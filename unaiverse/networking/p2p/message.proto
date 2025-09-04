@@ -1,0 +1,55 @@
+// Specifies that we are using the proto3 syntax.
+syntax = "proto3";
+
+// Defines the package name, which helps in preventing naming conflicts.
+package p2p;
+
+option go_package = "./proto-go";
+
+message Message {
+  string sender = 1;
+  string content_type = 2; // "profile", "action_request", etc.
+  string channel = 3;
+  string piggyback = 4;
+  string timestamp_net = 5;
+
+  // The simplified 'oneof' for the hybrid approach
+  oneof content {
+    StreamSampleContent stream_sample = 6;
+    string json_content = 7; // Umbrella for ALL other structured messages
+  }
+}
+
+// --- Definitions for the Optimized Path: Stream Samples ---
+
+message StreamSampleContent {
+  map<string, StreamSample> samples = 1;
+}
+
+message StreamSample {
+  SampleData data = 1;
+  int32 data_tag = 2;
+  optional string data_uuid = 3;
+}
+
+message SampleData {
+  oneof data_payload {
+    TensorData tensor_data = 1;
+    ImageData image_data = 2;
+    TextData text_data = 3;
+  }
+}
+
+message TensorData {
+  bytes data = 1;     // gzipped raw bytes
+  string dtype = 2;
+  repeated int32 shape = 3;
+}
+
+message ImageData {
+  bytes data = 1;     // raw PNG bytes
+}
+
+message TextData {
+  string data = 1;     // string of text
+}
