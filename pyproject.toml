@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "unaiverse"
+version = "0.1"
+requires-python = ">3.10"
+dependencies = []
+description = "UNaIVERSE: A Collectionless AI Project"
+authors = [
+    { name = "Stefano Melacci", email = "stefano.melacci@unisi.it" },
+    { name = "Christian Di Maio", email = "christian.dimaio@phd.unipi.it" },
+    { name = "Tommaso Guidi", email = "tommaso.guidi.1998@gmail.com" }
+]
+
+[project.urls]
+"Homepage" = "https://collectionless.ai"
