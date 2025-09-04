@@ -1,0 +1,65 @@
+# Python
+*.pyc
+*.pyo
+*.pyd
+__pycache__/
+venv/
+env/
+*.env
+
+# Node.js / React
+node_modules/
+npm-debug.log
+yarn-debug.log
+yarn-error.log
+build/
+dist/
+coverage/
+
+# IDEs & Editors
+.idea
+.idea/           # PyCharm and IntelliJ
+.vscode
+.vscode/         # VS Code
+*.sublime-project
+*.sublime-workspace
+
+# Operating System Files
+.DS_Store
+*.DS_Store       # macOS
+Thumbs.db        # Windows
+
+# Environment files
+.env             # Environment variables
+.env.*           # .env.local, .env.production, etc.
+
+# Logs
+*.log
+
+# Python wheel files
+*.whl
+
+# Jupyter Notebooks
+.ipynb_checkpoints
+.ipynb_checkpoints/
+
+# Misc
+/*.pdf
+/*.PDF
+output/
+oldies/
+root_cfg_private.json
+/unaiverse/networking/root/data/
+unaiverse/networking/p2p/lib.h
+unaiverse/networking/p2p/lib.so
+unaiverse/networking/p2p/lib.dll
+unaiverse/networking/p2p/lib.dylib
+unaiverse/networking/p2p/logs/*
+world_addresses.txt
+addresses.txt
+interact_stdout.txt
+wolf_img.png
+
+*.pem
+#unaiverse/networking/root/viewer/www/*
+unaiverse/networking/root/api/secret.json
