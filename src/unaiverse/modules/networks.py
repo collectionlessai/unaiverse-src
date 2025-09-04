@@ -22,25 +22,13 @@ import torchvision
 from PIL import Image
 import urllib.request
 from typing import Callable
-        from lang_sam import LangSAM
-        from bs4 import BeautifulSoup
-        from bs4 import BeautifulSoup
 import torch.nn.functional as F
-        from urllib.parse import urljoin
-        from PIL import ImageDraw, ImageFont
 from unaiverse.dataprops import Data4Proc
-        from langchain.vectorstores import Chroma
-        from langchain.vectorstores import Chroma
-        from urllib.parse import urljoin, urlparse
-        from langchain.docstore.document import Document
-from unaiverse.library.modules.cnu.cnus import CNUs
-        from transformers import AutoModelForImageTextToText
-from unaiverse.library.modules.cnu.layers import LinearCNU
-        from langchain.embeddings import SentenceTransformerEmbeddings
-        from langchain.text_splitter import RecursiveCharacterTextSplitter
+from unaiverse.modules.cnu.cnus import CNUs
+from unaiverse.modules.cnu.layers import LinearCNU
 from transformers import pipeline, AutoProcessor, AutoModelForCausalLM, AutoTokenizer
-from unaiverse.library.modules.utils import (ModuleWrapper, transforms_factory, get_proc_inputs_and_proc_outputs_for_rnn,
-                                             get_proc_inputs_and_proc_outputs_for_image_classification)
+from unaiverse.modules.utils import get_proc_inputs_and_proc_outputs_for_image_classification
+from unaiverse.modules.utils import ModuleWrapper, transforms_factory, get_proc_inputs_and_proc_outputs_for_rnn
 
 
 class RNNTokenLM(ModuleWrapper):
@@ -1276,9 +1264,11 @@ class LangSegmentAnything(ModuleWrapper):
                          Data4Proc(data_type="text", pubsub=False, private_only=True)],
             proc_outputs=[Data4Proc(data_type="img", pubsub=False, private_only=True)]
         )
+        from lang_sam import LangSAM
         self.module = LangSAM(device=self.device)
 
         # generate a 64x64 error image (with text "Error" on it)
+        from PIL import ImageDraw, ImageFont
         self.error_img = Image.new("RGB", (64, 64), color="white")
         draw = ImageDraw.Draw(self.error_img)
         font = ImageFont.load_default()
@@ -1348,8 +1338,9 @@ class SmolVLM(ModuleWrapper):
         model_id = "HuggingFaceTB/SmolVLM2-500M-Video-Instruct"
         self.pre_post_processor = AutoProcessor.from_pretrained(model_id, device_map=self.device)
 
+        from transformers import AutoModelForImageTextToText
         self.module = AutoModelForImageTextToText.from_pretrained(model_id, torch_dtype=torch.bfloat16,
-                                                               device_map=self.device)
+                                                                  device_map=self.device)
         self.module = self.module.to(self.device)
 
     def forward(self, image_pil: Image, msg: str = "what is this?", first: bool = False, last: bool = False):
@@ -1395,6 +1386,7 @@ class SiteRAG(ModuleWrapper):
         self.module = pipeline("text-generation", model=model, tokenizer=tokenizer, max_new_tokens=200)
 
         # embedder
+        from langchain.embeddings import SentenceTransformerEmbeddings
         self.embedder = SentenceTransformerEmbeddings(model_name="all-MiniLM-L6-v2",
                                                       model_kwargs={"device": self.device.type})
 
@@ -1403,6 +1395,7 @@ class SiteRAG(ModuleWrapper):
         self.crawled_site_to_rag_knowledge_base()
 
         # setting up RAG stuff
+        from langchain.vectorstores import Chroma
         db = Chroma(persist_directory=db_folder, embedding_function=self.embedder)
         self.retriever = db.as_retriever(search_kwargs={"k": 3})
 
@@ -1432,6 +1425,8 @@ class SiteRAG(ModuleWrapper):
 
     def crawl_website(self, max_pages=300):
         import requests
+        from bs4 import BeautifulSoup
+        from urllib.parse import urljoin, urlparse
 
         if os.path.exists(self.site_folder):
             shutil.rmtree(self.site_folder)
@@ -1468,6 +1463,11 @@ class SiteRAG(ModuleWrapper):
         print(f"Crawled {len(visited)} pages.")
 
     def crawled_site_to_rag_knowledge_base(self):
+        from bs4 import BeautifulSoup
+        from urllib.parse import urljoin
+        from langchain.vectorstores import Chroma
+        from langchain.docstore.document import Document
+        from langchain.text_splitter import RecursiveCharacterTextSplitter
 
         docs = []
         for filename in os.listdir(self.site_folder):

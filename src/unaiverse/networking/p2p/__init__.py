@@ -23,8 +23,8 @@ import subprocess
 from typing import cast
 from .messages import Msg
 from .p2p import P2P, P2PError
-    from .golibp2p import GoLibP2P # Your stub interface definition
-from .lib_types import TypeInterface # Assuming TypeInterface handles the void* results
+from .golibp2p import GoLibP2P  # Your stub interface definition
+from .lib_types import TypeInterface  # Assuming TypeInterface handles the void* results
 
 
 # --- Setup and Pre-build Checks ---
@@ -39,7 +39,7 @@ lib_name = "lib"
 if platform.system() == "Windows":
     lib_url = "https://github.com/collectionlessai/unaiverse-misc/raw/main/precompiled/lib.dll"
     lib_ext = ".dll"
-elif platform.system() == "Darwin": # macOS
+elif platform.system() == "Darwin":  # macOS
     lib_url = "https://github.com/collectionlessai/unaiverse-misc/raw/main/precompiled/lib.dylib"
     lib_ext = ".dylib"
 else: # Linux and other Unix-like
@@ -228,6 +228,7 @@ _shared_lib.FreeInt.restype = None # void return
 
 # Import the stub type for type checking
 try:
+    from .golibp2p import GoLibP2P  # Your stub interface definition
 except ImportError:
     print("Warning: GoLibP2P stub not found. Type checking will be limited.", file=sys.stderr)
     GoLibP2P = ctypes.CDLL
@@ -246,6 +247,5 @@ TypeInterface.libp2p = _shared_lib_typed # Attach to TypeInterface if needed
 __all__ = [
     "P2P",
     "P2PError",
-    "MessageType",
-    "TypeInterface", # Expose TypeInterface if users need its conversion helpers directly
+    "TypeInterface"  # Expose TypeInterface if users need its conversion helpers directly
 ]
