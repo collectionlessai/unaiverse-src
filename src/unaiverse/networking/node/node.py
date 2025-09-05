@@ -13,6 +13,7 @@
                  Main Developers:    Stefano Melacci (Project Leader), Christian Di Maio, Tommaso Guidi
 """
 import os
+import re
 import cv2
 import sys
 import ast
@@ -52,24 +53,31 @@ class Node:
     TEXT_LAST_USED_COLOR = 0
     TEXT_LOCK = threading.Lock()
 
-    def __init__(self, node_id: str, password: str,
+    def __init__(self, unaiverse_key: str,
                  hosted: Agent | World,
+                 node_name: str | None = "test_0",
+                 node_id: str | None = None,
                  clock_delta: float = 1. / 25.,
-                 root_endpoint: str | None = None,
                  only_certified_agents: bool = False,
                  allowed_node_ids: list[str] | set[str] = None,  # optional: it is loaded from the online profile
                  world_masters_node_ids: list[str] | set[str] = None,  # optional: it is loaded from the online profile
+                 world_masters_node_names: list[str] | set[str] = None,  # optional: it will be converted to node IDs
+                 offer_relay_facilities: bool = True,
                  allow_connection_through_relay: bool = True,
                  talk_to_relay_based_nodes: bool = True):
 
         # checking main arguments
         assert isinstance(hosted, Agent) or isinstance(hosted, World), f"Invalid hosted entity, must be Agent or World"
-        assert isinstance(node_id, str) and node_id is not None, f"Invalid node ID"
-        assert isinstance(password, str) and password is not None, f"Invalid password"
+        assert node_id is None or isinstance(node_id, str), f"Invalid node ID"
+        assert node_name is None or isinstance(node_name, str), f"Invalid node name"
+        assert node_name is None or node_id is None, f"Cannot specify both node ID and node name"
+        assert node_name is not None or node_id is not None, \
+            f"You must specify either node ID or node name: both are missing"
+        assert unaiverse_key is not None and isinstance(unaiverse_key, str), f"Invalid UNaIVERSE key"
 
         # main attributes
         self.node_id = node_id
-        self.password = password
+        self.unaiverse_key = unaiverse_key
         self.hosted = hosted
         self.node_type = Node.AGENT if (isinstance(hosted, Agent) and not isinstance(hosted, World)) else Node.WORLD
         self.agent = hosted if self.node_type is Node.AGENT else None
@@ -99,7 +107,7 @@ class Node:
         self.connect_without_ack_timeout = 45.  # seconds
 
         # root server-related
-        self.root_endpoint = root_endpoint if root_endpoint is not None else 'https://unaiverse.diism.unisi.it/api'
+        self.root_endpoint = 'https://unaiverse.io/api'  # WARNING: EDITING THIS ADDRESS VIOLATES THE LICENSE
         self.node_token = ""
         self.public_key = ""
 
@@ -126,6 +134,23 @@ class Node:
         self.agents_expected_to_send_ack = {}
         self.last_rejected_agents = deque(maxlen=self.conn)
         self.joining_world_info = None
+
+        # getting node ID (retrieving by name), if it was not provided (the node is created if not existing)
+        if self.node_id is None:
+            self.node_id = self.get_node_id_by_name(node_name, create_if_missing=True)
+            if self.node_id is None:
+                raise ValueError("Cannot create node: node ID was not set")
+
+        # getting node ID of world masters, if needed
+        if world_masters_node_names is not None and len(world_masters_node_names) > 0:
+            for master_node_name in world_masters_node_names:
+                master_node_id = self.get_node_id_by_name(master_node_name, create_if_missing=False)
+                if master_node_id is None:
+                    raise ValueError("Cannot find world master node ID given its name: {master_node_id}")
+                else:
+                    if self.world_masters_node_ids is None:
+                        self.world_masters_node_ids = set()
+                    self.world_masters_node_ids.add(master_node_id)
 
         self.prev_snapshot = None
 
@@ -243,6 +268,27 @@ class Node:
         """Print an error message to the console, if enabled."""
         self.out("<ERROR> " + msg)
 
+    def get_node_id_by_name(self, node_name: str, create_if_missing: bool = False) -> str | None:
+        try:
+            response = self.__root("/account/node/TODO/TODO/retrieve",  # TODO
+                                   payload={"node_name": node_name,
+                                            "password": self.unaiverse_key})
+            if response["node_id"] is None and create_if_missing:
+                if self.node_type is Node.WORLD:
+
+                    # discarding basic roles (public_agent, world_agent, ...)
+                    roles = list(set(self.world.ROLE_BITS_TO_STR.values()) - set(World.ROLE_BITS_TO_STR.values()))
+                else:
+                    roles = []
+                response = self.__root("/account/node/TODO/TODO/create",  # TODO
+                                       payload={"node_name": node_name,
+                                                "roles": roles,
+                                                "password": self.unaiverse_key})
+            return response["node_id"]
+        except Exception as e:
+            self.err(f"Error while retrieving node named {node_name} from server\n{e}")
+            return None
+
     def get_node_token(self, peer_ids) -> None:
         response = None
 
@@ -250,7 +296,7 @@ class Node:
             try:
                 response = self.__root("/account/node/token/generate",
                                        payload={"node_id": self.node_id,
-                                                "password": self.password
+                                                "password": self.unaiverse_key
                                                 if self.node_token is None or len(self.node_token) == 0 else None,
                                                 "node_token": self.node_token, "peer_ids": json.dumps(peer_ids)})
                 break

@@ -19,10 +19,8 @@ import logging
 import threading
 from .messages import Msg
 from __future__ import annotations
-from typing import Optional, List, Dict, Any, TYPE_CHECKING
-
-# Local imports (adjust path if necessary)
 from .lib_types import TypeInterface
+from typing import Optional, List, Dict, Any, TYPE_CHECKING
 
 # Conditional import for type hinting to avoid circular dependencies
 if TYPE_CHECKING:
