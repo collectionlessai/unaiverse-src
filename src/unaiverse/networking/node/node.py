@@ -56,6 +56,7 @@ class Node:
                  hosted: Agent | World,
                  node_name: str | None = "test_0",
                  node_id: str | None = None,
+                 hidden: bool = True,
                  clock_delta: float = 1. / 25.,
                  only_certified_agents: bool = False,
                  allowed_node_ids: list[str] | set[str] = None,  # Optional: it is loaded from the online profile
