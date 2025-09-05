@@ -1,0 +1,25 @@
+# License
+
+This software is licensed under the Polyform Strict License 1.0.0.  
+Full license text: https://polyformproject.org/licenses/strict/1.0.0/
+
+## Non-Commercial Use
+
+You may use, copy, and run this software for **non-commercial purposes**, as defined in the Polyform Strict License.  
+This includes use in **academic and scientific research**.  
+
+You may also create and publish your own software **that depends on or interfaces with this project** (for example, through imports, APIs, or integration), provided that:
+- Your software is used **only for non-commercial purposes**, and  
+- You do not modify or redistribute this software’s source code.  
+
+If you find bugs, have suggestions for improvements, or wish to propose changes, you are welcome to share them (for example, by opening an issue or contacting us).  
+Direct modification and redistribution of this software’s source code, however, is not permitted.  
+
+## Commercial Use
+
+Commercial use of this software, or of any software that depends on it, is **not permitted** under the Polyform Strict License.  
+If you would like to obtain a **commercial license**, please contact:  
+
+Stefano Melacci, Christian Di Maio, Tommaso Guidi, Marco Gori
+contact@unaiverse.io
+
