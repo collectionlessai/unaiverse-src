@@ -1,10 +1,23 @@
+"""
+       █████  █████ ██████   █████           █████ █████   █████ ██████████ ███████████    █████████  ██████████
+      ░░███  ░░███ ░░██████ ░░███           ░░███ ░░███   ░░███ ░░███░░░░░█░░███░░░░░███  ███░░░░░███░░███░░░░░█
+       ░███   ░███  ░███░███ ░███   ██████   ░███  ░███    ░███  ░███  █ ░  ░███    ░███ ░███    ░░░  ░███  █ ░ 
+       ░███   ░███  ░███░░███░███  ░░░░░███  ░███  ░███    ░███  ░██████    ░██████████  ░░█████████  ░██████   
+       ░███   ░███  ░███ ░░██████   ███████  ░███  ░░███   ███   ░███░░█    ░███░░░░░███  ░░░░░░░░███ ░███░░█   
+       ░███   ░███  ░███  ░░█████  ███░░███  ░███   ░░░█████░    ░███ ░   █ ░███    ░███  ███    ░███ ░███ ░   █
+       ░░████████   █████  ░░█████░░████████ █████    ░░███      ██████████ █████   █████░░█████████  ██████████
+        ░░░░░░░░   ░░░░░    ░░░░░  ░░░░░░░░ ░░░░░      ░░░      ░░░░░░░░░░ ░░░░░   ░░░░░  ░░░░░░░░░  ░░░░░░░░░░ 
+                 A Collectionless AI Project (https://collectionless.ai)
+                 Registration/Login: https://unaiverse.io
+                 Code Repositories:  https://github.com/collectionlessai/
+                 Main Developers:    Stefano Melacci (Project Leader), Christian Di Maio, Tommaso Guidi
+"""
 import os
 import sys
 import uuid
 import argparse
 import subprocess
 from pathlib import Path
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
 from unaiverse.networking.p2p import P2P
 
 # configuration
@@ -16,7 +29,7 @@ DOCKERFILE_CONTENT = """
 FROM python:3.12-slim-bookworm
 
 # Installing Go compiler
-RUN apt-get update && apt-get install -y --no-install-recommends build-essential curl git 
+RUN apt-get update && apt-get install -y --no-install-recommends build-essential curl git
 RUN rm -rf /var/lib/apt/lists/*
 RUN ARCH=$(dpkg --print-architecture) && curl -LO https://go.dev/dl/go1.24.5.linux-${ARCH}.tar.gz
 RUN ARCH=$(dpkg --print-architecture) && tar -C /usr/local -xzf go1.24.5.linux-${ARCH}.tar.gz
@@ -31,7 +44,7 @@ RUN mkdir -p /go/bin /go/src /go/pkg
 WORKDIR /unaiverse
 
 # Dependencies
-RUN <create_requirements.txt> 
+RUN <create_requirements.txt>
 RUN pip install --no-cache-dir -r requirements.txt --break-system-packages
 """
 

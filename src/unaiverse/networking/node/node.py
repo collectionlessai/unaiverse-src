@@ -1,8 +1,22 @@
-import copy
+"""
+       █████  █████ ██████   █████           █████ █████   █████ ██████████ ███████████    █████████  ██████████
+      ░░███  ░░███ ░░██████ ░░███           ░░███ ░░███   ░░███ ░░███░░░░░█░░███░░░░░███  ███░░░░░███░░███░░░░░█
+       ░███   ░███  ░███░███ ░███   ██████   ░███  ░███    ░███  ░███  █ ░  ░███    ░███ ░███    ░░░  ░███  █ ░ 
+       ░███   ░███  ░███░░███░███  ░░░░░███  ░███  ░███    ░███  ░██████    ░██████████  ░░█████████  ░██████   
+       ░███   ░███  ░███ ░░██████   ███████  ░███  ░░███   ███   ░███░░█    ░███░░░░░███  ░░░░░░░░███ ░███░░█   
+       ░███   ░███  ░███  ░░█████  ███░░███  ░███   ░░░█████░    ░███ ░   █ ░███    ░███  ███    ░███ ░███ ░   █
+       ░░████████   █████  ░░█████░░████████ █████    ░░███      ██████████ █████   █████░░█████████  ██████████
+        ░░░░░░░░   ░░░░░    ░░░░░  ░░░░░░░░ ░░░░░      ░░░      ░░░░░░░░░░ ░░░░░   ░░░░░  ░░░░░░░░░  ░░░░░░░░░░ 
+                 A Collectionless AI Project (https://collectionless.ai)
+                 Registration/Login: https://unaiverse.io
+                 Code Repositories:  https://github.com/collectionlessai/
+                 Main Developers:    Stefano Melacci (Project Leader), Christian Di Maio, Tommaso Guidi
+"""
 import os
 import cv2
 import sys
 import ast
+import copy
 import json
 import math
 import time
@@ -68,14 +82,14 @@ class Node:
         self.only_certified_agents = only_certified_agents
         self.allowed_node_ids = set(allowed_node_ids) if allowed_node_ids is not None else None
         self.world_masters_node_ids = set(world_masters_node_ids) if world_masters_node_ids is not None else None
-        
+
         # profile
         self.profile = None
         self.send_dynamic_profile_every = 10. if self.node_type is Node.WORLD else 10.  # seconds
         self.get_new_token_every = 23 * 60. * 60. + 30 * 60.  # seconds (23 hours and 30 minutes, safer)
         self.publish_rendezvous_every = 10.
         self._last_rendezvous_time = 0.
-        
+
         # automatic address update and relay refresh (if needed)
         self.relay_reservation_expiry: Optional[datetime] = None
         self.address_check_every = 5 * 60.  # Check every 5 minutes
@@ -117,7 +131,7 @@ class Node:
 
         # here you can setup max_instances, max_channels, enable_logging at libp2p level etc.
         P2P.setup_library(enable_logging=os.getenv("NODE_LIBP2PLOG", "0") == "1")
-        
+
         offer_relay_facilities = self.node_type is Node.WORLD  # only world nodes offer relay facilities
 
         # create P2P node in the whole universe (it has fields 'addresses', and 'peer_id', and 'libp2p')
@@ -642,7 +656,7 @@ class Node:
                 if self.clock.get_time() - last_get_token_time >= self.get_new_token_every:
                     self.get_node_token(peer_ids=[self.get_public_peer_id(), self.get_world_peer_id()])
                     last_get_token_time = self.clock.get_time()
-                
+
                 # check for address changes every "N" seconds
                 if self.clock.get_time() - last_address_check_time >= self.address_check_every:
                     self.out("Performing periodic check for address changes...")
@@ -652,7 +666,7 @@ class Node:
                         current_private_addrs = self.conn.p2p_world.get_node_addresses()
                         profile_public_addrs = self.profile.get_dynamic_profile().get('peer_addresses', [])
                         profile_private_addrs = self.profile.get_dynamic_profile().get('private_peer_addresses', [])
-                        
+
                         # TODO: if public addresses changed... (if this makes any sense)
                         if set(current_public_addrs) != set(profile_public_addrs):
                             self.out(f"Address change detected for the public instance! New addresses: {current_public_addrs}")
@@ -661,7 +675,7 @@ class Node:
                             # address_list.clear()
                             # address_list.extend(current_public_addrs)
                             # self.profile.mark_change_in_connections()
-                        
+
                         # if private addresses changed, update the profile and notify the world
                         elif set(current_private_addrs) != set(profile_private_addrs):
                             self.out(f"Address change detected for the private instance! New addresses: {current_public_addrs}")
@@ -670,7 +684,7 @@ class Node:
                             address_list.clear()
                             address_list.extend(current_private_addrs)
                             # self.profile.mark_change_in_connections()
-                            
+
                             world_peer_id = self.profile.get_dynamic_profile().get('connections', {}).get('world_peer_id')
                             if self.node_type is Node.AGENT and world_peer_id:
                                 self.out("Notifying world of address change...")
@@ -680,7 +694,7 @@ class Node:
                             self.out("No address changes detected.")
                     except Exception as e:
                         self.err(f"Failed to check for address updates: {e}")
-                
+
                 # refresh relay reservation if nearing expiration
                 if self.relay_reservation_expiry is not None:
                     time_to_expiry = self.relay_reservation_expiry - datetime.now(timezone.utc)
@@ -1067,7 +1081,7 @@ class Node:
                                           content_type=Msg.PROFILE):
                         self.err("Failed to send profile, removing (disconnecting) " + msg.sender)
                         self.__purge(msg.sender)
-            
+
             # (E) the world node received an ADDRESS_UPDATE from an agent
             elif msg.content_type == Msg.ADDRESS_UPDATE:
                 self.out("Received an address update from " + msg.sender)
@@ -1245,12 +1259,12 @@ class Node:
 
                     self.out("Fetching updated address list from transport layer...")
                     complete_private_addrs = self.conn.p2p_world.get_node_addresses()
-                    
+
                     # Update the profile with this definitive list (IN-PLACE)
                     address_list = self.profile.get_dynamic_profile()['private_peer_addresses']
                     address_list.clear()
                     address_list.extend(complete_private_addrs)
-                    
+
                     self.out("Notifying world of the complete updated address list...")
                     self.conn.send(peer_id, channel_trail=None,
                                    content_type=Msg.ADDRESS_UPDATE,

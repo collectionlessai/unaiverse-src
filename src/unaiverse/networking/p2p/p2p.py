@@ -1,15 +1,25 @@
-# Assume golibp2p.py holds the LibP2P class that loads the .so file
-# Assume lib_types.py holds the TypeInterface class for C type conversions
-# Assume messages.py holds the Msg class
-
-from __future__ import annotations
-import base64
+"""
+       █████  █████ ██████   █████           █████ █████   █████ ██████████ ███████████    █████████  ██████████
+      ░░███  ░░███ ░░██████ ░░███           ░░███ ░░███   ░░███ ░░███░░░░░█░░███░░░░░███  ███░░░░░███░░███░░░░░█
+       ░███   ░███  ░███░███ ░███   ██████   ░███  ░███    ░███  ░███  █ ░  ░███    ░███ ░███    ░░░  ░███  █ ░ 
+       ░███   ░███  ░███░░███░███  ░░░░░███  ░███  ░███    ░███  ░██████    ░██████████  ░░█████████  ░██████   
+       ░███   ░███  ░███ ░░██████   ███████  ░███  ░░███   ███   ░███░░█    ░███░░░░░███  ░░░░░░░░███ ░███░░█   
+       ░███   ░███  ░███  ░░█████  ███░░███  ░███   ░░░█████░    ░███ ░   █ ░███    ░███  ███    ░███ ░███ ░   █
+       ░░████████   █████  ░░█████░░████████ █████    ░░███      ██████████ █████   █████░░█████████  ██████████
+        ░░░░░░░░   ░░░░░    ░░░░░  ░░░░░░░░ ░░░░░      ░░░      ░░░░░░░░░░ ░░░░░   ░░░░░  ░░░░░░░░░  ░░░░░░░░░░ 
+                 A Collectionless AI Project (https://collectionless.ai)
+                 Registration/Login: https://unaiverse.io
+                 Code Repositories:  https://github.com/collectionlessai/
+                 Main Developers:    Stefano Melacci (Project Leader), Christian Di Maio, Tommaso Guidi
+"""
 import re
-import threading
 import time
-from typing import Optional, List, Dict, Any, TYPE_CHECKING
+import base64
 import logging
+import threading
 from .messages import Msg
+from __future__ import annotations
+from typing import Optional, List, Dict, Any, TYPE_CHECKING
 
 # Local imports (adjust path if necessary)
 from .lib_types import TypeInterface
@@ -44,19 +54,19 @@ class P2P:
     # --- Class-level state ---
     libp2p: 'GoLibP2P'                  # Static variable for the loaded Go library
     _type_interface: 'TypeInterface'    # Shared type interface for all instances
-    
+
     # --- Config class variables for configuration ---
     _MAX_INSTANCES = 32
     _MAX_NUM_CAHNNELS = 100
     _MAX_QUEUE_PER_CHANNEL = 50
     _MAX_MESSAGE_SIZE = 50 * 1024 * 1024  # 50 MB
-    
+
     # --- Class-level tracking ---
     _library_initialized = False
     _initialize_lock = threading.Lock()
     _instance_ids = [False, ] * _MAX_INSTANCES
     _instance_lock = threading.Lock()
-    
+
     @classmethod
     def setup_library(cls,
                       max_instances: Optional[int] = None,
@@ -71,10 +81,10 @@ class P2P:
             if cls._library_initialized:
                 logger.warning("P2P library is already initialized. Skipping setup.")
                 return
-            
+
             if not hasattr(cls, 'libp2p') or cls.libp2p is None:
                 raise P2PError("Library not loaded before setup. Check package __init__.py")
-            
+
             # Configure Python logging based on the flag
             if not enable_logging:
                 logger.setLevel(logging.WARNING)
@@ -103,10 +113,10 @@ class P2P:
                 cls._type_interface.to_go_int(_max_msg_size),
                 cls._type_interface.to_go_bool(enable_logging)
             )
-            
+
             cls._library_initialized = True
             logger.info("✅ Go library initialized successfully.")
-    
+
     def __init__(self,
                  port: int = 0,
                  ips: List[str] = None,
@@ -188,7 +198,7 @@ class P2P:
             message_data = result.get('message')
             initial_addresses = message_data.get("addresses", [])
             self._is_public = message_data.get("isPublic", False)
-            
+
             # check teh returned data
             if not isinstance(initial_addresses, list) or not initial_addresses:
                 err_msg = "Received empty or invalid addresses list from Go CreateNode."
@@ -311,13 +321,13 @@ class P2P:
             if result is None:
                 logger.error("Failed to disconnect from peer, received null result.")
                 raise P2PError("Failed to disconnect from peer, received null result.")
-            
+
             if result.get('state') == "Error":
                 logger.error(f"Failed to disconnect from peer '{peer_id}': {result.get('message', 'Unknown Go error')}")
                 raise P2PError(f"Failed to disconnect from peer '{peer_id}': {result.get('message', 'Unknown Go error')}")
 
             logger.info(f"✅ Successfully disconnected from {peer_id}")
-            
+
             # Optionally remove from internal peer map
             # if peer_id in self._peer_map: del self._peer_map[peer_id]
 
@@ -341,7 +351,7 @@ class P2P:
         if not channel or not isinstance(channel, str):
             logger.error("Invalid channel provided.")
             raise ValueError("Invalid channel provided.")
-        
+
         if not isinstance(msg, Msg):
             logger.error("Invalid message provided (must be of type Msg).")
             raise ValueError("Invalid message provided (must be of type Msg).")
@@ -363,22 +373,22 @@ class P2P:
                 P2P._type_interface.to_go_int(payload_len),
             )
             result = P2P._type_interface.from_go_ptr_to_json(result_ptr)
-            
+
             if result is None:
                 logger.error(f"Failed to send direct message to {peer_id}, received null result.")
                 raise P2PError(f"Failed to send direct message to {peer_id}, received null result.")
-                
+
             if result.get('state') == "Error":
                 logger.error(f"Failed to send direct message to '{peer_id}': {result.get('message', 'Unknown Go error')}")
                 raise P2PError(f"Failed to send direct message to '{peer_id}': {result.get('message', 'Unknown Go error')}")
 
             logger.info(f"✅ Message sent successfully to {peer_id}.")
-        
+
         except Exception as e:
             logger.error(f"❌ Sending direct message to {peer_id} failed: {e}")
             raise P2PError(f"Sending direct message to {peer_id} failed") from e
 
-        
+
 
     def broadcast_message(self, channel: str, msg: Msg) -> None:
         """
@@ -416,15 +426,15 @@ class P2P:
             )
 
             result = P2P._type_interface.from_go_ptr_to_json(result_ptr)
-            
+
             if result is None:
                 logger.error(f"Failed to broadcast message on channel {channel}, received null result.")
                 raise P2PError(f"Failed to broadcast message on channel {channel}, received null result.")
-            
+
             if result.get('state') == "Error":
                 logger.error(f"Failed to broadcast message on channel '{channel}': {result.get('message', 'Unknown Go error')}")
                 raise P2PError(f"Failed to broadcast message on channel '{channel}': {result.get('message', 'Unknown Go error')}")
-            
+
         except Exception as e:
             logger.error(f"❌ Broadcasting to {channel} failed: {e}")
             raise P2PError(f"Broadcasting to {channel} failed") from e
@@ -501,7 +511,7 @@ class P2P:
                     # This assumes Msg.from_bytes can parse your message protocol from decoded_data
                     # and that Msg objects store sender, type, channel intrinsically or can be set.
                     msg_obj = Msg.from_bytes(decoded_data)
-                    
+
                     # --- CRITICAL SECURITY CHECK ---
                     # Verify that the sender claimed inside the message payload
                     # matches the cryptographically verified sender from the network layer.
@@ -648,7 +658,7 @@ class P2P:
             expiration_utc = result.get('message', {})
             if not isinstance(expiration_utc, str):
                 raise P2PError(f"Expected expiration timestamp string, but got {type(expiration_utc)}")
-            
+
             logger.info(f"✅ Reservation successful. Expires at: {expiration_utc}")
             return expiration_utc
 
@@ -677,12 +687,12 @@ class P2P:
             except P2PError as e:
                 logger.warning(f"Failed to refresh address cache, returning stale data. Error: {e}")
         return self._address_cache  # this could be None if initial fetch failed or if the property was called before node creation
-    
+
     @property
     def is_public(self) -> Optional[bool]:
         """Returns a boolean stating whether or not the local node is publicly reachable."""
         return self._is_public
-    
+
     @property
     def relay_is_enabled(self) -> bool:
         """Returns whether the relay client functionality is enabled for this node."""
@@ -749,7 +759,7 @@ class P2P:
             if result.get('state') == "Error":
                 logger.error(f"Failed to get connected peers: {result.get('message', 'Unknown Go error')}")
                 raise P2PError(f"Failed to get connected peers: {result.get('message', 'Unknown Go error')}")
-            
+
             peers_list = result.get('message', [])
             # Update internal map (optional)
             # logger.info(f"  Connected peers count: {len(peers_list)}") # Can be noisy
@@ -766,7 +776,7 @@ class P2P:
         Gets the full rendezvous state from the Go library, including peers and metadata.
 
         Returns:
-            - A dictionary representing the RendezvousState (containing 'peers', 
+            - A dictionary representing the RendezvousState (containing 'peers',
               'update_count', 'last_updated') if an update has been received.
             - None if no rendezvous topic is active or no updates have arrived yet.
 
@@ -780,7 +790,7 @@ class P2P:
             if result is None:
                 logger.error("Failed to get rendezvous peers, received null result.")
                 raise P2PError("Failed to get rendezvous peers, received null result.")
-            
+
             state = result.get('state')
             if state == "Empty":
                 logger.debug(f"[Instance {self._instance}] GetRendezvousPeers: No rendezvous messages received yet.")
@@ -825,7 +835,7 @@ class P2P:
             return -1 # Indicate error
 
     # --- Background Polling Methods ---
-    
+
     def _poll_connected_peers(self):
         """Target function for the connected peers polling thread."""
         logger.info("🧵 Starting connected peers polling thread...")
@@ -862,7 +872,7 @@ class P2P:
     def close(self, close_all: bool = False) -> None:
         """
         Gracefully shuts down the libp2p node and stops background threads.
-        
+
         Args:
             close_all: If True, closes all instances of the node. Default is False.
         """
@@ -891,7 +901,7 @@ class P2P:
             if result.get('state') == "Error":
                 logger.error(f"Node closure failed: {result.get('message', 'Unknown Go error')}")
                 raise P2PError(f"Node closure failed: {result.get('message', 'Unknown Go error')}")
-            
+
             close_msg = f"Node closed successfully ({'all instances' if close_all else f'instance {str(self._instance)}'})."
             logger.info(f"✅ {close_msg}")
 

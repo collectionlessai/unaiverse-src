@@ -1,3 +1,17 @@
+"""
+       █████  █████ ██████   █████           █████ █████   █████ ██████████ ███████████    █████████  ██████████
+      ░░███  ░░███ ░░██████ ░░███           ░░███ ░░███   ░░███ ░░███░░░░░█░░███░░░░░███  ███░░░░░███░░███░░░░░█
+       ░███   ░███  ░███░███ ░███   ██████   ░███  ░███    ░███  ░███  █ ░  ░███    ░███ ░███    ░░░  ░███  █ ░ 
+       ░███   ░███  ░███░░███░███  ░░░░░███  ░███  ░███    ░███  ░██████    ░██████████  ░░█████████  ░██████   
+       ░███   ░███  ░███ ░░██████   ███████  ░███  ░░███   ███   ░███░░█    ░███░░░░░███  ░░░░░░░░███ ░███░░█   
+       ░███   ░███  ░███  ░░█████  ███░░███  ░███   ░░░█████░    ░███ ░   █ ░███    ░███  ███    ░███ ░███ ░   █
+       ░░████████   █████  ░░█████░░████████ █████    ░░███      ██████████ █████   █████░░█████████  ██████████
+        ░░░░░░░░   ░░░░░    ░░░░░  ░░░░░░░░ ░░░░░      ░░░      ░░░░░░░░░░ ░░░░░   ░░░░░  ░░░░░░░░░  ░░░░░░░░░░ 
+                 A Collectionless AI Project (https://collectionless.ai)
+                 Registration/Login: https://unaiverse.io
+                 Code Repositories:  https://github.com/collectionlessai/
+                 Main Developers:    Stefano Melacci (Project Leader), Christian Di Maio, Tommaso Guidi
+"""
 import os
 import types
 from typing import Optional
@@ -117,7 +131,7 @@ class World(AgentBasics):
                 self._node_purge_fcn(peer_id)
             else:
                 self.role_changed_by_world = True
-    
+
     def set_addresses_in_profile(self, peer_id, addresses):
         if peer_id in self.all_agents:
             profile = self.all_agents[peer_id]
@@ -144,7 +158,7 @@ class World(AgentBasics):
         # validate score
         if score < 0. or score > 1.:
             raise ValueError(f"Score must be in [0.0, 1.0], got {score}")
-        
+
         # Validate badge_type
         if badge_type not in AgentBasics.BADGE_TYPES:
             raise ValueError(f"Invalid badge_type '{badge_type}'. Must be one of {AgentBasics.BADGE_TYPES}.")
@@ -166,7 +180,7 @@ class World(AgentBasics):
             self.agent_badges[peer_id] = [badge]
         else:
             self.agent_badges[peer_id].append(badge)
-    
+
     # get all the badges requested by the world
     def get_all_badges(self):
         return self.agent_badges
