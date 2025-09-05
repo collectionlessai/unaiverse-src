@@ -1,27 +1,13 @@
-"""
-       █████  █████ ██████   █████           █████ █████   █████ ██████████ ███████████    █████████  ██████████
-      ░░███  ░░███ ░░██████ ░░███           ░░███ ░░███   ░░███ ░░███░░░░░█░░███░░░░░███  ███░░░░░███░░███░░░░░█
-       ░███   ░███  ░███░███ ░███   ██████   ░███  ░███    ░███  ░███  █ ░  ░███    ░███ ░███    ░░░  ░███  █ ░ 
-       ░███   ░███  ░███░░███░███  ░░░░░███  ░███  ░███    ░███  ░██████    ░██████████  ░░█████████  ░██████   
-       ░███   ░███  ░███ ░░██████   ███████  ░███  ░░███   ███   ░███░░█    ░███░░░░░███  ░░░░░░░░███ ░███░░█   
-       ░███   ░███  ░███  ░░█████  ███░░███  ░███   ░░░█████░    ░███ ░   █ ░███    ░███  ███    ░███ ░███ ░   █
-       ░░████████   █████  ░░█████░░████████ █████    ░░███      ██████████ █████   █████░░█████████  ██████████
-        ░░░░░░░░   ░░░░░    ░░░░░  ░░░░░░░░ ░░░░░      ░░░      ░░░░░░░░░░ ░░░░░   ░░░░░  ░░░░░░░░░  ░░░░░░░░░░ 
-                 A Collectionless AI Project (https://collectionless.ai)
-                 Registration/Login: https://unaiverse.io
-                 Code Repositories:  https://github.com/collectionlessai/
-                 Main Developers:    Stefano Melacci (Project Leader), Christian Di Maio, Tommaso Guidi
-"""
 import io
 import gzip
-import json
 import torch
 from PIL import Image
-    from . import message_pb2 as pb
 from datetime import datetime, timezone
+import json
 
 # Import the Protobuf-generated module
 try:
+    from . import message_pb2 as pb
 except ImportError:
     print("Error: message_pb2.py not found. Please compile the .proto file first.")
     raise
@@ -34,6 +20,7 @@ class Msg:
     WORLD_APPROVAL = "world_approval"
     AGENT_APPROVAL = "agent_approval"
     PROFILE_REQUEST = "profile_request"
+    ADDRESS_UPDATE = "address_update"
     STREAM_SAMPLE = "stream_sample"
     ACTION_REQUEST = "action_request"
     ROLE_SUGGESTION = "role_suggestion"
@@ -47,9 +34,9 @@ class Msg:
     CONSOLE_AND_BEHAV_STATUS = "console_and_behav_status"
 
     # collections
-    CONTENT_TYPES = {PROFILE, WORLD_APPROVAL, AGENT_APPROVAL, PROFILE_REQUEST, STREAM_SAMPLE,
-                     ACTION_REQUEST, ROLE_SUGGESTION, HSM, MISC, GET_CV_FROM_ROOT, BADGE_SUGGESTIONS,
-                     INSPECT_ON, INSPECT_CMD, WORLD_AGENTS_LIST, CONSOLE_AND_BEHAV_STATUS}
+    CONTENT_TYPES = {PROFILE, WORLD_APPROVAL, AGENT_APPROVAL, PROFILE_REQUEST, ADDRESS_UPDATE,
+                     STREAM_SAMPLE, ACTION_REQUEST, ROLE_SUGGESTION, HSM, MISC, GET_CV_FROM_ROOT,
+                     BADGE_SUGGESTIONS, INSPECT_ON, INSPECT_CMD, WORLD_AGENTS_LIST, CONSOLE_AND_BEHAV_STATUS}
 
 
     def __init__(self,

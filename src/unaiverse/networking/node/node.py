@@ -1,23 +1,8 @@
-"""
-       █████  █████ ██████   █████           █████ █████   █████ ██████████ ███████████    █████████  ██████████
-      ░░███  ░░███ ░░██████ ░░███           ░░███ ░░███   ░░███ ░░███░░░░░█░░███░░░░░███  ███░░░░░███░░███░░░░░█
-       ░███   ░███  ░███░███ ░███   ██████   ░███  ░███    ░███  ░███  █ ░  ░███    ░███ ░███    ░░░  ░███  █ ░ 
-       ░███   ░███  ░███░░███░███  ░░░░░███  ░███  ░███    ░███  ░██████    ░██████████  ░░█████████  ░██████   
-       ░███   ░███  ░███ ░░██████   ███████  ░███  ░░███   ███   ░███░░█    ░███░░░░░███  ░░░░░░░░███ ░███░░█   
-       ░███   ░███  ░███  ░░█████  ███░░███  ░███   ░░░█████░    ░███ ░   █ ░███    ░███  ███    ░███ ░███ ░   █
-       ░░████████   █████  ░░█████░░████████ █████    ░░███      ██████████ █████   █████░░█████████  ██████████
-        ░░░░░░░░   ░░░░░    ░░░░░  ░░░░░░░░ ░░░░░      ░░░      ░░░░░░░░░░ ░░░░░   ░░░░░  ░░░░░░░░░  ░░░░░░░░░░ 
-                 A Collectionless AI Project (https://collectionless.ai)
-                 Registration/Login: https://unaiverse.io
-                 Code Repositories:  https://github.com/collectionlessai/
-                 Main Developers:    Stefano Melacci (Project Leader), Christian Di Maio, Tommaso Guidi
-"""
+import copy
 import os
-import re
 import cv2
 import sys
 import ast
-import copy
 import json
 import math
 import time
@@ -27,6 +12,7 @@ import requests
 import threading
 import traceback
 from PIL import Image
+from typing import Optional
 from collections import deque
 from unaiverse.clock import Clock
 from unaiverse.world import World
@@ -35,6 +21,7 @@ from unaiverse.networking.p2p import P2P
 from unaiverse.hsm import HybridStateMachine
 from requests.exceptions import RequestException
 from unaiverse.networking.p2p.messages import Msg
+from datetime import datetime, timezone, timedelta
 from unaiverse.networking.node.connpool import NodeConn
 from unaiverse.networking.node.profile import NodeProfile
 from unaiverse.streams import DataProps, BufferedDataStream
@@ -51,31 +38,24 @@ class Node:
     TEXT_LAST_USED_COLOR = 0
     TEXT_LOCK = threading.Lock()
 
-    def __init__(self, unaiverse_key: str,
+    def __init__(self, node_id: str, password: str,
                  hosted: Agent | World,
-                 node_name: str | None = "test_0",
-                 node_id: str | None = None,
                  clock_delta: float = 1. / 25.,
+                 root_endpoint: str | None = None,
                  only_certified_agents: bool = False,
                  allowed_node_ids: list[str] | set[str] = None,  # optional: it is loaded from the online profile
                  world_masters_node_ids: list[str] | set[str] = None,  # optional: it is loaded from the online profile
-                 world_masters_node_names: list[str] | set[str] = None,  # optional: it will be converted to node IDs
-                 offer_relay_facilities: bool = True,
                  allow_connection_through_relay: bool = True,
                  talk_to_relay_based_nodes: bool = True):
 
         # checking main arguments
         assert isinstance(hosted, Agent) or isinstance(hosted, World), f"Invalid hosted entity, must be Agent or World"
-        assert node_id is None or isinstance(node_id, str), f"Invalid node ID"
-        assert node_name is None or isinstance(node_name, str), f"Invalid node name"
-        assert node_name is None or node_id is None, f"Cannot specify both node ID and node name"
-        assert node_name is not None or node_id is not None, \
-            f"You must specify either node ID or node name: both are missing"
-        assert unaiverse_key is not None and isinstance(unaiverse_key, str), f"Invalid UNaIVERSE key"
+        assert isinstance(node_id, str) and node_id is not None, f"Invalid node ID"
+        assert isinstance(password, str) and password is not None, f"Invalid password"
 
         # main attributes
         self.node_id = node_id
-        self.unaiverse_key = unaiverse_key
+        self.password = password
         self.hosted = hosted
         self.node_type = Node.AGENT if (isinstance(hosted, Agent) and not isinstance(hosted, World)) else Node.WORLD
         self.agent = hosted if self.node_type is Node.AGENT else None
@@ -88,20 +68,24 @@ class Node:
         self.only_certified_agents = only_certified_agents
         self.allowed_node_ids = set(allowed_node_ids) if allowed_node_ids is not None else None
         self.world_masters_node_ids = set(world_masters_node_ids) if world_masters_node_ids is not None else None
-
+        
         # profile
         self.profile = None
         self.send_dynamic_profile_every = 10. if self.node_type is Node.WORLD else 10.  # seconds
         self.get_new_token_every = 23 * 60. * 60. + 30 * 60.  # seconds (23 hours and 30 minutes, safer)
         self.publish_rendezvous_every = 10.
         self._last_rendezvous_time = 0.
+        
+        # automatic address update and relay refresh (if needed)
+        self.relay_reservation_expiry: Optional[datetime] = None
+        self.address_check_every = 5 * 60.  # Check every 5 minutes
 
         # interview of newly connected nodes
         self.interview_timeout = 45.  # seconds
         self.connect_without_ack_timeout = 45.  # seconds
 
         # root server-related
-        self.root_endpoint = 'https://unaiverse.io/api'  # WARNING: EDITING THIS ADDRESS VIOLATES THE LICENSE
+        self.root_endpoint = root_endpoint if root_endpoint is not None else 'https://unaiverse.diism.unisi.it/api'
         self.node_token = ""
         self.public_key = ""
 
@@ -129,30 +113,12 @@ class Node:
         self.last_rejected_agents = deque(maxlen=self.conn)
         self.joining_world_info = None
 
-        # getting node ID (retrieving by name), if it was not provided (the node is created if not existing)
-        if self.node_id is None:
-            self.node_id = self.get_node_id_by_name(node_name, create_if_missing=True)
-            if self.node_id is None:
-                raise ValueError("Cannot create node: node ID was not set")
-
-        # getting node ID of world masters, if needed
-        if world_masters_node_names is not None and len(world_masters_node_names) > 0:
-            for master_node_name in world_masters_node_names:
-                master_node_id = self.get_node_id_by_name(master_node_name, create_if_missing=False)
-                if master_node_id is None:
-                    raise ValueError("Cannot find world master node ID given its name: {master_node_id}")
-                else:
-                    if self.world_masters_node_ids is None:
-                        self.world_masters_node_ids = set()
-                    self.world_masters_node_ids.add(master_node_id)
-
         self.prev_snapshot = None
-
-        # forcing IPs, if needed
-        ips = os.getenv("NODE_IPS").split(":") if os.getenv("NODE_IPS", None) is not None else None
 
         # here you can setup max_instances, max_channels, enable_logging at libp2p level etc.
         P2P.setup_library(enable_logging=os.getenv("NODE_LIBP2PLOG", "0") == "1")
+        
+        offer_relay_facilities = self.node_type is Node.WORLD  # only world nodes offer relay facilities
 
         # create P2P node in the whole universe (it has fields 'addresses', and 'peer_id', and 'libp2p')
         p2p_u = P2P(max_connections=1000, ips=None,
@@ -168,10 +134,6 @@ class Node:
                     wait_public_reachability=os.getenv("NODE_WAIT_PUBLIC", "0") == "1",
                     port=(int(os.getenv("NODE_STARTING_PORT", "0")) + 2)
                     if int(os.getenv("NODE_STARTING_PORT", "0")) > 0 else 0)
-
-        if ips is not None:
-            p2p_u.replace_ip_addresses(ips)
-            p2p_w.replace_ip_addresses(ips)
 
         # get first node token
         self.get_node_token(peer_ids=[p2p_u.peer_id, p2p_w.peer_id])  # passing both the peer IDs
@@ -267,27 +229,6 @@ class Node:
         """Print an error message to the console, if enabled."""
         self.out("<ERROR> " + msg)
 
-    def get_node_id_by_name(self, node_name: str, create_if_missing: bool = False) -> str | None:
-        try:
-            response = self.__root("/account/node/TODO/TODO/retrieve",  # TODO
-                                   payload={"node_name": node_name,
-                                            "password": self.unaiverse_key})
-            if response["node_id"] is None and create_if_missing:
-                if self.node_type is Node.WORLD:
-
-                    # discarding basic roles (public_agent, world_agent, ...)
-                    roles = list(set(self.world.ROLE_BITS_TO_STR.values()) - set(World.ROLE_BITS_TO_STR.values()))
-                else:
-                    roles = []
-                response = self.__root("/account/node/TODO/TODO/create",  # TODO
-                                       payload={"node_name": node_name,
-                                                "roles": roles,
-                                                "password": self.unaiverse_key})
-            return response["node_id"]
-        except Exception as e:
-            self.err(f"Error while retrieving node named {node_name} from server\n{e}")
-            return None
-
     def get_node_token(self, peer_ids) -> None:
         response = None
 
@@ -295,7 +236,7 @@ class Node:
             try:
                 response = self.__root("/account/node/token/generate",
                                        payload={"node_id": self.node_id,
-                                                "password": self.unaiverse_key
+                                                "password": self.password
                                                 if self.node_token is None or len(self.node_token) == 0 else None,
                                                 "node_token": self.node_token, "peer_ids": json.dumps(peer_ids)})
                 break
@@ -508,6 +449,7 @@ class Node:
 
             last_dynamic_profile_time = self.clock.get_time()
             last_get_token_time = self.clock.get_time()
+            last_address_check_time = self.clock.get_time()
             assert cycles is None or cycles > 0, "Invalid number of cycles"
 
             # external event manipulated by inspector commands
@@ -700,6 +642,58 @@ class Node:
                 if self.clock.get_time() - last_get_token_time >= self.get_new_token_every:
                     self.get_node_token(peer_ids=[self.get_public_peer_id(), self.get_world_peer_id()])
                     last_get_token_time = self.clock.get_time()
+                
+                # check for address changes every "N" seconds
+                if self.clock.get_time() - last_address_check_time >= self.address_check_every:
+                    self.out("Performing periodic check for address changes...")
+                    last_address_check_time = self.clock.get_time()
+                    try:
+                        current_public_addrs = self.conn.p2p_public.get_node_addresses()
+                        current_private_addrs = self.conn.p2p_world.get_node_addresses()
+                        profile_public_addrs = self.profile.get_dynamic_profile().get('peer_addresses', [])
+                        profile_private_addrs = self.profile.get_dynamic_profile().get('private_peer_addresses', [])
+                        
+                        # TODO: if public addresses changed... (if this makes any sense)
+                        if set(current_public_addrs) != set(profile_public_addrs):
+                            self.out(f"Address change detected for the public instance! New addresses: {current_public_addrs}")
+                            # Update profile in-place
+                            # address_list = self.profile.get_dynamic_profile()['peer_addresses']
+                            # address_list.clear()
+                            # address_list.extend(current_public_addrs)
+                            # self.profile.mark_change_in_connections()
+                        
+                        # if private addresses changed, update the profile and notify the world
+                        elif set(current_private_addrs) != set(profile_private_addrs):
+                            self.out(f"Address change detected for the private instance! New addresses: {current_public_addrs}")
+                            # Update profile in-place
+                            address_list = self.profile.get_dynamic_profile()['private_peer_addresses']
+                            address_list.clear()
+                            address_list.extend(current_private_addrs)
+                            # self.profile.mark_change_in_connections()
+                            
+                            world_peer_id = self.profile.get_dynamic_profile().get('connections', {}).get('world_peer_id')
+                            if self.node_type is Node.AGENT and world_peer_id:
+                                self.out("Notifying world of address change...")
+                                self.conn.send(world_peer_id, content_type=Msg.ADDRESS_UPDATE,
+                                               content={'addresses': self.profile.get_dynamic_profile()['private_peer_addresses']})
+                        else:
+                            self.out("No address changes detected.")
+                    except Exception as e:
+                        self.err(f"Failed to check for address updates: {e}")
+                
+                # refresh relay reservation if nearing expiration
+                if self.relay_reservation_expiry is not None:
+                    time_to_expiry = self.relay_reservation_expiry - datetime.now(timezone.utc)
+                    if time_to_expiry < timedelta(minutes=15):
+                        self.out("Relay reservation nearing expiration. Attempting to renew...")
+                        try:
+                            world_private_peer_id = self.profile.get_dynamic_profile()['connections']['world_peer_id']
+                            new_expiry_utc = self.conn.p2p_world.reserve_on_relay(world_private_peer_id)
+                            self.relay_reservation_expiry = datetime.fromisoformat(new_expiry_utc.replace('Z', '+00:00'))
+                            self.out(f"Relay reservation renewed. New expiration: {self.relay_reservation_expiry.strftime('%Y-%m-%d %H:%M:%S')} UTC")
+                        except Exception as e:
+                            self.err(f"Failed to renew relay reservation: {e}. Node may become unreachable.")
+                            self.relay_reservation_expiry = None # Stop trying if it fails
 
                 # taking to the inspector
                 if self.inspector_connected:
@@ -823,8 +817,8 @@ class Node:
             enter_left = an_agent_joined_the_world or an_agent_left_the_world
             timeout = (self.clock.get_time() - self._last_rendezvous_time) >= self.publish_rendezvous_every
 
-            if enter_left or timeout or self.world.a_role_was_changed_by_the_world:
-                if enter_left or self.world.a_role_was_changed_by_the_world:
+            if enter_left or timeout or self.world.role_changed_by_world or self.world.received_address_update:
+                if enter_left or self.world.role_changed_by_world:
 
                     # updating world-node profile with the summary of currently connected agents in the world
                     world_agents_peer_infos = self.conn.get_all_connected_peer_infos(NodeConn.WORLD_AGENTS)
@@ -852,7 +846,8 @@ class Node:
                              f"(tag: {self.clock.get_cycle()}, peers: {len(world_all_peer_infos)})")
 
                     # clearing
-                    self.world.a_role_was_changed_by_the_world = False
+                    self.world.role_changed_by_world = False
+                    self.world.received_address_update = False
 
         # updating list of node connections (being this a world or a plain agent)
         if added_peers or removed_peers:
@@ -1072,6 +1067,18 @@ class Node:
                                           content_type=Msg.PROFILE):
                         self.err("Failed to send profile, removing (disconnecting) " + msg.sender)
                         self.__purge(msg.sender)
+            
+            # (E) the world node received an ADDRESS_UPDATE from an agent
+            elif msg.content_type == Msg.ADDRESS_UPDATE:
+                self.out("Received an address update from " + msg.sender)
+
+                if self.node_type is Node.WORLD and msg.sender in self.world.all_agents:
+                    all_addresses = msg.content.get('addresses')
+                    if all_addresses and isinstance(all_addresses, list):
+                        # update the address both in the connection and in the profile
+                        self.conn.set_addresses_in_peer_info(msg.sender, all_addresses)
+                        self.world.set_addresses_in_profile(msg.sender, all_addresses)
+                        self.out(f"Waiting rendezvous publish after address update from {msg.sender}")
 
             # (E) got stream data
             elif msg.content_type == Msg.STREAM_SAMPLE:
@@ -1228,6 +1235,28 @@ class Node:
         peer_id = self.ask_to_get_in_touch(addresses, public=False, before_updating_pools_fcn=self.conn.set_world)
 
         if peer_id is not None:
+            # Relay reservation logic for non-public peers
+            if not self.conn.p2p_world.is_public and self.conn.p2p_world.relay_is_enabled:
+                self.out("Node is not publicly reachable. Attempting to reserve a slot on the world's private network.")
+                try:
+                    expiry_utc = self.conn.p2p_world.reserve_on_relay(peer_id)
+                    self.relay_reservation_expiry = datetime.fromisoformat(expiry_utc.replace('Z', '+00:00'))
+                    self.out(f"Reserved relay slot. Expires at {self.relay_reservation_expiry.strftime('%Y-%m-%d %H:%M:%S')} UTC")
+
+                    self.out("Fetching updated address list from transport layer...")
+                    complete_private_addrs = self.conn.p2p_world.get_node_addresses()
+                    
+                    # Update the profile with this definitive list (IN-PLACE)
+                    address_list = self.profile.get_dynamic_profile()['private_peer_addresses']
+                    address_list.clear()
+                    address_list.extend(complete_private_addrs)
+                    
+                    self.out("Notifying world of the complete updated address list...")
+                    self.conn.send(peer_id, channel_trail=None,
+                                   content_type=Msg.ADDRESS_UPDATE,
+                                   content={'addresses': complete_private_addrs})
+                except Exception as e:
+                    self.err(f"An error occurred during relay reservation: {e}.")
 
             # subscribing to the world rendezvous topic, from which we will get fresh information
             # about the world agents and masters

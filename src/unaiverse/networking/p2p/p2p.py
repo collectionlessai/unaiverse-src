@@ -1,32 +1,22 @@
-"""
-       █████  █████ ██████   █████           █████ █████   █████ ██████████ ███████████    █████████  ██████████
-      ░░███  ░░███ ░░██████ ░░███           ░░███ ░░███   ░░███ ░░███░░░░░█░░███░░░░░███  ███░░░░░███░░███░░░░░█
-       ░███   ░███  ░███░███ ░███   ██████   ░███  ░███    ░███  ░███  █ ░  ░███    ░███ ░███    ░░░  ░███  █ ░ 
-       ░███   ░███  ░███░░███░███  ░░░░░███  ░███  ░███    ░███  ░██████    ░██████████  ░░█████████  ░██████   
-       ░███   ░███  ░███ ░░██████   ███████  ░███  ░░███   ███   ░███░░█    ░███░░░░░███  ░░░░░░░░███ ░███░░█   
-       ░███   ░███  ░███  ░░█████  ███░░███  ░███   ░░░█████░    ░███ ░   █ ░███    ░███  ███    ░███ ░███ ░   █
-       ░░████████   █████  ░░█████░░████████ █████    ░░███      ██████████ █████   █████░░█████████  ██████████
-        ░░░░░░░░   ░░░░░    ░░░░░  ░░░░░░░░ ░░░░░      ░░░      ░░░░░░░░░░ ░░░░░   ░░░░░  ░░░░░░░░░  ░░░░░░░░░░ 
-                 A Collectionless AI Project (https://collectionless.ai)
-                 Registration/Login: https://unaiverse.io
-                 Code Repositories:  https://github.com/collectionlessai/
-                 Main Developers:    Stefano Melacci (Project Leader), Christian Di Maio, Tommaso Guidi
-"""
-import re
-import time
-import base64
-import logging
-import threading
-from .messages import Msg
+# Assume golibp2p.py holds the LibP2P class that loads the .so file
+# Assume lib_types.py holds the TypeInterface class for C type conversions
+# Assume messages.py holds the Msg class
+
 from __future__ import annotations
-from .lib_types import TypeInterface
+import base64
+import re
+import threading
+import time
 from typing import Optional, List, Dict, Any, TYPE_CHECKING
-    from .golibp2p import GoLibP2P # Assuming this class loads the library
+import logging
+from .messages import Msg
 
 # Local imports (adjust path if necessary)
+from .lib_types import TypeInterface
 
 # Conditional import for type hinting to avoid circular dependencies
 if TYPE_CHECKING:
+    from .golibp2p import GoLibP2P # Assuming this class loads the library
 
 logger = logging.getLogger('P2P')
 
@@ -47,25 +37,26 @@ class P2P:
         libp2p (LibP2P): Static class attribute holding the loaded Go library instance.
                          Must be set before instantiating P2P. Example: P2P.libp2p = LibP2P()
         peer_id (str): The Peer ID of the initialized local node.
-        addresses (List[str]): List of multiaddresses the local node is listening on.
+        addresses (Optional[List[str]]): List of multiaddresses the local node is listening on.
+        is_public (bool): Whether the node is publicly reachable.
         peer_map (Dict[str, Any]): A dictionary to potentially store information about connected peers (managed manually or by polling thread).
     """
     # --- Class-level state ---
     libp2p: 'GoLibP2P'                  # Static variable for the loaded Go library
     _type_interface: 'TypeInterface'    # Shared type interface for all instances
-
+    
     # --- Config class variables for configuration ---
     _MAX_INSTANCES = 32
     _MAX_NUM_CAHNNELS = 100
     _MAX_QUEUE_PER_CHANNEL = 50
     _MAX_MESSAGE_SIZE = 50 * 1024 * 1024  # 50 MB
-
+    
     # --- Class-level tracking ---
     _library_initialized = False
     _initialize_lock = threading.Lock()
     _instance_ids = [False, ] * _MAX_INSTANCES
     _instance_lock = threading.Lock()
-
+    
     @classmethod
     def setup_library(cls,
                       max_instances: Optional[int] = None,
@@ -80,10 +71,10 @@ class P2P:
             if cls._library_initialized:
                 logger.warning("P2P library is already initialized. Skipping setup.")
                 return
-
+            
             if not hasattr(cls, 'libp2p') or cls.libp2p is None:
                 raise P2PError("Library not loaded before setup. Check package __init__.py")
-
+            
             # Configure Python logging based on the flag
             if not enable_logging:
                 logger.setLevel(logging.WARNING)
@@ -112,10 +103,10 @@ class P2P:
                 cls._type_interface.to_go_int(_max_msg_size),
                 cls._type_interface.to_go_bool(enable_logging)
             )
-
+            
             cls._library_initialized = True
             logger.info("✅ Go library initialized successfully.")
-
+    
     def __init__(self,
                  port: int = 0,
                  ips: List[str] = None,
@@ -166,32 +157,22 @@ class P2P:
         self._enable_relay_service = enable_relay_service
         self._wait_public_reachability = wait_public_reachability
         self._max_connections = max_connections
-        self._addresses: Optional[List[str]] = None
         self._peer_id: Optional[str] = None
         self._peer_map: Dict[str, Any] = {} # Map to store peer info {peer_id: info}
         self._poll_interval = 5.0 # Polling interval for background threads
         self._stop_event = threading.Event()
 
-        # Prepare arguments for the Go function
-        go_instance = P2P._type_interface.to_go_int(self._instance)
-        go_port = P2P._type_interface.to_go_int(port)
-        go_ips_json = P2P._type_interface.to_go_json(self._ips)
-        go_enable_relay_client = P2P._type_interface.to_go_bool(enable_relay_client)
-        go_enable_relay_service = P2P._type_interface.to_go_bool(enable_relay_service)
-        go_wait_public_reachability = P2P._type_interface.to_go_bool(wait_public_reachability)
-        go_max_connections = P2P._type_interface.to_go_int(max_connections)
-
         logger.info(f"🐍 Creating Node (Instance ID: {self._instance})...")
         try:
             # Call the Go function
             result_ptr = P2P.libp2p.CreateNode(
-                go_instance,
-                go_port,
-                go_ips_json,
-                go_enable_relay_client,
-                go_enable_relay_service,
-                go_wait_public_reachability,
-                go_max_connections,
+                P2P._type_interface.to_go_int(self._instance),
+                P2P._type_interface.to_go_int(port),
+                P2P._type_interface.to_go_json(self._ips),
+                P2P._type_interface.to_go_bool(enable_relay_client),
+                P2P._type_interface.to_go_bool(enable_relay_service),
+                P2P._type_interface.to_go_bool(wait_public_reachability),
+                P2P._type_interface.to_go_int(max_connections),
             )
             result = P2P._type_interface.from_go_ptr_to_json(result_ptr)
 
@@ -205,39 +186,31 @@ class P2P:
                 raise P2PError(f"[Instance {self._instance}] Failed to create node: {err_msg}")
 
             message_data = result.get('message')
-            addresses = message_data.get("addresses", [])
-            is_public = message_data.get("isPublic", False)
-
+            initial_addresses = message_data.get("addresses", [])
+            self._is_public = message_data.get("isPublic", False)
+            
             # check teh returned data
-            if not isinstance(addresses, list) or not addresses:
+            if not isinstance(initial_addresses, list) or not initial_addresses:
                 err_msg = "Received empty or invalid addresses list from Go CreateNode."
                 logger.error(f"[Instance {self._instance}] {err_msg}")
                 raise P2PError(f"[Instance {self._instance}] {err_msg}")
-            if not isinstance(is_public, bool):
-                err_msg = "Received invalid value for 'isPublic' from Go CreateNode (should be bool)."
-                logger.error(f"[Instance {self._instance}] {err_msg}")
-                raise P2PError(f"[Instance {self._instance}] {err_msg}")
 
-            self._addresses = addresses
-            self._is_public = is_public
-            try:
-                self._peer_id = self._addresses[0].split("/")[-1]
-            except (IndexError, AttributeError, TypeError):
-                logger.error(f"[Instance {self._instance}] Failed to parse Peer ID from addresses: {self._addresses}")
-                raise P2PError(f"[Instance {self._instance}] Failed to parse Peer ID from returned addresses.")
+            self._peer_id = initial_addresses[0].split("/")[-1]
+            #Cache for the dynamic addresses property
+            self._address_cache: Optional[List[str]] = initial_addresses
+            self._address_cache_time: float = time.monotonic()
 
-            # re-ordering/sorting, putting /p2p-circuit/ at the very end and preferring /udp/
-            addresses_udp_webrtc = [a for a in self._addresses if "/udp/" and "/webrtc" in a]
-            addresses_udp_others = [a for a in self._addresses if "/udp/" and "/webrtc" not in a]
-            addresses_others = [a for a in self._addresses if "/udp/" not in a]
-            addresses_circuit = [a for a in self._addresses if "/p2p-circuit/" in a]
-            addresses = addresses_udp_others + addresses_udp_webrtc + addresses_others + addresses_circuit
-            self._addresses.clear()
+            # re-ordering/sorting, discarding /p2p-circuit/ because right now it is useless and preferring /udp/
+            addresses_quic = [a for a in self._address_cache if "/quic-v1/" in a]
+            addresses_webrtc = [a for a in self._address_cache if "/webrtc" in a]
+            addresses_tcp = [a for a in self._address_cache if "/tcp/" in a]
+            addresses = addresses_quic + addresses_webrtc + addresses_tcp
+            self._address_cache.clear()
             for _addr in addresses:
-                self._addresses.append(_addr)
+                self._address_cache.append(_addr)
 
             logger.info(f"✅ [Instance {self._instance}] Node created with ID: {self._peer_id}")
-            logger.info(f"👂 [Instance {self._instance}] Listening on: {self._addresses}")
+            logger.info(f"👂 [Instance {self._instance}] Listening on: {self._address_cache}")
             logger.info(f"🌐 [Instance {self._instance}] Publicly reachable: {self._is_public}")
 
             # Start background threads if desired (currently commented out in original)
@@ -260,22 +233,6 @@ class P2P:
 
         # # --- Background Threads ---
         self._stop_event = threading.Event() # Event to signal threads to stop
-
-        # logger.info("🧵 Starting background polling threads...")
-        # # Start a thread to periodically get connected peers
-        # self._get_connected_peers_thread = threading.Thread(
-        #     target=self._poll_connected_peers,
-        #     daemon=True # Allows program exit even if thread is running
-        # )
-        # self._get_connected_peers_thread.start()
-
-        # logger.info("🧵 Starting message queue polling thread...")
-        # # Start a thread to periodically check message queue length
-        # self._check_message_queue_thread = threading.Thread(
-        #     target=self._poll_message_queue,
-        #     daemon=True
-        # )
-        # self._check_message_queue_thread.start()
 
         logger.info("🎉 Node created successfully and background polling started.")
 
@@ -354,13 +311,13 @@ class P2P:
             if result is None:
                 logger.error("Failed to disconnect from peer, received null result.")
                 raise P2PError("Failed to disconnect from peer, received null result.")
-
+            
             if result.get('state') == "Error":
                 logger.error(f"Failed to disconnect from peer '{peer_id}': {result.get('message', 'Unknown Go error')}")
                 raise P2PError(f"Failed to disconnect from peer '{peer_id}': {result.get('message', 'Unknown Go error')}")
 
             logger.info(f"✅ Successfully disconnected from {peer_id}")
-
+            
             # Optionally remove from internal peer map
             # if peer_id in self._peer_map: del self._peer_map[peer_id]
 
@@ -384,7 +341,7 @@ class P2P:
         if not channel or not isinstance(channel, str):
             logger.error("Invalid channel provided.")
             raise ValueError("Invalid channel provided.")
-
+        
         if not isinstance(msg, Msg):
             logger.error("Invalid message provided (must be of type Msg).")
             raise ValueError("Invalid message provided (must be of type Msg).")
@@ -406,22 +363,22 @@ class P2P:
                 P2P._type_interface.to_go_int(payload_len),
             )
             result = P2P._type_interface.from_go_ptr_to_json(result_ptr)
-
+            
             if result is None:
                 logger.error(f"Failed to send direct message to {peer_id}, received null result.")
                 raise P2PError(f"Failed to send direct message to {peer_id}, received null result.")
-
+                
             if result.get('state') == "Error":
                 logger.error(f"Failed to send direct message to '{peer_id}': {result.get('message', 'Unknown Go error')}")
                 raise P2PError(f"Failed to send direct message to '{peer_id}': {result.get('message', 'Unknown Go error')}")
 
             logger.info(f"✅ Message sent successfully to {peer_id}.")
-
+        
         except Exception as e:
             logger.error(f"❌ Sending direct message to {peer_id} failed: {e}")
             raise P2PError(f"Sending direct message to {peer_id} failed") from e
 
-
+        
 
     def broadcast_message(self, channel: str, msg: Msg) -> None:
         """
@@ -459,15 +416,15 @@ class P2P:
             )
 
             result = P2P._type_interface.from_go_ptr_to_json(result_ptr)
-
+            
             if result is None:
                 logger.error(f"Failed to broadcast message on channel {channel}, received null result.")
                 raise P2PError(f"Failed to broadcast message on channel {channel}, received null result.")
-
+            
             if result.get('state') == "Error":
                 logger.error(f"Failed to broadcast message on channel '{channel}': {result.get('message', 'Unknown Go error')}")
                 raise P2PError(f"Failed to broadcast message on channel '{channel}': {result.get('message', 'Unknown Go error')}")
-
+            
         except Exception as e:
             logger.error(f"❌ Broadcasting to {channel} failed: {e}")
             raise P2PError(f"Broadcasting to {channel} failed") from e
@@ -544,7 +501,7 @@ class P2P:
                     # This assumes Msg.from_bytes can parse your message protocol from decoded_data
                     # and that Msg objects store sender, type, channel intrinsically or can be set.
                     msg_obj = Msg.from_bytes(decoded_data)
-
+                    
                     # --- CRITICAL SECURITY CHECK ---
                     # Verify that the sender claimed inside the message payload
                     # matches the cryptographically verified sender from the network layer.
@@ -664,8 +621,7 @@ class P2P:
             relay_peer_id: The peerID of the relay node
 
         Returns:
-            A dictionary containing the addresses to contact the local node via relay (ID and Addrs),
-            confirming the peer with which the reservation was made.
+            The UTC expiration timestamp of the reservation as an ISO 8601 string.
 
         Raises:
             P2PError: If the reservation fails.
@@ -689,10 +645,12 @@ class P2P:
                 logger.error(f"Failed to reserve on relay '{relay_peer_id}': {result.get('message', 'Unknown Go error')}")
                 raise P2PError(f"Failed to reserve on relay '{relay_peer_id}': {result.get('message', 'Unknown Go error')}")
 
-            addr_info = result.get('message', {})
-            relayed_addrs = addr_info.get('Addrs', [])
-            logger.info(f"✅ Reservation successful. Local node's relayed addresses: {relayed_addrs}")
-            return relayed_addrs
+            expiration_utc = result.get('message', {})
+            if not isinstance(expiration_utc, str):
+                raise P2PError(f"Expected expiration timestamp string, but got {type(expiration_utc)}")
+            
+            logger.info(f"✅ Reservation successful. Expires at: {expiration_utc}")
+            return expiration_utc
 
         except Exception as e:
             logger.error(f"❌ Reservation on {relay_peer_id} failed: {e}")
@@ -707,13 +665,28 @@ class P2P:
 
     @property
     def addresses(self) -> Optional[List[str]]:
-        """Returns the list of multiaddresses the local node is listening on."""
-        return self._addresses
-
+        """
+        Returns the list of multiaddresses the local node is listening on.
+        This property queries the Go layer directly, caching the result for performance.
+        """
+        now = time.monotonic()
+        if self._address_cache is None or (now - self._address_cache_time > 5.0):
+            try:
+                self._address_cache = self.get_node_addresses()
+                self._address_cache_time = now
+            except P2PError as e:
+                logger.warning(f"Failed to refresh address cache, returning stale data. Error: {e}")
+        return self._address_cache  # this could be None if initial fetch failed or if the property was called before node creation
+    
     @property
     def is_public(self) -> Optional[bool]:
         """Returns a boolean stating whether or not the local node is publicly reachable."""
         return self._is_public
+    
+    @property
+    def relay_is_enabled(self) -> bool:
+        """Returns whether the relay client functionality is enabled for this node."""
+        return self._enable_relay_client
 
     def get_node_addresses(self, peer_id: str = "") -> List[str]:
         """
@@ -776,7 +749,7 @@ class P2P:
             if result.get('state') == "Error":
                 logger.error(f"Failed to get connected peers: {result.get('message', 'Unknown Go error')}")
                 raise P2PError(f"Failed to get connected peers: {result.get('message', 'Unknown Go error')}")
-
+            
             peers_list = result.get('message', [])
             # Update internal map (optional)
             # logger.info(f"  Connected peers count: {len(peers_list)}") # Can be noisy
@@ -793,7 +766,7 @@ class P2P:
         Gets the full rendezvous state from the Go library, including peers and metadata.
 
         Returns:
-            - A dictionary representing the RendezvousState (containing 'peers',
+            - A dictionary representing the RendezvousState (containing 'peers', 
               'update_count', 'last_updated') if an update has been received.
             - None if no rendezvous topic is active or no updates have arrived yet.
 
@@ -807,7 +780,7 @@ class P2P:
             if result is None:
                 logger.error("Failed to get rendezvous peers, received null result.")
                 raise P2PError("Failed to get rendezvous peers, received null result.")
-
+            
             state = result.get('state')
             if state == "Empty":
                 logger.debug(f"[Instance {self._instance}] GetRendezvousPeers: No rendezvous messages received yet.")
@@ -852,7 +825,7 @@ class P2P:
             return -1 # Indicate error
 
     # --- Background Polling Methods ---
-
+    
     def _poll_connected_peers(self):
         """Target function for the connected peers polling thread."""
         logger.info("🧵 Starting connected peers polling thread...")
@@ -889,7 +862,7 @@ class P2P:
     def close(self, close_all: bool = False) -> None:
         """
         Gracefully shuts down the libp2p node and stops background threads.
-
+        
         Args:
             close_all: If True, closes all instances of the node. Default is False.
         """
@@ -918,7 +891,7 @@ class P2P:
             if result.get('state') == "Error":
                 logger.error(f"Node closure failed: {result.get('message', 'Unknown Go error')}")
                 raise P2PError(f"Node closure failed: {result.get('message', 'Unknown Go error')}")
-
+            
             close_msg = f"Node closed successfully ({'all instances' if close_all else f'instance {str(self._instance)}'})."
             logger.info(f"✅ {close_msg}")
 
@@ -928,7 +901,8 @@ class P2P:
 
         # 4. Clear internal state
         self._peer_id = None
-        self._addresses = None
+        self._address_cache = None
+        self._address_cache_time = time.monotonic()
         self._peer_map = {}
         with P2P._instance_lock:
             if close_all:
@@ -943,108 +917,6 @@ class P2P:
         logger.info("🐍 Python P2P object state cleared.")
 
         return close_msg
-
-    def extract_ips_ports_protocols(self) -> tuple[list[tuple[str, int, str]], list[str], list[int], list[str]]:
-        ipv4_pattern = re.compile(r'\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b')
-        ipv6_pattern = re.compile(
-            r'\b(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}\b|'
-            r'\b((?:[0-9a-fA-F]{1,4}(?::[0-9a-fA-F]{1,4})*)?::(?:[0-9a-fA-F]{1,4}(?::[0-9a-fA-F]{1,4})*)?)\b')
-        protocols_to_consider = ['tcp', 'udp']
-
-        ips_ports_protocols = set()
-        extracted_ip = None
-        extracted_port = None
-        extracted_protocol = None
-        ips = set()
-        ports = set()
-        protocols = set()
-        for i, s in enumerate(self.addresses):
-            found_ip = False
-
-            # find all IPv4 addresses
-            if not found_ip:
-                ipv4_matches = ipv4_pattern.findall(s)
-                for ip in ipv4_matches:
-
-                    # basic validation: ensure each octet is within 0-255
-                    if all(0 <= int(octet) <= 255 for octet in ip.split('.')):
-                        extracted_ip = ip
-                        found_ip = True
-                        break
-
-            # find all IPv6 addresses
-            if not found_ip:
-                ipv6_matches = ipv6_pattern.findall(s)
-                for ip_match in ipv6_matches:
-
-                    # findall for ipv6_pattern might return tuples for groups:
-                    # we want the string itself, which might be in group 0 or the full match
-                    if isinstance(ip_match, tuple):
-                        ip_to_add = next((item for item in ip_match if item), None)
-                    else:
-                        ip_to_add = ip_match
-
-                    if ip_to_add:
-                        extracted_ip = ip_to_add
-                        found_ip = True
-                        break
-
-            # find protocol and port
-            if found_ip:
-                for p in protocols_to_consider:
-                    if '/' + p + '/' in s:  # looking for /tcp/, for example
-                        extracted_protocol = p
-                        extracted_port = int(s.split('/' + p + '/')[1].split('/')[0])
-                        break
-
-                # saving
-                ips_ports_protocols.add((extracted_ip, extracted_port, extracted_protocol))
-                ips.add(extracted_ip)
-                ports.add(extracted_port)
-                protocols.add(extracted_protocol)
-
-        # converting to list(s)
-        return list(ips_ports_protocols), list(ips), list(ports), list(protocols)
-
-    def replace_ip_addresses(self, new_ips):
-        ipv4_pattern = re.compile(r'\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b')
-        ipv6_pattern = re.compile(
-            r'\b(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}\b|'
-            r'\b((?:[0-9a-fA-F]{1,4}(?::[0-9a-fA-F]{1,4})*)?::(?:[0-9a-fA-F]{1,4}(?::[0-9a-fA-F]{1,4})*)?)\b')
-
-        # copying original addresses
-        original_addresses = [addr for addr in self.addresses]
-
-        # clearing current addresses in P2P
-        self.addresses.clear()
-
-        # for each provided new IP, we copy the whole set of multi addresses, replacing all IPs found there
-        for new_ip in new_ips:
-            modified_unique_addresses = set()
-
-            # noinspection PyProtectedMember
-            for s in original_addresses:
-                current_string = s
-
-                def ipv4_replacer(match):
-                    matched_ip = match.group(0)
-
-                    # basic validation for IPv4 octets (0-255)
-                    if all(0 <= int(octet) <= 255 for octet in matched_ip.split('.')):
-                        return new_ip
-                    return matched_ip  # if not a valid IP, return the original match
-
-                # replace IPv4 addresses in the current string (checking it as well)
-                current_string = ipv4_pattern.sub(ipv4_replacer, current_string)
-
-                # replace IPv6 addresses in the current string (we assume any match of the pattern is valid)
-                current_string = ipv6_pattern.sub(new_ip, current_string)
-
-                # add the modified string to the set to ensure uniqueness
-                modified_unique_addresses.add(current_string)
-
-            # augmenting the addresses in P2P with the just altered ones
-            self.addresses.extend(list(modified_unique_addresses))
 
     def __enter__(self):
         """Enter context manager."""

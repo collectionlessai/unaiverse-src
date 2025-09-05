@@ -1,23 +1,10 @@
-"""
-       █████  █████ ██████   █████           █████ █████   █████ ██████████ ███████████    █████████  ██████████
-      ░░███  ░░███ ░░██████ ░░███           ░░███ ░░███   ░░███ ░░███░░░░░█░░███░░░░░███  ███░░░░░███░░███░░░░░█
-       ░███   ░███  ░███░███ ░███   ██████   ░███  ░███    ░███  ░███  █ ░  ░███    ░███ ░███    ░░░  ░███  █ ░ 
-       ░███   ░███  ░███░░███░███  ░░░░░███  ░███  ░███    ░███  ░██████    ░██████████  ░░█████████  ░██████   
-       ░███   ░███  ░███ ░░██████   ███████  ░███  ░░███   ███   ░███░░█    ░███░░░░░███  ░░░░░░░░███ ░███░░█   
-       ░███   ░███  ░███  ░░█████  ███░░███  ░███   ░░░█████░    ░███ ░   █ ░███    ░███  ███    ░███ ░███ ░   █
-       ░░████████   █████  ░░█████░░████████ █████    ░░███      ██████████ █████   █████░░█████████  ██████████
-        ░░░░░░░░   ░░░░░    ░░░░░  ░░░░░░░░ ░░░░░      ░░░      ░░░░░░░░░░ ░░░░░   ░░░░░  ░░░░░░░░░  ░░░░░░░░░░ 
-                 A Collectionless AI Project (https://collectionless.ai)
-                 Registration/Login: https://unaiverse.io
-                 Code Repositories:  https://github.com/collectionlessai/
-                 Main Developers:    Stefano Melacci (Project Leader), Christian Di Maio, Tommaso Guidi
-"""
 import os
 import sys
 import uuid
 import argparse
 import subprocess
 from pathlib import Path
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
 from unaiverse.networking.p2p import P2P
 
 # configuration
@@ -29,7 +16,7 @@ DOCKERFILE_CONTENT = """
 FROM python:3.12-slim-bookworm
 
 # Installing Go compiler
-RUN apt-get update && apt-get install -y --no-install-recommends build-essential curl git
+RUN apt-get update && apt-get install -y --no-install-recommends build-essential curl git 
 RUN rm -rf /var/lib/apt/lists/*
 RUN ARCH=$(dpkg --print-architecture) && curl -LO https://go.dev/dl/go1.24.5.linux-${ARCH}.tar.gz
 RUN ARCH=$(dpkg --print-architecture) && tar -C /usr/local -xzf go1.24.5.linux-${ARCH}.tar.gz
@@ -44,7 +31,7 @@ RUN mkdir -p /go/bin /go/src /go/pkg
 WORKDIR /unaiverse
 
 # Dependencies
-RUN <create_requirements.txt>
+RUN <create_requirements.txt> 
 RUN pip install --no-cache-dir -r requirements.txt --break-system-packages
 """
 
@@ -162,7 +149,6 @@ def run_in_docker(file_to_run: str, read_only_host_paths: list[str] = None, writ
     command = ["docker", "run",
                "--rm",  # automatically remove the container when it exits
                "-e", "PYTHONUNBUFFERED=1",  # ensure Python output is unbuffered
-               "-e", "NODE_IPS",
                "-e", "NODE_STARTING_PORT",
                "--name", CONTAINER_NAME]
 
@@ -284,16 +270,6 @@ if __name__ == "__main__":
 
     # marking
     os.environ["NODE_STARTING_PORT"] = args.port
-
-    # guessing IPs
-    P2P.setup_library()
-    dummy_p2p_node = P2P(max_connections=4, enable_relay_client=False, enable_relay_service=False,
-                         use_upnp=False, port=int(args.port))
-    _, host_ip_addresses, _, _ = dummy_p2p_node.extract_ips_ports_protocols()
-    dummy_p2p_node.close()
-
-    # saving guessed IPs
-    os.environ["NODE_IPS"] = ":".join(host_ip_addresses)
 
     # running the sandbox and the script
     sandbox(script_to_run, read_only_paths=read_only_folders, writable_paths=writable_folders)

@@ -1,17 +1,3 @@
-"""
-       █████  █████ ██████   █████           █████ █████   █████ ██████████ ███████████    █████████  ██████████
-      ░░███  ░░███ ░░██████ ░░███           ░░███ ░░███   ░░███ ░░███░░░░░█░░███░░░░░███  ███░░░░░███░░███░░░░░█
-       ░███   ░███  ░███░███ ░███   ██████   ░███  ░███    ░███  ░███  █ ░  ░███    ░███ ░███    ░░░  ░███  █ ░ 
-       ░███   ░███  ░███░░███░███  ░░░░░███  ░███  ░███    ░███  ░██████    ░██████████  ░░█████████  ░██████   
-       ░███   ░███  ░███ ░░██████   ███████  ░███  ░░███   ███   ░███░░█    ░███░░░░░███  ░░░░░░░░███ ░███░░█   
-       ░███   ░███  ░███  ░░█████  ███░░███  ░███   ░░░█████░    ░███ ░   █ ░███    ░███  ███    ░███ ░███ ░   █
-       ░░████████   █████  ░░█████░░████████ █████    ░░███      ██████████ █████   █████░░█████████  ██████████
-        ░░░░░░░░   ░░░░░    ░░░░░  ░░░░░░░░ ░░░░░      ░░░      ░░░░░░░░░░ ░░░░░   ░░░░░  ░░░░░░░░░  ░░░░░░░░░░ 
-                 A Collectionless AI Project (https://collectionless.ai)
-                 Registration/Login: https://unaiverse.io
-                 Code Repositories:  https://github.com/collectionlessai/
-                 Main Developers:    Stefano Melacci (Project Leader), Christian Di Maio, Tommaso Guidi
-"""
 import os
 import types
 from typing import Optional
@@ -64,7 +50,8 @@ class World(AgentBasics):
 
         # world specific attributes
         self.agent_badges: dict[str, list[dict]] = {}  # peer_id -> collected badges for other agents
-        self.a_role_was_changed_by_the_world: bool = False  # if the role of another agent was changed (world case)
+        self.role_changed_by_world: bool = False
+        self.received_address_update: bool = False
 
         # loading agent (actions) file
         if agent_actions_file is not None:
@@ -129,7 +116,18 @@ class World(AgentBasics):
                 self.err("Failed to send role change, removing (disconnecting) " + peer_id)
                 self._node_purge_fcn(peer_id)
             else:
-                self.a_role_was_changed_by_the_world = True
+                self.role_changed_by_world = True
+    
+    def set_addresses_in_profile(self, peer_id, addresses):
+        if peer_id in self.all_agents:
+            profile = self.all_agents[peer_id]
+            addrs = profile.get_dynamic_profile()['private_peer_addresses']
+            addrs.clear()  # warning: do not allocate a new list, keep the current one (it is referenced by others)
+            for _addrs in addresses:
+                addrs.append(_addrs)
+            self.received_address_update = True
+        else:
+            self.err(f"Cannot set addresses in profile, unknown peer_id {peer_id}")
 
     def add_badge(self, peer_id, score: float, badge_type: str, agent_token: str,
                   badge_description: Optional[str] = None):
@@ -146,7 +144,7 @@ class World(AgentBasics):
         # validate score
         if score < 0. or score > 1.:
             raise ValueError(f"Score must be in [0.0, 1.0], got {score}")
-
+        
         # Validate badge_type
         if badge_type not in AgentBasics.BADGE_TYPES:
             raise ValueError(f"Invalid badge_type '{badge_type}'. Must be one of {AgentBasics.BADGE_TYPES}.")
@@ -168,7 +166,7 @@ class World(AgentBasics):
             self.agent_badges[peer_id] = [badge]
         else:
             self.agent_badges[peer_id].append(badge)
-
+    
     # get all the badges requested by the world
     def get_all_badges(self):
         return self.agent_badges

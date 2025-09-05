@@ -603,6 +603,8 @@ func readFromSubscription(
 			continue // Continue the loop to try reading again.
 		}
 
+		log.Printf("[GO] 📬 Instance %d (id: %s): Received new PubSub message on topic '%s' from %s\n", instanceIndex, instanceHost.ID().String(), topic, msg.GetFrom())
+
 		// Ignore messages published by the local node itself.
 		if msg.GetFrom() == instanceHost.ID() {
 			continue // Skip processing self-sent messages.
@@ -714,9 +716,9 @@ func handleStream(instanceIndex int, s network.Stream) {
 			if err == io.EOF {
 				log.Printf("[GO] 🔌 Instance %d: Direct stream with peer %s closed (EOF).\n", instanceIndex, senderPeerID)
 			} else if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-				log.Printf("[GO] ⏳ Instance %d: Timeout reading length from direct stream with %s: %v\n", instanceIndex, senderPeerID, err)
+				log.Printf("[GO] ⏳ Instance %d: Timeout reading channel-length from direct stream with %s: %v\n", instanceIndex, senderPeerID, err)
 			} else {
-				log.Printf("[GO] ❌ Instance %d: Unexpected error reading length from direct stream with %s: %v\n", instanceIndex, senderPeerID, err)
+				log.Printf("[GO] ❌ Instance %d: Unexpected error reading channel-length from direct stream with %s: %v\n", instanceIndex, senderPeerID, err)
 			}
 			return // Exit handler for any read error on length.
 		}
@@ -727,9 +729,9 @@ func handleStream(instanceIndex int, s network.Stream) {
 			if err == io.EOF {
 				log.Printf("[GO] 🔌 Instance %d: Direct stream with peer %s closed (EOF).\n", instanceIndex, senderPeerID)
 			} else if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-				log.Printf("[GO] ⏳ Instance %d: Timeout reading length from direct stream with %s: %v\n", instanceIndex, senderPeerID, err)
+				log.Printf("[GO] ⏳ Instance %d: Timeout reading channel from direct stream with %s: %v\n", instanceIndex, senderPeerID, err)
 			} else {
-				log.Printf("[GO] ❌ Instance %d: Unexpected error reading length from direct stream with %s: %v\n", instanceIndex, senderPeerID, err)
+				log.Printf("[GO] ❌ Instance %d: Unexpected error reading channel from direct stream with %s: %v\n", instanceIndex, senderPeerID, err)
 			}
 			return // Exit handler for any read error on length.
 		}
@@ -742,9 +744,9 @@ func handleStream(instanceIndex int, s network.Stream) {
 			if err == io.EOF {
 				log.Printf("[GO] 🔌 Instance %d: Direct stream with peer %s closed (EOF).\n", instanceIndex, senderPeerID)
 			} else if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-				log.Printf("[GO] ⏳ Instance %d: Timeout reading length from direct stream with %s: %v\n", instanceIndex, senderPeerID, err)
+				log.Printf("[GO] ⏳ Instance %d: Timeout reading payload from direct stream with %s: %v\n", instanceIndex, senderPeerID, err)
 			} else {
-				log.Printf("[GO] ❌ Instance %d: Unexpected error reading length from direct stream with %s: %v\n", instanceIndex, senderPeerID, err)
+				log.Printf("[GO] ❌ Instance %d: Unexpected error reading payload from direct stream with %s: %v\n", instanceIndex, senderPeerID, err)
 			}
 			return // Exit handler for any read error on length.
 		}
@@ -1220,14 +1222,14 @@ func CreateNode(
 
 	// Configure Relay Service (ability to *be* a relay)
 	if enableRelayService {
-		limit := rc.DefaultLimit()         // open this to see the default limits
+		// limit := rc.DefaultLimit()         // open this to see the default limits
 		resources := rc.DefaultResources() // open this to see the default resource limits
 		// Set the duration for relayed connections. 0 means infinite.
-		limit.Duration = 100 * 365 * 24 * time.Hour // ~100 years
-		// Update the resource manager with our custom limits.
-		resources.Limit = limit
-		// Set the reservation TTL to a very long time, effectively infinite.
-		resources.ReservationTTL = 100 * 365 * 24 * time.Hour // ~100 years
+		ttl := 2 * time.Hour	// reduced to 2 hours, it will be the node's duty to refresh the reservation if needed.
+		// limit.Duration = ttl
+		// resources.Limit = limit
+		resources.Limit = nil	// same as setting rc.WithInfiniteLimits()
+		resources.ReservationTTL = ttl
 
 		// This single option enables the node to act as a relay for others, including hopping,
 		// with our custom resource limits.
@@ -1470,8 +1472,8 @@ func ConnectTo(
 //
 // Returns:
 //   - *C.char: A JSON string indicating success or failure.
-//     On success, the `message` contains the AddrInfo containing the relayed addresses.
-//     Structure (Success): `{"state":"Success", "message": {"ID": "RELAY_NODE_ID", "Addrs": ["/ip4/RELAY_IP/..."]}}`
+//     On success, the `message` contains the expiration date of the reservation (ISO 8601).
+//     Structure (Success): `{"state":"Success", "message": "2024-12-31T23:59:59Z"}`
 //     Structure (Error): `{"state":"Error", "message":"..."}`
 //   - IMPORTANT: The caller MUST free the returned C string using `FreeString`.
 //
@@ -1587,14 +1589,8 @@ func ReserveOnRelay(
 
 	log.Printf("[GO] ✅ Instance %d: Reservation successful on relay: %s.\n", instanceIndex, relayInfo.ID)
 
-	// --- 🎯 Construct the AddrInfo for the LOCAL node with its new addresses ---
-	localNodeRelayedAddrInfo := peer.AddrInfo{
-		ID:    instanceHost.ID(),
-		Addrs: constructedAddrs,
-	}
-
-	// Return the newly constructed AddrInfo for the local node.
-	return jsonSuccessResponse(localNodeRelayedAddrInfo)
+	// Return the expiration time of the reservation as confirmation.
+	return jsonSuccessResponse(reservation.Expiration)
 }
 
 // DisconnectFrom attempts to close any active connections to a specified peer
