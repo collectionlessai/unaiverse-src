@@ -1,3 +1,5 @@
+#!/bin/bash
+
 # create pip package (create only, see the "dist" folder)
 pip install build twine
 python -m build
