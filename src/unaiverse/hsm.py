@@ -19,8 +19,7 @@ import html
 import time
 import inspect
 import graphviz
-from typing_extensions import Self
-from collections.abc import Iterable, Callable
+from collections.abc import Callable
 
 
 class Action:
@@ -35,7 +34,7 @@ class Action:
     REQUEST_TIME_NAMES = {'_request_time'}
     REQUEST_UUID_NAMES = {'_request_uuid'}
     NOT_READY_PREFIXES = ('get_', 'got_', 'do_', 'done_')
-    KNOWN_SINGLE_STEP_ACTION_PREFIXES = ('ask_', )
+    KNOWN_SINGLE_STEP_ACTION_PREFIXES = ('ask_',)
 
     # Completion reasons
     MAX_STEPS_REACHED = 0  # Single-step actions always complete due to this reason
@@ -50,7 +49,21 @@ class Action:
                  ready: bool = True,
                  wildcards: dict[str, str | float | int] | None = None,
                  msg: str | None = None):
+        """Initializes an `Action` object, which encapsulates a method to be executed on a given object (`actionable`)
+        with specified arguments. It sets up various properties for managing multistep actions, including
+        `total_steps`, `total_time`, and `timeout`. It also handles wildcard argument replacement and checks for the
+        existence of required parameters. It identifies if the action is a 'not ready' type (e.g., `do_`, `get_`) and
+        sets its initial status accordingly.
 
+        Args:
+            name: The name of the method to call.
+            args: A dictionary of arguments for the method.
+            actionable: The object on which the method will be executed.
+            idx: A unique ID for the action.
+            ready: A boolean indicating if the action is ready to be executed.
+            wildcards: A dictionary for replacing placeholder values in arguments.
+            msg: An optional human-readable message.
+        """
         # Basic properties
         self.name = name  # Name of the action (name of the corresponding method)
         self.args = args  # Dictionary of arguments to pass to the action
@@ -117,7 +130,22 @@ class Action:
         self.__cannot_be_run_anymore = False
 
     def __call__(self, requester: object | None = None, requested_args: dict | None = None,
-                 request_time: float = -1, request_uuid: str | None = None) -> bool:
+                 request_time: float = -1, request_uuid: str | None = None):
+        """Executes the action's associated method. This is the main entry point for running an action. It handles
+        multistep logic by updating the step counter and checking for completion based on steps, time, or timeout.
+        It also injects dynamic arguments like the `requester`, `request_time`, and `request_uuid` into the method's
+        arguments before execution. If the action is a multistep action and has a completion step, it handles that
+        callback as well.
+
+        Args:
+            requester: The object that requested the action.
+            requested_args: Additional arguments provided by the requester.
+            request_time: The time of the request.
+            request_uuid: A unique ID for the request.
+
+        Returns:
+            A boolean indicating whether the action was executed successfully.
+        """
         self.__check_if_args_exist(requested_args, exception=True)
         actual_args = self.__get_actual_params(requested_args)  # Getting the actual values of the arguments
 
@@ -222,40 +250,100 @@ class Action:
             return False
 
     def __str__(self):
+        """Provides a string representation of the `Action` instance.
+
+        Returns:
+            A string containing a formatted summary of the instance.
+        """
         return (f"[Action: {self.name}] id: {self.id}, args: {self.args}, param_list: {self.param_list}, "
                 f"total_steps: {self.__total_steps}, "
                 f"total_time: {self.__total_time}, timeout: {self.__timeout}, "
                 f"ready: {self.ready}, requests: {str(self.requests)}, msg: {str(self.msg)}]")
 
     def set_as_ready(self):
+        """Sets the action's ready flag to `True`, indicating it can now be executed.
+        """
         self.ready = True
 
     def set_as_not_ready(self):
+        """Sets the action's ready flag to `False`, preventing it from being executed.
+        """
         self.ready = False
 
-    def is_ready(self, consider_requests: bool = True) -> bool:
+    def is_ready(self, consider_requests: bool = True):
+        """Checks if the action is ready to be executed. It returns `True` if the `ready` flag is set or if there are
+        any pending requests.
+
+        Args:
+            consider_requests: A boolean flag to include pending requests in the readiness check.
+
+        Returns:
+            A boolean indicating the action's readiness.
+        """
         return self.ready or (consider_requests and len(self.requests) > 0)
 
-    def was_last_step_done(self) -> bool:
+    def was_last_step_done(self):
+        """Determines if the action has reached its completion criteria, either by reaching the total number of steps
+        or by exceeding the maximum allowed execution time.
+
+        Returns:
+            True if the action is completed, False otherwise.
+        """
         return ((self.__total_steps > 0 and self.__step == self.__total_steps - 1) or
                 (self.__total_time > 0 and ((time.perf_counter() - self.__starting_time) >= self.__total_time)))
 
     def cannot_be_run_anymore(self):
+        """Checks if the action has reached a state where it cannot be executed further, for instance, due to
+        completion or a timeout.
+
+        Returns:
+            A boolean indicating if the action can no longer be run.
+        """
         return self.__cannot_be_run_anymore
 
     def has_completion_step(self):
+        """Checks if the action is designed to have a completion step, which is a final execution pass after the main
+        action logic has finished.
+
+        Returns:
+            A boolean indicating the presence of a completion step.
+        """
         return self.__has_completion_step
 
-    def is_multi_steps(self) -> bool:
+    def is_multi_steps(self):
+        """Determines if the action is configured to be a multistep action (i.e., not a single-step action).
+
+        Returns:
+            A boolean indicating if the action is multistep.
+        """
         return self.__total_steps != 1
 
     def has_a_timeout(self):
+        """Checks if a timeout has been configured for the action.
+
+        Returns:
+            A boolean indicating if a timeout is set.
+        """
         return self.__timeout > 0
 
     def is_delayed(self, starting_time: float):
+        """Checks if the action is currently in a delayed state and cannot be executed yet, based on a defined delay
+        period.
+
+        Args:
+            starting_time: The time the delay period began.
+
+        Returns:
+            True if the action is delayed, False otherwise.
+        """
         return self.__delay > 0 and (time.perf_counter() - starting_time) <= self.__delay
 
     def is_timed_out(self):
+        """Checks if the action has exceeded its configured timeout period since the last successful execution attempt.
+
+        Returns:
+            True if the action has timed out, False otherwise.
+        """
         if self.__timeout <= 0 or self.__timeout_starting_time <= 0:
             return False
         else:
@@ -269,7 +357,16 @@ class Action:
             else:
                 return False
 
-    def to_list(self, minimal=False) -> list:
+    def to_list(self, minimal=False):
+        """Converts the action's properties into a list for easy serialization. It can generate either a full or a
+        minimal representation.
+
+        Args:
+            minimal: A boolean flag to return a minimal list representation.
+
+        Returns:
+            A list containing the action's properties.
+        """
         if not minimal:
             if self.msg is not None:
                 msg = self.msg.encode("ascii", "xmlcharrefreplace").decode("ascii")
@@ -280,6 +377,16 @@ class Action:
             return [self.name, self.args]
 
     def same_as(self, name: str, args: dict | None):
+        """Compares the current action to a target action by name and arguments. It returns `True` if they are
+        considered the same, ignoring specific arguments like time or timeout.
+
+        Args:
+            name: The name of the target action.
+            args: The arguments of the target action.
+
+        Returns:
+            A boolean indicating if the actions are a match.
+        """
         if args is None:
             args = {}
 
@@ -296,7 +403,17 @@ class Action:
                 self.__check_if_args_exist(args) and
                 all(k in args_to_exclude or k not in self.args or self.args[k] == v for k, v in args.items()))
 
-    def __check_if_args_exist(self, args: dict, exception: bool = False) -> bool:
+    def __check_if_args_exist(self, args: dict, exception: bool = False):
+        """A private helper method to validate that all provided arguments for an action exist in the action's
+        parameter list. It can either raise a `ValueError` or return a boolean.
+
+        Args:
+            args: The dictionary of arguments to check.
+            exception: If `True`, a `ValueError` is raised on failure.
+
+        Returns:
+            True if all arguments are valid, False otherwise (if `exception` is `False`).
+        """
         if args is not None:
             for param_name in args.keys():
                 if param_name not in self.param_list:
@@ -307,38 +424,94 @@ class Action:
         return True
 
     def set_wildcards(self, wildcards: dict[str, str | float | int] | None):
+        """Replaces wildcard values in the action's arguments with actual values. This method is used to dynamically
+        configure actions with context-specific data.
+
+        Args:
+            wildcards: A dictionary mapping wildcard placeholders to their concrete values.
+        """
         self.wildcards = wildcards if wildcards is not None else {}
         self.__replace_wildcard_values()
 
     def add_request(self, generic_request_obj: object, args: dict, timestamp: float, uuid: str):
+        """Adds a new request to the action's internal list. This is used to track pending requests that might make the
+        action ready to be executed.
+
+        Args:
+            generic_request_obj: The object making the request.
+            args: The arguments associated with the request.
+            timestamp: The time the request was made.
+            uuid: A unique ID for the request.
+        """
         if generic_request_obj not in self.requests:
             self.requests[generic_request_obj] = (args, timestamp, uuid)
 
     def clear_requests(self):
+        """Clears all pending requests from the action's list.
+        """
         self.requests = {}
 
-    def get_requests(self) -> dict[object, tuple[dict, float, str]]:
+    def get_requests(self):
+        """Retrieves the dictionary of pending requests. Each entry in the dictionary maps a requester to its
+        arguments, timestamp, and UUID.
+
+        Returns:
+            A dictionary of pending requests.
+        """
         return self.requests
 
     def reset_step(self):
+        """Resets the action's state, including the step counter and timing metrics, allowing it to be re-run from the
+        beginning.
+        """
         self.__step = -1
         self.__starting_time = 0.
         self.__timeout_starting_time = 0.
         self.__cannot_be_run_anymore = False
 
     def get_step(self):
+        """Retrieves the current step index of the multistep action.
+
+        Returns:
+            An integer representing the current step index.
+        """
         return self.__step
 
     def get_total_steps(self):
+        """Retrieves the total number of steps configured for the action.
+        
+        Returns:
+            An integer representing the total steps.
+        """
         return self.__total_steps
 
     def get_starting_time(self):
+        """Retrieves the timestamp when the action's current execution started.
+
+        Returns:
+            A float representing the starting time.
+        """
         return self.__starting_time
 
     def get_total_time(self):
+        """Retrieves the total time configured for the action's execution.
+
+        Returns:
+            A float representing the total time.
+        """
         return self.__total_time
 
-    def __get_actual_params(self, additional_args: dict | None) -> dict | None:
+    def __get_actual_params(self, additional_args: dict | None):
+        """A private helper method that resolves all parameters for an action's execution. It combines the action's
+        default arguments, initial arguments, and any additional arguments provided during the call, ensuring all
+        necessary parameters have a value.
+
+        Args:
+            additional_args: A dictionary of arguments to be combined with the action's defaults.
+
+        Returns:
+            A dictionary of all resolved arguments, or `None` if a required parameter is missing.
+        """
         actual_params = {}
         params = self.param_list
         defaults = self.param_to_default_value
@@ -356,8 +529,15 @@ class Action:
         return actual_params
 
     def __action_name_to_callable(self, action_name: str):
-        """Get a function from its name."""
+        """A private helper method that resolves a string action name into a callable method on the `actionable`
+        object. It raises a `ValueError` if the method is not found.
 
+        Args:
+            action_name: The name of the method to retrieve.
+
+        Returns:
+            A callable function or method.
+        """
         if self.actionable is not None:
             action_fcn = getattr(self.actionable, action_name)
             if action_fcn is None:
@@ -367,11 +547,17 @@ class Action:
             return None
 
     def __get_action_params(self):
+        """A private helper method that inspects the signature of the action's method to populate the list of
+        supported parameters and their default values.
+        """
         self.param_list = [param_name for param_name in self.__sig.parameters.keys()]
         self.param_to_default_value = {param.name: param.default for param in self.__sig.parameters.values() if
                                        param.default is not inspect.Parameter.empty}
 
     def __replace_wildcard_values(self):
+        """A private helper method that replaces placeholder values (wildcards) in the action's arguments with their
+        actual, concrete values. It handles both single-value and list-based wildcards.
+        """
         if self.args_with_wildcards is None:
             self.args_with_wildcards = copy.deepcopy(self.args)  # Backup before applying wildcards (first time only)
         else:
@@ -392,6 +578,12 @@ class Action:
                             self.args[k] = v.replace(wildcard_from, wildcard_to)
 
     def __guess_total_steps(self, args):
+        """A private helper method that attempts to determine the total number of steps for a multistep action by
+        looking for specific keyword arguments like 'steps' or 'samples'.
+
+        Args:
+            args: The dictionary of arguments to inspect.
+        """
         for prefix in Action.KNOWN_SINGLE_STEP_ACTION_PREFIXES:
             if self.name.startswith(prefix):
                 return
@@ -402,6 +594,12 @@ class Action:
                 break
 
     def __guess_total_time(self, args):
+        """A private helper method that attempts to determine the total execution time for an action by looking for a
+        'time' or 'seconds' argument.
+
+        Args:
+            args: The dictionary of arguments to inspect.
+        """
         for prefix in Action.KNOWN_SINGLE_STEP_ACTION_PREFIXES:
             if self.name.startswith(prefix):
                 return
@@ -416,6 +614,12 @@ class Action:
                 break
 
     def __guess_timeout(self, args):
+        """A private helper method that attempts to determine the timeout duration for an action by looking for a
+        'timeout' argument.
+
+        Args:
+            args: The dictionary of arguments to inspect.
+        """
         for prefix in Action.KNOWN_SINGLE_STEP_ACTION_PREFIXES:
             if self.name.startswith(prefix):
                 return
@@ -429,6 +633,12 @@ class Action:
                 break
 
     def __guess_delay(self, args):
+        """A private helper method that attempts to determine a delay duration for an action by looking for a 'delay'
+        argument.
+
+        Args:
+            args: The dictionary of arguments to inspect.
+        """
         for arg_name in Action.DELAY_ARG_NAMES:
             if arg_name in args:
                 try:
@@ -440,12 +650,23 @@ class Action:
 
 
 class State:
-
     # Output print function
     out_fcn = print
 
     def __init__(self, name: str, idx: int = -1, action: Action | None = None, waiting_time: float = 0.,
                  blocking: bool = True, msg: str | None = None):
+        """Initializes a `State` object, which is a fundamental component of a Hybrid State Machine. A state can be
+        associated with an optional `Action` to be performed, a unique name, and various properties like waiting time
+        and blocking behavior. It also stores a human-readable message.
+
+        Args:
+            name: The unique name of the state.
+            idx: A unique ID for the state.
+            action: An optional `Action` object to be executed when the state is entered.
+            waiting_time: The number of seconds to wait before the state can transition.
+            blocking: A boolean indicating if the state blocks execution until a condition is met.
+            msg: An optional message associated with the state.
+        """
         self.name = name  # Name of the state (must be unique)
         self.action = action  # Inner state action (it can be None)
         self.id = idx  # Unique ID of the state (-1 if not needed)
@@ -458,7 +679,18 @@ class State:
         if self.msg is not None:
             self.msg = html.unescape(self.msg)
 
-    def __call__(self, *args, **kwargs) -> bool | None:
+    def __call__(self, *args, **kwargs):
+        """Executes the state's logic. If a `waiting_time` is set, it starts a timer. If an `action` is associated with
+        the state, it resets the action's step counter and then executes the action by calling it. It returns the
+        result of the action's execution.
+
+        Args:
+            *args: Positional arguments to pass to the action's `__call__` method.
+            **kwargs: Keyword arguments to pass to the action's `__call__` method.
+
+        Returns:
+            The return value of the action's `__call__` method, or `None` if no action is set.
+        """
         if self.starting_time <= 0.:
             self.starting_time = time.perf_counter()
 
@@ -474,10 +706,24 @@ class State:
             return None
 
     def __str__(self):
+        """Provides a string representation of the `State` object. This is useful for debugging and logging, as it
+        summarizes the state's properties, including its name, ID, waiting time, blocking status, and its associated
+        action (if any).
+
+        Returns:
+            A string containing a formatted summary of the state's instance.
+        """
         return (f"[State: {self.name}] id: {self.id}, waiting_time: {self.waiting_time}, blocking: {self.blocking}, "
                 f"action -> {self.action if self.action is not None else 'none'}, msg: {self.msg}")
 
-    def must_wait(self) -> bool:
+    def must_wait(self):
+        """Checks if the state needs to wait before it can transition. It compares the current elapsed time since
+        entering the state with the configured `waiting_time`. If the elapsed time is less than the waiting time,
+        it returns `True`, indicating the state is still in a waiting period.
+
+        Returns:
+            A boolean indicating whether the state is currently waiting.
+        """
         if self.waiting_time > 0.:
             if (time.perf_counter() - self.starting_time) >= self.waiting_time:
                 if HybridStateMachine.DEBUG:
@@ -488,7 +734,14 @@ class State:
         else:
             return False
 
-    def to_list(self) -> list:
+    def to_list(self):
+        """Converts the state's properties into a list. This method is useful for serialization, allowing the state to
+        be easily stored or transmitted. It includes the action's minimal list representation, the state's ID,
+        blocking status, waiting time, and message.
+
+        Returns:
+            A list containing the state's properties.
+        """
         if self.msg is not None:
             msg = self.msg.encode("ascii", "xmlcharrefreplace").decode("ascii")
         else:
@@ -497,17 +750,36 @@ class State:
                 ([self.id, self.blocking, self.waiting_time] + ([msg] if msg is not None else [])))
 
     def has_action(self):
+        """A simple getter that checks if an action is associated with the state.
+
+        Returns:
+            True if an action is set, False otherwise.
+        """
         return self.action is not None
 
     def get_starting_time(self):
+        """Retrieves the timestamp when the state's execution began. This is used to calculate the elapsed waiting time.
+
+        Returns:
+            A float representing the starting time.
+        """
         return self.starting_time
 
     def reset(self):
+        """Resets the state's internal counters. This method is typically called when re-entering a state. It sets the
+        `starting_time` to zero and also resets the associated action's step counter if an action exists.
+        """
         self.starting_time = 0.
         if self.action is not None:
             self.action.reset_step()
 
     def set_blocking(self, blocking: bool):
+        """Sets the blocking status of the state. A blocking state will prevent the state machine from transitioning to
+        the next state until the action is fully completed.
+
+        Args:
+            blocking: A boolean value to set the blocking status.
+        """
         self.blocking = blocking
 
 
@@ -518,6 +790,17 @@ class HybridStateMachine:
     def __init__(self, actionable: object, wildcards: dict[str, str | float | int] | None = None,
                  request_signature_checker: Callable[[object], bool] | None = None,
                  policy: Callable[[list[Action]], int] | None = None):
+        """Initializes a `HybridStateMachine` object, which orchestrates states and transitions. It manages a set of
+        states and actions, and handles the logic for transitions between states based on conditions and a defined
+        policy. It sets up initial and current states, wildcards for dynamic arguments, and references to an
+        `actionable` object whose methods are the actions to be called. It also includes debug and output settings.
+
+        Args:
+            actionable: The object on which actions (methods) are to be executed.
+            wildcards: A dictionary of key-value pairs for dynamic argument substitution.
+            request_signature_checker: An optional callable to validate incoming action requests.
+            policy: An optional callable that determines which action to execute from a list of feasible actions.
+        """
 
         # States are identified by strings, and then handled as State object with possibly and integer ID and action
         self.initial_state: str | None = None  # Initial state of the machine
@@ -562,6 +845,13 @@ class HybridStateMachine:
         Action.out_fcn = wrapped_out_fcn
 
     def to_dict(self):
+        """Serializes the state machine's current configuration into a dictionary. This includes its states,
+        transitions, roles, and the current action being executed. It is useful for saving the state of the machine or
+        for logging its status in a structured format.
+
+        Returns:
+            A dictionary representation of the state machine's properties.
+        """
         return {
             'initial_state': self.initial_state,
             'state': self.state,
@@ -581,6 +871,13 @@ class HybridStateMachine:
         }
 
     def __str__(self):
+        """Generates a human-readable string representation of the state machine. It uses the `to_dict` method to get
+        the machine's data and then formats it as a compact JSON string, making it easy to inspect for debugging
+        purposes.
+
+        Returns:
+            A formatted JSON string representing the state machine.
+        """
         hsm_data = self.to_dict()
 
         def custom_serializer(obj):
@@ -619,8 +916,13 @@ class HybridStateMachine:
         return remove_newlines_in_lists(json_str)
 
     def set_actionable(self, obj: object):
-        """Set the object where actions should be found (as methods)."""
+        """Sets the object on which the state machine's actions will be performed. This allows the same state machine
+        logic to be applied to different objects. It updates the `actionable` reference for all states and actions
+        within the machine.
 
+        Args:
+            obj: The object instance to be set as the new `actionable`.
+        """
         self.actionable = obj
 
         for state_obj in self.states.values():
@@ -628,38 +930,87 @@ class HybridStateMachine:
                 state_obj.action.actionable = obj
 
     def set_wildcards(self, wildcards: dict[str, str | float | int] | None):
-        """Set the dictionary of wildcards used during the loading process."""
+        """Sets the dictionary of wildcards that are used to dynamically replace placeholder values in action
+        arguments. It updates all actions with the new wildcard dictionary.
 
+        Args:
+            wildcards: A dictionary containing wildcard key-value pairs.
+        """
         self.wildcards = wildcards if wildcards is not None else {}
         for action in self.__id_to_action:
             action.set_wildcards(self.wildcards)
 
     def set_role(self, role: str):
-        """Set the role."""
+        """Sets the role of the agent associated with this state machine. This can be used to influence state machine
+        behavior based on the agent's role (e.g., 'teacher', 'student').
+
+        Args:
+            role: The string representation of the new role.
+        """
         self.role = role
 
-    def get_wildcards(self) -> dict[str, str | float | int]:
+    def get_wildcards(self):
+        """Retrieves the dictionary of wildcards currently used by the state machine.
+
+        Returns:
+            A dictionary of the wildcards.
+        """
         return self.wildcards
 
     def add_wildcards(self, wildcards: dict[str, str | float | int | list[str]]):
+        """Adds new key-value pairs to the existing wildcard dictionary. It also triggers an update to all actions with
+        the new combined dictionary.
+
+        Args:
+            wildcards: A dictionary of new wildcards to add.
+        """
         self.wildcards.update(wildcards)
         self.set_wildcards(self.wildcards)
 
     def update_wildcard(self, wildcard_key: str, wildcard_value: str | float | int):
+        """Updates the value of a single existing wildcard. It raises an error if the key does not exist. This method
+        is useful for changing a single dynamic value without redefining all wildcards.
+
+        Args:
+            wildcard_key: The key of the wildcard to update.
+            wildcard_value: The new value for the wildcard.
+        """
         assert wildcard_key in self.wildcards, f"{wildcard_key} is not a valid wildcard"
         self.wildcards[wildcard_key] = wildcard_value
         self.set_wildcards(self.wildcards)
 
-    def get_action_step(self) -> int:
+    def get_action_step(self):
+        """Retrieves the current step index of the action being executed. This is particularly useful for tracking the
+        progress of multistep actions.
+
+        Returns:
+            An integer representing the current step, or -1 if no action is running.
+        """
         return self.__action.get_step() if self.__action is not None else -1
 
     def is_busy_acting(self):
+        """Checks if the state machine is currently executing an action. This is determined by checking if the action
+        step index is greater than or equal to 0.
+
+        Returns:
+            True if an action is running, False otherwise.
+        """
         return self.get_action_step() >= 0
 
     def add_state(self, state: str, action: str = None, args: dict | None = None, state_id: int | None = None,
                   waiting_time: float | None = None, blocking: bool | None = None, msg: str | None = None):
-        """Add a state with its action (inner action) creating it from scratch."""
+        """Adds a new state to the state machine. This method can create a new state with an optional inner action or
+        update an existing state. It assigns a unique ID to the state and its action.
 
+        Args:
+            state: The name of the state to add.
+            action: The name of the action to associate with the state.
+            args: A dictionary of arguments for the action.
+            state_id: An optional unique ID for the state.
+            waiting_time: A float representing a delay before the state can transition.
+            blocking: A boolean indicating if the state is blocking.
+            msg: A human-readable message for the state.
+        """
         if args is None:
             args = {}
         sta_obj = None
@@ -692,27 +1043,43 @@ class HybridStateMachine:
         if len(self.__id_to_state) == 1 and self.state is None:
             self.set_state(sta.name)
 
-    def get_state_name(self) -> str | None:
-        """Returns the name of the current state of the HSM."""
+    def get_state_name(self):
+        """Retrieves the name of the current state of the state machine.
+
+        Returns:
+            A string with the state's name, or `None` if no state is set.
+        """
 
         return self.state
 
-    def get_state(self) -> State | None:
-        """Returns the current state of the HSM."""
+    def get_state(self):
+        """Retrieves the current `State` object of the state machine.
 
+        Returns:
+            A `State` object or `None`.
+        """
         return self.states[self.state] if self.state is not None else None
 
     def get_action(self):
+        """Retrieves the `Action` object that is currently being executed.
+
+        Returns:
+            An `Action` object or `None`.
+        """
         return self.__action
 
-    def get_action_name(self) -> str | None:
-        """Returns the name of current action being performed by the HSM, if any."""
+    def get_action_name(self):
+        """Retrieves the name of the action currently being executed.
 
+        Returns:
+            A string with the action's name, or `None` if no action is running.
+        """
         return self.__action.name if self.__action is not None else None
 
     def reset_state(self):
-        """Go back to the initial state of the HSM."""
-
+        """Resets the state machine to its initial state. This clears the current action, the previous state, and
+        the limbo state. It also resets the step counters for all actions within the machine.
+        """
         self.state = self.initial_state
         self.limbo_state = None
         self.prev_state = None
@@ -723,14 +1090,22 @@ class HybridStateMachine:
             if s.action is not None:
                 s.action.reset_step()
 
-    def get_states(self) -> Iterable[str]:
-        """Get all the states of the HSM."""
+    def get_states(self):
+        """Returns an iterable of all state names defined in the state machine.
 
+        Returns:
+            An iterable of state names.
+        """
         return list(set(list(self.transitions.keys()) + self.__id_to_state))
 
     def set_state(self, state: str):
-        """Set the current state."""
+        """Sets the current state of the state machine to a new, specified state. It also handles the transition logic
+        by resetting the current action and updating the previous state. Raises an error if the new state is not known
+        to the machine.
 
+        Args:
+            state: The name of the state to transition to.
+        """
         if state in self.transitions or state in self.states:
             self.prev_state = self.state
             self.state = state
@@ -745,7 +1120,19 @@ class HybridStateMachine:
     def add_transit(self, from_state: str, to_state: str,
                     action: str, args: dict | None = None, ready: bool = True,
                     act_id: int | None = None, msg: str | None = None):
-        """Define a transition between two states with an associated action."""
+        """Defines a transition between two states with an associated action. This method is central to building the
+        state machine's logic. It can also handle loading and integrating a complete state machine from a file,
+        resolving any state name clashes.
+
+        Args:
+            from_state: The name of the starting state.
+            to_state: The name of the destination state (can be a file path to load another HSM).
+            action: The name of the action to trigger the transition.
+            args: A dictionary of arguments for the action.
+            ready: A boolean indicating if the action is ready by default.
+            act_id: An optional unique ID for the action.
+            msg: An optional human-readable message for the action.
+        """
 
         # Plugging a previously loaded HSM
         if os.path.exists(to_state):
@@ -830,6 +1217,17 @@ class HybridStateMachine:
         self.__id_to_action.append(new_action)
 
     def include(self, hsm, make_a_copy=False):
+        """Integrates the states and transitions of another state machine (`hsm`) into the current one. This is a
+        crucial method for composing complex state machines from smaller, reusable components. It copies wildcards,
+        states, and transitions, ensuring that all actions and states are properly added and linked. This method also
+        handles an optional `make_a_copy` flag to completely replicate the source machine's state (e.g., current state,
+        initial state).
+
+        Args:
+            hsm: The `HybridStateMachine` object to include.
+            make_a_copy: A boolean to indicate whether the current state machine should adopt the state (e.g.,
+                current state, initial state) of the included one.
+        """
 
         # Copying wildcards
         self.add_wildcards(hsm.get_wildcards())
@@ -858,20 +1256,38 @@ class HybridStateMachine:
             self.initial_state = hsm.initial_state
             self.limbo_state = hsm.limbo_state
 
-    def must_wait(self) -> bool:
+    def must_wait(self):
+        """Checks if the current state is in a waiting period before any transitions can occur.
+
+        Returns:
+            A boolean indicating if the state machine must wait.
+        """
         if self.state is not None:
             return self.states[self.state].must_wait()
         else:
             return False
 
     def is_enabled(self):
+        """A simple getter to check if the state machine is currently enabled to run.
+
+        Returns:
+            True if the state machine is enabled, False otherwise.
+        """
         return self.enabled
 
     def enable(self, yes_or_not: bool):
+        """Enables or disables the state machine. When disabled, the `act_states` and `act_transitions` methods will
+        not perform any actions.
+
+        Args:
+            yes_or_not: A boolean to enable (`True`) or disable (`False`) the state machine.
+        """
         self.enabled = yes_or_not
 
     def act_states(self):
-        """Apply actions that do not trigger a state transition."""
+        """Executes the inner action of the current state, if one exists. This method is for actions that occur upon
+        entering a state but do not cause an immediate transition. It only runs if the state machine is enabled.
+        """
         if not self.enabled:
             return
 
@@ -879,6 +1295,18 @@ class HybridStateMachine:
             self.states[self.state]()  # Run the action (if any)
 
     def act_transitions(self, requested_only: bool = False):
+        """This is the core execution loop for transitions. It finds all feasible actions from the current state and,
+        using a policy, selects and executes one. It handles single-step and multistep actions, managing state changes,
+        timeouts, and failed executions. It returns an integer status code indicating the outcome (e.g., transition
+        done, try again, move to next action).
+
+        Args:
+            requested_only: A boolean to consider only actions that have pending requests.
+
+        Returns:
+            An integer status code: `0` for a successful transition, `1` to retry the same action, `2` to move to the
+            next action, or `-1` if no actions were found.
+        """
         if not self.enabled:
             return -1
 
@@ -961,10 +1389,10 @@ class HybridStateMachine:
                     status = 0  # Done
                 else:
 
-                    # Multi-step actions
+                    # multistep actions
                     if action.cannot_be_run_anymore():  # Timeout, max time reached, max steps reached
                         if HybridStateMachine.DEBUG:
-                            print(f"[DEBUG HSM] Multi-step action {self.__action.name} returned True and "
+                            print(f"[DEBUG HSM] multistep action {self.__action.name} returned True and "
                                   f"cannot-be-run-anymore "
                                   f"(step: {action.get_step()}, "
                                   f"has_completion_step: {action.has_completion_step()})")
@@ -977,7 +1405,7 @@ class HybridStateMachine:
                                 status = 2  # Move to the next action
                     else:
                         if HybridStateMachine.DEBUG:
-                            print(f"[DEBUG HSM] Multi-step action {self.__action.name} can still be run")
+                            print(f"[DEBUG HSM] multistep action {self.__action.name} can still be run")
                         status = 1  # Try again (next step)
             else:
                 if not action.is_multi_steps():
@@ -989,10 +1417,10 @@ class HybridStateMachine:
                         status = 1  # Try again (one more time, until timeout is reached)
                 else:
 
-                    # Multi-step actions
+                    # multistep actions
                     if action.cannot_be_run_anymore():  # Timeout, max time reached, max steps reached
                         if HybridStateMachine.DEBUG:
-                            print(f"[DEBUG HSM] Multi-step action {self.__action.name} returned False and "
+                            print(f"[DEBUG HSM] multistep action {self.__action.name} returned False and "
                                   f"cannot-be-run-anymore "
                                   f"(step: {action.get_step()}, "
                                   f"has_completion_step: {self.__action.has_completion_step()})")
@@ -1084,6 +1512,10 @@ class HybridStateMachine:
         return -1
 
     def act(self):
+        """A high-level method that combines `act_states` and `act_transitions` to run the state machine. It repeatedly
+        processes states and transitions until a blocking state is reached or all feasible actions have been tried,
+        thus ensuring a complete processing cycle in one call.
+        """
 
         # It keeps processing states and actions, until all the current feasible actions fail
         # (also when a step of a multistep action is executed) or a blocking state is reached
@@ -1094,12 +1526,33 @@ class HybridStateMachine:
                 break
 
     def get_state_changed(self):
+        """Returns an internal flag that indicates if a state transition has occurred in the last execution cycle.
+        This can be used by an external loop to know when to re-evaluate the state machine's context.
+
+        Returns:
+            True if the state has changed, False otherwise.
+        """
         return self.__state_changed
 
     def request_action(self, signature: object, action_name: str, args: dict | None = None,
                        from_state: str | None = None, to_state: str | None = None,
-                       timestamp: float | None = None, uuid: str | None = None) -> bool:
-        """Adds a suggestion to an action, if the action exists and if it is positively checked."""
+                       timestamp: float | None = None, uuid: str | None = None):
+        """Allows an external entity to request a specific action. The request is validated by a signature checker
+        (if one exists) and then queued on the corresponding action. This method enables dynamic, external triggers for
+        state machine transitions.
+
+        Args:
+            signature: An object used for validating the request's origin.
+            action_name: The name of the requested action.
+            args: Arguments for the requested action.
+            from_state: The optional starting state for the requested transition.
+            to_state: The optional destination state for the requested transition.
+            timestamp: The time the request was made.
+            uuid: A unique identifier for the request.
+
+        Returns:
+            True if the request was accepted and queued, False otherwise.
+        """
         if HybridStateMachine.DEBUG:
             print(f"[DEBUG HSM] Received a request signed as {signature}, "
                   f"asking for action {action_name}, with args: {args}, "
@@ -1145,8 +1598,12 @@ class HybridStateMachine:
         return False
 
     def wait_for_all_actions_that_start_with(self, prefix):
-        """Forces the ready flag of all actions whose name start with a given prefix."""
+        """Sets the `ready` flag to `False` for all actions whose name begins with a given prefix. This method is used
+        to programmatically disable a group of actions, effectively pausing them.
 
+        Args:
+            prefix: The string prefix to match against action names.
+        """
         for state, to_states in self.transitions.items():
             for to_state, action_list in to_states.items():
                 for i, action in enumerate(action_list):
@@ -1154,8 +1611,12 @@ class HybridStateMachine:
                         action.set_as_not_ready()
 
     def wait_for_all_actions_that_include_an_arg(self, arg_name):
-        """Forces the ready flag of all actions whose name start with a given prefix."""
+        """Sets the `ready` flag to `False` for all actions that include a specific argument name in their signature.
+        This provides another way to programmatically disable actions.
 
+        Args:
+            arg_name: The name of the argument to look for.
+        """
         for state, to_states in self.transitions.items():
             for to_state, action_list in to_states.items():
                 for i, action in enumerate(action_list):
@@ -1163,8 +1624,17 @@ class HybridStateMachine:
                         action.set_as_not_ready()
 
     def wait_for_actions(self, from_state: str, to_state: str, wait: bool = True):
-        """Forces the ready flag of a specific action."""
+        """Sets the `ready` flag for a specific action (or group of actions) between two states. This allows for
+        fine-grained control over which transitions are active.
 
+        Args:
+            from_state: The name of the starting state.
+            to_state: The name of the destination state.
+            wait: A boolean flag to either set the action as not ready (`True`) or ready (`False`).
+
+        Returns:
+            True if the specified action was found, False otherwise.
+        """
         if from_state not in self.transitions or to_state not in self.transitions[from_state]:
             return False
 
@@ -1175,9 +1645,18 @@ class HybridStateMachine:
                 action.set_as_ready()
         return True
 
-    def save(self, filename: str, only_if_changed: object | None = None) -> bool:
-        """Save the HSM to a JSON file."""
+    def save(self, filename: str, only_if_changed: object | None = None):
+        """Saves the state machine's current configuration to a JSON file. It can optionally check if the configuration
+        has changed before saving to avoid redundant file writes.
 
+        Args:
+            filename: The path to the file to save to.
+            only_if_changed: An optional object to compare against for changes. If a change is not detected, the file
+                is not written.
+
+        Returns:
+            True if the file was written, False otherwise.
+        """
         if only_if_changed is not None and os.path.exists(filename):
             existing = HybridStateMachine(actionable=only_if_changed).load(filename)
             if str(existing) == str(self):
@@ -1187,8 +1666,17 @@ class HybridStateMachine:
             file.write(str(self))
         return True
 
-    def load(self, filename_or_hsm_as_string: str) -> Self:
-        """Load the HSM state from a JSON file and resolve actions."""
+    def load(self, filename_or_hsm_as_string: str):
+        """Loads a state machine's configuration from a JSON file or a JSON string. It reconstructs the states,
+        actions, and transitions from the serialized data. This method is critical for persistence and for loading
+        pre-defined state machine models.
+
+        Args:
+            filename_or_hsm_as_string: The path to the JSON file or a JSON string representation of the state machine.
+
+        Returns:
+            The loaded `HybridStateMachine` object (self).
+        """
 
         # Loading the whole file
         if os.path.exists(filename_or_hsm_as_string) and os.path.isfile(filename_or_hsm_as_string):
@@ -1241,8 +1729,14 @@ class HybridStateMachine:
         return self
 
     def to_graphviz(self):
-        """Encode the HSM in GraphViz format."""
+        """Generates a Graphviz `Digraph` object representing the state machine's structure. This method visualizes
+        states as nodes and transitions as edges. It includes details such as node shapes (diamond for initial state,
+        oval for others), styles (filled for blocking states), and labels for both states and transitions. The labels
+        for actions include their names and arguments, formatted to wrap lines for readability.
 
+        Returns:
+            A `graphviz.Digraph` object ready for rendering.
+        """
         graph = graphviz.Digraph()
         graph.attr('node', fontsize='8')
         for state, state_obj in self.states.items():
@@ -1308,8 +1802,15 @@ class HybridStateMachine:
         return graph
 
     def save_pdf(self, filename: str):
-        """Save the HSM in GraphViz format, drawn on a PDF file."""
+        """Saves the state machine's Graphviz representation as a PDF file. It calls `to_graphviz()` to create the
+        graph and then uses the Graphviz library's `render` method to generate the PDF.
 
+        Args:
+            filename: The path and name of the PDF file to save.
+
+        Returns:
+            True if the file was successfully saved, False otherwise.
+        """
         if filename.lower().endswith(".pdf"):
             filename = filename[0:-4]
 
@@ -1320,6 +1821,13 @@ class HybridStateMachine:
             return False
 
     def print_actions(self, state: str | None = None):
+        """Prints a list of all transitions and their associated actions from a given state. If no state is provided,
+        it defaults to the current state. This method is useful for quickly inspecting the available transitions from
+        a specific point in the state machine's flow.
+
+        Args:
+            state: The name of the state from which to print actions. Defaults to the current state.
+        """
         state = (self.state if self.state is not None else self.limbo_state) if state is None else state
         for to_state, action_list in self.transitions[state].items():
             if action_list is None or len(action_list) == 0:
@@ -1330,6 +1838,18 @@ class HybridStateMachine:
     # Noinspection PyMethodMayBeStatic
     def __policy_first_requested_or_first_ready(self, actions_list: list[Action]) \
             -> tuple[int, tuple[object | None, tuple[dict, float, str | None]]]:
+        """This is the default policy for selecting which action to execute from a list of feasible actions.
+        It prioritizes actions that have been explicitly requested (i.e., have pending requests) on a first-come,
+        first-served basis. If no requested actions are found, it then selects the first action in the list that is
+        marked as `ready`.
+    
+        Args:
+            actions_list: A list of `Action` objects that are candidates for execution.
+    
+        Returns:
+            A tuple containing the index of the selected action and a tuple of the requester details (object,
+                arguments, time, and UUID), or -1 and `None` if no action is selected.
+        """
         for i, action in enumerate(actions_list):
             if len(action.get_requests()) > 0:
                 return i, next(iter(action.get_requests().items()))
@@ -1337,64 +1857,3 @@ class HybridStateMachine:
             if action.is_ready(consider_requests=False):
                 return i, (None, ({}, -1., None))
         return -1, (None, ({}, -1., None))
-
-
-if __name__ == "__main__":
-    class Dummy:
-        def __init__(self):
-            self.dummy = "[Dummy]"
-
-        def method1(self, a: int, b: float = 3.5):
-            print(f"{self.dummy} method1: a: {a}, b: {b}")
-            return True
-
-        def method2(self, c: str = "default", d: tuple = ("test", "this")):
-            print(f"{self.dummy} method2: c: {c}, d: {d}")
-            return True
-
-        def method3(self, f: int):
-            print(f"{self.dummy} method3: f: {f}")
-            return True
-
-        def method4(self, z: int, steps: int = 3):
-            print(f"{self.dummy} method4: z: {z}, steps: {steps}")
-            return True
-
-    def checker(request: object) -> bool:
-        if not isinstance(request, str):
-            return False
-        if request.startswith("dave") or request.startswith("paul"):
-            return True
-        else:
-            return False
-
-    dummy = Dummy()
-
-    _hsm1 = HybridStateMachine(actionable=dummy, wildcards={"<hi>": "replaced_by_hello"},
-                               request_signature_checker=checker)
-    _hsm1.add_state("first", action="method3", args={"f": 3})
-    _hsm1.add_transit("init", "first", action="method1", args={"a": 3})
-    _hsm1.add_transit("init", "second", action="method2", args={"c": "cat", "d": ["pizza", "style"]})
-    _hsm1.add_transit("init", "fourth", action="method4", args={"z": 5, "steps": 3})
-    _hsm1.add_transit("first", "third", action="method2", args={"c": "dog"})
-    _hsm1.add_transit("third", "second", action="method2", args={"c": "furry"})
-    _hsm1.add_transit("second", "first", action="method3", args={"f": 10})
-    _hsm1.add_transit("fourth", "second", action="method1", args={"a": 2, "b": 7.6})
-    _hsm1.save("test1.json")
-    _hsm1.save_pdf("test1.pdf")
-    _hsm1.to_graphviz()
-    _hsm1.print_actions("fourth")
-    print(_hsm1)
-
-    _hsm2 = HybridStateMachine(actionable=dummy)
-    _hsm2.load("test1.json")
-    _hsm2.save("test2.json")
-    _hsm2.save_pdf("test2.pdf")
-    _hsm2.to_graphviz()
-    print(_hsm2)
-
-    _ret = _hsm1.request_action(signature="dave", action_name="method4", args={"z": 5, "steps": 3})
-    print("Request action returned: " + str(_ret))
-    for _i in range(0, 10):
-        _hsm1.act_states()
-        _hsm1.act_transitions()

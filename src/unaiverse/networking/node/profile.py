@@ -138,8 +138,7 @@ class NodeProfile:
 
     @classmethod
     def from_dict(cls, combined_data: dict) -> 'NodeProfile':
-        """
-        Factory method to create a NodeProfile instance from a dictionary
+        """Factory method to create a NodeProfile instance from a dictionary
         containing combined profile data (static, specs, and CV list of dicts).
 
         Args:
@@ -173,17 +172,13 @@ class NodeProfile:
     # Get operating system information
     @staticmethod
     def _get_os_spec():
-        """
-        Extracts operating system information.
-        """
+        """Extracts operating system information."""
         return platform.platform()
 
     # Get cpu information
     @staticmethod
     def _get_cpu_info():
-        """
-        Extracts CPU core information.
-        """
+        """Extracts CPU core information."""
         try:
             return {
                 'physical_cores': psutil.cpu_count(logical=False),
@@ -196,9 +191,7 @@ class NodeProfile:
     # Get memory information
     @staticmethod
     def _get_memory_info():
-        """
-        Extracts memory information in GB.
-        """
+        """Extracts memory information in GB."""
         try:
             mem = psutil.virtual_memory()
             total_gb = mem.total / (1024 ** 3)
@@ -216,8 +209,7 @@ class NodeProfile:
     # Get public ip address
     @staticmethod
     def _get_public_ip_address() -> str | None:
-        """
-        Attempts to retrieve the public IP address using an external web service.
+        """Attempts to retrieve the public IP address using an external web service.
         Uses multiple services as fallbacks.
         Returns the public IP address string or None if retrieval fails.
         """
@@ -268,9 +260,7 @@ class NodeProfile:
 
     # Get guessed location based on IP address
     def _get_geolocation_from_ip(self, ip_address):
-        """
-        Retrieves geolocation data (same as before).
-        """
+        """Retrieves geolocation data (same as before)."""
 
         # Added a check for local/private IPs to avoid unnecessary API calls
         try:
@@ -342,8 +332,7 @@ class NodeProfile:
 
     # This is the function that collects all the information for the 'node_specification'
     def _get_current_specs(self) -> dict:
-        """
-        Gathers current system specifications.
+        """Gathers current system specifications.
         """
         cpu_info = self._get_cpu_info()
         memory_info = self._get_memory_info()
@@ -373,15 +362,13 @@ class NodeProfile:
         self._profile_last_updated = datetime.datetime.now(timezone.utc)  # Mark profile as checked/updated
 
     def check_and_update_specs(self, update_only: bool = True) -> bool:
-        """
-        Checks current specs against saved specs. Updates profile data
-        """
+        """Checks current specs against saved specs. Updates profile data."""
 
         current_specs = self._get_current_specs()
         specs_changed = False
 
         if update_only:
-            self._profile_data['dynamic'] = self._profile_data['dynamic'] | current_specs
+            self._profile_data['dynamic'] |= current_specs
         else:
             saved_specs = self._profile_data['dynamic'].copy()
             change_details = []
@@ -389,7 +376,7 @@ class NodeProfile:
             if saved_specs is None:
 
                 # No previous specification exists, capture the current one
-                self._profile_data['dynamic'] = self._profile_data['dynamic'] | current_specs
+                self._profile_data['dynamic'] |= current_specs
                 specs_changed = True
                 change_details.append("Initial specification captured")
 
@@ -419,7 +406,7 @@ class NodeProfile:
                 if specs_changed:
 
                     # Update the specification in the profile data with the new current specs
-                    self._profile_data['dynamic'] = self._profile_data['dynamic'] | current_specs
+                    self._profile_data['dynamic'] |= current_specs
                     change_summary = ", ".join(change_details)
                     print(f"Specs changed for '{self._profile_data['static']['node_id']}': {change_summary}")
 
@@ -451,5 +438,5 @@ class NodeProfile:
 
     def verify_cv_hash(self, cv_hash: str):
         computed_hash = hashlib.blake2b(json.dumps(self._profile_data['cv']).encode("utf-8"),
-                                          digest_size=16).hexdigest()
+                                        digest_size=16).hexdigest()
         return cv_hash == computed_hash, (cv_hash, computed_hash)

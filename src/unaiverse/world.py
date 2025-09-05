@@ -24,6 +24,13 @@ from unaiverse.networking.node.profile import NodeProfile
 class World(AgentBasics):
 
     def __init__(self, *args, **kwargs):
+        """Initializes a World object, which acts as a special agent without a processor or behavior.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments, including 'role_to_behav' and 'agent_actions' which are used to
+                configure the world.
+        """
 
         # Deleting the "proc" parameter, if provided (it is the second one)
         if len(args) == 2:
@@ -94,6 +101,18 @@ class World(AgentBasics):
             self.role_to_behav = None
 
     def assign_role(self, profile: NodeProfile, is_world_master: bool):
+        """Assigns an initial role to a newly connected agent.
+
+        In this basic implementation, the role is determined based on whether the agent is a world master or a regular
+        world agent, ensuring there's only one master.
+
+        Args:
+            profile: The NodeProfile of the new agent.
+            is_world_master: A boolean indicating if the new agent is attempting to be a master.
+
+        Returns:
+            An integer representing the assigned role (e.g., ROLE_WORLD_MASTER or ROLE_WORLD_AGENT).
+        """
         assert self.is_world, "Assigning a role is expected to be done by the world"
 
         if profile.get_dynamic_profile()['guessed_location'] == 'Some Dummy Location, Just An Example Here':
@@ -109,6 +128,15 @@ class World(AgentBasics):
             return AgentBasics.ROLE_WORLD_AGENT
 
     def set_role(self, peer_id: str, role: int):
+        """Sets a new role for a specific agent and broadcasts this change to the agent.
+
+        It computes the new role and sends a message containing the new role and the corresponding default behavior
+        for that role.
+
+        Args:
+            peer_id: The ID of the agent whose role is to be set.
+            role: The new role to be assigned (as an integer).
+        """
         assert self.is_world, "Setting the role is expected to be done by the world, which will broadcast such info"
 
         # Computing new role (keeping the first two bits as before)
@@ -133,6 +161,12 @@ class World(AgentBasics):
                 self.role_changed_by_world = True
 
     def set_addresses_in_profile(self, peer_id, addresses):
+        """Updates the network addresses in an agent's profile.
+
+        Args:
+            peer_id: The ID of the agent whose profile is being updated.
+            addresses: A list of new addresses to set.
+        """
         if peer_id in self.all_agents:
             profile = self.all_agents[peer_id]
             addrs = profile.get_dynamic_profile()['private_peer_addresses']
@@ -145,14 +179,15 @@ class World(AgentBasics):
 
     def add_badge(self, peer_id, score: float, badge_type: str, agent_token: str,
                   badge_description: Optional[str] = None):
-        """Request a badge for an agent.
+        """Requests a badge for a specific agent, which can be used to track and reward agent performance.
+        It validates the score and badge type and stores the badge information in an internal dictionary.
 
         Args:
-            peer_id: agent peer_id for which the badge is requested.
-            score: must be in [0,1]
-            badge_type: must be one of 'completed', 'intermediate', 'attended', 'pro'.
-            agent_token: token of the agent that will receive this badge.
-            badge_description: optional text description defining the badge.
+            peer_id: The ID of the agent for whom the badge is requested.
+            score: The score associated with the badge (must be in [0, 1]).
+            badge_type: The type of badge to be awarded.
+            agent_token: The token of the agent receiving the badge.
+            badge_description: An optional text description for the badge.
         """
 
         # Validate score
@@ -183,7 +218,16 @@ class World(AgentBasics):
 
     # Get all the badges requested by the world
     def get_all_badges(self):
+        """Retrieves all badges that have been added to the world's record for all agents.
+        This provides a central log of achievements or performance metrics.
+
+        Returns:
+            A dictionary where keys are agent peer IDs and values are lists of badge dictionaries.
+        """
         return self.agent_badges
 
     def clear_badges(self):
+        """Clears all badge records from the world's memory.
+        This can be used to reset competition results or clean up state after a specific event.
+        """
         self.agent_badges = {}

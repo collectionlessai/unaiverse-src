@@ -33,8 +33,7 @@ class DataStream:
     def __init__(self,
                  props: DataProps,
                  clock: Clock = Clock()) -> None:
-        """
-        Initialize a DataStream.
+        """Initialize a DataStream.
 
         Args:
             props (DataProps): Properties of the stream.
@@ -56,8 +55,7 @@ class DataStream:
     @staticmethod
     def create(stream: 'DataStream', name: str | None = None, group: str = 'none',
                public: bool = True, pubsub: bool = True):
-        """
-        Create and set the name for a given stream, also updates data stream labels.
+        """Create and set the name for a given stream, also updates data stream labels.
 
         Args:
             stream (DataStream): The stream object to modify.
@@ -82,8 +80,7 @@ class DataStream:
         return stream
 
     def enable(self):
-        """
-        Enable the stream, allowing data to be retrieved.
+        """Enable the stream, allowing data to be retrieved.
 
         Returns:
             None
@@ -91,8 +88,7 @@ class DataStream:
         self.enabled = True
 
     def disable(self):
-        """
-        Disable the stream, preventing data from being retrieved.
+        """Disable the stream, preventing data from being retrieved.
 
         Returns:
             None
@@ -124,8 +120,7 @@ class DataStream:
         return self.get_props().is_public()
 
     def __getitem__(self, idx: int) -> tuple[torch.Tensor | None, int]:
-        """
-        Get item for a specific clock cycle. Not implemented for base class: it will be implemented in buffered data
+        """Get item for a specific clock cycle. Not implemented for base class: it will be implemented in buffered data
         streams or stream that can generate data on-the-fly.
 
         Args:
@@ -138,8 +133,7 @@ class DataStream:
                          "that can generated on the fly)")
 
     def __str__(self) -> str:
-        """
-        String representation of the object.
+        """String representation of the object.
 
         Returns:
             str: String representation of the object.
@@ -147,8 +141,7 @@ class DataStream:
         return f"[DataStream] enabled: {self.enabled}\n\tprops: {self.props}"
 
     def __len__(self):
-        """
-        Get the length of the stream.
+        """Get the length of the stream.
 
         Returns:
             int: Infinity (as this is a lifelong stream).
@@ -156,8 +149,7 @@ class DataStream:
         return math.inf
 
     def set(self, data: torch.Tensor | Image.Image | str, data_tag: int = -1) -> bool:
-        """
-        Set a new data sample into the stream, that will be provided when calling "get()".
+        """Set a new data sample into the stream, that will be provided when calling "get()".
 
         Args:
             data (torch.Tensor): Data sample to set.
@@ -175,8 +167,7 @@ class DataStream:
             return False
 
     def get(self, requested_by: str | None = None) -> torch.Tensor | None:
-        """
-        Get the most recent data sample from the stream (i.e., the last one that was "set").
+        """Get the most recent data sample from the stream (i.e., the last one that was "set").
 
         Returns:
             torch.Tensor | None: Adapted data sample if available.
@@ -223,8 +214,7 @@ class DataStream:
             self.data_uuid_clearable = False
 
     def set_props(self, data_stream: Self):
-        """
-        Set (edit) the data properties picking up the ones of another DataStream.
+        """Set (edit) the data properties picking up the ones of another DataStream.
 
         Args:
             data_stream (DataStream): the source DataStream from which DataProp is taken.
@@ -241,8 +231,7 @@ class BufferedDataStream(DataStream):
     """
 
     def __init__(self, props: DataProps, clock: Clock = Clock(), is_static: bool = False):
-        """
-        Initialize a BufferedDataStream.
+        """Initialize a BufferedDataStream.
 
         Args:
             is_static (bool): If True, the buffer stores only one item that is reused.
@@ -264,8 +253,7 @@ class BufferedDataStream(DataStream):
         self.restart_before_next_get = set()
 
     def get(self, requested_by: str | None = None) -> tuple[torch.Tensor | None, float]:
-        """
-        Get the current data sample based on cycle and buffer.
+        """Get the current data sample based on cycle and buffer.
 
         Returns:
             torch.Tensor | None: Current buffered sample.
@@ -290,8 +278,7 @@ class BufferedDataStream(DataStream):
         return super().get(requested_by)
 
     def set(self, data: torch.Tensor, data_tag: int = -1):
-        """
-        Store a new data sample into the buffer.
+        """Store a new data sample into the buffer.
 
         Args:
             data (torch.Tensor): Data to store.
@@ -327,8 +314,7 @@ class BufferedDataStream(DataStream):
         return ret
 
     def __getitem__(self, idx: int) -> tuple[torch.Tensor | None, int]:
-        """
-        Retrieve a sample from the buffer based on the given clock cycle.
+        """Retrieve a sample from the buffer based on the given clock cycle.
 
         Args:
             idx (int): Index (>=0) of the sample.
@@ -345,8 +331,7 @@ class BufferedDataStream(DataStream):
         return data, data_tag if data_tag >= 0 else self.clock.get_cycle() - self.first_cycle
 
     def __len__(self):
-        """
-        Get number of samples in the buffer.
+        """Get number of samples in the buffer.
 
         Returns:
             int: Number of buffered samples.
@@ -354,8 +339,7 @@ class BufferedDataStream(DataStream):
         return len(self.data_buffer)
 
     def set_first_cycle(self, cycle):
-        """
-        Manually set the first cycle for the buffer.
+        """Manually set the first cycle for the buffer.
 
         Args:
             cycle (int): Global cycle to start from.
@@ -364,8 +348,7 @@ class BufferedDataStream(DataStream):
         self.last_cycle = cycle + len(self)
 
     def get_first_cycle(self):
-        """
-        Get the first cycle of the stream.
+        """Get the first cycle of the stream.
 
         Returns:
             int: First cycle value.
@@ -373,8 +356,7 @@ class BufferedDataStream(DataStream):
         return self.first_cycle
 
     def restart(self):
-        """
-        Restart the buffer using the current clock cycle.
+        """Restart the buffer using the current clock cycle.
         """
         self.set_first_cycle(max(self.clock.get_cycle(), 0))
         self.buffered_data_index = -1
@@ -384,8 +366,7 @@ class BufferedDataStream(DataStream):
         self.restart_before_next_get.add(requested_by)
 
     def clear_buffer(self):
-        """
-        Clear the data buffer
+        """Clear the data buffer
         """
         self.data_buffer = []
         self.text_buffer = []
@@ -420,10 +401,8 @@ class BufferedDataStream(DataStream):
             for i in indices:
                 self.text_buffer.append(old_text_buffer[i])
 
-
     def to_text_snippet(self, length: int | None = None):
-        """
-        Convert buffered text samples to a single long string.
+        """Convert buffered text samples to a single long string.
 
         Args:
             length (int | None): Optional length of the resulting text snippet.
@@ -445,8 +424,7 @@ class BufferedDataStream(DataStream):
 
     def get_since_timestamp(self, since_what_timestamp: float, stride: int = 1) -> (
             tuple[list[int] | None, list[torch.Tensor | None] | None, int, DataProps]):
-        """
-        Retrieve all samples starting from a given timestamp.
+        """Retrieve all samples starting from a given timestamp.
 
         Args:
             since_what_timestamp (float): Timestamp in seconds.
@@ -460,8 +438,7 @@ class BufferedDataStream(DataStream):
 
     def get_since_cycle(self, since_what_cycle: int, stride: int = 1) -> (
             tuple[list[int] | None, list[torch.Tensor | None] | None, int, DataProps]):
-        """
-        Retrieve all samples starting from a given clock cycle.
+        """Retrieve all samples starting from a given clock cycle.
 
         Args:
             since_what_cycle (int): Cycle number.
@@ -513,11 +490,10 @@ class Dataset(BufferedDataStream):
     """
 
     def __init__(self, tensor_dataset: torch.utils.data.Dataset, shape: tuple, index: int = 0, batch_size: int = 1):
-        """
-        Initialize a Dataset instance, which wraps around a PyTorch Dataset.
+        """Initialize a Dataset instance, which wraps around a PyTorch Dataset.
 
         Args:
-            dataset (torch.utils.data.Dataset): The PyTorch Dataset to wrap.
+            tensor_dataset (torch.utils.data.Dataset): The PyTorch Dataset to wrap.
             shape (tuple): The shape of each sample from the data stream.
             index (int): The index of the element returned by __getitem__ to pick up.
         """
@@ -566,8 +542,7 @@ class ImageFileStream(BufferedDataStream):
 
     def __init__(self, image_dir: str, list_of_image_files: str,
                  device: torch.device = None, circular: bool = True, show_images: bool = False):
-        """
-        Initialize an ImageFileStream instance for streaming image data.
+        """Initialize an ImageFileStream instance for streaming image data.
 
         Args:
             image_dir (str): The directory containing image files.
@@ -611,8 +586,7 @@ class ImageFileStream(BufferedDataStream):
                 print(str(i) + " => " + clickable_label)
 
     def __len__(self):
-        """
-        Return the number of images in the dataset.
+        """Return the number of images in the dataset.
 
         Returns:
             int: Number of images in the dataset.
@@ -620,8 +594,7 @@ class ImageFileStream(BufferedDataStream):
         return len(self.image_paths)
 
     def __getitem__(self, idx: int) -> tuple[torch.Tensor | None, int]:
-        """
-        Get the image and label for the specified cycle number.
+        """Get the image and label for the specified cycle number.
 
         Args:
             idx (int): The cycle number to retrieve data for.
@@ -644,8 +617,7 @@ class LabelStream(BufferedDataStream):
     def __init__(self, label_dir: str, label_file_csv: str,
                  device: torch.device = None, circular: bool = True, single_class: bool = False,
                  line_header: bool = False):
-        """
-        Initialize an LabelStream instance for streaming labels.
+        """Initialize an LabelStream instance for streaming labels.
 
         Args:
             label_dir (str): The directory containing image files.
@@ -700,8 +672,7 @@ class LabelStream(BufferedDataStream):
         self.first_cycle = self.last_cycle - len(self.labels) + 1
 
     def __len__(self):
-        """
-        Return the number of labels in the dataset.
+        """Return the number of labels in the dataset.
 
         Returns:
             int: Number of labels in the dataset.
@@ -709,8 +680,7 @@ class LabelStream(BufferedDataStream):
         return len(self.labels)
 
     def __getitem__(self, idx: int) -> torch.Tensor | None:
-        """
-        Get the image and label for the specified cycle number.
+        """Get the image and label for the specified cycle number.
 
         Args:
             idx (int): The cycle number to retrieve data for.
@@ -719,7 +689,7 @@ class LabelStream(BufferedDataStream):
             tuple: A tuple of tensors (image, label) for the specified cycle.
         """
         if self.circular:
-            idx = idx % self.__len__()
+            idx %= self.__len__()
 
         label = self.labels[idx].unsqueeze(0).to(self.device)  # Multi-label vector for the image
         return self.props.adapt_tensor_to_tensor_labels(label), self.clock.get_cycle() - self.first_cycle
@@ -731,8 +701,7 @@ class TokensStream(BufferedDataStream):
     """
 
     def __init__(self, tokens_file_csv: str, circular: bool = True, max_tokens: int = -1):
-        """
-        Initialize a Tokens instance for streaming tokenized data and associated labels.
+        """Initialize a Tokens instance for streaming tokenized data and associated labels.
 
         Args:
             tokens_file_csv (str): Path to the CSV file containing token data.
@@ -779,8 +748,7 @@ class TokensStream(BufferedDataStream):
         self.restart()
 
     def __getitem__(self, idx: int) -> torch.Tensor | None:
-        """
-        Get the image and label for the specified cycle number.
+        """Get the image and label for the specified cycle number.
 
         Args:
             idx (int): The index to retrieve data for.

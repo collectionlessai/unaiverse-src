@@ -122,7 +122,7 @@ class AgentBasics:
         # Streams-related
         self._recipients = {}  # The peer IDs of the recipients of the next batch of direct messages
         self._preferred_streams = []  # List of preferred streams
-        self._cur_preferred_stream = 0  # Id of the current preferred stream from the list
+        self._cur_preferred_stream = 0  # ID of the current preferred stream from the list
         self._repeat = 1  # Number of repetitions of the playlist
 
         # Agent exchanges
@@ -188,6 +188,7 @@ class AgentBasics:
             ask_to_get_in_touch_fcn: The function to call to request getting in touch with another peer.
             purge_fcn: The function to call to purge (kill/disconnect) a connection.
             agents_waiting: Set of agents that connected to this node but have not been evaluated yet to be added.
+            print_level: The level of output printing verbosity (0, 1, 2).
         """
 
         # Getting basic references
@@ -278,7 +279,6 @@ class AgentBasics:
         Args:
             msg: The error message string to print.
         """
-
         self.out("<ERROR> " + msg)
 
     def deb(self, msg: str):
@@ -287,15 +287,33 @@ class AgentBasics:
         Args:
             msg: The error message string to print.
         """
-
         if AgentBasics.DEBUG:
             self.out("[DEBUG " + ("AGENT" if not self.is_world else "WORLD") + "] " + msg)
 
     def get_name(self):
-        """Get the name of this agent/world (taken from the node profile)."""
+        """Returns the name of the agent or world from the node's profile.
+
+        Args:
+            None.
+
+        Returns:
+            The name of the agent or world.
+
+        """
+
         return self._node_name
 
-    def get_current_role(self, return_int: bool = False, ignore_base_role: bool = True) -> str | int | None:
+    def get_current_role(self, return_int: bool = False, ignore_base_role: bool = True):
+        """Returns the current role of the agent.
+
+        Args:
+            return_int: If True, returns the integer representation of the role.
+            ignore_base_role: If True, returns only the specific role part, not the base.
+
+        Returns:
+            The role as a string or integer, or None if the agent is not in a world.
+
+        """
         if self.in_world():
             role_str = self._node_profile.get_dynamic_profile()['connections']['role']
             if ignore_base_role:
@@ -431,6 +449,16 @@ class AgentBasics:
         self.out(f"Successfully removed all agents")
 
     def add_behav_wildcard(self, wildcard_from: str, wildcard_to: object):
+        """Adds a wildcard mapping for the agent's behavior state machine.
+
+        Args:
+            wildcard_from: The string to be used as a wildcard.
+            wildcard_to: The object to replace the wildcard.
+
+        Returns:
+            None.
+
+        """
         self.behav_wildcards[wildcard_from] = wildcard_to
 
     def add_stream(self, stream: DataStream, owned: bool = True, net_hash: str | None = None) -> dict[str, DataStream]:
@@ -1151,8 +1179,18 @@ class AgentBasics:
             self.behav_lone_wolf.act()
             self.behav_lone_wolf.enable(False)
 
-    def learn_behave(self, state: int, last_action: int, prev_state: int) -> int:
-        """Learn to behave in the current environment."""
+    def learn_behave(self, state: int, last_action: int, prev_state: int):
+        """A placeholder method for behavioral learning, intended to be implemented by child classes.
+        It receives state and action information to update a behavioral model.
+
+        Args:
+            state: The current state of the agent.
+            last_action: The last action taken.
+            prev_state: The previous state of the agent.
+
+        Returns:
+            An integer representing a new state, or similar feedback.
+        """
         pass
 
     def get_peer_ids(self):
@@ -1228,6 +1266,15 @@ class AgentBasics:
             return False
 
     def behaving_in_world(self):
+        """Checks if the agent's world-specific behavior state machine is currently active.
+
+        Args:
+            None.
+
+        Returns:
+            True if the world behavior is active, False otherwise.
+
+        """
         return self.behav.is_enabled()
 
     def get_stream_sample(self, net_hash: str, sample_dict: dict[str, dict[str, torch.Tensor | None | int | str]]):
@@ -1417,7 +1464,7 @@ class AgentBasics:
                 if data is not None:
                     something_to_send = True
                     self.deb(f"[send_stream_samples] Preparing to send stream samples from {net_hash}, {name} "
-                            f"(data_tag: {stream.get_tag()}, data_uuid: {stream.get_uuid()})")
+                             f"(data_tag: {stream.get_tag()}, data_uuid: {stream.get_uuid()})")
 
                 content[name] = {'data': data, 'data_tag': stream.get_tag(), 'data_uuid': stream.get_uuid()}
 
@@ -1488,15 +1535,39 @@ class AgentBasics:
             return None
 
     def is_multi_steps_action(self):
+        """Determines if the current action is a multistep action.
+
+        Args:
+            None.
+
+        Returns:
+            True if the action is multistep, False otherwise.
+        """
         behav = self.behav if self.behav.is_enabled() else self.behav_lone_wolf
         action = behav.get_action()
         return action.is_multi_steps()
 
     def proc_callback_inputs(self, inputs):
+        """A callback method that saves the inputs to the processor right before execution.
+
+        Args:
+            inputs: The data inputs for the processor.
+
+        Returns:
+            The same inputs passed to the function.
+        """
         self.proc_last_inputs = inputs
         return inputs
 
     def proc_callback_outputs(self, outputs):
+        """A callback method that saves the outputs from the processor right after execution.
+
+        Args:
+            outputs: The data outputs from the processor.
+
+        Returns:
+            The same outputs passed to the function.
+        """
         self.proc_last_outputs = outputs
         return outputs
 

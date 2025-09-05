@@ -28,8 +28,7 @@ class Clock:
     """
 
     def __init__(self, min_delta: float = -1):
-        """
-        Initialize a Clock instance.
+        """Initialize a Clock instance.
 
         Args:
             min_delta (float): Minimum time (in seconds) between consecutive cycles.
@@ -49,8 +48,7 @@ class Clock:
         self.__time2cycle_cache = 0  # Cached cycle value for optimization
 
     def __get_time_from_server(self) -> float:
-        """
-        Get the current time from an NTP server.
+        """Get the current time from an NTP server.
 
         Returns:
             float: The time returned by the NTP server, converted to a timestamp.
@@ -67,8 +65,7 @@ class Clock:
         return datetime.fromtimestamp(response.tx_time, timezone.utc).timestamp()
 
     def __add_timestamp(self, timestamp: float):
-        """
-        Add a timestamp to the list of timestamps for the clock cycles.
+        """Add a timestamp to the list of timestamps for the clock cycles.
 
         Args:
             timestamp (float): The timestamp to be added to the list.
@@ -82,8 +79,7 @@ class Clock:
             raise ValueError("Cannot add a timestamp that is NOT more recent than the already added ones")
 
     def time2cycle(self, timestamp: float, delta: float | None = None) -> int:
-        """
-        Convert a given timestamp to the corresponding cycle index.
+        """Convert a given timestamp to the corresponding cycle index.
 
         Args:
             timestamp (float): The timestamp to convert.
@@ -100,8 +96,7 @@ class Clock:
             return self.__time2cycle_cache
 
     def cycle2time(self, cycle: int, delta: float | None = None) -> float:
-        """
-        Convert a cycle index to the corresponding timestamp.
+        """Convert a cycle index to the corresponding timestamp.
 
         Args:
             cycle (int): The cycle index to convert.
@@ -116,8 +111,7 @@ class Clock:
             return self.__timestamps[cycle] if cycle >= 0 else -1.
 
     def get_time(self, passed: bool = False) -> float:
-        """
-        Get the current time based on the NTP server synchronization.
+        """Get the current time based on the NTP server synchronization.
 
         Returns:
             float: The current synchronized time (in seconds since the Unix epoch).
@@ -126,12 +120,16 @@ class Clock:
         return self.__global_initial_t + passed_since_beginning if not passed else passed_since_beginning
 
     def get_time_as_string(self) -> str:
-        dt_object = datetime.utcfromtimestamp(self.get_time())
+        """Get the current time as a string (ISO format).
+
+        Returns:
+            str: A string representation of the current time (ISO format, UTC).
+        """
+        dt_object = datetime.fromtimestamp(self.get_time(), tz=timezone.utc)
         return dt_object.isoformat()
 
     def get_cycle(self):
-        """
-        Get the current cycle index.
+        """Get the current cycle index.
 
         Returns:
             int: The current cycle index.
@@ -139,8 +137,7 @@ class Clock:
         return self.cycle
 
     def get_cycle_time(self):
-        """
-        Get the timestamp corresponding to the current cycle.
+        """Get the timestamp corresponding to the current cycle.
 
         Returns:
             float: The timestamp corresponding to the current cycle index.
@@ -148,14 +145,13 @@ class Clock:
         return self.cycle2time(self.cycle)
 
     def next_cycle(self) -> bool:
-        """
-        Move to the next cycle if the minimum delta time has passed or if cycles are not constrained.
+        """Move to the next cycle if the minimum delta time has passed or if cycles are not constrained.
 
         Returns:
             bool: True if the cycle was successfully moved to the next one, False otherwise.
         """
         if self.cycle >= 0 and (self.min_delta > 0 and len(self.__timestamps) > 0 and
-                (self.get_time() - self.__timestamps[-1]) < self.min_delta):
+                                (self.get_time() - self.__timestamps[-1]) < self.min_delta):
             return False
         else:
             self.cycle += 1  # Increment the cycle index
@@ -164,8 +160,7 @@ class Clock:
 
     @staticmethod
     def __search(_list, _target, _last_pos):
-        """
-        Search for a target value in the list of timestamps and return the index of the corresponding cycle.
+        """Search for a target value in the list of timestamps and return the index of the corresponding cycle.
 
         Args:
             _list (list): The list of timestamps.

@@ -40,7 +40,6 @@ from unaiverse.networking.node.connpool import NodeConn
 from unaiverse.networking.node.profile import NodeProfile
 from unaiverse.streams import DataProps, BufferedDataStream
 
-
 class Node:
 
     # Each node can host an agent or a world
@@ -64,7 +63,25 @@ class Node:
                  world_masters_node_names: list[str] | set[str] = None,  # Optional: it will be converted to node IDs
                  allow_connection_through_relay: bool = True,
                  talk_to_relay_based_nodes: bool = True):
+        """Initializes a new instance of the Node class.
 
+        Args:
+            unaiverse_key: The UNaIVERSE key for authentication.
+            hosted: The Agent or World entity hosted by this node.
+            node_name: An optional human-readable name for the node.
+            node_id: An optional unique identifier for the node.
+            hidden: A flag to determine if the node is hidden.
+            clock_delta: The minimum time delta for the node's clock.
+            only_certified_agents: A flag to allow only certified agents to connect.
+            allowed_node_ids: A list or set of allowed node IDs to connect.
+            world_masters_node_ids: A list or set of world masters' node IDs.
+            world_masters_node_names: A list or set of world masters' node names.
+            allow_connection_through_relay: A flag to allow connections through a relay.
+            talk_to_relay_based_nodes: A flag to allow talking to relay-based nodes.
+
+        Returns:
+            None.
+        """
         # Checking main arguments
         assert isinstance(hosted, Agent) or isinstance(hosted, World), f"Invalid hosted entity, must be Agent or World"
         assert node_id is None or isinstance(node_id, str), f"Invalid node ID"
@@ -248,7 +265,15 @@ class Node:
         self.__inspector_pause_event = None
 
     def out(self, msg: str):
-        """Print a message to the console, if enabled."""
+        """Prints a formatted message to the console if printing is enabled.
+
+        Args:
+            msg: The message to be printed.
+
+        Returns:
+            None.
+        """
+
 
         if self.print_enabled:
             s = (f"node: {self.node_id[0:8]}, {self.node_type}: " +
@@ -264,10 +289,27 @@ class Node:
         self._output_messages[self._output_messages_last_pos] = msg
 
     def err(self, msg: str):
-        """Print an error message to the console, if enabled."""
+        """Prints a formatted error message to the console.
+
+        Args:
+            msg: The error message to be printed.
+
+        Returns:
+            None.
+        """
+
         self.out("<ERROR> " + msg)
 
-    def get_node_id_by_name(self, node_name: str, create_if_missing: bool = False) -> str | None:
+    def get_node_id_by_name(self, node_name: str, create_if_missing: bool = False):
+        """Retrieves the node ID by its name from the root server, creating a new node if it's missing and specified.
+
+        Args:
+            node_name: The name of the node to retrieve.
+            create_if_missing: A flag to create the node if it doesn't exist.
+
+        Returns:
+            The node ID or None if an error occurs.
+        """
         try:
             response = self.__root("/account/node/TODO/TODO/retrieve",  # TODO
                                    payload={"node_name": node_name,
@@ -288,7 +330,15 @@ class Node:
             self.err(f"Error while retrieving node named {node_name} from server\n{e}")
             return None
 
-    def get_node_token(self, peer_ids) -> None:
+    def get_node_token(self, peer_ids):
+        """Generates and retrieves a node token from the root server.
+
+        Args:
+            peer_ids: A list of public and private peer IDs.
+
+        Returns:
+            None.
+        """
         response = None
 
         for i in range(0, 3):  # It will try 3 times before raising the exception...
@@ -315,6 +365,14 @@ class Node:
             self.conn.set_token(self.node_token)
 
     def get_cv(self):
+        """Retrieves the node's CV (Curriculum Vitae) from the root server.
+
+        Args:
+            None.
+
+        Returns:
+            The node's CV as a dictionary.
+        """
         for i in range(0, 3):  # It will try 3 times before raising the exception...
             try:
                 return self.__root(api="/account/node/cv/get", payload={"node_id": self.node_id})
@@ -326,7 +384,15 @@ class Node:
                 else:
                     raise e  # Raise the exception
 
-    def send_dynamic_profile(self) -> None:
+    def send_dynamic_profile(self):
+        """Sends the node's dynamic profile to the root server.
+
+        Args:
+            None.
+
+        Returns:
+            None.
+        """
         try:
             self.__root(api="/account/node/profile/dynamic/post", payload={"node_id": self.node_id,
                                                                            "profile":
@@ -335,7 +401,15 @@ class Node:
             self.err(f"Error while sending dynamic profile to from server\n{e}")
             raise e  # Raise the exception
 
-    def send_badges(self) -> None:
+    def send_badges(self):
+        """Sends new badges assigned by a world node to the root server and notifies the agents.
+
+        Args:
+            None.
+
+        Returns:
+            None.
+        """
         if self.node_type is Node.WORLD:
             peer_id_to_badges = self.world.get_all_badges()
             if len(peer_id_to_badges) > 0:
@@ -386,20 +460,64 @@ class Node:
                             raise e  # Raise the exception
 
     def get_public_addresses(self):
+        """Returns the public addresses of the P2P node.
+
+        Args:
+            None.
+
+        Returns:
+            The list of public addresses.
+        """
         return self.conn[NodeConn.P2P_PUBLIC].addresses
 
     def get_world_addresses(self):
+        """Returns the world addresses of the P2P node.
+
+        Args:
+            None.
+
+        Returns:
+            The list of world addresses.
+        """
         return self.conn[NodeConn.P2P_WORLD].addresses
 
     def get_public_peer_id(self):
+        """Returns the public peer ID of the P2P node.
+
+        Args:
+            None.
+
+        Returns:
+            The public peer ID.
+        """
         return self.conn[NodeConn.P2P_PUBLIC].peer_id
 
     def get_world_peer_id(self):
+        """Returns the world peer ID of the P2P node.
+
+        Args:
+            None.
+
+        Returns:
+            The world peer ID.
+        """
         return self.conn[NodeConn.P2P_WORLD].peer_id
 
     def ask_to_get_in_touch(self, addresses: list[str], public: bool = True,
-                            before_updating_pools_fcn=None, run_count: int = 0) -> str | None:
-        """Try to connect to an agent/world."""
+                            before_updating_pools_fcn=None, run_count: int = 0):
+        """Tries to connect to another agent or world node.
+
+        Args:
+            addresses: A list of network addresses to connect to.
+            public: A boolean flag indicating whether to use the public or world P2P network.
+            before_updating_pools_fcn: A function to call before updating the connection pools.
+            run_count: The number of connection attempts made.
+
+        Returns:
+            The peer ID of the connected node if successful, otherwise None.
+
+        """
+
 
         # Connecting
         self.out("Connecting to another agent/world...")
@@ -437,8 +555,18 @@ class Node:
             self.err("Connection failed!")
             return None
 
-    def ask_to_join_world(self, addresses: list[str], **kwargs) -> str | None:
-        """Ask to join a world (i.e., no actual join operation is done, it is only a request)."""
+    def ask_to_join_world(self, addresses: list[str], **kwargs):
+        """Initiates a request to join a world.
+
+        Args:
+            addresses: A list of network addresses of the world node.
+            **kwargs: Additional options for joining the world.
+
+        Returns:
+            The public peer ID of the world node if the connection request is successful, otherwise None.
+
+        """
+
 
         print("Asking to join world...")
 
@@ -459,7 +587,16 @@ class Node:
         return peer_id
 
     def leave(self, peer_id):
-        """Leave a world (if current living is a world)."""
+        """Disconnects the node from a specific peer, typically a world.
+
+        Args:
+            peer_id: The peer ID of the node to leave.
+
+        Returns:
+            None.
+
+        """
+
         self.out(f"Leaving {peer_id}...")
 
         dynamic_profile = self.profile.get_dynamic_profile()
@@ -496,12 +633,32 @@ class Node:
             self.conn.remove(peer_id)
 
     def leave_world(self):
+        """Initiates the process of leaving a world.
+
+        Args:
+            None.
+
+        Returns:
+            None.
+
+        """
         if self.profile.get_dynamic_profile()['connections']['world_peer_id'] is not None:
             self.agent.accept_new_role(self.agent.ROLE_PUBLIC, None)
             self.leave(self.profile.get_dynamic_profile()['connections']['world_peer_id'])
 
     def run(self, cycles: int | None = None, max_time: float | None = None, interact_mode_opts: dict | None = None):
-        """Main node loop."""
+        """Starts the main execution loop for the node.
+
+        Args:
+            cycles: The number of clock cycles to run the loop for. If None, runs indefinitely.
+            max_time: The maximum time in seconds to run the loop. If None, runs indefinitely.
+            interact_mode_opts: A dictionary of options to enable interactive mode.
+
+        Returns:
+            None.
+
+        """
+
 
         try:
             if self.cursor_was_hidden:
@@ -789,7 +946,16 @@ class Node:
             traceback.print_exc()
 
     def __handle_network_connections(self):
-        """Manages the new connections and the lost ones."""
+        """Manages new and lost network connections.
+
+        Args:
+            None.
+
+        Returns:
+            None.
+
+        """
+
 
         # Getting fresh lists of existing world agents and world masters (from the rendezvous)
         if self.node_type is Node.AGENT:
@@ -942,7 +1108,15 @@ class Node:
             self.profile.mark_change_in_connections()
 
     def __handle_network_messages(self, interact_mode_opts=None):
+        """Handles and processes all incoming network messages.
 
+        Args:
+            interact_mode_opts: A dictionary of options for interactive mode.
+
+        Returns:
+            None.
+
+        """
         # Fetching all messages,
         public_messages = self.conn.get_messages(p2p_name=NodeConn.P2P_PUBLIC)
         world_messages = self.conn.get_messages(p2p_name=NodeConn.P2P_WORLD)
@@ -1295,8 +1469,21 @@ class Node:
         self.__connected_without_ack_clean()
 
     def __join_world(self, profile: NodeProfile, role: int,
-                     default_behav: str | None, agent_actions: str | None, rendezvous_tag: int) -> bool:
-        """Joint a world: this is actual join operation, only doable when the world already confirmed the access."""
+                     default_behav: str | None, agent_actions: str | None, rendezvous_tag: int):
+        """Performs the actual operation of joining a world after receiving confirmation.
+
+        Args:
+            profile: The profile of the world to join.
+            role: The role assigned to the agent in the world.
+            default_behav: The default behavior for the agent in the world.
+            agent_actions: A string of code defining the agent's actions.
+            rendezvous_tag: The rendezvous tag from the world's profile.
+
+        Returns:
+            True if the join operation is successful, otherwise False.
+
+        """
+
 
         addresses = profile.get_dynamic_profile()['private_peer_addresses']
         world_public_peer_id = profile.get_dynamic_profile()['peer_id']
@@ -1423,7 +1610,17 @@ class Node:
         else:
             return False
 
-    def __join_agent(self, profile: NodeProfile, peer_id: str) -> bool:
+    def __join_agent(self, profile: NodeProfile, peer_id: str):
+        """Adds a new known agent after receiving an approval message.
+
+        Args:
+            profile: The profile of the agent to join.
+            peer_id: The peer ID of the agent.
+
+        Returns:
+            True if the agent is successfully added, otherwise False.
+
+        """
         self.out("Adding known agent " + peer_id)
         if not self.agent.add_agent(peer_id=peer_id, profile=profile):
             self.__purge(peer_id)
@@ -1432,8 +1629,17 @@ class Node:
         del self.agents_expected_to_send_ack[peer_id]
         return True
 
-    def __interview_enqueue(self, peer_id: str) -> bool:
-        """Add a new agent to the queue of agent to interview."""
+    def __interview_enqueue(self, peer_id: str):
+        """Adds a newly connected peer to the queue of agents to be interviewed.
+
+        Args:
+            peer_id: The peer ID of the agent to interview.
+
+        Returns:
+            True if the agent is successfully enqueued, otherwise False.
+
+        """
+
 
         # If the peer_id is not in the same world were we are, we early stop the interview process
         if (not self.conn.is_public(peer_id) and peer_id not in self.conn.world_agents_list and
@@ -1454,8 +1660,19 @@ class Node:
         self.agents_to_interview[peer_id] = [self.clock.get_time(), None]  # Peer ID -> [time, profile]; no profile yet
         return True
 
-    def __interview_check_profile(self, peer_id: str, node_id: str, profile: NodeProfile) -> bool:
-        """Checking whether a profile can be accepted or should be discarded."""
+    def __interview_check_profile(self, peer_id: str, node_id: str, profile: NodeProfile):
+        """Checks if a received profile is acceptable and valid.
+
+        Args:
+            peer_id: The peer ID of the node that sent the profile.
+            node_id: The node ID of the node that sent the profile.
+            profile: The NodeProfile object to be checked.
+
+        Returns:
+            True if the profile is acceptable, otherwise False.
+
+        """
+
 
         # If the node ID was not on the list of allowed ones (if the list exists), then stop it
         # notice that we do not get the node ID from the profile, but from outside (it comes from the token, so safe)
@@ -1521,7 +1738,16 @@ class Node:
                     return False
 
     def __interview_clean(self):
-        """Purging outdated interview requests."""
+        """Removes outdated or timed-out interview requests from the queue.
+
+        Args:
+            None.
+
+        Returns:
+            None.
+
+        """
+
 
         cur_time = self.clock.get_time()
         agents_to_remove = []
@@ -1537,7 +1763,16 @@ class Node:
             self.__purge(peer_id)  # This will also remove the peer from the queue of peers to interview
 
     def __connected_without_ack_clean(self):
-        """Purging outdated connected peers that never replied to our profile."""
+        """Removes connected peers from the queue if they haven't sent an acknowledgment within the timeout period.
+
+        Args:
+            None.
+
+        Returns:
+            None.
+
+        """
+
 
         cur_time = self.clock.get_time()
         agents_to_remove = []
@@ -1553,6 +1788,15 @@ class Node:
             self.__purge(peer_id)  # This will also remove the peer from the queue of in the connected-without-ack queue
 
     def __purge(self, peer_id: str):
+        """Removes a peer from all relevant connection lists and queues.
+
+        Args:
+            peer_id: The peer ID of the node to purge.
+
+        Returns:
+            None.
+
+        """
         self.hosted.remove_agent(peer_id)
         self.conn.remove(peer_id)
 
@@ -1565,7 +1809,17 @@ class Node:
             del self.agents_expected_to_send_ack[peer_id]
 
     def __root(self, api, payload):
-        """Send data to the root server."""
+        """Sends a POST request to the root server's API endpoint.
+
+        Args:
+            api: The API endpoint to send the request to.
+            payload: The data to be sent in the request body.
+
+        Returns:
+            The 'data' field from the server's JSON response.
+
+        """
+
 
         response_fields = ["state", "flags", "data"]
 
@@ -1595,6 +1849,15 @@ class Node:
 
     @staticmethod
     def __analyze_code(file_in_memory):
+        """Analyzes a string of Python code for dangerous or unsafe functions and modules.
+
+        Args:
+            file_in_memory: The string of Python code to analyze.
+
+        Returns:
+            True if the code is considered safe, otherwise False.
+
+        """
         dangerous_functions = {"eval", "exec", "compile", "system", "__import__", "input"}
         dangerous_modules = {"subprocess"}
 
@@ -1627,6 +1890,16 @@ class Node:
         return True
 
     def __handle_inspector_command(self, cmd: str, arg):
+        """Handles commands received from an inspector node.
+
+        Args:
+            cmd: The command string.
+            arg: The argument for the command.
+
+        Returns:
+            None.
+
+        """
         self.out(f"Handling inspector message {cmd}, with arg {arg}")
 
         if cmd == "ask_to_join_world":
@@ -1647,7 +1920,15 @@ class Node:
             self.err("Unknown inspector command")
 
     def __send_to_inspector(self):
+        """Sends status updates and data to the connected inspector node.
 
+        Args:
+            None.
+
+        Returns:
+            None.
+
+        """
         # Collecting console
         console = {'output_messages': self._output_messages,
                    'output_messages_count': self._output_messages_count,
@@ -1727,11 +2008,18 @@ class Node:
                                   content_type=Msg.STREAM_SAMPLE, content=content):
                 self.err(f"Failed to send stream sample data to the inspector (hash: {net_hash})")
 
-
 class NodeSynchronizer:
     DEBUG = True
 
     def __init__(self):
+        """Initializes a new instance of the NodeSynchronizer class.
+
+        Args:
+            None.
+
+        Returns:
+            None.
+        """
         self.nodes = []
         self.agent_nodes = {}
         self.world_node = None  # Added to allow get_console() to access the world node from server.py (synch only)
@@ -1755,6 +2043,14 @@ class NodeSynchronizer:
         self.gap = 0.  # Seconds
 
     def add_node(self, node: Node):
+        """Adds a new node to the synchronizer.
+
+        Args:
+            node: The node to add.
+
+        Returns:
+            None.
+        """
         self.nodes.append(node)
 
         if node.node_type == Node.AGENT:
@@ -1774,6 +2070,14 @@ class NodeSynchronizer:
                     self.world_masters.add(node.agent.get_name())
 
     def run(self, synch_cycles: int | None = None):
+        """Starts the main execution loop for the node.
+
+        Args:
+            synch_cycles: The number of clock cycles to run the loop for. If None, runs indefinitely.
+
+        Returns:
+            None.
+        """
         assert self.world is not None, "Missing world node"
 
         # External events

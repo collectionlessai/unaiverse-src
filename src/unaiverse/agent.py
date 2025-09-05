@@ -18,8 +18,8 @@ import uuid
 import torch
 from unaiverse.dataprops import DataProps
 from unaiverse.agent_basics import AgentBasics
+from unaiverse.streams import BufferedDataStream
 from unaiverse.networking.p2p.messages import Msg
-from unaiverse.streams import BufferedDataStream, DataStream
 
 
 class Agent(AgentBasics):
@@ -150,6 +150,9 @@ class Agent(AgentBasics):
     def send_disengagement(self, send_disconnection_too: bool = False):
         """Ask for disengagement.
 
+        Args:
+            send_disconnection_too: Whether to send a disconnect-suggestion together with the disengagement.
+
         Returns:
             True if disengagement requests were successfully sent to at least one engaged agent, False otherwise.
         """
@@ -169,6 +172,7 @@ class Agent(AgentBasics):
         """Get a disengagement request from an agent.
 
         Args:
+            disconnect_too: Whether to disconnect the agent who sent the disengagement.
             _requester: The ID of the agent requesting disengagement. Defaults to None.
 
         Returns:
@@ -206,6 +210,16 @@ class Agent(AgentBasics):
         return True
 
     def disconnect_by_role(self, role: str | list[str]):
+        """Disconnects from all agents that match a specified role.
+        It finds the agents and calls the node's purge function on each.
+
+        Args:
+            role: A string or list of strings representing the role(s) of agents to disconnect from.
+
+        Returns:
+            Always True.
+
+        """
         self.out(f"Disconnecting agents with role: {role}")
         if self.find_agents(role):
             found_agents = copy.deepcopy(self._found_agents)
@@ -214,7 +228,16 @@ class Agent(AgentBasics):
         return True
 
     def disconnected(self, agent: str | None = None):
+        """Checks if a specific set of agents (by ID or wildcard) are no longer connected to the agent.
+        It returns False if any of the specified agents are still connected.
 
+        Args:
+            agent: The ID of the agent or a wildcard to check.
+
+        Returns:
+            True if all involved agents are disconnected, False otherwise.
+
+        """
         # - if "agent" is a peer ID, the involved agents will be a list with one element.
         # - if "agent" is a known wildcard, as "<valid_cmp>", then involved agents will be self._valid_cmp_agents
         # - if "agent" is None, then the current agent in self._engaged_agents will be returned
@@ -231,8 +254,15 @@ class Agent(AgentBasics):
         return somebody_still_connected
 
     def received_some_asked_data(self, processing_fcn: str | None = None):
-        """Checks if at least one of the agents who were asked for something (generate, learn, ...) sent some data."""
+        """Checks if any of the agents that were previously asked for data (e.g., via `ask_gen`) have sent a stream
+        sample back. Optionally, it can process the received data with a specified function.
 
+        Args:
+            processing_fcn: The name of a function to process the received data.
+
+        Returns:
+            True if at least one data sample was received, False otherwise.
+        """
         _processing_fcn = None
         if processing_fcn is not None:
             if hasattr(self, processing_fcn):
@@ -317,6 +347,7 @@ class Agent(AgentBasics):
             samples: The number of samples to generate. Defaults to 100.
             time: The time duration for generation. Defaults to -1.
             timeout: The timeout for the generation request. Defaults to -1.
+            ask_uuid: Specify the UUID of the action (if None - default -, it is randomly generated).
             ignore_uuid: Force a None UUID instead of generating a random one.
 
         Returns:
@@ -562,6 +593,8 @@ class Agent(AgentBasics):
             samples: The number of samples to learn from. Defaults to 100.
             time: The time duration for generation. Defaults to -1.
             timeout: The timeout for the generation request. Defaults to -1.
+            ask_uuid: Specify the action UUID (default = None, i.e., it is automatically generated).
+            ignore_uuid: If Trie, the UUID is fully ignored (i.e, forced to None).
 
         Returns:
             True if the learning request was successfully sent to at least one involved agent, False otherwise.
@@ -807,15 +840,32 @@ class Agent(AgentBasics):
         return True
 
     def all_asked_finished(self):
-        """Check if all the agents who where asked for something (calling "ask_*") are done."""
+        """Checks if all agents that were previously asked to perform a task (e.g., generate or learn) have sent a
+        completion confirmation. It compares the set of agents asked with the set of agents that have completed
+        the task.
+
+        Returns:
+            True if all agents are done, False otherwise.
+        """
         return self._agents_who_were_asked == self._agents_who_completed_what_they_were_asked
 
     def all_engagements_completed(self):
-        """Check if all the agents who where asked for engagement ("send_engagement") confirmed ("got_engagement")."""
+        """Checks if all engagement requests that were sent have been confirmed. It returns True if there are no agents
+        remaining in the `_found_agents` list, implying all have been engaged with or discarded.
+
+        Returns:
+            True if all engagements are complete, False otherwise.
+
+        """
         return len(self._found_agents) == 0
 
     def agents_are_waiting(self):
-        """Check if at least one agent from self._found_agents is waiting to be considered in order to be added."""
+        """Checks if there are any agents who have connected but have not yet been fully processed or added to the
+        agent's known lists. This indicates that new agents are waiting to be managed.
+
+        Returns:
+            True if there are waiting agents, False otherwise.
+        """
         self.out(f"Current set of {len(self._node_agents_waiting)} connected peer IDs non managed yet: "
                  f"{self._node_agents_waiting}")
         for found_agent in self._found_agents:
@@ -825,6 +875,17 @@ class Agent(AgentBasics):
 
     def ask_subscribe(self, agent: str | None = None,
                       stream_hashes: list[str] | None = None, unsubscribe: bool = False):
+        """Requests a remote agent or a group of agents to subscribe to or unsubscribe from a list of specified PubSub
+        streams. It normalizes the stream hashes and sends an action request containing the stream properties.
+
+        Args:
+            agent: The target agent's ID or a wildcard.
+            stream_hashes: A list of streams to subscribe to or unsubscribe from.
+            unsubscribe: A boolean to indicate if it's an unsubscription request.
+
+        Returns:
+            True if the request was sent to at least one agent, False otherwise.
+        """
 
         # - if "agent" is a peer ID, the involved agents will be a list with one element.
         # - if "agent" is a known wildcard, as "<valid_cmp>", then involved agents will be self._valid_cmp_agents
@@ -883,7 +944,21 @@ class Agent(AgentBasics):
 
     def do_subscribe(self, stream_owners: list[str] | None = None, stream_props: list[str] | None = None,
                      unsubscribe: bool = False,
-                     _requester: str | list | None = None, _request_time: float = -1.) -> bool:
+                     _requester: str | list | None = None, _request_time: float = -1.):
+        """Executes a subscription or unsubscription request received from another agent. It processes the stream
+        properties, adds or removes the streams from the agent's known streams, and handles the underlying PubSub topic
+        subscriptions.
+
+        Args:
+            stream_owners: A list of peer IDs who own the streams.
+            stream_props: A list of JSON-serialized stream properties.
+            unsubscribe: A boolean to indicate unsubscription.
+            _requester: The ID of the requesting agent.
+            _request_time: The time the request was made.
+
+        Returns:
+            True if the action is successful, False otherwise.
+        """
         self.deb(f"[do_subscribe] unsubscribe: {unsubscribe}, "
                  f"stream_owners: {stream_owners}, stream_props: ... ({len(stream_props)} props)")
 
@@ -939,14 +1014,15 @@ class Agent(AgentBasics):
         return True
 
     def done_subscribe(self, unsubscribe: bool = False, _requester: str | None = None):
-        """This is a way to get back the confirmation of a completed subscription/unsubscription.
+        """Handles the confirmation that a subscription or unsubscription request has been completed by another agent.
+        It adds the requester to the set of agents that have completed their asked tasks.
 
         Args:
-            unsubscribe: If this action is to confirm an unsubscription (True) or a subscription (False).
-            _requester: The ID of the agent who completed the subscription. Defaults to None.
+            unsubscribe: A boolean indicating if it was an unsubscription.
+            _requester: The ID of the agent who completed the task.
 
         Returns:
-            True if the subscription/unsubscription confirmation was successfully handled by this agent.
+            Always True.
         """
         what = "subscribing" if unsubscribe else "unsubscribing"
         self.out(f"Agent {_requester} finished {what}")
@@ -956,7 +1032,18 @@ class Agent(AgentBasics):
         return True
 
     def record(self, net_hash: str, samples: int = 100, time: float = -1., timeout: float = -1.):
-        """Record a stream."""
+        """Records data from a specified stream into a new, owned `BufferedDataStream`. This is a multistep action
+        that captures a sequence of samples over time and then adds the new recorded stream to the agent's profile.
+
+        Args:
+            net_hash: The hash of the stream to record.
+            samples: The number of samples to record.
+            time: The time duration for recording.
+            timeout: The timeout for each recording attempt.
+
+        Returns:
+            True if a sample was successfully recorded, False otherwise.
+        """
         assert samples is not None and time is not None and timeout is not None, "Missing basic action information"
 
         k = self.get_action_step()
@@ -1020,6 +1107,18 @@ class Agent(AgentBasics):
 
     def connect_by_role(self, role: str | list[str], filter_fcn: str | None = None,
                         time: float = -1., timeout: float = -1.):
+        """Finds and attempts to connect with agents whose profiles match a specific role. It can be optionally
+        filtered by a custom function. It returns True if at least one valid agent is found.
+
+        Args:
+            role: The role or list of roles to search for.
+            filter_fcn: The name of an optional filter function.
+            time: The time duration for the action.
+            timeout: The action timeout.
+
+        Returns:
+            True if at least one agent is found and a connection request is made, False otherwise.
+        """
         self.out(f"Asking to get in touch with all agents whose role is {role}")
         assert time is not None and timeout is not None, "Missing basic action information"
 
@@ -1064,8 +1163,15 @@ class Agent(AgentBasics):
             return True
 
     def find_agents(self, role: str | list[str]):
-        """Find an agent whose authority is in the specified range."""
+        """Locally searches through the agent's known peers (world and public agents) to find agents with a specific
+        role. It populates the `_found_agents` set with the peer IDs of matching agents.
 
+        Args:
+            role: The role or list of roles to search for.
+
+        Returns:
+            True if at least one agent is found, False otherwise.
+        """
         self.out(f"Finding an available agent whose role is {role}")
         role_list = role if isinstance(role, list) else [role]
         self._found_agents = set()
@@ -1095,8 +1201,12 @@ class Agent(AgentBasics):
         return len(self._found_agents) > 0
 
     def next_pref_stream(self):
-        """Moves to the next stream in the list of preferred ones."""
+        """Moves the internal pointer to the next stream in the list of preferred streams, which is often used for
+        playlist-like operations. It wraps around to the beginning if it reaches the end.
 
+        Returns:
+            True if the move is successful, False if the list is empty.
+        """
         if len(self._preferred_streams) == 0:
             self.err(f"Cannot move to the next stream because the list of preferred streams is empty")
             return False
@@ -1107,8 +1217,12 @@ class Agent(AgentBasics):
         return True
 
     def first_pref_stream(self):
-        """Moves to the next stream in the list of preferred ones."""
+        """Resets the internal pointer to the first stream in the list of preferred streams. This is useful for
+        restarting a playback or processing loop.
 
+        Returns:
+            True if the move is successful, False if the list is empty.
+        """
         if len(self._preferred_streams) == 0:
             self.err(f"Cannot move to the first stream because the list of preferred streams is empty")
             return False
@@ -1117,9 +1231,16 @@ class Agent(AgentBasics):
         self.out(f"Moving to the first preferred stream ({self._preferred_streams[self._cur_preferred_stream]})")
         return True
 
-    def check_pref_stream(self, what: str = "last") -> bool:
-        """Check the current preferred stream."""
+    def check_pref_stream(self, what: str = "last"):
+        """Checks the position of the current preferred stream within the list. It can check if it's the first, last,
+        or if it has completed a full round, among other checks.
 
+        Args:
+            what: A string specifying the type of check to perform (e.g., 'first', 'last', 'last_round').
+
+        Returns:
+            True if the condition is met, False otherwise.
+        """
         valid = ['first', 'last', 'not_first', 'not_last', 'last_round', 'not_last_round', 'last_song', 'not_last_song']
         assert what in valid, f"The what argument can only be one of {valid}"
 
@@ -1147,8 +1268,16 @@ class Agent(AgentBasics):
             return (self._cur_preferred_stream + 1) % num_streams_in_playlist != 0
 
     def set_pref_streams(self, net_hashes: list[str], repeat: int = 1):
-        """Fill a list with preferred streams."""
+        """Fills the agent's list of preferred streams (a playlist). It can repeat the playlist a specified number of
+        times and resolves user-provided stream hashes to their full network hashes.
 
+        Args:
+            net_hashes: A list of stream hashes to add to the playlist.
+            repeat: The number of times to repeat the playlist.
+
+        Returns:
+            Always True.
+        """
         self.out(f"Setting up a list of {len(net_hashes)} preferred streams")
         self._cur_preferred_stream = 0
         self._preferred_streams = []
@@ -1166,9 +1295,20 @@ class Agent(AgentBasics):
 
         return True
 
-    def evaluate(self, stream_hash: str, how: str, steps: int = 100, re_offset: bool = False) -> bool:
-        """Compare two signals."""
+    def evaluate(self, stream_hash: str, how: str, steps: int = 100, re_offset: bool = False):
+        """Evaluates the performance of agents that have completed a generation task. It compares the generated data
+        from each agent with a local stream (which can be a ground truth or reference stream) using a specified
+        comparison method.
 
+        Args:
+            stream_hash: The hash of the local stream to use for comparison.
+            how: The name of the comparison method to use.
+            steps: The number of steps to perform the evaluation.
+            re_offset: A boolean to indicate whether to re-offset the streams.
+
+        Returns:
+            True if the evaluation is successful, False otherwise.
+        """
         if not self.buffer_generated_by_others:
             self.err("Cannot evaluate if not buffering data generated by others")
             return False
@@ -1195,9 +1335,19 @@ class Agent(AgentBasics):
 
         return True
 
-    def compare_eval(self, cmp: str, thres: float, good_if_true: bool = True) -> bool:
-        """After having completed an evaluation."""
+    def compare_eval(self, cmp: str, thres: float, good_if_true: bool = True):
+        """Compares the results of a previous evaluation to a given threshold or finds the best result among all
+        agents. It can check for minimum, maximum, or simple threshold-based comparisons, and it populates a list of
+        'valid' agents that passed the comparison.
 
+        Args:
+            cmp: The comparison operator (e.g., '<', '>', 'min').
+            thres: The threshold value for comparison.
+            good_if_true: A boolean to invert the pass/fail logic.
+
+        Returns:
+            True if at least one agent passed the comparison, False otherwise.
+        """
         assert cmp in ["<", ">", ">=", "<=", "min", "max"], f"Invalid comparison operator: {cmp}"
         assert thres >= 0. or cmp in ["min", "max"], f"Invalid evaluation threshold: {thres} (it must be in >= 0.)"
 
@@ -1280,6 +1430,17 @@ class Agent(AgentBasics):
             return True
 
     def suggest_role_to_world(self, agent: str | None, role: str):
+        """Suggests a role change for one or more agents to the world master. It iterates through the involved agents,
+        checks if their current role differs from the suggested one, and sends a role suggestion message to the
+        world master.
+
+        Args:
+            agent: The ID of the agent or a wildcard to suggest the role for.
+            role: The new role to suggest (as a string).
+
+        Returns:
+            True if the suggestion was sent successfully, False otherwise.
+        """
         self.out("Suggesting role to world")
 
         agents = self.__involved_agents(agent)
@@ -1309,6 +1470,19 @@ class Agent(AgentBasics):
     def suggest_badges_to_world(self, agent: str | None = None,
                                 score: float = -1.0, badge_type: str = "completed",
                                 badge_description: str | None = None):
+        """Suggests one or more badges to the world master for specific agents. This is typically used to reward agents
+        for completing tasks, such as for a competition. It sends a message with the badge details, including the score
+        and type, to the world master.
+
+        Args:
+            agent: The ID of the agent or a wildcard for which to suggest the badge.
+            score: The score associated with the badge.
+            badge_type: The type of badge (e.g., 'completed').
+            badge_description: An optional description for the badge.
+
+        Returns:
+            True if the badge suggestion was sent successfully, False otherwise.
+        """
         self.out("Suggesting one or more badges to world")
 
         if score < 0.:
@@ -1342,7 +1516,23 @@ class Agent(AgentBasics):
                            u_hashes: list[str] | None,
                            yhat_hashes: list[str] | None,
                            samples: int = 100, time: float = -1., timeout: float = -1., ref_uuid: str | None = None):
+        """A private helper method that encapsulates the logic for sending a 'do_gen' or 'do_learn' action request to
+        another agent. It handles the normalization of stream hashes, sets up recipients for direct messages, and adds
+        the target agent to the list of agents asked.
 
+        Args:
+            for_what: A string indicating whether to ask for 'gen' or 'learn'.
+            agent: The ID of the agent to send the request to.
+            u_hashes: A list of input stream hashes.
+            yhat_hashes: A list of target stream hashes (for learning).
+            samples: The number of samples.
+            time: The time duration.
+            timeout: The request timeout.
+            ref_uuid: The UUID for the request.
+
+        Returns:
+            True if the request was sent successfully, False otherwise.
+        """
         if agent not in self.all_agents:
             self.err(f"Unknown agent: {agent}")
             return False
@@ -1396,8 +1586,21 @@ class Agent(AgentBasics):
                           yhat_hashes: list[str] | None,
                           learn: bool = False,
                           recipient: str | None = None,
-                          ref_uuid: str | None = None) -> bool:
-        """Loop on data streams, for learning and/or generation purposes."""
+                          ref_uuid: str | None = None):
+        """A private helper method that contains the core logic for processing data streams, either for generation or
+        learning. It reads input streams, passes them to the agent's processor, and handles the output streams.
+        It's designed to be called repeatedly by multistep actions like `do_gen` and `do_learn`.
+
+        Args:
+            u_hashes: A list of input stream hashes.
+            yhat_hashes: A list of target stream hashes (for learning).
+            learn: A boolean to indicate if the task is a learning task.
+            recipient: The ID of the agent to send data back to.
+            ref_uuid: The UUID for the request.
+
+        Returns:
+            True if the stream processing is successful, False otherwise.
+        """
 
         # Getting current step index
         k = self.get_action_step()
@@ -1486,8 +1689,18 @@ class Agent(AgentBasics):
 
     def __complete_do(self, do_what: str, peer_id_who_asked: str, all_hashes: list[str] | None,
                       send_back_confirmation: bool = True):
-        """Post action to run after at the end of a do_something call, to confirm it."""
+        """A private helper method to be called at the end of a `do_gen` or `do_learn` action. It performs cleanup
+        tasks, such as clearing UUIDs on streams, and sends a confirmation message back to the requesting agent.
 
+        Args:
+            do_what: A string ('gen' or 'learn') indicating which task was completed.
+            peer_id_who_asked: The ID of the agent who requested the task.
+            all_hashes: A list of all stream hashes involved in the task.
+            send_back_confirmation: A boolean to indicate if a confirmation message should be sent.
+
+        Returns:
+            True if the completion process is successful, False otherwise.
+        """
         assert do_what in ["gen", "learn"]
 
         if do_what == "gen":
@@ -1520,9 +1733,21 @@ class Agent(AgentBasics):
             return True
 
     def __compare_streams(self, net_hash_a: str, net_hash_b: str,
-                          how: str = "mse", steps: int = 100, re_offset: bool = False) -> tuple[float, bool]:
-        """Loop on two -buffered- data streams, for comparison purposes, returning a value >= 0."""
+                          how: str = "mse", steps: int = 100, re_offset: bool = False):
+        """A private helper method that compares two buffered data streams based on a specified metric (e.g., MSE,
+        max accuracy). It handles stream compatibility checks, data retrieval, and the actual comparison, returning a
+        dissimilarity score.
 
+        Args:
+            net_hash_a: The network hash of the first stream.
+            net_hash_b: The network hash of the second stream.
+            how: The comparison metric ('mse', 'max', 'geqX').
+            steps: The number of samples to compare.
+            re_offset: A boolean to re-align stream tags before comparison.
+
+        Returns:
+            A tuple containing the dissimilarity score and a success flag (e.g., `(0.5, True)`).
+        """
         if net_hash_a not in self.known_streams:
             self.err(f"Unknown stream (net_hash_a): {net_hash_a}")
             return -1., False
@@ -1737,7 +1962,17 @@ class Agent(AgentBasics):
         # Input("*** press enter to continue ***")
         return o / steps, True
 
-    def __involved_agents(self, agent: str | None) -> list[str]:
+    def __involved_agents(self, agent: str | None):
+        """A private helper method that resolves an agent ID or a wildcard into a list of specific peer IDs.
+        It can resolve a single agent, a group of agents that passed a previous comparison (`<valid_cmp>`), or all
+        currently engaged agents.
+
+        Args:
+            agent: The agent ID or wildcard string.
+
+        Returns:
+            A list of peer IDs corresponding to the involved agents.
+        """
         peer_id = agent
         involved_agents = [peer_id] if peer_id is not None and peer_id != "<valid_cmp>" else (
             self._valid_cmp_agents) if peer_id is not None and peer_id == "<valid_cmp>" else self._engaged_agents
