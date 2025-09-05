@@ -82,7 +82,7 @@ class DataProps:
     def __init__(self,
                  name: str = "unk",
                  group: str = "none",
-                 data_type: str = "text",  # do not set tensor as default
+                 data_type: str = "text",  # Do not set tensor as default
                  data_desc: str = "unk",
                  tensor_shape: tuple[int | None, ...] | None = None,
                  tensor_labels: list[str] | str | None = None,
@@ -128,11 +128,11 @@ class DataProps:
             None
         """
 
-        # checking data type
+        # Checking data type
         assert data_type in DataProps.VALID_DATA_TYPES, "Invalid data type"
         assert isinstance(data_desc, str), "Invalid data description"
 
-        # checking transformations
+        # Checking transformations
         assert (stream_to_proc_transforms is None or
                 isinstance(stream_to_proc_transforms, str) or
                 isinstance(stream_to_proc_transforms, PreTrainedTokenizerBase) or
@@ -164,43 +164,43 @@ class DataProps:
         self.proc_to_stream_transforms = proc_to_stream_transforms
         self.__original_proc_to_stream_transforms = proc_to_stream_transforms
 
-        # setting data type and description
+        # Setting data type and description
         self.data_type = data_type
         self.data_desc = data_desc
 
-        # setting empty attributes
+        # Setting empty attributes
         self.tensor_shape = None
         self.tensor_dtype = None
         self.tensor_labels = None
 
-        # checking data in function of its type
+        # Checking data in function of its type
         if self.is_tensor():
 
-            # checking shape
+            # Checking shape
             assert (tensor_shape is not None and
                     isinstance(tensor_shape, (tuple, list))), f"Invalid shape for DataProps: {tensor_shape}"
             assert all(x is None or isinstance(x, int) for x in tensor_shape), \
                 f"Invalid shape for DataProps: {tensor_shape}"
 
-            # setting shape
-            self.tensor_shape = tuple(tensor_shape)  # forcing (important)
+            # Setting shape
+            self.tensor_shape = tuple(tensor_shape)  # Forcing (important)
 
-            # checking dtype
+            # Checking dtype
             assert (tensor_dtype is not None and
                     (isinstance(tensor_dtype, torch.dtype) or isinstance(tensor_dtype, str)
                      and tensor_dtype.startswith("torch."))), \
                 f"Invalid tensor type: {tensor_dtype}"
 
-            # setting dtype
+            # Setting dtype
             self.tensor_dtype = tensor_dtype if isinstance(tensor_dtype, torch.dtype) else eval(tensor_dtype)
 
-            # checking labels
+            # Checking labels
             assert tensor_labels is None or (isinstance(tensor_labels, list) or
                                              (isinstance(tensor_shape, str) and
                                               tensor_labels.startswith("AutoTokenizer:"))), \
                 f"Invalid tensor labels: {tensor_labels}"
 
-            # setting labels
+            # Setting labels
             if tensor_labels is not None:
                 if not (isinstance(tensor_labels, str) and tensor_labels.startswith("AutoTokenizer:")):
                     self.tensor_labels = TensorLabels(self, labels=tensor_labels, labeling_rule=tensor_labeling_rule)
@@ -209,7 +209,7 @@ class DataProps:
 
         elif self.is_img():
 
-            # ensuring other type-related tools are not set
+            # Ensuring other type-related tools are not set
             assert tensor_shape is None and tensor_labels is None and tensor_dtype is None, \
                 f"Tensor-related arguments must be None when using a DataProps of type {data_type}"
             assert (self.stream_to_proc_transforms is None or (not isinstance(self.stream_to_proc_transforms, str)
@@ -225,11 +225,11 @@ class DataProps:
 
         elif self.is_text():
 
-            # ensuring other type-related tools are not set
+            # Ensuring other type-related tools are not set
             assert tensor_shape is None and tensor_labels is None and tensor_dtype is None, \
                 f"Tensor/image-related arguments must be None when using a DataProps of type {data_type}"
 
-            # setting text to tensor transform (tokenizer in encode mode) (if given)
+            # Setting text to tensor transform (tokenizer in encode mode) (if given)
             if self.stream_to_proc_transforms is not None:
                 for j, _tttt in enumerate(self.stream_to_proc_transforms):
                     assert ((isinstance(_tttt, str) and _tttt.startswith("AutoTokenizer:")) or
@@ -242,7 +242,7 @@ class DataProps:
                     if isinstance(_tttt, str) and _tttt.startswith("AutoTokenizer:"):
                         self.stream_to_proc_transforms[j] = AutoTokenizer.from_pretrained(_tttt.split(":")[1])
 
-            # setting tensor to text transform (tokenizer in decode mode OR a given vocabulary int->str) (if given)
+            # Setting tensor to text transform (tokenizer in decode mode OR a given vocabulary int->str) (if given)
             if self.proc_to_stream_transforms is not None:
                 assert ((isinstance(self.proc_to_stream_transforms, str) and
                          self.proc_to_stream_transforms.startswith("AutoTokenizer:")) or
@@ -257,11 +257,11 @@ class DataProps:
                     self.proc_to_stream_transforms = (
                         AutoTokenizer.from_pretrained(self.proc_to_stream_transforms.split(":")[1]))
 
-        # checking name and group
+        # Checking name and group
         assert "~" not in name, "Invalid chars in stream name"
         assert "~" not in group, "Invalid chars in group name"
 
-        # initialize properties
+        # Initialize properties
         self.name = name
         self.group = group
         self.delta = delta
@@ -467,9 +467,9 @@ class DataProps:
                 data_padded[:, self.tensor_labels.indices] = data
                 return data_padded
             else:
-                return data  # do nothing
+                return data  # Do nothing
         else:
-            return data  # do nothing
+            return data  # Do nothing
 
     def clear_label_adaptation(self, data: torch.Tensor):
         return data[:, self.tensor_labels.indices] if self.tensor_labels.indices is not None else data
@@ -503,11 +503,11 @@ class DataProps:
             return data
         elif not isinstance(data, torch.Tensor):
             return None
-        elif len(data.shape) > 2:  # can only print 1d data (recall that 1d data has 2 dimensions, due to batch size)
+        elif len(data.shape) > 2:  # Can only print 1d data (recall that 1d data has 2 dimensions, due to batch size)
             return None
 
         if data.shape[0] != 1:
-            return None   # "Code designed for a batch of only 1 element
+            return None  # "Code designed for a batch of only 1 element
 
         if self.is_tensor():
             if not self.has_tensor_labels():
@@ -515,7 +515,7 @@ class DataProps:
 
             if self.is_tensor_token_ids():
 
-                # this is the case in which we assume to have a vector of token IDs
+                # This is the case in which we assume to have a vector of token IDs
                 text = ""
                 for i in range(0, data.shape[1]):
                     if i > 0:
@@ -525,12 +525,13 @@ class DataProps:
 
             elif self.is_tensor_float():
 
-                # this is the generic case of a 1d tensor
+                # This is the generic case of a 1d tensor
                 if self.tensor_labels.labeling_rule == "max":
                     j = torch.argmax(data, dim=1)
                     return self.tensor_labels[j.item()]
                 elif self.tensor_labels.labeling_rule == "geq":
-                    # warning: does not work for mini-batches
+
+                    # Warning: does not work for mini-batches
                     jj = torch.where(data >= self.tensor_labels.labeling_rule_thres)[1]
                     return ", ".join(self.tensor_labels[j] for j in jj.tolist())
                 else:
@@ -543,11 +544,13 @@ class DataProps:
                 return self.proc_to_stream_transforms.decode(data[0])
             elif isinstance(self.proc_to_stream_transforms, dict):
                 if data.dtype != torch.long:
-                    # this is the case of probabilities
-                    j = torch.argmax(data, dim=1)  # warning: does not work for mini-batches
+
+                    # This is the case of probabilities
+                    j = torch.argmax(data, dim=1)  # Warning: does not work for mini-batches
                     return self.proc_to_stream_transforms[j.item()]
                 else:
-                    # this is the case in which we assume to have a vector of token IDs
+
+                    # This is the case in which we assume to have a vector of token IDs
                     text = ""
                     for i in range(0, data.shape[1]):
                         if i > 0:
@@ -565,15 +568,15 @@ class DataProps:
         if self.is_tensor():
             if isinstance(data, torch.Tensor):
 
-                # skipping all checks, it is enough to know it is a tensor
+                # Skipping all checks, it is enough to know it is a tensor
                 if allow_class_ids and data.dtype == torch.long and len(data.shape) == 1:
                     return data.to(device)
 
-                # checking dtype
+                # Checking dtype
                 if self.tensor_dtype != data.dtype:
                     raise ValueError(f"Expected data of type {self.tensor_dtype}, got {data.dtype} (shape {data.shape})")
 
-                # checking shape
+                # Checking shape
                 if len(self.tensor_shape) != len(data.shape):
                     raise ValueError(f"Expected data with shape {self.tensor_shape}, got {data.shape}")
                 for i, s in enumerate(self.tensor_shape):
@@ -581,7 +584,7 @@ class DataProps:
                         if s != data.shape[i]:
                             raise ValueError(f"Expected data with shape {self.tensor_shape}, got {data.shape}")
 
-                # checking labels
+                # Checking labels
                 if self.has_tensor_labels():
                     if data.ndim != 2:
                         raise ValueError("Only 2d tensors are expected for "
@@ -600,13 +603,13 @@ class DataProps:
                     text_to_tensor_transform = self.stream_to_proc_transforms[int(targets)]
                     if text_to_tensor_transform is not None:
                         if isinstance(text_to_tensor_transform, PreTrainedTokenizerBase):
-                            return text_to_tensor_transform(data, return_tensors='pt')['input_ids'].to(device)  # tok
+                            return text_to_tensor_transform(data, return_tensors='pt')['input_ids'].to(device)  # Tok
                         elif isinstance(text_to_tensor_transform, dict):
                             return torch.tensor(text_to_tensor_transform[data]
                                                 if data in text_to_tensor_transform else len(text_to_tensor_transform),
-                                                dtype=torch.long, device=device).view(1, -1)  # warning batch size 1
+                                                dtype=torch.long, device=device).view(1, -1)  # Warning batch size 1
                         else:
-                            return text_to_tensor_transform(data).to(device)  # custom callable function
+                            return text_to_tensor_transform(data).to(device)  # Custom callable function
                     else:
                         return data
                 else:
@@ -637,11 +640,11 @@ class DataProps:
                     data = self.proc_to_stream_transforms(data)
                 data = data.cpu()
 
-                # checking dtype
+                # Checking dtype
                 if self.tensor_dtype != data.dtype:
                     raise ValueError(f"Expected data of type {self.tensor_dtype}, got {data.dtype}")
 
-                # checking shape
+                # Checking shape
                 if len(self.tensor_shape) != len(data.shape):
                     raise ValueError(f"Expected data with shape {self.tensor_shape}, got {data.shape}")
                 for i, s in enumerate(self.tensor_shape):
@@ -649,7 +652,7 @@ class DataProps:
                         if s != data.shape[i]:
                             raise ValueError(f"Expected data with shape {self.tensor_shape}, got {data.shape}")
 
-                # checking labels
+                # Checking labels
                 if self.has_tensor_labels():
                     if data.ndim != 2:
                         raise ValueError("Only 2d tensors are expected for "
@@ -670,14 +673,16 @@ class DataProps:
                 if self.proc_to_stream_transforms is not None:
                     assert data.shape[0] == 1, f"Code designed for a batch of only 1 element, got {data.shape[0]}"
                     if isinstance(self.proc_to_stream_transforms, PreTrainedTokenizerBase):
-                        return self.proc_to_stream_transforms.decode(data[0])  # tokenizer
+                        return self.proc_to_stream_transforms.decode(data[0])  # Tokenizer
                     elif isinstance(self.proc_to_stream_transforms, list):
                         if data.dtype != torch.long:
-                            # this is the case of probabilities
-                            j = torch.argmax(data, dim=1)  # warning: does not work for mini-batches
+
+                            # This is the case of probabilities
+                            j = torch.argmax(data, dim=1)  # Warning: does not work for mini-batches
                             return self.proc_to_stream_transforms[j.item()]
                         else:
-                            # this is the case in which we assume to have a vector of token IDs
+
+                            # This is the case in which we assume to have a vector of token IDs
                             text = ""
                             for i in range(0, data.shape[1]):
                                 if i > 0:
@@ -685,7 +690,7 @@ class DataProps:
                                 text += self.proc_to_stream_transforms[data[0][i].item()]
                             return text
                     else:
-                        return self.proc_to_stream_transforms(data)  # custom callable function
+                        return self.proc_to_stream_transforms(data)  # Custom callable function
                 else:
                     raise ValueError(f"Cannot decode torch.Tensor to text, since text_to_tensor_inv_transform is None")
             else:
@@ -718,14 +723,14 @@ class DataProps:
             bool: True if compatible, False otherwise.
         """
 
-        # checking data type
+        # Checking data type
         if self.data_type != props_to_compare.data_type and self.data_type != "all":
             return False
 
-        # in the case of tensors...
+        # In the case of tensors...
         if self.is_tensor():
 
-            # checking shape
+            # Checking shape
             if len(self.tensor_shape) == len(props_to_compare.tensor_shape):
                 for s, p in zip(self.tensor_shape, props_to_compare.tensor_shape):
                     if s is not None and p is not None and s != p:
@@ -733,7 +738,7 @@ class DataProps:
             else:
                 return False
 
-            # checking labels (if possible)
+            # Checking labels (if possible)
             if (not self.has_tensor_labels()) or (not props_to_compare.has_tensor_labels()):
                 return True
             else:
@@ -792,14 +797,14 @@ class TensorLabels:
         except ValueError:
             assert False, "Invalid labeling rule"
 
-        # basic attributes
+        # Basic attributes
         self.data_props = data_props
         self.labels = labels
         self.labeling_rule = labeling_rule
         self.labeling_rule_thres = labeling_rule_thres
         self.original_labeling_rule = original_labeling_rule
 
-        # these are mostly operational stuff, similar to private info (but it could be useful to expose them)
+        # These are mostly operational stuff, similar to private info (but it could be useful to expose them)
         self.num_labels = num_labels
         self.indices = None
 
@@ -892,7 +897,7 @@ class TensorLabels:
             f"Can only interleave non-empty sets of attribute labels"
         assert len(superset_labels) >= len(self), f"You must provide a super-set of attribute labels"
 
-        # ensuring it is a super-set of the current labels and finding its position
+        # Ensuring it is a super-set of the current labels and finding its position
         if self.indices is not None:
             labels = []
             indices_list = self.indices.tolist()
@@ -921,7 +926,7 @@ class TensorLabels:
             self.num_labels = len(self.labels)
             self.indices = torch.tensor(indices, dtype=torch.long)
 
-            # altering shape
+            # Altering shape
             self.data_props.tensor_shape = (self.data_props.tensor_shape[0], self.num_labels)
         else:
             self.indices = None

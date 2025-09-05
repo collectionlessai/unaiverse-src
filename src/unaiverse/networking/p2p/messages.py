@@ -29,7 +29,7 @@ except ImportError:
 
 class Msg:
 
-    # message content types
+    # Message content types
     PROFILE = "profile"
     WORLD_APPROVAL = "world_approval"
     AGENT_APPROVAL = "agent_approval"
@@ -47,7 +47,7 @@ class Msg:
     WORLD_AGENTS_LIST = "world_agents_list"
     CONSOLE_AND_BEHAV_STATUS = "console_and_behav_status"
 
-    # collections
+    # Collections
     CONTENT_TYPES = {PROFILE, WORLD_APPROVAL, AGENT_APPROVAL, PROFILE_REQUEST, ADDRESS_UPDATE,
                      STREAM_SAMPLE, ACTION_REQUEST, ROLE_SUGGESTION, HSM, MISC, GET_CV_FROM_ROOT,
                      BADGE_SUGGESTIONS, INSPECT_ON, INSPECT_CMD, WORLD_AGENTS_LIST, CONSOLE_AND_BEHAV_STATUS}
@@ -70,6 +70,7 @@ class Msg:
         self._decoded_content: any = None  # Cache for decompressed content
 
         if _proto_msg is not None:
+
             # Check if any other arguments were simultaneously provided
             other_args = [sender, content, timestamp_net, channel, piggyback]
             if any(arg is not None for arg in other_args):
@@ -79,7 +80,7 @@ class Msg:
             self._proto_msg = _proto_msg
             return
 
-        # sanity checks
+        # Sanity checks
         assert sender is not None, "Sender must be specified for a new message."
         assert isinstance(sender, str), "Sender must be a string"
         assert timestamp_net is None or isinstance(timestamp_net, str), "Invalid timestamp_net"
@@ -98,12 +99,13 @@ class Msg:
 
 
         if content is None or content == "<empty>":
-            return # Nothing to set in the 'oneof'
+            return  # Nothing to set in the 'oneof'
 
         # Route the content to the correct builder
         if content_type == Msg.STREAM_SAMPLE:
             self._build_stream_sample_content(content)
         else:
+
             # All other structured types use the generic json_content field
             self._build_json_content(content)
 
@@ -179,6 +181,7 @@ class Msg:
         """Deserializes a byte array into a new Msg instance."""
         pb_msg = pb.Message()
         pb_msg.ParseFromString(msg_bytes)
+
         # Pass the parsed protobuf message to the constructor
         return cls(_proto_msg=pb_msg)
 
@@ -202,6 +205,7 @@ class Msg:
             stream_sample_pb = content_pb.samples[name]
             stream_sample_pb.data_tag = sample_info.get('data_tag', -1)
             uuid = sample_info.get('data_uuid')
+
             # Only set the field if the uuid is not None
             if uuid is not None:
                 stream_sample_pb.data_uuid = uuid
@@ -229,6 +233,7 @@ class Msg:
         dictionary of tensors and images.
         """
         py_dict = {}
+
         # Iterate through the Protobuf map ('samples')
         for name, sample_pb in self._proto_msg.stream_sample.samples.items():
             data_payload = sample_pb.data
@@ -239,6 +244,7 @@ class Msg:
 
             if payload_type == "tensor_data":
                 tensor_data = data_payload.tensor_data
+
                 # Decompress and reconstruct the tensor
                 with gzip.GzipFile(fileobj=io.BytesIO(tensor_data.data), mode='rb') as f:
                     raw_bytes = f.read()

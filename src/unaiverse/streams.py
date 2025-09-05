@@ -41,7 +41,7 @@ class DataStream:
             clock (Clock): Clock object for time management (usually provided from outside).
         """
 
-        # a stream can be turned off
+        # A stream can be turned off
         self.props = props
         self.clock = clock
         self.data = None
@@ -73,7 +73,7 @@ class DataStream:
         if name is not None:
             stream.props.set_name(name)
         else:
-            stream.props.set_name(stream.props.get_name() + "@" + group)  # if name is None, then a group was provided
+            stream.props.set_name(stream.props.get_name() + "@" + group)  # If name is None, then a group was provided
         stream.props.set_public(public)
         stream.props.set_pubsub(pubsub)
         if (stream.props.is_flat_tensor_with_labels() and
@@ -209,7 +209,7 @@ class DataStream:
         else:
             self.data_uuid_expected = ref_uuid
 
-        # when we "set" a UUID, even if None, we unmark the "clear UUID" flag, to be sure that nobody is going to
+        # When we "set" a UUID, even if None, we unmark the "clear UUID" flag, to be sure that nobody is going to
         # accidentally clear this information
         self.data_uuid_clearable = False
 
@@ -249,16 +249,16 @@ class BufferedDataStream(DataStream):
         """
         super().__init__(props=props, clock=clock)
 
-        # we store the data samples, and we cache their text representation (for speed)
+        # We store the data samples, and we cache their text representation (for speed)
         self.data_buffer = []
         self.text_buffer = []
 
-        self.is_static = is_static  # a static stream store only one sample and always yields it
+        self.is_static = is_static  # A static stream store only one sample and always yields it
 
-        # we need to remember the fist cycle in which we started buffering and the last one we buffered
+        # We need to remember the fist cycle in which we started buffering and the last one we buffered
         self.first_cycle = -1
         self.last_cycle = -1
-        self.last_get_cycle = -2  # keep it to -2 (since -1 is the starting value for cycles)
+        self.last_get_cycle = -2  # Keep it to -2 (since -1 is the starting value for cycles)
         self.buffered_data_index = -1
 
         self.restart_before_next_get = set()
@@ -274,9 +274,9 @@ class BufferedDataStream(DataStream):
             self.restart_before_next_get.remove(requested_by)
             self.restart()
 
-        cycle = self.clock.get_cycle() - self.first_cycle  # this ensures that first get clock = first sample
+        cycle = self.clock.get_cycle() - self.first_cycle  # This ensures that first get clock = first sample
 
-        # these two lines might make you think "hey, call super().set(self[cycle]), it is the same!"
+        # These two lines might make you think "hey, call super().set(self[cycle]), it is the same!"
         # however, it is not like that, since "set" will also call "adapt_to_labels", that is not needed for
         # buffered streams
         if (self.last_get_cycle != cycle and
@@ -310,13 +310,13 @@ class BufferedDataStream(DataStream):
                 elif self.props.is_text():
                     self.text_buffer.append(data)
 
-                # boilerplate
+                # Boilerplate
                 if self.first_cycle < 0:
                     self.first_cycle = self.clock.get_cycle()
                     self.last_cycle = self.first_cycle
                 else:
 
-                    # filling gaps with "None"
+                    # Filling gaps with "None"
                     cycle = self.clock.get_cycle()
                     if cycle > self.last_cycle + 1:
                         for cycle in range(cycle, self.last_cycle + 1):
@@ -392,7 +392,7 @@ class BufferedDataStream(DataStream):
 
         self.first_cycle = -1
         self.last_cycle = -1
-        self.last_get_cycle = -2  # keep it to -2 (since -1 is the starting value for cycles)
+        self.last_get_cycle = -2  # Keep it to -2 (since -1 is the starting value for cycles)
         self.buffered_data_index = -1
 
         self.restart_before_next_get = set()
@@ -472,16 +472,16 @@ class BufferedDataStream(DataStream):
         """
         assert stride >= 1 and isinstance(stride, int), f"Invalid stride: {stride}"
 
-        # notice: this whole routed never calls ".get()", on purpose! it must be as it is
+        # Notice: this whole routed never calls ".get()", on purpose! it must be as it is
         global_cycle = self.clock.get_cycle()
         if global_cycle < 0:
             return None, None, -1, self.props
 
-        # fist check: ensure we do not go beyond the first clock and counting the resulting number of steps
+        # Fist check: ensure we do not go beyond the first clock and counting the resulting number of steps
         since_what_cycle = max(since_what_cycle, 0)
         num_steps = global_cycle - since_what_cycle + 1
 
-        # second check: now we compute the index we should pass to get item
+        # Second check: now we compute the index we should pass to get item
         since_what_idx_in_getitem = since_what_cycle - self.first_cycle
 
         ret_cycles = []
@@ -555,7 +555,7 @@ class Dataset(BufferedDataStream):
 
             self.data_buffer.append((torch.stack(batch), -1))
 
-        # it was buffered previously than every other thing
+        # It was buffered previously than every other thing
         self.restart()
 
 
@@ -579,26 +579,26 @@ class ImageFileStream(BufferedDataStream):
         self.device = device if device is not None else torch.device("cpu")
         self.circular = circular
 
-        # reading the image file
+        # Reading the image file
         # (assume a file with one filename per line or a CSV format with lines such as: cat.jpg,cat,mammal,animal)
         self.image_paths = []
 
-        # calling the constructor
+        # Calling the constructor
         super().__init__(props=DataProps(name=ImageFileStream.__name__,
                                          data_type="img",
                                          pubsub=True))
 
         with open(list_of_image_files, 'r') as f:
             for line in f:
-                parts = line.strip().split(',')  # tolerates if it is a CVS and the first field is the image file name
+                parts = line.strip().split(',')  # Tolerates if it is a CVS and the first field is the image file name
                 image_name = parts[0]
                 self.image_paths.append(os.path.join(image_dir, image_name))
 
-        # it was buffered previously than every other thing
+        # It was buffered previously than every other thing
         self.last_cycle = -1
         self.first_cycle = self.last_cycle - len(self.image_paths) + 1
 
-        # possibly print to screen the "clickable" list of images
+        # Possibly print to screen the "clickable" list of images
         if show_images:
             show_images_grid(self.image_paths)
             for i, image_path in enumerate(self.image_paths):
@@ -658,7 +658,7 @@ class LabelStream(BufferedDataStream):
         self.device = device if device is not None else torch.device("cpu")
         self.circular = circular
 
-        # reading the label file
+        # Reading the label file
         # (assume a file with a labeled element per line or a CSV format with lines such as: cat.jpg,cat,mammal,animal)
         self.labels = []
 
@@ -672,7 +672,7 @@ class LabelStream(BufferedDataStream):
         class_name_to_index = {}
         class_names = list(class_names.keys())
 
-        # call the constructor
+        # Call the constructor
         super().__init__(props=DataProps(name=LabelStream.__name__,
                                          data_type="tensor",
                                          data_desc="label stream",
@@ -695,7 +695,7 @@ class LabelStream(BufferedDataStream):
                     target_vector[0, idx] = 1.
                 self.labels.append(target_vector)
 
-        # it was buffered previously than every other thing
+        # It was buffered previously than every other thing
         self.last_cycle = -1
         self.first_cycle = self.last_cycle - len(self.labels) + 1
 
@@ -721,7 +721,7 @@ class LabelStream(BufferedDataStream):
         if self.circular:
             idx = idx % self.__len__()
 
-        label = self.labels[idx].unsqueeze(0).to(self.device)  # multi-label vector for the image
+        label = self.labels[idx].unsqueeze(0).to(self.device)  # Multi-label vector for the image
         return self.props.adapt_tensor_to_tensor_labels(label), self.clock.get_cycle() - self.first_cycle
 
 
@@ -741,7 +741,7 @@ class TokensStream(BufferedDataStream):
         """
         self.circular = circular
 
-        # reading the data file (assume a token per line or a CSV format with lines such as:
+        # Reading the data file (assume a token per line or a CSV format with lines such as:
         # token,category_label1,category_label2,etc.)
         tokens = []
         with open(tokens_file_csv, 'r') as f:
@@ -751,7 +751,7 @@ class TokensStream(BufferedDataStream):
                 if 0 < max_tokens <= len(tokens):
                     break
 
-        # vocabulary
+        # Vocabulary
         idx = 0
         word2id = {}
         sorted_stream_of_tokens = sorted(tokens)
@@ -763,19 +763,19 @@ class TokensStream(BufferedDataStream):
         for _word, _id in word2id.items():
             id2word[_id] = _word
 
-        # calling the constructor
+        # Calling the constructor
         super().__init__(props=DataProps(name=TokensStream.__name__,
                                          data_type="text",
                                          data_desc="stream of words",
                                          stream_to_proc_transforms=word2id,
                                          proc_to_stream_transforms=id2word))
 
-        # tokenized text
+        # Tokenized text
         for i, token in enumerate(tokens):
             data = token
             self.data_buffer.append((data, -1))
 
-        # it was buffered previously than every other thing
+        # It was buffered previously than every other thing
         self.restart()
 
     def __getitem__(self, idx: int) -> torch.Tensor | None:

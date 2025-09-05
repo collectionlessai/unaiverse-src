@@ -24,63 +24,66 @@ class ConnectionPools:
     def __init__(self, max_connections: int, pool_name_to_p2p_name_and_ratio: dict[str, [str, float]],
                  p2p_name_to_p2p: dict[str, P2P], public_key: str | None = None, token: str | None = None):
 
-        # common terms: a "pool triple" is [pool_contents, max_connections_in_such_a_pool, p2p_object_of_the_pool
+        # Common terms: a "pool triple" is [pool_contents, max_connections_in_such_a_pool, p2p_object_of_the_pool
         self.max_con = max_connections
         self.pool_count = len(pool_name_to_p2p_name_and_ratio)
         self.pool_names = list(pool_name_to_p2p_name_and_ratio.keys())
         self.pool_ratios = [p2p_name_and_ratio[1] for p2p_name_and_ratio in pool_name_to_p2p_name_and_ratio.values()]
 
-        # indices involving the P2P object or its name
+        # Indices involving the P2P object or its name
         self.p2p_name_to_p2p = p2p_name_to_p2p
         self.p2p_name_and_pool_name_to_pool_triple = {}
         self.p2p_to_pool_names = {}
 
-        # indices rooted around the pool name
+        # Indices rooted around the pool name
         self.pool_name_to_pool_triple = {}
         self.pool_name_to_added_in_last_update = {}
         self.pool_name_to_removed_in_last_update = {}
         self.pool_name_to_peer_infos = {p: {} for p in self.pool_names}
 
-        # indices rooted around the peer ID
+        # Indices rooted around the peer ID
         self.peer_id_to_pool_name = {}
         self.peer_id_to_p2p = {}
         self.peer_id_to_misc = {}
         self.peer_id_to_token = {}
 
-        # token-related stuff, super private
+        # Token-related stuff, super private
         self.__token = token if token is not None else ""
         self.__token_verifier = TokenVerifier(public_key) if public_key is not None else None
 
-        # checking
+        # Checking
         for p2p_name_and_ratio in pool_name_to_p2p_name_and_ratio.values():
             assert p2p_name_and_ratio[0] in self.p2p_name_to_p2p, f"Cannot find p2p named {p2p_name_and_ratio[0]} "
         assert self.max_con >= len(self.pool_names), "Too small number of max connections"
         assert sum([x for x in self.pool_ratios if x > 0]) == 1.0, "Pool ratios must sum to 1.0"
 
-        # preparing the pool triples
+        # Preparing the pool triples
         self.pool_name_to_pool_triple = \
             {k: [set(), 0, self.p2p_name_to_p2p[pool_name_to_p2p_name_and_ratio[k][0]]] for k in self.pool_names}
         num_zero_ratio_pools = len([x for x in self.pool_ratios if x == 0])
         assert num_zero_ratio_pools <= self.max_con, "Cannot create pools given the provided max connection count"
+
         # Edit: to solve the teacher not engaging with more than two students.
         pools_max_sizes = {k: max(math.floor(self.pool_ratios[i] * (self.max_con - num_zero_ratio_pools)),
                                   1 if self.pool_ratios[i] >= 0. else 0)
                            for i, k in enumerate(self.pool_names)}
-        # pools_max_sizes = {k: self.max_con for k in self.pool_names}
 
-        # fixing sizes
+        # Pools_max_sizes = {k: self.max_con for k in self.pool_names}
+
+        # Fixing sizes
         tot = 0
         for i, (k, v) in enumerate(pools_max_sizes.items()):
             assert v > 0 or self.pool_ratios[i] < 0, "Cannot create pools given the provided max connection count"
+
         # Edit: to solve the teacher not engaging with more than two students.
             tot += v
         assert tot <= self.max_con, \
             "Cannot create pools given the provided max connection count"
         pools_max_sizes[self.pool_names[-1]] += (self.max_con - tot)
 
-        # storing fixed sizes in the previously created pool triples & building additional index
+        # Storing fixed sizes in the previously created pool triples & building additional index
         for pool_name, pool_contents_max_con_and_p2p in self.pool_name_to_pool_triple.items():
-            pool_contents_max_con_and_p2p[1] = pools_max_sizes[pool_name]  # fixing the second element of the triple
+            pool_contents_max_con_and_p2p[1] = pools_max_sizes[pool_name]  # Fixing the second element of the triple
 
             pool, _, p2p = pool_contents_max_con_and_p2p
             p2p_name = None
@@ -157,12 +160,12 @@ class ConnectionPools:
             return None
         else:
             node_id, cv_hash = self.__token_verifier.verify_token(token, p2p_peer=peer_id)
-            return node_id, cv_hash  # if the verification fails, this is None, None
+            return node_id, cv_hash  # If the verification fails, this is None, None
 
     def connect(self, addresses: list[str], p2p_name: str) -> tuple[str | None, bool]:
         p2p = self.p2p_name_to_p2p[p2p_name]
 
-        # connecting
+        # Connecting
         peer_id, through_relay = ConnectionPools.__connect(p2p, addresses)
         return peer_id, through_relay
 
@@ -178,10 +181,10 @@ class ConnectionPools:
             self.peer_id_to_pool_name[peer_id] = pool_name
             self.peer_id_to_p2p[peer_id] = p2p
 
-            # setting 'misc' field (default is 0, where 0 means public)
+            # Setting 'misc' field (default is 0, where 0 means public)
             peer_info['misc'] = self.peer_id_to_misc.get(peer_id, 0)
 
-            # storing (only)
+            # Storing (only)
             pool.add(peer_id)
             self.pool_name_to_peer_infos[pool_name][peer_id] = peer_info
             return True
@@ -193,7 +196,7 @@ class ConnectionPools:
             pool_name = self.peer_id_to_pool_name[peer_id]
             pool, _, p2p = self.pool_name_to_pool_triple[pool_name]
 
-            # disconnecting
+            # Disconnecting
             disc = ConnectionPools.disconnect(p2p, peer_id)
             pool.remove(peer_id)
             del self.pool_name_to_peer_infos[pool_name][peer_id]
@@ -225,10 +228,10 @@ class ConnectionPools:
 
             if connected_peer_infos is not None:
 
-                # routing to the right queue / filtering
+                # Routing to the right queue / filtering
                 pool_name_and_peer_ids_to_peer_info = self.conn_routing_fcn(connected_peer_infos, p2p)
 
-                # parsing the generated index
+                # Parsing the generated index
                 for pool_name, connected_peer_ids_to_connected_peer_infos \
                         in pool_name_and_peer_ids_to_peer_info.items():
                     pool, _, pool_p2p = self.p2p_name_and_pool_name_to_pool_triple[p2p_name][pool_name]
@@ -236,11 +239,11 @@ class ConnectionPools:
                     new_peer_ids = connected_peer_ids - pool
                     lost_peer_ids = pool - connected_peer_ids
 
-                    # clearing disconnected agents
+                    # Clearing disconnected agents
                     for lost_peer_id in lost_peer_ids:
                         self.pool_name_to_removed_in_last_update.setdefault(pool_name, set()).add(lost_peer_id)
 
-                    # adding new agents
+                    # Adding new agents
                     for new_peer_id in new_peer_ids:
                         peer_info = connected_peer_ids_to_connected_peer_infos[new_peer_id]
                         if not self.add(peer_info, pool_name=pool_name):
@@ -251,16 +254,16 @@ class ConnectionPools:
 
     def get_messages(self, p2p_name: str, allowed_not_connected_peers: set | None = None) -> list[Msg]:
 
-        # pop all messages
-        messages: list[Msg] = self[p2p_name].pop_messages()  # pop all messages (list of messages - list[Msg])
+        # Pop all messages
+        messages: list[Msg] = self[p2p_name].pop_messages()  # Pop all messages (list of messages - list[Msg])
         ret = []
         for m in messages:
-            if (m.sender in self.peer_id_to_pool_name or  # check if expected sender
+            if (m.sender in self.peer_id_to_pool_name or  # Check if expected sender
                     (allowed_not_connected_peers is not None and m.sender in allowed_not_connected_peers)):
                 token = m.piggyback
                 node_id, _ = self.verify_token(token, m.sender)
                 if node_id is not None:
-                    m.piggyback = node_id  # replacing piggyback with the node ID
+                    m.piggyback = node_id  # Replacing piggyback with the node ID
                     ret.append(m)
                     if m.sender in self.peer_id_to_pool_name:
                         self.peer_id_to_token[m.sender] = token
@@ -308,7 +311,7 @@ class ConnectionPools:
     def send(self, peer_id: str, channel_trail: str | None,
              content_type: str, content: bytes | dict | None = None, p2p: P2P | None = None) -> bool:
 
-        # getting the right p2p object
+        # Getting the right p2p object
         if p2p is None:
             p2p = self.peer_id_to_p2p[peer_id] if peer_id in self.peer_id_to_p2p else None
             if p2p is None:
@@ -316,13 +319,13 @@ class ConnectionPools:
                     print("[DEBUG CONNECTIONS-POOL] P2P non found for peer id: " + str(peer_id))
                 return False
 
-        # defining channel
+        # Defining channel
         if channel_trail is not None and len(channel_trail) > 0:
             channel = f"{p2p.peer_id}::dm:{peer_id}-{content_type}~{channel_trail}"
         else:
             channel = f"{p2p.peer_id}::dm:{peer_id}-{content_type}"
 
-        # adding sender info here
+        # Adding sender info here
         msg = Msg(sender=p2p.peer_id,
                   content_type=content_type,
                   content=content,
@@ -331,12 +334,14 @@ class ConnectionPools:
         if ConnectionPools.DEBUG:
             print("[DEBUG CONNECTIONS-POOL] Sending message: " + str(msg))
 
-        # sending direct message
+        # Sending direct message
         try:
             p2p.send_message_to_peer(channel, msg)
+
             # If the line above executes without raising an error, it was successful.
             return True
         except P2PError as e:
+
             # If send_message_to_peer fails, it will raise a P2PError. We catch it here.
             if ConnectionPools.DEBUG:
                 print("[DEBUG CONNECTIONS-POOL] Sending error is: " + str(e))
@@ -344,7 +349,7 @@ class ConnectionPools:
 
     def subscribe(self, peer_id: str, channel: str, default_p2p_name: str | None = None) -> bool:
 
-        # getting the right p2p object
+        # Getting the right p2p object
         p2p = None
         for _p2p in self.p2p_to_pool_names.keys():
             if _p2p.peer_id == peer_id:
@@ -366,7 +371,7 @@ class ConnectionPools:
 
     def unsubscribe(self, peer_id: str, channel: str) -> bool:
 
-        # getting the right p2p object
+        # Getting the right p2p object
         p2p = None
         for _p2p in self.p2p_to_pool_names.keys():
             if _p2p.peer_id == peer_id:
@@ -386,7 +391,7 @@ class ConnectionPools:
     def publish(self, peer_id: str, channel: str,
                 content_type: str, content: bytes | dict | tuple | None = None):
 
-        # getting the right p2p object
+        # Getting the right p2p object
         p2p = None
         for _p2p in self.p2p_to_pool_names.keys():
             if _p2p.peer_id == peer_id:
@@ -397,7 +402,7 @@ class ConnectionPools:
         if p2p is None:
             return False
 
-        # adding sender info here
+        # Adding sender info here
         msg = Msg(sender=p2p.peer_id,
                   content_type=content_type,
                   content=content,
@@ -406,37 +411,39 @@ class ConnectionPools:
         if ConnectionPools.DEBUG:
             print("[DEBUG CONNECTIONS-POOL] Sending (publish) message: " + str(msg))
 
-        # sending message via GossipSub
+        # Sending message via GossipSub
         try:
             p2p.broadcast_message(channel, msg)
+
             # If the line above executes without raising an error, it was successful.
             return True
         except P2PError as e:
+
             # If send_message_to_peer fails, it will raise a P2PError. We catch it here.
             return False
 
 
 class NodeConn(ConnectionPools):
 
-    # basic name
+    # Basic name
     __ALL_UNIVERSE = "all_universe"
     __WORLD_AGENTS_ONLY = "world_agents"
     __WORLD_NODE_ONLY = "world_node"
     __WORLD_MASTERS_ONLY = "world_masters"
 
-    # suffixes
+    # Suffixes
     __PUBLIC_NET = "_public"
     __PRIVATE_NET = "_private"
 
-    # prefixes
+    # Prefixes
     __INBOUND = "in_"
     __OUTBOUND = "out_"
 
-    # p2p names
+    # P2p names
     P2P_PUBLIC = "p2p_public"
     P2P_WORLD = "p2p_world"
 
-    # all pools (prefix + basic name + suffix)
+    # All pools (prefix + basic name + suffix)
     IN_PUBLIC = __INBOUND + __ALL_UNIVERSE + __PUBLIC_NET
     OUT_PUBLIC = __OUTBOUND + __ALL_UNIVERSE + __PUBLIC_NET
     IN_WORLD_AGENTS = __INBOUND + __WORLD_AGENTS_ONLY + __PRIVATE_NET
@@ -446,7 +453,7 @@ class NodeConn(ConnectionPools):
     IN_WORLD_MASTERS = __INBOUND + __WORLD_MASTERS_ONLY + __PRIVATE_NET
     OUT_WORLD_MASTERS = __OUTBOUND + __WORLD_MASTERS_ONLY + __PRIVATE_NET
 
-    # aggregated pools
+    # Aggregated pools
     PUBLIC = {IN_PUBLIC, OUT_PUBLIC}
     WORLD_NODE = {IN_WORLD_NODE, OUT_WORLD_NODE}
     WORLD_AGENTS = {IN_WORLD_AGENTS, OUT_WORLD_AGENTS}
@@ -475,11 +482,11 @@ class NodeConn(ConnectionPools):
                          },
                          public_key=public_key, token=token)
 
-        # just for convenience
+        # Just for convenience
         self.p2p_public = p2p_u
         self.p2p_world = p2p_w
 
-        # these are the list of all the possible agents that might try to connect when we are in world
+        # These are the list of all the possible agents that might try to connect when we are in world
         self.world_agents_list = set()
         self.world_masters_list = set()
         self.world_agents_and_world_masters_list = set()
@@ -487,7 +494,7 @@ class NodeConn(ConnectionPools):
         self.role_to_peer_ids = {}
         self.peer_id_to_addrs = {}
 
-        # rendezvous
+        # Rendezvous
         self.rendezvous_tag = -1
 
     def reset_rendezvous_tag(self):
@@ -500,7 +507,7 @@ class NodeConn(ConnectionPools):
         for c in connected_peer_infos:
             inbound = c['direction'] == "incoming"
             outbound = c['direction'] == "outgoing"
-            peer_id = c['id']  # other fields are: c['addrs'], c['connected_at']
+            peer_id = c['id']  # Other fields are: c['addrs'], c['connected_at']
 
             if public:
                 if inbound:
@@ -543,20 +550,20 @@ class NodeConn(ConnectionPools):
     def set_addresses_in_peer_info(self, peer_id, addresses):
         if self.in_connection_queues(peer_id):
             addrs = self.pool_name_to_peer_infos[self.get_pool_of(peer_id)][peer_id]['addrs']
-            addrs.clear()  # warning: do not allocate a new list, keep the current one (it is referenced by others)
+            addrs.clear()  # Warning: do not allocate a new list, keep the current one (it is referenced by others)
             for _addrs in addresses:
                 addrs.append(_addrs)
 
     def set_role(self, peer_id, new_role: int):
         cur_role = self.get_role(peer_id)
 
-        # updating
+        # Updating
         self.peer_id_to_misc[peer_id] = new_role
 
         if self.in_connection_queues(peer_id):
             self.pool_name_to_peer_infos[self.get_pool_of(peer_id)][peer_id]['misc'] = new_role
 
-        # updating
+        # Updating
         if cur_role in self.role_to_peer_ids:
             if peer_id in self.role_to_peer_ids[cur_role]:
                 self.role_to_peer_ids[cur_role].remove(peer_id)
@@ -568,7 +575,7 @@ class NodeConn(ConnectionPools):
 
     def set_world_agents_list(self, world_agents_list_peer_infos: list[dict] | None):
 
-        # clearing previous information
+        # Clearing previous information
         to_remove = []
         for peer_id, misc in self.peer_id_to_misc.items():
             if misc & 1 == 1 and misc & 2 == 0:
@@ -579,7 +586,7 @@ class NodeConn(ConnectionPools):
             del self.peer_id_to_addrs[peer_id]
             self.role_to_peer_ids[misc].remove(peer_id)
 
-        # setting new information
+        # Setting new information
         if world_agents_list_peer_infos is not None and len(world_agents_list_peer_infos) > 0:
             self.world_agents_list = {x['id'] for x in world_agents_list_peer_infos}
             for x in world_agents_list_peer_infos:
@@ -592,7 +599,7 @@ class NodeConn(ConnectionPools):
 
     def set_world_masters_list(self, world_masters_list_peer_infos: list[dict] | None):
 
-        # clearing previous information
+        # Clearing previous information
         to_remove = []
         for peer_id, misc in self.peer_id_to_misc.items():
             if misc & 1 == 1 and misc & 2 == 2:
@@ -603,7 +610,7 @@ class NodeConn(ConnectionPools):
             del self.peer_id_to_addrs[peer_id]
             self.role_to_peer_ids[misc].remove(peer_id)
 
-        # setting new information
+        # Setting new information
         if world_masters_list_peer_infos is not None and len(world_masters_list_peer_infos) > 0:
             self.world_masters_list = {x['id'] for x in world_masters_list_peer_infos}
             for x in world_masters_list_peer_infos:
@@ -616,7 +623,8 @@ class NodeConn(ConnectionPools):
 
     def add_to_world_agents_list(self, peer_id: str, addrs: list[str], role: int = -1):
         self.world_agents_list.add(peer_id)
-        # this assumes that the WORLD MASTER/AGENT BIT is the first one
+
+        # This assumes that the WORLD MASTER/AGENT BIT is the first one
         assert role & 1 == 1, "Expecting the first bit of the role to be 1 for world agents"
         assert role & 2 == 0, "Expecting the second bit of the role to be 0 for world agents"
         self.peer_id_to_addrs[peer_id] = addrs
@@ -625,7 +633,8 @@ class NodeConn(ConnectionPools):
 
     def add_to_world_masters_list(self, peer_id: str, addrs: list[str], role: int = -1):
         self.world_masters_list.add(peer_id)
-        # this assumes that the WORLD MASTER/AGENT BIT is the first one
+
+        # This assumes that the WORLD MASTER/AGENT BIT is the first one
         assert role & 1 == 1, "Expecting the first bit of the role to be 1 for world masters"
         assert role & 2 == 2, "Expecting the second bit of the role to be 1 for world masters"
         self.peer_id_to_addrs[peer_id] = addrs
@@ -758,7 +767,7 @@ class NodeConn(ConnectionPools):
                     else:
                         raise ValueError("Unexpected value of the 'misc' field: " + str(c))
 
-                # updating lists
+                # Updating lists
                 self.set_world_agents_list(world_agents_peer_infos)
                 self.set_world_masters_list(world_masters_peer_infos)
 

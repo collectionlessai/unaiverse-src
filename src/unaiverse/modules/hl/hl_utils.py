@@ -101,7 +101,8 @@ def _init(val: float | str, data_shape: torch.Size, device, dtype: torch.dtype, 
     elif val == 'ones':
         return torch.ones(data_shape, device=device, dtype=dtype)
     elif val == 'alternating':
-        # initialize the state as alternating pairs of (0,1) (to be used with BlockSkewSymmetric)
+
+        # Initialize the state as alternating pairs of (0,1) (to be used with BlockSkewSymmetric)
         # data_shape is (batch_size, xi_shape)
         assert len(data_shape) == 2, (f"xi should be initialized as (batch_size, xi_shape), "
                                       f"got xi with {len(data_shape)} dimensions.")
@@ -114,15 +115,16 @@ def _init_state_and_costate(model: nn.Module, batch_size: int = 1) -> (
         Dict)[str, Dict[str, torch.Tensor | Dict[str, torch.Tensor]]]:
     """Initialize the state and costate dictionaries (keys are 'xi', 'w_xi', 'w_y').
     """
-    # getting device
+
+    # Getting device
     device = next(model.parameters()).device
     dtype = next(model.parameters()).dtype
 
-    # creating state and costate
+    # Creating state and costate
     x = dict(xi=model.h_init, w={})
     p = dict(xi=torch.zeros_like(x['xi'], device=device, dtype=dtype), w={})
 
-    # initialize state and costate for the weights of the state network
+    # Initialize state and costate for the weights of the state network
     x['w'] = {par_name: par for par_name, par in dict(model.named_parameters()).items() if par.requires_grad}
     p['w'] = {par_name: torch.zeros_like(par, device=device, dtype=dtype) for par_name, par in x['w'].items()}
 
@@ -329,10 +331,11 @@ class HL:
                 - 'gamma', 'beta', 'theta', etc.: Hyperparameters for the group.
         """
 
-        # set defaults
+        # Set defaults
         defaults = dict(params=None, gamma=gamma, flip=flip, theta=theta, beta=beta,
                         reset_neuron_costate=reset_neuron_costate, reset_weight_costate=reset_weight_costate,
                         local=local)
+
         # Ensure models is a list of dicts and assign the specified values
         if isinstance(models, torch.nn.Module):
             models = [{**defaults, 'params': models}]
@@ -353,27 +356,29 @@ class HL:
             model = group['params']
             delta = model.delta
 
-            # copy the state (of the model) just to track it during the optimization and get the costate
+            # Copy the state (of the model) just to track it during the optimization and get the costate
             # the locality of these operations is handled by the model
             state['x']['xi'] = model.h
             dp_xi = _get_grad(model.h)
             _euler_step(state['p']['xi'], dp_xi, step_size=-delta * group['flip'],
                         decay=-group['flip'] * group['theta'], in_place=True)
 
-            # copy the weights from the network just to track it during the optimization and get the costates
+            # Copy the weights from the network just to track it during the optimization and get the costates
             dp_w = {}
             for name, param in model.named_parameters():
                 state['x']['w'][name] = param
                 dp_w[name] = _get_grad(param)
 
             if group['local']:
-                # local HL uses the old costates to update the weights
+
+                # Local HL uses the old costates to update the weights
                 d_w = state['p']['w']
                 _euler_step(state['x']['w'], d_w, step_size=-delta*group['beta'], decay=None, in_place=True)
                 _euler_step(state['p']['w'], dp_w, step_size=-delta*group['flip'],
                             decay=-group['flip']*group['theta'], in_place=True)
             else:
-                # non-local HL updates the costates before updating the weights
+
+                # Non-local HL updates the costates before updating the weights
                 d_w = _euler_step(state['p']['w'], dp_w, step_size=-delta * group['flip'],
                                   decay=-group['flip'] * group['theta'], in_place=True)
                 _euler_step(state['x']['w'], d_w, step_size=-delta * group['beta'], decay=None, in_place=True)
@@ -381,7 +386,7 @@ class HL:
     def compute_hamiltonian(self, *potential_terms: torch.Tensor) -> torch.Tensor:
         """Computes the Hamiltonian for all models."""
 
-        # the number of potential terms provided should be equal to the number of models
+        # The number of potential terms provided should be equal to the number of models
         assert len(potential_terms) == len(self.param_groups), f"A potential term for each model is expected."
 
         ham = torch.tensor(0., dtype=potential_terms[0].dtype, device=potential_terms[0].device)
@@ -399,7 +404,7 @@ class HL:
             for param in model.parameters():
                 _zero_grad(param, set_to_none)
 
-            # eventually reset costates
+            # Eventually reset costates
             if group['reset_neuron_costate']:
                 _zero_inplace(state['p']['xi'], detach=True)
             if group['reset_weight_costate']:

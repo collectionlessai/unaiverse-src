@@ -127,13 +127,13 @@ class CSSM(ModuleWrapper):
         self.register_buffer('h_next', torch.randn((batch_size, h_dim), device=device))
         self.h = None
         self.dh = None
-        self.sigma = sigma  # the non-linear activation function
+        self.sigma = sigma  # The non-linear activation function
 
         # Store input dimensions and device
         self.u_dim = u_dim
         self.du_dim = du_dim
         self.delta = 1.  # Discrete time step
-        self.local = local  # if True the state update is computed locally in time (i.e., kept out from the graph)
+        self.local = local  # If True the state update is computed locally in time (i.e., kept out from the graph)
         self.forward_count = 0
         self.project_every = project_every
 
@@ -165,33 +165,35 @@ class CSSM(ModuleWrapper):
         else:
             h = self.h_next.data
 
-        # track the gradients on h from here on
+        # Track the gradients on h from here on
         h.requires_grad_()
 
-        # check if it's time to project the eigenvalues
+        # Check if it's time to project the eigenvalues
         if self.project_every:
             if self.forward_count % self.project_every == 0:
                 self.adjust_eigs()
 
-        # handle inputs
+        # Handle inputs
         du, u = self.handle_inputs(du, u)
 
         # Update hidden state based on input and previous hidden state
         h_new = self.A(h) + self.B(torch.cat([du, u], dim=1))
 
         if self.local:
-            # in the local version we keep track in self.h of the old value of the state
+
+            # In the local version we keep track in self.h of the old value of the state
             self.h = h
             self.dh = (h_new - self.h) / self.delta  # (h_new - h_old) / delta
         else:
-            # in the non-local version we keep track in self.h of the new value of the state
+
+            # In the non-local version we keep track in self.h of the new value of the state
             self.h = h_new
             self.dh = (self.h - h) / self.delta  # (h_new - h_old) / delta
 
         # Compute output using a nonlinear activation function
         y = self.C(self.sigma(self.h))
 
-        # store the new state for the next iteration
+        # Store the new state for the next iteration
         self.h_next.data = h_new.detach()
         self.forward_count += 1
 
@@ -220,13 +222,13 @@ class CDiagR(ModuleWrapper):
         self.register_buffer('h_next', torch.randn((batch_size, h_dim), device=device))
         self.h = None
         self.dh = None
-        self.sigma = sigma  # the non-linear activation function
+        self.sigma = sigma  # The non-linear activation function
 
         # Store input dimensions and device
         self.u_dim = u_dim
         self.du_dim = du_dim
         self.delta = 1.
-        self.local = local  # if True the state update is computed locally in time (i.e., kept out from the graph)
+        self.local = local  # If True the state update is computed locally in time (i.e., kept out from the graph)
         self.forward_count = 0
         self.project_every = project_every
 
@@ -257,33 +259,36 @@ class CDiagR(ModuleWrapper):
             self.forward_count = 0
         else:
             h = self.h_next.data
-        # track the gradients on h from here on
+
+        # Track the gradients on h from here on
         h.requires_grad_()
 
-        # check if it's time to project the eigenvalues
+        # Check if it's time to project the eigenvalues
         if self.project_every:
             if self.forward_count % self.project_every == 0:
                 self.adjust_eigs()
 
-        # handle inputs
+        # Handle inputs
         du, u = self.handle_inputs(du, u)
 
         # Apply diagonal transformation to hidden state
         h_new = self.diag.weight.view(self.diag.out_features) * h + self.B(torch.cat([du, u], dim=1))
 
         if self.local:
-            # in the local version we keep track in self.h of the old value of the state
+
+            # In the local version we keep track in self.h of the old value of the state
             self.h = h
             self.dh = (h_new - self.h) / self.delta  # (h_new - h_old) / delta
         else:
-            # in the non-local version we keep track in self.h of the new value of the state
+
+            # In the non-local version we keep track in self.h of the new value of the state
             self.h = h_new
             self.dh = (self.h - h) / self.delta  # (h_new - h_old) / delta
 
         # Compute output using a nonlinear activation function
         y = self.C(self.sigma(self.h))
 
-        # store the new state for the next iteration
+        # Store the new state for the next iteration
         self.h_next.data = h_new.detach()
         self.forward_count += 1
 
@@ -312,13 +317,13 @@ class CDiagC(ModuleWrapper):
         self.register_buffer('h_next', torch.randn((batch_size, h_dim), device=device))
         self.h = None
         self.dh = None
-        self.sigma = sigma  # the non-linear activation function
+        self.sigma = sigma  # The non-linear activation function
 
         # Store input dimensions and device
         self.u_dim = u_dim
         self.du_dim = du_dim
         self.delta = 1.
-        self.local = local  # if True the state update is computed locally in time (i.e., kept out from the graph)
+        self.local = local  # If True the state update is computed locally in time (i.e., kept out from the graph)
         self.forward_count = 0
         self.project_every = project_every
 
@@ -349,33 +354,36 @@ class CDiagC(ModuleWrapper):
             self.forward_count = 0
         else:
             h = self.h_next.data
-        # track the gradients on h from here on
+
+        # Track the gradients on h from here on
         h.requires_grad_()
 
-        # check if it's time to project the eigenvalues
+        # Check if it's time to project the eigenvalues
         if self.project_every:
             if self.forward_count % self.project_every == 0:
                 self.adjust_eigs()
 
-        # handle inputs
+        # Handle inputs
         du, u = self.handle_inputs(du, u)
 
         # Apply complex diagonal transformation
         h_new = self.diag.weight.view(self.diag.out_features) * h + self.B(torch.cat([du, u], dim=1))
 
         if self.local:
-            # in the local version we keep track in self.h of the old value of the state
+
+            # In the local version we keep track in self.h of the old value of the state
             self.h = h
             self.dh = (h_new - self.h) / self.delta  # (h_new - h_old) / delta
         else:
-            # in the non-local version we keep track in self.h of the new value of the state
+
+            # In the non-local version we keep track in self.h of the new value of the state
             self.h = h_new
             self.dh = (self.h - h) / self.delta  # (h_new - h_old) / delta
 
         # Compute output using a nonlinear activation function
         y = self.C(self.sigma(self.h))
 
-        # store the new state for the next iteration
+        # Store the new state for the next iteration
         self.h_next.data = h_new.detach()
         self.forward_count += 1
 
@@ -427,7 +435,7 @@ class CTE(ModuleWrapper):
         self.register_buffer('h_next', torch.randn((batch_size, h_dim), device=device))
         self.h = None
         self.dh = None
-        self.sigma = sigma  # the non-linear activation function
+        self.sigma = sigma  # The non-linear activation function
 
         # System parameters
         self.u_dim = u_dim
@@ -475,10 +483,10 @@ class CTE(ModuleWrapper):
         else:
             h = self.h_next.data
 
-        # track the gradients on h from here on
+        # Track the gradients on h from here on
         h.requires_grad_()
 
-        # check if it's time to project the eigenvalues
+        # Check if it's time to project the eigenvalues
         if self.project_every:
             if self.forward_count % self.project_every == 0:
                 self.adjust_eigs()
@@ -492,7 +500,7 @@ class CTE(ModuleWrapper):
             def C(x):
                 return torch.nn.functional.linear(x, weight_C)
 
-        # handle inputs
+        # Handle inputs
         du, u = self.handle_inputs(du, u)
 
         # Antisymmetric matrix construction
@@ -505,20 +513,22 @@ class CTE(ModuleWrapper):
         inp = A_inv @ (A_expm - self.Id) @ self.B(torch.cat([du, u], dim=1)).unsqueeze(-1)
 
         # Handle locality
-        h_new = rec + inp.squeeze(-1)   # updated hidden state
+        h_new = rec + inp.squeeze(-1)  # Updated hidden state
         if self.local:
-            # in the local version we keep track in self.h of the old value of the state
+
+            # In the local version we keep track in self.h of the old value of the state
             self.h = h
-            self.dh = (h_new - self.h) / self.delta     # (h_new - h_old) / delta
+            self.dh = (h_new - self.h) / self.delta  # (h_new - h_old) / delta
         else:
-            # in the non-local version we keep track in self.h of the new value of the state
+
+            # In the non-local version we keep track in self.h of the new value of the state
             self.h = h_new
-            self.dh = (self.h - h) / self.delta     # (h_new - h_old) / delta
+            self.dh = (self.h - h) / self.delta  # (h_new - h_old) / delta
 
         # Compute output using a nonlinear activation function
         y = C(self.sigma(self.h))
 
-        # store the new state for the next iteration
+        # Store the new state for the next iteration
         self.h_next.data = h_new
         self.forward_count += 1
 
@@ -593,11 +603,13 @@ class CTB(ModuleWrapper):
 
         # Damping configuration
         if alpha > 0.:
-            # in this case we want to add the feedback parameter alpha and use it to move eigenvalues on the unit circle
+
+            # In this case we want to add the feedback parameter alpha and use it to move eigenvalues on the unit circle
             self.project_method = 'const'
             self.register_buffer('alpha', torch.full_like(self.omega.data, alpha, device=device))
         elif alpha == 0.:
-            # this is the case in which we want to divide by the modulus
+
+            # This is the case in which we want to divide by the modulus
             self.project_method = 'modulus'
             self.register_buffer('alpha', torch.zeros_like(self.omega.data, device=device))
         elif alpha == -1.:
@@ -609,13 +621,13 @@ class CTB(ModuleWrapper):
         self.register_buffer('h_next', torch.randn((batch_size, h_dim), device=device))
         self.h = None
         self.dh = None
-        self.sigma = sigma  # the non-linear activation function
+        self.sigma = sigma  # The non-linear activation function
 
         # System parameters
         self.u_dim = u_dim
         self.du_dim = du_dim
         self.delta = delta
-        self.local = local  # if True the state update is computed locally in time (i.e., kept out from the graph)
+        self.local = local  # If True the state update is computed locally in time (i.e., kept out from the graph)
         self.reset_parameters()
         self.forward_count = 0
         self.project_every = project_every
@@ -629,9 +641,11 @@ class CTB(ModuleWrapper):
         """Adjust eigenvalues to maintain stability"""
         with torch.no_grad():
             if self.project_method == 'alpha':
+
                 # Compute damping to maintain eigenvalues on unit circle
                 self.alpha.copy_((1. - torch.sqrt(1. - (self.delta * self.omega) ** 2) / self.delta))
             elif self.project_method == 'modulus':
+
                 # Normalize by modulus for unit circle stability
                 module = torch.sqrt(self.ones ** 2 + (self.delta * self.omega) ** 2)
                 self.omega.div_(module)
@@ -659,16 +673,17 @@ class CTB(ModuleWrapper):
             self.forward_count = 0
         else:
             h = self.h_next.data
-        # track the gradients on h from here on
+
+        # Track the gradients on h from here on
         h.requires_grad_()
         h_pair = h.view(-1, self.order, 2)  # Reshape to (batch, blocks, 2)
 
-        # check if it's time to project the eigenvalues
+        # Check if it's time to project the eigenvalues
         if self.project_every:
             if self.forward_count % self.project_every == 0:
                 self.adjust_eigs()
 
-        # handle inputs
+        # Handle inputs
         du, u = self.handle_inputs(du, u)
 
         # Block-wise rotation with damping
@@ -680,20 +695,22 @@ class CTB(ModuleWrapper):
         inp = self.delta * self.B(torch.cat([du, u], dim=1))
 
         # Handle locality
-        h_new = rec + inp  # updated hidden state
+        h_new = rec + inp  # Updated hidden state
         if self.local:
-            # in the local version we keep track in self.h of the old value of the state
+
+            # In the local version we keep track in self.h of the old value of the state
             self.h = h
             self.dh = (h_new - self.h) / self.delta  # (h_new - h_old) / delta
         else:
-            # in the non-local version we keep track in self.h of the new value of the state
+
+            # In the non-local version we keep track in self.h of the new value of the state
             self.h = h_new
             self.dh = (self.h - h) / self.delta  # (h_new - h_old) / delta
 
         # Compute output using a nonlinear activation function
         y = self.C(self.sigma(self.h))
 
-        # store the new state for the next iteration
+        # Store the new state for the next iteration
         self.h_next.data = h_new.detach()
         self.forward_count += 1
 
@@ -741,13 +758,13 @@ class CTBE(ModuleWrapper):
         self.register_buffer('h_next', torch.randn((batch_size, h_dim), device=device))
         self.h = None
         self.dh = None
-        self.sigma = sigma  # the non-linear activation function
+        self.sigma = sigma  # The non-linear activation function
 
         # System parameters
         self.u_dim = u_dim
         self.du_dim = du_dim
         self.delta = delta
-        self.local = local  # if True the state update is computed locally in time (i.e., kept out from the graph)
+        self.local = local  # If True the state update is computed locally in time (i.e., kept out from the graph)
         self.reset_parameters()
         self.forward_count = 0
         self.project_every = project_every
@@ -786,11 +803,12 @@ class CTBE(ModuleWrapper):
             self.forward_count = 0
         else:
             h = self.h_next.data
-        # track the gradients on h from here on
+
+        # Track the gradients on h from here on
         h.requires_grad_()
         h_pair = h.view(-1, self.order, 2)
 
-        # check if it's time to project the eigenvalues
+        # Check if it's time to project the eigenvalues
         if self.project_every:
             if self.forward_count % self.project_every == 0:
                 self.adjust_eigs()
@@ -804,7 +822,7 @@ class CTBE(ModuleWrapper):
             def C(x):
                 return torch.nn.functional.linear(x, weight_C)
 
-        # handle inputs
+        # Handle inputs
         du, u = self.handle_inputs(du, u)
         udu = torch.cat([du, u], dim=1)
 
@@ -824,20 +842,22 @@ class CTBE(ModuleWrapper):
         inp = torch.stack([inp1, inp2], dim=-1).flatten(start_dim=1)
 
         # Handle locality
-        h_new = rec + inp  # updated hidden state
+        h_new = rec + inp  # Updated hidden state
         if self.local:
-            # in the local version we keep track in self.h of the old value of the state
+
+            # In the local version we keep track in self.h of the old value of the state
             self.h = h
             self.dh = (h_new - self.h) / self.delta  # (h_new - h_old) / delta
         else:
-            # in the non-local version we keep track in self.h of the new value of the state
+
+            # In the non-local version we keep track in self.h of the new value of the state
             self.h = h_new
             self.dh = (self.h - h) / self.delta  # (h_new - h_old) / delta
 
         # Compute output using a nonlinear activation function
         y = C(self.sigma(self.h))
 
-        # store the new state for the next iteration
+        # Store the new state for the next iteration
         self.h_next.data = h_new.detach()
         self.forward_count += 1
 
@@ -1049,7 +1069,7 @@ class ViT(ModuleWrapper):
         weights = torchvision.models.ViT_B_16_Weights.IMAGENET1K_V1
         self.transforms = torchvision.transforms.Compose([
             weights.transforms(),
-            torchvision.transforms.Lambda(lambda x: x.unsqueeze(0))  # add batch dimension
+            torchvision.transforms.Lambda(lambda x: x.unsqueeze(0))  # Add batch dimension
         ])
         self.proc_inputs, self.proc_outputs = get_proc_inputs_and_proc_outputs_for_image_classification(d_dim)
         vit = torchvision.models.vit_b_16(weights=weights)
@@ -1174,7 +1194,7 @@ class FasterRCNN(ModuleWrapper):
             seed=seed)
 
     def forward(self, y: Image.Image, first: bool = True, last: bool = False):
-        o = self.module([self.transforms(y).to(self.device)])  # list with 1 image per element (no batch dim)
+        o = self.module([self.transforms(y).to(self.device)])  # List with 1 image per element (no batch dim)
 
         found_class_indices = o[0]['labels']
         found_class_scores = o[0]['scores']
@@ -1265,7 +1285,7 @@ class LangSegmentAnything(ModuleWrapper):
         from lang_sam import LangSAM
         self.module = LangSAM(device=self.device)
 
-        # generate a 64x64 error image (with text "Error" on it)
+        # Generate a 64x64 error image (with text "Error" on it)
         from PIL import ImageDraw, ImageFont
         self.error_img = Image.new("RGB", (64, 64), color="white")
         draw = ImageDraw.Draw(self.error_img)
@@ -1279,7 +1299,7 @@ class LangSegmentAnything(ModuleWrapper):
 
     def forward(self, image_pil: Image, msg: str, first: bool = False, last: bool = False):
         try:
-            image_pil = image_pil.convert("RGB") if image_pil.mode != "RGB" else image_pil  # forcing RGB
+            image_pil = image_pil.convert("RGB") if image_pil.mode != "RGB" else image_pil  # Forcing RGB
             out = self.module.predict([image_pil], [msg])
 
             if (out is None or not isinstance(out, list) or len(out) < 1 or
@@ -1319,7 +1339,7 @@ class LangSegmentAnything(ModuleWrapper):
             overlay_np[mask] = (1 - alpha) * overlay_np[mask] + alpha * color
             alpha_mask_combined[mask] = np.maximum(alpha_mask_combined[mask], alpha)
 
-        # final blending and conversion ...
+        # Final blending and conversion ...
         final_np = (1 - alpha_mask_combined) * img_np + alpha_mask_combined * overlay_np
         final_np = (final_np * 255).astype(np.uint8)
         final_image = Image.fromarray(final_np)
@@ -1342,7 +1362,7 @@ class SmolVLM(ModuleWrapper):
         self.module = self.module.to(self.device)
 
     def forward(self, image_pil: Image, msg: str = "what is this?", first: bool = False, last: bool = False):
-        image_pil = image_pil.convert("RGB") if image_pil.mode != "RGB" else image_pil  # forcing RGB
+        image_pil = image_pil.convert("RGB") if image_pil.mode != "RGB" else image_pil  # Forcing RGB
 
         msg_struct = [{"role": "user", "content": [{"type": "text", "text": f"{msg}"},
                                                    {"type": "image", "image": image_pil}]}]
@@ -1371,45 +1391,45 @@ class SiteRAG(ModuleWrapper):
             proc_outputs=[Data4Proc(data_type="text", pubsub=False, private_only=True)],
         )
 
-        # saving options
+        # Saving options
         self.site_url = site_url
         self.site_folder = site_folder
         self.db_folder = db_folder
 
-        # loading neural model
+        # Loading neural model
         model_id = "TheBloke/vicuna-7b-1.1-HF"
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=torch.float16,
                                                      device_map=self.device, offload_folder="offload")
         self.module = pipeline("text-generation", model=model, tokenizer=tokenizer, max_new_tokens=200)
 
-        # embedder
+        # Embedder
         from langchain.embeddings import SentenceTransformerEmbeddings
         self.embedder = SentenceTransformerEmbeddings(model_name="all-MiniLM-L6-v2",
                                                       model_kwargs={"device": self.device.type})
 
-        # crawling site
+        # Crawling site
         self.crawl_website()
         self.crawled_site_to_rag_knowledge_base()
 
-        # setting up RAG stuff
+        # Setting up RAG stuff
         from langchain.vectorstores import Chroma
         db = Chroma(persist_directory=db_folder, embedding_function=self.embedder)
         self.retriever = db.as_retriever(search_kwargs={"k": 3})
 
     def forward(self, msg: str, first: bool = False, last: bool = False):
 
-        # build context
+        # Build context
         docs = self.retriever.get_relevant_documents(msg)
         context = "\n\n".join(doc.page_content for doc in docs)
         prompt = f"Answer the question based on the following context:\n\n{context}\n\nQuestion: {msg}\nAnswer:"
 
-        # generate answer
+        # Generate answer
         out = self.module(prompt, max_new_tokens=256, do_sample=True, temperature=0.7)
         out = out[0]['generated_text'][len(prompt):].strip() if (out is not None and len(out) > 0 and
                                                                  "generated_text" in out[0]) else "Error!"
 
-        # append source URLs
+        # Append source URLs
         best_doc_with_score = self.retriever.vectorstore.similarity_search_with_score(msg, k=1)
         best_doc, _ = best_doc_with_score[0]
         docs = [best_doc]
@@ -1475,7 +1495,7 @@ class SiteRAG(ModuleWrapper):
                     html = f.read()
 
                 soup: BeautifulSoup = BeautifulSoup(html, "html.parser")
-                text = soup.get_text(separator=" ", strip=True)  # type: ignore
+                text = soup.get_text(separator=" ", strip=True)  # Type: ignore
 
                 page_path = filename.replace("__", "/").replace(".crawled", "")
                 url = urljoin(self.site_url, page_path)

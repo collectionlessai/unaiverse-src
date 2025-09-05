@@ -25,15 +25,15 @@ class TokenVerifier:
                      port: int | None = None,
                      p2p_peer: str | None = None) -> tuple[str, str] | tuple[None, None]:
 
-        # decoding token using the public key
+        # Decoding token using the public key
         try:
             payload = jwt.decode(token, self.public_key, algorithms=["RS256"])
         except jwt.DecodeError as e:
             return None, None
-        except jwt.ExpiredSignatureError as e:  # this checks expiration time (required)
+        except jwt.ExpiredSignatureError as e:  # This checks expiration time (required)
             return None, None
 
-        # checking optional information
+        # Checking optional information
         if node_id is not None and payload["node_id"] != node_id:
             return None, None
         if ip is not None and payload["ip"] != ip:
@@ -45,7 +45,7 @@ class TokenVerifier:
         if p2p_peer is not None and p2p_peer not in payload["p2p_peers"]:
             return None, None
 
-        # all ok
+        # All ok
         return payload["node_id"], payload["cv_hash"]
 
     def __str__(self):

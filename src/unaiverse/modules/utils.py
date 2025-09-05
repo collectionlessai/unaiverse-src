@@ -61,10 +61,10 @@ def transforms_factory(trans_type: str, add_batch_dim: bool = True, return_inver
 
     if trans_type == "rgb*":
         trans = transforms.Compose([
-            transforms.Lambda(lambda img: img.convert("RGB") if img.mode != "RGB" else img),  # ensure 3 channels
+            transforms.Lambda(lambda img: img.convert("RGB") if img.mode != "RGB" else img),  # Ensure 3 channels
             transforms.Resize(num),
             transforms.CenterCrop(num),
-            transforms.ToTensor(),  # convert PIL to tensor (3, H, W), float [0,1]
+            transforms.ToTensor(),  # Convert PIL to tensor (3, H, W), float [0,1]
             transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                  std=[0.229, 0.224, 0.225]),
         ])
@@ -76,10 +76,10 @@ def transforms_factory(trans_type: str, add_batch_dim: bool = True, return_inver
         ])
     elif trans_type == "gray*":
         trans = transforms.Compose([
-            transforms.Lambda(lambda img: img.convert("L") if img.mode != "L" else img),  # ensure 1 channel
+            transforms.Lambda(lambda img: img.convert("L") if img.mode != "L" else img),  # Ensure 1 channel
             transforms.Resize(num),
             transforms.CenterCrop(num),
-            transforms.ToTensor(),  # convert PIL to tensor (1, H, W), float [0,1]
+            transforms.ToTensor(),  # Convert PIL to tensor (1, H, W), float [0,1]
             transforms.Normalize(mean=[0.45],
                                  std=[0.225])
         ])
@@ -91,24 +91,24 @@ def transforms_factory(trans_type: str, add_batch_dim: bool = True, return_inver
         ])
     elif trans_type == "rgb-no_norm*":
         trans = transforms.Compose([
-            transforms.Lambda(lambda img: img.convert("RGB") if img.mode != "RGB" else img),  # ensure 3 channels
+            transforms.Lambda(lambda img: img.convert("RGB") if img.mode != "RGB" else img),  # Ensure 3 channels
             transforms.Resize(num),
             transforms.CenterCrop(num),
-            transforms.PILToTensor(),  # convert PIL to tensor (3, H, W), uint [0,255]
+            transforms.PILToTensor(),  # Convert PIL to tensor (3, H, W), uint [0,255]
         ])
         inverse_trans = transforms.Compose([transforms.ToPILImage()])
     elif trans_type == "gray-no_norm*":
         trans = transforms.Compose([
-            transforms.Lambda(lambda img: img.convert("L") if img.mode != "L" else img),  # ensure 1 channel
+            transforms.Lambda(lambda img: img.convert("L") if img.mode != "L" else img),  # Ensure 1 channel
             transforms.Resize(num),
             transforms.CenterCrop(num),
-            transforms.PILToTensor(),  # convert PIL to tensor (1, H, W), uint [0,255]
+            transforms.PILToTensor(),  # Convert PIL to tensor (1, H, W), uint [0,255]
         ])
         inverse_trans = transforms.ToPILImage()
     elif trans_type == "rgb":
         trans = transforms.Compose([
-            transforms.Lambda(lambda img: img.convert("RGB") if img.mode != "RGB" else img),  # ensure 3 channels
-            transforms.ToTensor(),  # convert PIL to tensor (3, H, W), float [0,1]
+            transforms.Lambda(lambda img: img.convert("RGB") if img.mode != "RGB" else img),  # Ensure 3 channels
+            transforms.ToTensor(),  # Convert PIL to tensor (3, H, W), float [0,1]
             transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                  std=[0.229, 0.224, 0.225])
         ])
@@ -120,8 +120,8 @@ def transforms_factory(trans_type: str, add_batch_dim: bool = True, return_inver
         ])
     elif trans_type == "gray":
         trans = transforms.Compose([
-            transforms.Lambda(lambda img: img.convert("L") if img.mode != "L" else img),  # ensure 1 channel
-            transforms.ToTensor(),  # convert PIL to tensor (1, H, W), float [0,1]
+            transforms.Lambda(lambda img: img.convert("L") if img.mode != "L" else img),  # Ensure 1 channel
+            transforms.ToTensor(),  # Convert PIL to tensor (1, H, W), float [0,1]
             transforms.Normalize(mean=[0.45],
                                  std=[0.225])
         ])
@@ -133,22 +133,22 @@ def transforms_factory(trans_type: str, add_batch_dim: bool = True, return_inver
         ])
     elif trans_type == "rgb-no_norm":
         trans = transforms.Compose([
-            transforms.Lambda(lambda img: img.convert("RGB") if img.mode != "RGB" else img),  # ensure 3 channels
-            transforms.PILToTensor(),  # convert PIL to tensor (3, H, W), uint [0,255]
+            transforms.Lambda(lambda img: img.convert("RGB") if img.mode != "RGB" else img),  # Ensure 3 channels
+            transforms.PILToTensor(),  # Convert PIL to tensor (3, H, W), uint [0,255]
         ])
         inverse_trans = transforms.Compose([transforms.ToPILImage()])
     elif trans_type == "gray-no_norm":
         trans = transforms.Compose([
-            transforms.Lambda(lambda img: img.convert("L") if img.mode != "L" else img),  # ensure 1 channel
-            transforms.PILToTensor(),  # convert PIL to tensor (1, H, W), uint [0,255]
+            transforms.Lambda(lambda img: img.convert("L") if img.mode != "L" else img),  # Ensure 1 channel
+            transforms.PILToTensor(),  # Convert PIL to tensor (1, H, W), uint [0,255]
         ])
         inverse_trans = transforms.Compose([transforms.ToPILImage()])
     elif trans_type == "gray_mnist":
         trans = transforms.Compose([
-            transforms.Lambda(lambda img: img.convert("L") if img.mode != "L" else img),  # ensure 1 channel
+            transforms.Lambda(lambda img: img.convert("L") if img.mode != "L" else img),  # Ensure 1 channel
             transforms.Resize(28),
             transforms.CenterCrop(28),
-            transforms.ToTensor(),  # convert PIL to tensor (1, H, W), float [0,1]
+            transforms.ToTensor(),  # Convert PIL to tensor (1, H, W), float [0,1]
             transforms.Normalize(mean=[0.1307],  # MNIST
                                  std=[0.3081])  # MNIST
         ])
@@ -201,7 +201,7 @@ def get_proc_inputs_and_proc_outputs_for_rnn(u_shape: torch.Size | tuple, du_dim
 
 def get_proc_inputs_and_proc_outputs_for_image_classification(y_dim: int):
     if y_dim == -1:
-        y_dim = 1000  # assuming ImageNet-trained models
+        y_dim = 1000  # Assuming ImageNet-trained models
     proc_inputs = [Data4Proc(data_type="img", pubsub=False, private_only=True)]
     proc_outputs = [Data4Proc(data_type="tensor", tensor_shape=(None, y_dim), tensor_dtype=torch.float32,
                               pubsub=False, private_only=True)]
@@ -210,7 +210,7 @@ def get_proc_inputs_and_proc_outputs_for_image_classification(y_dim: int):
 
 def error_rate_mnist_test_set(network: torch.nn.Module, mnist_data_save_path: str):
 
-    # getting MNIST test set
+    # Getting MNIST test set
     mnist_test = datasets.MNIST(root=mnist_data_save_path,
                                 train=False, download=True,
                                 transform=transforms.Compose([
@@ -219,7 +219,7 @@ def error_rate_mnist_test_set(network: torch.nn.Module, mnist_data_save_path: st
                                 ]))
     mnist_test = DataLoader(mnist_test, batch_size=200, shuffle=False)
 
-    # checking error rate
+    # Checking error rate
     error_rate = 0.
     n = 0
     training_flag_backup = network.training
@@ -252,12 +252,12 @@ class ModuleWrapper(torch.nn.Module):
                  proc_outputs: list[Data4Proc] | None = None,
                  seed: int = -1):
         super(ModuleWrapper, self).__init__()
-        self.device = None  # the device which is supposed to host the module
-        self.module = None  # the module itself
-        self.proc_inputs = proc_inputs  # the list of Data4Proc objects describing the input types of the module
-        self.proc_outputs = proc_outputs  # the list of Data4Proc objects describing the output types of the module
+        self.device = None  # The device which is supposed to host the module
+        self.module = None  # The module itself
+        self.proc_inputs = proc_inputs  # The list of Data4Proc objects describing the input types of the module
+        self.proc_outputs = proc_outputs  # The list of Data4Proc objects describing the output types of the module
 
-        # working
+        # Working
         set_seed(seed)
         device_env = os.getenv("PROC_DEVICE", None)
         self.device = torch.device("cpu") if device_env is None else torch.device(device_env)
@@ -265,13 +265,13 @@ class ModuleWrapper(torch.nn.Module):
 
     def forward(self, *args, **kwargs):
 
-        # the forward signature expected by who calls this method is:
+        # The forward signature expected by who calls this method is:
         # forward(self, *args, first: bool, last: bool, **kwargs)
         # so we have to discard 'first' and 'last' that are not used by an external module not designed for this library
         del kwargs['first']
         del kwargs['last']
 
-        # calling the module
+        # Calling the module
         return self.module(*args, **kwargs)
 
 
@@ -284,7 +284,7 @@ class AgentProcessorChecker:
         assert hasattr(processor_container, 'proc_opts'), "Invalid processor container object"
         assert hasattr(processor_container, 'proc_optional_inputs'), "Invalid processor container object"
 
-        # getting processor-related info from the main object which collects processor and its properties
+        # Getting processor-related info from the main object which collects processor and its properties
         proc: torch.nn.Module = processor_container.proc
         proc_inputs: list[Data4Proc] | None = processor_container.proc_inputs
         proc_outputs: list[Data4Proc] | None = processor_container.proc_outputs
@@ -302,14 +302,14 @@ class AgentProcessorChecker:
             "Invalid proc_inputs: it must be None or a list of Data4Proc"
         assert (proc_opts is None or isinstance(proc_opts, dict)), "Invalid proc_opts: it must be None or a dictionary"
 
-        # saving as attributes
+        # Saving as attributes
         self.proc = proc
         self.proc_inputs = proc_inputs
         self.proc_outputs = proc_outputs
         self.proc_opts = proc_opts
         self.proc_optional_inputs = proc_optional_inputs
 
-        # dummy processor (if no processor was provided)
+        # Dummy processor (if no processor was provided)
         if self.proc is None:
             self.proc = ModuleWrapper(module=MultiIdentity())
             self.proc.device = torch.device("cpu")
@@ -320,12 +320,12 @@ class AgentProcessorChecker:
             self.proc_opts = {'optimizer': None, 'losses': [None] * len(self.proc_outputs)}
         else:
 
-            # wrapping to have the basic attributes (device)
+            # Wrapping to have the basic attributes (device)
             if not isinstance(self.proc, ModuleWrapper):
                 self.proc = ModuleWrapper(module=self.proc)
                 self.proc.device = torch.device("cpu")
 
-        # guessing inputs, fixing attributes
+        # Guessing inputs, fixing attributes
         if self.proc_inputs is None:
             self.__guess_proc_inputs()
 
@@ -333,7 +333,7 @@ class AgentProcessorChecker:
             if self.proc_inputs[j].get_name() == "unk":
                 self.proc_inputs[j].set_name("proc_input_" + str(j))
 
-        # guessing outputs, fixing attributes
+        # Guessing outputs, fixing attributes
         if self.proc_outputs is None:
             self.__guess_proc_outputs()
 
@@ -341,22 +341,22 @@ class AgentProcessorChecker:
             if self.proc_outputs[j].get_name() == "unk":
                 self.proc_outputs[j].set_name("proc_output_" + str(j))
 
-        # guessing optimization-related options and stuff, fixing attributes
+        # Guessing optimization-related options and stuff, fixing attributes
         if (self.proc_opts is None or len(self.proc_opts) == 0 or
                 'optimizer' not in self.proc_opts or 'losses' not in self.proc_opts):
             self.__guess_proc_opts()
         self.__fix_proc_opts()
 
-        # ensuring all is OK
+        # Ensuring all is OK
         if self.proc is not None:
             assert "optimizer" in self.proc_opts, "Missing 'optimizer' key in proc_opts (required)"
             assert "losses" in self.proc_opts, "Missing 'losses' key in proc_opts (required)"
 
-        # checking inputs with default values
+        # Checking inputs with default values
         if self.proc_optional_inputs is None:
             self.__guess_proc_optional_inputs()
 
-        # updating processor container object
+        # Updating processor container object
         processor_container.proc = self.proc
         processor_container.proc_inputs = self.proc_inputs
         processor_container.proc_outputs = self.proc_outputs
@@ -373,14 +373,14 @@ class AgentProcessorChecker:
 
         first_layer = None
 
-        # traverse modules to find the first real layer (skip containers like Sequential)
+        # Traverse modules to find the first real layer (skip containers like Sequential)
         for layer in self.proc.modules():
             if (not isinstance(layer, (torch.nn.Sequential,
                                        torch.nn.ModuleList,
                                        torch.nn.ModuleDict))
                     and not isinstance(layer, torch.nn.Module)
                     and hasattr(layer, 'weight')):
-                continue  # skip non-leaf layers
+                continue  # Skip non-leaf layers
             if isinstance(layer, (torch.nn.Conv2d, torch.nn.Linear, torch.nn.Conv1d, torch.nn.Embedding)):
                 first_layer = layer
                 break
@@ -389,7 +389,7 @@ class AgentProcessorChecker:
             raise ValueError("Cannot automatically guess the shape of the input data, "
                              "please explicitly provide it (proc_input)")
 
-        # infer input properties
+        # Infer input properties
         data_desc = "automatically guessed"
         tensor_shape = None
         tensor_labels = None
@@ -402,7 +402,7 @@ class AgentProcessorChecker:
             if first_layer.in_channels == 3 or first_layer.in_channels == 1:
                 data_type = "img"
 
-                # creating dummy PIL images
+                # Creating dummy PIL images
                 rgb_input_img = Image.new('RGB', (224, 224))
                 pixels = rgb_input_img.load()
                 for x in range(28):
@@ -412,14 +412,15 @@ class AgentProcessorChecker:
                                         random.randint(0, 255))
                 gray_input_img = rgb_input_img.convert('L')
 
-                # checking if the model supports PIL images as input
+                # Checking if the model supports PIL images as input
                 # noinspection PyBroadException
                 try:
                     _ = self.proc(rgb_input_img)
                     can_handle_rgb_img = True
                 except Exception:
                     can_handle_rgb_img = False
-                # noinspection PyBroadException
+
+                # Noinspection PyBroadException
                 try:
                     _ = self.proc(gray_input_img)
                     can_handle_gray_img = True
@@ -439,7 +440,7 @@ class AgentProcessorChecker:
                         stream_to_proc_transforms = transforms_factory("rgb-no_norm")
             else:
 
-                # if the number of input channels is not 1 and not 3...
+                # If the number of input channels is not 1 and not 3...
                 data_type = "tensor"
                 tensor_shape = (first_layer.in_channels, None, None)
                 tensor_dtype = torch.float32
@@ -453,15 +454,17 @@ class AgentProcessorChecker:
             tensor_dtype = torch.float32
             tensor_shape = (first_layer.in_features,)
         elif isinstance(first_layer, torch.nn.Embedding):
-            # noinspection PyBroadException
+
+            # Noinspection PyBroadException
             try:
                 input_text = "testing if tokenizer is present"
                 _ = self.proc(input_text)
                 can_handle_text = True
-                can_handle_more_than_one_token = True  # unused
+                can_handle_more_than_one_token = True  # Unused
             except Exception:
                 can_handle_text = False
-                # noinspection PyBroadException
+
+                # Noinspection PyBroadException
                 try:
                     device = torch.device("cpu")
                     for param in self.proc.parameters():
@@ -488,7 +491,7 @@ class AgentProcessorChecker:
             raise ValueError("Cannot automatically guess the shape of the input data, "
                              "please explicitly provide it (proc_input)")
 
-        # setting the input attribute
+        # Setting the input attribute
         self.proc_inputs = [Data4Proc(name="proc_input_0",
                                       data_type=data_type,
                                       data_desc=data_desc,
@@ -515,7 +518,7 @@ class AgentProcessorChecker:
         for i, proc_input in enumerate(self.proc_inputs):
             if proc_input.is_tensor():
                 inputs.append(proc_input.check_and_preprocess(
-                    torch.randn([1] + list(proc_input.tensor_shape),  # adding batch size here
+                    torch.randn([1] + list(proc_input.tensor_shape),  # Adding batch size here
                                 dtype=proc_input.tensor_dtype).to(device)))
             elif proc_input.is_img():
                 rgb_input_img = Image.new('RGB', (224, 224))
@@ -529,7 +532,7 @@ class AgentProcessorChecker:
             elif proc_input.is_text():
                 inputs.append(proc_input.check_and_preprocess("test text as input"))
 
-        # forward
+        # Forward
         with torch.no_grad():
             outputs = proc(*inputs)
         if not isinstance(outputs, tuple | list):
@@ -537,12 +540,12 @@ class AgentProcessorChecker:
         if isinstance(outputs, tuple):
             outputs = list(outputs)
 
-        # this will be filled below
+        # This will be filled below
         self.proc_outputs = []
 
         for j, output in enumerate(outputs):
 
-            # infer output properties
+            # Infer output properties
             data_desc = "automatically guessed"
             tensor_shape = None
             tensor_labels = None
@@ -552,8 +555,8 @@ class AgentProcessorChecker:
 
             if isinstance(output, Image.Image):  # PIL Image
                 data_type = "img"
-            elif isinstance(output, torch.Tensor):  # tensor
-                output_shape = list(output.shape[1:])  # removing batch size here
+            elif isinstance(output, torch.Tensor):  # Tensor
+                output_shape = list(output.shape[1:])  # Removing batch size here
                 if len(output_shape) == 3 and (output_shape[0] == 3 or output_shape[0] == 1):
                     data_type = "img"
                     if output_shape[0] == 3:
@@ -570,7 +573,7 @@ class AgentProcessorChecker:
             else:
                 raise ValueError(f"Unsupported output type {type(output)}")
 
-            # setting the output attribute
+            # Setting the output attribute
             self.proc_outputs.append(Data4Proc(name="proc_output_" + str(j),
                                                data_type=data_type,
                                                data_desc=data_desc,
@@ -644,7 +647,7 @@ class AgentProcessorChecker:
         assert not cannot_fix, \
             "About proc_opts: cannot find required keys ('optimizer', 'losses') and/or cannot automatically guess them"
 
-        # removing batch dim from targets in case of cross-entropy
+        # Removing batch dim from targets in case of cross-entropy
         fixed_list = []
         for _loss_fcn in opts['losses']:
             if _loss_fcn == torch.nn.functional.cross_entropy or isinstance(_loss_fcn, torch.nn.CrossEntropyLoss):
@@ -653,7 +656,7 @@ class AgentProcessorChecker:
                 fixed_list.append(_loss_fcn)
         opts['losses'] = fixed_list
 
-        # updating
+        # Updating
         self.proc_opts = opts
 
     def __guess_proc_optional_inputs(self):

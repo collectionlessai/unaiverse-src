@@ -123,7 +123,7 @@ class CombSin(BufferedDataStream):
         else:
             raise Exception(f"expected float or list for c_cap, not {type(c_cap)}")
 
-        # check all the dimensions
+        # Check all the dimensions
         assert len(self.coeffs) == len(self.freqs), \
             (f"specify the same number of coefficients and frequencies (got {len(self.coeffs)} "
              f"and {len(self.freqs)} respectively).")

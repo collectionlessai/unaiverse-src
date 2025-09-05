@@ -24,7 +24,8 @@ from collections.abc import Iterable, Callable
 
 
 class Action:
-    # candidate argument names (when calling an action) that tells that such an action is multi-steps
+
+    # Candidate argument names (when calling an action) that tells that such an action is multi-steps
     STEPS_ARG_NAMES = {'steps', 'samples'}
     SECONDS_ARG_NAMES = {'time'}
     TIMEOUT_ARG_NAMES = {'timeout'}
@@ -36,12 +37,12 @@ class Action:
     NOT_READY_PREFIXES = ('get_', 'got_', 'do_', 'done_')
     KNOWN_SINGLE_STEP_ACTION_PREFIXES = ('ask_', )
 
-    # completion reasons
-    MAX_STEPS_REACHED = 0  # single-step actions always complete due to this reason
+    # Completion reasons
+    MAX_STEPS_REACHED = 0  # Single-step actions always complete due to this reason
     MAX_TIME_REACHED = 1
     MAX_TIMEOUT_DURING_ATTEMPTS_REACHED = 2
 
-    # output print function
+    # Output print function
     out_fcn = print
 
     def __init__(self, name: str, args: dict, actionable: object,
@@ -50,58 +51,58 @@ class Action:
                  wildcards: dict[str, str | float | int] | None = None,
                  msg: str | None = None):
 
-        # basic properties
-        self.name = name  # name of the action (name of the corresponding method)
-        self.args = args  # dictionary of arguments to pass to the action
-        self.actionable = actionable  # object on which the method whose name is self.name is searched
-        self.ready = ready  # boolean flag telling if the action can considered ready to be executed
-        self.requests = {}  # list of requests to make this action ready to be executed (customizable)
-        self.id = idx  # unique ID of the action (-1 if not needed)
-        self.msg = msg  # human-readable message associated to this instance of action
+        # Basic properties
+        self.name = name  # Name of the action (name of the corresponding method)
+        self.args = args  # Dictionary of arguments to pass to the action
+        self.actionable = actionable  # Object on which the method whose name is self.name is searched
+        self.ready = ready  # Boolean flag telling if the action can considered ready to be executed
+        self.requests = {}  # List of requests to make this action ready to be executed (customizable)
+        self.id = idx  # Unique ID of the action (-1 if not needed)
+        self.msg = msg  # Human-readable message associated to this instance of action
 
-        # fix UNICODE chars
+        # Fix UNICODE chars
         if self.msg is not None:
             self.msg = html.unescape(self.msg)
 
-        # reference elements
-        self.args_with_wildcards = copy.deepcopy(self.args)  # backup of the originally provided arguments
-        self.__fcn = self.__action_name_to_callable(name)  # the real method to be called
-        self.__sig = inspect.signature(self.__fcn)  # signature of the method for argument inspection
+        # Reference elements
+        self.args_with_wildcards = copy.deepcopy(self.args)  # Backup of the originally provided arguments
+        self.__fcn = self.__action_name_to_callable(name)  # The real method to be called
+        self.__sig = inspect.signature(self.__fcn)  # Signature of the method for argument inspection
 
-        # parameter names and default values
-        self.param_list = []  # full list of the parameters that the action supports
-        self.param_to_default_value = {}  # from parameter to its default value, if any
-        self.__get_action_params()  # this will fill the two attributes above
-        self.__check_if_args_exist(self.args, exception=True)  # checking arguments
+        # Parameter names and default values
+        self.param_list = []  # Full list of the parameters that the action supports
+        self.param_to_default_value = {}  # From parameter to its default value, if any
+        self.__get_action_params()  # This will fill the two attributes above
+        self.__check_if_args_exist(self.args, exception=True)  # Checking arguments
 
-        # argument values replaced by wildcards (commonly assumed to be in the format <value>)
-        self.wildcards = wildcards if wildcards is not None else {}  # value-to-value (es: <playlist> to this:and:this)
-        self.__replace_wildcard_values()  # this will alter self.arg in function of the provided wildcards
+        # Argument values replaced by wildcards (commonly assumed to be in the format <value>)
+        self.wildcards = wildcards if wildcards is not None else {}  # Value-to-value (es: <playlist> to this:and:this)
+        self.__replace_wildcard_values()  # This will alter self.arg in function of the provided wildcards
 
-        # number of steps of this function
-        self.__step = -1  # default initial step index (remark: "step INDEX", so when it is 0 it means a step was done)
-        self.__total_steps = 1   # total step of an action (a multi-steps action has != 1 steps)
-        self.__guess_total_steps(self.__get_actual_params({}))  # this will "guess" the value of self.__total_steps
+        # Number of steps of this function
+        self.__step = -1  # Default initial step index (remark: "step INDEX", so when it is 0 it means a step was done)
+        self.__total_steps = 1  # Total step of an action (a multi-steps action has != 1 steps)
+        self.__guess_total_steps(self.__get_actual_params({}))  # This will "guess" the value of self.__total_steps
 
-        # time-based metrics
+        # Time-based metrics
         self.__starting_time = 0
-        self.__total_time = 0  # a total time <= 0 means "no total time at all"
-        self.__guess_total_time(self.__get_actual_params({}))  # this will "guess" the value of self.__total_time
+        self.__total_time = 0  # A total time <= 0 means "no total time at all"
+        self.__guess_total_time(self.__get_actual_params({}))  # This will "guess" the value of self.__total_time
 
-        # time-based metrics
+        # Time-based metrics
         self.__timeout_starting_time = 0
-        self.__timeout = 0  # a timeout <= 0 means "no total time at all"
-        self.__guess_timeout(self.__get_actual_params({}))  # this will "guess" the value of self.__timeout
+        self.__timeout = 0  # A timeout <= 0 means "no total time at all"
+        self.__guess_timeout(self.__get_actual_params({}))  # This will "guess" the value of self.__timeout
 
-        # time-based metrics
+        # Time-based metrics
         self.__delay = 0
-        self.__guess_delay(self.__get_actual_params({}))  # this will "guess" the value of self.__delay
+        self.__guess_delay(self.__get_actual_params({}))  # This will "guess" the value of self.__delay
 
-        # fixing (if no options are specified, assuming a single-step action)
+        # Fixing (if no options are specified, assuming a single-step action)
         if self.__total_steps <= 0 and self.__total_time <= 0:
             self.__total_steps = 1
 
-        # fixing (forcing NOT-ready on some actions)
+        # Fixing (forcing NOT-ready on some actions)
         for prefix in Action.NOT_READY_PREFIXES:
             if self.name.startswith(prefix):
                 self.ready = False
@@ -112,33 +113,33 @@ class Action:
                 self.__has_completion_step = True
                 break
 
-        # status
+        # Status
         self.__cannot_be_run_anymore = False
 
     def __call__(self, requester: object | None = None, requested_args: dict | None = None,
                  request_time: float = -1, request_uuid: str | None = None) -> bool:
         self.__check_if_args_exist(requested_args, exception=True)
-        actual_args = self.__get_actual_params(requested_args)  # getting the actual values of the arguments
+        actual_args = self.__get_actual_params(requested_args)  # Getting the actual values of the arguments
 
         if self.msg is not None:
             Action.out_fcn(self.msg)
 
         if actual_args is not None:
 
-            # getting the values for the main involved measures: total steps, total time, timeout
+            # Getting the values for the main involved measures: total steps, total time, timeout
             self.__guess_total_steps(actual_args)
             self.__guess_total_time(actual_args)
             self.__guess_timeout(actual_args)
 
-            # storing the time index that is related to the timeout (do this before calling self.is_timed_out())
+            # Storing the time index that is related to the timeout (do this before calling self.is_timed_out())
             if self.__timeout_starting_time <= 0:
                 self.__timeout_starting_time = time.perf_counter()
 
-            # storing the starting time (do this before calling self.was_last_step_done())
+            # Storing the starting time (do this before calling self.was_last_step_done())
             if self.__starting_time <= 0:
                 self.__starting_time = time.perf_counter()
 
-            # setting up the flag that tells if the action reached a point in which it cannot be run anymore
+            # Setting up the flag that tells if the action reached a point in which it cannot be run anymore
             self.__cannot_be_run_anymore = self.is_timed_out() or self.was_last_step_done()
 
             if HybridStateMachine.DEBUG:
@@ -150,7 +151,7 @@ class Action:
             if self.__cannot_be_run_anymore and not self.is_multi_steps():
                 return False
 
-            # setting up the information on whether a multistep action is completed
+            # Setting up the information on whether a multistep action is completed
             # (for example, to tell that now it is time for a callback)
             calling_completion_step = False
             for completed_name in Action.COMPLETED_NAMES:
@@ -159,38 +160,38 @@ class Action:
                     actual_args[completed_name] = calling_completion_step
                     break
 
-            # we are done, no need to call the action again
+            # We are done, no need to call the action again
             if self.__cannot_be_run_anymore and not calling_completion_step:
                 return True
 
-            # setting up the requester
+            # Setting up the requester
             for req_arg_name in Action.REQUESTER_ARG_NAMES:
                 if req_arg_name in actual_args:
                     actual_args[req_arg_name] = requester
                     break
 
-            # setting up the request time
+            # Setting up the request time
             for req_time_name in Action.REQUEST_TIME_NAMES:
                 if req_time_name in actual_args:
                     actual_args[req_time_name] = request_time
                     break
 
-            # setting up the request uuid
+            # Setting up the request uuid
             for req_uuid_name in Action.REQUEST_UUID_NAMES:
                 if req_uuid_name in actual_args:
                     actual_args[req_uuid_name] = request_uuid
                     break
 
-            # fixing (if no options are specified, assuming a single-step action)
+            # Fixing (if no options are specified, assuming a single-step action)
             if self.__total_steps == 0 and self.__total_time == 0:
                 self.__total_steps = 1
 
-            # fixing the single step case: in this case, time does not matter, so we force it to zero
+            # Fixing the single step case: in this case, time does not matter, so we force it to zero
             if self.__total_steps == 1:
                 self.__total_time = 0
 
-            # increasing the step index
-            self.__step += 1  # this is a step index, so self.__step == 0 means "done 1 step"
+            # Increasing the step index
+            self.__step += 1  # This is a step index, so self.__step == 0 means "done 1 step"
 
             if HybridStateMachine.DEBUG:
                 if requester is None:
@@ -200,17 +201,17 @@ class Action:
                 print(f"[DEBUG HSM] Calling function {self.name} (multi_steps: {self.is_multi_steps()}), "
                       f"requested by {requester_str}, with actual params: {actual_args}")
 
-            # calling the method here
+            # Calling the method here
             ret = self.__fcn(**actual_args)
 
             if HybridStateMachine.DEBUG:
                 print(f"[DEBUG HSM] Returned: {ret}")
 
-            # if action failed, be sure to reduce the step counter (only if it was actually incremented)
+            # If action failed, be sure to reduce the step counter (only if it was actually incremented)
             if not ret:
                 self.__step -= 1
 
-            # if it went OK, we reset the time counter that is related to the timeout
+            # If it went OK, we reset the time counter that is related to the timeout
             else:
                 self.__timeout_starting_time = 0
 
@@ -282,7 +283,7 @@ class Action:
         if args is None:
             args = {}
 
-        # the current action is the same of another action called with some arguments "args" if:
+        # The current action is the same of another action called with some arguments "args" if:
         # 1) it has the same name of the other action
         # 2) the name of the arguments in "args" are known and valid
         # 3) the values of the arguments in "args" matches the ones of the current action, being them default or not
@@ -372,9 +373,9 @@ class Action:
 
     def __replace_wildcard_values(self):
         if self.args_with_wildcards is None:
-            self.args_with_wildcards = copy.deepcopy(self.args)  # backup before applying wildcards (first time only)
+            self.args_with_wildcards = copy.deepcopy(self.args)  # Backup before applying wildcards (first time only)
         else:
-            self.args = copy.deepcopy(self.args_with_wildcards)  # restore a backup before applying wildcards
+            self.args = copy.deepcopy(self.args_with_wildcards)  # Restore a backup before applying wildcards
 
         for k, v in self.args.items():
             for wildcard_from, wildcard_to in self.wildcards.items():
@@ -440,20 +441,20 @@ class Action:
 
 class State:
 
-    # output print function
+    # Output print function
     out_fcn = print
 
     def __init__(self, name: str, idx: int = -1, action: Action | None = None, waiting_time: float = 0.,
                  blocking: bool = True, msg: str | None = None):
-        self.name = name  # name of the state (must be unique)
-        self.action = action  # inner state action (it can be None)
-        self.id = idx  # unique ID of the state (-1 if not needed)
-        self.waiting_time = waiting_time  # number of seconds to wait in the current state before acting
+        self.name = name  # Name of the state (must be unique)
+        self.action = action  # Inner state action (it can be None)
+        self.id = idx  # Unique ID of the state (-1 if not needed)
+        self.waiting_time = waiting_time  # Number of seconds to wait in the current state before acting
         self.starting_time = 0.
         self.blocking = blocking
-        self.msg = msg  # human-readable message associated to this instance of action
+        self.msg = msg  # Human-readable message associated to this instance of action
 
-        # fix UNICODE chars
+        # Fix UNICODE chars
         if self.msg is not None:
             self.msg = html.unescape(self.msg)
 
@@ -518,37 +519,37 @@ class HybridStateMachine:
                  request_signature_checker: Callable[[object], bool] | None = None,
                  policy: Callable[[list[Action]], int] | None = None):
 
-        # states are identified by strings, and then handled as State object with possibly and integer ID and action
-        self.initial_state: str | None = None  # initial state of the machine
-        self.prev_state: str | None = None  # previous state
-        self.limbo_state: str | None = None  # when an action takes more than a step to complete, we are in "limbo"
-        self.state: str | None = None  # current state
-        self.role: str | None = None  # role of the agent in the state machine (e.g., teacher, student, etc.)
+        # States are identified by strings, and then handled as State object with possibly and integer ID and action
+        self.initial_state: str | None = None  # Initial state of the machine
+        self.prev_state: str | None = None  # Previous state
+        self.limbo_state: str | None = None  # When an action takes more than a step to complete, we are in "limbo"
+        self.state: str | None = None  # Current state
+        self.role: str | None = None  # Role of the agent in the state machine (e.g., teacher, student, etc.)
         self.enabled: bool = True
-        self.states: dict[str, State] = {}  # state name to State object
+        self.states: dict[str, State] = {}  # State name to State object
 
-        # actions (transitions) are handled as Action objects in-between state strings
-        self.transitions: dict[str, dict[str, list[Action]]] = {}  # pair-of-states to the actions between them
-        self.actionable: object = actionable  # the object on whose methods are actions that the machine calls
+        # Actions (transitions) are handled as Action objects in-between state strings
+        self.transitions: dict[str, dict[str, list[Action]]] = {}  # Pair-of-states to the actions between them
+        self.actionable: object = actionable  # The object on whose methods are actions that the machine calls
         self.wildcards: dict[str, str | float | int] | None = wildcards \
-            if wildcards is not None else {}  # from a wildcards string to a specific value (used in action arguments)
+            if wildcards is not None else {}  # From a wildcards string to a specific value (used in action arguments)
         self.policy = policy if policy is not None else self.__policy_first_requested_or_first_ready
 
-        # actions can be requested from the "outside": each request if checked by this function, if any
+        # Actions can be requested from the "outside": each request if checked by this function, if any
         self.request_signature_checker: Callable[[object], bool] | None = request_signature_checker
 
-        # running data
-        self.__action: Action | None = None  # action that is being executed (could take more than a step to complete)
+        # Running data
+        self.__action: Action | None = None  # Action that is being executed (could take more than a step to complete)
         self.__last_completed_action: Action | None = None
-        self.__cur_feasible_actions_status: dict | None = None  # store info of the executed action (for multi-steps)
-        self.__id_to_state: list[State] = []  # map from state ID to State object
-        self.__id_to_action: list[Action] = []  # map from action ID to Action object
-        self.__state_changed = False  # internal flag
+        self.__cur_feasible_actions_status: dict | None = None  # Store info of the executed action (for multi-steps)
+        self.__id_to_state: list[State] = []  # Map from state ID to State object
+        self.__id_to_action: list[Action] = []  # Map from action ID to Action object
+        self.__state_changed = False  # Internal flag
 
-        # forcing default wildcards
+        # Forcing default wildcards
         self.add_wildcards(HybridStateMachine.DEFAULT_WILDCARDS)
 
-        # forcing output function
+        # Forcing output function
         self.__last_printed_msg = None
 
         def wrapped_out_fcn(msg: str):
@@ -590,7 +591,7 @@ class HybridStateMachine:
 
         json_str = json.dumps(hsm_data, indent=4, default=custom_serializer)
 
-        # compacting lists
+        # Compacting lists
         def remove_newlines_in_lists(json_string):
             stack = []
             output = []
@@ -603,13 +604,13 @@ class HybridStateMachine:
                 elif char == ']':
                     stack.pop()
                     output.append(char)
-                elif char == '\n' and stack:  # skipping newline
+                elif char == '\n' and stack:  # Skipping newline
                     i += 1
                     while i < len(json_string) and json_string[i] in ' \t':
                         i += 1
                     if output[-1] == ",":
                         output.append(" ")
-                    continue  # do not output newline or following spaces
+                    continue  # Do not output newline or following spaces
                 else:
                     output.append(char)
                 i += 1
@@ -675,9 +676,9 @@ class HybridStateMachine:
                          actionable=self.actionable, wildcards=self.wildcards)
             self.__id_to_action.append(act)
         if waiting_time is None:
-            waiting_time = sta_obj.waiting_time if sta_obj is not None else 0.  # default waiting time
+            waiting_time = sta_obj.waiting_time if sta_obj is not None else 0.  # Default waiting time
         if blocking is None:
-            blocking = sta_obj.blocking if sta_obj is not None else True  # default blocking
+            blocking = sta_obj.blocking if sta_obj is not None else True  # Default blocking
         if msg is None:
             msg = sta_obj.msg if sta_obj is not None else None
 
@@ -746,13 +747,13 @@ class HybridStateMachine:
                     act_id: int | None = None, msg: str | None = None):
         """Define a transition between two states with an associated action."""
 
-        # plugging a previously loaded HSM
+        # Plugging a previously loaded HSM
         if os.path.exists(to_state):
             file_name = to_state
             hsm = HybridStateMachine(self.actionable).load(file_name)
 
-            # first, we avoid name clashes, renaming already-used-state-names in original_name~1 (or ~2, or ~3, ...)
-            hsm_states = list(hsm.states.keys())  # keep the list(...) thing, since we need a copy here (it will change)
+            # First, we avoid name clashes, renaming already-used-state-names in original_name~1 (or ~2, or ~3, ...)
+            hsm_states = list(hsm.states.keys())  # Keep the list(...) thing, since we need a copy here (it will change)
             for state in hsm_states:
                 renamed_state = state
                 i = 1
@@ -782,23 +783,23 @@ class HybridStateMachine:
                         if renamed_state != state:
                             del to_states[state]
 
-            # saving
+            # Saving
             initial_state_was_set = self.initial_state is not None
             state_was_set = self.state is not None
 
-            # include actions/states from another HSM
+            # Include actions/states from another HSM
             self.include(hsm)
 
-            # adding a transition to the initial state of the given HSM
+            # Adding a transition to the initial state of the given HSM
             self.add_transit(from_state=from_state, to_state=hsm.initial_state, action=action, args=args,
                              ready=ready, act_id=None, msg=msg)
 
-            # restoring
+            # Restoring
             self.initial_state = from_state if not initial_state_was_set else self.initial_state
             self.state = from_state if not state_was_set else self.state
             return
 
-        # adding a new transition
+        # Adding a new transition
         if from_state not in self.transitions:
             if from_state not in self.states:
                 self.add_state(from_state, action=None)
@@ -812,28 +813,28 @@ class HybridStateMachine:
         if act_id is None:
             act_id = len(self.__id_to_action)
 
-        # clearing
+        # Clearing
         if to_state not in self.transitions[from_state]:
             self.transitions[from_state][to_state] = []
 
-        # checking
+        # Checking
         existing_action_list = self.transitions[from_state][to_state]
         for existing_action in existing_action_list:
             if existing_action.same_as(name=action, args=args):
                 raise ValueError(f"Repeated transition from {from_state} to {to_state}: "
                                  f"{existing_action.to_list()}")
 
-        # adding the new action
+        # Adding the new action
         new_action = Action(name=action, args=args, idx=act_id, actionable=self.actionable, ready=ready, msg=msg)
         self.transitions[from_state][to_state].append(new_action)
         self.__id_to_action.append(new_action)
 
     def include(self, hsm, make_a_copy=False):
 
-        # copying wildcards
+        # Copying wildcards
         self.add_wildcards(hsm.get_wildcards())
 
-        # adding states before adding transitions, so that we also add inner state actions, if any
+        # Adding states before adding transitions, so that we also add inner state actions, if any
         for _state in hsm.states.values():
             self.add_state(state=_state.name,
                            action=_state.action.name if _state.action is not None else None,
@@ -843,7 +844,7 @@ class HybridStateMachine:
                            blocking=_state.blocking,
                            msg=_state.msg)
 
-        # copy all the transitions of the HSM
+        # Copy all the transitions of the HSM
         for _from_state, _to_states in hsm.transitions.items():
             for _to_state, _action_list in _to_states.items():
                 for _action in _action_list:
@@ -874,14 +875,14 @@ class HybridStateMachine:
         if not self.enabled:
             return
 
-        if self.state is not None:  # when in the middle of an action, the state is Nones
-            self.states[self.state]()  # run the action (if any)
+        if self.state is not None:  # When in the middle of an action, the state is Nones
+            self.states[self.state]()  # Run the action (if any)
 
     def act_transitions(self, requested_only: bool = False):
         if not self.enabled:
             return -1
 
-        # collecting list of feasible actions, wait flags, etc. (from the current state)
+        # Collecting list of feasible actions, wait flags, etc. (from the current state)
         if self.__cur_feasible_actions_status is None:
             if self.state is None:
                 return -1
@@ -908,25 +909,25 @@ class HybridStateMachine:
                 }
         else:
 
-            # reloading the already computed set of actions, wait flags, etc. (when in the middle of an action)
+            # Reloading the already computed set of actions, wait flags, etc. (when in the middle of an action)
             actions_list = self.__cur_feasible_actions_status['actions_list']
             to_state_list = self.__cur_feasible_actions_status['to_state_list']
 
-        # using the selected policy to decide what action to apply
+        # Using the selected policy to decide what action to apply
         while len(actions_list) > 0:
 
-            # it there was an already selected action (for example a multistep action), then continue with it,
+            # It there was an already selected action (for example a multistep action), then continue with it,
             # otherwise, select a new one following a certain policy (actually, first-come first-served)
             if self.__action is None:
 
-                # naive policy: take the first action that is ready
+                # Naive policy: take the first action that is ready
                 _idx, (_requester, (_requested_args, _request_time, _request_uuid)) = self.policy(actions_list)
 
-                # saving current action
+                # Saving current action
                 self.limbo_state = self.state
                 self.state = None
                 self.__action = actions_list[_idx]
-                self.__action.reset_step()  # resetting
+                self.__action.reset_step()  # Resetting
                 self.__cur_feasible_actions_status['selected_idx'] = _idx
                 self.__cur_feasible_actions_status['selected_requester'] = _requester
                 self.__cur_feasible_actions_status['selected_requested_args'] = _requested_args
@@ -936,7 +937,7 @@ class HybridStateMachine:
                 if HybridStateMachine.DEBUG:
                     print(f"[DEBUG HSM] Policy selected {self.__action.__str__()} whose requester is {_requester}")
 
-            # references
+            # References
             action = self.__action
             idx = self.__cur_feasible_actions_status['selected_idx']
             requester = self.__cur_feasible_actions_status['selected_requester']
@@ -944,77 +945,81 @@ class HybridStateMachine:
             request_time = self.__cur_feasible_actions_status['selected_request_time']
             request_uuid = self.__cur_feasible_actions_status['selected_request_uuid']
 
-            # call action
+            # Call action
             action_call_returned_true = action(requester=requester,
                                                requested_args=requested_args,
                                                request_time=request_time, request_uuid=request_uuid)
 
-            # status can be one of these:
+            # Status can be one of these:
             # 0: action fully done;
             # 1: try again this action;
             # 2: move to next action.
             if action_call_returned_true:
                 if not action.is_multi_steps():
-                    # single-step actions
-                    status = 0  # done
+
+                    # Single-step actions
+                    status = 0  # Done
                 else:
-                    # multi-step actions
-                    if action.cannot_be_run_anymore():  # timeout, max time reached, max steps reached
+
+                    # Multi-step actions
+                    if action.cannot_be_run_anymore():  # Timeout, max time reached, max steps reached
                         if HybridStateMachine.DEBUG:
                             print(f"[DEBUG HSM] Multi-step action {self.__action.name} returned True and "
                                   f"cannot-be-run-anymore "
                                   f"(step: {action.get_step()}, "
                                   f"has_completion_step: {action.has_completion_step()})")
                         if self.__action.has_completion_step() and action.get_step() == 0:
-                            status = 1  # try again (next step, it will trigger the completion step)
+                            status = 1  # Try again (next step, it will trigger the completion step)
                         else:
                             if action.get_step() >= 0:
-                                status = 0  # done, the action is fully completed
+                                status = 0  # Done, the action is fully completed
                             else:
-                                status = 2  # move to the next action
+                                status = 2  # Move to the next action
                     else:
                         if HybridStateMachine.DEBUG:
                             print(f"[DEBUG HSM] Multi-step action {self.__action.name} can still be run")
-                        status = 1  # try again (next step)
+                        status = 1  # Try again (next step)
             else:
                 if not action.is_multi_steps():
-                    # single-step actions
+
+                    # Single-step actions
                     if not action.has_a_timeout() or action.is_timed_out():
-                        status = 2  # move to the next action
+                        status = 2  # Move to the next action
                     else:
-                        status = 1  # try again (one more time, until timeout is reached)
+                        status = 1  # Try again (one more time, until timeout is reached)
                 else:
-                    # multi-step actions
-                    if action.cannot_be_run_anymore():  # timeout, max time reached, max steps reached
+
+                    # Multi-step actions
+                    if action.cannot_be_run_anymore():  # Timeout, max time reached, max steps reached
                         if HybridStateMachine.DEBUG:
                             print(f"[DEBUG HSM] Multi-step action {self.__action.name} returned False and "
                                   f"cannot-be-run-anymore "
                                   f"(step: {action.get_step()}, "
                                   f"has_completion_step: {self.__action.has_completion_step()})")
-                        status = 2  # move to the next action, since the final communication failed
+                        status = 2  # Move to the next action, since the final communication failed
                     else:
-                        status = 1  # try again (same step)
+                        status = 1  # Try again (same step)
 
             if HybridStateMachine.DEBUG:
                 print(f"[DEBUG HSM] Action {self.__action.name}, after being called, leaded to status: {status}")
 
-            # post-call operations
-            if status == 0:  # done
+            # Post-call operations
+            if status == 0:  # Done
 
-                # clearing request
+                # Clearing request
                 requests = self.__action.get_requests()
                 if requester is not None and requester in requests:
                     del requests[requester]
 
-                # state transition
+                # State transition
                 self.prev_state = self.limbo_state
                 self.state = to_state_list[idx]
                 self.limbo_state = None
 
-                # update status
-                self.__state_changed = self.state != self.prev_state  # checking if we are on a self-loop or not
+                # Update status
+                self.__state_changed = self.state != self.prev_state  # Checking if we are on a self-loop or not
 
-                # if we moved to another state, clearing all the pending annotations for the next possible actions
+                # If we moved to another state, clearing all the pending annotations for the next possible actions
                 if self.__state_changed:
                     if HybridStateMachine.DEBUG:
                         print(f"[DEBUG HSM] Moving to state: {self.state}")
@@ -1022,7 +1027,7 @@ class HybridStateMachine:
                         for i, act in enumerate(action_list):
                             act.clear_requests()
 
-                    # propagating (trying to propagate forward the residual requests)
+                    # Propagating (trying to propagate forward the residual requests)
                     residual_requests = self.__action.get_requests()
                     for _requester, (_requested_args, _request_time, _request_uuid) in residual_requests.items():
                         self.request_action(_requester, action_name=self.__action.name, args=_requested_args,
@@ -1031,56 +1036,56 @@ class HybridStateMachine:
                 if HybridStateMachine.DEBUG:
                     print(f"[DEBUG HSM] Correctly completed action: {self.__action.name}")
 
-                self.states[self.prev_state].reset()  # reset starting time
+                self.states[self.prev_state].reset()  # Reset starting time
                 self.__action.reset_step()
-                self.__action = None  # clearing
+                self.__action = None  # Clearing
                 self.__cur_feasible_actions_status = None
 
-                return 0  # transition done, no need to check other actions!
+                return 0  # Transition done, no need to check other actions!
 
-            elif status == 1:  # try again the same action (either a new step or an already done-and-failed one)
+            elif status == 1:  # Try again the same action (either a new step or an already done-and-failed one)
 
-                # update status
+                # Update status
                 self.__state_changed = False
                 if self.prev_state is not None:
-                    self.states[self.prev_state].reset()  # reset starting time
+                    self.states[self.prev_state].reset()  # Reset starting time
 
-                return 1  # transition not-done: no need to check other actions, the current one will be run again
+                return 1  # Transition not-done: no need to check other actions, the current one will be run again
 
-            elif status == 2:  # move to the next action
+            elif status == 2:  # Move to the next action
 
-                # clearing request
+                # Clearing request
                 requests = self.__action.get_requests()
                 if requester is not None and requester in requests:
                     del requests[requester]
 
-                # back to the original state
+                # Back to the original state
                 self.state = self.limbo_state
                 self.limbo_state = None
                 if HybridStateMachine.DEBUG:
                     print(f"[DEBUG HSM] Tried and failed (failed execution): {action.name}")
 
-                # purging action from the current list
+                # Purging action from the current list
                 del actions_list[idx]
                 del to_state_list[idx]
 
-                # update status
+                # Update status
                 self.__state_changed = False
                 self.__action.reset_step()
-                self.__action = None  # clearing
+                self.__action = None  # Clearing
 
-                continue  # move to the next action
+                continue  # Move to the next action
             else:
                 raise ValueError("Unexpected status: " + str(status))
 
-        # no actions were applied
+        # No actions were applied
         self.__cur_feasible_actions_status = None
         self.__state_changed = False
         return -1
 
     def act(self):
 
-        # it keeps processing states and actions, until all the current feasible actions fail
+        # It keeps processing states and actions, until all the current feasible actions fail
         # (also when a step of a multistep action is executed) or a blocking state is reached
         while True:
             self.act_states()
@@ -1100,13 +1105,13 @@ class HybridStateMachine:
                   f"asking for action {action_name}, with args: {args}, "
                   f"from_state: {from_state}, to_state: {to_state}, uuid: {uuid}")
 
-        # discard suggestions if they are not trusted
+        # Discard suggestions if they are not trusted
         if self.request_signature_checker is not None and not self.request_signature_checker(signature):
             if HybridStateMachine.DEBUG:
                 print("[DEBUG HSM] Request signature check failed")
             return False
 
-        # if state is not provided, the current state is assumed
+        # If state is not provided, the current state is assumed
         if from_state is None:
             from_state = self.state
         if from_state not in self.transitions:
@@ -1114,7 +1119,7 @@ class HybridStateMachine:
                 print(f"[DEBUG HSM] Request not accepted: not valid source state ({from_state})")
             return False
 
-        # if the destination state is not provided, all the possible destination from the current state are considered
+        # If the destination state is not provided, all the possible destination from the current state are considered
         if to_state is not None and to_state not in self.transitions[from_state]:
             if HybridStateMachine.DEBUG:
                 print(f"[DEBUG HSM] Request not accepted: not valid destination state ({to_state})")
@@ -1130,11 +1135,11 @@ class HybridStateMachine:
                     if HybridStateMachine.DEBUG:
                         print("[DEBUG HSM] Requested action found, adding request to the queue")
 
-                    # action found, let's save the suggestion
+                    # Action found, let's save the suggestion
                     action.add_request(signature, args, timestamp=timestamp, uuid=uuid)
                     return True
 
-        # if the action was not found
+        # If the action was not found
         if HybridStateMachine.DEBUG:
             print("[DEBUG HSM] Requested action not found")
         return False
@@ -1185,7 +1190,7 @@ class HybridStateMachine:
     def load(self, filename_or_hsm_as_string: str) -> Self:
         """Load the HSM state from a JSON file and resolve actions."""
 
-        # loading the whole file
+        # Loading the whole file
         if os.path.exists(filename_or_hsm_as_string) and os.path.isfile(filename_or_hsm_as_string):
             with open(filename_or_hsm_as_string, 'r') as file:
                 hsm_data = json.load(file)
@@ -1193,26 +1198,26 @@ class HybridStateMachine:
             assert not filename_or_hsm_as_string.endswith(".json"), f"File {filename_or_hsm_as_string} does not exist"
             hsm_data = json.loads(filename_or_hsm_as_string)
 
-        # getting state info
+        # Getting state info
         self.initial_state = hsm_data['initial_state']
         self.state = hsm_data['state']
         self.prev_state = hsm_data['prev_state']
         self.limbo_state = hsm_data['limbo_state']
         self.role = hsm_data.get('role', None)
 
-        # getting states
+        # Getting states
         self.states = {}
         for state, state_action_list in hsm_data['state_actions'].items():
-            if len(state_action_list) == 3:  # backward compatibility
+            if len(state_action_list) == 3:  # Backward compatibility
                 act_name, act_args, state_id = state_action_list
                 waiting_time = 0.
                 blocking = True
                 msg = None
-            elif len(state_action_list) == 4:    # backward compatibility
+            elif len(state_action_list) == 4:  # Backward compatibility
                 act_name, act_args, state_id, blocking = state_action_list
                 waiting_time = 0.
                 msg = None
-            elif len(state_action_list) == 5:    # backward compatibility
+            elif len(state_action_list) == 5:  # Backward compatibility
                 act_name, act_args, state_id, blocking, waiting_time = state_action_list
                 msg = None
             else:
@@ -1220,7 +1225,7 @@ class HybridStateMachine:
             self.add_state(state, action=act_name, args=act_args, state_id=state_id,
                            waiting_time=waiting_time, blocking=blocking, msg=msg)
 
-        # getting transitions
+        # Getting transitions
         self.transitions = {}
         for from_state, to_states in hsm_data['transitions'].items():
             for to_state, action_list in to_states.items():
@@ -1322,7 +1327,7 @@ class HybridStateMachine:
             for action in action_list:
                 print(f"{state} --> {to_state} {action}")
 
-    # noinspection PyMethodMayBeStatic
+    # Noinspection PyMethodMayBeStatic
     def __policy_first_requested_or_first_ready(self, actions_list: list[Action]) \
             -> tuple[int, tuple[object | None, tuple[dict, float, str | None]]]:
         for i, action in enumerate(actions_list):

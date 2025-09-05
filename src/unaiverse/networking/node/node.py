@@ -13,7 +13,6 @@
                  Main Developers:    Stefano Melacci (Project Leader), Christian Di Maio, Tommaso Guidi
 """
 import os
-import re
 import cv2
 import sys
 import ast
@@ -44,11 +43,11 @@ from unaiverse.streams import DataProps, BufferedDataStream
 
 class Node:
 
-    # each node can host an agent or a world
+    # Each node can host an agent or a world
     AGENT = "agent"
     WORLD = "world"
 
-    # each node outputs console text with a different color
+    # Each node outputs console text with a different color
     TEXT_COLORS = ('\033[91m', '\033[94m', '\033[92m', '\033[93m')
     TEXT_LAST_USED_COLOR = 0
     TEXT_LOCK = threading.Lock()
@@ -59,14 +58,13 @@ class Node:
                  node_id: str | None = None,
                  clock_delta: float = 1. / 25.,
                  only_certified_agents: bool = False,
-                 allowed_node_ids: list[str] | set[str] = None,  # optional: it is loaded from the online profile
-                 world_masters_node_ids: list[str] | set[str] = None,  # optional: it is loaded from the online profile
-                 world_masters_node_names: list[str] | set[str] = None,  # optional: it will be converted to node IDs
-                 offer_relay_facilities: bool = True,
+                 allowed_node_ids: list[str] | set[str] = None,  # Optional: it is loaded from the online profile
+                 world_masters_node_ids: list[str] | set[str] = None,  # Optional: it is loaded from the online profile
+                 world_masters_node_names: list[str] | set[str] = None,  # Optional: it will be converted to node IDs
                  allow_connection_through_relay: bool = True,
                  talk_to_relay_based_nodes: bool = True):
 
-        # checking main arguments
+        # Checking main arguments
         assert isinstance(hosted, Agent) or isinstance(hosted, World), f"Invalid hosted entity, must be Agent or World"
         assert node_id is None or isinstance(node_id, str), f"Invalid node ID"
         assert node_name is None or isinstance(node_name, str), f"Invalid node name"
@@ -75,43 +73,43 @@ class Node:
             f"You must specify either node ID or node name: both are missing"
         assert unaiverse_key is not None and isinstance(unaiverse_key, str), f"Invalid UNaIVERSE key"
 
-        # main attributes
+        # Main attributes
         self.node_id = node_id
         self.unaiverse_key = unaiverse_key
         self.hosted = hosted
         self.node_type = Node.AGENT if (isinstance(hosted, Agent) and not isinstance(hosted, World)) else Node.WORLD
         self.agent = hosted if self.node_type is Node.AGENT else None
         self.world = hosted if self.node_type is Node.WORLD else None
-        self.clock = Clock(min_delta=clock_delta)  # node clock
-        self.conn = None  # manages the network operations in the P2P network
+        self.clock = Clock(min_delta=clock_delta)  # Node clock
+        self.conn = None  # Manages the network operations in the P2P network
         self.talk_to_relay_based_nodes = talk_to_relay_based_nodes
 
-        # expected properties of the nodes that will try to connect to this one
+        # Expected properties of the nodes that will try to connect to this one
         self.only_certified_agents = only_certified_agents
         self.allowed_node_ids = set(allowed_node_ids) if allowed_node_ids is not None else None
         self.world_masters_node_ids = set(world_masters_node_ids) if world_masters_node_ids is not None else None
 
-        # profile
+        # Profile
         self.profile = None
-        self.send_dynamic_profile_every = 10. if self.node_type is Node.WORLD else 10.  # seconds
-        self.get_new_token_every = 23 * 60. * 60. + 30 * 60.  # seconds (23 hours and 30 minutes, safer)
+        self.send_dynamic_profile_every = 10. if self.node_type is Node.WORLD else 10.  # Seconds
+        self.get_new_token_every = 23 * 60. * 60. + 30 * 60.  # Seconds (23 hours and 30 minutes, safer)
         self.publish_rendezvous_every = 10.
         self._last_rendezvous_time = 0.
 
-        # automatic address update and relay refresh (if needed)
+        # Automatic address update and relay refresh (if needed)
         self.relay_reservation_expiry: Optional[datetime] = None
         self.address_check_every = 5 * 60.  # Check every 5 minutes
 
-        # interview of newly connected nodes
-        self.interview_timeout = 45.  # seconds
-        self.connect_without_ack_timeout = 45.  # seconds
+        # Interview of newly connected nodes
+        self.interview_timeout = 45.  # Seconds
+        self.connect_without_ack_timeout = 45.  # Seconds
 
-        # root server-related
+        # Root server-related
         self.root_endpoint = 'https://unaiverse.io/api'  # WARNING: EDITING THIS ADDRESS VIOLATES THE LICENSE
         self.node_token = ""
         self.public_key = ""
 
-        # output console text
+        # Output console text
         print_level = int(os.getenv("NODE_PRINT", "0"))
         self.print_enabled = print_level > 0
         self.cursor_was_hidden = False
@@ -123,25 +121,25 @@ class Node:
             self.text_color = Node.TEXT_COLORS[Node.TEXT_LAST_USED_COLOR]
             Node.TEXT_LAST_USED_COLOR = (Node.TEXT_LAST_USED_COLOR + 1) % len(Node.TEXT_COLORS)
 
-        # print-related logging
+        # Print-related logging
         self._output_messages = [""] * 20
         self._output_messages_ids = [-1] * 20
         self._output_messages_count = 0
         self._output_messages_last_pos = -1
 
-        # attributes: handshake-related
-        self.agents_to_interview: dict[str, [float, NodeProfile | None]] = {}  # peer_id -> [time, profile | None]
+        # Attributes: handshake-related
+        self.agents_to_interview: dict[str, [float, NodeProfile | None]] = {}  # Peer_id -> [time, profile | None]
         self.agents_expected_to_send_ack = {}
         self.last_rejected_agents = deque(maxlen=self.conn)
         self.joining_world_info = None
 
-        # getting node ID (retrieving by name), if it was not provided (the node is created if not existing)
+        # Getting node ID (retrieving by name), if it was not provided (the node is created if not existing)
         if self.node_id is None:
             self.node_id = self.get_node_id_by_name(node_name, create_if_missing=True)
             if self.node_id is None:
                 raise ValueError("Cannot create node: node ID was not set")
 
-        # getting node ID of world masters, if needed
+        # Getting node ID of world masters, if needed
         if world_masters_node_names is not None and len(world_masters_node_names) > 0:
             for master_node_name in world_masters_node_names:
                 master_node_id = self.get_node_id_by_name(master_node_name, create_if_missing=False)
@@ -154,19 +152,19 @@ class Node:
 
         self.prev_snapshot = None
 
-        # here you can setup max_instances, max_channels, enable_logging at libp2p level etc.
+        # Here you can setup max_instances, max_channels, enable_logging at libp2p level etc.
         P2P.setup_library(enable_logging=os.getenv("NODE_LIBP2PLOG", "0") == "1")
 
-        offer_relay_facilities = self.node_type is Node.WORLD  # only world nodes offer relay facilities
+        offer_relay_facilities = self.node_type is Node.WORLD  # Only world nodes offer relay facilities
 
-        # create P2P node in the whole universe (it has fields 'addresses', and 'peer_id', and 'libp2p')
+        # Create P2P node in the whole universe (it has fields 'addresses', and 'peer_id', and 'libp2p')
         p2p_u = P2P(max_connections=1000, ips=None,
                     enable_relay_service=offer_relay_facilities,
                     enable_relay_client=allow_connection_through_relay,
                     wait_public_reachability=os.getenv("NODE_WAIT_PUBLIC", "0") == "1",
                     port=int(os.getenv("NODE_STARTING_PORT", "0")))
 
-        # create another P2P node for the private world (it has fields 'addresses', and 'peer_id', and 'libp2p')
+        # Create another P2P node for the private world (it has fields 'addresses', and 'peer_id', and 'libp2p')
         p2p_w = P2P(max_connections=1000, ips=None,
                     enable_relay_service=offer_relay_facilities,
                     enable_relay_client=allow_connection_through_relay,
@@ -174,25 +172,25 @@ class Node:
                     port=(int(os.getenv("NODE_STARTING_PORT", "0")) + 2)
                     if int(os.getenv("NODE_STARTING_PORT", "0")) > 0 else 0)
 
-        # get first node token
-        self.get_node_token(peer_ids=[p2p_u.peer_id, p2p_w.peer_id])  # passing both the peer IDs
+        # Get first node token
+        self.get_node_token(peer_ids=[p2p_u.peer_id, p2p_w.peer_id])  # Passing both the peer IDs
 
-        # get first badge token
+        # Get first badge token
         if self.node_type is Node.WORLD:
             self.badge_token = self.__root(api="account/node/cv/badge/token/get", payload={"node_id": self.node_id})
         else:
             self.badge_token = None
 
-        # get profile (static)
+        # Get profile (static)
         profile_static = self.__root(api="/account/node/profile/static/get", payload={"node_id": self.node_id})
 
-        # getting list of allowed nodes from the static profile,
+        # Getting list of allowed nodes from the static profile,
         # if we did not already specify it when creating the node in the code (the code has higher priority)
         if (self.allowed_node_ids is None and 'allowed_node_ids' in profile_static and
                 profile_static['allowed_node_ids'] is not None and len(profile_static['allowed_node_ids']) > 0):
             self.allowed_node_ids = set(profile_static['allowed_node_ids'])
 
-        # getting list of world master nodes from the static profile,
+        # Getting list of world master nodes from the static profile,
         # if we did not already specify it when creating the node in the code (the code has higher priority)
         if self.node_type is Node.WORLD:
             if (self.world_masters_node_ids is None and 'world_masters_node_ids' in profile_static and
@@ -200,12 +198,12 @@ class Node:
                     and len(profile_static['world_masters_node_ids']) > 0):
                 self.world_masters_node_ids = set(profile_static['world_masters_node_ids'])
         else:
-            self.world_masters_node_ids = None  # clearing this in case the user specified it for a non-world node
+            self.world_masters_node_ids = None  # Clearing this in case the user specified it for a non-world node
 
-        # get CV
+        # Get CV
         cv = self.get_cv()
 
-        # creating full node profile putting together static info, dynamic profile, adding P2P node info, CV
+        # Creating full node profile putting together static info, dynamic profile, adding P2P node info, CV
         self.profile = NodeProfile(static=profile_static,
                                    dynamic={'peer_id': p2p_u.peer_id,
                                             'peer_addresses': p2p_u.addresses,
@@ -222,9 +220,9 @@ class Node:
                                             "world_roles_fsm": self.world.role_to_behav
                                             if self.node_type is Node.WORLD else None,
                                             },
-                                   cv=cv)  # adding CV here
+                                   cv=cv)  # Adding CV here
 
-        # creating the connection manager
+        # Creating the connection manager
         # guessing max number of connections (max number of valid
         # the connection manager will ensure that this limit is fulfilled)
         # however, the actual number of connection attempts handled by libp2p must be higher that
@@ -235,11 +233,11 @@ class Node:
                              public_key=self.public_key,
                              token=self.node_token)
 
-        # sharing node-level info with the hosted entity
+        # Sharing node-level info with the hosted entity
         self.hosted.set_node_info(self.clock, self.conn, self.profile, self.out, self.ask_to_get_in_touch,
                                   self.__purge, self.agents_expected_to_send_ack, print_level)
 
-        # finally, sending dynamic profile to the root server
+        # Finally, sending dynamic profile to the root server
         self.send_dynamic_profile()
 
         self.first = True
@@ -276,7 +274,7 @@ class Node:
             if response["node_id"] is None and create_if_missing:
                 if self.node_type is Node.WORLD:
 
-                    # discarding basic roles (public_agent, world_agent, ...)
+                    # Discarding basic roles (public_agent, world_agent, ...)
                     roles = list(set(self.world.ROLE_BITS_TO_STR.values()) - set(World.ROLE_BITS_TO_STR.values()))
                 else:
                     roles = []
@@ -292,7 +290,7 @@ class Node:
     def get_node_token(self, peer_ids) -> None:
         response = None
 
-        for i in range(0, 3):  # it will try 3 times before raising the exception...
+        for i in range(0, 3):  # It will try 3 times before raising the exception...
             try:
                 response = self.__root("/account/node/token/generate",
                                        payload={"node_id": self.node_id,
@@ -304,28 +302,28 @@ class Node:
                 self.err(f"Error while getting token from server\n{e}")
                 if i < 2:
                     self.out("Retrying...")
-                    time.sleep(5)  # wait a little bit
+                    time.sleep(5)  # Wait a little bit
                 else:
-                    raise e  # raise the exception
+                    raise e  # Raise the exception
 
         self.node_token = response["token"]
         self.public_key = response["public_key"]
 
-        # sharing the token with the connection manager
+        # Sharing the token with the connection manager
         if self.conn is not None:
             self.conn.set_token(self.node_token)
 
     def get_cv(self):
-        for i in range(0, 3):  # it will try 3 times before raising the exception...
+        for i in range(0, 3):  # It will try 3 times before raising the exception...
             try:
                 return self.__root(api="/account/node/cv/get", payload={"node_id": self.node_id})
             except Exception as e:
                 self.err(f"Error while getting CV from server\n{e}")
                 if i < 2:
                     self.out("Retrying...")
-                    time.sleep(5)  # wait a little bit
+                    time.sleep(5)  # Wait a little bit
                 else:
-                    raise e  # raise the exception
+                    raise e  # Raise the exception
 
     def send_dynamic_profile(self) -> None:
         try:
@@ -334,14 +332,14 @@ class Node:
                                                                                self.profile.get_dynamic_profile()})
         except Exception as e:
             self.err(f"Error while sending dynamic profile to from server\n{e}")
-            raise e  # raise the exception
+            raise e  # Raise the exception
 
     def send_badges(self) -> None:
         if self.node_type is Node.WORLD:
             peer_id_to_badges = self.world.get_all_badges()
             if len(peer_id_to_badges) > 0:
                 self.out(f"Sending {len(peer_id_to_badges)} badges to root server")
-                for i in range(0, 3):  # it will try 3 times before raising the exception...
+                for i in range(0, 3):  # It will try 3 times before raising the exception...
                     try:
                         badges = [badge for _badges in peer_id_to_badges.values() for badge in _badges]
                         peer_ids = [peer_id for peer_id, _badges in peer_id_to_badges.items() for _ in _badges]
@@ -351,39 +349,40 @@ class Node:
                                                         "world_node_id": self.node_id,
                                                         "world_badge_token": self.badge_token})
 
-                        # getting the next badge token
+                        # Getting the next badge token
                         self.badge_token = response["badge_token"]
-                        badges_states = response["badges_states"]  # list of booleans
+                        badges_states = response["badges_states"]  # List of booleans
 
-                        # check if posting went well and saving the set of peer IDs to contact
+                        # Check if posting went well and saving the set of peer IDs to contact
                         peer_ids_to_notify = set()
-                        for i in range(0, len(badges_states)):
-                            ret = badges_states[i]
+                        for z in range(0, len(badges_states)):
+                            ret = badges_states[z]
                             if 'state' not in ret or 'code' not in ret['state'] or 'message' not in ret['state']:
-                                self.err(f"Error while posting a badge assigned to {peer_ids[i]}. Badge: {badges[i]}. "
+                                self.err(f"Error while posting a badge assigned to {peer_ids[z]}. Badge: {badges[z]}. "
                                          f"Error message: invalid response format")
                             else:
                                 if ret['state']['code'] != "ok":
-                                    self.err(f"Error while posting a badge assigned to {peer_ids[i]}. Badge: {badges[i]}. "
+                                    self.err(f"Error while posting a badge assigned to {peer_ids[z]}. "
+                                             f"Badge: {badges[z]}. "
                                              f"Error message: {ret['state']['message']}")
                                 else:
                                     peer_ids_to_notify.add(peer_ids[i])
 
-                        # notify agents
+                        # Notify agents
                         for peer_id in peer_ids_to_notify:
                             if not self.conn.send(peer_id, channel_trail=None, content=None,
                                                   content_type=Msg.GET_CV_FROM_ROOT):
                                 self.err(f"Error while sending the request to re-download CV to peer {peer_id}")
 
-                        # clearing
+                        # Clearing
                         self.world.clear_badges()
                     except Exception as e:
                         self.err(f"Error while sending badges to server or when notifying peers\n{e}")
                         if i < 2:
                             self.out("Retrying...")
-                            time.sleep(5)  # wait a little bit
+                            time.sleep(5)  # Wait a little bit
                         else:
-                            raise e  # raise the exception
+                            raise e  # Raise the exception
 
     def get_public_addresses(self):
         return self.conn[NodeConn.P2P_PUBLIC].addresses
@@ -401,7 +400,7 @@ class Node:
                             before_updating_pools_fcn=None, run_count: int = 0) -> str | None:
         """Try to connect to an agent/world."""
 
-        # connecting
+        # Connecting
         self.out("Connecting to another agent/world...")
         peer_id, through_relay = self.conn.connect(addresses,
                                                    p2p_name=NodeConn.P2P_PUBLIC if public else NodeConn.P2P_WORLD)
@@ -412,7 +411,7 @@ class Node:
 
         if peer_id is not None and (not through_relay or self.talk_to_relay_based_nodes):
 
-            # ping to test the readiness of the established connection
+            # Ping to test the readiness of the established connection
             self.out(f"Connected, ping-pong {run_count + 1}/3...")
             if not self.conn.send(peer_id, channel_trail=None, content_type=Msg.MISC, content={"ping": "pong"},
                                   p2p=self.conn.p2p_name_to_p2p[NodeConn.P2P_PUBLIC if public else NodeConn.P2P_WORLD]):
@@ -442,15 +441,15 @@ class Node:
 
         print("Asking to join world...")
 
-        # leave an already entered world (if any)
+        # Leave an already entered world (if any)
         world_peer_id = self.profile.get_dynamic_profile()['connections']['world_peer_id']
         if world_peer_id is not None:
             self.leave(world_peer_id)
 
-        # connecting to the world (public)
+        # Connecting to the world (public)
         peer_id = self.ask_to_get_in_touch(addresses, public=True)
 
-        # saving info
+        # Saving info
         if peer_id is not None:
             print("Connected on the public network, waiting for handshake...")
             self.joining_world_info = {"world_public_peer_id": peer_id, "options": kwargs}
@@ -467,28 +466,28 @@ class Node:
         if peer_id == dynamic_profile['connections']['world_peer_id']:
             self.out("Leaving world...")
 
-            # clearing world-related lists in the connection manager (to avoid world agent to connect again)
+            # Clearing world-related lists in the connection manager (to avoid world agent to connect again)
             self.conn.set_world(None)
             self.conn.set_world_agents_list(None)
             self.conn.set_world_masters_list(None)
 
-            # disconnecting all connected world-related agents, including world node (it clears roles too)
+            # Disconnecting all connected world-related agents, including world node (it clears roles too)
             self.conn.remove_all_world_agents()
 
-            # better clear this as well
+            # Better clear this as well
             if peer_id in self.agents_expected_to_send_ack:
                 del self.agents_expected_to_send_ack[peer_id]
 
-            # clear profile
+            # Clear profile
             dynamic_profile['connections']['world_peer_id'] = None
             dynamic_profile['connections']['world_agents'] = None
             dynamic_profile['connections']['world_masters'] = None
             self.profile.mark_change_in_connections()
 
-            # clearing agent-level info
+            # Clearing agent-level info
             self.agent.clear_world_related_data()
 
-            # clearing all joining options
+            # Clearing all joining options
             self.joining_world_info = None
         else:
             if peer_id in self.hosted.all_agents:
@@ -505,17 +504,17 @@ class Node:
 
         try:
             if self.cursor_was_hidden:
-                sys.stdout.write("\033[?25l")  # hide cursor
+                sys.stdout.write("\033[?25l")  # Hide cursor
 
             last_dynamic_profile_time = self.clock.get_time()
             last_get_token_time = self.clock.get_time()
             last_address_check_time = self.clock.get_time()
             assert cycles is None or cycles > 0, "Invalid number of cycles"
 
-            # external event manipulated by inspector commands
+            # External event manipulated by inspector commands
             self.__inspector_pause_event = threading.Event()
 
-            # interactive mode (useful when chatting with lone wolves)
+            # Interactive mode (useful when chatting with lone wolves)
             keyboard_queue = None
             keyboard_listener = None
             processor_net_hash = None
@@ -550,9 +549,9 @@ class Node:
                 def keyboard_listener(k_queue):
                     while True:
                         webcam_shot = None
-                        keyboard_msg = input()  # get from keyboards
+                        keyboard_msg = input()  # Get from keyboards
                         if cap is not None:
-                            ret, got_shot = cap.read()  # get from webcam
+                            ret, got_shot = cap.read()  # Get from webcam
                             if ret:
                                 target_area = 224 * 224
                                 webcam_shot = Image.fromarray(cv2.cvtColor(got_shot, cv2.COLOR_BGR2RGB))
@@ -567,41 +566,41 @@ class Node:
                                                                      Image.Resampling.LANCZOS)
 
                         if keyboard_msg is not None and len(keyboard_msg) > 0:
-                            k_queue.put((keyboard_msg, webcam_shot))  # store in the asynch queue
+                            k_queue.put((keyboard_msg, webcam_shot))  # Store in the asynch queue
 
                         if keyboard_msg.strip() == "exit" or keyboard_msg.strip() == "quit":
                             break
 
-                keyboard_queue = queue.Queue()  # create a thread-safe queue for communication
+                keyboard_queue = queue.Queue()  # Create a thread-safe queue for communication
                 keyboard_listener = threading.Thread(target=keyboard_listener, args=(keyboard_queue,), daemon=True)
 
             if self.clock.get_cycle() == -1:
                 print("Running " + ("agent node" if self.agent else "world node") + " " +
                       f"(public: {self.get_public_peer_id()}, private: {self.get_world_peer_id()})...")
 
-            # main loop
+            # Main loop
             must_quit = False
             while not must_quit:
 
-                # check inspector
+                # Check inspector
                 if self.inspector_connected:
                     if self.__inspector_pause_event.is_set():
                         self.out("Paused by the inspector, waiting...")
                         self.__inspector_pause_event.wait()
 
-                # move to the next cycle
+                # Move to the next cycle
                 while not self.clock.next_cycle():
-                    time.sleep(0.001)  # seconds (lowest possible granularity level)
+                    time.sleep(0.001)  # Seconds (lowest possible granularity level)
 
                 self.out(f">>> Starting clock cycle {self.clock.get_cycle()} <<<")
 
-                # handle new connections or lost connections
+                # Handle new connections or lost connections
                 self.__handle_network_connections()
 
-                # handle (read, execute) received network data/commands
+                # Handle (read, execute) received network data/commands
                 self.__handle_network_messages(interact_mode_opts=interact_mode_opts)
 
-                # stream live data (generated and environmental)
+                # Stream live data (generated and environmental)
                 if len(self.hosted.all_agents) > 0:
                     if self.node_type is Node.WORLD:
                         if self.first is True:
@@ -612,12 +611,12 @@ class Node:
                                         stream_obj.restart()
                 self.hosted.send_stream_samples()
 
-                # trigger HSM of the agent
+                # Trigger HSM of the agent
                 if self.node_type is Node.AGENT:
                     if interact_mode_opts is not None:
                         try:
 
-                            # waiting until we meet a state named "ready"
+                            # Waiting until we meet a state named "ready"
                             if not ready_to_interact:
                                 behav = self.agent.behav_lone_wolf \
                                     if "lone_wolf_peer_id" in interact_mode_opts else self.agent.behav
@@ -627,15 +626,15 @@ class Node:
                                     cap = cv2.VideoCapture(0) if processor_img_stream is not None else None
                                     print(f"\n*** Entering interactive text mode ***\n\n👉 ", end="")
 
-                                    original_stdout = sys.stdout  # valid screen-related stream
+                                    original_stdout = sys.stdout  # Valid screen-related stream
                                     sys.stdout = open('interact_stdout.txt',
-                                                      'w')  # open(os.devnull, 'w')  # null stream
+                                                      'w')  # Open(os.devnull, 'w')  # null stream
                                     interact_mode_opts["stdout"] = [original_stdout, sys.stdout]
 
-                            # getting message from keyboard
+                            # Getting message from keyboard
                             msg, image_pil = keyboard_queue.get_nowait()
 
-                            # quit?
+                            # Quit?
                             msg = msg.strip()
                             if msg == "exit" or msg == "quit":
                                 must_quit = True
@@ -644,7 +643,7 @@ class Node:
                                     cap.release()
                             else:
 
-                                # asking the to generate (the request will be immediately sent)
+                                # Asking the to generate (the request will be immediately sent)
                                 if "lone_wolf_peer_id" in interact_mode_opts:
                                     behav = self.agent.behav_lone_wolf
                                     other_behav = self.agent.behav
@@ -665,7 +664,7 @@ class Node:
                                     other_behav = self.agent.behav_lone_wolf
                                     self.agent.behave()
 
-                                # loading the message and image to the processor's output streams
+                                # Loading the message and image to the processor's output streams
                                 # they will be sent at the next clock cycle
                                 other_behav.enable(False)
                                 behav.enable(True)
@@ -680,30 +679,30 @@ class Node:
                                     processor_text_stream.set(msg)
                                 behav.enable(False)
                         except queue.Empty:
-                            self.agent.behave()  # if nothing has been typed (+ enter)
+                            self.agent.behave()  # If nothing has been typed (+ enter)
                     else:
 
-                        # ordinary behaviour
+                        # Ordinary behaviour
                         self.agent.behave()
 
-                # send dynamic profile every "N" seconds
+                # Send dynamic profile every "N" seconds
                 if (self.clock.get_time() - last_dynamic_profile_time >= self.send_dynamic_profile_every
                         and self.profile.connections_changed()):
                     try:
                         last_dynamic_profile_time = self.clock.get_time()
                         self.profile.unmark_change_in_connections()
-                        self.send_badges()  # sending and clearing badges
-                        self.send_dynamic_profile()  # sending
+                        self.send_badges()  # Sending and clearing badges
+                        self.send_dynamic_profile()  # Sending
                     except Exception as e:
                         self.err(f"Error while sending the update dynamic profile (or badges) to the server "
                                  f"(trying to go ahead...)\n{e}")
 
-                # getting a new token every "N" seconds
+                # Getting a new token every "N" seconds
                 if self.clock.get_time() - last_get_token_time >= self.get_new_token_every:
                     self.get_node_token(peer_ids=[self.get_public_peer_id(), self.get_world_peer_id()])
                     last_get_token_time = self.clock.get_time()
 
-                # check for address changes every "N" seconds
+                # Check for address changes every "N" seconds
                 if self.clock.get_time() - last_address_check_time >= self.address_check_every:
                     self.out("Performing periodic check for address changes...")
                     last_address_check_time = self.clock.get_time()
@@ -715,33 +714,40 @@ class Node:
 
                         # TODO: if public addresses changed... (if this makes any sense)
                         if set(current_public_addrs) != set(profile_public_addrs):
-                            self.out(f"Address change detected for the public instance! New addresses: {current_public_addrs}")
+                            self.out(f"Address change detected for the public instance! "
+                                     f"New addresses: {current_public_addrs}")
+
                             # Update profile in-place
                             # address_list = self.profile.get_dynamic_profile()['peer_addresses']
                             # address_list.clear()
                             # address_list.extend(current_public_addrs)
                             # self.profile.mark_change_in_connections()
 
-                        # if private addresses changed, update the profile and notify the world
+                        # If private addresses changed, update the profile and notify the world
                         elif set(current_private_addrs) != set(profile_private_addrs):
-                            self.out(f"Address change detected for the private instance! New addresses: {current_public_addrs}")
+                            self.out(f"Address change detected for the private instance! "
+                                     f"New addresses: {current_public_addrs}")
+
                             # Update profile in-place
                             address_list = self.profile.get_dynamic_profile()['private_peer_addresses']
                             address_list.clear()
                             address_list.extend(current_private_addrs)
                             # self.profile.mark_change_in_connections()
 
-                            world_peer_id = self.profile.get_dynamic_profile().get('connections', {}).get('world_peer_id')
+                            world_peer_id = (
+                                self.profile.get_dynamic_profile().get('connections', {}).get('world_peer_id'))
                             if self.node_type is Node.AGENT and world_peer_id:
                                 self.out("Notifying world of address change...")
-                                self.conn.send(world_peer_id, content_type=Msg.ADDRESS_UPDATE,
-                                               content={'addresses': self.profile.get_dynamic_profile()['private_peer_addresses']})
+                                self.conn.send(
+                                    world_peer_id, content_type=Msg.ADDRESS_UPDATE, channel_trail=None,
+                                    content={'addresses': self.profile.get_dynamic_profile()['private_peer_addresses']}
+                                )
                         else:
                             self.out("No address changes detected.")
                     except Exception as e:
                         self.err(f"Failed to check for address updates: {e}")
 
-                # refresh relay reservation if nearing expiration
+                # Refresh relay reservation if nearing expiration
                 if self.relay_reservation_expiry is not None:
                     time_to_expiry = self.relay_reservation_expiry - datetime.now(timezone.utc)
                     if time_to_expiry < timedelta(minutes=15):
@@ -749,17 +755,19 @@ class Node:
                         try:
                             world_private_peer_id = self.profile.get_dynamic_profile()['connections']['world_peer_id']
                             new_expiry_utc = self.conn.p2p_world.reserve_on_relay(world_private_peer_id)
-                            self.relay_reservation_expiry = datetime.fromisoformat(new_expiry_utc.replace('Z', '+00:00'))
-                            self.out(f"Relay reservation renewed. New expiration: {self.relay_reservation_expiry.strftime('%Y-%m-%d %H:%M:%S')} UTC")
+                            self.relay_reservation_expiry = datetime.fromisoformat(
+                                new_expiry_utc.replace('Z', '+00:00'))
+                            self.out(f"Relay reservation renewed. New expiration: "
+                                     f"{self.relay_reservation_expiry.strftime('%Y-%m-%d %H:%M:%S')} UTC")
                         except Exception as e:
                             self.err(f"Failed to renew relay reservation: {e}. Node may become unreachable.")
-                            self.relay_reservation_expiry = None # Stop trying if it fails
+                            self.relay_reservation_expiry = None  # Stop trying if it fails
 
-                # taking to the inspector
+                # Taking to the inspector
                 if self.inspector_connected:
                     self.__send_to_inspector()
 
-                # stop conditions
+                # Stop conditions
                 if cycles is not None and ((self.clock.get_cycle() + 1) >= cycles):
                     break
                 if max_time is not None and self.clock.get_time(passed=True) >= max_time:
@@ -767,32 +775,32 @@ class Node:
 
         except KeyboardInterrupt:
             if self.cursor_was_hidden:
-                sys.stdout.write("\033[?25h")  # re-enabling cursor
+                sys.stdout.write("\033[?25h")  # Re-enabling cursor
             if cycles == 1:
-                raise KeyboardInterrupt  # node synch will catch this
+                raise KeyboardInterrupt  # Node synch will catch this
             else:
                 print("\nDetected Ctrl+C! Exiting gracefully...")
 
         except Exception as e:
             if self.cursor_was_hidden:
-                sys.stdout.write("\033[?25h")  # re-enabling cursor
+                sys.stdout.write("\033[?25h")  # Re-enabling cursor
             print(f"An error occurred: {e}")
             traceback.print_exc()
 
     def __handle_network_connections(self):
         """Manages the new connections and the lost ones."""
 
-        # getting fresh lists of existing world agents and world masters (from the rendezvous)
+        # Getting fresh lists of existing world agents and world masters (from the rendezvous)
         if self.node_type is Node.AGENT:
             self.out("Updating list of world agents and world masters by using data from the rendezvous")
             self.conn.set_world_agents_and_world_masters_lists_from_rendezvous()
 
-        # updating connection pools, getting back the lists (well, dictionaries) of new agents and lost agents
+        # Updating connection pools, getting back the lists (well, dictionaries) of new agents and lost agents
         new_peer_ids_by_pool, removed_peer_ids_by_pool = self.conn.update()
         if len(new_peer_ids_by_pool) > 0 or len(removed_peer_ids_by_pool) > 0:
             self.out("Current status of the pools, right after the update:\n" + str(self.conn))
 
-        # checking if some peers were removed
+        # Checking if some peers were removed
         an_agent_left_the_world = False
         removed_peers = False
         for pool_name, removed_peer_ids in removed_peer_ids_by_pool.items():
@@ -802,20 +810,20 @@ class Node:
                          "pool_name: " + pool_name + ", peer_id: " + peer_id + "...")
                 self.__purge(peer_id)
 
-                # checking if we removed an agent from this world
+                # Checking if we removed an agent from this world
                 if self.node_type is Node.WORLD and pool_name in self.conn.WORLD:
                     an_agent_left_the_world = True
 
-                # check if the world disconnected: in that case, disconnect all the other agents in the world and leave
+                # Check if the world disconnected: in that case, disconnect all the other agents in the world and leave
                 if self.node_type is Node.AGENT and pool_name in self.conn.WORLD_NODE:
                     self.leave_world()
 
-                # checking if the inspector disconnected
+                # Checking if the inspector disconnected
                 if peer_id == self.inspector_peer_id:
                     self.inspector_connected = False
                     self.inspector_peer_id = None
 
-        # handling newly connected peers
+        # Handling newly connected peers
         an_agent_joined_the_world = False
         added_peers = False
         for pool_name, new_peer_ids in new_peer_ids_by_pool.items():
@@ -823,52 +831,53 @@ class Node:
                 added_peers = True
                 self.out("Processing a newly connected peers, "
                          "pool_name: " + pool_name + ", peer_id: " + peer_id + "...")
-                # if this is a world node, it is time to tell the world object that a new agent is there
+
+                # If this is a world node, it is time to tell the world object that a new agent is there
                 if self.node_type is Node.WORLD and pool_name in self.conn.WORLD:
                     self.out("Not considering interviewing since this is a world and the considered peer is in the"
                              " world pools")
 
                     if peer_id in self.agents_to_interview:
 
-                        # getting the new agent profile
+                        # Getting the new agent profile
                         profile = self.agents_to_interview[peer_id][1]  # [time, profile]
 
-                        # adding the new agent to the world object
+                        # Adding the new agent to the world object
                         if not self.world.add_agent(peer_id=peer_id, profile=profile):
                             self.__purge(peer_id)
                             continue
 
-                        # clearing the profile from the interviews
-                        del self.agents_to_interview[peer_id]  # removing from the queue (private peer id)
+                        # Clearing the profile from the interviews
+                        del self.agents_to_interview[peer_id]  # Removing from the queue (private peer id)
                         an_agent_joined_the_world = True
 
-                        # replacing multi-address with what comes from the profile (there are more addresses there!)
+                        # Replacing multi-address with what comes from the profile (there are more addresses there!)
                         self.conn.set_addresses_in_peer_info(peer_id,
                                                              profile.get_dynamic_profile()['private_peer_addresses'])
                     else:
 
-                        # this agent tried to connect to a world "directly", without passing through the
+                        # This agent tried to connect to a world "directly", without passing through the
                         # public handshake
                         self.__purge(peer_id)
                         continue
 
-                    continue  # nothing else to do
+                    continue  # Nothing else to do
 
-                # both if this is an agent or a world, checks if the newly connected agent can be added or not to the
+                # Both if this is an agent or a world, checks if the newly connected agent can be added or not to the
                 # queue of agents to interview
                 if pool_name not in self.conn.OUTGOING:
 
-                    # trying to add to the queue
+                    # Trying to add to the queue
                     enqueued_for_interview = self.__interview_enqueue(peer_id)
 
-                    # if the agent is rejected at this stage, we disconnect from its peer
+                    # If the agent is rejected at this stage, we disconnect from its peer
                     if not enqueued_for_interview:
                         self.out(f"Not enqueued for interview, removing peer (disconnecting {peer_id})")
                         self.__purge(peer_id)
                     else:
                         self.out("Enqueued for interview")
 
-        # updating list of world agents & friends, if needed
+        # Updating list of world agents & friends, if needed
         # (it happens only if the node hosts a world, otherwise 'an_agent_joined_the_world' and
         # 'an_agent_left_the_world' are certainly False)
         world_agents_peer_infos = None
@@ -880,7 +889,7 @@ class Node:
             if enter_left or timeout or self.world.role_changed_by_world or self.world.received_address_update:
                 if enter_left or self.world.role_changed_by_world:
 
-                    # updating world-node profile with the summary of currently connected agents in the world
+                    # Updating world-node profile with the summary of currently connected agents in the world
                     world_agents_peer_infos = self.conn.get_all_connected_peer_infos(NodeConn.WORLD_AGENTS)
                     world_masters_peer_infos = self.conn.get_all_connected_peer_infos(NodeConn.WORLD_MASTERS)
 
@@ -893,7 +902,7 @@ class Node:
                                                                         len(world_masters_peer_infos))
                     self.profile.mark_change_in_connections()
 
-                # publish updated list of (all) world agents (i.e., both agents and masters)
+                # Publish updated list of (all) world agents (i.e., both agents and masters)
                 world_all_peer_infos = self.conn.get_all_connected_peer_infos(NodeConn.WORLD)
                 if not self.conn.publish(self.conn.p2p_world.peer_id, f"{self.conn.p2p_world.peer_id}::ps:rv",
                                          content_type=Msg.WORLD_AGENTS_LIST,
@@ -905,14 +914,14 @@ class Node:
                     self.out(f"Rendezvous messages just published "
                              f"(tag: {self.clock.get_cycle()}, peers: {len(world_all_peer_infos)})")
 
-                    # clearing
+                    # Clearing
                     self.world.role_changed_by_world = False
                     self.world.received_address_update = False
 
-        # updating list of node connections (being this a world or a plain agent)
+        # Updating list of node connections (being this a world or a plain agent)
         if added_peers or removed_peers:
 
-            # the following could have been already computed in the code above, let's reuse
+            # The following could have been already computed in the code above, let's reuse
             if world_agents_peer_infos is None:
                 world_agents_peer_infos = self.conn.get_all_connected_peer_infos(NodeConn.WORLD_AGENTS)
             if world_masters_peer_infos is None:
@@ -920,10 +929,10 @@ class Node:
             world_private_peer_id = self.conn.get_all_connected_peer_infos(NodeConn.WORLD_NODE)
             world_private_peer_id = world_private_peer_id[0]['id'] if len(world_private_peer_id) > 0 else None
 
-            # this is only computed here
+            # This is only computed here
             public_agents_peer_infos = self.conn.get_all_connected_peer_infos(NodeConn.PUBLIC)
 
-            # updating node profile with the summary of currently connected peers
+            # Updating node profile with the summary of currently connected peers
             dynamic_profile = self.profile.get_dynamic_profile()
             dynamic_profile['connections']['public_agents'] = public_agents_peer_infos
             dynamic_profile['connections']['world_agents'] = world_agents_peer_infos
@@ -933,14 +942,14 @@ class Node:
 
     def __handle_network_messages(self, interact_mode_opts=None):
 
-        # fetching all messages,
+        # Fetching all messages,
         public_messages = self.conn.get_messages(p2p_name=NodeConn.P2P_PUBLIC)
         world_messages = self.conn.get_messages(p2p_name=NodeConn.P2P_WORLD)
 
         self.out("Got " + str(len(public_messages)) + " messages from the public net")
         self.out("Got " + str(len(world_messages)) + " messages from the world/private net")
 
-        # process all messages
+        # Process all messages
         all_messages = public_messages + world_messages
         if len(all_messages) > 0:
             self.out("Processing all messages...")
@@ -953,14 +962,14 @@ class Node:
                 self.out("Processing world/private message " + str(i - len(public_messages) + 1)
                          + "/" + str(len(world_messages)) + ": " + str(msg))
 
-            # checking
+            # Checking
             assert isinstance(msg, Msg), "Expected message of type Msg, got {}".format(type(msg))
 
             # (A) received a profile
             if msg.content_type == Msg.PROFILE:
                 self.out("Received a profile...")
 
-                # checking the received profile
+                # Checking the received profile
                 # (recall that a profile sent through the world connection to the world node will be considered
                 # not acceptable)
                 profile = NodeProfile.from_dict(msg.content)
@@ -981,20 +990,20 @@ class Node:
                         self.__purge(msg.sender)
                     else:
 
-                        # if the node hosts a world and gets an expected and acceptable profile from the public network,
+                        # If the node hosts a world and gets an expected and acceptable profile from the public network,
                         # assigns a role and sends the world profile (which includes private peer ID) and role to the
                         # requester
                         if self.node_type is Node.WORLD and self.conn.is_public(peer_id=msg.sender):
-                            self.out("Sending world approval message, profile, and assigned role to " + msg.sender + \
+                            self.out("Sending world approval message, profile, and assigned role to " + msg.sender +
                                      " (and switching peer ID in the interview queue)...")
                             node_id = msg.piggyback
                             is_world_master = (self.world_masters_node_ids is not None and
                                                node_id in self.world_masters_node_ids)
 
-                            # assigning a role (the role is a bit-wise-interpretable integer)
+                            # Assigning a role (the role is a bit-wise-interpretable integer)
                             role = self.world.assign_role(profile=profile, is_world_master=is_world_master)
 
-                            # clearing temporary options (if any)
+                            # Clearing temporary options (if any)
                             dynamic_profile = profile.get_dynamic_profile()
                             keys_to_delete = [key for key in dynamic_profile if key.startswith('tmp_')]
                             for key in keys_to_delete:
@@ -1032,12 +1041,12 @@ class Node:
                                         role = role | Agent.ROLE_WORLD_AGENT
                                         self.conn.add_to_world_agents_list(private_peer_id, private_addr, role)
 
-                                    # removing from the queue of public interviews
+                                    # Removing from the queue of public interviews
                                     # and adding to the private ones (refreshing timer)
-                                    del self.agents_to_interview[msg.sender]  # removing from public queue
-                                    self.agents_to_interview[private_peer_id] = [self.clock.get_time(), profile]  # add
+                                    del self.agents_to_interview[msg.sender]  # Removing from public queue
+                                    self.agents_to_interview[private_peer_id] = [self.clock.get_time(), profile]  # Add
 
-                        # if the node is an agent, it is time to tell the agent object that a new agent is now known,
+                        # If the node is an agent, it is time to tell the agent object that a new agent is now known,
                         # and send our profile to the agent that asked for out contact
                         elif self.node_type is Node.AGENT:
                             self.out("Sending agent approval message and profile...")
@@ -1054,14 +1063,15 @@ class Node:
                                 if not self.agent.add_agent(peer_id=msg.sender, profile=profile):
                                     self.__purge(msg.sender)
                                 else:
-                                    # removing from the queues
-                                    del self.agents_to_interview[msg.sender]  # removing from queue
+
+                                    # Removing from the queues
+                                    del self.agents_to_interview[msg.sender]  # Removing from queue
 
             # (B) received a world-join-approval
             elif msg.content_type == Msg.WORLD_APPROVAL:
                 self.out("Received a world-join-approval message...")
 
-                # checking if it is the world we asked for
+                # Checking if it is the world we asked for
                 # moreover, it must be on the public network, and this must not be a world-node (of course)
                 # and you must not be already in another world
                 if (not self.conn.is_public(peer_id=msg.sender) or self.node_type is Node.WORLD
@@ -1077,7 +1087,7 @@ class Node:
                         self.__purge(msg.sender)
                     else:
 
-                        # getting world profile (includes private addresses) and connecting to the world (privately)
+                        # Getting world profile (includes private addresses) and connecting to the world (privately)
                         self.__join_world(profile=NodeProfile.from_dict(msg.content['world_profile']),
                                           role=msg.content['your_role'], default_behav=msg.content['default_behav'],
                                           agent_actions=msg.content['agent_actions'],
@@ -1087,13 +1097,13 @@ class Node:
             elif msg.content_type == Msg.AGENT_APPROVAL:
                 self.out("Received an agent-connect-approval message...")
 
-                # checking if it is the agent we asked for
+                # Checking if it is the agent we asked for
                 if msg.sender not in self.agents_expected_to_send_ack:
                     self.err("Unexpected agent-connect approval, removing (disconnecting) " + msg.sender)
                     self.__purge(msg.sender)
                 else:
 
-                    # adding the agent
+                    # Adding the agent
                     self.__join_agent(profile=NodeProfile.from_dict(msg.content['my_profile']),
                                       peer_id=msg.sender)
 
@@ -1101,7 +1111,7 @@ class Node:
             elif msg.content_type == Msg.PROFILE_REQUEST:
                 self.out("Received a profile request...")
 
-                # if this is a world-node, it expects profile requests only on the public network
+                # If this is a world-node, it expects profile requests only on the public network
                 # if this is not a world or not, we only send profile to agents who are involved in the handshake
                 if ((self.node_type is Node.WORLD and not self.conn.is_public(peer_id=msg.sender)) or
                         (msg.sender not in self.agents_expected_to_send_ack)):
@@ -1109,7 +1119,7 @@ class Node:
                     self.__purge(msg.sender)
                 else:
 
-                    # if a preference was defined, we temporarily add it to the profile
+                    # If a preference was defined, we temporarily add it to the profile
                     if (msg.sender == self.joining_world_info["world_public_peer_id"] and
                             self.joining_world_info["options"] is not None and
                             len(self.joining_world_info["options"]) > 0):
@@ -1120,7 +1130,7 @@ class Node:
                     else:
                         my_profile = self.profile.get_all_profile()
 
-                    # sending the profile
+                    # Sending the profile
                     self.out("Sending profile")
                     if not self.conn.send(msg.sender, channel_trail=None,
                                           content=my_profile,
@@ -1135,7 +1145,8 @@ class Node:
                 if self.node_type is Node.WORLD and msg.sender in self.world.all_agents:
                     all_addresses = msg.content.get('addresses')
                     if all_addresses and isinstance(all_addresses, list):
-                        # update the address both in the connection and in the profile
+
+                        # Update the address both in the connection and in the profile
                         self.conn.set_addresses_in_peer_info(msg.sender, all_addresses)
                         self.world.set_addresses_in_profile(msg.sender, all_addresses)
                         self.out(f"Waiting rendezvous publish after address update from {msg.sender}")
@@ -1144,27 +1155,27 @@ class Node:
             elif msg.content_type == Msg.STREAM_SAMPLE:
                 self.out("Received a stream sample...")
 
-                if self.node_type is Node.AGENT:  # handling the received samples
+                if self.node_type is Node.AGENT:  # Handling the received samples
                     self.agent.get_stream_sample(net_hash=msg.channel, sample_dict=msg.content)
 
-                    # printing messages to screen, if needed (useful when chatting with lone wolves)
+                    # Printing messages to screen, if needed (useful when chatting with lone wolves)
                     if interact_mode_opts is not None and "stdout" in interact_mode_opts:
                         net_hash = DataProps.normalize_net_hash(msg.channel)
                         if net_hash in self.agent.known_streams:
                             stream_dict = self.agent.known_streams[net_hash]
-                            sys.stdout = interact_mode_opts["stdout"][0]  # output on
+                            sys.stdout = interact_mode_opts["stdout"][0]  # Output on
                             for name, stream_obj in stream_dict.items():
                                 if stream_obj.props.is_text():
-                                    msg = stream_obj.get(requested_by="print")  # getting message
-                                    print(f"\n『 {msg} 』")  # printing to screen
+                                    msg = stream_obj.get(requested_by="print")  # Getting message
+                                    print(f"\n『 {msg} 』")  # Printing to screen
                                 if stream_obj.props.is_img():
-                                    img = stream_obj.get(requested_by="print")  # getting image
+                                    img = stream_obj.get(requested_by="print")  # Getting image
                                     filename = "wolf_img.png"
                                     img.save(filename)
                                     msg = f"(saved image to {filename})"
-                                    print(f"\n『 {msg} 』")  # printing to screen
+                                    print(f"\n『 {msg} 』")  # Printing to screen
                             print("\n👉 ", end="")
-                            sys.stdout = interact_mode_opts["stdout"][1]  # output off
+                            sys.stdout = interact_mode_opts["stdout"][1]  # Output off
 
                 elif self.node_type is Node.WORLD:
                     self.err("Unexpected stream samples received by this world node, sent by: " + msg.sender)
@@ -1214,13 +1225,13 @@ class Node:
                 self.out("Received a request to alter the HSM...")
 
                 if self.node_type is Node.AGENT:
-                    if msg.sender in self.agent.world_masters:  # this must be coherent with what we do in set_role
+                    if msg.sender in self.agent.world_masters:  # This must be coherent with what we do in set_role
                         ret = getattr(self.agent.behav, msg.content['method'])(*msg.content['args'])
                         if not ret:
                             self.err(f"Cannot run HSM action named {msg.content['method']} with args "
                                      f"{msg.content['args']}")
                     else:
-                        self.err("Only world-master can alter HSMs of other agents: " + msg.sender)  # no need to purge
+                        self.err("Only world-master can alter HSMs of other agents: " + msg.sender)  # No need to purge
 
                 elif self.node_type is Node.WORLD:
                     self.err("Unexpected request to alter the HSM received by this world node, sent by: " + msg.sender)
@@ -1235,10 +1246,10 @@ class Node:
             elif msg.content_type == Msg.GET_CV_FROM_ROOT:
                 self.out("Received a notification to re-download the CV...")
 
-                # downloading CV
+                # Downloading CV
                 self.get_cv()
 
-                # re-downloading token (it will include the new CV hash)
+                # Re-downloading token (it will include the new CV hash)
                 self.get_node_token(peer_ids=[self.get_public_peer_id(), self.get_world_peer_id()])
 
             # (K) got one or more badge suggestions
@@ -1248,8 +1259,8 @@ class Node:
                 if self.node_type is Node.WORLD:
                     for badge_dict in msg.content:
 
-                        # right now, we accept all the suggestions
-                        self.world.add_badge(**badge_dict)  # adding to the list of badges
+                        # Right now, we accept all the suggestions
+                        self.world.add_badge(**badge_dict)  # Adding to the list of badges
                 elif self.node_type is Node.AGENT:
                     self.err("Receiving badge suggestions is not expected for an agent node")
 
@@ -1258,6 +1269,7 @@ class Node:
                 self.out("Received an inspector-activation message...")
 
                 if msg.piggyback == self.profile.get_static_profile()['inspector_node_id']:
+
                     # TODO reactivate these
                     # self.inspector_connected = True
                     # self.inspector_peer_id = msg.sender
@@ -1289,19 +1301,21 @@ class Node:
         world_public_peer_id = profile.get_dynamic_profile()['peer_id']
         self.out(f"Actually joining world with addresses={addresses}, role will be {role}")
 
-        # connecting to the world (private)
+        # Connecting to the world (private)
         # notice that we also communicate the world node private peer ID to the connection manager,
         # to avoid filtering it out when updating pools
         peer_id = self.ask_to_get_in_touch(addresses, public=False, before_updating_pools_fcn=self.conn.set_world)
 
         if peer_id is not None:
+
             # Relay reservation logic for non-public peers
             if not self.conn.p2p_world.is_public and self.conn.p2p_world.relay_is_enabled:
                 self.out("Node is not publicly reachable. Attempting to reserve a slot on the world's private network.")
                 try:
                     expiry_utc = self.conn.p2p_world.reserve_on_relay(peer_id)
                     self.relay_reservation_expiry = datetime.fromisoformat(expiry_utc.replace('Z', '+00:00'))
-                    self.out(f"Reserved relay slot. Expires at {self.relay_reservation_expiry.strftime('%Y-%m-%d %H:%M:%S')} UTC")
+                    self.out(f"Reserved relay slot. Expires at "
+                             f"{self.relay_reservation_expiry.strftime('%Y-%m-%d %H:%M:%S')} UTC")
 
                     self.out("Fetching updated address list from transport layer...")
                     complete_private_addrs = self.conn.p2p_world.get_node_addresses()
@@ -1318,21 +1332,21 @@ class Node:
                 except Exception as e:
                     self.err(f"An error occurred during relay reservation: {e}.")
 
-            # subscribing to the world rendezvous topic, from which we will get fresh information
+            # Subscribing to the world rendezvous topic, from which we will get fresh information
             # about the world agents and masters
             self.out("Subscribing to the world-members topic...")
-            if not self.conn.subscribe(peer_id, channel=f"{peer_id}::ps:rv"):  # special rendezvous (ps:rv)
-                self.leave(peer_id)  # if subscribing fails, we quit everything (safer)
+            if not self.conn.subscribe(peer_id, channel=f"{peer_id}::ps:rv"):  # Special rendezvous (ps:rv)
+                self.leave(peer_id)  # If subscribing fails, we quit everything (safer)
                 return False
 
-            # killing the public connection to the world node
+            # Killing the public connection to the world node
             self.out("Disconnecting from the public world network (since we joined the private one)")
             self.__purge(world_public_peer_id)
 
-            # removing the private world peer id from the list of connected-but-not-managed peer
+            # Removing the private world peer id from the list of connected-but-not-managed peer
             del self.agents_expected_to_send_ack[peer_id]
 
-            # subscribing to all the other world topics, from which we will get fresh information
+            # Subscribing to all the other world topics, from which we will get fresh information
             # about the streams
             self.out("Subscribing to the world-streams topics...")
             dynamic_profile = profile.get_dynamic_profile()
@@ -1344,30 +1358,30 @@ class Node:
                 self.leave(peer_id)
                 return False
 
-            # setting actions
+            # Setting actions
             if agent_actions is not None and len(agent_actions) > 0:
 
-                # checking code
+                # Checking code
                 if not Node.__analyze_code(agent_actions):
                     self.err("Invalid agent actions code (syntax errors or unsafe code) was provided by the world, "
                              "blocking the join operation")
                     return False
 
-                # creating a new agent with the received actions
+                # Creating a new agent with the received actions
                 mod = types.ModuleType("dynamic_module")
                 exec(agent_actions, mod.__dict__)
                 sys.modules["dynamic_module"] = mod
                 new_agent = mod.WAgent(proc=None)
 
-                # cloning attributes of the existing agent
+                # Cloning attributes of the existing agent
                 for key, value in self.agent.__dict__.items():
                     if hasattr(new_agent, key):
                         setattr(new_agent, key, value)
 
-                # telling the FSM that actions are related to this new agent
+                # Telling the FSM that actions are related to this new agent
                 new_agent.behav.set_actionable(new_agent)
 
-                # updating node-level references
+                # Updating node-level references
                 old_agent = self.agent
                 self.agent = new_agent
                 self.hosted = new_agent
@@ -1376,27 +1390,30 @@ class Node:
             else:
                 old_agent = self.agent
 
-            # setting the assigned role and default behavior (do it after having recreated the new agent object)
+            # Setting the assigned role and default behavior (do it after having recreated the new agent object)
             self.agent.accept_new_role(role, default_behav)
 
-            # updating wildcards
+            # Updating wildcards
             self.agent.behav.update_wildcard("<agent>", f"{self.get_world_peer_id()}")
             self.agent.behav.update_wildcard("<world>", f"{peer_id}")
             self.agent.behav.add_wildcards(old_agent.behav_wildcards)
 
-            # telling the connection manager the info needed to discriminate peers (getting them from the world profile)
+            # Telling the connection manager the info needed to discriminate peers (getting them from the world profile)
             # notice that the world node private ID was already told to the connection manager (see a few lines above)
-            self.out(f"Rendezvous tag received with profile: {rendezvous_tag} (in conn pool: {self.conn.rendezvous_tag})")
+            self.out(f"Rendezvous tag received with profile: {rendezvous_tag} "
+                     f"(in conn pool: {self.conn.rendezvous_tag})")
             if self.conn.rendezvous_tag < rendezvous_tag:
                 self.conn.rendezvous_tag = rendezvous_tag
-                self.out(f"Rendezvous from profile (tag: {rendezvous_tag}), "
-                         f"world masters: {len(dynamic_profile['world_summary']['world_masters']) if dynamic_profile['world_summary']['world_masters'] is not None else 'none'}")
-                self.out(f"Rendezvous from profile (tag: {rendezvous_tag}), "
-                         f"world agents: {len(dynamic_profile['world_summary']['world_agents']) if dynamic_profile['world_summary']['world_agents'] is not None else 'none'}")
+                num_world_masters = len(dynamic_profile['world_summary']['world_masters']) \
+                    if dynamic_profile['world_summary']['world_masters'] is not None else 'none'
+                num_world_agents = len(dynamic_profile['world_summary']['world_agents']) \
+                    if dynamic_profile['world_summary']['world_agents'] is not None else 'none'
+                self.out(f"Rendezvous from profile (tag: {rendezvous_tag}), world masters: {num_world_masters}")
+                self.out(f"Rendezvous from profile (tag: {rendezvous_tag}), world agents: {num_world_agents}")
                 self.conn.set_world_masters_list(dynamic_profile['world_summary']['world_masters'])
                 self.conn.set_world_agents_list(dynamic_profile['world_summary']['world_agents'])
 
-            # updating our profile to set the world we are in
+            # Updating our profile to set the world we are in
             self.profile.get_dynamic_profile()['connections']['world_peer_id'] = peer_id
             self.profile.mark_change_in_connections()
 
@@ -1417,14 +1434,14 @@ class Node:
     def __interview_enqueue(self, peer_id: str) -> bool:
         """Add a new agent to the queue of agent to interview."""
 
-        # if the peer_id is not in the same world were we are, we early stop the interview process
+        # If the peer_id is not in the same world were we are, we early stop the interview process
         if (not self.conn.is_public(peer_id) and peer_id not in self.conn.world_agents_list and
                 peer_id not in self.conn.world_masters_list and peer_id != self.conn.world_node_peer_id):
             self.out(f"Interview failed: "
                      f"peer ID {peer_id} is not in the world agents/masters list, and it is not the world node")
             return False
 
-        # ask for the profile
+        # Ask for the profile
         ret = self.conn.send(peer_id, channel_trail=None,
                              content_type=Msg.PROFILE_REQUEST, content=None)
         if not ret:
@@ -1432,14 +1449,14 @@ class Node:
                      f"unable to send a profile request to peer ID {peer_id}")
             return False
 
-        # put the agent in the list of agents to interview
-        self.agents_to_interview[peer_id] = [self.clock.get_time(), None]  # peer ID -> [time, profile]; no profile yet
+        # Put the agent in the list of agents to interview
+        self.agents_to_interview[peer_id] = [self.clock.get_time(), None]  # Peer ID -> [time, profile]; no profile yet
         return True
 
     def __interview_check_profile(self, peer_id: str, node_id: str, profile: NodeProfile) -> bool:
         """Checking whether a profile can be accepted or should be discarded."""
 
-        # if the node ID was not on the list of allowed ones (if the list exists), then stop it
+        # If the node ID was not on the list of allowed ones (if the list exists), then stop it
         # notice that we do not get the node ID from the profile, but from outside (it comes from the token, so safe)
         if ((self.allowed_node_ids is not None and node_id not in self.allowed_node_ids) or
                 (peer_id not in self.agents_to_interview)):
@@ -1447,26 +1464,27 @@ class Node:
             return False
         else:
 
-            # getting the parts of profile needed
+            # Getting the parts of profile needed
             eval_static_profile = profile.get_static_profile()
             eval_dynamic_profile = profile.get_dynamic_profile()
             my_dynamic_profile = self.profile.get_dynamic_profile()
 
-            # checking if CV was altered
+            # Checking if CV was altered
             cv_hash = self.conn.get_cv_hash_from_last_token(peer_id)
             sanity_ok, pairs_of_hashes = profile.verify_cv_hash(cv_hash)
             if not sanity_ok:
                 self.out(f"The CV in the profile of f{peer_id} failed the sanity check {pairs_of_hashes},"
                          f" {profile.get_cv()}")
                 self.out("WARNING: TEMPORARILY IGNORING THIS FAILED CV SANITY CHECK - REACTIVATE IT - TODO")
-                # return False  # TODO REACTIVATE THIS
 
-            # determining type of agent, checking the connection pools
+                # Return False  # TODO REACTIVATE THIS
+
+            # Determining type of agent, checking the connection pools
             role = self.conn.get_role(peer_id)
 
             if role & 1 == 0:
 
-                # ensuring that the interviewed agent is out of every world
+                # Ensuring that the interviewed agent is out of every world
                 # (if it were in the same world in which we are, it would connect in a private manner) and
                 # possibly fulfilling the optional constraint of accepting only certified agent,
                 # then asking the hosted entity for additional custom evaluation
@@ -1481,7 +1499,7 @@ class Node:
 
                 if self.node_type is Node.AGENT:
 
-                    # ensuring that the interviewed agent is in the same world where we are and
+                    # Ensuring that the interviewed agent is in the same world where we are and
                     # possibly fulfilling the optional constraint of accepting only certified agent
                     if (eval_dynamic_profile['connections']['world_peer_id'] is not None and
                             eval_dynamic_profile['connections']['world_peer_id'] ==
@@ -1496,7 +1514,7 @@ class Node:
 
                 elif self.node_type is Node.WORLD:
 
-                    # if this node hosts a world, we do not expect to interview agents in the private world connection,
+                    # If this node hosts a world, we do not expect to interview agents in the private world connection,
                     # so something went wrong here, let's reject it
                     self.out(f"Peer f{peer_id} sent a profile in the private network, unexpected")
                     return False
@@ -1508,14 +1526,14 @@ class Node:
         agents_to_remove = []
         for peer_id, (profile_time, profile) in self.agents_to_interview.items():
 
-            # checking timeout
+            # Checking timeout
             if (cur_time - profile_time) > self.interview_timeout:
                 self.out("Removing (disconnecting) due to timeout in interview queue: " + peer_id)
                 agents_to_remove.append(peer_id)
 
-        # updating
+        # Updating
         for peer_id in agents_to_remove:
-            self.__purge(peer_id)  # this will also remove the peer from the queue of peers to interview
+            self.__purge(peer_id)  # This will also remove the peer from the queue of peers to interview
 
     def __connected_without_ack_clean(self):
         """Purging outdated connected peers that never replied to our profile."""
@@ -1524,24 +1542,24 @@ class Node:
         agents_to_remove = []
         for peer_id, connection_time in self.agents_expected_to_send_ack.items():
 
-            # checking timeout
+            # Checking timeout
             if (cur_time - connection_time) > self.connect_without_ack_timeout:
                 self.out("Removing (disconnecting) due to timeout in the connected-without-ack queue: " + peer_id)
                 agents_to_remove.append(peer_id)
 
-        # updating
+        # Updating
         for peer_id in agents_to_remove:
-            self.__purge(peer_id)  # this will also remove the peer from the queue of in the connected-without-ack queue
+            self.__purge(peer_id)  # This will also remove the peer from the queue of in the connected-without-ack queue
 
     def __purge(self, peer_id: str):
         self.hosted.remove_agent(peer_id)
         self.conn.remove(peer_id)
 
-        # clearing also the contents of the list of interviews
+        # Clearing also the contents of the list of interviews
         if peer_id in self.agents_to_interview:
             del self.agents_to_interview[peer_id]
 
-        # clearing the temporary list of connected agents
+        # Clearing the temporary list of connected agents
         if peer_id in self.agents_expected_to_send_ack:
             del self.agents_expected_to_send_ack[peer_id]
 
@@ -1552,7 +1570,7 @@ class Node:
 
         try:
             api = self.root_endpoint + ("/" if self.root_endpoint[-1] != "/" and api[0] != "/" else "") + api
-            payload["node_token"] = self.node_token  # adding token to let the server verify
+            payload["node_token"] = self.node_token  # Adding token to let the server verify
             response = requests.post(api,
                                      json=payload,
                                      headers={"Content-Type": "application/json"})
@@ -1581,14 +1599,14 @@ class Node:
 
         def is_suspicious(ast_node):
 
-            # detect function calls
+            # Detect function calls
             if isinstance(ast_node, ast.Call):
                 if isinstance(ast_node.func, ast.Name):
                     return ast_node.func.id in dangerous_functions
                 elif isinstance(ast_node.func, ast.Attribute):
                     return ast_node.func.attr in dangerous_functions
 
-            # detect imports
+            # Detect imports
             if isinstance(ast_node, (ast.Import, ast.ImportFrom)):
                 for alias in ast_node.names:
                     if alias.name.split('.')[0] in dangerous_modules:
@@ -1629,20 +1647,20 @@ class Node:
 
     def __send_to_inspector(self):
 
-        # collecting console
+        # Collecting console
         console = {'output_messages': self._output_messages,
                    'output_messages_count': self._output_messages_count,
                    'output_messages_last_pos': self._output_messages_last_pos,
                    'output_messages_ids': self._output_messages_ids}
 
-        # collecting the HSM
+        # Collecting the HSM
         if self.__inspector_cache['behav'] != self.hosted.behav:
             self.__inspector_cache['behav'] = self.hosted.behav
             behav = str(self.hosted.behav.to_graphviz().source)
         else:
             behav = None
 
-        # collecting status of the HSM
+        # Collecting status of the HSM
         if self.hosted.behav is not None:
             behav = self.hosted.behav
             state = behav.get_state().id if behav.get_state() is not None else None
@@ -1653,37 +1671,37 @@ class Node:
         else:
             behav_status = None
 
-        # collecting known agents
+        # Collecting known agents
         if self.__inspector_cache['all_agents_count'] != len(self.hosted.all_agents):
             self.__inspector_cache['all_agents_count'] = len(self.hosted.all_agents)
             all_agents_profiles = self.hosted.all_agents
         else:
             all_agents_profiles = None
 
-        # collecting known streams info
+        # Collecting known streams info
         if self.__inspector_cache['known_streams_count'] != len(self.hosted.known_streams):
             self.__inspector_cache['known_streams_count'] = len(self.hosted.known_streams)
             known_streams_props = {k: v.get_props() for k, v in self.hosted.known_streams.items()}
         else:
             known_streams_props = None
 
-        # packing console, HSM status, and possibly HSM
+        # Packing console, HSM status, and possibly HSM
         console_behav_status_and_behav = {'console': console,
                                           'behav': behav,
                                           'behav_status': behav_status,
                                           'all_agents_profiles': all_agents_profiles,
                                           'known_streams_props': known_streams_props}
 
-        # sending console, HSM status, and possibly HSM to the inspector
+        # Sending console, HSM status, and possibly HSM to the inspector
         if not self.conn.send(self.inspector_peer_id, channel_trail=None,
                               content_type=Msg.CONSOLE_AND_BEHAV_STATUS,
                               content=console_behav_status_and_behav):
             self.err("Failed to send console and behaviour data to the inspector")
 
-        # sending stream data (not pubsub) to the inspector
+        # Sending stream data (not pubsub) to the inspector
         for net_hash, streams_dict in self.hosted.known_streams.items():
 
-            # preparing content to send
+            # Preparing content to send
             something_to_send = False
             content = {name: {} for name in streams_dict.keys()}
             for name, stream in streams_dict.items():
@@ -1695,13 +1713,13 @@ class Node:
                 self.hosted.deb(f"[__send_to_inspector] Preparing to send stream samples from {net_hash}, {name}")
                 content[name] = {'data': data, 'data_tag': stream.get_tag(), 'data_uuid': stream.get_uuid()}
 
-            # checking if there is something valid in this group of streams to send to inspector
+            # Checking if there is something valid in this group of streams to send to inspector
             if not something_to_send:
                 self.hosted.deb(f"[__send_to_inspector] No stream samples to send to inspector for {net_hash}, "
                                 f"all internal streams returned None")
                 continue
 
-            # sending to inspector
+            # Sending to inspector
             self.hosted.deb(f"[__send_to_inspector] Sending samples of {net_hash} by direct message, to inspector")
             name_or_group = DataProps.name_or_group_from_net_hash(net_hash)
             if not self.conn.send(self.inspector_peer_id, channel_trail=name_or_group,
@@ -1715,7 +1733,7 @@ class NodeSynchronizer:
     def __init__(self):
         self.nodes = []
         self.agent_nodes = {}
-        self.world_node = None  # added to allow get_console() to access the world node from server.py (synch only)
+        self.world_node = None  # Added to allow get_console() to access the world node from server.py (synch only)
         self.streams = {}
         self.world = None
         self.world_masters = set()
@@ -1725,15 +1743,15 @@ class NodeSynchronizer:
         self.synch_cycle = -1
         self.synch_cycles = -1
 
-        # visualization-related attributes
+        # Visualization-related attributes
         self.using_server = False
         self.server_checkpoints = None
         self.skip_clear_for = 0
-        self.step_event = None  # event that triggers a new step (manipulated by the server)
-        self.wait_event = None  # event that triggers a new "wait-for-step-event" case (manipulated by the server)
+        self.step_event = None  # Event that triggers a new step (manipulated by the server)
+        self.wait_event = None  # Event that triggers a new "wait-for-step-event" case (manipulated by the server)
         self.next_checkpoint = 0
         self.server_checkpoints = None
-        self.gap = 0.  # seconds
+        self.gap = 0.  # Seconds
 
     def add_node(self, node: Node):
         self.nodes.append(node)
@@ -1757,19 +1775,19 @@ class NodeSynchronizer:
     def run(self, synch_cycles: int | None = None):
         assert self.world is not None, "Missing world node"
 
-        # external events
+        # External events
         if self.using_server:
             self.step_event = threading.Event()
             self.wait_event = threading.Event()
 
-        # main loop
+        # Main loop
         self.synch_cycles = synch_cycles
         self.synch_cycle = 0
 
         try:
             while True:
 
-                # in server mode, we wait for an external event to go ahead (step_event.set())
+                # In server mode, we wait for an external event to go ahead (step_event.set())
                 if self.using_server:
                     self.wait_event.set()
                     self.step_event.wait()
@@ -1796,7 +1814,7 @@ class NodeSynchronizer:
                             print(f"[DEBUG NODE SYNCHRONIZER] {node.agent.get_name()} "
                                   f"state: {node.agent.behav.get_state_name()}")
 
-                # matching checkpoints
+                # Matching checkpoints
                 if self.server_checkpoints is not None and self.server_checkpoints["current"] >= 0:
                     self.server_checkpoints["matched"] = -1
                     checkpoint = self.server_checkpoints["checkpoints"][self.server_checkpoints["current"]]
@@ -1814,24 +1832,24 @@ class NodeSynchronizer:
                             self.server_checkpoints["matched"] = self.server_checkpoints["current"]
                             self.server_checkpoints["current"] += 1
                             if self.server_checkpoints["current"] >= len(self.server_checkpoints["checkpoints"]):
-                                self.server_checkpoints["current"] = -1  # this means: no more checkpoints
+                                self.server_checkpoints["current"] = -1  # This means: no more checkpoints
                         else:
                             checkpoint["skip"] -= 1
                             if checkpoint["skip"] <= 0:
                                 self.server_checkpoints["current"] += 1
                                 if self.server_checkpoints["current"] >= len(self.server_checkpoints["checkpoints"]):
-                                    self.server_checkpoints["current"] = -1  # this means: no more checkpoints
+                                    self.server_checkpoints["current"] = -1  # This means: no more checkpoints
 
-                # in step mode, we clear the external event to be able to wait for a new one
+                # In step mode, we clear the external event to be able to wait for a new one
                 if self.using_server:
                     if self.skip_clear_for == 0:
                         self.step_event.clear()
-                    elif self.skip_clear_for == -2:  # infinite play
+                    elif self.skip_clear_for == -2:  # Infinite play
                         pass
-                    elif self.skip_clear_for == -1:  # play until next state
+                    elif self.skip_clear_for == -1:  # Play until next state
                         if state_changed:
                             self.step_event.clear()
-                    elif self.skip_clear_for == -3:  # play until next checkpoint:
+                    elif self.skip_clear_for == -3:  # Play until next checkpoint:
                         if self.server_checkpoints["matched"] >= 0:
                             self.step_event.clear()
                     else:
@@ -1839,7 +1857,7 @@ class NodeSynchronizer:
 
                 self.synch_cycle += 1
 
-                # stop condition on the number of cycles
+                # Stop condition on the number of cycles
                 if self.synch_cycles is not None and self.synch_cycle == self.synch_cycles:
                     break
         except KeyboardInterrupt:

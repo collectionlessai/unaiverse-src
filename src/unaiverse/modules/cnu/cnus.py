@@ -63,17 +63,17 @@ class CNUs(torch.nn.Module):
         self.upd_k = upd_k
         self.beta_k = beta_k
         self.psi_fn = psi_fn
-        self.debug = False  # temporarily used
+        self.debug = False  # Temporarily used
         self.reset_memories = True
 
-        # creating keys (self.K) and memories (self.M)
+        # Creating keys (self.K) and memories (self.M)
         self.M = torch.nn.Parameter(torch.empty((self.q, self.m, self.u), dtype=torch.float32))
         if self.upd_k == "ad_hoc_WTA":
             self.register_buffer('K', torch.zeros((self.q, self.m, self.d)))
         else:
             self.K = torch.nn.Parameter(torch.empty((self.q, self.m, self.d), dtype=torch.float32))
 
-        # buffers for ad_hoc_WTA key updates (average usefulness register buffer "mu" and age "eta")
+        # Buffers for ad_hoc_WTA key updates (average usefulness register buffer "mu" and age "eta")
         if self.upd_k == "ad_hoc_WTA":
             self.register_buffer('mu', torch.zeros(self.q, m, dtype=torch.float))
             self.register_buffer('eta', torch.ones((self.q, m), dtype=torch.float) * self.tau_eta)
@@ -83,10 +83,10 @@ class CNUs(torch.nn.Module):
             self.mu = None
             self.eta = None
 
-        # scrambling stats
+        # Scrambling stats
         self.register_buffer('scrambling_count', torch.zeros(self.q, dtype=torch.long))
 
-        # initializing memories and keys
+        # Initializing memories and keys
         self.reset_parameters()
 
     def reset_parameters(self):
@@ -97,49 +97,50 @@ class CNUs(torch.nn.Module):
 
     def compute_weights(self, x):
 
-        # shortcuts (notice that "self.delta" is called "k" in shortcuts, while "self.delta-1" is called "z")
+        # Shortcuts (notice that "self.delta" is called "k" in shortcuts, while "self.delta-1" is called "z")
         q, m, u, d, k = self.q, self.m, self.u, self.d, self.delta
         b = x.shape[0]
         M_qmu = self.M
 
-        # ensuring keys are normalized (not needed with ad_hoc_WTA updates)
+        # Ensuring keys are normalized (not needed with ad_hoc_WTA updates)
         if self.upd_k != 'ad_hoc_WTA':
             self.__normalize_keys()
         else:
-            x = x.detach()  # in ad-hoc WTA, no gradient is propagated to the layers below through key-matching
+            x = x.detach()  # In ad-hoc WTA, no gradient is propagated to the layers below through key-matching
 
-        # mapping the input to the key space using the psi function
+        # Mapping the input to the key space using the psi function
         x_bd = psi(x, self.psi_fn, key_size=d, normalize=True)
 
-        # finding the top responses and indices for the attention procedure
+        # Finding the top responses and indices for the attention procedure
         top_responses_bqk, top_indices_bqk = self.__top_k_attention(x_bd)
 
-        # probabilities
+        # Probabilities
         top_alpha_bqk = torch.softmax((self.gamma_alpha / math.sqrt(d)) * top_responses_bqk, dim=2)
 
         if self.debug:
-            # getting the top-1 indices for the current mini-batch
+
+            # Getting the top-1 indices for the current mini-batch
             top1_indices_qb = top_indices_bqk[..., 0].t()
             self.key_counter.data.scatter_add_(dim=1,
                                                index=top1_indices_qb,
                                                src=torch.ones_like(top1_indices_qb, dtype=self.key_counter.dtype))
 
-        # updating keys with the ad-hoc scheme (also refreshing top-stuff: responses, indices, alpha)
+        # Updating keys with the ad-hoc scheme (also refreshing top-stuff: responses, indices, alpha)
         if self.training and self.upd_k == 'ad_hoc_WTA':
             top_responses_bqk, top_indices_bqk, top_alpha_bqk = \
                 self.__update_keys_and_counters(x_bd, top_responses_bqk, top_indices_bqk, top_alpha_bqk)
 
-        # reading memories and blending them
+        # Reading memories and blending them
         if self.upd_m is None:
 
-            # preparing to read memory units and to blend them
+            # Preparing to read memory units and to blend them
             M_exp_bqmu = M_qmu.view(1, q, m, u).expand(b, q, m, u)
 
-            # getting top memory units
+            # Getting top memory units
             top_M_bqku = torch.gather(M_exp_bqmu, dim=2,
                                       index=top_indices_bqk.view(b, q, k, 1).expand(b, q, k, u))
 
-            # mixing memory units by attention scores
+            # Mixing memory units by attention scores
             # -> top_alpha_bqk: [b,q,k], that we un-squeeze to [b,q,1,k]
             # -> top_M_bqku: [b,q,k,u]
             # -> W_bqu: matmul([(b,q),1,k], [(b,q),k,u]) = [b,q,1,u] that we squeeze to [b,q,u]
@@ -147,38 +148,38 @@ class CNUs(torch.nn.Module):
 
         elif self.upd_m == 'WTA':
 
-            # preparing to read memory units and to blend them
+            # Preparing to read memory units and to blend them
             M_exp_bqmu = M_qmu.view(1, q, m, u).expand(b, q, m, u)
 
-            # dealing with top-1 stuff
+            # Dealing with top-1 stuff
             top1_M_exp_bq1u = torch.gather(M_exp_bqmu, dim=2,
                                            index=top_indices_bqk[..., 0:1].view(b, q, 1, 1).expand(b, q, 1, u))
 
-            # mixing memory units by attention scores
+            # Mixing memory units by attention scores
             # -> top1_alpha_bqk: [b,q,k], that we select to [b,k,1] un-squeeze to [b,q,1,1]
             # -> top1_M_exp_bq1u: [b,q,1,u]
             # -> W_bqu: [b,q,1,1] * [b,q,1,u] = [b,q,1,u] that we squeeze to [b,q,u]
             top1_W_bqu = (top_alpha_bqk[..., 0:1].view(b, q, 1, 1) * top1_M_exp_bq1u).squeeze(2)
 
-            # dealing with top-2-and-following stuff
+            # Dealing with top-2-and-following stuff
             top2on_M_exp_bqzu = torch.gather(M_exp_bqmu.detach(), dim=2,
                                              index=top_indices_bqk[..., 1:].view(b, q, k-1, 1).expand(b, q, k-1, u))
             top2on_alpha_bqz = top_alpha_bqk[:, :, 1:]
             if self.upd_k == 'grad_WTA':
                 top2on_alpha_bqz = top2on_alpha_bqz.detach()
 
-            # mixing memory units by attention scores
+            # Mixing memory units by attention scores
             # -> top2on_alpha_bqz: [b,q,k-1], that we un-squeeze to [b,q,1,k-1]
             # -> top2on_M_exp_bqzu: [b,q,k-1,u]
             # -> W_bqu: matmul([(b,q),1,k-1], [(b,q),k-1,u]) = [b,q,1,u] that we squeeze to [b,q,u]
             top2on_W_bqu = torch.matmul(top2on_alpha_bqz.view(b, q, 1, k-1), top2on_M_exp_bqzu).squeeze(2)
 
-            # merging top1 and top-2-and-following stuff
+            # Merging top1 and top-2-and-following stuff
             W_bqu = top1_W_bqu + top2on_W_bqu
 
         else:
 
-            # what is going on?
+            # What is going on?
             raise NotImplementedError
 
         return W_bqu
@@ -208,7 +209,8 @@ class CNUs(torch.nn.Module):
             self.key_counter.data = torch.zeros_like(self.key_counter)
 
     def __top_k_attention(self, x_bd):
-        # matmul([b,d], [d,qm]) = [b,qm], then reshaped (view) to [b,q,m]
+
+        # Matmul([b,d], [d,qm]) = [b,qm], then reshaped (view) to [b,q,m]
         responses_bqm = torch.matmul(x_bd, self.K.view(self.q * self.m, self.d).t()).view(-1, self.q, self.m)
         top_responses_bqk, top_indices_bqk = torch.topk(responses_bqm, k=self.delta, dim=2, largest=True, sorted=True)
         return top_responses_bqk, top_indices_bqk
@@ -230,15 +232,15 @@ class CNUs(torch.nn.Module):
 
     def __update_keys_and_counters(self, x_bd, top_responses_bqk, top_indices_bqk, top_alphas_bqk):
 
-        # saving some shortcuts, notice that "self.delta" is called "k" here
+        # Saving some shortcuts, notice that "self.delta" is called "k" here
         b, q, d, m, k, u = x_bd.shape[0], self.q, self.d, self.m, self.delta, self.u
         K_qmd = self.K
         mu_qm, eta_qm = self.mu, self.eta
 
-        # getting the top-1 indices for the current mini-batch
+        # Getting the top-1 indices for the current mini-batch
         top1_indices_qb = top_indices_bqk[..., 0].t()
 
-        # temporarily used
+        # Temporarily used
         if self.debug:
             K_initial_qmd = self.K.clone()
             M_initial_qmd = self.M.clone()
@@ -249,57 +251,57 @@ class CNUs(torch.nn.Module):
             K_initial_qmd, M_initial_qmd, mu_initial_qm = None, None, None
             eta_initial_qm, top1_indices_initial_qb = None, None
 
-        # determining if we need to scramble keys and memories (if scrambling is enabled)
+        # Determining if we need to scramble keys and memories (if scrambling is enabled)
         # (up to one key/memory per neuron, even when the batch size is greater than one)
         if self.scramble:
 
-            # computing a boolean mask that tells what neurons should be subject to scrambling (scramble_q),
+            # Computing a boolean mask that tells what neurons should be subject to scrambling (scramble_q),
             # a boolean mask associated with the weak keys,
             # and the indices of the elements of x_bd (batch elements) that should replace the
             # scrambled keys (weak_batch_elements_q)
             scramble_q, weak_keys_mask_qm, weak_batch_elements_q = \
                 self.__evaluate_scrambling_conditions(top_responses_bqk)
 
-            # temporarily used
+            # Temporarily used
             if self.debug:
                 self.__debug_pre_scrambling(top_indices_bqk, top_alphas_bqk, scramble_q,
                                             weak_keys_mask_qm, weak_batch_elements_q, x_bd)
 
-            # if at least one neuron requires a scrambling operation, we do scramble! (in-place)
+            # If at least one neuron requires a scrambling operation, we do scramble! (in-place)
             if torch.any(scramble_q):
                 self.__scramble(x_bd, scramble_q, weak_keys_mask_qm, weak_batch_elements_q, top1_indices_qb)
 
-            # temporarily used
+            # Temporarily used
             if self.debug:
                 self.__debug_changes_with_respect_to(K_initial_qmd, M_initial_qmd, mu_initial_qm, eta_initial_qm,
                                                      top1_indices_initial_qb, top1_indices_qb,
                                                      msg="Right after scrambling...")
 
-        # computing variations to apply to winning keys, eventually using an adaptive learning rate
-        key_variations_qbd = (self.beta_k * x_bd).view(1, b, d).expand(q, b, d)  # delta to add to each winning key
+        # Computing variations to apply to winning keys, eventually using an adaptive learning rate
+        key_variations_qbd = (self.beta_k * x_bd).view(1, b, d).expand(q, b, d)  # Delta to add to each winning key
 
-        # updating the winning keys (one winning key per neuron, for each batch example)
+        # Updating the winning keys (one winning key per neuron, for each batch example)
         K_qmd.scatter_add_(dim=1,
                            index=top1_indices_qb.view(q, b, 1).expand(q, b, d),
-                           src=key_variations_qbd)  # adding variations to winning keys
+                           src=key_variations_qbd)  # Adding variations to winning keys
 
-        # recomputing or updating responses (in the case of batch size > 1, we recompute them all)
+        # Recomputing or updating responses (in the case of batch size > 1, we recompute them all)
         top_responses_bqk, top_indices_bqk, top1_indices_qb = \
             self.__update_top_k_attention(x_bd, top_responses_bqk, top_indices_bqk, top1_indices_qb)
 
-        # recomputing the softmax over the (now updated) top responses
+        # Recomputing the softmax over the (now updated) top responses
         top_alphas_bqk = torch.softmax((self.gamma_alpha / math.sqrt(d)) * top_responses_bqk, dim=2)  # [b,q,k]
 
-        # resetting ages of winning keys
+        # Resetting ages of winning keys
         eta_qm.scatter_(1, top1_indices_qb, 0.)
 
-        # updating counters: usages ("mu") for the winning keys and ages ("eta") for all the keys
+        # Updating counters: usages ("mu") for the winning keys and ages ("eta") for all the keys
         mu_qm.scatter_add_(dim=1,
                            index=top1_indices_qb,
-                           src=torch.ones_like(top1_indices_qb, dtype=mu_qm.dtype))   # winning keys
-        eta_qm += b  # all the keys
+                           src=torch.ones_like(top1_indices_qb, dtype=mu_qm.dtype))  # Winning keys
+        eta_qm += b  # All the keys
 
-        # temporarily used
+        # Temporarily used
         if self.debug:
             self.__debug_changes_with_respect_to(K_initial_qmd, M_initial_qmd, mu_initial_qm, eta_initial_qm,
                                                  top1_indices_initial_qb, top1_indices_qb,
@@ -309,39 +311,39 @@ class CNUs(torch.nn.Module):
 
     def __evaluate_scrambling_conditions(self, top_responses_bqk):
 
-        # shortcuts
+        # Shortcuts
         mu_qm = self.mu
         eta_qm = self.eta
 
-        # computing the max of alphas (we take the smallest of them in case of batch sizes greater than one)
-        top1_responses_bq = top_responses_bqk[..., 0]  # max of responses
+        # Computing the max of alphas (we take the smallest of them in case of batch sizes greater than one)
+        top1_responses_bq = top_responses_bqk[..., 0]  # Max of responses
         max_of_responses_q, weak_batch_elements_q = torch.min(top1_responses_bq, dim=0)
 
-        # finding the weak keys, if any (boolean mask)
+        # Finding the weak keys, if any (boolean mask)
         weak_keys_mask_qm = torch.logical_and(mu_qm < self.tau_mu, eta_qm >= self.tau_eta)
 
-        # determining on what neurons scrambling should be applied (boolean mask)
+        # Determining on what neurons scrambling should be applied (boolean mask)
         scramble_q = torch.logical_and(max_of_responses_q < self.tau_alpha, torch.any(weak_keys_mask_qm, dim=1))
 
         return scramble_q, weak_keys_mask_qm, weak_batch_elements_q
 
     def __scramble(self, x_bd, scramble_q, weak_keys_mask_qm, weak_batch_elements_q, top1_indices_qb):
 
-        # shortcuts
+        # Shortcuts
         q, d, u = self.q, self.d, self.u
         K_qmd, M_qmu, mu_qm, eta_qm = self.K, self.M, self.mu, self.eta
 
-        # stats
+        # Stats
         self.scrambling_count[scramble_q] += 1
 
-        # finding the indices of the candidate keys to scramble (one per neuron)
+        # Finding the indices of the candidate keys to scramble (one per neuron)
         scramble_candidates_keys_q = torch.max(eta_qm * weak_keys_mask_qm.to(torch.float), dim=1)[1]
 
-        # neurons that must and must-not be subject to scrambling operations
+        # Neurons that must and must-not be subject to scrambling operations
         scramble_q = scramble_q.to(torch.float)
-        no_scramble_q = torch.logical_not(scramble_q).to(torch.float)  # boolean mask
+        no_scramble_q = torch.logical_not(scramble_q).to(torch.float)  # Boolean mask
 
-        # scrambling keys
+        # Scrambling keys
         scramble_candidates_keys_exp_q1d = scramble_candidates_keys_q.view(q, 1, 1).expand(q, 1, d)
         scramble_q11 = scramble_q.view(q, 1, 1)
         no_scramble_q11 = no_scramble_q.view(q, 1, 1)
@@ -353,7 +355,7 @@ class CNUs(torch.nn.Module):
                        index=scramble_candidates_keys_exp_q1d,
                        src=new_keys_q1d * scramble_q11 + old_keys_q1d * no_scramble_q11)
 
-        # scrambling memories
+        # Scrambling memories
         with torch.no_grad():
             scramble_candidates_keys_exp_q1u = scramble_candidates_keys_q.view(q, 1, 1).expand(q, 1, u)
             weak_keys_q1 = top1_indices_qb.gather(dim=1, index=weak_batch_elements_q.view(q, 1))
@@ -367,7 +369,7 @@ class CNUs(torch.nn.Module):
                 index=scramble_candidates_keys_exp_q1u,
                 src=new_memories_q1u * scramble_q11 + old_memories_q1u * no_scramble_q11)
 
-        # updating indices of the winning keys (in-place!)
+        # Updating indices of the winning keys (in-place!)
         weak_batch_elements_q1 = weak_batch_elements_q.view(q, 1)
         scramble_q1 = scramble_q.view(q, 1)
         no_scramble_q1 = no_scramble_q.view(q, 1)
@@ -379,7 +381,7 @@ class CNUs(torch.nn.Module):
             dim=1, index=weak_batch_elements_q1,
             src=(new_top1_indices_q1 * scramble_q1 + old_top1_indices_q1 * no_scramble_q1).to(torch.long))
 
-        # resetting to zero the usage counts ("mu") for keys that were scrambled
+        # Resetting to zero the usage counts ("mu") for keys that were scrambled
         scramble_candidates_keys_q1 = scramble_candidates_keys_q.view(q, 1)
 
         new_values = 0.
@@ -395,22 +397,22 @@ class CNUs(torch.nn.Module):
 
         if b == 1:
 
-            # normalizing the winning keys (recall that b=1 here)
-            normalized_winning_keys_q1d = self.__normalize_keys(ids=top1_indices_qb)  # recall that b=1 here
+            # Normalizing the winning keys (recall that b=1 here)
+            normalized_winning_keys_q1d = self.__normalize_keys(ids=top1_indices_qb)  # Recall that b=1 here
 
-            # updating responses (the response with the updated key is recomputed, for each neuron)
+            # Updating responses (the response with the updated key is recomputed, for each neuron)
             response_winning_bq1 = torch.matmul(x_bd, normalized_winning_keys_q1d.view(q, d).t()).view(b, q, 1)
             top_responses_bqk[:, :, 0] = response_winning_bq1.squeeze()
 
         elif b > 1:
 
-            # normalizing all the keys (for simplicity - with large batch sizes it is likely easier/faster)
+            # Normalizing all the keys (for simplicity - with large batch sizes it is likely easier/faster)
             self.__normalize_keys()
 
-            # recomputing all responses, re-determining the top-responses
+            # Recomputing all responses, re-determining the top-responses
             top_responses_bqk, top_indices_bqk = self.__top_k_attention(x_bd)
 
-            # re-transposing top-1 indices
+            # Re-transposing top-1 indices
             top1_indices_qb = top_indices_bqk[..., 0].t()
 
         return top_responses_bqk, top_indices_bqk, top1_indices_qb
@@ -437,7 +439,7 @@ class CNUs(torch.nn.Module):
         b, q, k, d, m = top_indices_bqk.shape[0], self.q, self.delta, self.d, self.m
         mu_qm, eta_qm = self.mu, self.eta
 
-        # finding the indices of the candidate keys to scramble (one per neuron)
+        # Finding the indices of the candidate keys to scramble (one per neuron)
         scramble_candidates_keys_q = torch.max(eta_qm * weak_keys_mask_qm.to(torch.float), dim=1)[1]
 
         print("*** __debug_pre_scrambling ***")

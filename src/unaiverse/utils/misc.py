@@ -74,19 +74,19 @@ def countdown_start(seconds: int, msg: str):
             self.original_stdout = sys.__stdout__
 
         def write(self, s):
-            if s.strip():  # ignore empty lines (needed for the way tqdm works)
+            if s.strip():  # Ignore empty lines (needed for the way tqdm works)
                 self.tqdm_instance.write(s, file=self.original_stdout)
 
         def flush(self):
-            pass  # tqdm handles flushing
+            pass  # Tqdm handles flushing
 
     def drawing(secs: int, message: str):
         with tqdm(total=secs, desc=message, file=sys.__stdout__) as t:
-            sys.stdout = TqdmPrintRedirector(t)  # redirect prints to tqdm.write
+            sys.stdout = TqdmPrintRedirector(t)  # Redirect prints to tqdm.write
             for i in range(secs):
                 time.sleep(1)
                 t.update(1.)
-            sys.stdout = sys.__stdout__  # restore original stdout
+            sys.stdout = sys.__stdout__  # Restore original stdout
 
     sys.stdout.flush()
     handle = threading.Thread(target=drawing, args=(seconds, msg))
@@ -141,13 +141,13 @@ def show_images_grid(image_paths, max_cols=3):
     cols = min(max_cols, n)
     rows = math.ceil(n / cols)
 
-    # load images
+    # Load images
     images = [mpimg.imread(p) for p in image_paths]
 
-    # determine figure size based on image sizes
+    # Determine figure size based on image sizes
     widths, heights = zip(*[(img.shape[1], img.shape[0]) for img in images])
 
-    # use average width/height for scaling
+    # Use average width/height for scaling
     avg_width = sum(widths) / len(widths)
     avg_height = sum(heights) / len(heights)
 
@@ -159,7 +159,7 @@ def show_images_grid(image_paths, max_cols=3):
 
     fig.canvas.manager.set_window_title("Image Grid")
 
-    # hide unused axes
+    # Hide unused axes
     for ax in axes[n:]:
         ax.axis('off')
 
@@ -168,14 +168,14 @@ def show_images_grid(image_paths, max_cols=3):
         ax.axis('off')
         ax.set_title(str(idx), fontsize=12, fontweight='bold')
 
-    # display images
+    # Display images
     for ax, img in zip(axes, images):
         ax.imshow(img)
         ax.axis('off')
 
     plt.subplots_adjust(wspace=0, hspace=0)
 
-    # turn on interactive mode
+    # Turn on interactive mode
     plt.ion()
     plt.show()
 

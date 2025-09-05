@@ -35,16 +35,16 @@ class Clock:
             min_delta (float): Minimum time (in seconds) between consecutive cycles.
                                 If less than or equal to zero, the cycles will be real-time-based.
         """
-        self.min_delta = min_delta  # min-time passed between consecutive cycles (seconds) - if <=0, it is real-time
-        self.cycle = -1  # internal index, not shared outside (the value -1 is only used at creation/reset time)
+        self.min_delta = min_delta  # Min-time passed between consecutive cycles (seconds) - if <=0, it is real-time
+        self.cycle = -1  # Internal index, not shared outside (the value -1 is only used at creation/reset time)
         self.__servers = [
             'pool.ntp.org',
             'north-america.pool.ntp.org'
             'asia.pool.ntp.org',
             'europe.pool.ntp.org',
         ]
-        self.__global_initial_t = self.__get_time_from_server()  # real-time, wall-clock
-        self.__local_initial_t = datetime.now(timezone.utc).timestamp()  # corresponding local time
+        self.__global_initial_t = self.__get_time_from_server()  # Real-time, wall-clock
+        self.__local_initial_t = datetime.now(timezone.utc).timestamp()  # Corresponding local time
         self.__timestamps = []  # List to store timestamps for cycles
         self.__time2cycle_cache = 0  # Cached cycle value for optimization
 
@@ -93,7 +93,7 @@ class Clock:
             int: The cycle index corresponding to the given timestamp.
         """
         if delta is not None and delta > 0:
-            passed = self.get_time() - timestamp  # precision: microseconds
+            passed = self.get_time() - timestamp  # Precision: microseconds
             return self.cycle - int(passed * delta)
         else:
             self.__time2cycle_cache = Clock.__search(self.__timestamps, timestamp, self.__time2cycle_cache)

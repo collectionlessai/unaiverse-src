@@ -25,6 +25,7 @@ _runtime_version.ValidateProtobufRuntimeVersion(
     '',
     'message.proto'
 )
+
 # @@protoc_insertion_point(imports)
 
 _sym_db = _symbol_database.Default()
@@ -58,4 +59,5 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['_IMAGEDATA']._serialized_end=695
   _globals['_TEXTDATA']._serialized_start=697
   _globals['_TEXTDATA']._serialized_end=721
+
 # @@protoc_insertion_point(module_scope)

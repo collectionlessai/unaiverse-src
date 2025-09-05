@@ -32,11 +32,11 @@ class NodeProfile:
                  dynamic: dict,
                  cv: dict):
 
-        # checking provided data
+        # Checking provided data
         if not static:
             raise ValueError("Missing static profile data")
 
-        # forcing key order (important! otherwise the hash operation will not be consistent with the one on the server)
+        # Forcing key order (important! otherwise the hash operation will not be consistent with the one on the server)
         cv = [{k: _cv[k] for k in sorted(_cv)} for _cv in cv]
 
         self._profile_data = \
@@ -76,11 +76,11 @@ class NodeProfile:
                     'proc_outputs': None,
                     'streams': None,
                     'connections': {
-                        'public_agents': None,  # list of dict
-                        'world_agents': None,  # list of dict
-                        'world_masters': None,  # list of dict
-                        'world_peer_id': None,  # str
-                        'role': None  # str
+                        'public_agents': None,  # List of dict
+                        'world_agents': None,  # List of dict
+                        'world_masters': None,  # List of dict
+                        'world_peer_id': None,  # Str
+                        'role': None  # Str
                     },
                     'world_summary': {
                         "world_title": None,
@@ -93,22 +93,22 @@ class NodeProfile:
                         "agent_badges": None,
                         "streams_count": None
                     },
-                    "world_roles_fsm": None  # dict of FSMs for world roles
+                    "world_roles_fsm": None  # Dict of FSMs for world roles
                 },
                 'cv': cv
             }
 
-        # checking the presence of basic static profile info
+        # Checking the presence of basic static profile info
         for k in self._profile_data['static'].keys():
             if (k not in static and k != "certified" and
-                    k != "allowed_node_ids" and k != "world_masters_node_ids" and k != "inspector_node_id"):  # patch
+                    k != "allowed_node_ids" and k != "world_masters_node_ids" and k != "inspector_node_id"):  # Patch
                 raise ValueError("Missing required static profile info: " + str(k))
 
-        # filling static profile info (there might be more information that the one shown above)
+        # Filling static profile info (there might be more information that the one shown above)
         for k, v in static.items():
             self._profile_data['static'][k] = v
 
-        # including the provided dynamic info, only considering the expected keys
+        # Including the provided dynamic info, only considering the expected keys
         # (the provided "dynamic" argument will contain all or just a sub-portion of the expected keys)
         for k, v in dynamic.items():
             if k == 'connections' and v is not None and isinstance(v, dict):
@@ -126,14 +126,14 @@ class NodeProfile:
             elif k.startswith('tmp_'):
                 self._profile_data['dynamic'][k] = v
 
-        # internally required attributes
-        self._profile_last_updated = None  # will be set by calling _fill_missing_specs or check_and_update_specs
-        self._geolocation_cache = {}  # will be needed to avoid too many IP-related lookups
+        # Internally required attributes
+        self._profile_last_updated = None  # Will be set by calling _fill_missing_specs or check_and_update_specs
+        self._geolocation_cache = {}  # Will be needed to avoid too many IP-related lookups
 
-        # filling the missing information (machine-level information, specs) that can be automatically extracted
+        # Filling the missing information (machine-level information, specs) that can be automatically extracted
         self._fill_missing_specs()
 
-        # flag
+        # Flag
         self._connections_updated = False
 
     @classmethod
@@ -157,7 +157,7 @@ class NodeProfile:
             TypeError: If the 'cv' data is present but not a list.
         """
 
-        # ensure essential 'node_id' is present
+        # Ensure essential 'node_id' is present
         node_id = combined_data.get('static').get('node_id')
         if not node_id:
             raise ValueError("Input dictionary must contain a 'node_id'.")
@@ -170,7 +170,7 @@ class NodeProfile:
 
         return profile_instance
 
-    # get operating system information
+    # Get operating system information
     @staticmethod
     def _get_os_spec():
         """
@@ -178,7 +178,7 @@ class NodeProfile:
         """
         return platform.platform()
 
-    # get cpu information
+    # Get cpu information
     @staticmethod
     def _get_cpu_info():
         """
@@ -193,7 +193,7 @@ class NodeProfile:
             print(f"Error getting CPU info: {e}")
             return {'physical_cores': None, 'logical_cores': None}
 
-    # get memory information
+    # Get memory information
     @staticmethod
     def _get_memory_info():
         """
@@ -213,7 +213,7 @@ class NodeProfile:
             print(f"Error getting memory info: {e}")
             return {'total': 0.0, 'available': 0.0, 'used': 0.0}
 
-    # get public ip address
+    # Get public ip address
     @staticmethod
     def _get_public_ip_address() -> str | None:
         """
@@ -221,7 +221,8 @@ class NodeProfile:
         Uses multiple services as fallbacks.
         Returns the public IP address string or None if retrieval fails.
         """
-        # list of reliable services that return the public IP as plain text
+
+        # List of reliable services that return the public IP as plain text
         services = [
             "https://api.ipify.org",
             "https://icanhazip.com",
@@ -229,19 +230,20 @@ class NodeProfile:
             "https://checkip.amazonaws.com",
         ]
 
-        # print("Attempting to retrieve public IP address...")
+        # Print("Attempting to retrieve public IP address...")
         for url in services:
             try:
-                # make a GET request to the service URL with a timeout
+
+                # Make a GET request to the service URL with a timeout
                 response = requests.get(url, timeout=5)
 
-                # raise an HTTPError for bad responses (4xx or 5xx status codes)
+                # Raise an HTTPError for bad responses (4xx or 5xx status codes)
                 response.raise_for_status()
 
-                # get the response text, which should be the IP address, and strip any whitespace
+                # Get the response text, which should be the IP address, and strip any whitespace
                 public_ip = response.text.strip()
 
-                # basic validation - check if the result looks like a valid IP address
+                # Basic validation - check if the result looks like a valid IP address
                 try:
                     ipaddress.ip_address(public_ip)  # This checks if it's a valid IPv4 or IPv6 address
 
@@ -249,27 +251,28 @@ class NodeProfile:
 
                 except ValueError:
 
-                    # if ipaddress.ip_address raises ValueError, it's not a valid format
+                    # If ipaddress.ip_address raises ValueError, it's not a valid format
                     continue  # Try the next service if validation fails
 
             except requests.exceptions.RequestException:
 
-                # catch any request-related errors (e.g., network issues, timeout, bad status)
-                continue  # try the next service on error
+                # Catch any request-related errors (e.g., network issues, timeout, bad status)
+                continue  # Try the next service on error
 
             except Exception:
 
-                # catch any other unexpected errors
+                # Catch any other unexpected errors
                 continue  # Try the next service on error
 
         return 'Public IP not available.'  # Return None if all services fail
 
-    # get guessed location based on IP address
+    # Get guessed location based on IP address
     def _get_geolocation_from_ip(self, ip_address):
         """
         Retrieves geolocation data (same as before).
         """
-        # added a check for local/private IPs to avoid unnecessary API calls
+
+        # Added a check for local/private IPs to avoid unnecessary API calls
         try:
             ip_obj = ipaddress.ip_address(ip_address)
             if ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_unspecified:
@@ -277,9 +280,10 @@ class NodeProfile:
         except ValueError:
             return {"error": f"Invalid IP address format: {ip_address}"}
 
-        # added a simple cache to avoid repeated API calls for the same IP
+        # Added a simple cache to avoid repeated API calls for the same IP
         if hasattr(self, '_geolocation_cache') and ip_address in self._geolocation_cache:
-            # print(f"Using cached geolocation for {ip_address}") # Optional: for debugging
+
+            # Print(f"Using cached geolocation for {ip_address}") # Optional: for debugging
             return self._geolocation_cache[ip_address]
 
         try:
@@ -301,7 +305,7 @@ class NodeProfile:
                     "isp": data.get("isp")
                 }
 
-                # cache the result
+                # Cache the result
                 if not hasattr(self, '_geolocation_cache'):
                     self._geolocation_cache = {}
                 self._geolocation_cache[ip_address] = geo_data
@@ -309,7 +313,7 @@ class NodeProfile:
             else:
                 error_data = {"error": data.get("message", "Geolocation lookup failed.")}
 
-                # cache the error result too
+                # Cache the error result too
                 if not hasattr(self, '_geolocation_cache'):
                     self._geolocation_cache = {}
                 self._geolocation_cache[ip_address] = error_data
@@ -336,7 +340,7 @@ class NodeProfile:
             self._geolocation_cache[ip_address] = error_data
             return error_data
 
-    # this is the function that collects all the information for the 'node_specification'
+    # This is the function that collects all the information for the 'node_specification'
     def _get_current_specs(self) -> dict:
         """
         Gathers current system specifications.
@@ -366,7 +370,7 @@ class NodeProfile:
                 if k in current_specs:
                     dynamic_profile[k] = current_specs[k]
 
-        self._profile_last_updated = datetime.datetime.now(timezone.utc)  # mark profile as checked/updated
+        self._profile_last_updated = datetime.datetime.now(timezone.utc)  # Mark profile as checked/updated
 
     def check_and_update_specs(self, update_only: bool = True) -> bool:
         """
@@ -384,14 +388,14 @@ class NodeProfile:
 
             if saved_specs is None:
 
-                # no previous specification exists, capture the current one
+                # No previous specification exists, capture the current one
                 self._profile_data['dynamic'] = self._profile_data['dynamic'] | current_specs
                 specs_changed = True
                 change_details.append("Initial specification captured")
 
             else:
 
-                # compare current specs with saved specs (ignore timestamp for comparison)
+                # Compare current specs with saved specs (ignore timestamp for comparison)
                 keys_to_compare = current_specs.keys()
 
                 for key in keys_to_compare:
@@ -401,7 +405,7 @@ class NodeProfile:
                     saved_value = saved_specs.get(key)
                     current_value = current_specs.get(key)
 
-                    # handle float comparison with tolerance
+                    # Handle float comparison with tolerance
                     if isinstance(saved_value, float) and isinstance(current_value, float):
                         if abs(current_value - saved_value) > 1e-6:  # Tolerance for float changes
                             change_details.append(f"{key}: from {saved_value:.2f} to {current_value:.2f}")
@@ -411,18 +415,19 @@ class NodeProfile:
                         change_details.append(f"{key}: from {saved_value} to {current_value}")
                         specs_changed = True
 
-                # comparing total resources (OS, CPU, total RAM/Disk) is more typical for 'specification' changes.
+                # Comparing total resources (OS, CPU, total RAM/Disk) is more typical for 'specification' changes.
                 if specs_changed:
-                    # update the specification in the profile data with the new current specs
+
+                    # Update the specification in the profile data with the new current specs
                     self._profile_data['dynamic'] = self._profile_data['dynamic'] | current_specs
                     change_summary = ", ".join(change_details)
                     print(f"Specs changed for '{self._profile_data['static']['node_id']}': {change_summary}")
 
-        self._profile_last_updated = datetime.datetime.now(timezone.utc)  # mark profile as checked/updated
+        self._profile_last_updated = datetime.datetime.now(timezone.utc)  # Mark profile as checked/updated
 
         return specs_changed
 
-    # get profile data as dict: cv, dynamic_profile, static_profile
+    # Get profile data as dict: cv, dynamic_profile, static_profile
     def get_static_profile(self) -> dict:
         return self._profile_data['static']
 

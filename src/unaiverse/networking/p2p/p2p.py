@@ -12,19 +12,18 @@
                  Code Repositories:  https://github.com/collectionlessai/
                  Main Developers:    Stefano Melacci (Project Leader), Christian Di Maio, Tommaso Guidi
 """
-import re
 import time
 import base64
 import logging
+import binascii
 import threading
 from .messages import Msg
-from __future__ import annotations
 from .lib_types import TypeInterface
 from typing import Optional, List, Dict, Any, TYPE_CHECKING
 
 # Conditional import for type hinting to avoid circular dependencies
 if TYPE_CHECKING:
-    from .golibp2p import GoLibP2P # Assuming this class loads the library
+    from .golibp2p import GoLibP2P  # Assuming this class loads the library
 
 logger = logging.getLogger('P2P')
 
@@ -32,6 +31,7 @@ logger = logging.getLogger('P2P')
 class P2PError(Exception):
     """Custom exception class for P2P library errors."""
     pass
+
 
 class P2P:
     """
@@ -49,9 +49,10 @@ class P2P:
         is_public (bool): Whether the node is publicly reachable.
         peer_map (Dict[str, Any]): A dictionary to potentially store information about connected peers (managed manually or by polling thread).
     """
+
     # --- Class-level state ---
-    libp2p: 'GoLibP2P'                  # Static variable for the loaded Go library
-    _type_interface: 'TypeInterface'    # Shared type interface for all instances
+    libp2p: 'GoLibP2P'  # Static variable for the loaded Go library
+    _type_interface: 'TypeInterface'  # Shared type interface for all instances
 
     # --- Config class variables for configuration ---
     _MAX_INSTANCES = 32
@@ -100,7 +101,7 @@ class P2P:
 
             # Update class attributes if they were overridden
             cls._MAX_INSTANCES = _max_instances
-            cls._instance_ids = [False, ] * _max_instances # Resize the tracking list
+            cls._instance_ids = [False, ] * _max_instances  # Resize the tracking list
 
             # Call the Go function to set up its internal state
             logger.info("🐍 Initializing Go library core...")
@@ -138,9 +139,10 @@ class P2P:
             P2PError: If the node creation fails in the Go library.
             AttributeError: If P2P.libp2p has not been set before instantiation.
         """
+
         # --- CRITICAL: Check if library is initialized ---
         if not P2P._library_initialized:
-             raise P2PError("P2P library not set up. Call P2P.setup_library() before creating an instance.")
+            raise P2PError("P2P library not set up. Call P2P.setup_library() before creating an instance.")
 
         # Assign instance ID
         assigned_instance_id = -1
@@ -166,12 +168,13 @@ class P2P:
         self._wait_public_reachability = wait_public_reachability
         self._max_connections = max_connections
         self._peer_id: Optional[str] = None
-        self._peer_map: Dict[str, Any] = {} # Map to store peer info {peer_id: info}
-        self._poll_interval = 5.0 # Polling interval for background threads
+        self._peer_map: Dict[str, Any] = {}  # Map to store peer info {peer_id: info}
+        self._poll_interval = 5.0  # Polling interval for background threads
         self._stop_event = threading.Event()
 
         logger.info(f"🐍 Creating Node (Instance ID: {self._instance})...")
         try:
+
             # Call the Go function
             result_ptr = P2P.libp2p.CreateNode(
                 P2P._type_interface.to_go_int(self._instance),
@@ -197,18 +200,19 @@ class P2P:
             initial_addresses = message_data.get("addresses", [])
             self._is_public = message_data.get("isPublic", False)
 
-            # check teh returned data
+            # Check teh returned data
             if not isinstance(initial_addresses, list) or not initial_addresses:
                 err_msg = "Received empty or invalid addresses list from Go CreateNode."
                 logger.error(f"[Instance {self._instance}] {err_msg}")
                 raise P2PError(f"[Instance {self._instance}] {err_msg}")
 
             self._peer_id = initial_addresses[0].split("/")[-1]
-            #Cache for the dynamic addresses property
+
+            # Cache for the dynamic addresses property
             self._address_cache: Optional[List[str]] = initial_addresses
             self._address_cache_time: float = time.monotonic()
 
-            # re-ordering/sorting, discarding /p2p-circuit/ because right now it is useless and preferring /udp/
+            # Re-ordering/sorting, discarding /p2p-circuit/ because right now it is useless and preferring /udp/
             addresses_quic = [a for a in self._address_cache if "/quic-v1/" in a]
             addresses_webrtc = [a for a in self._address_cache if "/webrtc" in a]
             addresses_tcp = [a for a in self._address_cache if "/tcp/" in a]
@@ -232,15 +236,16 @@ class P2P:
 
         except Exception as e:
             logger.error(f"❌ [Instance {self._instance}] Node creation failed: {e}")
+
             # Reclaim the instance ID using the _instance_ids list
-            if self._instance != -1: # Check if an ID was actually assigned
+            if self._instance != -1:  # Check if an ID was actually assigned
                 with P2P._instance_lock:
                     P2P._instance_ids[self._instance] = False
                     logger.info(f"[Instance {self._instance}] Reclaimed instance ID {self._instance} due to creation failure.")
-            raise # Re-raise the exception that caused the failure
+            raise  # Re-raise the exception that caused the failure
 
         # # --- Background Threads ---
-        self._stop_event = threading.Event() # Event to signal threads to stop
+        self._stop_event = threading.Event()  # Event to signal threads to stop
 
         logger.info("🎉 Node created successfully and background polling started.")
 
@@ -251,7 +256,7 @@ class P2P:
         Establishes a connection with a remote peer.
 
         Args:
-            multiaddr: The list of multiaddress strings of the peer to try to connect to.
+            multiaddrs: The list of multiaddress strings of the peer to try to connect to.
 
         Returns:
             A dictionary containing the connected peer's AddrInfo (ID and Addrs).
@@ -280,7 +285,8 @@ class P2P:
                 raise P2PError(f"Failed to connect to peer '{dest_peer_id}': {result.get('message', 'Unknown Go error')}")
 
             peer_info = result.get('message', {})
-            logger.info(f"✅ Connection initiated to peer: {peer_info.get('ID', dest_peer_id)}") # Use ID if available
+            logger.info(f"✅ Connection initiated to peer: {peer_info.get('ID', dest_peer_id)}")  # Use ID if available
+
             # Optionally update internal peer map here
             # self._peer_map[peer_info.get('ID')] = peer_info
             return peer_info
@@ -288,7 +294,6 @@ class P2P:
         except Exception as e:
             logger.error(f"❌ Connection to {dest_peer_id} failed: {e}")
             raise P2PError(f"Connection to {dest_peer_id} failed") from e
-
 
     def disconnect_from(self, peer_id: str) -> None:
         """
@@ -304,9 +309,10 @@ class P2P:
         if not peer_id or not isinstance(peer_id, str):
             logger.error("Invalid Peer ID provided.")
             raise ValueError("Invalid Peer ID provided.")
+
         # Basic peer ID format check (Qm... or 12D3...)
         if not (peer_id.startswith("Qm") or peer_id.startswith("12D3")):
-             logger.warning(f"⚠️ Warning: Peer ID '{peer_id}' does not look like a standard v0 or v1 ID.")
+            logger.warning(f"⚠️ Warning: Peer ID '{peer_id}' does not look like a standard v0 or v1 ID.")
 
         logger.info(f"🔌 Attempting to disconnect from peer: {peer_id}...")
         try:
@@ -358,7 +364,7 @@ class P2P:
         payload_bytes = msg.to_bytes()
         payload_len = len(payload_bytes)
         msg_content_type = msg.content_type
-        peer_id = channel.split("::dm:")[1].split('-')[0] # Extract Peer ID from channel format
+        peer_id = channel.split("::dm:")[1].split('-')[0]  # Extract Peer ID from channel format
 
         logger.info(f"📤 Sending message (type: {msg_content_type}, len: {payload_len}) to peer: {peer_id}...")
 
@@ -367,7 +373,7 @@ class P2P:
             result_ptr = P2P.libp2p.SendMessageToPeer(
                 P2P._type_interface.to_go_int(self._instance),
                 P2P._type_interface.to_go_string(channel),
-                P2P._type_interface.to_go_bytes(payload_bytes), # Pass bytes directly
+                P2P._type_interface.to_go_bytes(payload_bytes),  # Pass bytes directly
                 P2P._type_interface.to_go_int(payload_len),
             )
             result = P2P._type_interface.from_go_ptr_to_json(result_ptr)
@@ -385,8 +391,6 @@ class P2P:
         except Exception as e:
             logger.error(f"❌ Sending direct message to {peer_id} failed: {e}")
             raise P2PError(f"Sending direct message to {peer_id} failed") from e
-
-
 
     def broadcast_message(self, channel: str, msg: Msg) -> None:
         """
@@ -455,10 +459,12 @@ class P2P:
             go_instance_c = P2P._type_interface.to_go_int(self._instance)
 
             result_ptr = P2P.libp2p.PopMessages(go_instance_c)
-            # from_go_ptr_to_json should handle freeing result_ptr
+
+            # From_go_ptr_to_json should handle freeing result_ptr
             raw_result = P2P._type_interface.from_go_ptr_to_json(result_ptr)
 
             if raw_result is None:
+
                 # This indicates an issue with the C call or JSON conversion in TypeInterface
                 logger.error(f"[Instance {self._instance}] PopMessages: Received null/invalid result from TypeInterface.")
                 raise P2PError(f"[Instance {self._instance}] PopMessages: Failed to get valid JSON response.")
@@ -473,12 +479,14 @@ class P2P:
                     error_message = raw_result.get('message', 'Unknown Go error during PopMessages')
                     logger.error(f"[Instance {self._instance}] PopMessages: {error_message}")
                     raise P2PError(f"[Instance {self._instance}] PopMessages: {error_message}")
+
                 # If it's a dict but not a known state, it's unexpected
                 logger.warning(f"[Instance {self._instance}] PopMessages: Unexpected dictionary format: {raw_result}")
                 raise P2PError(f"[Instance {self._instance}] PopMessages: Unexpected dictionary response format.")
 
             # Expecting a list of messages if not an error/empty dict
             if not isinstance(raw_result, list):
+
                 # This also covers the case where n=0 and Go returns "[]" which json.loads makes a list
                 # If it's not a list at this point, it's an unexpected format.
                 logger.error(f"[Instance {self._instance}] PopMessages: Unexpected response format, expected a list or "
@@ -491,14 +499,14 @@ class P2P:
                 try:
                     if not isinstance(msg_dict, dict):
                         logger.warning(f"[Instance {self._instance}] PopMessages: Item {i} in list is not a dict: {msg_dict}")
-                        continue # Skip this malformed entry
+                        continue  # Skip this malformed entry
 
                     # Extract and validate required fields from the Go message structure
                     # Go structure: {"from":"Qm...", "data":"BASE64_ENCODED_DATA"}
                     verified_sender_id = msg_dict.get("from")
                     base64_data = msg_dict.get("data")
 
-                    if not all([verified_sender_id is not None, base64_data is not None]): # type can be empty string
+                    if not all([verified_sender_id is not None, base64_data is not None]):  # Type can be empty string
                         logger.warning(f"[Instance {self._instance}] PopMessages: Message item {i} missing required fields (from, type, data): {msg_dict}")
                         continue
 
@@ -516,9 +524,10 @@ class P2P:
                     if msg_obj.sender != verified_sender_id:
                         logger.error(f"SENDER MISMATCH! Network sender '{verified_sender_id}' does not match "
                                      f"payload sender '{msg_obj.sender}'. Discarding message.")
+
                         # In a real-world scenario, you might also want to penalize or disconnect
                         # from a peer that sends such malformed/spoofed messages.
-                        continue # Discard this message
+                        continue  # Discard this message
 
                     logger.debug(f"[Instance {self._instance}] Message popped from {verified_sender_id} on {msg_obj.channel}, "
                                  f"content_type: {msg_obj.content_type}, len: {len(decoded_data)})")
@@ -526,23 +535,25 @@ class P2P:
 
                 except ValueError as ve:
                     logger.error(f"Invalid message created, stopping. Error: {ve}")
-                    continue # Skip problematic message
-                except (TypeError, base64.binascii.Error) as decode_err:
+                    continue  # Skip problematic message
+                except (TypeError, binascii.Error) as decode_err:
                     logger.error(f"[Instance {self._instance}] PopMessages: Failed to decode Base64 data for a message in batch: {decode_err}. Message dict: {msg_dict}")
-                    continue # Skip problematic message
-                except Exception as msg_proc_err: # Catch errors from Msg.from_bytes or attribute setting
+                    continue  # Skip problematic message
+                except Exception as msg_proc_err:  # Catch errors from Msg.from_bytes or attribute setting
                     logger.error(f"[Instance {self._instance}] PopMessages: Error processing popped message item {i}: {msg_proc_err}. Message dict: {msg_dict}")
-                    continue # Skip problematic message
+                    continue  # Skip problematic message
 
             if len(raw_result) > 0 and len(processed_messages) == 0:
                 logger.warning(f"[Instance {self._instance}] PopMessages: Received {len(raw_result)} messages from Go, but none could be processed into Msg objects.")
+
                 # This could indicate a persistent issue with message format or Msg class.
 
             return processed_messages
 
-        except P2PError: # Re-raise P2PError directly
+        except P2PError:  # Re-raise P2PError directly
             raise
         except Exception as e:
+
             # Catch potential JSON parsing errors from TypeInterface or other unexpected errors
             logger.error(f"[Instance {self._instance}] ❌ Error during pop_message: {e}")
             raise P2PError(f"[Instance {self._instance}] Unexpected error during pop_message: {e}") from e
@@ -684,11 +695,11 @@ class P2P:
                 self._address_cache_time = now
             except P2PError as e:
                 logger.warning(f"Failed to refresh address cache, returning stale data. Error: {e}")
-        return self._address_cache  # this could be None if initial fetch failed or if the property was called before node creation
+        return self._address_cache  # This could be None if initial fetch failed or if the property was called before node creation
 
     @property
     def is_public(self) -> Optional[bool]:
-        """Returns a boolean stating whether or not the local node is publicly reachable."""
+        """Returns a boolean stating whether the local node is publicly reachable."""
         return self._is_public
 
     @property
@@ -745,8 +756,10 @@ class P2P:
         Raises:
             P2PError: If fetching connected peers fails.
         """
-        # logger.info("ℹ️ Fetching connected peers info...") # Can be noisy
+
+        # Logger.info("ℹ️ Fetching connected peers info...") # Can be noisy
         try:
+
             # GetConnectedPeers takes no arguments in Go
             result_ptr = P2P.libp2p.GetConnectedPeers(P2P._type_interface.to_go_int(self._instance))
             result = P2P._type_interface.from_go_ptr_to_json(result_ptr)
@@ -759,15 +772,18 @@ class P2P:
                 raise P2PError(f"Failed to get connected peers: {result.get('message', 'Unknown Go error')}")
 
             peers_list = result.get('message', [])
+
             # Update internal map (optional)
             # logger.info(f"  Connected peers count: {len(peers_list)}") # Can be noisy
             return peers_list
 
         except Exception as e:
+
             # Avoid crashing the polling thread, just log the error
             logger.error(f"❌ Error fetching connected peers info: {e}")
+
             # Optionally raise P2PError(f"Failed to get connected peers info") from e if called directly
-            return [] # Return empty list on error during polling
+            return []  # Return empty list on error during polling
 
     def get_rendezvous_peers_info(self) -> Dict[str, Any]:
         """
@@ -798,6 +814,7 @@ class P2P:
                 logger.error(f"Failed to get rendezvous peers: {error_msg}")
                 raise P2PError(f"Failed to get rendezvous peers: {error_msg}")
             elif state == "Success":
+
                 # The message payload is the full RendezvousState object
                 rendezvous_state = result.get('message', {})
                 return rendezvous_state
@@ -806,10 +823,12 @@ class P2P:
                 raise P2PError(f"[Instance {self._instance}] GetRendezvousPeers: Received invalid state.")
 
         except Exception as e:
+
             # Avoid crashing the polling thread, just log the error
             logger.error(f"❌ Error fetching rendezvous peers info: {e}")
+
             # Optionally raise P2PError(f"Failed to get rendezvous peers info") from e if called directly
-            return [] # Return empty list on error during polling
+            return []  # Return empty list on error during polling
 
     def get_message_queue_length(self) -> int:
         """
@@ -822,15 +841,18 @@ class P2P:
             P2PError: If querying the length fails (should be rare).
         """
         try:
+
             # Call Go function, returns C.int directly
             length_cint = P2P.libp2p.MessageQueueLength(P2P._type_interface.to_go_int(self._instance))
             length = P2P._type_interface.from_go_int(length_cint)
-            # print(f"  Current Message Queue Len: {length}") # Can be noisy
+
+            # Print(f"  Current Message Queue Len: {length}") # Can be noisy
             return length
         except Exception as e:
+
             # Avoid crashing polling thread
             logger.error(f"❌ Error fetching message queue length: {e}")
-            return -1 # Indicate error
+            return -1  # Indicate error
 
     # --- Background Polling Methods ---
 
@@ -839,11 +861,12 @@ class P2P:
         logger.info("🧵 Starting connected peers polling thread...")
         while not self._stop_event.is_set():
             try:
-                peers_info = self.get_connected_peers_info()
+                self.get_connected_peers_info()
 
             except Exception as e:
-                 # Catch any unexpected errors within the loop itself
-                 logger.error(f" CRITICAL: Uncaught error in connected peers polling loop: {e}")
+
+                # Catch any unexpected errors within the loop itself
+                logger.error(f" CRITICAL: Uncaught error in connected peers polling loop: {e}")
 
             # Wait for the specified interval or until stop event is set
             self._stop_event.wait(self._poll_interval)
@@ -854,13 +877,14 @@ class P2P:
         logger.info("🧵 Starting message queue polling thread...")
         while not self._stop_event.is_set():
             try:
-                length = self.get_message_queue_length()
+                self.get_message_queue_length()
+
                 # TODO: adapt the queue length to the actual version and change the logic accordingly
                 # if length > self._message_buffer_size * 0.8: # Example: Warn if queue is getting full
-                #      logger.info(f"⚠️ Message queue length ({length}) is approaching limit ({self._message_buffer_size})")
+                # logger.info(f"⚠️ Message queue length ({length}) is approaching limit ({self._message_buffer_size})")
 
             except Exception as e:
-                 logger.error(f" CRITICAL: Uncaught error in message queue polling loop: {e}")
+                logger.error(f" CRITICAL: Uncaught error in message queue polling loop: {e}")
 
             self._stop_event.wait(self._poll_interval)
         logger.info("🧵 Message queue polling thread stopped.")
@@ -914,11 +938,12 @@ class P2P:
         self._peer_map = {}
         with P2P._instance_lock:
             if close_all:
+
                 # Also apply the lock here and use the corrected logic
                 P2P._instance_ids = [False] * P2P._MAX_INSTANCES
                 logger.info("🐍 All instance slots have been marked as free.")
             else:
-                if self._instance != -1: # Ensure instance was set
+                if self._instance != -1:  # Ensure instance was set
                     P2P._instance_ids[self._instance] = False
                     logger.info(f"🐍 Instance slot {self._instance} has been marked as free.")
 
@@ -933,48 +958,3 @@ class P2P:
     def __exit__(self, exc_type, exc_val, exc_tb):
         """Exit context manager, ensuring node closure."""
         self.close()
-
-
-# Example Usage (Illustrative - requires LibP2P, TypeInterface, MessageType setup)
-if __name__ == '__main__':
-
-    try:
-        # Use context manager for automatic cleanup
-        P2P.setup_library()
-        with P2P(port=0, enable_relay=False) as node: # Use random port
-            print("\n--- Node Initialized ---")
-            print(f"My Peer ID: {node.peer_id}")
-            print(f"My Addresses: {node.addresses}")
-            print("------------------------\n")
-
-            # Keep the main thread alive to observe background tasks
-            # In a real application, you'd have event loops or other logic here
-            print("Node running. Polling threads active. Press Ctrl+C to exit.")
-
-            # Example: Continuously try to pop messages
-            msg_count = 0
-            while True:
-                try:
-                    message = node.pop_message()
-                    if message:
-                        msg_count += 1
-                        print(f"\n--- Received Message #{msg_count} ---")
-                        print(f"  From: {message['from']}")
-                        print(f"  Type: {message['type']}")
-                        print(f"  Data: {message['data'][:50]}...") # Print first 50 bytes
-                        print("------------------------\n")
-                    time.sleep(0.5) # Check for messages twice a second
-                except P2PError as e:
-                     print(f"Error popping message: {e}")
-                     time.sleep(2) # Wait longer after an error
-
-
-    except P2PError as e:
-        print(f"\n--- P2P Error Occurred ---")
-        print(e)
-        print("--------------------------\n")
-    except KeyboardInterrupt:
-        print("\n🐍 KeyboardInterrupt received. Exiting...")
-    finally:
-        print("\n🐍 Main execution finished.")
-        # Node is closed automatically by the 'with' statement's __exit__ method

@@ -35,44 +35,46 @@ class LinearCNU(CNUs):
                                       "'key_mem_units', do not set argument 'm'"
             assert 'u' not in kwargs, "Size of each memory unit is automatically determined, do not set argument 'u'"
 
-        # number of keys/memory units
+        # Number of keys/memory units
         kwargs['m'] = key_mem_units
 
-        # size of each key
+        # Size of each key
         kwargs['d'] = in_features if key_size is None else key_size
 
-        # function used to compare input against keys
+        # Function used to compare input against keys
         kwargs['psi_fn'] = psi_fn
 
         if not shared_keys:
-            # each neuron is an independent cnu, with its own keys and its own memory units
+
+            # Each neuron is an independent cnu, with its own keys and its own memory units
             kwargs['q'] = self.out_features
             kwargs['u'] = self.in_features + (1 if self.bias else 0)
         else:
-            # all the CNUs of the layer share the same keys, thus their memory units are concatenated
+
+            # All the CNUs of the layer share the same keys, thus their memory units are concatenated
             kwargs['q'] = 1
             kwargs['u'] = self.out_features * (self.in_features + (1 if self.bias else 0))
 
-        # creating neurons
+        # Creating neurons
         super(LinearCNU, self).__init__(**kwargs)
 
-        # switching device
+        # Switching device
         if device is not None:
             self.to(device)
 
-        # clearing
+        # Clearing
         if not self.bias:
             self.bias = None
 
     def forward(self, x):
 
-        # getting weights
+        # Getting weights
         W = self.compute_weights(x)
 
-        # ensuring the shape is right (needed when neurons share the same keys)
+        # Ensuring the shape is right (needed when neurons share the same keys)
         W = W.reshape((x.shape[0], self.out_features, -1))  # [b,q,1] => [b, out_features,(in_features + 1-if-bias)]
 
-        # splitting into weights and biases
+        # Splitting into weights and biases
         if self.bias:
             weights = W[:, :, :-1]  # [b,out_features,in_features]
             bias = W[:, :, -1]  # [b,out_features]
@@ -80,7 +82,7 @@ class LinearCNU(CNUs):
             weights = W  # [b,out_features,in_features]
             bias = None
 
-        # batched linear projection: matmul([b,out_features,in_features], [b,in_features,1]) = [b,out_features,1]
+        # Batched linear projection: matmul([b,out_features,in_features], [b,in_features,1]) = [b,out_features,1]
         # that we squeeze to [b,out_features]
         o = torch.matmul(weights, x.unsqueeze(2)).squeeze(2)  # [b,out_features]
         if bias is not None:
@@ -91,17 +93,17 @@ class LinearCNU(CNUs):
         self.reset_memories = False
         super().reset_parameters()
 
-        # we ensure that memories M are initialized as Pytorch does for the classic linear layer
+        # We ensure that memories M are initialized as Pytorch does for the classic linear layer
         q = self.M.shape[0]
         m = self.M.shape[1]
-        self.M.data.zero_()  # ensures we don’t keep old values
+        self.M.data.zero_()  # Ensures we don’t keep old values
 
         for j in range(q):
             for i in range(m):
 
-                # initialize weight and bias separately for each memory
+                # Initialize weight and bias separately for each memory
                 weight = torch.empty(self.out_features if self.shared_keys else 1, self.in_features)
-                torch.nn.init.kaiming_uniform_(weight, a=math.sqrt(5))  # computes fan in
+                torch.nn.init.kaiming_uniform_(weight, a=math.sqrt(5))  # Computes fan in
 
                 if self.bias:
                     bias = torch.empty(self.out_features if self.shared_keys else 1)
@@ -111,7 +113,7 @@ class LinearCNU(CNUs):
                 else:
                     weight_bias = weight
 
-                # store the flattened weight_bias into self.M[i]
+                # Store the flattened weight_bias into self.M[i]
                 self.M.data[j, i, :] = weight_bias.flatten()
 
     def __str__(self):
@@ -162,10 +164,10 @@ class Conv2d(CNUs):
                                       "'key_mem_units', do not set argument 'm'"
             assert 'u' not in kwargs, "Size of each memory unit is automatically determined, do not set argument 'u'"
 
-        # number of keys/memory units
+        # Number of keys/memory units
         kwargs['m'] = key_mem_units
 
-        # size of each key
+        # Size of each key
         if key_size is not None:
             if isinstance(key_size, (tuple, list)):
                 key_size = math.prod(key_size)
@@ -173,37 +175,39 @@ class Conv2d(CNUs):
         else:
             kwargs['d'] = (5 * 5 * self.in_channels)
 
-        # function used to compare input against keys
+        # Function used to compare input against keys
         kwargs['psi_fn'] = psi_fn
 
         if not shared_keys:
-            # each neuron is an independent cnu, with its own keys and its own memory units
+
+            # Each neuron is an independent cnu, with its own keys and its own memory units
             kwargs['q'] = self.out_channels
             kwargs['u'] = self.in_features + (1 if self.bias else 0)
         else:
-            # all the CNUs of the layer share the same keys, thus their memory units are concatenated
+
+            # All the CNUs of the layer share the same keys, thus their memory units are concatenated
             kwargs['q'] = 1
             kwargs['u'] = self.out_channels * (self.in_features + (1 if self.bias else 0))
 
-        # creating neurons
+        # Creating neurons
         super(Conv2d, self).__init__(**kwargs)
 
-        # switching device
+        # Switching device
         if device is not None:
             self.to(device)
 
     def forward(self, x):
 
-        # shortcuts
+        # Shortcuts
         b, c, h, w = x.shape
 
-        # getting weights
+        # Getting weights
         W = self.compute_weights(x)
 
-        # ensuring the shape is right (needed when neurons share the same keys)
+        # Ensuring the shape is right (needed when neurons share the same keys)
         W = W.reshape((b, self.out_channels, -1))  # [b,q,1] => [b,out_channels,(in_features + 1-if-bias)]
 
-        # splitting into weights and biases
+        # Splitting into weights and biases
         if self.bias:
             weights = W[:, :, :-1]  # [b,out_channels,in_features]
             bias = W[:, :, -1]  # [b,out_channels]
@@ -211,13 +215,13 @@ class Conv2d(CNUs):
             weights = W  # [b,out_channels,in_features]
             bias = None
 
-        # creating tensor with convolutional filters
+        # Creating tensor with convolutional filters
         kernels = self.__mat2filters(weights)
 
-        # stack all images along the channels
+        # Stack all images along the channels
         x = x.view(1, b * c, h, w)
 
-        # convolution
+        # Convolution
         if self.padding_mode != 'zeros':
             x = F.conv2d(F.pad(x, self.__reversed_padding_repeated_twice, mode=self.padding_mode),
                          kernels, bias.flatten() if bias is not None else None, self.stride,

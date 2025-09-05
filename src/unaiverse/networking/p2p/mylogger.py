@@ -49,6 +49,7 @@ def setup_logger(module_name: str, when: str = 'midnight', backup_count: int = 7
     logger.setLevel(logging.DEBUG)
 
     if do_log and not logger.handlers:
+
         # Create rotating file handler
         handler = TimedRotatingFileHandler(
             log_base_filename,

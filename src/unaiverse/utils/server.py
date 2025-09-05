@@ -33,33 +33,33 @@ class Server:
                  checkpoints: dict[str, list[dict] | int] | str | None = None,
                  y_range: list[float] | None = None):
         self.node_synchronizer = node_synchronizer
-        self.node_synchronizer.using_server = True  # forcing
+        self.node_synchronizer.using_server = True  # Forcing
         self.root = root
         self.root_css = root + "/static/css"
         self.root_js = root + "/static/js"
         self.port = port
         self.app = Flask(__name__, template_folder=self.root)
-        CORS(self.app)  # to handle cross-origin requests (needed for development)
+        CORS(self.app)  # To handle cross-origin requests (needed for development)
         self.register_routes()
         self.thumb_transforms = transforms.Compose([transforms.Resize(64), transforms.CenterCrop(64)])
         self.y_range = y_range
         self.visu_name_to_net_hash = {}
 
-        # loading checkpoints, if needed
-        if checkpoints is not None and isinstance(checkpoints, str):  # string: assumed to be a file name
+        # Loading checkpoints, if needed
+        if checkpoints is not None and isinstance(checkpoints, str):  # String: assumed to be a file name
             file_name = checkpoints
             checkpoints = {"checkpoints": None, "matched": -1, "current": 0}
             with open(file_name, 'r') as file:
-                checkpoints["checkpoints"] = json.load(file)  # from filename to dictionary
+                checkpoints["checkpoints"] = json.load(file)  # From filename to dictionary
         elif checkpoints is not None:
             checkpoints = {"checkpoints": checkpoints, "matched": -1, "current": 0}
         self.node_synchronizer.server_checkpoints = checkpoints
 
-        # fixing y_range as needed
+        # Fixing y_range as needed
         self.y_range = [None, None] if self.y_range is None else self.y_range
         assert len(self.y_range) == 2, "Invalid y_range argument (it must be either None of a list of 2 floats)"
 
-        # starting a new thread
+        # Starting a new thread
         thread = Thread(target=self.__run_server)
         thread.start()
 
@@ -105,7 +105,7 @@ class Server:
             else:
                 return False
 
-        # list of pytorch tensors (or nones)
+        # List of pytorch tensors (or nones)
         def encode_tensor_or_list_of_tensors(__data):
             __type = ""
 
@@ -120,19 +120,19 @@ class Server:
 
                         __data_b64.append(base64.b64encode(__tensor.detach().cpu().numpy().tobytes()).decode('utf-8'))
                     else:
-                        __data_b64.append(None)  # there might be some None in some list elements...
+                        __data_b64.append(None)  # There might be some None in some list elements...
                 if not found_tensor:
                     __type = "none"
                 __data = __data_b64
 
-            # pytorch tensor
+            # Pytorch tensor
             if isinstance(__data, torch.Tensor):
                 __type = __data.dtype.__str__().split('.')[-1]
                 __data = base64.b64encode(__data.detach().cpu().numpy()).decode('utf-8')
 
             return __data, __type
 
-        # list of PIL images (or nones)
+        # List of PIL images (or nones)
         def encode_pil_or_list_of_pils(__data):
             __type = ""
 
@@ -150,12 +150,12 @@ class Server:
                         buffer.seek(0)
                         _data_b64.append(f"data:image/png;base64,{base64.b64encode(buffer.read()).decode('utf-8')}")
                     else:
-                        _data_b64.append(None)  # there might be some None in some list elements...
+                        _data_b64.append(None)  # There might be some None in some list elements...
                 if not found_image:
                     __type = "none"
                 __data = _data_b64
 
-            # pil image
+            # Pil image
             if isinstance(__data, Image.Image):
                 __type = "png"
                 __buffer = io.BytesIO()
@@ -164,7 +164,7 @@ class Server:
 
             return __data, __type
 
-        # in the case of a dictionary, we look for values that are (list of) tensors/images and encode them;
+        # In the case of a dictionary, we look for values that are (list of) tensors/images and encode them;
         # we augment the key name adding "-type", where "type" is the type of the packed data
         if _type == "dict":
             keys = list(_data.keys())
@@ -190,7 +190,7 @@ class Server:
             else:
                 pass
 
-        # generate JSON for the whole data, where some of them might have been base64 encoded (tensors/images)
+        # Generate JSON for the whole data, where some of them might have been base64 encoded (tensors/images)
         return jsonify({"data": _data, "type": _type})
 
     def serve_index(self):
@@ -343,34 +343,34 @@ class Server:
 
         if stream_obj is None:
 
-            # missing stream
+            # Missing stream
             ks = [agent._node_clock.get_cycle()]
             data = None
             last_k = agent._node_clock.get_cycle()
             props = None
         elif isinstance(stream_obj, BufferedDataStream):
 
-            # buffered stream
+            # Buffered stream
             ks, data, last_k, props = stream_obj.get_since_cycle(since_step)
         else:
 
-            # not-buffered stream
+            # Not-buffered stream
             sample = stream_obj.get()
             ks = [agent._node_clock.get_cycle()]
             data = [sample] if sample is not None else None
             last_k = agent._node_clock.get_cycle()
             props = stream_obj.get_props()
 
-        # data is None if the step index (k) of the stream is -1 (beginning), or if stream is disabled
+        # Data is None if the step index (k) of the stream is -1 (beginning), or if stream is disabled
         if data is not None:
 
-            # if data has labeled components (and is not "img" and is not "token_ids"),
+            # If data has labeled components (and is not "img" and is not "token_ids"),
             # then we take a decision and convert it to a text string
             if props.is_flat_tensor_with_labels():
                 for _i, _data in enumerate(data):
                     data[_i] = props.to_text(_data)
 
-            # if data is of type image, we revert the possibly applied transformation and downscale it
+            # If data is of type image, we revert the possibly applied transformation and downscale it
             elif props.is_img():
                 for _i, _data in enumerate(data):
                     data[_i] = self.thumb_transforms(_data)

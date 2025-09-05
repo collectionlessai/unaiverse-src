@@ -20,11 +20,12 @@ import subprocess
 from pathlib import Path
 from unaiverse.networking.p2p import P2P
 
-# configuration
+# Configuration
 DOCKER_IMAGE_NAME = "unaiverse-sandbox"
 CONTAINER_NAME_BASE = "unaiverse-sandbox-container"
-CONTAINER_NAME = f"{CONTAINER_NAME_BASE}-{uuid.uuid4().hex[:8]}"  # append a short unique ID
+CONTAINER_NAME = f"{CONTAINER_NAME_BASE}-{uuid.uuid4().hex[:8]}"  # Append a short unique ID
 DOCKERFILE_CONTENT = """
+
 # Debian image, automatically guessed architecture
 FROM python:3.12-slim-bookworm
 
@@ -53,24 +54,24 @@ def sandbox(file_to_run: str,
             read_only_paths: tuple[str] | list[str] | None = None,
             writable_paths: tuple[str] | list[str] | None = None) -> None:
 
-    # path of this file
+    # Path of this file
     absolute_path_of_this_file = os.path.abspath(__file__)
 
-    # folders composing the path (and file name at the end)
+    # Folders composing the path (and file name at the end)
     path_components = list(Path(absolute_path_of_this_file).parts)
 
-    # ensuring the folder/file structure was not manipulated
+    # Ensuring the folder/file structure was not manipulated
     assert path_components[-1] == 'sandbox.py', "Major security issue, stopping."
     assert path_components[-2] == 'utils', "Major security issue, stopping."
     assert path_components[-3] == 'unaiverse', "Major security issue, stopping."
 
-    # main folder of UNaIVERSE
+    # Main folder of UNaIVERSE
     abspath_of_unaiverse_code = str(Path(*path_components[0:-3]))
 
-    # clean up any remnants from previous runs first (safety)
+    # Clean up any remnants from previous runs first (safety)
     cleanup_docker_artifacts(where=abspath_of_unaiverse_code)
 
-    # requirements
+    # Requirements
     echoed_contents_of_requirements = 'printf "'
     with open(os.path.join(abspath_of_unaiverse_code, "requirements.txt"), 'r') as req_file:
         req_lines = req_file.readlines()
@@ -80,35 +81,35 @@ def sandbox(file_to_run: str,
         else:
             echoed_contents_of_requirements += req_line.strip() + "\\n\" > requirements.txt"
 
-    # create Dockerfile
+    # Create Dockerfile
     print("Creating Dockerfile...")
     with open(os.path.join(abspath_of_unaiverse_code, "Dockerfile"), "w") as f:
         f.write(DOCKERFILE_CONTENT.replace('<create_requirements.txt>', echoed_contents_of_requirements))
 
-    # building Docker image
+    # Building Docker image
     if not build_docker_image(where=abspath_of_unaiverse_code):
         print("Exiting due to Docker image build failure")
-        cleanup_docker_artifacts(where=abspath_of_unaiverse_code)  # try to clean up what was created (if any)
+        cleanup_docker_artifacts(where=abspath_of_unaiverse_code)  # Try to clean up what was created (if any)
         sys.exit(1)
 
-    # read only folders from the host machine
+    # Read only folders from the host machine
     read_only_mount_paths = ([abspath_of_unaiverse_code] +
                              (list(read_only_paths) if read_only_paths is not None else []))
 
-    # writable folders in host machine
+    # Writable folders in host machine
     writable_mount_paths = ([os.path.join(abspath_of_unaiverse_code, 'runners'),
                              os.path.join(abspath_of_unaiverse_code, 'unaiverse', 'library'),
                              os.path.join(abspath_of_unaiverse_code, 'unaiverse', 'networking', 'p2p')] +
                             (list(writable_paths) if writable_paths is not None else []))
 
-    # running
+    # Running
     if not run_in_docker(file_to_run=os.path.abspath(file_to_run),
                          read_only_host_paths=read_only_mount_paths,
                          writable_host_paths=writable_mount_paths):
         print("Exiting due to Docker container run failure")
         sys.exit(1)
 
-    # final cleanup
+    # Final cleanup
     cleanup_docker_artifacts(where=abspath_of_unaiverse_code)
 
 
@@ -117,7 +118,8 @@ def build_docker_image(where: str):
     print(f"Building Docker image '{DOCKER_IMAGE_NAME}'...")
 
     try:
-        # the '.' at the end means build from the current directory
+
+        # The '.' at the end means build from the current directory
         subprocess.run(["docker", "build", "-t", DOCKER_IMAGE_NAME, where], check=True)
         print(f"Docker image '{DOCKER_IMAGE_NAME}' built successfully.")
         return True
@@ -130,7 +132,7 @@ def cleanup_docker_artifacts(where: str):
     """Cleans up the generated files and Docker image."""
     print("Cleaning...")
 
-    # stop and remove container if it's still running (e.g., if previous run failed)
+    # Stop and remove container if it's still running (e.g., if previous run failed)
     try:
         print(f"Attempting to stop and remove container '{CONTAINER_NAME}' (if running)...")
         subprocess.run(["docker", "stop", CONTAINER_NAME],
@@ -140,7 +142,7 @@ def cleanup_docker_artifacts(where: str):
     except Exception as e:
         print(f"Error during preliminary container cleanup: {e}")
 
-    # remove the Docker image
+    # Remove the Docker image
     try:
         print(f"Removing Docker image '{DOCKER_IMAGE_NAME}'...")
         subprocess.run(["docker", "rmi", DOCKER_IMAGE_NAME], check=True)
@@ -148,7 +150,7 @@ def cleanup_docker_artifacts(where: str):
     except subprocess.CalledProcessError as e:
         print(f"Error removing Docker image '{DOCKER_IMAGE_NAME}': {e}")
 
-    # remove the generated Dockerfile
+    # Remove the generated Dockerfile
     if os.path.exists(os.path.join(where, "Dockerfile")):
         os.remove(os.path.join(where, "Dockerfile"))
         print("Removed Dockerfile.")
@@ -158,18 +160,20 @@ def run_in_docker(file_to_run: str, read_only_host_paths: list[str] = None, writ
     """Runs the code in a Docker container with optional mounts."""
     print(f"\nRunning code in Docker container '{CONTAINER_NAME}'...")
 
-    # building command (it will continue below...)
+    # Building command (it will continue below...)
     command = ["docker", "run",
-               "--rm",  # automatically remove the container when it exits
-               "-e", "PYTHONUNBUFFERED=1",  # ensure Python output is unbuffered
+               "--rm",  # Automatically remove the container when it exits
+               "-e", "PYTHONUNBUFFERED=1",  # Ensure Python output is unbuffered
                "-e", "NODE_STARTING_PORT",
                "--name", CONTAINER_NAME]
 
     if sys.platform.startswith('linux'):
-        # linux
-        command.extend(["--net", "host"]),  # expose the host network (in macOS and Windows it is still a virtual host)
+
+        # Linux
+        command.extend(["--net", "host"]),  # Expose the host network (in macOS and Windows it is still a virtual host)
     else:
-        # not-linux: check ports (adding -p port:port)
+
+        # Not-linux: check ports (adding -p port:port)
         port_int = int(os.getenv("NODE_STARTING_PORT", "0"))
         if port_int > 0:
             command.extend(["-p", str(port_int + 0) + ":" + str(port_int + 0)])
@@ -177,49 +181,50 @@ def run_in_docker(file_to_run: str, read_only_host_paths: list[str] = None, writ
             command.extend(["-p", str(port_int + 2) + ":" + str(port_int + 2)])
             command.extend(["-p", str(port_int + 3) + ":" + str(port_int + 3) + "/udp"])
 
-    # add read-only mount if path is provided
+    # Add read-only mount if path is provided
     if read_only_host_paths is not None and len(read_only_host_paths) > 0:
         for path in read_only_host_paths:
 
-            # ensure the host path exists and is a directory
+            # Ensure the host path exists and is a directory
             if not os.path.isdir(path):
                 print(
                     f"Error: Read-only host path '{path}' does not exist or is not a directory. Cannot mount.")
                 return False
             else:
 
-                # augmenting command
+                # Augmenting command
                 path = os.path.abspath(path)
                 command.extend(["-v", f"{path}:{path}:ro"])
                 print(f"Mounted host '{path}' as read-only to container")
 
-    # add writable mount if path is provided
+    # Add writable mount if path is provided
     if writable_host_paths is not None and len(writable_host_paths) > 0:
         for path in writable_host_paths:
 
-            # ensure the host path exists and is a directory
+            # Ensure the host path exists and is a directory
             if not os.path.isdir(path):
                 print(
                     f"Error: Writable host path '{path}' does not exist or is not a directory. Cannot mount.")
                 return False
             else:
 
-                # augmenting command
+                # Augmenting command
                 path = os.path.abspath(path)
                 command.extend(["-v", f"{path}:{path}"])
                 print(f"Mounted host '{path}' as writable to container")
 
-    # completing command
+    # Completing command
     command.append(DOCKER_IMAGE_NAME)
 
     try:
-        # running the prepared command... (using Popen to stream output in real-time)
+
+        # Running the prepared command... (using Popen to stream output in real-time)
         try:
             command.extend(["python3", file_to_run])
             process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
             for line in iter(process.stdout.readline, ''):
                 sys.stdout.write(line)
-            process.wait()  # wait for the process to finish
+            process.wait()  # Wait for the process to finish
             if process.returncode != 0:
                 print(f"Container exited with non-zero status code: {process.returncode}")
         except KeyboardInterrupt:
@@ -236,7 +241,7 @@ def run_in_docker(file_to_run: str, read_only_host_paths: list[str] = None, writ
         return False
 
 
-# entry point
+# Entry point
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Run a Python script adding customizable read-only and writable paths.",
@@ -281,8 +286,8 @@ if __name__ == "__main__":
     print(f"- Read only paths to mount (the UNaIVERSE code folder will be automatically mounted): {read_only_folders}")
     print(f"- Writable paths to mount: {writable_folders}\n")
 
-    # marking
+    # Marking
     os.environ["NODE_STARTING_PORT"] = args.port
 
-    # running the sandbox and the script
+    # Running the sandbox and the script
     sandbox(script_to_run, read_only_paths=read_only_folders, writable_paths=writable_folders)
