@@ -1,0 +1,19 @@
+{
+    "initial_state": "ready",
+    "state": "ready",
+    "prev_state": null,
+    "limbo_state": null,
+    "state_actions": {
+        "ready": [null, null, 0, false],
+        "done_gen": [null, null, 1, false]
+    },
+    "transitions": {
+        "ready": {
+            "done_gen": [["do_gen", {"timeout": 15.0}, false, 0]]
+        },
+        "done_gen": {
+            "ready": [["nop", {}, true, 3]]
+        }
+    },
+    "cur_action": null
+}

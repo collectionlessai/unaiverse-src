@@ -23,7 +23,10 @@ from typing import Optional, List, Dict, Any, TYPE_CHECKING
 
 # Conditional import for type hinting to avoid circular dependencies
 if TYPE_CHECKING:
-    from .golibp2p import GoLibP2P  # Assuming this class loads the library
+    try:
+        from unaiverse.networking.p2p.golibp2p import GoLibP2P  # Assuming this class loads the library
+    except ImportError:
+        pass
 
 logger = logging.getLogger('P2P')
 

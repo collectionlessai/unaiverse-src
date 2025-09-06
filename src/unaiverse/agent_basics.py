@@ -172,7 +172,7 @@ class AgentBasics:
 
             self.behav_lone_wolf = HybridStateMachine(self)
             self.behav_lone_wolf.load(os.path.join(os.path.abspath(os.path.dirname(__file__)),
-                                                   "library", "behaviors", "lone_wolf.json"))
+                                                   "utils", "lone_wolf.json"))
         else:
             self.is_world = True
 

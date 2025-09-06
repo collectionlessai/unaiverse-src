@@ -12,6 +12,5 @@
                  Code Repositories:  https://github.com/collectionlessai/
                  Main Developers:    Stefano Melacci (Project Leader), Christian Di Maio, Tommaso Guidi
 """
-from . import cnus
-from . import layers
-from . import psi
+from . import node
+from . import p2p

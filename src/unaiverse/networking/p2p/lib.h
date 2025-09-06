@@ -123,8 +123,8 @@ extern char* ConnectTo(int instanceIndexC, char* addrsJSONC);
 //
 // Returns:
 //   - *C.char: A JSON string indicating success or failure.
-//     On success, the `message` contains the AddrInfo containing the relayed addresses.
-//     Structure (Success): `{"state":"Success", "message": {"ID": "RELAY_NODE_ID", "Addrs": ["/ip4/RELAY_IP/..."]}}`
+//     On success, the `message` contains the expiration date of the reservation (ISO 8601).
+//     Structure (Success): `{"state":"Success", "message": "2024-12-31T23:59:59Z"}`
 //     Structure (Error): `{"state":"Error", "message":"..."}`
 //   - IMPORTANT: The caller MUST free the returned C string using `FreeString`.
 //

@@ -77,8 +77,7 @@ class World(AgentBasics):
         # Loading agent (actions) file
         if agent_actions_file is not None:
             path_of_this_file = str(os.path.dirname(os.path.abspath(__file__)))
-            with open(os.path.join(path_of_this_file, 'library', 'worlds', agent_actions_file),
-                      'r', encoding='utf-8') as file:
+            with open(agent_actions_file, 'r', encoding='utf-8') as file:
                 self.agent_actions = file.read()
         else:
             self.agent_actions = ""  # Empty string
@@ -95,7 +94,7 @@ class World(AgentBasics):
 
             for role, default_behav_file in role_to_behav_files.items():
                 behav = HybridStateMachine(dummy_agent)
-                behav.load(os.path.join(path_of_this_file, 'library', 'worlds', default_behav_file))
+                behav.load(default_behav_file)
                 self.role_to_behav[role] = str(behav)
         else:
             self.role_to_behav = None

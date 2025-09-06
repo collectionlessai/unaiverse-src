@@ -12,6 +12,10 @@
                  Code Repositories:  https://github.com/collectionlessai/
                  Main Developers:    Stefano Melacci (Project Leader), Christian Di Maio, Tommaso Guidi
 """
+from . import messages
+from . import p2p
+from . import golibp2p
+from . import lib_types
 import os
 import sys
 import ctypes

@@ -18,8 +18,7 @@ import logging
 from threading import Lock
 from typing import Optional, List, Any, TYPE_CHECKING
 
-if TYPE_CHECKING:
-    from .golibp2p import GoLibP2P  # Assuming this class loads the library
+from .golibp2p import GoLibP2P  # Assuming this class loads the library
 
 logger = logging.getLogger('LIB-TYPES')
 
