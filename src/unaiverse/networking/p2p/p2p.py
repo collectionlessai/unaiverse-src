@@ -635,7 +635,7 @@ class P2P:
 
     # --- Relay Operations ---
 
-    def reserve_on_relay(self, relay_peer_id: str) -> Dict[str, Any]:
+    def reserve_on_relay(self, relay_peer_id: str) -> str:
         """
         Attempts to reserve a slot on a specified relay node.
 

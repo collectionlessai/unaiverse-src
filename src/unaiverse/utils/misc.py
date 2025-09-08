@@ -20,11 +20,17 @@ import json
 import math
 import threading
 from tqdm import tqdm
+from pathlib import Path
 from rich.json import JSON
 from datetime import datetime
 import matplotlib.pyplot as plt
 import matplotlib.image as mpimg
 from rich.console import Console
+
+
+class GenException(Exception):
+    """Base exception for this application (a simple wrapper around a generic Exception)."""
+    pass
 
 
 def save_node_addresses_to_file(node, dir_path: str, public: bool):
@@ -181,3 +187,25 @@ def show_images_grid(image_paths, max_cols=3):
 
     fig.canvas.draw()
     plt.pause(0.1)
+
+
+class FileTracker:
+    def __init__(self, folder, ext=".json"):
+        self.folder = Path(folder)
+        self.ext = ext.lower()
+        self.last_state = self._scan_files()
+
+    def _scan_files(self):
+        state = {}
+        for file in self.folder.iterdir():
+            if file.is_file() and file.suffix.lower() == self.ext:
+                state[file.name] = os.path.getmtime(file)
+        return state
+
+    def something_changed(self):
+        new_state = self._scan_files()
+        created = [f for f in new_state if f not in self.last_state]
+        modified = [f for f in new_state
+                    if f in self.last_state and new_state[f] != self.last_state[f]]
+        self.last_state = new_state
+        return created or modified

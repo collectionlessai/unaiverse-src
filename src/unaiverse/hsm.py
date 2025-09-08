@@ -1135,7 +1135,10 @@ class HybridStateMachine:
         """
 
         # Plugging a previously loaded HSM
-        if os.path.exists(to_state):
+        if to_state.lower().endswith(".json"):
+            if not os.path.exists(to_state):
+                raise FileNotFoundError(f"Cannot find {to_state}")
+
             file_name = to_state
             hsm = HybridStateMachine(self.actionable).load(file_name)
 
@@ -1710,7 +1713,10 @@ class HybridStateMachine:
                 msg = None
             else:
                 act_name, act_args, state_id, blocking, waiting_time, msg = state_action_list
-            self.add_state(state, action=act_name, args=act_args, state_id=state_id,
+
+            # Recall that state_id can be set to -1 in the original file, meaning "automatically set the state_id"
+            self.add_state(state, action=act_name, args=act_args,
+                           state_id=state_id if state_id >= 0 else None,
                            waiting_time=waiting_time, blocking=blocking, msg=msg)
 
         # Getting transitions
@@ -1723,8 +1729,11 @@ class HybridStateMachine:
                         msg = None
                     else:
                         act_name, act_args, act_ready, act_id, msg = action_list_tuple
+
+                    # Recall that act_id can be set to -1 in the original file, meaning "automatically set the act_id"
                     self.add_transit(from_state, to_state,
-                                     action=act_name, args=act_args, ready=act_ready, act_id=act_id, msg=msg)
+                                     action=act_name, args=act_args, ready=act_ready,
+                                     act_id=act_id if act_id >= 0 else None, msg=msg)
 
         return self
 

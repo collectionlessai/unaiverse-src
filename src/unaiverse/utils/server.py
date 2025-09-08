@@ -13,6 +13,7 @@
                  Main Developers:    Stefano Melacci (Project Leader), Christian Di Maio, Tommaso Guidi
 """
 import io
+import os
 import json
 import torch
 import base64
@@ -28,15 +29,16 @@ from flask import Flask, jsonify, request, send_from_directory
 
 class Server:
 
-    def __init__(self, node_synchronizer: NodeSynchronizer, root: str = '../networking/node/viewer/www',
+    def __init__(self, node_synchronizer: NodeSynchronizer,
+                 root: str = '../../../../zoo/debug_viewer/www',
                  port: int = 5001,
                  checkpoints: dict[str, list[dict] | int] | str | None = None,
                  y_range: list[float] | None = None):
         self.node_synchronizer = node_synchronizer
         self.node_synchronizer.using_server = True  # Forcing
-        self.root = root
-        self.root_css = root + "/static/css"
-        self.root_js = root + "/static/js"
+        self.root = os.path.join(os.path.dirname(os.path.abspath(__file__)), root)
+        self.root_css = self.root + "/static/css"
+        self.root_js = self.root + "/static/js"
         self.port = port
         self.app = Flask(__name__, template_folder=self.root)
         CORS(self.app)  # To handle cross-origin requests (needed for development)

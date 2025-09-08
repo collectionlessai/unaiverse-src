@@ -12,9 +12,6 @@
                  Code Repositories:  https://github.com/collectionlessai/
                  Main Developers:    Stefano Melacci (Project Leader), Christian Di Maio, Tommaso Guidi
 """
-import os
-import types
-from typing import Optional
 from unaiverse.agent import AgentBasics
 from unaiverse.hsm import HybridStateMachine
 from unaiverse.networking.p2p.messages import Msg
@@ -23,43 +20,16 @@ from unaiverse.networking.node.profile import NodeProfile
 
 class World(AgentBasics):
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, world_folder: str, merge_flat_stream_labels: bool = False):
         """Initializes a World object, which acts as a special agent without a processor or behavior.
 
         Args:
-            *args: Variable length argument list.
-            **kwargs: Arbitrary keyword arguments, including 'role_to_behav' and 'agent_actions' which are used to
-                configure the world.
+            world_folder: The path of the world folder, with JSON files of the behaviors (per role) and agent.py.
         """
 
-        # Deleting the "proc" parameter, if provided (it is the second one)
-        if len(args) == 2:
-            args = (args[0])
-
-        # Clearing keyword-level processor-related attributes
-        kwargs['proc'] = None  # Processor = None (existing)
-        kwargs['proc_inputs'] = None
-        kwargs['proc_outputs'] = None
-        kwargs['proc_opts'] = None
-
-        # Clearing behavior
-        kwargs['behav'] = None
-
-        # Removing world-specific arguments
-        if 'role_to_behav' in kwargs:
-            role_to_behav_files = kwargs['role_to_behav']
-            del kwargs['role_to_behav']
-        else:
-            role_to_behav_files = None
-
-        if 'agent_actions' in kwargs:
-            agent_actions_file = kwargs['agent_actions']
-            del kwargs['agent_actions']
-        else:
-            agent_actions_file = None
-
-        # Creating a "special" agent with no processor and no behavior, which is our world
-        super().__init__(*args, **kwargs)
+        # Creating a "special" agent with no processor and no behavior, but with a "world_folder", which is our world
+        super().__init__(proc=None, proc_inputs=None, proc_outputs=None, proc_opts=None, behav=None,
+                         world_folder=world_folder, merge_flat_stream_labels=merge_flat_stream_labels)
 
         # Clearing processor (world must have no processor, and, maybe, a dummy processor was allocated when building
         # the agent in the init call above)
@@ -69,37 +39,7 @@ class World(AgentBasics):
         self.compat_in_streams = None
         self.compat_out_streams = None
 
-        # World specific attributes
-        self.agent_badges: dict[str, list[dict]] = {}  # Peer_id -> collected badges for other agents
-        self.role_changed_by_world: bool = False
-        self.received_address_update: bool = False
-
-        # Loading agent (actions) file
-        if agent_actions_file is not None:
-            path_of_this_file = str(os.path.dirname(os.path.abspath(__file__)))
-            with open(agent_actions_file, 'r', encoding='utf-8') as file:
-                self.agent_actions = file.read()
-        else:
-            self.agent_actions = ""  # Empty string
-
-        # Loading default behaviours
-        self.role_to_behav = {}
-        if role_to_behav_files is not None:
-
-            # Creating a dummy agent which supports the actions of the following state machines
-            mod = types.ModuleType("dynamic_module")
-            exec(self.agent_actions, mod.__dict__)
-            dummy_agent = mod.WAgent(proc=None)
-            path_of_this_file = str(os.path.dirname(os.path.abspath(__file__)))
-
-            for role, default_behav_file in role_to_behav_files.items():
-                behav = HybridStateMachine(dummy_agent)
-                behav.load(default_behav_file)
-                self.role_to_behav[role] = str(behav)
-        else:
-            self.role_to_behav = None
-
-    def assign_role(self, profile: NodeProfile, is_world_master: bool):
+    def assign_role(self, profile: NodeProfile, is_world_master: bool) -> str:
         """Assigns an initial role to a newly connected agent.
 
         In this basic implementation, the role is determined based on whether the agent is a world master or a regular
@@ -110,7 +50,7 @@ class World(AgentBasics):
             is_world_master: A boolean indicating if the new agent is attempting to be a master.
 
         Returns:
-            An integer representing the assigned role (e.g., ROLE_WORLD_MASTER or ROLE_WORLD_AGENT).
+            A string representing the assigned role.
         """
         assert self.is_world, "Assigning a role is expected to be done by the world"
 
@@ -120,11 +60,11 @@ class World(AgentBasics):
         # Currently, roles are only world masters and world agents
         if is_world_master:
             if len(self.world_masters) <= 1:
-                return AgentBasics.ROLE_WORLD_MASTER
+                return AgentBasics.ROLE_BITS_TO_STR[AgentBasics.ROLE_WORLD_MASTER]
             else:
-                return AgentBasics.ROLE_WORLD_AGENT
+                return AgentBasics.ROLE_BITS_TO_STR[AgentBasics.ROLE_WORLD_AGENT]
         else:
-            return AgentBasics.ROLE_WORLD_AGENT
+            return AgentBasics.ROLE_BITS_TO_STR[AgentBasics.ROLE_WORLD_AGENT]
 
     def set_role(self, peer_id: str, role: int):
         """Sets a new role for a specific agent and broadcasts this change to the agent.
@@ -177,7 +117,7 @@ class World(AgentBasics):
             self.err(f"Cannot set addresses in profile, unknown peer_id {peer_id}")
 
     def add_badge(self, peer_id, score: float, badge_type: str, agent_token: str,
-                  badge_description: Optional[str] = None):
+                  badge_description: str | None = None):
         """Requests a badge for a specific agent, which can be used to track and reward agent performance.
         It validates the score and badge type and stores the badge information in an internal dictionary.
 

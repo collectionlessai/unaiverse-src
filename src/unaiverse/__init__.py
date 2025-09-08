@@ -14,6 +14,6 @@
 """
 from . import modules
 from . import networking
-from . import streamslib
+from . import streamlib
 from . import utils
 

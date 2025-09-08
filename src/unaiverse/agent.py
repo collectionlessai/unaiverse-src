@@ -25,6 +25,38 @@ from unaiverse.networking.p2p.messages import Msg
 class Agent(AgentBasics):
     """This class contains those basic actions that can be performed by every agent."""
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        # Status variables (assumed to start with "_"): Agent exchanges
+        self._available = True  # It will be automatically set/changed during the agent's life
+        self._found_agents = set()  # Peer IDs discovered
+        self._valid_cmp_agents = set()  # Agents for which the last evaluation was positive
+        self._engaged_agents = set()
+        self._agents_who_completed_what_they_were_asked = set()
+        self._agents_who_were_asked = set()
+        self._eval_results = {}
+
+        # Status variables (assumed to start with "_"): Recordings
+        self._last_recorded_stream_num = 1
+        self._last_recorded_stream_dict = None
+        self._last_recording_stream_dict = None
+
+        # Status variables (assumed to start with "_"): Playlist
+        self._preferred_streams = []  # List of preferred streams
+        self._cur_preferred_stream = 0  # ID of the current preferred stream from the list
+        self._repeat = 1  # Number of repetitions of the playlist
+
+    def remove_peer_from_agent_status_attrs(self, peer_id):
+        super().remove_peer_from_agent_status_attrs(peer_id)
+        self._available = len(self._engaged_agents) == 0
+
+    def reset_agent_status_attrs(self):
+        super().reset_agent_status_attrs()  # this sets status vars to [], {}, 0, 0., False, in function of their type
+        self._available = True
+        self._repeat = 1
+        self._last_recorded_stream_num = 1
+
     def set_next_action(self, agent: str | None, action: str, args: dict | None = None, ref_uuid: str | None = None):
         """Try to tell another agent what is the next action it should run.
 
@@ -100,7 +132,7 @@ class Agent(AgentBasics):
             return False
 
         # Confirming
-        if self.available:
+        if self._available:
             acceptable_role_int = self.ROLE_STR_TO_BITS[acceptable_role]
             if "~" not in acceptable_role:
                 sender_role_int = (self.ROLE_STR_TO_BITS[sender_role] >> 2) << 2
@@ -112,7 +144,7 @@ class Agent(AgentBasics):
                     self._engaged_agents.add(_requester)
 
                     # Marking this agent as not available since it engaged with another one
-                    self.available = False
+                    self._available = False
                     return True
                 else:
                     self.err(f"Unable to confirm engagement to {_requester}")
@@ -138,7 +170,7 @@ class Agent(AgentBasics):
             self._engaged_agents.add(_requester)
 
             # Marking this agent as not available since it engaged with another one
-            self.available = False
+            self._available = False
 
             # Removing the engaged agent from the list of found agents, to avoid sending him another engagement request
             self._found_agents.discard(_requester)
@@ -193,7 +225,7 @@ class Agent(AgentBasics):
         self._engaged_agents.discard(_requester)  # Remove if present
 
         # Marking this agent as available if not engaged to any agent
-        self.available = len(self._engaged_agents) == 0
+        self._available = len(self._engaged_agents) == 0
         return True
 
     def disengage_all(self):
@@ -206,7 +238,7 @@ class Agent(AgentBasics):
         self._engaged_agents = set()
 
         # Marking this agent as available
-        self.available = True
+        self._available = True
         return True
 
     def disconnect_by_role(self, role: str | list[str]):
@@ -430,7 +462,7 @@ class Agent(AgentBasics):
         if len(correctly_asked) > 0:
 
             # Saving
-            self._last_ref_uuid = ref_uuid
+            self.last_ref_uuid = ref_uuid
 
             # For each agent that we involve in this request....
             for peer_id in correctly_asked:
@@ -710,6 +742,9 @@ class Agent(AgentBasics):
 
         # Preparing the buffered stream where to store data, if needed
         if len(correctly_asked) > 0:
+
+            # Saving
+            self.last_ref_uuid = ref_uuid
 
             # For each agent that we involve in this request....
             for peer_id in correctly_asked:
@@ -1321,7 +1356,7 @@ class Agent(AgentBasics):
         self._eval_results = {}
         self.deb(f"[eval] Agents returning streams: {self._agents_who_completed_what_they_were_asked}")
         for peer_id in self._agents_who_completed_what_they_were_asked:
-            received_net_hash = self._last_buffered_peer_id_to_info[peer_id]["net_hash"]
+            received_net_hash = self.last_buffered_peer_id_to_info[peer_id]["net_hash"]
             self.out(f"Comparing {net_hash} with {received_net_hash}")
             eval_result, ret = self.__compare_streams(net_hash_a=net_hash,
                                                       net_hash_b=received_net_hash,
@@ -1553,11 +1588,11 @@ class Agent(AgentBasics):
         if u_hashes is not None:
             for u_hash in u_hashes:
                 if not DataProps.is_pubsub_from_net_hash(u_hash):
-                    self._recipients[u_hash] = agent
+                    self.recipients[u_hash] = agent
         if yhat_hashes is not None:
             for yhat_hash in yhat_hashes:
                 if not DataProps.is_pubsub_from_net_hash(yhat_hash):
-                    self._recipients[yhat_hash] = agent
+                    self.recipients[yhat_hash] = agent
 
         # Triggering
         if for_what == "gen":
@@ -1667,7 +1702,7 @@ class Agent(AgentBasics):
 
                     # Guessing recipient of the communication
                     if i == 0:
-                        self._recipients[net_hash] = recipient \
+                        self.recipients[net_hash] = recipient \
                             if not DataProps.is_pubsub_from_net_hash(net_hash) else None
 
                     self.deb(f"[__process_streams] Setting the {i}-th network output to stream with "

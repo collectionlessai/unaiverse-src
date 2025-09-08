@@ -54,10 +54,10 @@ class RNNTokenLM(ModuleWrapper):
         self.h = None
         self.y = None
 
-    def forward(self, u: torch.Tensor, first: bool = True, last: bool = False):
+    def forward(self, u: torch.Tensor | None = None, first: bool = True, last: bool = False):
         if first:
             h = self.h_init
-            u = self.u_init
+            u = self.u_init if u is None else u
         else:
             h = self.h.detach()
             u = self.embeddings((torch.argmax(self.y.detach(), dim=1) if self.y.shape[1] > 1
