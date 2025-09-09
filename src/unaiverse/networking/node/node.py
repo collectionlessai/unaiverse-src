@@ -1528,7 +1528,6 @@ class Node:
             self.agent.world_profile = profile
 
             # Setting the assigned role and default behavior (do it after having recreated the new agent object)
-            print(role)
             self.agent.accept_new_role(role)  # Do this after having done 'self.agent.world_profile = profile'
 
             # Updating wildcards

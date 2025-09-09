@@ -67,3 +67,6 @@ unaiverse/networking/root/api/secret.json
 *.dll
 *.so
 *.dylib
+mnist_data
+extracted_info.json
+stats.json
