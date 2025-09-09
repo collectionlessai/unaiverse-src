@@ -19,6 +19,9 @@ integration), provided that:
 
 - Your software is used only for non-commercial purposes, and
 - You do not modify or redistribute this software’s source code.
+- You do not alter the hardcoded network communications of this software.
+
+You can edit the examples as you prefer.
 
 If you find bugs, have suggestions for improvements, or wish to propose
 changes, you are welcome to share them (for example, by opening an issue or

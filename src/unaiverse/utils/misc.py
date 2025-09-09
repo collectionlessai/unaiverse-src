@@ -33,10 +33,12 @@ class GenException(Exception):
     pass
 
 
-def save_node_addresses_to_file(node, dir_path: str, public: bool):
-    address_file = os.path.join(dir_path, "addresses.txt")
-    with open(address_file, "w") as file:
+def save_node_addresses_to_file(node, dir_path: str, public: bool,
+                                filename: str = "addresses.txt", append: bool = False):
+    address_file = os.path.join(dir_path, filename)
+    with open(address_file, "w" if not append else "a") as file:
         file.write(str(node.get_public_addresses() if public else node.get_world_addresses()))
+        file.flush()
 
 
 def get_node_addresses_from_file(dir_path: str):

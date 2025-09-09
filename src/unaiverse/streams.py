@@ -21,7 +21,6 @@ import pathlib
 from PIL import Image
 from .clock import Clock
 from .dataprops import DataProps
-from typing_extensions import Self
 from unaiverse.utils.misc import show_images_grid
 
 
@@ -213,7 +212,7 @@ class DataStream:
             self.data_uuid_expected = None
             self.data_uuid_clearable = False
 
-    def set_props(self, data_stream: Self):
+    def set_props(self, data_stream: 'DataStream'):
         """Set (edit) the data properties picking up the ones of another DataStream.
 
         Args:

@@ -33,12 +33,12 @@ from unaiverse.clock import Clock
 from unaiverse.world import World
 from unaiverse.agent import Agent
 from unaiverse.networking.p2p import P2P
-from unaiverse.utils.misc import GenException
 from unaiverse.networking.p2p.messages import Msg
 from datetime import datetime, timezone, timedelta
 from unaiverse.networking.node.connpool import NodeConn
 from unaiverse.networking.node.profile import NodeProfile
 from unaiverse.streams import DataProps, BufferedDataStream
+from unaiverse.utils.misc import GenException, save_node_addresses_to_file
 
 
 class Node:
@@ -56,7 +56,7 @@ class Node:
                  hosted: Agent | World,
                  node_name: str | None = None,
                  node_id: str | None = None,
-                 hidden: bool = True,
+                 hidden: bool = False,
                  clock_delta: float = 1. / 25.,
                  only_certified_agents: bool = False,
                  allowed_node_ids: list[str] | set[str] = None,  # Optional: it is loaded from the online profile
@@ -95,11 +95,6 @@ class Node:
         if not (unaiverse_key is not None and isinstance(unaiverse_key, str)):
             raise GenException("Invalid UNaIVERSE key")
 
-        # warn user
-        if node_name is not None:
-            print(f"Warning: your node is identified by its name {node_name}, which might be associated to multiple "
-                  f"node IDs! If possible, use node ID in place of name")
-
         # Main attributes
         self.node_id = node_id
         self.unaiverse_key = unaiverse_key
@@ -132,6 +127,11 @@ class Node:
         # Interview of newly connected nodes
         self.interview_timeout = 45.  # Seconds
         self.connect_without_ack_timeout = 45.  # Seconds
+        
+        # Alive messaging
+        self.send_alive_every = 2.5 * 60.  # Seconds
+        self.last_alive_time = 0.
+        self.skip_was_alive_check = os.getenv("NODE_IGNORE_ALIVE", "0") == "1"
 
         # Root server-related
         self.root_endpoint = 'https://unaiverse.io/api'  # WARNING: EDITING THIS ADDRESS VIOLATES THE LICENSE
@@ -170,20 +170,29 @@ class Node:
         self.__inspector_cache = {"behav": None, "known_streams_count": 0, "all_agents_count": 0}
         self.__inspector_pause_event = None
 
+        # Replace key, if needed
+        if os.getenv("NODE_KEY") is not None:
+            self.unaiverse_key = os.getenv("NODE_KEY")
+        if self.unaiverse_key is None or self.unaiverse_key.upper() == "<UNAIVERSE_KEY_GOES_HERE>":
+            raise GenException(f"UNaIVERSE key was not provided. Either pass it a parameter when building a node or "
+                               f"set it to the environment variable 'NODE_KEY'")
+
         # TODO use "hidden"
 
         # Getting node ID (retrieving by name), if it was not provided (the node is created if not existing)
         if self.node_id is None:
-            self.node_id = self.get_node_id_by_name(node_name, create_if_missing=True)
-            if self.node_id is None:
-                raise GenException("Cannot create node: node ID was not set")
+            node_ids, were_alive = self.get_node_id_by_name([node_name], create_if_missing=True)
+            self.node_id = node_ids[0]
+            if were_alive[0]:
+                raise GenException(f"Cannot access node {node_name}, it is already running! "
+                                   f"(set env variable NODE_IGNORE_ALIVE=1 to ignore this control)")
 
         # Getting node ID of world masters, if needed
         if world_masters_node_names is not None and len(world_masters_node_names) > 0:
-            for master_node_name in world_masters_node_names:
-                master_node_id = self.get_node_id_by_name(master_node_name, create_if_missing=False)
+            master_node_ids, were_alive = self.get_node_id_by_name(world_masters_node_names, create_if_missing=True)
+            for master_node_name, master_node_id in zip(world_masters_node_names, master_node_ids):
                 if master_node_id is None:
-                    raise GenException(f"Cannot find world master node ID given its name: {master_node_id}")
+                    raise GenException(f"Cannot find world master node ID given its name: {master_node_name}")
                 else:
                     if self.world_masters_node_ids is None:
                         self.world_masters_node_ids = set()
@@ -210,6 +219,11 @@ class Node:
                     wait_public_reachability=os.getenv("NODE_WAIT_PUBLIC", "0") == "1",
                     port=(int(os.getenv("NODE_STARTING_PORT", "0")) + 2)
                     if int(os.getenv("NODE_STARTING_PORT", "0")) > 0 else 0)
+
+        # Save public addresses
+        # TODO
+        # if os.getenv("NODE_APPEND_ADDRESSES", "0") == "1":
+            # save_node_addresses_to_file(self, dir_path=)
 
         # Get first node token
         self.get_node_token(peer_ids=[p2p_u.peer_id, p2p_w.peer_id])  # Passing both the peer IDs
@@ -293,7 +307,7 @@ class Node:
             s = f"[{s}] {msg}"
             print(f"{self.text_color}{s}\033[0m")
 
-        if (self.inspector_connected or self.debug_server_running):
+        if self.inspector_connected or self.debug_server_running:
             last_id = self._output_messages_ids[self._output_messages_last_pos]
             self._output_messages_last_pos = (self._output_messages_last_pos + 1) % len(self._output_messages)
             self._output_messages_count = min(self._output_messages_count + 1, len(self._output_messages))
@@ -311,34 +325,65 @@ class Node:
         else:
             print("<ERROR> " + msg)
 
-    def get_node_id_by_name(self, node_name: str, create_if_missing: bool = False):
+    def get_node_id_by_name(self, node_names: list[str], create_if_missing: bool = False) \
+            -> tuple[list[str], list[bool]]:
         """Retrieves the node ID by its name from the root server, creating a new node if it's missing and specified.
 
         Args:
-            node_name: The name of the node to retrieve.
-            create_if_missing: A flag to create the node if it doesn't exist.
+            node_names: The list with the names of the nodes to retrieve.
+            create_if_missing: A flag to create the node if it doesn't exist (only valid for your own nodes).
 
         Returns:
-            The node ID or None if an error occurs.
+            The list of node IDs and the list of boolean flags telling if a node was already alive,
+            or an exception if an error occurs.
         """
         try:
-            response = self.__root("/account/node/TODO/TODO/retrieve",  # TODO
-                                   payload={"node_name": node_name,
-                                            "password": self.unaiverse_key})
-            if response["node_id"] is None and create_if_missing:
-                if self.node_type is Node.WORLD:
-
-                    # Discarding basic roles (public_agent, world_agent, ...)
-                    roles = list(set(self.world.ROLE_BITS_TO_STR.values()) - set(World.ROLE_BITS_TO_STR.values()))
+            response = self.__root("/account/node/get/id",
+                                   payload={"node_name": node_names,
+                                            "account_token": self.unaiverse_key})
+            node_ids = []
+            were_alive = []
+            missing = []
+            for i in range(0, len(response["nodes"])):
+                if response["nodes"][i] is not None:
+                    node_ids.append(response["nodes"][i]["node_id"])
+                    were_alive.append(response["nodes"][i]["was_alive"])
                 else:
-                    roles = []
-                response = self.__root("/account/node/TODO/TODO/create",  # TODO
-                                       payload={"node_name": node_name,
-                                                "roles": roles,
-                                                "password": self.unaiverse_key})
-            return response["node_id"]
+                    node_ids.append(None)
+                    were_alive.append(None)
+                missing.append(i)
         except Exception as e:
-            raise GenException(f"Error while retrieving node named {node_name} from server! [{e}]")
+            raise GenException(f"Error while retrieving nodes named {node_names} from server! [{e}]")
+
+        if create_if_missing:
+            for i in missing:
+                node_name = node_names[i]
+                if "/" in node_name or "@" in node_name:  # Cannot create nodes belonging to others
+                    continue
+                try:
+                    response = self.__root("/account/node/fast_register",
+                                           payload={"node_name": node_name,
+                                                    "node_type": self.node_type,
+                                                    "account_token": self.unaiverse_key})
+                    node_ids[i] = response["node_id"]
+                    were_alive[i] = False
+                except Exception as e:
+                    raise GenException(f"Error while registering node named {node_name} in server! [{e}]")
+        return node_ids, were_alive
+
+    def send_alive(self) -> bool:
+        """Send an alive message to the root server.
+
+        Returns:
+            A boolean flag indicating whether the node was already live before sending this.
+        """
+        try:
+            response = self.__root("/account/node/alive",
+                                   payload={"node_id": self.node_id,
+                                            "account_token": self.unaiverse_key})
+            return response["was_alive"]
+        except Exception as e:
+            raise GenException(f"Error while sending alive message to server! [{e}]")
 
     def get_node_token(self, peer_ids):
         """Generates and retrieves a node token from the root server.
@@ -352,7 +397,7 @@ class Node:
             try:
                 response = self.__root("/account/node/token/generate",
                                        payload={"node_id": self.node_id,
-                                                "password": self.unaiverse_key
+                                                "account_token": self.unaiverse_key
                                                 if self.node_token is None or len(self.node_token) == 0 else None,
                                                 "node_token": self.node_token, "peer_ids": json.dumps(peer_ids)})
                 break
@@ -480,12 +525,13 @@ class Node:
         """
         return self.conn[NodeConn.P2P_WORLD].peer_id
 
-    def ask_to_get_in_touch(self, addresses: list[str], public: bool = True,
+    def ask_to_get_in_touch(self, node_name: str | None = None, addresses: list[str] | None = None, public: bool = True,
                             before_updating_pools_fcn=None, run_count: int = 0):
         """Tries to connect to another agent or world node.
 
         Args:
-            addresses: A list of network addresses to connect to.
+            node_name: Name of the node to join (alternative to addresses below)
+            addresses: A list of network addresses to connect to (alternative to node_name).
             public: A boolean flag indicating whether to use the public or world P2P network.
             before_updating_pools_fcn: A function to call before updating the connection pools.
             run_count: The number of connection attempts made.
@@ -493,6 +539,15 @@ class Node:
         Returns:
             The peer ID of the connected node if successful, otherwise None.
         """
+
+        # Checking arguments
+        if (node_name is None and addresses is None) or (node_name is not None and addresses is not None):
+            raise GenException("Cannot specify both node_name and addresses or none of them, check your code!")
+
+        # Getting addresses, if needed
+        if addresses is None:
+            addresses = self.__root(api="account/node/get/addresses",
+                                    payload={"node_name": node_name, "account_token": self.unaiverse_key})["addresses"]
 
         # Connecting
         self.out("Connecting to another agent/world...")
@@ -510,7 +565,8 @@ class Node:
             if not self.conn.send(peer_id, channel_trail=None, content_type=Msg.MISC, content={"ping": "pong"},
                                   p2p=self.conn.p2p_name_to_p2p[NodeConn.P2P_PUBLIC if public else NodeConn.P2P_WORLD]):
                 if run_count < 2:
-                    return self.ask_to_get_in_touch(addresses, public, before_updating_pools_fcn, run_count=run_count+1)
+                    return self.ask_to_get_in_touch(addresses=addresses, public=public,
+                                                    before_updating_pools_fcn=before_updating_pools_fcn, run_count=run_count+1)
                 else:
                     self.err("Connection failed! (ping-pong max trials exceeded)")
                     return None
@@ -529,11 +585,12 @@ class Node:
             self.err("Connection failed!")
             return None
 
-    def ask_to_join_world(self, addresses: list[str], **kwargs):
+    def ask_to_join_world(self, node_name: str | None, addresses: list[str] | None = None, **kwargs):
         """Initiates a request to join a world.
 
         Args:
-            addresses: A list of network addresses of the world node.
+            node_name: The name of the node hosting the world to join (alternative to addresses below).
+            addresses: A list of network addresses of the world node (alternative to world_name).
             **kwargs: Additional options for joining the world.
 
         Returns:
@@ -547,7 +604,7 @@ class Node:
             self.leave(world_peer_id)
 
         # Connecting to the world (public)
-        peer_id = self.ask_to_get_in_touch(addresses, public=True)
+        peer_id = self.ask_to_get_in_touch(node_name=node_name, addresses=addresses, public=True)
 
         # Saving info
         if peer_id is not None:
@@ -819,6 +876,17 @@ class Node:
                 if self.clock.get_time() - last_get_token_time >= self.get_new_token_every:
                     self.get_node_token(peer_ids=[self.get_public_peer_id(), self.get_world_peer_id()])
                     last_get_token_time = self.clock.get_time()
+
+                # Sending alive message every "K" seconds
+                if self.clock.get_time() - self.last_alive_time >= self.send_alive_every:
+                    was_alive = self.send_alive()
+
+                    # Checking only at the first run
+                    if self.last_alive_time == 0 and was_alive and not self.skip_was_alive_check:
+                        print(f"The node is already alive, maybe running in a different machine? "
+                              f"(set env variable NODE_IGNORE_ALIVE=1 to ignore this control)")
+                        break  # Stopping the running cycle
+                    self.last_alive_time = self.clock.get_time()
 
                 # Check for address changes every "N" seconds
                 if self.clock.get_time() - last_address_check_time >= self.address_check_every:
@@ -1329,8 +1397,7 @@ class Node:
                     if msg.sender == self.conn.get_world_peer_id():
                         new_role_indication = msg.content
                         if new_role_indication['peer_id'] == self.get_world_peer_id():
-                            self.agent.accept_new_role(new_role_indication['role'],
-                                                       new_role_indication['default_behav'])
+                            self.agent.accept_new_role(new_role_indication['role'])
 
                             self.agent.behav.update_wildcard("<agent>", f"{self.get_world_peer_id()}")
                             self.agent.behav.update_wildcard("<world>", f"{msg.sender}")
@@ -1433,7 +1500,8 @@ class Node:
         # Connecting to the world (private)
         # notice that we also communicate the world node private peer ID to the connection manager,
         # to avoid filtering it out when updating pools
-        peer_id = self.ask_to_get_in_touch(addresses, public=False, before_updating_pools_fcn=self.conn.set_world)
+        peer_id = self.ask_to_get_in_touch(addresses=addresses, public=False,
+                                           before_updating_pools_fcn=self.conn.set_world)
 
         if peer_id is not None:
 

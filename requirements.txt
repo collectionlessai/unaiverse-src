@@ -10,4 +10,3 @@ PyJWT
 Requests
 torch
 torchvision
-typing_extensions

@@ -15,7 +15,6 @@
 import torch
 from PIL import Image
 from typing import Callable, Any
-from typing_extensions import Self
 from transformers import AutoTokenizer, PreTrainedTokenizerBase
 
 
@@ -1163,7 +1162,7 @@ class TensorLabels:
         """Interleaves the current labels with a super-set of labels, determining how to index them.
 
         Args:
-            superset_labels (Self): The super-set of labels to interleave with.
+            superset_labels (list[str]): The super-set of labels to interleave with.
 
         Returns:
             None
