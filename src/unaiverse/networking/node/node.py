@@ -766,13 +766,11 @@ class Node:
                         while self.__inspector_told_to_pause:
                             if not self.inspector_connected:
                                 self.__inspector_told_to_pause = False
+                                print("Resuming!")
                                 break
-                            print("Loop...")
 
                             public_messages = self.conn.get_messages(p2p_name=NodeConn.P2P_PUBLIC)
-                            world_messages = self.conn.get_messages(p2p_name=NodeConn.P2P_WORLD)
-                            all_messages = public_messages + world_messages
-                            for msg in all_messages:
+                            for msg in public_messages:
                                 if msg.content_type == Msg.INSPECT_CMD:
                                     if msg.piggyback == self.profile.get_static_profile()['inspector_node_id']:
                                         self.__handle_inspector_command(msg.content['cmd'], msg.content['arg'])
@@ -1897,18 +1895,25 @@ class Node:
         print(f"Handling inspector message {cmd}, with arg {arg}")
 
         if cmd == "ask_to_join_world":
+            print(f"Inspector asked to join world: {arg}")
             self.ask_to_join_world(arg)
         elif cmd == "ask_to_get_in_touch":
+            print(f"Inspector asked to get in touch with an agent: {arg}")
             self.ask_to_get_in_touch(arg, public=True)
         elif cmd == "leave":
+            print(f"Inspector asked to leave an agent: {arg}")
             self.leave(arg)
         elif cmd == "leave_world":
+            print(f"Inspector asked to leave the current world")
             self.leave_world()
         elif cmd == "pause":
+            print("Inspector asked to pause")
             self.__inspector_told_to_pause = True
         elif cmd == "play":
+            print("Inspector asked to play")
             self.__inspector_told_to_pause = False
         elif cmd == "save":
+            print("Inspector asked to save")
             self.hosted.save(arg)
         else:
             self.err("Unknown inspector command")
