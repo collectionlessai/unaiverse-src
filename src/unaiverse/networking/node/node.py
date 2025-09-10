@@ -170,7 +170,7 @@ class Node:
         self.inspector_peer_id = None
         self.debug_server_running = False
         self.__inspector_cache = {"behav": None, "known_streams_count": 0, "all_agents_count": 0}
-        self.__inspector_pause_event = None
+        self.__inspector_told_to_pause = False
 
         # Get key
         self.unaiverse_key = get_key_considering_multiple_sources(self.unaiverse_key)
@@ -312,7 +312,7 @@ class Node:
             self._output_messages_last_pos = (self._output_messages_last_pos + 1) % len(self._output_messages)
             self._output_messages_count = min(self._output_messages_count + 1, len(self._output_messages))
             self._output_messages_ids[self._output_messages_last_pos] = last_id + 1
-            self._output_messages[self._output_messages_last_pos] = html.escape(msg, quote=True)
+            self._output_messages[self._output_messages_last_pos] = html.escape(str(msg), quote=True)
 
     def err(self, msg: str):
         """Prints a formatted error message to the console.
@@ -689,9 +689,6 @@ class Node:
             if not (cycles is None or cycles > 0):
                 raise GenException("Invalid number of cycles")
 
-            # External event manipulated by inspector commands
-            self.__inspector_pause_event = threading.Event()
-
             # Interactive mode (useful when chatting with lone wolves)
             keyboard_queue = None
             keyboard_listener = None
@@ -763,9 +760,27 @@ class Node:
 
                 # Check inspector
                 if self.inspector_connected:
-                    if self.__inspector_pause_event.is_set():
-                        self.out("Paused by the inspector, waiting...")
-                        self.__inspector_pause_event.wait()
+                    if self.__inspector_told_to_pause:
+                        print("Paused by the inspector, waiting...")
+
+                        while self.__inspector_told_to_pause:
+                            if not self.inspector_connected:
+                                self.__inspector_told_to_pause = False
+                                break
+                            print("Loop...")
+
+                            public_messages = self.conn.get_messages(p2p_name=NodeConn.P2P_PUBLIC)
+                            world_messages = self.conn.get_messages(p2p_name=NodeConn.P2P_WORLD)
+                            all_messages = public_messages + world_messages
+                            for msg in all_messages:
+                                if msg.content_type == Msg.INSPECT_CMD:
+                                    if msg.piggyback == self.profile.get_static_profile()['inspector_node_id']:
+                                        self.__handle_inspector_command(msg.content['cmd'], msg.content['arg'])
+                                    else:
+                                        self.err("Inspector command was not sent by the expected inspector node ID "
+                                                 "or no inspector connected")
+                                        self.__purge(msg.sender)
+                            time.sleep(0.1)
 
                 # Move to the next cycle
                 while not self.clock.next_cycle():
@@ -1189,7 +1204,8 @@ class Node:
                         # If the node hosts a world and gets an expected and acceptable profile from the public network,
                         # assigns a role and sends the world profile (which includes private peer ID) and role to the
                         # requester
-                        if self.node_type is Node.WORLD and self.conn.is_public(peer_id=msg.sender):
+                        if (self.node_type is Node.WORLD and self.conn.is_public(peer_id=msg.sender) and
+                                self.inspector_peer_id != msg.sender):
                             self.out("Sending world approval message, profile, and assigned role to " + msg.sender +
                                      " (and switching peer ID in the interview queue)...")
                             node_id = msg.piggyback
@@ -1240,7 +1256,7 @@ class Node:
 
                         # If the node is an agent, it is time to tell the agent object that a new agent is now known,
                         # and send our profile to the agent that asked for out contact
-                        elif self.node_type is Node.AGENT:
+                        elif self.node_type is Node.AGENT or msg.sender == self.inspector_peer_id:
                             self.out("Sending agent approval message and profile...")
 
                             if not self.conn.send(msg.sender, channel_trail=None,
@@ -1462,6 +1478,7 @@ class Node:
                 if msg.piggyback == self.profile.get_static_profile()['inspector_node_id']:
                     self.inspector_connected = True
                     self.inspector_peer_id = msg.sender
+                    self.conn.set_inspector(self.inspector_peer_id)  # This will also move the inspector to its pool
                 else:
                     self.err("Inspector-activation message was not sent by the expected inspector node ID")
                     self.__purge(msg.sender)
@@ -1877,6 +1894,7 @@ class Node:
             arg: The argument for the command.
         """
         self.out(f"Handling inspector message {cmd}, with arg {arg}")
+        print(f"Handling inspector message {cmd}, with arg {arg}")
 
         if cmd == "ask_to_join_world":
             self.ask_to_join_world(arg)
@@ -1887,9 +1905,9 @@ class Node:
         elif cmd == "leave_world":
             self.leave_world()
         elif cmd == "pause":
-            self.__inspector_pause_event.set()
+            self.__inspector_told_to_pause = True
         elif cmd == "play":
-            self.__inspector_pause_event.clear()
+            self.__inspector_told_to_pause = False
         elif cmd == "save":
             self.hosted.save(arg)
         else:
@@ -1907,17 +1925,17 @@ class Node:
         # Collecting the HSM
         if self.__inspector_cache['behav'] != self.hosted.behav:
             self.__inspector_cache['behav'] = self.hosted.behav
-            behav = str(self.hosted.behav.to_graphviz().source)
+            behav = str(self.hosted.behav)
         else:
             behav = None
 
         # Collecting status of the HSM
         if self.hosted.behav is not None:
-            behav = self.hosted.behav
-            state = behav.get_state().id if behav.get_state() is not None else None
-            action = behav.get_action().id if behav.get_action() is not None else None
+            _behav = self.hosted.behav
+            state = _behav.get_state().id if _behav.get_state() is not None else None
+            action = _behav.get_action().id if _behav.get_action() is not None else None
             behav_status = {'state': state, 'action': action,
-                            'state_with_action': behav.get_state().has_action()
+                            'state_with_action': _behav.get_state().has_action()
                             if (state is not None) else False}
         else:
             behav_status = None
@@ -1925,14 +1943,15 @@ class Node:
         # Collecting known agents
         if self.__inspector_cache['all_agents_count'] != len(self.hosted.all_agents):
             self.__inspector_cache['all_agents_count'] = len(self.hosted.all_agents)
-            all_agents_profiles = self.hosted.all_agents
+            all_agents_profiles = {k: v.get_all_profile() for k, v in self.hosted.all_agents.items()}
         else:
             all_agents_profiles = None
 
         # Collecting known streams info
         if self.__inspector_cache['known_streams_count'] != len(self.hosted.known_streams):
             self.__inspector_cache['known_streams_count'] = len(self.hosted.known_streams)
-            known_streams_props = {k: v.get_props() for k, v in self.hosted.known_streams.items()}
+            known_streams_props = {(k + "-" + name): v.get_props().to_dict() for k, stream_dict in
+                                   self.hosted.known_streams.items() for name, v in stream_dict.items()}
         else:
             known_streams_props = None
 

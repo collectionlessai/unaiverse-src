@@ -63,6 +63,10 @@ class ConnectionPools:
         self.__token = token if token is not None else ""
         self.__token_verifier = TokenVerifier(public_key) if public_key is not None else None
 
+        # Special cases
+        self.special_peer_id = None
+        self.special_peer_id_allowed_content_types = None
+
         # Checking
         for p2p_name_and_ratio in pool_name_to_p2p_name_and_ratio.values():
             assert p2p_name_and_ratio[0] in self.p2p_name_to_p2p, f"Cannot find p2p named {p2p_name_and_ratio[0]} "
@@ -143,9 +147,7 @@ class ConnectionPools:
 
         Returns:
             The P2P object.
-
         """
-
         return self.p2p_name_to_p2p[p2p_name]
 
     def conn_routing_fcn(self, connected_peer_infos: list, p2p: P2P):
@@ -157,9 +159,7 @@ class ConnectionPools:
 
         Returns:
             A dictionary mapping pool names to a dictionary of peer IDs and their information.
-
         """
-
         raise NotImplementedError("You must implement conn_routing_fcn!")
 
     @staticmethod
@@ -172,7 +172,6 @@ class ConnectionPools:
 
         Returns:
             A tuple containing the peer ID and a boolean indicating if the connection was established through a relay.
-
         """
         if ConnectionPools.DEBUG:
             print(f"[DEBUG CONNECTIONS-POOL] Connecting to {addresses}")
@@ -201,7 +200,6 @@ class ConnectionPools:
 
         Returns:
             True if the disconnection is successful, otherwise False.
-
         """
         try:
             p2p.disconnect_from(peer_id)
@@ -214,10 +212,6 @@ class ConnectionPools:
 
         Args:
             token: The new token string.
-
-        Returns:
-            None.
-
         """
         self.__token = token
 
@@ -230,7 +224,6 @@ class ConnectionPools:
 
         Returns:
             A tuple containing the node ID and CV hash if the token is valid, otherwise None.
-
         """
         if self.__token_verifier is None:
             return None
@@ -247,7 +240,6 @@ class ConnectionPools:
 
         Returns:
             A tuple containing the peer ID of the connected peer and a boolean indicating if a relay was used.
-
         """
         p2p = self.p2p_name_to_p2p[p2p_name]
 
@@ -264,7 +256,6 @@ class ConnectionPools:
 
         Returns:
             True if the peer is successfully added, otherwise False.
-
         """
         peer_id = peer_info['id']
         pool, max_size, p2p = self.pool_name_to_pool_triple[pool_name]
@@ -295,7 +286,6 @@ class ConnectionPools:
 
         Returns:
             True if the peer is successfully removed, otherwise False.
-
         """
         if peer_id in self.peer_id_to_pool_name:
             pool_name = self.peer_id_to_pool_name[peer_id]
@@ -323,7 +313,6 @@ class ConnectionPools:
 
         Returns:
             A list of dictionaries, each containing information about a peer in the pool.
-
         """
         return list(self.pool_name_to_peer_infos[pool_name].values())
 
@@ -335,7 +324,6 @@ class ConnectionPools:
 
         Returns:
             A dictionary mapping pool names to the set of peer IDs in that pool.
-
         """
         return {k: v[0] for k, v in self.pool_name_to_pool_triple.items()}
 
@@ -347,7 +335,6 @@ class ConnectionPools:
 
         Returns:
             A list of all connected peer IDs.
-
         """
         return list(self.peer_id_to_pool_name.keys())
 
@@ -358,8 +345,8 @@ class ConnectionPools:
             None.
 
         Returns:
-            A tuple containing two dictionaries: one for newly added peers and one for removed peers, both keyed by pool name.
-
+            A tuple containing two dictionaries: one for newly added peers and one for removed peers, both keyed by
+            pool name.
         """
         self.pool_name_to_added_in_last_update = {}
         self.pool_name_to_removed_in_last_update = {}
@@ -402,7 +389,6 @@ class ConnectionPools:
 
         Returns:
             A list of verified and processed message objects.
-
         """
         # Pop all messages
         messages: list[Msg] = self[p2p_name].pop_messages()  # Pop all messages (list of messages - list[Msg])
@@ -433,7 +419,6 @@ class ConnectionPools:
 
         Returns:
             A set of added peer IDs for the specified pool, or a dictionary of sets for all pools.
-
         """
         if pool_name is not None:
             return self.pool_name_to_added_in_last_update[pool_name]
@@ -448,7 +433,6 @@ class ConnectionPools:
 
         Returns:
             A set of removed peer IDs for the specified pool, or a dictionary of sets for all pools.
-
         """
         if pool_name is not None:
             return self.pool_name_to_removed_in_last_update[pool_name]
@@ -463,7 +447,6 @@ class ConnectionPools:
 
         Returns:
             The token string if found, otherwise None.
-
         """
         return self.peer_id_to_token[peer_id] if peer_id in self.peer_id_to_token else None
 
@@ -476,7 +459,6 @@ class ConnectionPools:
 
         Returns:
             True if the peer is connected, otherwise False.
-
         """
         if pool_name is None:
             return peer_id in self.peer_id_to_pool_name
@@ -491,7 +473,6 @@ class ConnectionPools:
 
         Returns:
             The name of the pool the peer is in.
-
         """
         return self.peer_id_to_pool_name[peer_id]
 
@@ -503,7 +484,6 @@ class ConnectionPools:
 
         Returns:
             The size of the pool or the total number of connections.
-
         """
         if pool_name is not None:
             return len(self.pool_name_to_pool_triple[pool_name])
@@ -526,7 +506,6 @@ class ConnectionPools:
 
         Returns:
             True if the message is sent successfully, otherwise False.
-
         """
         # Getting the right p2p object
         if p2p is None:
@@ -541,6 +520,10 @@ class ConnectionPools:
             channel = f"{p2p.peer_id}::dm:{peer_id}-{content_type}~{channel_trail}"
         else:
             channel = f"{p2p.peer_id}::dm:{peer_id}-{content_type}"
+
+        # Filtering
+        if peer_id == self.special_peer_id and content_type not in self.special_peer_id_allowed_content_types:
+            return True
 
         # Adding sender info here
         msg = Msg(sender=p2p.peer_id,
@@ -574,8 +557,8 @@ class ConnectionPools:
 
         Returns:
             True if the subscription is successful, otherwise False.
-
         """
+
         # Getting the right p2p object
         p2p = None
         for _p2p in self.p2p_to_pool_names.keys():
@@ -605,8 +588,8 @@ class ConnectionPools:
 
         Returns:
             True if the unsubscription is successful, otherwise False.
-
         """
+
         # Getting the right p2p object
         p2p = None
         for _p2p in self.p2p_to_pool_names.keys():
@@ -636,8 +619,8 @@ class ConnectionPools:
 
         Returns:
             True if the message is published successfully, otherwise False.
-
         """
+
         # Getting the right p2p object
         p2p = None
         for _p2p in self.p2p_to_pool_names.keys():
@@ -648,6 +631,10 @@ class ConnectionPools:
             p2p = self.peer_id_to_p2p[peer_id]
         if p2p is None:
             return False
+
+        # Filtering
+        if peer_id == self.special_peer_id and content_type not in self.special_peer_id_allowed_content_types:
+            return True
 
         # Adding sender info here
         msg = Msg(sender=p2p.peer_id,
@@ -669,6 +656,16 @@ class ConnectionPools:
             # If send_message_to_peer fails, it will raise a P2PError. We catch it here.
             return False
 
+    def set_special_peer_id(self, peer_id: str, content_types: set[str]) -> None:
+        """Set the special peer_id, that does not receive messages unless they are of a specific type.
+
+        Args:
+            peer_id: Peer ID to consider a special case.
+            content_types: The set of types of content that is allowed for the special peer_id above.
+        """
+        self.special_peer_id = peer_id
+        self.special_peer_id_allowed_content_types = content_types
+
 
 class NodeConn(ConnectionPools):
 
@@ -677,6 +674,7 @@ class NodeConn(ConnectionPools):
     __WORLD_AGENTS_ONLY = "world_agents"
     __WORLD_NODE_ONLY = "world_node"
     __WORLD_MASTERS_ONLY = "world_masters"
+    __INSPECTOR_ONLY = "inspector"
 
     # Suffixes
     __PUBLIC_NET = "_public"
@@ -693,6 +691,8 @@ class NodeConn(ConnectionPools):
     # All pools (prefix + basic name + suffix)
     IN_PUBLIC = __INBOUND + __ALL_UNIVERSE + __PUBLIC_NET
     OUT_PUBLIC = __OUTBOUND + __ALL_UNIVERSE + __PUBLIC_NET
+    IN_INSPECTOR = __INBOUND + __INSPECTOR_ONLY + __PUBLIC_NET
+    OUT_INSPECTOR = __OUTBOUND + __INSPECTOR_ONLY + __PUBLIC_NET
     IN_WORLD_AGENTS = __INBOUND + __WORLD_AGENTS_ONLY + __PRIVATE_NET
     OUT_WORLD_AGENTS = __OUTBOUND + __WORLD_AGENTS_ONLY + __PRIVATE_NET
     IN_WORLD_NODE = __INBOUND + __WORLD_NODE_ONLY + __PRIVATE_NET
@@ -701,14 +701,14 @@ class NodeConn(ConnectionPools):
     OUT_WORLD_MASTERS = __OUTBOUND + __WORLD_MASTERS_ONLY + __PRIVATE_NET
 
     # Aggregated pools
-    PUBLIC = {IN_PUBLIC, OUT_PUBLIC}
+    PUBLIC = {IN_PUBLIC, OUT_PUBLIC, IN_INSPECTOR, OUT_INSPECTOR}
     WORLD_NODE = {IN_WORLD_NODE, OUT_WORLD_NODE}
     WORLD_AGENTS = {IN_WORLD_AGENTS, OUT_WORLD_AGENTS}
     WORLD_MASTERS = {IN_WORLD_MASTERS, OUT_WORLD_MASTERS}
     WORLD = WORLD_NODE | WORLD_AGENTS | WORLD_MASTERS
     ALL = PUBLIC | WORLD
-    OUTGOING = {OUT_PUBLIC, OUT_WORLD_NODE, OUT_WORLD_AGENTS, OUT_WORLD_MASTERS}
-    INCOMING = {IN_PUBLIC, IN_WORLD_NODE, IN_WORLD_AGENTS, IN_WORLD_MASTERS}
+    OUTGOING = {OUT_PUBLIC, OUT_INSPECTOR, OUT_WORLD_NODE, OUT_WORLD_AGENTS, OUT_WORLD_MASTERS}
+    INCOMING = {IN_PUBLIC, IN_INSPECTOR, IN_WORLD_NODE, IN_WORLD_AGENTS, IN_WORLD_MASTERS}
 
     def __init__(self, max_connections: int, p2p_u: P2P, p2p_w: P2P,
                  is_world_node: bool, public_key: str, token: str):
@@ -721,10 +721,6 @@ class NodeConn(ConnectionPools):
             is_world_node: A boolean flag indicating if this node is a world node.
             public_key: The public key for token verification.
             token: The node's authentication token.
-
-        Returns:
-            None.
-
         """
         super().__init__(max_connections=max_connections,
                          p2p_name_to_p2p={
@@ -739,7 +735,9 @@ class NodeConn(ConnectionPools):
                              NodeConn.IN_WORLD_NODE: [NodeConn.P2P_WORLD, 0. if not is_world_node else -1.],
                              NodeConn.OUT_WORLD_NODE: [NodeConn.P2P_WORLD, 0. if not is_world_node else -1],
                              NodeConn.IN_WORLD_MASTERS: [NodeConn.P2P_WORLD, 0. if not is_world_node else 0.25 / 2.],
-                             NodeConn.OUT_WORLD_MASTERS: [NodeConn.P2P_WORLD, 0. if not is_world_node else 0.25 / 2.]
+                             NodeConn.OUT_WORLD_MASTERS: [NodeConn.P2P_WORLD, 0. if not is_world_node else 0.25 / 2.],
+                             NodeConn.IN_INSPECTOR: [NodeConn.P2P_PUBLIC, 0. if not is_world_node else -1.],
+                             NodeConn.OUT_INSPECTOR: [NodeConn.P2P_PUBLIC, 0. if not is_world_node else -1],
                          },
                          public_key=public_key, token=token)
 
@@ -752,6 +750,7 @@ class NodeConn(ConnectionPools):
         self.world_masters_list = set()
         self.world_agents_and_world_masters_list = set()
         self.world_node_peer_id = None
+        self.inspector_peer_id = None
         self.role_to_peer_ids = {}
         self.peer_id_to_addrs = {}
 
@@ -759,15 +758,7 @@ class NodeConn(ConnectionPools):
         self.rendezvous_tag = -1
 
     def reset_rendezvous_tag(self):
-        """Resets the rendezvous tag to its initial state.
-
-        Args:
-            None.
-
-        Returns:
-            None.
-
-        """
+        """Resets the rendezvous tag to its initial state."""
         self.rendezvous_tag = -1
 
     def conn_routing_fcn(self, connected_peer_infos: list, p2p: P2P):
@@ -779,7 +770,6 @@ class NodeConn(ConnectionPools):
 
         Returns:
             A dictionary mapping pool names to a dictionary of peer IDs and their information.
-
         """
         pool_name_and_peer_id_to_peer_info = {k: {} for k in self.p2p_to_pool_names[p2p]}
         public = p2p == self.p2p_public
@@ -800,22 +790,25 @@ class NodeConn(ConnectionPools):
                 is_world_agent = peer_id in self.world_agents_list
                 is_world_master = peer_id in self.world_masters_list
                 is_world_node = self.world_node_peer_id is not None and peer_id == self.world_node_peer_id
-                if not is_world_node and not is_world_master and not is_world_agent:
+                is_inspector = self.inspector_peer_id is not None and peer_id == self.inspector_peer_id
+                if not is_world_node and not is_world_master and not is_world_agent and not is_inspector:
                     if ConnectionPools.DEBUG:
                         print("[DEBUG CONNECTIONS-POOL] World agents list:  " + str(self.world_agents_list))
                         print("[DEBUG CONNECTIONS-POOL] World masters list: " + str(self.world_masters_list))
                         print("[DEBUG CONNECTIONS-POOL] World node peer id: " + str(self.world_node_peer_id))
                         print(f"[DEBUG CONNECTIONS-POOL] Unable to determine the peer type for {peer_id}: "
-                              f"cannot say if world agent, master, node (disconnecting it)")
+                              f"cannot say if world agent, master, world node, inspector (disconnecting it)")
                         ConnectionPools.disconnect(p2p, peer_id)
                 if inbound:
                     pool_name_and_peer_id_to_peer_info[
-                        NodeConn.IN_WORLD_AGENTS if is_world_agent else (NodeConn.IN_WORLD_NODE if is_world_node else
-                                                                         NodeConn.IN_WORLD_MASTERS)][peer_id] = c
+                        NodeConn.IN_INSPECTOR if is_inspector else (NodeConn.IN_WORLD_AGENTS if is_world_agent else (
+                            NodeConn.IN_WORLD_NODE if is_world_node else
+                            NodeConn.IN_WORLD_MASTERS))][peer_id] = c
                 elif outbound:
                     pool_name_and_peer_id_to_peer_info[
-                        NodeConn.OUT_WORLD_AGENTS if is_world_agent else (NodeConn.OUT_WORLD_NODE if is_world_node else
-                                                                          NodeConn.OUT_WORLD_MASTERS)][peer_id] = c
+                        NodeConn.OUT_INSPECTOR if is_inspector else (NodeConn.OUT_WORLD_AGENTS if is_world_agent else (
+                            NodeConn.OUT_WORLD_NODE if is_world_node else
+                            NodeConn.OUT_WORLD_MASTERS))][peer_id] = c
                 else:
                     raise ValueError(f"Connection direction is undefined: {c}")
 
@@ -826,12 +819,30 @@ class NodeConn(ConnectionPools):
 
         Args:
             world_peer_id: The peer ID of the world node, or None to clear it.
-
-        Returns:
-            None.
-
         """
         self.world_node_peer_id = world_peer_id
+
+    def set_inspector(self, inspector_peer_id: str | None):
+        """Sets the peer ID of the inspector, moving it to its own pool.
+
+        Args:
+            inspector_peer_id: The peer ID of the inspector node.
+        """
+        self.inspector_peer_id = inspector_peer_id
+        self.set_special_peer_id(self.inspector_peer_id, {Msg.INSPECT_CMD, Msg.INSPECT_ON})
+        old_pool = self.peer_id_to_pool_name[self.inspector_peer_id]
+        if old_pool is not None and old_pool != NodeConn.IN_INSPECTOR and old_pool != NodeConn.OUT_INSPECTOR:
+
+            # Moving from a public (usually) pool to an inspector one
+            new_pool = NodeConn.IN_INSPECTOR if old_pool.startswith(self.__INBOUND) else NodeConn.OUT_INSPECTOR
+            self.peer_id_to_pool_name[self.inspector_peer_id] = new_pool
+            pool, _, p2p = self.pool_name_to_pool_triple[old_pool]
+            pool.remove(self.inspector_peer_id)
+            pool, _, p2p = self.pool_name_to_pool_triple[new_pool]
+            pool.add(self.inspector_peer_id)
+            infos = self.pool_name_to_peer_infos[old_pool][self.inspector_peer_id]
+            self.pool_name_to_peer_infos[new_pool][self.inspector_peer_id] = infos
+            del self.pool_name_to_peer_infos[old_pool][self.inspector_peer_id]
 
     def get_world_peer_id(self):
         """Returns the peer ID of the world node.
@@ -841,7 +852,6 @@ class NodeConn(ConnectionPools):
 
         Returns:
             The world node's peer ID.
-
         """
         return self.world_node_peer_id
 
@@ -851,10 +861,6 @@ class NodeConn(ConnectionPools):
         Args:
             peer_id: The peer ID to update.
             addresses: A new list of addresses for the peer.
-
-        Returns:
-            None.
-
         """
         if self.in_connection_queues(peer_id):
             addrs = self.pool_name_to_peer_infos[self.get_pool_of(peer_id)][peer_id]['addrs']
@@ -868,10 +874,6 @@ class NodeConn(ConnectionPools):
         Args:
             peer_id: The peer ID to update.
             new_role: The new role for the peer.
-
-        Returns:
-            None.
-
         """
         cur_role = self.get_role(peer_id)
 
@@ -896,11 +898,8 @@ class NodeConn(ConnectionPools):
 
         Args:
             world_agents_list_peer_infos: A list of dictionaries containing peer information for world agents.
-
-        Returns:
-            None.
-
         """
+
         # Clearing previous information
         to_remove = []
         for peer_id, misc in self.peer_id_to_misc.items():
@@ -928,11 +927,8 @@ class NodeConn(ConnectionPools):
 
         Args:
             world_masters_list_peer_infos: A list of dictionaries containing peer information for world masters.
-
-        Returns:
-            None.
-
         """
+
         # Clearing previous information
         to_remove = []
         for peer_id, misc in self.peer_id_to_misc.items():
@@ -962,10 +958,6 @@ class NodeConn(ConnectionPools):
             peer_id: The peer ID of the new agent.
             addrs: A list of addresses for the new agent.
             role: The role assigned to the agent.
-
-        Returns:
-            None.
-
         """
         self.world_agents_list.add(peer_id)
 
@@ -983,10 +975,6 @@ class NodeConn(ConnectionPools):
             peer_id: The peer ID of the new master.
             addrs: A list of addresses for the new master.
             role: The role assigned to the master.
-
-        Returns:
-            None.
-
         """
         self.world_masters_list.add(peer_id)
 
@@ -1005,7 +993,6 @@ class NodeConn(ConnectionPools):
 
         Returns:
             A dictionary mapping pool names to sets of added peer IDs, or a single set if only one pool is specified.
-
         """
         if pool_names is not None:
             ret = {}
@@ -1023,7 +1010,6 @@ class NodeConn(ConnectionPools):
 
         Returns:
             A dictionary mapping pool names to sets of removed peer IDs, or a single set if only one pool is specified.
-
         """
         if pool_names is not None:
             ret = {}
@@ -1041,7 +1027,6 @@ class NodeConn(ConnectionPools):
 
         Returns:
             The total number of connections.
-
         """
         if pool_names is not None:
             return super().size()
@@ -1060,7 +1045,6 @@ class NodeConn(ConnectionPools):
 
         Returns:
             True if the peer is found in any of the pools, otherwise False.
-
         """
         if pool_names is None:
             return super().is_connected(peer_id)
@@ -1078,7 +1062,6 @@ class NodeConn(ConnectionPools):
 
         Returns:
             True if the peer is in a public pool, otherwise False.
-
         """
         pool_name = self.get_pool_of(peer_id)
         return pool_name in NodeConn.PUBLIC
@@ -1091,7 +1074,6 @@ class NodeConn(ConnectionPools):
 
         Returns:
             True if the peer is in a world master pool, otherwise False.
-
         """
         pool_name = self.get_pool_of(peer_id)
         return pool_name in NodeConn.WORLD_MASTERS
@@ -1104,7 +1086,6 @@ class NodeConn(ConnectionPools):
 
         Returns:
             True if the peer is in a world node pool, otherwise False.
-
         """
         pool_name = self.get_pool_of(peer_id)
         return pool_name in NodeConn.WORLD_NODE
@@ -1117,7 +1098,6 @@ class NodeConn(ConnectionPools):
 
         Returns:
             True if the peer is in any world pool, otherwise False.
-
         """
         pool_name = self.get_pool_of(peer_id)
         return pool_name in NodeConn.WORLD
@@ -1130,7 +1110,6 @@ class NodeConn(ConnectionPools):
 
         Returns:
             The integer role of the peer.
-
         """
         role = self.peer_id_to_misc.get(peer_id, 0)  # 0 means public
         assert role >= 0, "Expecting role to be >= 0"
@@ -1145,7 +1124,6 @@ class NodeConn(ConnectionPools):
 
         Returns:
             A list of addresses for the peer.
-
         """
         return self.peer_id_to_addrs.get(peer_id)
 
@@ -1157,7 +1135,6 @@ class NodeConn(ConnectionPools):
 
         Returns:
             True if the peer is found in any pool, otherwise False.
-
         """
         return peer_id in self.peer_id_to_pool_name
 
@@ -1170,7 +1147,6 @@ class NodeConn(ConnectionPools):
 
         Returns:
             A list of lists of addresses, and optionally a list of peer IDs.
-
         """
         if role in self.role_to_peer_ids:
             peer_ids = self.role_to_peer_ids[role]
@@ -1199,7 +1175,6 @@ class NodeConn(ConnectionPools):
 
         Returns:
             The number of peers with that role.
-
         """
         if role in self.role_to_peer_ids:
             return len(self.role_to_peer_ids)
@@ -1214,7 +1189,6 @@ class NodeConn(ConnectionPools):
 
         Returns:
             A list of dictionaries containing peer information.
-
         """
         ret = []
         for p in pool_names:
@@ -1222,15 +1196,7 @@ class NodeConn(ConnectionPools):
         return ret
 
     def set_world_agents_and_world_masters_lists_from_rendezvous(self):
-        """Updates the lists of world agents and masters using data from the rendezvous topic.
-
-        Args:
-            None.
-
-        Returns:
-            None.
-
-        """
+        """Updates the lists of world agents and masters using data from the rendezvous topic."""
         rendezvous_state = self.p2p_world.get_rendezvous_peers_info()
 
         if rendezvous_state is not None:
@@ -1270,7 +1236,6 @@ class NodeConn(ConnectionPools):
 
         Returns:
             The CV hash string, or None if not found.
-
         """
         token = self.get_last_token(peer_id)
         if token is not None:
@@ -1284,25 +1249,13 @@ class NodeConn(ConnectionPools):
 
         Args:
             peer_id: The peer ID to remove.
-
-        Returns:
-            None.
-
         """
         super().remove(peer_id)
         if peer_id in self.peer_id_to_addrs:
             del self.peer_id_to_addrs[peer_id]
 
     def remove_all_world_agents(self):
-        """Removes all connected world agents from the pools and role lists.
-
-        Args:
-            None.
-
-        Returns:
-            None.
-
-        """
+        """Removes all connected world agents from the pools and role lists."""
         peer_infos = self.get_all_connected_peer_infos(NodeConn.WORLD)
         for c in peer_infos:
             peer_id = c['id']
@@ -1321,7 +1274,6 @@ class NodeConn(ConnectionPools):
 
         Returns:
             True if successful, False otherwise.
-
         """
         return super().subscribe(peer_id, channel,
                                  default_p2p_name=NodeConn.P2P_WORLD if default_p2p_name is None else default_p2p_name)
@@ -1335,7 +1287,6 @@ class NodeConn(ConnectionPools):
 
         Returns:
             A list of verified and processed message objects.
-
         """
         assert allowed_not_connected_peers is None, "This param (allowed_not_connected_peers is ignored in NodeConn"
         return super().get_messages(p2p_name, allowed_not_connected_peers=self.world_agents_and_world_masters_list)

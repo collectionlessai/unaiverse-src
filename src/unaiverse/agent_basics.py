@@ -434,35 +434,36 @@ class AgentBasics:
         # Guessing the type of agent to add (accordingly to the default roles shared by every agent)
         role = self._node_conn.get_role(peer_id)
         self.all_agents[peer_id] = profile
-        if role & 1 == self.ROLE_PUBLIC:
-            self.public_agents[peer_id] = profile
-            public = True
-        elif role & 3 == self.ROLE_WORLD_AGENT:
-            self.world_agents[peer_id] = profile
-            public = False
-        elif role & 3 == self.ROLE_WORLD_MASTER:
-            self.world_masters[peer_id] = profile
-            public = False
-        else:
-            self.err(f"Cannot add agent with peer ID {peer_id} - unknown role: {role}")
-            return False
-
-        # Check compatibility of the streams owned by the agent we are adding with our-agent's processor
-        if self.proc_outputs is not None and self.proc_inputs is not None:
-
-            # Check compatibility of the environmental streams of the agent we are adding with our-agent's processor
-            environmental_streams = profile.get_dynamic_profile()['streams']
-            if (environmental_streams is not None and
-                    not self.add_compatible_streams(peer_id, environmental_streams,
-                                                    buffered=False, public=public)):  # This will also "add" the stream
+        if peer_id != self._node_conn.inspector_peer_id:
+            if role & 1 == self.ROLE_PUBLIC:
+                self.public_agents[peer_id] = profile
+                public = True
+            elif role & 3 == self.ROLE_WORLD_AGENT:
+                self.world_agents[peer_id] = profile
+                public = False
+            elif role & 3 == self.ROLE_WORLD_MASTER:
+                self.world_masters[peer_id] = profile
+                public = False
+            else:
+                self.err(f"Cannot add agent with peer ID {peer_id} - unknown role: {role}")
                 return False
 
-            # Check compatibility of the generated streams of the agent we are adding with our-agent's processor
-            proc_streams = profile.get_dynamic_profile()['proc_outputs']
-            if (proc_streams is not None and
-                    not self.add_compatible_streams(peer_id, profile.get_dynamic_profile()['proc_outputs'],
-                                                    buffered=False, public=public)):  # This will also "add" the stream
-                return False
+            # Check compatibility of the streams owned by the agent we are adding with our-agent's processor
+            if self.proc_outputs is not None and self.proc_inputs is not None:
+
+                # Check compatibility of the environmental streams of the agent we are adding with our-agent's processor
+                environmental_streams = profile.get_dynamic_profile()['streams']
+                if (environmental_streams is not None and
+                        not self.add_compatible_streams(peer_id, environmental_streams,
+                                                        buffered=False, public=public)):  # This will also "add" the stream
+                    return False
+
+                # Check compatibility of the generated streams of the agent we are adding with our-agent's processor
+                proc_streams = profile.get_dynamic_profile()['proc_outputs']
+                if (proc_streams is not None and
+                        not self.add_compatible_streams(peer_id, profile.get_dynamic_profile()['proc_outputs'],
+                                                        buffered=False, public=public)):  # This will also "add" the stream
+                    return False
 
         self.out(f"Successfully added agent with peer ID {peer_id}")
         return True
