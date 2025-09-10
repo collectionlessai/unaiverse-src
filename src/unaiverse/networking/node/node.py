@@ -177,7 +177,8 @@ class Node:
 
         # Getting node ID (retrieving by name), if it was not provided (the node is created if not existing)
         if self.node_id is None:
-            node_ids, were_alive = self.get_node_id_by_name([node_name], create_if_missing=True)
+            node_ids, were_alive = self.get_node_id_by_name([node_name],
+                                                            create_if_missing=True)
             self.node_id = node_ids[0]
             if were_alive[0]:
                 raise GenException(f"Cannot access node {node_name}, it is already running! "
@@ -185,7 +186,8 @@ class Node:
 
         # Getting node ID of world masters, if needed
         if world_masters_node_names is not None and len(world_masters_node_names) > 0:
-            master_node_ids, were_alive = self.get_node_id_by_name(world_masters_node_names, create_if_missing=True)
+            master_node_ids, were_alive = self.get_node_id_by_name(world_masters_node_names,
+                                                                   create_if_missing=True, node_type=Node.AGENT)
             for master_node_name, master_node_id in zip(world_masters_node_names, master_node_ids):
                 if master_node_id is None:
                     raise GenException(f"Cannot find world master node ID given its name: {master_node_name}")
@@ -322,13 +324,15 @@ class Node:
         else:
             print("<ERROR> " + msg)
 
-    def get_node_id_by_name(self, node_names: list[str], create_if_missing: bool = False) \
-            -> tuple[list[str], list[bool]]:
+    def get_node_id_by_name(self, node_names: list[str], create_if_missing: bool = False,
+                            node_type: str | None = None) -> tuple[list[str], list[bool]]:
         """Retrieves the node ID by its name from the root server, creating a new node if it's missing and specified.
 
         Args:
             node_names: The list with the names of the nodes to retrieve.
             create_if_missing: A flag to create the node if it doesn't exist (only valid for your own nodes).
+            node_type: The type of the node to create if missing (if create_if_missing is True) - default: the type of
+                the current node.
 
         Returns:
             The list of node IDs and the list of boolean flags telling if a node was already alive,
@@ -360,7 +364,7 @@ class Node:
                 try:
                     response = self.__root("/account/node/fast_register",
                                            payload={"node_name": node_name,
-                                                    "node_type": self.node_type,
+                                                    "node_type": self.node_type if node_type is None else node_type,
                                                     "account_token": self.unaiverse_key})
                     node_ids[i] = response["node_id"]
                     were_alive[i] = False
