@@ -38,7 +38,7 @@ from datetime import datetime, timezone, timedelta
 from unaiverse.networking.node.connpool import NodeConn
 from unaiverse.networking.node.profile import NodeProfile
 from unaiverse.streams import DataProps, BufferedDataStream
-from unaiverse.utils.misc import GenException, get_key_considering_multiple_sources
+from unaiverse.utils.misc import GenException, get_key_considering_multiple_sources, save_node_addresses_to_file
 
 
 class Node:
@@ -219,9 +219,10 @@ class Node:
                     if int(os.getenv("NODE_STARTING_PORT", "0")) > 0 else 0)
 
         # Save public addresses
-        # TODO
-        # if os.getenv("NODE_APPEND_ADDRESSES", "0") == "1":
-            # save_node_addresses_to_file(self, dir_path=)
+        path_to_append_addresses = os.getenv("NODE_SAVE_RUNNING_ADDRESSES")
+        if path_to_append_addresses is not None and not hidden:  # Only for visible nodes
+            save_node_addresses_to_file(self, public=True, dir_path=path_to_append_addresses,
+                                        filename="running.csv", append=True)
 
         # Get first node token
         self.get_node_token(peer_ids=[p2p_u.peer_id, p2p_w.peer_id])  # Passing both the peer IDs
@@ -331,7 +332,7 @@ class Node:
         Args:
             node_names: The list with the names of the nodes to retrieve.
             create_if_missing: A flag to create the node if it doesn't exist (only valid for your own nodes).
-            node_type: The type of the node to create if missing (if create_if_missing is True) - default: the type of
+            node_type: The type of the node to create if missing (when create_if_missing is True) - default: the type of
                 the current node.
 
         Returns:
@@ -476,7 +477,7 @@ class Node:
                                              f"Badge: {badges[z]}. "
                                              f"Error message: {ret['state']['message']}")
                                 else:
-                                    peer_ids_to_notify.add(peer_ids[i])
+                                    peer_ids_to_notify.add(peer_ids[z])
 
                         # Notify agents
                         for peer_id in peer_ids_to_notify:
@@ -486,6 +487,7 @@ class Node:
 
                         # Clearing
                         self.world.clear_badges()
+                        break
                     except Exception as e:
                         self.err(f"Error while sending badges to server or when notifying peers [{e}]")
                         if i < 2:
@@ -567,7 +569,8 @@ class Node:
                                   p2p=self.conn.p2p_name_to_p2p[NodeConn.P2P_PUBLIC if public else NodeConn.P2P_WORLD]):
                 if run_count < 2:
                     return self.ask_to_get_in_touch(addresses=addresses, public=public,
-                                                    before_updating_pools_fcn=before_updating_pools_fcn, run_count=run_count+1)
+                                                    before_updating_pools_fcn=before_updating_pools_fcn,
+                                                    run_count=run_count+1)
                 else:
                     self.err("Connection failed! (ping-pong max trials exceeded)")
                     return None
@@ -1435,7 +1438,7 @@ class Node:
                 self.out("Received a notification to re-download the CV...")
 
                 # Downloading CV
-                self.get_cv()
+                self.profile.update_cv(self.get_cv())
 
                 # Re-downloading token (it will include the new CV hash)
                 self.get_node_token(peer_ids=[self.get_public_peer_id(), self.get_world_peer_id()])
@@ -1457,14 +1460,8 @@ class Node:
                 self.out("Received an inspector-activation message...")
 
                 if msg.piggyback == self.profile.get_static_profile()['inspector_node_id']:
-
-                    # TODO reactivate these
-                    # self.inspector_connected = True
-                    # self.inspector_peer_id = msg.sender
-
-                    # TODO remove these
-                    self.inspector_connected = False
-                    self.inspector_peer_id = None
+                    self.inspector_connected = True
+                    self.inspector_peer_id = msg.sender
                 else:
                     self.err("Inspector-activation message was not sent by the expected inspector node ID")
                     self.__purge(msg.sender)
@@ -1706,9 +1703,7 @@ class Node:
             if not sanity_ok:
                 self.out(f"The CV in the profile of f{peer_id} failed the sanity check {pairs_of_hashes},"
                          f" {profile.get_cv()}")
-                self.out("WARNING: TEMPORARILY IGNORING THIS FAILED CV SANITY CHECK - REACTIVATE IT - TODO")
-
-                # Return False  # TODO REACTIVATE THIS
+                return False
 
             # Determining type of agent, checking the connection pools
             role = self.conn.get_role(peer_id)

@@ -126,7 +126,7 @@ class Clock:
             str: A string representation of the current time (ISO format, UTC).
         """
         dt_object = datetime.fromtimestamp(self.get_time(), tz=timezone.utc)
-        return dt_object.isoformat()
+        return dt_object.isoformat(timespec='milliseconds')
 
     def get_cycle(self):
         """Get the current cycle index.

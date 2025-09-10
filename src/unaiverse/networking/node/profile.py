@@ -137,6 +137,9 @@ class NodeProfile:
         # Flag
         self._connections_updated = False
 
+    def update_cv(self, new_cv):
+        self._profile_data['cv'] = new_cv
+
     @classmethod
     def from_dict(cls, combined_data: dict) -> 'NodeProfile':
         """Factory method to create a NodeProfile instance from a dictionary

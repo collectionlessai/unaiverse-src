@@ -37,26 +37,33 @@ def save_node_addresses_to_file(node, dir_path: str, public: bool,
                                 filename: str = "addresses.txt", append: bool = False):
     address_file = os.path.join(dir_path, filename)
     with open(address_file, "w" if not append else "a") as file:
-        file.write(str(node.get_public_addresses() if public else node.get_world_addresses()))
+        file.write(node.hosted.get_name() + "," +
+                   str(node.get_public_addresses() if public else node.get_world_addresses()) + "\n")
         file.flush()
 
 
-def get_node_addresses_from_file(dir_path: str):
-    while not os.path.exists(os.path.join(dir_path, "addresses.txt")):
-        time.sleep(1.)
-    with open(os.path.join(dir_path, "addresses.txt")) as file:
+def get_node_addresses_from_file(dir_path: str, filename: str = "addresses.txt") -> dict[str, list[str]]:
+    ret = {}
+    with open(os.path.join(dir_path, filename)) as file:
         lines = file.readlines()
-        if lines[0].strip()[0] == "[":
-            addresses = ast.literal_eval(lines[0].strip())
-        elif lines[0].strip()[0] == "/":
+
+        # Old file format
+        if lines[0].strip() == "/":
             addresses = []
             for line in lines:
                 _line = line.strip()
                 if len(_line) > 0:
                     addresses.append(_line)
-        else:
-            raise ValueError("Invalid format of file address.txt")
-    return addresses
+            ret["unk"] = addresses
+            return ret
+
+        # New file format
+        for line in lines:
+            comma_separated_values = [v.strip() for v in line.split(',')]
+            node_name, addresses_str = comma_separated_values
+            ret[node_name] = ast.literal_eval(addresses_str)  # Name appearing multiple times? the last entry is kept
+
+    return ret
 
 
 class Silent:

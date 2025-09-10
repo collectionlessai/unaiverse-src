@@ -116,7 +116,7 @@ class World(AgentBasics):
         else:
             self.err(f"Cannot set addresses in profile, unknown peer_id {peer_id}")
 
-    def add_badge(self, peer_id, score: float, badge_type: str, agent_token: str,
+    def add_badge(self, peer_id: str, score: float, badge_type: str, agent_token: str,
                   badge_description: str | None = None):
         """Requests a badge for a specific agent, which can be used to track and reward agent performance.
         It validates the score and badge type and stores the badge information in an internal dictionary.
@@ -154,6 +154,9 @@ class World(AgentBasics):
             self.agent_badges[peer_id] = [badge]
         else:
             self.agent_badges[peer_id].append(badge)
+
+        # This will force the sending of the dynamic profile at the defined time instants
+        self._node_profile.mark_change_in_connections()
 
     # Get all the badges requested by the world
     def get_all_badges(self):
