@@ -94,7 +94,7 @@ class Node:
             raise GenException("Cannot specify both node ID and node name")
         if not (node_name is not None or node_id is not None):
             raise GenException("You must specify either node ID or node name: both are missing")
-        if not (unaiverse_key is not None and isinstance(unaiverse_key, str)):
+        if not (unaiverse_key is None or isinstance(unaiverse_key, str)):
             raise GenException("Invalid UNaIVERSE key")
 
         # Main attributes

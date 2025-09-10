@@ -247,9 +247,9 @@ def get_key_considering_multiple_sources(key_variable: str | None) -> str:
     # Getting from code-specified option
     if key_variable is not None and len(key_variable.strip()) > 0:
         key_from_var = key_variable.strip()
+        if key_from_var.startswith("<") and key_from_var.endswith(">"):  # Something like <UNAIVERSE_KEY_GOES_HERE>
+            key_from_var = None
     else:
-        key_from_var = None
-    if key_from_var.startswith("<") and key_from_var.endswith(">"):  # Something like <UNAIVERSE_KEY_GOES_HERE>
         key_from_var = None
 
     # Finding valid sources and checking if multiple keys were provided
