@@ -38,7 +38,7 @@ from datetime import datetime, timezone, timedelta
 from unaiverse.networking.node.connpool import NodeConn
 from unaiverse.networking.node.profile import NodeProfile
 from unaiverse.streams import DataProps, BufferedDataStream
-from unaiverse.utils.misc import GenException, save_node_addresses_to_file
+from unaiverse.utils.misc import GenException, get_key_considering_multiple_sources
 
 
 class Node:
@@ -52,8 +52,9 @@ class Node:
     TEXT_LAST_USED_COLOR = 0
     TEXT_LOCK = threading.Lock()
 
-    def __init__(self, unaiverse_key: str,
+    def __init__(self,
                  hosted: Agent | World,
+                 unaiverse_key: str | None = None,
                  node_name: str | None = None,
                  node_id: str | None = None,
                  hidden: bool = False,
@@ -67,8 +68,9 @@ class Node:
         """Initializes a new instance of the Node class.
 
         Args:
-            unaiverse_key: The UNaIVERSE key for authentication.
             hosted: The Agent or World entity hosted by this node.
+            unaiverse_key: The UNaIVERSE key for authentication (if None, it will be loaded from env var or cache file,
+                or you will be asked for it).
             node_name: A human-readable name for the node (using node ID is preferable; use this or node ID, not both).
             node_id: A unique identifier for the node (use this or the node name, not both).
             hidden: A flag to determine if the node is hidden (i.e., only the owner of the account can see it).
@@ -170,14 +172,8 @@ class Node:
         self.__inspector_cache = {"behav": None, "known_streams_count": 0, "all_agents_count": 0}
         self.__inspector_pause_event = None
 
-        # Replace key, if needed
-        if os.getenv("NODE_KEY") is not None:
-            self.unaiverse_key = os.getenv("NODE_KEY")
-        if self.unaiverse_key is None or self.unaiverse_key.upper() == "<UNAIVERSE_KEY_GOES_HERE>":
-            raise GenException(f"UNaIVERSE key was not provided. Either pass it a parameter when building a node or "
-                               f"set it to the environment variable 'NODE_KEY'")
-
-        # TODO use "hidden"
+        # Get key
+        self.unaiverse_key = get_key_considering_multiple_sources(self.unaiverse_key)
 
         # Getting node ID (retrieving by name), if it was not provided (the node is created if not existing)
         if self.node_id is None:
@@ -281,7 +277,8 @@ class Node:
                                                     profile_static['node_name']
                                                     if self.node_type is Node.WORLD else None
                                             },
-                                            "world_roles_fsm": None,  # will be filled later if this is a world
+                                            "world_roles_fsm": None,  # This will be filled later if this is a world
+                                            "hidden": hidden  # Marking the node as hidden (or not)
                                             },
                                    cv=cv)  # Adding CV here
 
@@ -585,7 +582,7 @@ class Node:
             self.err("Connection failed!")
             return None
 
-    def ask_to_join_world(self, node_name: str | None, addresses: list[str] | None = None, **kwargs):
+    def ask_to_join_world(self, node_name: str | None = None, addresses: list[str] | None = None, **kwargs):
         """Initiates a request to join a world.
 
         Args:

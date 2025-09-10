@@ -211,3 +211,85 @@ class FileTracker:
                     if f in self.last_state and new_state[f] != self.last_state[f]]
         self.last_state = new_state
         return created or modified
+
+
+def prepare_key_dir(app_name):
+    app_name = app_name.lower()
+    if os.name == "nt":  # Windows
+        if os.getenv("APPDATA") is not None:
+            key_dir = os.path.join(os.getenv("APPDATA"), "Local", app_name)  # Expected
+        else:
+            key_dir = os.path.join(str(Path.home()), f".{app_name}")  # Fallback
+    else:  # Linux/macOS
+        key_dir = os.path.join(str(Path.home()), f".{app_name}")
+    os.makedirs(key_dir, exist_ok=True)
+    return key_dir
+
+
+def get_key_considering_multiple_sources(key_variable: str | None) -> str:
+
+    # Creating folder (if needed) to store the key
+    try:
+        key_dir = prepare_key_dir(app_name="UNaIVERSE")
+    except Exception:
+        raise GenException("Cannot create folder to store the key file")
+    key_file = os.path.join(key_dir, "key")
+
+    # Getting from an existing file
+    key_from_file = None
+    if os.path.exists(key_file):
+        with open(key_file, "r") as f:
+            key_from_file = f.read().strip()
+
+    # Getting from env variable
+    key_from_env = os.getenv("NODE_KEY", None)
+
+    # Getting from code-specified option
+    if key_variable is not None and len(key_variable.strip()) > 0:
+        key_from_var = key_variable.strip()
+    else:
+        key_from_var = None
+    if key_from_var.startswith("<") and key_from_var.endswith(">"):  # Something like <UNAIVERSE_KEY_GOES_HERE>
+        key_from_var = None
+
+    # Finding valid sources and checking if multiple keys were provided
+    _keys = [key_from_var, key_from_env, key_from_file]
+    _source_names = ["your code", "env variable 'NODE_KEY'", f"cache file {key_file}"]
+    source_names = []
+    mismatching = False
+    multiple_source = False
+    first_key = None
+    first_source = None
+    _prev_key = None
+    for i, (_key, _source_name) in enumerate(zip(_keys, _source_names)):
+        if _key is not None:
+            source_names.append(_source_name)
+            if _prev_key is not None:
+                if _key != _prev_key:
+                    mismatching = True
+                multiple_source = True
+            else:
+                _prev_key = _key
+                first_key = _key
+                first_source = _source_name
+
+    if len(source_names) > 0:
+        msg = ""
+        if multiple_source and not mismatching:
+            msg = "UNaIVERSE key (the exact same key) present in multiple locations: " + ", ".join(source_names)
+        if multiple_source and mismatching:
+            msg = "UNaIVERSE keys (different keys) present in multiple locations: " + ", ".join(source_names)
+            msg += "\nLoaded the one stored in " + first_source
+        if not multiple_source:
+            msg = f"UNaIVERSE key loaded from {first_source}"
+        print(msg)
+        return first_key
+    else:
+
+        # If no key present, ask user and save to file
+        print("UNaIVERSE key not present in " + ", ".join(_source_names))
+        print("If you did not already do it, go to https://unaiverse.io, login, and generate a key")
+        key = input("Enter your UNaIVERSE key, that will be save to the cache file: ").strip()
+        with open(key_file, "w") as f:
+            f.write(key)
+        return key
