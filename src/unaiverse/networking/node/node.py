@@ -1953,6 +1953,8 @@ class Node:
         if self.__inspector_cache['all_agents_count'] != len(self.hosted.all_agents):
             self.__inspector_cache['all_agents_count'] = len(self.hosted.all_agents)
             all_agents_profiles = {k: v.get_all_profile() for k, v in self.hosted.all_agents.items()}
+            if self.hosted.in_world() and self.conn.world_node_peer_id is not None:
+                all_agents_profiles[self.conn.world_node_peer_id] = self.hosted.world_profile
         else:
             all_agents_profiles = None
 
@@ -1978,7 +1980,7 @@ class Node:
             self.err("Failed to send data to the inspector")
 
         # Sending stream data (not pubsub) to the inspector
-        my_peer_id = self.get_public_peer_id()
+        my_peer_ids = (self.get_public_peer_id(), self.get_world_peer_id())
         for net_hash, streams_dict in self.hosted.known_streams.items():
             peer_id = DataProps.peer_id_from_net_hash(net_hash)
 
@@ -1992,7 +1994,7 @@ class Node:
                     something_to_send = True
 
                 self.hosted.deb(f"[__send_to_inspector] Preparing to send stream samples from {net_hash}, {name}")
-                content[(peer_id + "|" + name) if peer_id != my_peer_id else name] = \
+                content[(peer_id + "|" + name) if peer_id not in my_peer_ids else name] = \
                     {'data': data, 'data_tag': stream.get_tag(), 'data_uuid': stream.get_uuid()}
 
             # Checking if there is something valid in this group of streams to send to inspector
