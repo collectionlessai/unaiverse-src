@@ -218,12 +218,6 @@ class Node:
                     port=(int(os.getenv("NODE_STARTING_PORT", "0")) + 2)
                     if int(os.getenv("NODE_STARTING_PORT", "0")) > 0 else 0)
 
-        # Save public addresses
-        path_to_append_addresses = os.getenv("NODE_SAVE_RUNNING_ADDRESSES")
-        if path_to_append_addresses is not None and not hidden:  # Only for visible nodes
-            save_node_addresses_to_file(self, public=True, dir_path=path_to_append_addresses,
-                                        filename="running.csv", append=True)
-
         # Get first node token
         self.get_node_token(peer_ids=[p2p_u.peer_id, p2p_w.peer_id])  # Passing both the peer IDs
 
@@ -293,6 +287,12 @@ class Node:
         # (send AFTER set_node_info, not before, since set_node_info updates the profile,
         # adding world roles and state machines)
         self.send_dynamic_profile()
+
+        # Save public addresses
+        path_to_append_addresses = os.getenv("NODE_SAVE_RUNNING_ADDRESSES")
+        if path_to_append_addresses is not None and not hidden:  # Only for visible nodes
+            save_node_addresses_to_file(self, public=True, dir_path=path_to_append_addresses,
+                                        filename="running.csv", append=True)
 
     def out(self, msg: str):
         """Prints a formatted message to the console if printing is enabled.
