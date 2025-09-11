@@ -1279,7 +1279,8 @@ class Node:
                                     del self.agents_to_interview[msg.sender]  # Removing from queue
 
                                     # Allowing the inspector to receive data
-                                    self.inspector_approved = True
+                                    if msg.sender == self.inspector_peer_id:
+                                        self.inspector_approved = True
 
             # (B) received a world-join-approval
             elif msg.content_type == Msg.WORLD_APPROVAL:
