@@ -823,14 +823,15 @@ class NodeConn(ConnectionPools):
         self.world_node_peer_id = world_peer_id
 
     def set_inspector(self, inspector_peer_id: str | None):
-        """Sets the peer ID of the inspector, moving it to its own pool.
+        """Sets the peer ID of the inspector.
 
         Args:
             inspector_peer_id: The peer ID of the inspector node.
         """
         self.inspector_peer_id = inspector_peer_id
         self.set_special_peer_id(self.inspector_peer_id, {Msg.INSPECT_CMD, Msg.INSPECT_ON})
-        old_pool = self.peer_id_to_pool_name[self.inspector_peer_id]
+
+        """old_pool = self.peer_id_to_pool_name[self.inspector_peer_id]
         if old_pool is not None and old_pool != NodeConn.IN_INSPECTOR and old_pool != NodeConn.OUT_INSPECTOR:
 
             # Moving from a public (usually) pool to an inspector one
@@ -842,7 +843,7 @@ class NodeConn(ConnectionPools):
             pool.add(self.inspector_peer_id)
             infos = self.pool_name_to_peer_infos[old_pool][self.inspector_peer_id]
             self.pool_name_to_peer_infos[new_pool][self.inspector_peer_id] = infos
-            del self.pool_name_to_peer_infos[old_pool][self.inspector_peer_id]
+            del self.pool_name_to_peer_infos[old_pool][self.inspector_peer_id]"""
 
     def get_world_peer_id(self):
         """Returns the peer ID of the world node.
