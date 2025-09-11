@@ -1953,8 +1953,10 @@ class Node:
         if self.__inspector_cache['all_agents_count'] != len(self.hosted.all_agents):
             self.__inspector_cache['all_agents_count'] = len(self.hosted.all_agents)
             all_agents_profiles = {k: v.get_all_profile() for k, v in self.hosted.all_agents.items()}
+
+            # Inspector expects also to have access to the profile of the world...
             if self.hosted.in_world() and self.conn.world_node_peer_id is not None:
-                all_agents_profiles[self.conn.world_node_peer_id] = self.hosted.world_profile
+                all_agents_profiles[self.conn.world_node_peer_id] = self.hosted.world_profile.get_all_profile()
         else:
             all_agents_profiles = None
 
