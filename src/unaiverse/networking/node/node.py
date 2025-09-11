@@ -167,6 +167,7 @@ class Node:
 
         # Inspector related
         self.inspector_connected = False
+        self.inspector_approved = False
         self.inspector_peer_id = None
         self.debug_server_running = False
         self.__inspector_cache = {"behav": None, "known_streams_count": 0, "all_agents_count": 0}
@@ -968,7 +969,7 @@ class Node:
                             self.relay_reservation_expiry = None  # Stop trying if it fails
 
                 # Taking to the inspector
-                if self.inspector_connected:
+                if self.inspector_connected and self.inspector_approved:
                     self.__send_to_inspector()
 
                 # Stop conditions
@@ -1026,6 +1027,7 @@ class Node:
                 if peer_id == self.inspector_peer_id:
                     self.inspector_connected = False
                     self.inspector_peer_id = None
+                    self.inspector_approved = False
                     self.__inspector_cache = {"behav": None, "known_streams_count": 0, "all_agents_count": 0}
                     print("Inspector disconnected")
 
@@ -1275,6 +1277,9 @@ class Node:
 
                                     # Removing from the queues
                                     del self.agents_to_interview[msg.sender]  # Removing from queue
+
+                                    # Allowing the inspector to receive data
+                                    self.inspector_approved = True
 
             # (B) received a world-join-approval
             elif msg.content_type == Msg.WORLD_APPROVAL:
@@ -1954,7 +1959,8 @@ class Node:
             self.__inspector_cache['all_agents_count'] = len(self.hosted.all_agents)
             all_agents_profiles = {k: v.get_all_profile() for k, v in self.hosted.all_agents.items()}
 
-            # Inspector expects also to have access to the profile of the world...
+            # Inspector expects also to have access to the profile of the world,
+            # so we patch this thing by adding it here
             if self.hosted.in_world() and self.conn.world_node_peer_id is not None:
                 all_agents_profiles[self.conn.world_node_peer_id] = self.hosted.world_profile.get_all_profile()
         else:
