@@ -1979,13 +1979,13 @@ class Node:
 
                 if data is not None:
                     something_to_send = True
-
-                self.hosted.deb(f"[__send_to_inspector] Preparing to send stream samples from {net_hash}, {name}")
-                sample_dict[name] = {'data': data, 'data_tag': stream.get_tag(), 'data_uuid': stream.get_uuid()}
-            streams_for_inspector[peer_id][net_hash] = sample_dict
+                    self.hosted.deb(f"[__send_to_inspector] Preparing to send stream samples from {net_hash}, {name}")
+                    sample_dict[name] = {'data': data, 'data_tag': stream.get_tag(), 'data_uuid': stream.get_uuid()}
 
             # Checking if there is something valid in this group of streams to send to inspector
-            if not something_to_send:
+            if something_to_send:
+                streams_for_inspector[peer_id][net_hash] = sample_dict
+            else:
                 self.hosted.deb(f"[__send_to_inspector] No stream samples to send to inspector for {net_hash}, "
                                 f"all internal streams returned None")
 
