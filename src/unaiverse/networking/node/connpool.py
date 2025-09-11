@@ -736,8 +736,8 @@ class NodeConn(ConnectionPools):
                              NodeConn.OUT_WORLD_NODE: [NodeConn.P2P_WORLD, 0. if not is_world_node else -1],
                              NodeConn.IN_WORLD_MASTERS: [NodeConn.P2P_WORLD, 0. if not is_world_node else 0.25 / 2.],
                              NodeConn.OUT_WORLD_MASTERS: [NodeConn.P2P_WORLD, 0. if not is_world_node else 0.25 / 2.],
-                             NodeConn.IN_INSPECTOR: [NodeConn.P2P_PUBLIC, 0. if not is_world_node else -1.],
-                             NodeConn.OUT_INSPECTOR: [NodeConn.P2P_PUBLIC, 0. if not is_world_node else -1],
+                             NodeConn.IN_INSPECTOR: [NodeConn.P2P_PUBLIC, 0.],
+                             NodeConn.OUT_INSPECTOR: [NodeConn.P2P_PUBLIC, 0.],
                          },
                          public_key=public_key, token=token)
 
