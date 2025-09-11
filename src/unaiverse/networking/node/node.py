@@ -1964,46 +1964,48 @@ class Node:
         else:
             known_streams_props = None
 
-        # Sending stream data (not pubsub) to the inspector
-        streams_for_inspector = {}
-        for net_hash, streams_dict in self.hosted.known_streams.items():
+        # Packing console, HSM status, and possibly HSM
+        console_behav_status_and_behav = {'console': console,
+                                          'behav': behav,
+                                          'behav_status': behav_status,
+                                          'all_agents_profiles': all_agents_profiles,
+                                          'known_streams_props': known_streams_props}
 
-            # Preparing sample dict for this net hash
+        # Sending console, HSM status, and possibly HSM to the inspector
+        if not self.conn.send(self.inspector_peer_id, channel_trail=None,
+                              content_type=Msg.CONSOLE_AND_BEHAV_STATUS,
+                              content=console_behav_status_and_behav):
+            self.err("Failed to send data to the inspector")
+
+        # Sending stream data (not pubsub) to the inspector
+        my_peer_id = self.get_public_peer_id()
+        for net_hash, streams_dict in self.hosted.known_streams.items():
+            peer_id = DataProps.peer_id_from_net_hash(net_hash)
+
+            # Preparing sample dict
             something_to_send = False
-            sample_dict = {name: {} for name in streams_dict.keys()}
+            content = {name: {} for name in streams_dict.keys()}
             for name, stream in streams_dict.items():
                 data = stream.get(requested_by="__send_to_inspector")
 
                 if data is not None:
-                    self.hosted.deb(f"[__send_to_inspector] Preparing to send stream samples from {net_hash}, {name}")
                     something_to_send = True
-                    sample_dict[name] = {'data': data, 'data_tag': stream.get_tag(), 'data_uuid': stream.get_uuid()}
+
+                self.hosted.deb(f"[__send_to_inspector] Preparing to send stream samples from {net_hash}, {name}")
+                content[(peer_id + "|" + name) if peer_id != my_peer_id else name] = \
+                    {'data': data, 'data_tag': stream.get_tag(), 'data_uuid': stream.get_uuid()}
 
             # Checking if there is something valid in this group of streams to send to inspector
-            if something_to_send:
-
-                # Organizing streams in function of the peer IDs associated to them
-                peer_id = DataProps.peer_id_from_net_hash(net_hash)
-                if peer_id not in streams_for_inspector:
-                    streams_for_inspector[peer_id] = {}
-                streams_for_inspector[peer_id] = sample_dict
-            else:
+            if not something_to_send:
                 self.hosted.deb(f"[__send_to_inspector] No stream samples to send to inspector for {net_hash}, "
                                 f"all internal streams returned None")
+                continue
 
-        # Packing console, HSM status, stream data, and possibly HSM
-        whole_status_for_inspector = {'console': console,
-                                      'behav': behav,
-                                      'behav_status': behav_status,
-                                      'all_agents_profiles': all_agents_profiles,
-                                      'known_streams_props': known_streams_props,
-                                      'streams': streams_for_inspector}
-
-        # Sending console, HSM status, and possibly HSM to the inspector
-        if not self.conn.send(self.inspector_peer_id, channel_trail=None,
-                              content_type=Msg.STATUS_FOR_INSPECTOR,
-                              content=whole_status_for_inspector):
-            self.err("Failed to send data to the inspector")
+            self.hosted.deb(f"[__send_to_inspector] Sending samples of {net_hash} by direct message, to inspector")
+            name_or_group = DataProps.name_or_group_from_net_hash(net_hash)
+            if not self.conn.send(self.inspector_peer_id, channel_trail=name_or_group,
+                                  content_type=Msg.STREAM_SAMPLE, content=content):
+                self.err(f"Failed to send stream sample data to the inspector (hash: {net_hash})")
 
 
 class NodeSynchronizer:
