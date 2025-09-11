@@ -838,20 +838,6 @@ class NodeConn(ConnectionPools):
         self.inspector_peer_id = inspector_peer_id
         self.set_special_peer_id(self.inspector_peer_id, {Msg.CONSOLE_AND_BEHAV_STATUS, Msg.STREAM_SAMPLE})
 
-        """old_pool = self.peer_id_to_pool_name[self.inspector_peer_id]
-        if old_pool is not None and old_pool != NodeConn.IN_INSPECTOR and old_pool != NodeConn.OUT_INSPECTOR:
-
-            # Moving from a public (usually) pool to an inspector one
-            new_pool = NodeConn.IN_INSPECTOR if old_pool.startswith(self.__INBOUND) else NodeConn.OUT_INSPECTOR
-            self.peer_id_to_pool_name[self.inspector_peer_id] = new_pool
-            pool, _, p2p = self.pool_name_to_pool_triple[old_pool]
-            pool.remove(self.inspector_peer_id)
-            pool, _, p2p = self.pool_name_to_pool_triple[new_pool]
-            pool.add(self.inspector_peer_id)
-            infos = self.pool_name_to_peer_infos[old_pool][self.inspector_peer_id]
-            self.pool_name_to_peer_infos[new_pool][self.inspector_peer_id] = infos
-            del self.pool_name_to_peer_infos[old_pool][self.inspector_peer_id]"""
-
     def get_world_peer_id(self):
         """Returns the peer ID of the world node.
 

@@ -166,7 +166,7 @@ class Node:
         self.first = True
 
         # Inspector related
-        self.inspector_connected = False
+        self.inspector_activated = False
         self.inspector_approved = False
         self.inspector_peer_id = None
         self.debug_server_running = False
@@ -309,7 +309,7 @@ class Node:
             s = f"[{s}] {msg}"
             print(f"{self.text_color}{s}\033[0m")
 
-        if self.inspector_connected or self.debug_server_running:
+        if self.inspector_activated and self.inspector_approved or self.debug_server_running:
             last_id = self._output_messages_ids[self._output_messages_last_pos]
             self._output_messages_last_pos = (self._output_messages_last_pos + 1) % len(self._output_messages)
             self._output_messages_count = min(self._output_messages_count + 1, len(self._output_messages))
@@ -761,12 +761,12 @@ class Node:
             while not must_quit:
 
                 # Check inspector
-                if self.inspector_connected:
+                if self.inspector_activated and self.inspector_approved:
                     if self.__inspector_told_to_pause:
                         print("Paused by the inspector, waiting...")
 
                         while self.__inspector_told_to_pause:
-                            if not self.inspector_connected:
+                            if not self.inspector_activated:  # Disconnected
                                 self.__inspector_told_to_pause = False
                                 print("Resuming!")
                                 break
@@ -969,7 +969,7 @@ class Node:
                             self.relay_reservation_expiry = None  # Stop trying if it fails
 
                 # Taking to the inspector
-                if self.inspector_connected and self.inspector_approved:
+                if self.inspector_activated and self.inspector_approved:
                     self.__send_to_inspector()
 
                 # Stop conditions
@@ -1025,9 +1025,9 @@ class Node:
 
                 # Checking if the inspector disconnected
                 if peer_id == self.inspector_peer_id:
-                    self.inspector_connected = False
-                    self.inspector_peer_id = None
+                    self.inspector_activated = False
                     self.inspector_approved = False
+                    self.inspector_peer_id = None
                     self.__inspector_cache = {"behav": None, "known_streams_count": 0, "all_agents_count": 0}
                     print("Inspector disconnected")
 
@@ -1279,7 +1279,8 @@ class Node:
                                     del self.agents_to_interview[msg.sender]  # Removing from queue
 
                                     # Allowing the inspector to receive data
-                                    if msg.sender == self.inspector_peer_id:
+                                    if msg.piggyback == self.profile.get_static_profile()['inspector_node_id']:
+                                        self.inspector_peer_id = msg.sender
                                         self.inspector_approved = True
 
             # (B) received a world-join-approval
@@ -1483,17 +1484,18 @@ class Node:
                 self.out("Received an inspector-activation message...")
 
                 if msg.piggyback == self.profile.get_static_profile()['inspector_node_id']:
-                    self.inspector_connected = True
+                    self.inspector_activated = True
                     self.inspector_peer_id = msg.sender
-                    self.conn.set_inspector(self.inspector_peer_id)  # This will also move the inspector to its pool
-                    print("Inspector connected")
+                    self.conn.set_inspector(self.inspector_peer_id)
+                    print("Inspector activated")
                 else:
                     self.err("Inspector-activation message was not sent by the expected inspector node ID")
                     self.__purge(msg.sender)
 
             # (N) got a command from an inspector
             elif msg.content_type == Msg.INSPECT_CMD:
-                if self.inspector_connected and msg.piggyback == self.profile.get_static_profile()['inspector_node_id']:
+                if (self.inspector_activated and self.inspector_approved and
+                        msg.piggyback == self.profile.get_static_profile()['inspector_node_id']):
                     self.__handle_inspector_command(msg.content['cmd'], msg.content['arg'])
                 else:
                     self.err("Inspector command was not sent by the expected inspector node ID "
