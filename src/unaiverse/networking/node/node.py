@@ -1026,6 +1026,7 @@ class Node:
                 if peer_id == self.inspector_peer_id:
                     self.inspector_connected = False
                     self.inspector_peer_id = None
+                    print("Inspector disconnected")
 
         # Handling newly connected peers
         an_agent_joined_the_world = False
@@ -1478,6 +1479,7 @@ class Node:
                     self.inspector_connected = True
                     self.inspector_peer_id = msg.sender
                     self.conn.set_inspector(self.inspector_peer_id)  # This will also move the inspector to its pool
+                    print("Inspector connected")
                 else:
                     self.err("Inspector-activation message was not sent by the expected inspector node ID")
                     self.__purge(msg.sender)
