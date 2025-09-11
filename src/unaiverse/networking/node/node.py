@@ -1986,7 +1986,7 @@ class Node:
                 peer_id = DataProps.peer_id_from_net_hash(net_hash)
                 if peer_id not in streams_for_inspector:
                     streams_for_inspector[peer_id] = {}
-                streams_for_inspector[peer_id][net_hash] = sample_dict
+                streams_for_inspector[peer_id] = sample_dict
             else:
                 self.hosted.deb(f"[__send_to_inspector] No stream samples to send to inspector for {net_hash}, "
                                 f"all internal streams returned None")
