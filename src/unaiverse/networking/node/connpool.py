@@ -827,7 +827,7 @@ class NodeConn(ConnectionPools):
             inspector_peer_id: The peer ID of the inspector node.
         """
         self.inspector_peer_id = inspector_peer_id
-        self.set_special_peer_id(self.inspector_peer_id, {Msg.INSPECT_CMD, Msg.INSPECT_ON})
+        self.set_special_peer_id(self.inspector_peer_id, {Msg.CONSOLE_AND_BEHAV_STATUS, Msg.STREAM_SAMPLE})
 
         """old_pool = self.peer_id_to_pool_name[self.inspector_peer_id]
         if old_pool is not None and old_pool != NodeConn.IN_INSPECTOR and old_pool != NodeConn.OUT_INSPECTOR:
