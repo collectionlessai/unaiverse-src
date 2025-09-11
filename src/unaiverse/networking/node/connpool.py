@@ -800,15 +800,13 @@ class NodeConn(ConnectionPools):
                               f"cannot say if world agent, master, world node, inspector (disconnecting it)")
                         ConnectionPools.disconnect(p2p, peer_id)
                 if inbound:
-                    pool_name_and_peer_id_to_peer_info[
-                        NodeConn.IN_INSPECTOR if is_inspector else (NodeConn.IN_WORLD_AGENTS if is_world_agent else (
+                    pool_name_and_peer_id_to_peer_info[NodeConn.IN_WORLD_AGENTS if is_world_agent else (
                             NodeConn.IN_WORLD_NODE if is_world_node else
-                            NodeConn.IN_WORLD_MASTERS))][peer_id] = c
+                            NodeConn.IN_WORLD_MASTERS)][peer_id] = c
                 elif outbound:
-                    pool_name_and_peer_id_to_peer_info[
-                        NodeConn.OUT_INSPECTOR if is_inspector else (NodeConn.OUT_WORLD_AGENTS if is_world_agent else (
+                    pool_name_and_peer_id_to_peer_info[NodeConn.OUT_WORLD_AGENTS if is_world_agent else (
                             NodeConn.OUT_WORLD_NODE if is_world_node else
-                            NodeConn.OUT_WORLD_MASTERS))][peer_id] = c
+                            NodeConn.OUT_WORLD_MASTERS)][peer_id] = c
                 else:
                     raise ValueError(f"Connection direction is undefined: {c}")
 
