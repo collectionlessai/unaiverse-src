@@ -1026,6 +1026,7 @@ class Node:
                 if peer_id == self.inspector_peer_id:
                     self.inspector_connected = False
                     self.inspector_peer_id = None
+                    self.__inspector_cache = {"behav": None, "known_streams_count": 0, "all_agents_count": 0}
                     print("Inspector disconnected")
 
         # Handling newly connected peers
