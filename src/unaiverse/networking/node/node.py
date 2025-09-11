@@ -215,7 +215,7 @@ class Node:
                     enable_relay_service=offer_relay_facilities,
                     enable_relay_client=allow_connection_through_relay,
                     wait_public_reachability=os.getenv("NODE_WAIT_PUBLIC", "0") == "1",
-                    port=(int(os.getenv("NODE_STARTING_PORT", "0")) + 2)
+                    port=(int(os.getenv("NODE_STARTING_PORT", "0")) + 3)
                     if int(os.getenv("NODE_STARTING_PORT", "0")) > 0 else 0)
 
         # Get first node token

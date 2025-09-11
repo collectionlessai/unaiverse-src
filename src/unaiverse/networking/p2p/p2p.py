@@ -131,7 +131,7 @@ class P2P:
         Initializes and starts a new libp2p node.
 
         Args:
-            port: The TCP port to listen on (0 for random).
+            port: The (first) TCP port to listen on (0 for random).
             ips: A list of specific IP addresses to listen on. Defaults to ["0.0.0.0"].
             enable_relay_client: Enable listening to relayed connections for this node.
             enable_relay_service: Enable relay service capabilities for this node.
@@ -788,7 +788,7 @@ class P2P:
             # Optionally raise P2PError(f"Failed to get connected peers info") from e if called directly
             return []  # Return empty list on error during polling
 
-    def get_rendezvous_peers_info(self) -> Dict[str, Any]:
+    def get_rendezvous_peers_info(self) -> Dict[str, Any] | None:
         """
         Gets the full rendezvous state from the Go library, including peers and metadata.
 
