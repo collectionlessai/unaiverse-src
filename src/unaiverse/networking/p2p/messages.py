@@ -45,12 +45,12 @@ class Msg:
     INSPECT_ON = "inspect_on"
     INSPECT_CMD = "inspect_cmd"
     WORLD_AGENTS_LIST = "world_agents_list"
-    CONSOLE_AND_BEHAV_STATUS = "console_and_behav_status"
+    STATUS_FOR_INSPECTOR = "status_for_inspector"
 
     # Collections
     CONTENT_TYPES = {PROFILE, WORLD_APPROVAL, AGENT_APPROVAL, PROFILE_REQUEST, ADDRESS_UPDATE,
                      STREAM_SAMPLE, ACTION_REQUEST, ROLE_SUGGESTION, HSM, MISC, GET_CV_FROM_ROOT,
-                     BADGE_SUGGESTIONS, INSPECT_ON, INSPECT_CMD, WORLD_AGENTS_LIST, CONSOLE_AND_BEHAV_STATUS}
+                     BADGE_SUGGESTIONS, INSPECT_ON, INSPECT_CMD, WORLD_AGENTS_LIST, STATUS_FOR_INSPECTOR}
 
 
     def __init__(self,
