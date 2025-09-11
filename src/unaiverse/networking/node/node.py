@@ -1967,23 +1967,25 @@ class Node:
         # Sending stream data (not pubsub) to the inspector
         streams_for_inspector = {}
         for net_hash, streams_dict in self.hosted.known_streams.items():
-            peer_id = DataProps.peer_id_from_net_hash(net_hash)
-            if peer_id not in streams_for_inspector:
-                streams_for_inspector[peer_id] = {}
 
-            # Preparing sample dict
+            # Preparing sample dict for this net hash
             something_to_send = False
             sample_dict = {name: {} for name in streams_dict.keys()}
             for name, stream in streams_dict.items():
                 data = stream.get(requested_by="__send_to_inspector")
 
                 if data is not None:
-                    something_to_send = True
                     self.hosted.deb(f"[__send_to_inspector] Preparing to send stream samples from {net_hash}, {name}")
+                    something_to_send = True
                     sample_dict[name] = {'data': data, 'data_tag': stream.get_tag(), 'data_uuid': stream.get_uuid()}
 
             # Checking if there is something valid in this group of streams to send to inspector
             if something_to_send:
+
+                # Organizing streams in function of the peer IDs associated to them
+                peer_id = DataProps.peer_id_from_net_hash(net_hash)
+                if peer_id not in streams_for_inspector:
+                    streams_for_inspector[peer_id] = {}
                 streams_for_inspector[peer_id][net_hash] = sample_dict
             else:
                 self.hosted.deb(f"[__send_to_inspector] No stream samples to send to inspector for {net_hash}, "
@@ -2001,7 +2003,8 @@ class Node:
         if not self.conn.send(self.inspector_peer_id, channel_trail=None,
                               content_type=Msg.STATUS_FOR_INSPECTOR,
                               content=whole_status_for_inspector):
-            self.err("Failed to send console and behaviour data to the inspector")
+            self.err("Failed to send data to the inspector")
+
 
 class NodeSynchronizer:
     DEBUG = True
