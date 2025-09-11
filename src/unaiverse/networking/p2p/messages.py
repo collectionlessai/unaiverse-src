@@ -45,7 +45,7 @@ class Msg:
     INSPECT_ON = "inspect_on"
     INSPECT_CMD = "inspect_cmd"
     WORLD_AGENTS_LIST = "world_agents_list"
-    CONSOLE_AND_BEHAV_STATUS = "status_for_inspector"
+    CONSOLE_AND_BEHAV_STATUS = "console_and_behav_status"
 
     # Collections
     CONTENT_TYPES = {PROFILE, WORLD_APPROVAL, AGENT_APPROVAL, PROFILE_REQUEST, ADDRESS_UPDATE,
