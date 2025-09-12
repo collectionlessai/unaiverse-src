@@ -283,7 +283,8 @@ class Agent(AgentBasics):
         self.out(f"Checking if all these agents are not connected to me anymore: {involved_agents}")
         all_disconnected = True
         for agent in involved_agents:
-            if agent in self.world_agents or agent in self.public_agents or agent in self._node_agents_waiting:
+            if agent in self.world_agents or agent in self.public_agents or agent in self._node_agents_waiting\
+                    or self._node_conn.is_connected(agent):
                 all_disconnected = False
                 break
         return all_disconnected

@@ -1169,7 +1169,7 @@ class NodeConn(ConnectionPools):
             The number of peers with that role.
         """
         if role in self.role_to_peer_ids:
-            return len(self.role_to_peer_ids)
+            return len(self.role_to_peer_ids[role])
         else:
             return 0
 
