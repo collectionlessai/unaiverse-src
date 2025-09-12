@@ -309,7 +309,7 @@ class Node:
             s = f"[{s}] {msg}"
             print(f"{self.text_color}{s}\033[0m")
 
-        if self.inspector_activated and self.inspector_approved or self.debug_server_running:
+        if (self.inspector_activated and self.inspector_approved) or self.debug_server_running:
             last_id = self._output_messages_ids[self._output_messages_last_pos]
             self._output_messages_last_pos = (self._output_messages_last_pos + 1) % len(self._output_messages)
             self._output_messages_count = min(self._output_messages_count + 1, len(self._output_messages))

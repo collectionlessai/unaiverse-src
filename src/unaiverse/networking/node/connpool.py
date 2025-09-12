@@ -63,10 +63,6 @@ class ConnectionPools:
         self.__token = token if token is not None else ""
         self.__token_verifier = TokenVerifier(public_key) if public_key is not None else None
 
-        # Special cases
-        self.special_peer_id = None
-        self.special_peer_id_allowed_content_types = None
-
         # Checking
         for p2p_name_and_ratio in pool_name_to_p2p_name_and_ratio.values():
             assert p2p_name_and_ratio[0] in self.p2p_name_to_p2p, f"Cannot find p2p named {p2p_name_and_ratio[0]} "
@@ -528,10 +524,6 @@ class ConnectionPools:
         else:
             channel = f"{p2p.peer_id}::dm:{peer_id}-{content_type}"
 
-        # Filtering
-        if peer_id == self.special_peer_id and content_type not in self.special_peer_id_allowed_content_types:
-            return True
-
         # Adding sender info here
         msg = Msg(sender=p2p.peer_id,
                   content_type=content_type,
@@ -639,10 +631,6 @@ class ConnectionPools:
         if p2p is None:
             return False
 
-        # Filtering
-        if peer_id == self.special_peer_id and content_type not in self.special_peer_id_allowed_content_types:
-            return True
-
         # Adding sender info here
         msg = Msg(sender=p2p.peer_id,
                   content_type=content_type,
@@ -662,16 +650,6 @@ class ConnectionPools:
 
             # If send_message_to_peer fails, it will raise a P2PError. We catch it here.
             return False
-
-    def set_special_peer_id(self, peer_id: str, content_types: set[str]) -> None:
-        """Set the special peer_id, that does not receive messages unless they are of a specific type.
-
-        Args:
-            peer_id: Peer ID to consider a special case.
-            content_types: The set of types of content that is allowed for the special peer_id above.
-        """
-        self.special_peer_id = peer_id
-        self.special_peer_id_allowed_content_types = content_types
 
 
 class NodeConn(ConnectionPools):
@@ -834,7 +812,6 @@ class NodeConn(ConnectionPools):
             inspector_peer_id: The peer ID of the inspector node.
         """
         self.inspector_peer_id = inspector_peer_id
-        self.set_special_peer_id(self.inspector_peer_id, {Msg.CONSOLE_AND_BEHAV_STATUS, Msg.STREAM_SAMPLE})
 
     def get_world_peer_id(self):
         """Returns the peer ID of the world node.
