@@ -96,8 +96,6 @@ class Msg:
         self._proto_msg.channel = channel if channel is not None else "<unknown>"
         self._proto_msg.piggyback = piggyback if piggyback is not None else ""
 
-
-
         if content is None or content == "<empty>":
             return  # Nothing to set in the 'oneof'
 

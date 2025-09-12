@@ -776,7 +776,16 @@ class Node:
                             public_messages = self.conn.get_messages(p2p_name=NodeConn.P2P_PUBLIC)
                             for msg in public_messages:
                                 if msg.content_type == Msg.INSPECT_CMD:
-                                    if msg.piggyback == self.profile.get_static_profile()['inspector_node_id']:
+
+                                    # Unpacking piggyback
+                                    sender_node_id, sender_inspector_mode_on = msg.piggyback
+
+                                    # Is message from inspector?
+                                    sender_is_inspector = (sender_node_id == self.profile.get_static_profile()[
+                                        'inspector_node_id'] and
+                                                           sender_inspector_mode_on)
+
+                                    if sender_is_inspector:
                                         self.__handle_inspector_command(msg.content['cmd'], msg.content['arg'])
                                     else:
                                         self.err("Inspector command was not sent by the expected inspector node ID "
@@ -1180,8 +1189,12 @@ class Node:
                 self.err("Expected message of type Msg, got {} (skipping)".format(type(msg)))
                 continue
 
+            # Unpacking piggyback
+            sender_node_id, sender_inspector_mode_on = msg.piggyback
+
             # Is message from inspector?
-            message_from_inspector = msg.piggyback == self.profile.get_static_profile()['inspector_node_id']
+            sender_is_inspector = (sender_node_id == self.profile.get_static_profile()['inspector_node_id'] and
+                                   sender_inspector_mode_on)
 
             # (A) received a profile
             if msg.content_type == Msg.PROFILE:
@@ -1200,7 +1213,7 @@ class Node:
                         self.__purge(msg.sender)
                 else:
                     is_expected_and_acceptable_profile = self.__interview_check_profile(peer_id=msg.sender,
-                                                                                        node_id=msg.piggyback,
+                                                                                        node_id=sender_node_id,
                                                                                         profile=profile)
 
                     if not is_expected_and_acceptable_profile:
@@ -1212,12 +1225,11 @@ class Node:
                         # assigns a role and sends the world profile (which includes private peer ID) and role to the
                         # requester
                         if (self.node_type is Node.WORLD and self.conn.is_public(peer_id=msg.sender) and
-                                not message_from_inspector):
+                                not sender_is_inspector):
                             self.out("Sending world approval message, profile, and assigned role to " + msg.sender +
                                      " (and switching peer ID in the interview queue)...")
-                            node_id = msg.piggyback
                             is_world_master = (self.world_masters_node_ids is not None and
-                                               node_id in self.world_masters_node_ids)
+                                               sender_node_id in self.world_masters_node_ids)
 
                             # Assigning a role
                             role_str = self.world.assign_role(profile=profile, is_world_master=is_world_master)
@@ -1263,7 +1275,7 @@ class Node:
 
                         # If the node is an agent, it is time to tell the agent object that a new agent is now known,
                         # and send our profile to the agent that asked for out contact
-                        elif self.node_type is Node.AGENT or message_from_inspector:
+                        elif self.node_type is Node.AGENT or sender_is_inspector:
                             self.out("Sending agent approval message and profile...")
 
                             if not self.conn.send(msg.sender, channel_trail=None,
@@ -1482,7 +1494,8 @@ class Node:
             elif msg.content_type == Msg.INSPECT_ON:
                 self.out("Received an inspector-activation message...")
 
-                if msg.piggyback == self.profile.get_static_profile()['inspector_node_id']:
+                if sender_is_inspector:
+                    self.inspector_activated = True
                     print("Inspector activated")
                 else:
                     self.err("Inspector-activation message was not sent by the expected inspector node ID")
@@ -1490,12 +1503,13 @@ class Node:
 
             # (N) got a command from an inspector
             elif msg.content_type == Msg.INSPECT_CMD:
-                if (self.inspector_activated and
-                        msg.piggyback == self.profile.get_static_profile()['inspector_node_id']):
+                self.out("Received a command from the inspector...")
+
+                if sender_is_inspector and self.inspector_activated:
                     self.__handle_inspector_command(msg.content['cmd'], msg.content['arg'])
                 else:
                     self.err("Inspector command was not sent by the expected inspector node ID "
-                             "or no inspector connected")
+                             "or the inspector was not yet activated (Msg.INSPECT_ON not received yet)")
                     self.__purge(msg.sender)
 
         self.__interview_clean()

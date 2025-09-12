@@ -399,10 +399,14 @@ class ConnectionPools:
         for m in messages:
             if (m.sender in self.peer_id_to_pool_name or  # Check if expected sender
                     (allowed_not_connected_peers is not None and m.sender in allowed_not_connected_peers)):
-                token = m.piggyback
+                token_with_inspector_final_bit = m.piggyback
+                token = token_with_inspector_final_bit[0:-1]
+                inspector_mode = token_with_inspector_final_bit[-1] == 1
                 node_id, _ = self.verify_token(token, m.sender)
                 if node_id is not None:
-                    m.piggyback = node_id  # Replacing piggyback with the node ID
+
+                    # Replacing piggyback with the node ID and the flag telling if it is inspector
+                    m.piggyback = [node_id, inspector_mode]
                     ret.append(m)
                     if m.sender in self.peer_id_to_pool_name:
                         self.peer_id_to_token[m.sender] = token
@@ -529,7 +533,7 @@ class ConnectionPools:
                   content_type=content_type,
                   content=content,
                   channel=channel,
-                  piggyback=self.__token)
+                  piggyback=self.__token + "0")  # Adding inspector-mode bit (dummy bit here)
         if ConnectionPools.DEBUG:
             print("[DEBUG CONNECTIONS-POOL] Sending message: " + str(msg))
 
@@ -636,7 +640,7 @@ class ConnectionPools:
                   content_type=content_type,
                   content=content,
                   channel=channel,
-                  piggyback=self.__token)
+                  piggyback=self.__token + "0")  # Adding inspector-mode bit (dummy bit here)
         if ConnectionPools.DEBUG:
             print("[DEBUG CONNECTIONS-POOL] Sending (publish) message: " + str(msg))
 
