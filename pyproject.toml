@@ -58,4 +58,3 @@ F-Documentation = "https://github.com/collectionlessai/unaiverse-src/blob/main/R
 
 [tool.setuptools]
 package-dir = {"" = "src"}
-
