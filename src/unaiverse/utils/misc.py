@@ -37,7 +37,7 @@ def save_node_addresses_to_file(node, dir_path: str, public: bool,
                                 filename: str = "addresses.txt", append: bool = False):
     address_file = os.path.join(dir_path, filename)
     with open(address_file, "w" if not append else "a") as file:
-        file.write(node.hosted.get_name() + "," +
+        file.write(node.hosted.get_name() + ";" +
                    str(node.get_public_addresses() if public else node.get_world_addresses()) + "\n")
         file.flush()
 
@@ -59,8 +59,7 @@ def get_node_addresses_from_file(dir_path: str, filename: str = "addresses.txt")
 
         # New file format
         for line in lines:
-            comma_separated_values = [v.strip() for v in line.split(',')]
-            print(comma_separated_values)
+            comma_separated_values = [v.strip() for v in line.split(';')]
             node_name, addresses_str = comma_separated_values
             ret[node_name] = ast.literal_eval(addresses_str)  # Name appearing multiple times? the last entry is kept
 
