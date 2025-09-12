@@ -1079,8 +1079,9 @@ class AgentBasics:
             data_tag = -1
 
         if AgentBasics.DEBUG:
-            self.deb(f"[generate] Input shapes: {[x.shape for x in inputs if isinstance(x, torch.Tensor)]}")
-            self.deb(f"[generate] Input data tag: {data_tag}")
+            if inputs is not None:
+                self.deb(f"[generate] Input shapes: {[x.shape for x in inputs if isinstance(x, torch.Tensor)]}")
+                self.deb(f"[generate] Input data tag: {data_tag}")
 
         # Calling processor (inference) passing the collected inputs
         inputs = self.proc_callback_inputs(inputs)
@@ -1099,14 +1100,14 @@ class AgentBasics:
         self.last_ref_uuid = ref_uuid
 
         if AgentBasics.DEBUG:
-            for net_hash, stream_dict in self.proc_streams.items():
-                for stream in stream_dict.values():
-                    if stream.props.is_tensor():
-                        if outputs is not None:
-                            self.deb(f"[generate] Text outputs: "
-                                     f"{[str(stream.props.to_text(x)) for i, x in enumerate(outputs)]}")
-                        break
             if outputs is not None:
+                for net_hash, stream_dict in self.proc_streams.items():
+                    for stream in stream_dict.values():
+                        if stream.props.is_tensor() or stream.props.is_text():
+                            if outputs is not None:
+                                self.deb(f"[generate] Text outputs: "
+                                         f"{[str(stream.props.to_text(x)) for i, x in enumerate(outputs)]}")
+                            break
                 self.deb(f"[generate] Output shapes: {[x.shape for x in outputs if isinstance(x, torch.Tensor)]}")
 
         return outputs, data_tag

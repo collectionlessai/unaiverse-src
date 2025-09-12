@@ -1159,7 +1159,7 @@ class NodeConn(ConnectionPools):
         else:
             return ret_addrs, ret_peer_ids
 
-    def count_by_role(self, role):
+    def count_by_role(self, role: int):
         """Counts the number of peers with a specific role.
 
         Args:
