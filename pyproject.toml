@@ -4,15 +4,58 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "unaiverse"
-version = "0.1.0"
+version = "0.0.0"
 requires-python = ">3.10"
-dependencies = []
-description = "UNaIVERSE: A Collectionless AI Project"
+dependencies = [
+    "opencv-python",
+    "Flask",
+    "flask_cors",
+    "graphviz",
+    "ntplib",
+    "numpy",
+    "Pillow",
+    "protobuf",
+    "psutil",
+    "PyJWT",
+    "Requests",
+    "torch",
+    "torchvision"
+]
+license-files = ["LICENSE"]
+keywords = ["UNaIVERSE", "Collectionless AI", "AI", "Agentic AI", "Agents", "Machine Learning", "Learning Over Time"]
+description = "UNaIVERSE: A Collectionless AI Project. The new web of humans & AI Agents, built on privacy, control, and reduced energy consumption."
+readme = "README.md"
 authors = [
     { name = "Stefano Melacci", email = "stefano.melacci@unisi.it" },
     { name = "Christian Di Maio", email = "christian.dimaio@phd.unipi.it" },
     { name = "Tommaso Guidi", email = "tommaso.guidi.1998@gmail.com" }
 ]
+maintainers = [
+    { name = "Stefano Melacci", email = "stefano.melacci@unisi.it" },
+    { name = "Christian Di Maio", email = "christian.dimaio@phd.unipi.it" },
+    { name = "Tommaso Guidi", email = "tommaso.guidi.1998@gmail.com" }
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: End Users/Desktop",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence"
+]
+
+[tool.setuptools.package-data]
+"unaiverse" = ["utils/lone_wolf.json"]
 
 [project.urls]
-"Homepage" = "https://collectionless.ai"
+A.Homepage = "https://unaiverse.io"
+B.CollectionlessAI = "https://collectionless.ai"
+C.Source = "https://github.com/collectionlessai/unaiverse-src"
+D.Starting = "https://github.com/collectionlessai/unaiverse-src/blob/main/README.md"
+E.Examples = "https://github.com/collectionlessai/unaiverse-examples"
+F.Documentation = "https://github.com/collectionlessai/unaiverse-src/blob/main/README.md"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+

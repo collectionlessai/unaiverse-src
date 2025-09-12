@@ -16,6 +16,7 @@ import os
 import torch
 import types
 import pickle
+import importlib.resources
 from PIL.Image import Image
 from unaiverse.clock import Clock
 from unaiverse.hsm import HybridStateMachine
@@ -166,8 +167,13 @@ class AgentBasics:
                 self.behav.add_state("empty")
 
             self.behav_lone_wolf = HybridStateMachine(self)
-            self.behav_lone_wolf.load(os.path.join(os.path.abspath(os.path.dirname(__file__)), "utils",
-                                                   "lone_wolf.json"))
+
+            # Safe way to load a file packed in a pip package
+            utils_path = importlib.resources.files("unaiverse.utils")
+            json_file = utils_path.joinpath("lone_wolf.json")
+            file = json_file.open()
+            self.behav_lone_wolf.load(file)
+            file.close()
         else:
             self.is_world = True
             if self.world_folder is None:

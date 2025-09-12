@@ -13,9 +13,9 @@
                  Main Developers:    Stefano Melacci (Project Leader), Christian Di Maio, Tommaso Guidi
 """
 import os
-import cv2
 import sys
 import ast
+import cv2
 import copy
 import json
 import math
@@ -167,7 +167,6 @@ class Node:
 
         # Inspector related
         self.inspector_activated = False
-        self.inspector_approved = False
         self.inspector_peer_id = None
         self.debug_server_running = False
         self.__inspector_cache = {"behav": None, "known_streams_count": 0, "all_agents_count": 0}
@@ -309,7 +308,7 @@ class Node:
             s = f"[{s}] {msg}"
             print(f"{self.text_color}{s}\033[0m")
 
-        if (self.inspector_activated and self.inspector_approved) or self.debug_server_running:
+        if self.inspector_activated or self.debug_server_running:
             last_id = self._output_messages_ids[self._output_messages_last_pos]
             self._output_messages_last_pos = (self._output_messages_last_pos + 1) % len(self._output_messages)
             self._output_messages_count = min(self._output_messages_count + 1, len(self._output_messages))
@@ -764,7 +763,7 @@ class Node:
             while not must_quit:
 
                 # Check inspector
-                if self.inspector_activated and self.inspector_approved:
+                if self.inspector_activated:
                     if self.__inspector_told_to_pause:
                         print("Paused by the inspector, waiting...")
 
@@ -972,7 +971,7 @@ class Node:
                             self.relay_reservation_expiry = None  # Stop trying if it fails
 
                 # Taking to the inspector
-                if self.inspector_activated and self.inspector_approved:
+                if self.inspector_activated:
                     self.__send_to_inspector()
 
                 # Stop conditions
@@ -1029,7 +1028,6 @@ class Node:
                 # Checking if the inspector disconnected
                 if peer_id == self.inspector_peer_id:
                     self.inspector_activated = False
-                    self.inspector_approved = False
                     self.inspector_peer_id = None
                     self.__inspector_cache = {"behav": None, "known_streams_count": 0, "all_agents_count": 0}
                     print("Inspector disconnected")
@@ -1182,6 +1180,9 @@ class Node:
                 self.err("Expected message of type Msg, got {} (skipping)".format(type(msg)))
                 continue
 
+            # Is message from inspector?
+            message_from_inspector = msg.piggyback == self.profile.get_static_profile()['inspector_node_id']
+
             # (A) received a profile
             if msg.content_type == Msg.PROFILE:
                 self.out("Received a profile...")
@@ -1211,7 +1212,7 @@ class Node:
                         # assigns a role and sends the world profile (which includes private peer ID) and role to the
                         # requester
                         if (self.node_type is Node.WORLD and self.conn.is_public(peer_id=msg.sender) and
-                                self.inspector_peer_id != msg.sender):
+                                not message_from_inspector):
                             self.out("Sending world approval message, profile, and assigned role to " + msg.sender +
                                      " (and switching peer ID in the interview queue)...")
                             node_id = msg.piggyback
@@ -1262,7 +1263,7 @@ class Node:
 
                         # If the node is an agent, it is time to tell the agent object that a new agent is now known,
                         # and send our profile to the agent that asked for out contact
-                        elif self.node_type is Node.AGENT or msg.sender == self.inspector_peer_id:
+                        elif self.node_type is Node.AGENT or message_from_inspector:
                             self.out("Sending agent approval message and profile...")
 
                             if not self.conn.send(msg.sender, channel_trail=None,
@@ -1280,11 +1281,6 @@ class Node:
 
                                     # Removing from the queues
                                     del self.agents_to_interview[msg.sender]  # Removing from queue
-
-                                    # Allowing the inspector to receive data
-                                    if msg.piggyback == self.profile.get_static_profile()['inspector_node_id']:
-                                        self.inspector_peer_id = msg.sender
-                                        self.inspector_approved = True
 
             # (B) received a world-join-approval
             elif msg.content_type == Msg.WORLD_APPROVAL:
@@ -1487,9 +1483,6 @@ class Node:
                 self.out("Received an inspector-activation message...")
 
                 if msg.piggyback == self.profile.get_static_profile()['inspector_node_id']:
-                    self.inspector_activated = True
-                    self.inspector_peer_id = msg.sender
-                    self.conn.set_inspector(self.inspector_peer_id)
                     print("Inspector activated")
                 else:
                     self.err("Inspector-activation message was not sent by the expected inspector node ID")
@@ -1497,7 +1490,7 @@ class Node:
 
             # (N) got a command from an inspector
             elif msg.content_type == Msg.INSPECT_CMD:
-                if (self.inspector_activated and self.inspector_approved and
+                if (self.inspector_activated and
                         msg.piggyback == self.profile.get_static_profile()['inspector_node_id']):
                     self.__handle_inspector_command(msg.content['cmd'], msg.content['arg'])
                 else:

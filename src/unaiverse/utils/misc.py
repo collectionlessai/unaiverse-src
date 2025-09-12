@@ -21,11 +21,7 @@ import math
 import threading
 from tqdm import tqdm
 from pathlib import Path
-from rich.json import JSON
 from datetime import datetime
-import matplotlib.pyplot as plt
-import matplotlib.image as mpimg
-from rich.console import Console
 
 
 class GenException(Exception):
@@ -114,6 +110,8 @@ def countdown_wait(handle):
 
 
 def check_json_start(file: str, msg: str, delete_existing: bool = False):
+    from rich.json import JSON
+    from rich.console import Console
     cons = Console(file=sys.__stdout__)
 
     if delete_existing:
@@ -152,6 +150,9 @@ def check_json_start_wait(handle):
 
 
 def show_images_grid(image_paths, max_cols=3):
+    import matplotlib.pyplot as plt
+    import matplotlib.image as mpimg
+
     n = len(image_paths)
     cols = min(max_cols, n)
     rows = math.ceil(n / cols)

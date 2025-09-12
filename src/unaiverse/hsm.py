@@ -12,6 +12,7 @@
                  Code Repositories:  https://github.com/collectionlessai/
                  Main Developers:    Stefano Melacci (Project Leader), Christian Di Maio, Tommaso Guidi
 """
+import io
 import os
 import json
 import copy
@@ -19,6 +20,7 @@ import html
 import time
 import inspect
 import graphviz
+import importlib.resources
 from collections.abc import Callable
 
 
@@ -1669,7 +1671,7 @@ class HybridStateMachine:
             file.write(str(self))
         return True
 
-    def load(self, filename_or_hsm_as_string: str):
+    def load(self, filename_or_hsm_as_string: str | io.TextIOWrapper):
         """Loads a state machine's configuration from a JSON file or a JSON string. It reconstructs the states,
         actions, and transitions from the serialized data. This method is critical for persistence and for loading
         pre-defined state machine models.
@@ -1682,12 +1684,20 @@ class HybridStateMachine:
         """
 
         # Loading the whole file
-        if os.path.exists(filename_or_hsm_as_string) and os.path.isfile(filename_or_hsm_as_string):
-            with open(filename_or_hsm_as_string, 'r') as file:
-                hsm_data = json.load(file)
+        if isinstance(filename_or_hsm_as_string, importlib.resources.abc.Traversable):
+
+            # Safe way to load when this file is packed in a pip package
+            hsm_data = json.load(filename_or_hsm_as_string)
         else:
-            assert not filename_or_hsm_as_string.endswith(".json"), f"File {filename_or_hsm_as_string} does not exist"
-            hsm_data = json.loads(filename_or_hsm_as_string)
+
+            # Ordinary case
+            if os.path.exists(filename_or_hsm_as_string) and os.path.isfile(filename_or_hsm_as_string):
+                with open(filename_or_hsm_as_string, 'r') as file:
+                    hsm_data = json.load(file)
+            else:
+                assert not filename_or_hsm_as_string.endswith(".json"), \
+                    f"File {filename_or_hsm_as_string} does not exist"
+                hsm_data = json.loads(filename_or_hsm_as_string)
 
         # Getting state info
         self.initial_state = hsm_data['initial_state']

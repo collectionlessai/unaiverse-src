@@ -3,6 +3,7 @@
 | Flask                    | 3.1.2   | BSD-3-Clause                                      | https://github.com/pallets/flask/                  |
 | PyJWT                    | 2.10.1  | MIT License                                       | https://github.com/jpadilla/pyjwt                  |
 | flask-cors               | 6.0.1   | MIT License                                       | https://corydolphin.github.io/flask-cors/          |
+| opencv-python            | 4.12.0  | Apache-2.0                                        | https://opencv.org/                                |
 | graphviz                 | 0.21    | MIT License                                       | https://github.com/xflr6/graphviz                  |
 | ntplib                   | 0.4.0   | MIT License                                       | https://github.com/cf-natali/ntplib                |
 | numpy                    | 2.3.2   | BSD License                                       | https://numpy.org                                  |

@@ -659,7 +659,6 @@ class NodeConn(ConnectionPools):
     __WORLD_AGENTS_ONLY = "world_agents"
     __WORLD_NODE_ONLY = "world_node"
     __WORLD_MASTERS_ONLY = "world_masters"
-    __INSPECTOR_ONLY = "inspector"
 
     # Suffixes
     __PUBLIC_NET = "_public"
@@ -676,8 +675,6 @@ class NodeConn(ConnectionPools):
     # All pools (prefix + basic name + suffix)
     IN_PUBLIC = __INBOUND + __ALL_UNIVERSE + __PUBLIC_NET
     OUT_PUBLIC = __OUTBOUND + __ALL_UNIVERSE + __PUBLIC_NET
-    IN_INSPECTOR = __INBOUND + __INSPECTOR_ONLY + __PUBLIC_NET
-    OUT_INSPECTOR = __OUTBOUND + __INSPECTOR_ONLY + __PUBLIC_NET
     IN_WORLD_AGENTS = __INBOUND + __WORLD_AGENTS_ONLY + __PRIVATE_NET
     OUT_WORLD_AGENTS = __OUTBOUND + __WORLD_AGENTS_ONLY + __PRIVATE_NET
     IN_WORLD_NODE = __INBOUND + __WORLD_NODE_ONLY + __PRIVATE_NET
@@ -686,14 +683,14 @@ class NodeConn(ConnectionPools):
     OUT_WORLD_MASTERS = __OUTBOUND + __WORLD_MASTERS_ONLY + __PRIVATE_NET
 
     # Aggregated pools
-    PUBLIC = {IN_PUBLIC, OUT_PUBLIC, IN_INSPECTOR, OUT_INSPECTOR}
+    PUBLIC = {IN_PUBLIC, OUT_PUBLIC}
     WORLD_NODE = {IN_WORLD_NODE, OUT_WORLD_NODE}
     WORLD_AGENTS = {IN_WORLD_AGENTS, OUT_WORLD_AGENTS}
     WORLD_MASTERS = {IN_WORLD_MASTERS, OUT_WORLD_MASTERS}
     WORLD = WORLD_NODE | WORLD_AGENTS | WORLD_MASTERS
     ALL = PUBLIC | WORLD
-    OUTGOING = {OUT_PUBLIC, OUT_INSPECTOR, OUT_WORLD_NODE, OUT_WORLD_AGENTS, OUT_WORLD_MASTERS}
-    INCOMING = {IN_PUBLIC, IN_INSPECTOR, IN_WORLD_NODE, IN_WORLD_AGENTS, IN_WORLD_MASTERS}
+    OUTGOING = {OUT_PUBLIC, OUT_WORLD_NODE, OUT_WORLD_AGENTS, OUT_WORLD_MASTERS}
+    INCOMING = {IN_PUBLIC, IN_WORLD_NODE, IN_WORLD_AGENTS, IN_WORLD_MASTERS}
 
     def __init__(self, max_connections: int, p2p_u: P2P, p2p_w: P2P,
                  is_world_node: bool, public_key: str, token: str):
@@ -720,9 +717,7 @@ class NodeConn(ConnectionPools):
                              NodeConn.IN_WORLD_NODE: [NodeConn.P2P_WORLD, 0. if not is_world_node else -1.],
                              NodeConn.OUT_WORLD_NODE: [NodeConn.P2P_WORLD, 0. if not is_world_node else -1],
                              NodeConn.IN_WORLD_MASTERS: [NodeConn.P2P_WORLD, 0. if not is_world_node else 0.25 / 2.],
-                             NodeConn.OUT_WORLD_MASTERS: [NodeConn.P2P_WORLD, 0. if not is_world_node else 0.25 / 2.],
-                             NodeConn.IN_INSPECTOR: [NodeConn.P2P_PUBLIC, 0.],
-                             NodeConn.OUT_INSPECTOR: [NodeConn.P2P_PUBLIC, 0.],
+                             NodeConn.OUT_WORLD_MASTERS: [NodeConn.P2P_WORLD, 0. if not is_world_node else 0.25 / 2.]
                          },
                          public_key=public_key, token=token)
 
@@ -781,9 +776,12 @@ class NodeConn(ConnectionPools):
                         print("[DEBUG CONNECTIONS-POOL] World agents list:  " + str(self.world_agents_list))
                         print("[DEBUG CONNECTIONS-POOL] World masters list: " + str(self.world_masters_list))
                         print("[DEBUG CONNECTIONS-POOL] World node peer id: " + str(self.world_node_peer_id))
+                        print("[DEBUG CONNECTIONS-POOL] Inspector peer id: " + str(self.inspector_peer_id))
                         print(f"[DEBUG CONNECTIONS-POOL] Unable to determine the peer type for {peer_id}: "
                               f"cannot say if world agent, master, world node, inspector (disconnecting it)")
-                        ConnectionPools.disconnect(p2p, peer_id)
+                    ConnectionPools.disconnect(p2p, peer_id)
+                    continue
+
                 if inbound:
                     pool_name_and_peer_id_to_peer_info[NodeConn.IN_WORLD_AGENTS if is_world_agent else (
                             NodeConn.IN_WORLD_NODE if is_world_node else
