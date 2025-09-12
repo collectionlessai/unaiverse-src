@@ -401,12 +401,12 @@ class ConnectionPools:
                     (allowed_not_connected_peers is not None and m.sender in allowed_not_connected_peers)):
                 token_with_inspector_final_bit = m.piggyback
                 token = token_with_inspector_final_bit[0:-1]
-                inspector_mode = token_with_inspector_final_bit[-1] == 1
+                inspector_mode = token_with_inspector_final_bit[-1]
                 node_id, _ = self.verify_token(token, m.sender)
                 if node_id is not None:
 
                     # Replacing piggyback with the node ID and the flag telling if it is inspector
-                    m.piggyback = [node_id, inspector_mode]
+                    m.piggyback = node_id + inspector_mode
                     ret.append(m)
                     if m.sender in self.peer_id_to_pool_name:
                         self.peer_id_to_token[m.sender] = token

@@ -778,7 +778,8 @@ class Node:
                                 if msg.content_type == Msg.INSPECT_CMD:
 
                                     # Unpacking piggyback
-                                    sender_node_id, sender_inspector_mode_on = msg.piggyback
+                                    sender_node_id, sender_inspector_mode_on = (msg.piggyback[0:-1],
+                                                                                msg.piggyback[-1] == 1)
 
                                     # Is message from inspector?
                                     sender_is_inspector = (sender_node_id == self.profile.get_static_profile()[
@@ -1190,7 +1191,8 @@ class Node:
                 continue
 
             # Unpacking piggyback
-            sender_node_id, sender_inspector_mode_on = msg.piggyback
+            sender_node_id, sender_inspector_mode_on = (msg.piggyback[0:-1],
+                                                        msg.piggyback[-1] == 1)
 
             # Is message from inspector?
             sender_is_inspector = (sender_node_id == self.profile.get_static_profile()['inspector_node_id'] and
