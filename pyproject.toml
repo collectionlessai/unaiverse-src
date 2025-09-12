@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "unaiverse"
-version = "0.0.0"
+version = "0.1.0"
 requires-python = ">3.10"
 dependencies = [
     "opencv-python",
@@ -49,12 +49,12 @@ classifiers = [
 "unaiverse" = ["utils/lone_wolf.json"]
 
 [project.urls]
-A.Homepage = "https://unaiverse.io"
-B.CollectionlessAI = "https://collectionless.ai"
-C.Source = "https://github.com/collectionlessai/unaiverse-src"
-D.Starting = "https://github.com/collectionlessai/unaiverse-src/blob/main/README.md"
-E.Examples = "https://github.com/collectionlessai/unaiverse-examples"
-F.Documentation = "https://github.com/collectionlessai/unaiverse-src/blob/main/README.md"
+A-Homepage = "https://unaiverse.io"
+B-CollectionlessAI = "https://collectionless.ai"
+C-Source = "https://github.com/collectionlessai/unaiverse-src"
+D-Starting = "https://github.com/collectionlessai/unaiverse-src/blob/main/README.md"
+E-Examples = "https://github.com/collectionlessai/unaiverse-examples"
+F-Documentation = "https://github.com/collectionlessai/unaiverse-src/blob/main/README.md"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

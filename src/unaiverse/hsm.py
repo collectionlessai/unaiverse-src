@@ -1684,7 +1684,8 @@ class HybridStateMachine:
         """
 
         # Loading the whole file
-        if isinstance(filename_or_hsm_as_string, importlib.resources.abc.Traversable):
+        if (isinstance(filename_or_hsm_as_string, importlib.resources.abc.Traversable) or
+                isinstance(filename_or_hsm_as_string, io.TextIOWrapper)):
 
             # Safe way to load when this file is packed in a pip package
             hsm_data = json.load(filename_or_hsm_as_string)
