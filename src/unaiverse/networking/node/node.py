@@ -768,7 +768,7 @@ class Node:
                         while self.__inspector_told_to_pause:
                             if not self.inspector_activated:  # Disconnected
                                 self.__inspector_told_to_pause = False
-                                print("Resuming!")
+                                print("Inspector is not active/connected anymore, resuming...")
                                 break
 
                             public_messages = self.conn.get_messages(p2p_name=NodeConn.P2P_PUBLIC)
