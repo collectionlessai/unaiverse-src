@@ -259,17 +259,20 @@ class Agent(AgentBasics):
                 self._node_purge_fcn(agent)  # This will also call remove_agent, that will call remove_streams
         return True
 
-    def disconnected(self, agent: str | None = None):
+    def disconnected(self, agent: str | None = None, delay: float = -1.):
         """Checks if a specific set of agents (by ID or wildcard) are no longer connected to the agent.
         It returns False if any of the specified agents are still connected.
 
         Args:
             agent: The ID of the agent or a wildcard to check.
+            delay: The time (seconds) to be spent in the current state before actually considering this action.
 
         Returns:
             True if all involved agents are disconnected, False otherwise.
 
         """
+        assert delay is not None, "Missing basic action information"
+
         # - if "agent" is a peer ID, the involved agents will be a list with one element.
         # - if "agent" is a known wildcard, as "<valid_cmp>", then involved agents will be self._valid_cmp_agents
         # - if "agent" is None, then the current agent in self._engaged_agents will be returned
