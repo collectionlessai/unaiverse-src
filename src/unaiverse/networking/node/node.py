@@ -749,6 +749,9 @@ class Node:
                         if keyboard_msg.strip() == "exit" or keyboard_msg.strip() == "quit":
                             break
 
+                        if not self.agent.in_world():  # If the world disconnected
+                            break
+
                 keyboard_queue = queue.Queue()  # Create a thread-safe queue for communication
                 keyboard_listener = threading.Thread(target=keyboard_listener, args=(keyboard_queue,), daemon=True)
 

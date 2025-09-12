@@ -1782,7 +1782,7 @@ class AgentBasics:
     def reset_agent_status_attrs(self):
         """Resets attributes that represent the status of the agent, assuming to be the ones that start with '_'."""
         for attr_name in dir(self):
-            if attr_name.startswith("_"):
+            if attr_name.startswith("_") and (not attr_name.startswith("__") and not attr_name.startswith("_Agent")):
                 try:
                     value = getattr(self, attr_name)
                     if isinstance(value, list):

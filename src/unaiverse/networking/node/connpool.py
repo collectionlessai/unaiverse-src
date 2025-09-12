@@ -187,8 +187,6 @@ class ConnectionPools:
             peer_id = winning_addr_info_dict.get('ID')
             connected_addr_str = winning_addr_info_dict.get('Addrs')[0]
             through_relay = '/p2p-circuit/' in connected_addr_str
-            print(f"[DEBUG CONNECTIONS-POOL] Connected to peer {peer_id} via {connected_addr_str} "
-                  f"(through relay: {through_relay})")
             if ConnectionPools.DEBUG:
                 print(f"[DEBUG CONNECTIONS-POOL] Connected to peer {peer_id} via {connected_addr_str} "
                       f"(through relay: {through_relay})")
