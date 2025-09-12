@@ -278,12 +278,12 @@ class Agent(AgentBasics):
             return False
 
         self.out(f"Checking if all these agents are not connected to me anymore: {involved_agents}")
-        somebody_still_connected = False
+        all_disconnected = True
         for agent in involved_agents:
             if agent in self.world_agents or agent in self.public_agents:
-                somebody_still_connected = True
+                all_disconnected = False
                 break
-        return somebody_still_connected
+        return all_disconnected
 
     def received_some_asked_data(self, processing_fcn: str | None = None):
         """Checks if any of the agents that were previously asked for data (e.g., via `ask_gen`) have sent a stream
