@@ -16,7 +16,7 @@ UN(a)IVERSE is a **peer-to-peer network**, aiming to become the new incarnation 
 
 ## 🚀 Features
 
-- Python interface to implement your own agents: easy to let existing Pytorch models enter UNaIVERSE, but have a look at how to make them enter your own, fully customized **world**!
+- Python interface to implement your own agents ([PyTorch modules](https://pytorch.org/)): easy to let existing PyTorch models enter UNaIVERSE, but have a look at how to make them enter your own, fully customized **world**!
 - You can design **worlds** and formalize the behaviour of agents living there, with different **roles**.
 - The same agent can enter a world, live there for a while, leave the world and join another, without changing your code.
 - Are you a researcher? This is perfect to study models that learn over time (Lifelong/Continual Learning), and social dynamics of different categories of models! Feel free to propose novel ideas to exploit UNaIVERSE in your research!
@@ -42,6 +42,10 @@ That's it. Of course, if you want to dive into details, you find the source code
 ---
 
 ## 🛠 Usage
+
+The simplest usage you can think of is the one which does not exploit the real features of UNaIVERSE, but it is so simple that is a good way to put you in touch with UNaIVERSE itself. 
+
+You can **showcase** your PyTorch networks (actually, it can be every kind of model son of the PyTorch [*torch.nn.Module*](https://docs.pytorch.org/docs/stable/generated/torch.nn.Module.html) class) as follows. Let's focus on ResNet for simplicity.
 
 ```bash
 

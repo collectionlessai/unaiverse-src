@@ -587,7 +587,7 @@ class AgentProcessorChecker:
 
     def __guess_proc_opts(self):
         if self.proc_opts is None:
-            if isinstance(self.proc.module, MultiIdentity):
+            if isinstance(self.proc.module, MultiIdentity) or len(list(self.proc.parameters())) == 0:
                 self.proc_opts = {"optimizer": None,
                                   "losses": [None] * len(self.proc_outputs)}
             else:
@@ -661,7 +661,12 @@ class AgentProcessorChecker:
 
     def __guess_proc_optional_inputs(self):
         self.proc_optional_inputs = []
-        sig = inspect.signature(self.proc.forward)
+        if isinstance(self.proc, ModuleWrapper):
+            sig = inspect.signature(self.proc.module.forward)
+        else:
+            sig = inspect.signature(self.proc.forward)
+        param_count = len(sig.parameters.items())
+
         i = 0
         for name, param in sig.parameters.items():
             if i >= len(self.proc_inputs):

@@ -9,7 +9,7 @@
     },
     "transitions": {
         "ready": {
-            "done_gen": [["do_gen", {"timeout": 15.0}, false, 0]]
+            "done_gen": [["do_gen", {"timeout": 7.5}, false, 0]]
         },
         "done_gen": {
             "ready": [["nop", {}, true, 3]]

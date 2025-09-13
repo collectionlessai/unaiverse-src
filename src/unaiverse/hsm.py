@@ -1709,26 +1709,27 @@ class HybridStateMachine:
 
         # Getting states
         self.states = {}
-        for state, state_action_list in hsm_data['state_actions'].items():
-            if len(state_action_list) == 3:  # Backward compatibility
-                act_name, act_args, state_id = state_action_list
-                waiting_time = 0.
-                blocking = True
-                msg = None
-            elif len(state_action_list) == 4:  # Backward compatibility
-                act_name, act_args, state_id, blocking = state_action_list
-                waiting_time = 0.
-                msg = None
-            elif len(state_action_list) == 5:  # Backward compatibility
-                act_name, act_args, state_id, blocking, waiting_time = state_action_list
-                msg = None
-            else:
-                act_name, act_args, state_id, blocking, waiting_time, msg = state_action_list
+        if 'state_actions' in hsm_data:
+            for state, state_action_list in hsm_data['state_actions'].items():
+                if len(state_action_list) == 3:  # Backward compatibility
+                    act_name, act_args, state_id = state_action_list
+                    waiting_time = 0.
+                    blocking = True
+                    msg = None
+                elif len(state_action_list) == 4:  # Backward compatibility
+                    act_name, act_args, state_id, blocking = state_action_list
+                    waiting_time = 0.
+                    msg = None
+                elif len(state_action_list) == 5:  # Backward compatibility
+                    act_name, act_args, state_id, blocking, waiting_time = state_action_list
+                    msg = None
+                else:
+                    act_name, act_args, state_id, blocking, waiting_time, msg = state_action_list
 
-            # Recall that state_id can be set to -1 in the original file, meaning "automatically set the state_id"
-            self.add_state(state, action=act_name, args=act_args,
-                           state_id=state_id if state_id >= 0 else None,
-                           waiting_time=waiting_time, blocking=blocking, msg=msg)
+                # Recall that state_id can be set to -1 in the original file, meaning "automatically set the state_id"
+                self.add_state(state, action=act_name, args=act_args,
+                               state_id=state_id if state_id >= 0 else None,
+                               waiting_time=waiting_time, blocking=blocking, msg=msg)
 
         # Getting transitions
         self.transitions = {}

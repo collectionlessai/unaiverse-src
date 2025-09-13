@@ -250,7 +250,6 @@ class Agent(AgentBasics):
 
         Returns:
             Always True.
-
         """
         self.out(f"Disconnecting agents with role: {role}")
         if self.find_agents(role):
@@ -532,9 +531,6 @@ class Agent(AgentBasics):
                     if _requester not in self.public_agents:
                         self.err(f"Unknown agent: {_requester} (fully skipping generation)")
                         return False
-        else:
-            self.err("Unknown requester (None)")
-            return False
 
         # Check what is the step ID of the multistep action
         k = self.get_action_step()
@@ -1201,12 +1197,13 @@ class Agent(AgentBasics):
         else:
             return True
 
-    def find_agents(self, role: str | list[str]):
+    def find_agents(self, role: str | list[str], engage: bool = False):
         """Locally searches through the agent's known peers (world and public agents) to find agents with a specific
         role. It populates the `_found_agents` set with the peer IDs of matching agents.
 
         Args:
             role: The role or list of roles to search for.
+            engage: If you want to force the found agents to be the ones that you are engaged with.
 
         Returns:
             True if at least one agent is found, False otherwise.
@@ -1219,7 +1216,7 @@ class Agent(AgentBasics):
             role = self.ROLE_STR_TO_BITS[role]
             role_base_int = role & 3
 
-            if role_base_int != 0:
+            if role_base_int != self.ROLE_PUBLIC:  # Expected to be 0
                 if role_base_int == self.ROLE_WORLD_AGENT:
                     agents = self.world_agents
                 elif role_base_int == self.ROLE_WORLD_MASTER:
@@ -1227,7 +1224,7 @@ class Agent(AgentBasics):
                 else:
                     return False
             else:
-                agents = self.world_agents | self.world_masters
+                agents = self.public_agents
 
             role = (role >> 2) << 2
             for peer_id, profile in agents.items():
@@ -1237,6 +1234,8 @@ class Agent(AgentBasics):
                     self._found_agents.add(peer_id)  # Peer IDs here
 
         self.deb(f"[find_agents] Found these agents: {self._found_agents}")
+        if engage:
+            self._engaged_agents = copy.deepcopy(self._found_agents)
         return len(self._found_agents) > 0
 
     def next_pref_stream(self):

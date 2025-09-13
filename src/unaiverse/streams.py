@@ -476,7 +476,8 @@ class BufferedDataStream(DataStream):
 
 class System(DataStream):
     def __init__(self):
-        super().__init__(props=DataProps(name=System.__name__, data_type="text", data_desc="System stream"))
+        super().__init__(props=DataProps(name=System.__name__, data_type="text", data_desc="System stream",
+                                         pubsub=False))
         self.set("ping")
 
     def get(self, requested_by: str | None = None):
@@ -510,7 +511,8 @@ class Dataset(BufferedDataStream):
                                          data_type="tensor",
                                          data_desc="dataset",
                                          tensor_shape=shape,
-                                         tensor_dtype=dtype))
+                                         tensor_dtype=dtype,
+                                         pubsub=True))
 
         n = len(tensor_dataset)
         b = batch_size
@@ -736,7 +738,8 @@ class TokensStream(BufferedDataStream):
                                          data_type="text",
                                          data_desc="stream of words",
                                          stream_to_proc_transforms=word2id,
-                                         proc_to_stream_transforms=id2word))
+                                         proc_to_stream_transforms=id2word,
+                                         pubsub=True))
 
         # Tokenized text
         for i, token in enumerate(tokens):

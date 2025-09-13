@@ -1,0 +1,27 @@
+{
+    "initial_state": "ready",
+    "state": "ready",
+    "prev_state": null,
+    "limbo_state": null,
+    "state_actions": {
+        "found_lone_wolf": ["do_gen", {"samples": 1}, 0, false]
+    },
+    "transitions": {
+        "ready": {
+            "found_lone_wolf": [["find_agents", {"role":  "public_agent", "engage":  true}, true, 0]]
+        },
+        "found_lone_wolf": {
+            "asked": [["ask_gen", {"u_hashes": ["<agent>:processor"], "samples": 1}, true, 1]]
+        },
+        "asked": {
+            "lone_wolf_done": [
+                ["done_gen", {}, false, 2],
+                ["nop", {"delay":  30.0}, true, 3]
+            ]
+        },
+        "lone_wolf_done": {
+            "ready": [["disconnect_by_role", {"role": "public_agent"}, true, 4]]
+        }
+    },
+    "cur_action": null
+}

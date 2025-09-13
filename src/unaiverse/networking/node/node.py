@@ -295,6 +295,11 @@ class Node:
             save_node_addresses_to_file(self, public=True, dir_path=path_to_append_addresses,
                                         filename="running.csv", append=True)
 
+        # Update lone-wolf machines to replace default wildcards (like <agent>) - the private one will be handled when
+        # joining a world
+        if self.node_type is Node.AGENT:
+            self.agent.behav_lone_wolf.update_wildcard("<agent>", f"{self.get_public_peer_id()}")
+
     def out(self, msg: str):
         """Prints a formatted message to the console if printing is enabled.
 
@@ -619,12 +624,16 @@ class Node:
             print("Failed to join world!")
         return peer_id
 
-    def leave(self, peer_id):
+    def leave(self, peer_id: str):
         """Disconnects the node from a specific peer, typically a world.
 
         Args:
             peer_id: The peer ID of the node to leave.
         """
+
+        if not isinstance(peer_id, str):
+            self.err(f"Invalid argument provided to leave(...): {peer_id}")
+            return
 
         print(f"Leaving {peer_id}...")
 
@@ -1349,7 +1358,8 @@ class Node:
                 else:
 
                     # If a preference was defined, we temporarily add it to the profile
-                    if (msg.sender == self.joining_world_info["world_public_peer_id"] and
+                    if (self.joining_world_info is not None and
+                            msg.sender == self.joining_world_info["world_public_peer_id"] and
                             self.joining_world_info["options"] is not None and
                             len(self.joining_world_info["options"]) > 0):
                         my_profile = copy.deepcopy(self.profile)

@@ -151,7 +151,7 @@ class DataProps:
                      dict | Callable[..., Any] | PreTrainedTokenizerBase | str | None] | None = None,
                  proc_to_stream_transforms: Callable[..., Any] | PreTrainedTokenizerBase | str | list | None = None,
                  delta: float = -1,
-                 pubsub: bool = True,
+                 pubsub: bool = False,
                  public: bool = False):
         """Initializes a DataProps instance.
 
