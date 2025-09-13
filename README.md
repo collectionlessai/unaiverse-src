@@ -1,6 +1,6 @@
 <h1 style="text-align: center;">UNaIVERSE</h1>
 <p style="text-align: center;">
-  <img src="./assets/planets2.png" alt="Project Logo">
+  <img src="./assets/caicat_planets.png" alt="Project Logo">
 </p>
 
 *Welcome to a new "UN(a)IVERSE," where humans and artificial agents coexist, interact, learn from each other, grow together, in a privacy and low-energy oriented reality.*
