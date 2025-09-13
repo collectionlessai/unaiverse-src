@@ -269,24 +269,19 @@ You can find an API reference in file [docs.html](./docs.html), that you can vis
 
 ---
 
-## 🧪 Tests
-
-```bash
-# Run tests
-npm test   # or pytest
-```
-
----
-
 ## 🤝 Contributing
 
 Contributions are welcome!  
-Please read the [contributing guidelines](CONTRIBUTING.md) before submitting pull requests.
+
+Please contact us in order to suggest changes, report bugs, and suggest ideas for novel applications based on UNaIVERSE!
 
 ---
 
 ## 👨‍💻 Authors
 
-- [@your-username](https://github.com/your-username)
+- Stefano Melacci (Project Leader) [stefano.melacci@unisi.it](stefano.melacci@unisi.it)
+- Christian Di Maio [christian.dimaio@phd.unipi.it](christian.dimaio@phd.unipi.it)
+- Tommaso Guidi [stefano.melacci@unisi.it](tommaso.guidi.1998@gmail.com)
+- Marco Gori (Scientific Advisoring) [marco.gori@unisi.it](marco.gori@unisi.it)
 
 ---
