@@ -1244,6 +1244,9 @@ class Node:
 
                             # Assigning a role
                             role_str = self.world.assign_role(profile=profile, is_world_master=is_world_master)
+                            if role_str is None:
+                                self.out("An agent not compatible with any role joined, let's disconnect him")
+                                self.__purge(msg.sender)
                             role = self.world.ROLE_STR_TO_BITS[role_str]  # the role is a bit-wise-interpretable integer
 
                             # Clearing temporary options (if any)
