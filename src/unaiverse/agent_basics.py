@@ -1051,10 +1051,10 @@ class AgentBasics:
                     # Checking the UUID in our known streams, comparing it with the UUID provided as input:
                     # if they are not compatible, we don't generate at all
                     if ref_uuid is not None and stream.get_uuid(expected=False) != ref_uuid:
-                        self.deb(f"[generate] The stream UUID ({stream.get_uuid(expected=False)}, expected: "
-                                 f"{stream.get_uuid(expected=True)}) is not the one we were "
-                                 f"looking for ({ref_uuid}), returning None")
-                        return None, -1
+                        self.deb(f"[generate] The UUID ({stream.get_uuid(expected=False)}, expected: "
+                                 f"{stream.get_uuid(expected=True)}) of stream {net_hash} is not the one we were "
+                                 f"looking for ({ref_uuid}), skipping this data stream")
+                        continue
 
                     # Matching the currently checked input stream with one of the processor inputs
                     stream_sample = None
@@ -1421,10 +1421,12 @@ class AgentBasics:
 
         if net_hash in self.known_streams:
             for name, data_and_tag_and_uuid in sample_dict.items():
-                self.deb(f"[get_stream_sample] Local data stream {name} status: tag="
-                         f"{self.known_streams[net_hash][name].get_tag()}, uuid="
-                         f"{self.known_streams[net_hash][name].get_uuid(expected=False)}, uuid-expected="
-                         f"{self.known_streams[net_hash][name].get_uuid(expected=True)}")
+                if AgentBasics.DEBUG:
+                    if net_hash in self.known_streams and name in self.known_streams[net_hash]:
+                        self.deb(f"[get_stream_sample] Local data stream {name} status: tag="
+                                 f"{self.known_streams[net_hash][name].get_tag()}, uuid="
+                                 f"{self.known_streams[net_hash][name].get_uuid(expected=False)}, uuid-expected="
+                                 f"{self.known_streams[net_hash][name].get_uuid(expected=True)}")
 
                 data, data_tag, data_uuid = (data_and_tag_and_uuid['data'],
                                              data_and_tag_and_uuid['data_tag'],
@@ -1435,6 +1437,7 @@ class AgentBasics:
                 # - if the UUID associated to our local stream is the same of the data, then we check tag order
                 # - if the UUID associated to our local stream is the expected one, we don't check tag order
                 skip = data is None
+                skip = skip or net_hash not in self.known_streams
                 skip = skip or name not in self.known_streams[net_hash]
                 skip = (skip or (self.known_streams[net_hash][name].get_uuid(expected=True) is not None and
                         data_uuid != self.known_streams[net_hash][name].get_uuid(expected=True)))

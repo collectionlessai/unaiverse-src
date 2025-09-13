@@ -15,6 +15,7 @@ class Net(torch.nn.Module):
     def forward(self, x: torch.Tensor | None = None):
         with urllib.request.urlopen("https://cataas.com/cat") as response:
             inp = Image.open(BytesIO(response.read()))
+            inp.show()  # Let's see the pic (watch out: random pic with a cat somewhere)
             print(f"Downloaded image shape {inp.size}, type: {type(inp)}, expected-content: cat")
         return inp
 
@@ -22,7 +23,7 @@ class Net(torch.nn.Module):
 # Agent
 agent = Agent(proc=Net(),
               proc_inputs=[Data4Proc(data_type="all")],
-              proc_outputs=[Data4Proc(data_type="img")],  # PIL image is being "generated" here
+              proc_outputs=[Data4Proc(data_type="img")],  # A PIL image is being "generated" here
               behav_lone_wolf="ask")
 
 # Node hosting agent
@@ -37,3 +38,7 @@ node.run(max_time=10.0)
 # Printing the last received data from the ResNet agent
 out = agent.get_last_streamed_data('ResNetAgent')[0]
 print(f"Received response: {out}")  # Now we expect a textual response
+print("")
+print(f"Notice: instead of using this agent, you can also: search for the ResNet node (ResNetAgent) "
+      f"in the UNaIVERSE portal, connect to it using our in-browser agent, select a picture from "
+      f"your disk, send it to the agent, get back the text response!")

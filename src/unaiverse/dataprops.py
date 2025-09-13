@@ -877,8 +877,6 @@ class DataProps:
                 if self.stream_to_proc_transforms is not None:
                     img_to_tensor_transform = self.stream_to_proc_transforms[int(targets)]
                     if img_to_tensor_transform is not None:
-                        print("HERE")
-                        print(data)
                         return img_to_tensor_transform(data).to(device)
                     else:
                         return data

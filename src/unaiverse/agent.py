@@ -543,7 +543,7 @@ class Agent(AgentBasics):
             if u_hashes is not None:
                 for net_hash in u_hashes:
                     if net_hash in self.known_streams:
-                        for stream_obj in self.known_streams[net_hash].values():
+                        for stream_name, stream_obj in self.known_streams[net_hash].items():
 
                             # If the data arrived before this action, then the UUID is already set, and here there is
                             # no need to do anything; if the data has not yet arrived (common case) ...

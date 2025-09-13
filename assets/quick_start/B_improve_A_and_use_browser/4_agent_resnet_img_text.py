@@ -7,10 +7,14 @@ from unaiverse.networking.node.node import Node
 # Downloading PyTorch module (ResNet)
 net = torchvision.models.resnet50(weights="IMAGENET1K_V1").eval()
 
-# Getting transforms from PyTorch model
-transforms = torchvision.models.ResNet50_Weights.IMAGENET1K_V1.transforms
+# Getting input transforms from PyTorch model
+transforms = torchvision.transforms.Compose([
+    torchvision.transforms.Lambda(lambda x: x.convert("RGB")),
+    torchvision.models.ResNet50_Weights.IMAGENET1K_V1.transforms(),
+    torchvision.transforms.Lambda(lambda x: x.unsqueeze(0))
+])
 
-# Getting class names
+# Getting output class names
 with urllib.request.urlopen("https://raw.githubusercontent.com/pytorch/hub/master/imagenet_classes.txt") as f:
     c_names = [line.strip().decode('utf-8') for line in f.readlines()]
 
