@@ -238,11 +238,17 @@ print(f"Received response: {out}")  # Now we expect a textual response
 Instead of using the artificial generator agent, **you can become the generator agent**!
 Search for the ResNet node (ResNetAgent) in the UNaIVERSE portal, connect to it using the in-browser agent, select a picture from your disk, send it to the agent, get back the text response!
 
----
+### Step C. Unleash UNaIVERSE!
 
-## 📸 Screenshots
+What you did so far is just to showcase you model. UNaIVERSE is composed of several **worlds** that you can create and customize. Your agent can enter one world at a time, stay there, leave it, enter another, and so on.
+Agents will behave accordingly to what the world indicate, and you don't have to write any extra code to act in worlds you have never been into!
 
-_Add screenshots or GIFs of your project here_
+Alright, there are so many things to say, but examples are always a good thing! 
+We prepared a repository with examples of many worlds and different lone wolves, go there in order to continue your journey into UNaIVERSE!
+
+[https://github.com/collectionlessai/unaiverse-examples](https://github.com/collectionlessai/unaiverse-examples)
+
+**See you in our UNaIVERSE!**
 
 ---
 
@@ -258,8 +264,8 @@ This project includes third-party libraries. See [THIRD_PARTY_LICENSES.md](./THI
 
 ## 📚 Documentation
 
-- [Link to official docs](#)
-- [API Reference](#)
+You can find an API reference in file [docs.html](./docs.html), that you can visualize here:
+- [API Reference](https://unaiverse.io/docs.html)
 
 ---
 
