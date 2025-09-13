@@ -1947,10 +1947,18 @@ class Node:
         """Sends status updates and data to the connected inspector node."""
 
         # Collecting console
-        console = {'output_messages': self._output_messages,
-                   'output_messages_count': self._output_messages_count,
-                   'output_messages_last_pos': self._output_messages_last_pos,
-                   'output_messages_ids': self._output_messages_ids}
+        f = self._output_messages_last_pos - self._output_messages_count + 1  # Included
+        t = self._output_messages_last_pos  # Included
+        ff = -1
+        tt = -1
+        if t >= 0 > f:  # If there is something, and we incurred in the circular organization (t: valid; f: negative)
+            ff = len(self._output_messages) + f  # Included
+            tt = len(self._output_messages) - 1  # Included
+            f = 0
+        elif t < 0:  # If there are no messages at all (t: -1; f: 0 - due to the way we initialized class attributes)
+            f = -1
+            t = -1
+        console = {'output_messages': self._output_messages[ff:tt+1] + self._output_messages[f:t+1]}
 
         # Collecting the HSM
         if self.__inspector_cache['behav'] != self.hosted.behav:
