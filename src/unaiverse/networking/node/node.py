@@ -1498,6 +1498,7 @@ class Node:
 
                 if sender_is_inspector:
                     self.inspector_activated = True
+                    self.inspector_peer_id = msg.sender
                     print("Inspector activated")
                 else:
                     self.err("Inspector-activation message was not sent by the expected inspector node ID")
