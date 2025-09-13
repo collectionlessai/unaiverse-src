@@ -265,7 +265,7 @@ This project includes third-party libraries. See [THIRD_PARTY_LICENSES.md](./THI
 ## 📚 Documentation
 
 You can find an API reference in file [docs.html](./docs.html), that you can visualize here:
-- [API Reference](https://unaiverse.io/docs.html)
+- [API Reference](https://collectionlessai.github.io/unaiverse-docs.github.io/)
 
 ---
 
@@ -281,7 +281,7 @@ Please contact us in order to suggest changes, report bugs, and suggest ideas fo
 
 - Stefano Melacci (Project Leader) [stefano.melacci@unisi.it](stefano.melacci@unisi.it)
 - Christian Di Maio [christian.dimaio@phd.unipi.it](christian.dimaio@phd.unipi.it)
-- Tommaso Guidi [stefano.melacci@unisi.it](tommaso.guidi.1998@gmail.com)
+- Tommaso Guidi [tommaso.guidi.1998](tommaso.guidi.1998@gmail.com)
 - Marco Gori (Scientific Advisoring) [marco.gori@unisi.it](marco.gori@unisi.it)
 
 ---
