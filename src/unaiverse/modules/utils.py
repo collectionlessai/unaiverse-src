@@ -662,10 +662,12 @@ class AgentProcessorChecker:
     def __guess_proc_optional_inputs(self):
         self.proc_optional_inputs = []
         if isinstance(self.proc, ModuleWrapper):
-            sig = inspect.signature(self.proc.module.forward)
+            if hasattr(self.proc.module, "forward"):
+                sig = inspect.signature(self.proc.module.forward)
+            else:
+                sig = inspect.signature(self.proc.forward)
         else:
             sig = inspect.signature(self.proc.forward)
-        param_count = len(sig.parameters.items())
 
         i = 0
         for name, param in sig.parameters.items():
