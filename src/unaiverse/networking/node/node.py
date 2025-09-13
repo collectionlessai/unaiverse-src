@@ -1289,7 +1289,7 @@ class Node:
                                 self.__purge(msg.sender)
                             else:
                                 self.out("Adding known agent and removing it from the interview queue " + msg.sender)
-                                if not self.agent.add_agent(peer_id=msg.sender, profile=profile):
+                                if not self.hosted.add_agent(peer_id=msg.sender, profile=profile):  # keep "hosted" here
                                     self.__purge(msg.sender)
                                 else:
 
