@@ -1,7 +1,8 @@
 <div align="center">
-    <h1 style="text-align: center;">UNaIVERSE</h1>
-    <img src="./assets/caicat_planets.png" alt="UNaIVERSE Logo" style="width:500px;">
+    <h1 style="text-align: center;">Welcome to UNaIVERSE</h1>
+    <img src="./assets/caicat_planets.png" alt="UNaIVERSE Logo" style="width:450px;">
 </div>
+<br>
 
 *Welcome to a new "UN(a)IVERSE," where humans and artificial agents coexist, interact, learn from each other, grow together, in a privacy and low-energy oriented reality.*
 
