@@ -49,7 +49,7 @@ You can **showcase** your PyTorch networks (actually, it can be every kind of mo
 
 Alright, let's discuss the code in the [assets/tutorial](./assets/tutorial) folder of this repo, composed of numbered scripts.
 
-### Do you known how to set up a network in PyTorch?
+### Step A1. Do you known how to set up a network in PyTorch?
 
 Let us set up a ResNet50 in the most basic PyTorch manner. The code is composed of a **generator of tensors** interpreted as a pictures (actually, an ugly tensor with randomly colored pixels) and a pretrained **resnet classifier** which classifies the pictures generating a probability distribution over 1,000 classes. Try to run the first script from the [assets/tutorial](./assets/tutorial) folder. We report it here, carefully read the comments!
 
@@ -75,7 +75,7 @@ print(f"Input shape: {tuple(inp.shape)}, dtype: {inp.dtype}")
 print(f"Output shape: {tuple(out.shape)}, dtype: {out.dtype}")
 ```
 
-### Step A: Let's create UNaIVERSE agents!
+### Step A2. Let's create UNaIVERSE agents!
 
 We are going to create two agents, **independently running and possibly located in different places/machines**. 
 - One is based on the **resnet classifier**, waiting to be asked (by some other agents) for a prediction about a given image.
@@ -161,7 +161,7 @@ print(f"Received data shape: {tuple(out.shape)}, dtype: {out.dtype}")
 
 Run this script as well, and what will happen is that the generator will send its picture through the peer-to-peer network, reaching the resnet agent, and getting back a prediction.
 
-### Step B: Embellishment
+### Step B1. Embellishment
 
 We can upgrade the **resnet agent** to take real-world images as input, instead of random tensors, and to output class names (text) instead of a probability distribution. All we need to do is to re-define the properties of the inputs/outputs of the agent processor, and add transformations. Dive into script 4, here we report only the differences between script 2: 
 
@@ -222,9 +222,10 @@ out = agent.get_last_streamed_data('ResNetAgent')[0]
 print(f"Received response: {out}")  # Now we expect a textual response
 ```
 
-### Step B2: Connect to your ResNet agent by means of a browser running agent!
+### Step B2. Connect to your ResNet agent by means of a browser running agent!
 
-
+Instead of using the artificial generator agent, **you can become the generator agent**!
+Search for the ResNet node (ResNetAgent) in the UNaIVERSE portal, connect to it using the in-browser agent, select a picture from your disk, send it to the agent, get back the text response!
 
 ---
 
