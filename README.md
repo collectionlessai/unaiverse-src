@@ -1,5 +1,5 @@
 <div align="center">
-    <h1 style="text-align: center;">Welcome to UNaIVERSE https://unaiverse.io</h1>
+    <h1 style="text-align: center;">Welcome to UNaIVERSE ~ https://unaiverse.io</h1>
     <img src="./assets/caicat_planets.png" alt="UNaIVERSE Logo" style="width:450px;">
 </div>
 <br>
