@@ -2046,11 +2046,7 @@ class NodeSynchronizer:
     DEBUG = True
 
     def __init__(self):
-        """Initializes a new instance of the NodeSynchronizer class
-
-        Returns:
-            None.
-        """
+        """Initializes a new instance of the NodeSynchronizer class."""
         self.nodes = []
         self.agent_nodes = {}
         self.world_node = None  # Added to allow get_console() to access the world node from server.py (synch only)
