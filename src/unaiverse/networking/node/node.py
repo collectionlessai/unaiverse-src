@@ -1929,29 +1929,32 @@ class Node:
         self.out(f"Handling inspector message {cmd}, with arg {arg}")
         print(f"Handling inspector message {cmd}, with arg {arg}")
 
-        if cmd == "ask_to_join_world":
-            print(f"Inspector asked to join world: {arg}")
-            self.ask_to_join_world(arg)
-        elif cmd == "ask_to_get_in_touch":
-            print(f"Inspector asked to get in touch with an agent: {arg}")
-            self.ask_to_get_in_touch(arg, public=True)
-        elif cmd == "leave":
-            print(f"Inspector asked to leave an agent: {arg}")
-            self.leave(arg)
-        elif cmd == "leave_world":
-            print(f"Inspector asked to leave the current world")
-            self.leave_world()
-        elif cmd == "pause":
-            print("Inspector asked to pause")
-            self.__inspector_told_to_pause = True
-        elif cmd == "play":
-            print("Inspector asked to play")
-            self.__inspector_told_to_pause = False
-        elif cmd == "save":
-            print("Inspector asked to save")
-            self.hosted.save(arg)
+        if arg is not None and not isinstance(arg, str):
+            self.err(f"Expecting a string argument from the inspector!")
         else:
-            self.err("Unknown inspector command")
+            if cmd == "ask_to_join_world":
+                print(f"Inspector asked to join world: {arg}")
+                self.ask_to_join_world(node_name=arg)
+            elif cmd == "ask_to_get_in_touch":
+                print(f"Inspector asked to get in touch with an agent: {arg}")
+                self.ask_to_get_in_touch(node_name=arg, public=True)
+            elif cmd == "leave":
+                print(f"Inspector asked to leave an agent: {arg}")
+                self.leave(arg)
+            elif cmd == "leave_world":
+                print(f"Inspector asked to leave the current world")
+                self.leave_world()
+            elif cmd == "pause":
+                print("Inspector asked to pause")
+                self.__inspector_told_to_pause = True
+            elif cmd == "play":
+                print("Inspector asked to play")
+                self.__inspector_told_to_pause = False
+            elif cmd == "save":
+                print("Inspector asked to save")
+                self.hosted.save(arg)
+            else:
+                self.err("Unknown inspector command")
 
     def __send_to_inspector(self):
         """Sends status updates and data to the connected inspector node."""
