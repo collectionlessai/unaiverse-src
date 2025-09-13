@@ -36,7 +36,11 @@ UN(a)IVERSE is a **peer-to-peer network**, aiming to become the new incarnation 
 
 Jump to [https://unaiverse.io](https://unaiverse.io), create a new account (free!) or log in with an existing one. If you did not already do it, click on the top-right icon with "a person" on it:
 
-<img src="./assets/top_right_icons.png" alt="UNaIVERSE Logo" style="width:80px;"> and then click on "Generate a Token" <img src="./assets/generate_token.png" alt="UNaIVERSE Logo" style="width:320px;">
+<img src="./assets/top_right_icons.png" alt="UNaIVERSE Logo" style="width:80px;"> 
+
+Then click on "Generate a Token":
+
+<img src="./assets/generate_token.png" alt="UNaIVERSE Logo" style="width:320px;">
 
 **COPY THE TOKEN**, you won't be able to see it twice! Now, let's focus on Python:
 
