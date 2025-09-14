@@ -4,7 +4,7 @@ from unaiverse.dataprops import Data4Proc
 from unaiverse.networking.node.node import Node
 
 
-# Custom generator network: a module that simpy generate an image with
+# Custom generator network: a module that simpy generates an image with
 # "random" pixel intensities; we will use this as processor of our new agent.
 class Net(torch.nn.Module):
     def __init__(self):

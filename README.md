@@ -9,7 +9,7 @@
 </p>
 <br>
 
-UNaIVERSE is a project framed in the context of [Collectionless AI](https://collectionless.ai), our perspective on Artificial Intelligence rooted on **privacy**, **low energy consumption**, and, more importantly, a **decentralized** model.
+UNaIVERSE is a project framed in the context of [Collectionless AI](https://collectionless.ai), our perspective on Artificial Intelligence rooted in **privacy**, **low energy consumption**, and, more importantly, a **decentralized** model.
 
 UN(a)IVERSE is a **peer-to-peer network**, aiming to become the new incarnation of the Web, combining (in the long run) the principles of Social Networks and AI under a **privacy** lens—a perspective that is crucial given how the Web, especially Social Networks, and AI are used today by both businesses and individual users.
 
@@ -37,7 +37,7 @@ Remarks:
 ## ⚡ Status
 
 - Very first version: we think it will always stay alpha/beta/whatever 😎, but right now there are many features we plan to add and several parts to improve, **thanks to your feedback!**
-- Missing features (work-in-progress): browser-to-browser communication; agents running on mobile; actual social network features (right now it is very preliminary, not really showcasing where we want go)
+- Missing features (work-in-progress): browser-to-browser communication; agents running on mobile; actual social network features (right now it is very preliminary, not really showcasing where we want to go)
 
 --
 
@@ -69,9 +69,9 @@ You can **showcase** your PyTorch networks (actually, it can be every kind of mo
 
 Alright, let's discuss the code in the [assets/tutorial](./assets/tutorial) folder of this repo, composed of numbered scripts.
 
-### Step A1. Do you known how to set up a network in PyTorch?
+### Step A1. Do you know how to set up a network in PyTorch?
 
-Let us set up a ResNet50 in the most basic PyTorch manner. The code is composed of a **generator of tensors** interpreted as a pictures (actually, an ugly tensor with randomly colored pixels) and a pretrained **resnet classifier** which classifies the pictures generating a probability distribution over 1,000 classes. Try to run [script 1](./assets/tutorial/A_move_to_unaiverse/1_generator_and_resnet.py) from the [assets/tutorial](./assets/tutorial) folder. We report it here, carefully read the comments!
+Let us set up a ResNet50 in the most basic PyTorch manner. The code is composed of a **generator of tensors** interpreted as pictures (actually, an ugly tensor with randomly colored pixels) and a pretrained **resnet classifier** which classifies the pictures generating a probability distribution over 1,000 classes. Try to run [script 1](./assets/tutorial/A_move_to_unaiverse/1_generator_and_resnet.py) from the [assets/tutorial](./assets/tutorial) folder. We report it here, carefully read the comments!
 
 ```python
 import torch
@@ -143,7 +143,7 @@ from unaiverse.dataprops import Data4Proc
 from unaiverse.networking.node.node import Node
 
 
-# Custom generator network: a module that simpy generate an image with
+# Custom generator network: a module that simpy generates an image with
 # "random" pixel intensities; we will use this as processor of our new agent.
 class Net(torch.nn.Module):
     def __init__(self):
@@ -278,8 +278,8 @@ Search for the ResNet node (ResNetAgent) in the UNaIVERSE portal, connect to it 
 
 ### Step C. Unleash UNaIVERSE!
 
-What you did so far is just to showcase you model. UNaIVERSE is composed of several **worlds** that you can create and customize. Your agent can enter one world at a time, stay there, leave it, enter another, and so on.
-Agents will behave accordingly to what the world indicate, and you don't have to write any extra code to act in worlds you have never been into!
+What you did so far is just to showcase your model. UNaIVERSE is composed of several **worlds** that you can create and customize. Your agent can enter one world at a time, stay there, leave it, enter another, and so on.
+Agents will behave according to what the world indicates, and you don't have to write any extra code to act in worlds you have never been into!
 
 Alright, there are so many things to say, but examples are always a good thing! 
 We prepared a repository with examples of many worlds and different lone wolves, go there in order to continue your journey into UNaIVERSE!
@@ -293,7 +293,7 @@ We prepared a repository with examples of many worlds and different lone wolves,
 ## 📄 License
 
 This project is licensed under the Polyform Strict License 1.0.0.
-Commercial licence can be provided.
+Commercial licenses can be provided.
 See the [LICENSE](./LICENSE) file for details (research, etc.).
 
 This project includes third-party libraries. See [THIRD_PARTY_LICENSES.md](./THIRD_PARTY_LICENSES.md) for details.
@@ -320,6 +320,6 @@ Please contact us in order to suggest changes, report bugs, and suggest ideas fo
 - Stefano Melacci (Project Leader) [stefano.melacci@unisi.it](stefano.melacci@unisi.it)
 - Christian Di Maio [christian.dimaio@phd.unipi.it](christian.dimaio@phd.unipi.it)
 - Tommaso Guidi [tommaso.guidi.1998](tommaso.guidi.1998@gmail.com)
-- Marco Gori (Scientific Advisoring) [marco.gori@unisi.it](marco.gori@unisi.it)
+- Marco Gori (Scientific Advisor) [marco.gori@unisi.it](marco.gori@unisi.it)
 
 ---
