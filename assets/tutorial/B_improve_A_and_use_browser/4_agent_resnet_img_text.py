@@ -28,7 +28,7 @@ agent = Agent(proc=net,
               proc_outputs=[Data4Proc(data_type="text", proc_to_stream_transforms=lambda p: c_names[p.argmax(1)[0]])])
 
 # Node hosting agent
-node = Node(node_name="ResNetAgent", hosted=agent, hidden=True, clock_delta=1. / 30.)
+node = Node(node_name="Test0", hosted=agent, hidden=True, clock_delta=1. / 30.)
 
 # Running node
 node.run()

@@ -22,7 +22,7 @@ agent = Agent(proc=net,
 # existing; it is "hidden" meaning that only you can see it in UNaIVERSE (since it is
 # just a test!); the clock speed can be tuned accordingly to your needed and computing
 # power.
-node = Node(node_name="ResNetAgent", hosted=agent, hidden=True, clock_delta=1. / 30.)
+node = Node(node_name="Test0", hosted=agent, hidden=True, clock_delta=1. / 30.)
 
 # Running node (forever)
 node.run()

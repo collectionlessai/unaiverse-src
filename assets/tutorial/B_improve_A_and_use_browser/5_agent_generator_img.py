@@ -27,16 +27,16 @@ agent = Agent(proc=Net(),
               behav_lone_wolf="ask")
 
 # Node hosting agent
-node = Node(node_name="GeneratorAgent", hosted=agent, hidden=True, clock_delta=1. / 30.)
+node = Node(node_name="Test1", hosted=agent, hidden=True, clock_delta=1. / 30.)
 
 # Telling this agent to connect to the ResNet one
-node.ask_to_get_in_touch(node_name="ResNetAgent")
+node.ask_to_get_in_touch(node_name="Test0")
 
 # Running node for 10 seconds
 node.run(max_time=10.0)
 
 # Printing the last received data from the ResNet agent
-out = agent.get_last_streamed_data('ResNetAgent')[0]
+out = agent.get_last_streamed_data('Test0')[0]
 print(f"Received response: {out}")  # Now we expect a textual response
 print("")
 print(f"Notice: instead of using this agent, you can also: search for the ResNet node (ResNetAgent) "

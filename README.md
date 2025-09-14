@@ -128,7 +128,7 @@ agent = Agent(proc=net,
 # existing; it is "hidden" meaning that only you can see it in UNaIVERSE (since it is
 # just a test!); the clock speed can be tuned accordingly to your needed and computing
 # power.
-node = Node(node_name="ResNetAgent", hosted=agent, hidden=True, clock_delta=1. / 30.)
+node = Node(node_name="Test0", hosted=agent, hidden=True, clock_delta=1. / 30.)
 
 # Running node (forever)
 node.run()
@@ -166,16 +166,16 @@ agent = Agent(proc=Net(),
               behav_lone_wolf="ask")  # Setting this behavior: "ask the partner to respond to your generated data"
 
 # Node hosting agent
-node = Node(node_name="GeneratorAgent", hosted=agent, hidden=True, clock_delta=1. / 30.)
+node = Node(node_name="Test1", hosted=agent, hidden=True, clock_delta=1. / 30.)
 
 # Telling this agent to connect to the ResNet one
-node.ask_to_get_in_touch(node_name="ResNetAgent")
+node.ask_to_get_in_touch(node_name="Test0")
 
 # Running node for 10 seconds
 node.run(max_time=10.0)
 
 # Printing the last received data from the ResNet agent
-out = agent.get_last_streamed_data('ResNetAgent')[0]
+out = agent.get_last_streamed_data('Test0')[0]
 print(f"Received data shape: {tuple(out.shape)}, dtype: {out.dtype}")
 ```
 
@@ -216,7 +216,7 @@ agent = Agent(proc=net,
               proc_outputs=[Data4Proc(data_type="text", proc_to_stream_transforms=lambda p: c_names[p.argmax(1)[0]])])
 
 # Node hosting agent
-node = Node(node_name="ResNetAgent", hosted=agent, hidden=True, clock_delta=1. / 30.)
+node = Node(node_name="Test0", hosted=agent, hidden=True, clock_delta=1. / 30.)
 
 # Running node
 node.run()
@@ -254,10 +254,10 @@ agent = Agent(proc=Net(),
               behav_lone_wolf="ask")
 
 # Node hosting agent
-node = Node(node_name="GeneratorAgent", hosted=agent, hidden=True, clock_delta=1. / 30.)
+node = Node(node_name="Test1", hosted=agent, hidden=True, clock_delta=1. / 30.)
 
 # Telling this agent to connect to the ResNet one
-node.ask_to_get_in_touch(node_name="ResNetAgent")
+node.ask_to_get_in_touch(node_name="Test0")
 
 # Running node for 10 seconds
 node.run(max_time=10.0)
