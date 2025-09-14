@@ -100,10 +100,10 @@ class Agent(AgentBasics):
 
         if len(self._found_agents) > 0:
             self.out(f"Sending engagement request to {', '.join([x for x in self._found_agents])}")
-        my_role = self.ROLE_STR_TO_BITS[self._node_profile.get_dynamic_profile()['connections']['role']]
+        my_role_str = self._node_profile.get_dynamic_profile()['connections']['role']
         for found_agent in self._found_agents:
             if self.set_next_action(found_agent, action="get_engagement",
-                                    args={"sender_role": self.ROLE_BITS_TO_STR[my_role]}):
+                                    args={"sender_role": my_role_str}):
                 at_least_one_sent = True
             else:
                 self.err(f"Unable to send engagement to {found_agent}")
@@ -1213,13 +1213,13 @@ class Agent(AgentBasics):
         self._found_agents = set()
 
         for role_str in role_list:
-            role_int = self.ROLE_STR_TO_BITS[role_str]
             agents = self.all_agents
-            role_clean = (role_int >> 2) << 2  # It should not be necessary here, but let's keep it
+            role_int = self.ROLE_STR_TO_BITS[role_str]
+            role_clean = (role_int >> 2) << 2
             for peer_id, profile in agents.items():
-                _role = self.ROLE_STR_TO_BITS[profile.get_dynamic_profile()['connections']['role']]
-                _role = (_role >> 2) << 2  # It should not be necessary here, but let's keep it
-                if _role == role_clean:
+                _role_int = self.ROLE_STR_TO_BITS[profile.get_dynamic_profile()['connections']['role']]
+                _role_clean = (_role_int >> 2) << 2
+                if _role_clean == role_clean:
                     self._found_agents.add(peer_id)  # Peer IDs here
 
         self.deb(f"[find_agents] Found these agents: {self._found_agents}")

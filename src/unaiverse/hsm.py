@@ -1717,8 +1717,8 @@ class HybridStateMachine:
                     blocking = True
                     msg = None
                 elif len(state_action_list) == 4:  # Backward compatibility
-                    act_name, act_args, state_id, blocking = state_action_list
-                    waiting_time = 0.
+                    act_name, act_args, state_id, waiting_time = state_action_list
+                    blocking = True
                     msg = None
                 elif len(state_action_list) == 5:  # Backward compatibility
                     act_name, act_args, state_id, blocking, waiting_time = state_action_list
