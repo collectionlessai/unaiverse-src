@@ -18,7 +18,7 @@ class Net(torch.nn.Module):
 
 
 # Agent: we use the generator as processor.
-# This agent will still be a "lone wolf", but we will force a different behaviour, that is
+# This agent will still be a "lone wolf", but we will force a different behavior, that is
 # the one of "asking" another agent to handle the generated data, getting back a response.
 agent = Agent(proc=Net(),
               proc_inputs=[Data4Proc(data_type="all")],  # Able to get every type of data (since it won't use it :))
