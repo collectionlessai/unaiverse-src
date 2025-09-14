@@ -291,7 +291,7 @@ class Node:
         # Save public addresses
         path_to_append_addresses = os.getenv("NODE_SAVE_RUNNING_ADDRESSES")
         if (path_to_append_addresses is not None and
-                not self.profile.get_dynamic_profile()["hidden"]):  # Only for visible nodes
+                not self.profile.get_static_profile()['node_name'].lower().startswith("test")):  # Skip Test0, ...
             save_node_addresses_to_file(self, public=True, dir_path=path_to_append_addresses,
                                         filename="running.csv", append=True)
 
