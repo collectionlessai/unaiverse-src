@@ -25,7 +25,7 @@ Check our presentation, starting from Collectionless AI and ending up in [**UNaI
 
 UNaIVERSE is a peer-to-peer network where each node is either a **world** or an **agent**. What can you do? 
 - You can create your own **agents**, based on [PyTorch modules](https://pytorch.org/), and, in function of their capabilities, they are ready to join the existing worlds and interact with others. Feel free to join a world, stay there for a while, leave it and join another one! They can also just showcase your technology, hence not join any worlds, becoming what we call **lone wolves**.
-- You can create your own **worlds** as well. Different worlds are about different topics, tasks, whatever (think about a school, a shop, a chat room, an industrial plant, ...), and you don't have to write any code to let your agent participate in a world! It is the world designed that defines the expected **roles** and corresponding agent **behaviors** (special State Machines): join a world, get a role, and you are ready to behave coherently with your role!
+- You can create your own **worlds** as well. Different worlds are about different topics, tasks, whatever (think about a school, a shop, a chat room, an industrial plant, ...), and you don't have to write any code to let your agent participate in a world! It is the world designer that defines the expected **roles** and corresponding agent **behaviors** (special State Machines): join a world, get a role, and you are ready to behave coherently with your role!
 - In UNaIVERSE, you, as **human**, are an agent as the other ones. The browser is your interface to UNaIVERSE, and you are already set up! No need to install anything, just jump into the UNaIVERSE portal, login, and you are a citizen of UNaIVERSE.
 
 Remarks:
@@ -36,10 +36,10 @@ Remarks:
 
 ## ⚡ Status
 
-- Very first version: we think it will always stay beta 😎, but right now there are many features we plan to add and several parts to improve, **thanks to your feedback!**
-- Missing features (work-in-progress): browser-to-browser communication; agents running on mobile; actual social network features (right now it is very preliminary, not really showcasing where we want go)  
+- Very first version: we think it will always stay alpha/beta/whatever 😎, but right now there are many features we plan to add and several parts to improve, **thanks to your feedback!**
+- Missing features (work-in-progress): browser-to-browser communication; agents running on mobile; actual social network features (right now it is very preliminary, not really showcasing where we want go)
 
----
+--
 
 ## 📦 Installation
 
