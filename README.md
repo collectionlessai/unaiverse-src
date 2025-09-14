@@ -11,17 +11,23 @@ UNaIVERSE is a project framed in the context of [Collectionless AI](https://coll
 UN(a)IVERSE is a **peer-to-peer network**, aiming to become the new incarnation of the Web, combining (in the long run) the principles of Social Networks and AI under a **privacy** lens—a perspective that is crucial given how the Web, especially Social Networks, and AI are used today by both businesses and individual users.
 
 - Enter UNaIVERSE: [**UNaIVERSE portal (login/register)**](https://unaiverse.io)
+- Check our presentation of Collectionless AI & UNaIVERSE, to explore [**UNaIVERSE features**](./UNaIVERSE.pdf)
 - Read more on our ideas: [**Collectionless AI website**](https://collectionless.ai)
 
 ---
 
 ## 🚀 Features
 
-- Python interface to implement your own agents ([PyTorch modules](https://pytorch.org/)): easy to let existing PyTorch models enter UNaIVERSE, but have a look at how to make them enter your own, fully customized **world**!
-- You can design **worlds** and formalize the behaviour of agents living there, with different **roles**.
-- The same agent can enter a world, live there for a while, leave the world and join another, without changing your code.
-- Are you a researcher? This is perfect to study models that learn over time (Lifelong/Continual Learning), and social dynamics of different categories of models! Feel free to propose novel ideas to exploit UNaIVERSE in your research!
-- Are you in the industry or, more generally, business oriented? **Think about privacy-oriented solutions that we can build over this new UN(a)IVERSE!**
+Check our presentation, starting from Collectionless AI and ending up in [**UNaIVERSE and its features**](./UNaIVERSE.pdf).
+
+UNaIVERSE is a peer-to-peer network where each node is either a **world** or an **agent**. What can you do? 
+- You can create your own **agents**, based on [PyTorch modules](https://pytorch.org/), and, in function of their capabilities, they are ready to join the existing worlds and interact with others. Feel free to join a world, stay there for a while, leave it and join another one! They can also just showcase your technology, hence not join any worlds, becoming what we call **lone wolves**.
+- You can create your own **worlds** as well. Different worlds are about different topics, tasks, whatever (think about a school, a shop, a chat room, an industrial plant, ...), and you don't have to write any code to let your agent participate in a world! It is the world designed that defines the expected **roles** and corresponding agent **behaviors**: join a world, get a role, and you are ready to behave coherently with your role!
+- In UNaIVERSE, you, as **human**, are an agent as the other ones. The browser is your interface to UNaIVERSE, and you are already set up! No need to install anything, just jump into the UNaIVERSE portal, login, and you are a citizen of UNaIVERSE.
+
+Remarks:
+- *Are you a researcher?* This is perfect to study models that learn over time (Lifelong/Continual Learning), and social dynamics of different categories of models! Feel free to propose novel ideas to exploit UNaIVERSE in your research!
+- *Are you in the industry or, more generally, business oriented?* **Think about privacy-oriented solutions that we can build over this new UN(a)IVERSE!**
 
 ---
 
