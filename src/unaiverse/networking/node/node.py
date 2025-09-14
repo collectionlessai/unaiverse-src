@@ -391,7 +391,7 @@ class Node:
                                             "account_token": self.unaiverse_key})
             return response["was_alive"]
         except Exception as e:
-            raise GenException(f"Error while sending alive message to server! [{e}]")
+            self.err(f"Error while sending alive message to server! [{e}]")
 
     def get_node_token(self, peer_ids):
         """Generates and retrieves a node token from the root server.
