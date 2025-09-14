@@ -32,36 +32,36 @@ body:
     validations:
       required: true
 
-  - type: fieldset
-    id: python-environment
+  - type: markdown
     attributes:
-      label: Python Environment Details
-      description: Please provide the details of the environment where you encountered the bug.
-    fields:
-      - type: input
-        id: os
-        attributes:
-          label: Operating System
-          placeholder: "e.g., Ubuntu 22.04, Windows 11"
-        validations:
-          required: true
-      - type: dropdown
-        id: architecture
-        attributes:
-          label: System Architecture
-          options:
-            - x86_64 / amd64
-            - arm64
-            - Other
-        validations:
-          required: true
-      - type: input
-        id: python-version
-        attributes:
-          label: Python Version
-          placeholder: "e.g., 3.10.12"
-        validations:
-          required: true
+      value: "### 🐍 Environment Details"
+
+  - type: input
+    id: os
+    attributes:
+      label: Operating System
+      placeholder: "e.g., Ubuntu 22.04, Windows 11"
+    validations:
+      required: true
+      
+  - type: dropdown
+    id: architecture
+    attributes:
+      label: System Architecture
+      options:
+        - x86_64 / amd64
+        - arm64
+        - Other
+    validations:
+      required: true
+      
+  - type: input
+    id: python-version
+    attributes:
+      label: Python Version
+      placeholder: "e.g., 3.10.12"
+    validations:
+      required: true
 
   - type: textarea
     id: logs
