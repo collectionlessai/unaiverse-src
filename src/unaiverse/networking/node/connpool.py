@@ -399,23 +399,25 @@ class ConnectionPools:
         for m in messages:
             if (m.sender in self.peer_id_to_pool_name or  # Check if expected sender
                     (allowed_not_connected_peers is not None and m.sender in allowed_not_connected_peers)):
-                token_with_inspector_final_bit = m.piggyback
-                token = token_with_inspector_final_bit[0:-1]
-                inspector_mode = token_with_inspector_final_bit[-1]
-                node_id, _ = self.verify_token(token, m.sender)
-                if node_id is not None:
+                try:
+                    token_with_inspector_final_bit = m.piggyback
+                    token = token_with_inspector_final_bit[0:-1]
+                    inspector_mode = token_with_inspector_final_bit[-1]
+                    node_id, _ = self.verify_token(token, m.sender)
+                    if node_id is not None:
 
-                    # Replacing piggyback with the node ID and the flag telling if it is inspector
-                    m.piggyback = node_id + inspector_mode
-                    ret.append(m)
-                    if m.sender in self.peer_id_to_pool_name:
-                        self.peer_id_to_token[m.sender] = token
-                else:
-                    if ConnectionPools.DEBUG:
-                        print("[DEBUG CONNECTIONS-POOL] INVALID TOKEN! (discarding a message)")
+                        # Replacing piggyback with the node ID and the flag telling if it is inspector
+                        m.piggyback = node_id + inspector_mode
+                        ret.append(m)
+                        if m.sender in self.peer_id_to_pool_name:
+                            self.peer_id_to_token[m.sender] = token
+                    else:
+                        print("Received a message missing expected info in the token payload (discarding it)")
+                except Exception as e:
+                    print(f"Received a message with an invalid piggyback token! (discarding it) [{e}]")
             else:
                 if ConnectionPools.DEBUG:
-                    print("[DEBUG CONNECTIONS-POOL] SENDER NOT FOUND IN THE POOLS! (discarding a message)")
+                    print("Received a message from a unknown sender (discarding it)")
         return ret
 
     def get_added_after_updating(self, pool_name: str | None = None):
