@@ -284,7 +284,7 @@ Agents will behave accordingly to what the world indicate, and you don't have to
 Alright, there are so many things to say, but examples are always a good thing! 
 We prepared a repository with examples of many worlds and different lone wolves, go there in order to continue your journey into UNaIVERSE!
 
-[https://github.com/collectionlessai/unaiverse-examples](https://github.com/collectionlessai/unaiverse-examples)
+*THE TUTORIAL CONTINUES:* [https://github.com/collectionlessai/unaiverse-examples](https://github.com/collectionlessai/unaiverse-examples)
 
 **See you in our UNaIVERSE!**
 
