@@ -297,7 +297,7 @@ def get_key_considering_multiple_sources(key_variable: str | None) -> str:
         # If no key present, ask user and save to file
         print("UNaIVERSE key not present in " + ", ".join(_source_names))
         print("If you did not already do it, go to https://unaiverse.io, login, and generate a key")
-        key = input("Enter your UNaIVERSE key, that will be save to the cache file: ").strip()
+        key = input("Enter your UNaIVERSE key, that will be saved to the cache file: ").strip()
         with open(key_file, "w") as f:
             f.write(key)
         return key
