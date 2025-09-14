@@ -25,7 +25,7 @@ Check our presentation, starting from Collectionless AI and ending up in [**UNaI
 
 UNaIVERSE is a peer-to-peer network where each node is either a **world** or an **agent**. What can you do? 
 - You can create your own **agents**, based on [PyTorch modules](https://pytorch.org/), and, in function of their capabilities, they are ready to join the existing worlds and interact with others. Feel free to join a world, stay there for a while, leave it and join another one! They can also just showcase your technology, hence not join any worlds, becoming what we call **lone wolves**.
-- You can create your own **worlds** as well. Different worlds are about different topics, tasks, whatever (think about a school, a shop, a chat room, an industrial plant, ...), and you don't have to write any code to let your agent participate in a world! It is the world designed that defines the expected **roles** and corresponding agent **behaviors**: join a world, get a role, and you are ready to behave coherently with your role!
+- You can create your own **worlds** as well. Different worlds are about different topics, tasks, whatever (think about a school, a shop, a chat room, an industrial plant, ...), and you don't have to write any code to let your agent participate in a world! It is the world designed that defines the expected **roles** and corresponding agent **behaviors** (special State Machines): join a world, get a role, and you are ready to behave coherently with your role!
 - In UNaIVERSE, you, as **human**, are an agent as the other ones. The browser is your interface to UNaIVERSE, and you are already set up! No need to install anything, just jump into the UNaIVERSE portal, login, and you are a citizen of UNaIVERSE.
 
 Remarks:
@@ -71,7 +71,7 @@ Alright, let's discuss the code in the [assets/tutorial](./assets/tutorial) fold
 
 ### Step A1. Do you known how to set up a network in PyTorch?
 
-Let us set up a ResNet50 in the most basic PyTorch manner. The code is composed of a **generator of tensors** interpreted as a pictures (actually, an ugly tensor with randomly colored pixels) and a pretrained **resnet classifier** which classifies the pictures generating a probability distribution over 1,000 classes. Try to run the first script from the [assets/tutorial](./assets/tutorial) folder. We report it here, carefully read the comments!
+Let us set up a ResNet50 in the most basic PyTorch manner. The code is composed of a **generator of tensors** interpreted as a pictures (actually, an ugly tensor with randomly colored pixels) and a pretrained **resnet classifier** which classifies the pictures generating a probability distribution over 1,000 classes. Try to run [script 1](./assets/tutorial/A_move_to_unaiverse/1_generator_and_resnet.py) from the [assets/tutorial](./assets/tutorial) folder. We report it here, carefully read the comments!
 
 ```python
 import torch
@@ -101,7 +101,7 @@ We are going to create two agents, **independently running and possibly located 
 - One is based on the **resnet classifier**, waiting to be asked (by some other agents) for a prediction about a given image.
 - The other is the **generator of tensors**, ready to generate a tensor (representation of a picture) and ask another agent to classify it.
 
-Here is the **resnet classifier** agent, running forever and waiting for somebody to ask for a prediction, taken from script 2 in the [assets/tutorial](./assets/tutorial) folder:
+Here is the **resnet classifier** agent, running forever and waiting for somebody to ask for a prediction, taken from [script 2](./assets/tutorial/A_move_to_unaiverse/2_agent_resnet.py) in the [assets/tutorial](./assets/tutorial) folder:
 
 ```python
 import torch
@@ -134,7 +134,7 @@ node = Node(node_name="ResNetAgent", hosted=agent, hidden=True, clock_delta=1. /
 node.run()
 ```
 
-Run it. Now, here is the agent capable of **generating tensors** (let's say images), which is asked to get in touch with the resnet agent, taken from script 3 in the [assets/tutorial](./assets/tutorial) folder:
+Run it. Now, here is the agent capable of **generating tensors** (let's say images), which is asked to get in touch with the resnet agent, taken from [script 3](./assets/tutorial/A_move_to_unaiverse/3_agent_generator.py) in the [assets/tutorial](./assets/tutorial) folder:
 
 ```python
 import torch
@@ -183,9 +183,18 @@ Run this script as well, and what will happen is that the generator will send it
 
 ### Step B1. Embellishment
 
-We can upgrade the **resnet agent** to take real-world images as input, instead of random tensors, and to output class names (text) instead of a probability distribution. All we need to do is to re-define the properties of the inputs/outputs of the agent processor, and add transformations. Dive into script 4, here we report only the differences between script 2: 
+We can upgrade the **resnet agent** to take real-world images as input, instead of random tensors, and to output class names (text) instead of a probability distribution. All we need to do is to re-define the properties of the inputs/outputs of the agent processor, and add transformations. Dive into [script 4](./assets/tutorial/B_improve_A_and_use_browser/4_agent_resnet_img_text.py): 
 
 ```python
+import torchvision
+import urllib.request
+from unaiverse.agent import Agent
+from unaiverse.dataprops import Data4Proc
+from unaiverse.networking.node.node import Node
+
+# Downloading PyTorch module (ResNet)
+net = torchvision.models.resnet50(weights="IMAGENET1K_V1").eval()
+
 # Getting input transforms from PyTorch model
 transforms = torchvision.transforms.Compose([
     torchvision.transforms.Lambda(lambda x: x.convert("RGB")),
@@ -205,11 +214,27 @@ with urllib.request.urlopen("https://raw.githubusercontent.com/pytorch/hub/maste
 agent = Agent(proc=net,
               proc_inputs=[Data4Proc(data_type="img", stream_to_proc_transforms=transforms)],
               proc_outputs=[Data4Proc(data_type="text", proc_to_stream_transforms=lambda p: c_names[p.argmax(1)[0]])])
+
+# Node hosting agent
+node = Node(node_name="ResNetAgent", hosted=agent, hidden=True, clock_delta=1. / 30.)
+
+# Running node
+node.run()
 ```
 
-Now let us promote the **generator** to an agent that downloads and offers a picture of a cat and expects to get back a text description of it (the class name in this case - only differences with respect to script 3 are shown):
+Now let us promote the **generator** to an agent that downloads and offers a picture of a cat and expects to get back a text description of it (the class name in this case - this is [script 5](./assets/tutorial/B_improve_A_and_use_browser/5_agent_generator_img.py)):
 
 ```python
+import torch
+import urllib.request
+from PIL import Image
+from io import BytesIO
+from unaiverse.agent import Agent
+from unaiverse.dataprops import Data4Proc
+from unaiverse.networking.node.node import Node
+
+
+# Image offering network: a module that simpy downloads and offers an image as its output
 class Net(torch.nn.Module):
     def __init__(self):
         super().__init__()
@@ -240,6 +265,10 @@ node.run(max_time=10.0)
 # Printing the last received data from the ResNet agent
 out = agent.get_last_streamed_data('ResNetAgent')[0]
 print(f"Received response: {out}")  # Now we expect a textual response
+print("")
+print(f"Notice: instead of using this agent, you can also: search for the ResNet node (ResNetAgent) "
+      f"in the UNaIVERSE portal, connect to it using our in-browser agent, select a picture from "
+      f"your disk, send it to the agent, get back the text response!")
 ```
 
 ### Step B2. Connect to your ResNet agent by means of a browser running agent!
