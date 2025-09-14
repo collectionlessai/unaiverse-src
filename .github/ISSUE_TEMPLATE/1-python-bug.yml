@@ -1,0 +1,82 @@
+name: 🐍 Python Library Bug Report
+description: Report a bug or issue with the `unaiverse` pip package.
+title: "[BUG][Python]: "
+labels: ["bug", "python-library"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug in the Python library! Please provide as much detail as possible to help us resolve it quickly.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: "Provide a clear and concise description of the bug. Also, tell us what you expected to happen."
+      placeholder: "When I tried to initialize an Agent with..., it crashed. I expected it to..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction-steps
+    attributes:
+      label: Reproduction Steps
+      description: "Please provide the exact steps and a minimal code snippet to reproduce the behavior."
+      placeholder: |
+        ```python
+        # Your minimal reproducible code here
+        from unaiverse.agent import Agent
+        # ...
+        ```
+      render: python
+    validations:
+      required: true
+
+  - type: fieldset
+    id: python-environment
+    attributes:
+      label: Python Environment Details
+      description: Please provide the details of the environment where you encountered the bug.
+    fields:
+      - type: input
+        id: os
+        attributes:
+          label: Operating System
+          placeholder: "e.g., Ubuntu 22.04, Windows 11"
+        validations:
+          required: true
+      - type: dropdown
+        id: architecture
+        attributes:
+          label: System Architecture
+          options:
+            - x86_64 / amd64
+            - arm64
+            - Other
+        validations:
+          required: true
+      - type: input
+        id: python-version
+        attributes:
+          label: Python Version
+          placeholder: "e.g., 3.10.12"
+        validations:
+          required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Complete Log Output
+      description: "Please copy and paste the full error traceback or any relevant logs. This will be automatically formatted."
+      render: shell
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: terms
+    attributes:
+      label: Code of Conduct
+      description: By submitting this issue, you agree to follow our project's Code of Conduct.
+      options:
+        - label: I agree to follow this project's Code of Conduct
+          required: true
