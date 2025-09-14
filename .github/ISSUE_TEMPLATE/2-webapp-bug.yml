@@ -30,30 +30,30 @@ body:
     validations:
       required: true
 
-  - type: fieldset
-    id: browser-environment
+  - type: markdown
     attributes:
-      label: Browser Environment Details
-    fields:
-      - type: dropdown
-        id: browser-name
-        attributes:
-          label: Browser Name
-          options:
-            - Chrome
-            - Firefox
-            - Safari
-            - Microsoft Edge
-            - Other
-        validations:
-          required: true
-      - type: input
-        id: browser-version
-        attributes:
-          label: Browser Version
-          placeholder: "e.g., 115.0.5790.171"
-        validations:
-          required: true
+      value: "### 🖥️ Browser Environment Details"
+
+  - type: dropdown
+    id: browser-name
+    attributes:
+      label: Browser Name
+      options:
+        - Chrome
+        - Firefox
+        - Safari
+        - Microsoft Edge
+        - Other
+    validations:
+      required: true
+      
+  - type: input
+    id: browser-version
+    attributes:
+      label: Browser Version
+      placeholder: "e.g., 115.0.5790.171"
+    validations:
+      required: true
 
   - type: textarea
     id: logs
