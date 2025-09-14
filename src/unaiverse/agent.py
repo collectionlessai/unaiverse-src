@@ -1212,25 +1212,14 @@ class Agent(AgentBasics):
         role_list = role if isinstance(role, list) else [role]
         self._found_agents = set()
 
-        for role in role_list:
-            role = self.ROLE_STR_TO_BITS[role]
-            role_base_int = role & 3
-
-            if role_base_int != self.ROLE_PUBLIC:  # Expected to be 0
-                if role_base_int == self.ROLE_WORLD_AGENT:
-                    agents = self.world_agents
-                elif role_base_int == self.ROLE_WORLD_MASTER:
-                    agents = self.world_masters
-                else:
-                    return False
-            else:
-                agents = self.public_agents
-
-            role = (role >> 2) << 2
+        for role_str in role_list:
+            role_int = self.ROLE_STR_TO_BITS[role_str]
+            agents = self.all_agents
+            role_clean = (role_int >> 2) << 2  # It should not be necessary here, but let's keep it
             for peer_id, profile in agents.items():
                 _role = self.ROLE_STR_TO_BITS[profile.get_dynamic_profile()['connections']['role']]
-                _role = (_role >> 2) << 2
-                if _role == role:
+                _role = (_role >> 2) << 2  # It should not be necessary here, but let's keep it
+                if _role == role_clean:
                     self._found_agents.add(peer_id)  # Peer IDs here
 
         self.deb(f"[find_agents] Found these agents: {self._found_agents}")
