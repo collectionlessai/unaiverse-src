@@ -55,6 +55,8 @@ def get_node_addresses_from_file(dir_path: str, filename: str = "addresses.txt")
 
         # New file format
         for line in lines:
+            if line.strip().startswith("***"):  # Header marker
+                continue
             comma_separated_values = [v.strip() for v in line.split(';')]
             node_name, addresses_str = comma_separated_values
             ret[node_name] = ast.literal_eval(addresses_str)  # Name appearing multiple times? the last entry is kept
