@@ -319,7 +319,7 @@ Please contact us in order to suggest changes, report bugs, and suggest ideas fo
 
 - Stefano Melacci (Project Leader) [stefano.melacci@unisi.it](stefano.melacci@unisi.it)
 - Christian Di Maio [christian.dimaio@phd.unipi.it](christian.dimaio@phd.unipi.it)
-- Tommaso Guidi [tommaso.guidi.1998](tommaso.guidi.1998@gmail.com)
+- Tommaso Guidi [tommaso.guidi.1998@gmail.com](tommaso.guidi.1998@gmail.com)
 - Marco Gori (Scientific Advisor) [marco.gori@unisi.it](marco.gori@unisi.it)
 
 ---
