@@ -1,0 +1,16 @@
+# This file is used to configure the behavior of the issue creation page.
+
+blank_issues_enabled: true # Disables the option to open a blank issue.
+
+contact_links:
+  - name: 💬 General Questions & Discussion
+    url: https://github.com/collectionlessai/unaiverse/discussions
+    about: Please use GitHub Discussions for questions, sharing ideas, or general conversation.
+
+  - name: 📚 UNaIVERSE Examples Repository
+    url: https://github.com/collectionlessai/unaiverse-examples
+    about: Explore example worlds and agents, and continue the tutorial here.
+
+  - name: 🌐 UNaIVERSE Project Website
+    url: https://unaiverse.io
+    about: Learn more about the project, log in, or register.
