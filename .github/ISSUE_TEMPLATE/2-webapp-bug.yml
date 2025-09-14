@@ -1,0 +1,74 @@
+name: 🖥️ Web App Bug Report
+description: Report a bug or issue with the unaiverse.io web application.
+title: "[BUG][WebApp]: "
+labels: ["bug", "web-app"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug on the UNaIVERSE web app! Your feedback is crucial.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: "Provide a clear and concise description of the bug. Also, tell us what you expected to happen."
+      placeholder: "When I clicked the 'Generate Token' button, nothing happened. I expected a token to appear."
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction-steps
+    attributes:
+      label: Reproduction Steps
+      description: "Please provide the exact steps to reproduce the behavior."
+      placeholder: |
+        1. Go to unaiverse.io and log in.
+        2. Navigate to the 'Profile' page.
+        3. Click on the '...' button.
+        4. See the error / unexpected behavior.
+    validations:
+      required: true
+
+  - type: fieldset
+    id: browser-environment
+    attributes:
+      label: Browser Environment Details
+    fields:
+      - type: dropdown
+        id: browser-name
+        attributes:
+          label: Browser Name
+          options:
+            - Chrome
+            - Firefox
+            - Safari
+            - Microsoft Edge
+            - Other
+        validations:
+          required: true
+      - type: input
+        id: browser-version
+        attributes:
+          label: Browser Version
+          placeholder: "e.g., 115.0.5790.171"
+        validations:
+          required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Browser Console Log
+      description: "Please open your browser's developer tools (usually F12 or Right-Click > Inspect), go to the 'Console' tab, reproduce the bug, and then copy-paste the entire log here."
+      render: shell
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: terms
+    attributes:
+      label: Code of Conduct
+      description: By submitting this issue, you agree to follow our project's Code of Conduct.
+      options:
+        - label: I agree to follow this project's Code of Conduct
+          required: true
