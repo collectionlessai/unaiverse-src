@@ -206,7 +206,7 @@ class Node:
                     ips=None,
                     enable_relay_service=offer_relay_facilities,
                     enable_relay_client=allow_connection_through_relay,
-                    wait_public_reachability=os.getenv("NODE_WAIT_PUBLIC", "0") == "1",
+                    wait_public_reachability=os.getenv("NODE_WAIT_PUBLIC", "1") == "1",
                     port=int(os.getenv("NODE_STARTING_PORT", "0")))
 
         # Create another P2P node for the private world (it has fields 'addresses', and 'peer_id', and 'libp2p')
@@ -214,7 +214,7 @@ class Node:
                     ips=None,
                     enable_relay_service=offer_relay_facilities,
                     enable_relay_client=allow_connection_through_relay,
-                    wait_public_reachability=os.getenv("NODE_WAIT_PUBLIC", "0") == "1",
+                    wait_public_reachability=os.getenv("NODE_WAIT_PUBLIC", "1") == "1",
                     port=(int(os.getenv("NODE_STARTING_PORT", "0")) + 3)
                     if int(os.getenv("NODE_STARTING_PORT", "0")) > 0 else 0)
 
