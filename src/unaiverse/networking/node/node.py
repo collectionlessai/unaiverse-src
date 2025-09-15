@@ -447,7 +447,6 @@ class Node:
                                                                                self.profile.get_dynamic_profile()})
         except Exception as e:
             self.err(f"Error while sending dynamic profile to from server [{e}]")
-            raise GenException(f"Error while sending dynamic profile to from server [{e}]")
 
     def send_badges(self):
         """Sends new badges assigned by a world node to the root server and notifies the agents."""
