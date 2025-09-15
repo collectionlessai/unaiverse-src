@@ -124,7 +124,7 @@ class P2P:
                  ips: List[str] = None,
                  enable_relay_client: bool = True,
                  enable_relay_service: bool = False,
-                 wait_public_reachability: bool = False,
+                 knows_is_public: bool = False,
                  max_connections: int = 1000,
                  ) -> None:
         """
@@ -135,7 +135,7 @@ class P2P:
             ips: A list of specific IP addresses to listen on. Defaults to ["0.0.0.0"].
             enable_relay_client: Enable listening to relayed connections for this node.
             enable_relay_service: Enable relay service capabilities for this node.
-            wait_public_reachability: Tries every possible attempt to make the node publicly reachable (UPnP, HolePunching, AutoNat via DHT...).
+            knows_is_public: If you already know that the node is public this forces its public reachability. Otherwise it tries every possible attempt to make the node publicly reachable (UPnP, HolePunching, AutoNat via DHT...).
             max_connections: Maximum number of connections this node can handle.
 
         Raises:
@@ -168,7 +168,7 @@ class P2P:
         self._ips = ips if ips is not None else []
         self._enable_relay_client = enable_relay_client or enable_relay_service
         self._enable_relay_service = enable_relay_service
-        self._wait_public_reachability = wait_public_reachability
+        self._knows_is_public = knows_is_public
         self._max_connections = max_connections
         self._peer_id: Optional[str] = None
         self._peer_map: Dict[str, Any] = {}  # Map to store peer info {peer_id: info}
@@ -185,7 +185,7 @@ class P2P:
                 P2P._type_interface.to_go_json(self._ips),
                 P2P._type_interface.to_go_bool(enable_relay_client),
                 P2P._type_interface.to_go_bool(enable_relay_service),
-                P2P._type_interface.to_go_bool(wait_public_reachability),
+                P2P._type_interface.to_go_bool(knows_is_public),
                 P2P._type_interface.to_go_int(max_connections),
             )
             result = P2P._type_interface.from_go_ptr_to_json(result_ptr)

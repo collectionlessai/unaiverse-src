@@ -1137,7 +1137,7 @@ func InitializeLibrary(
 //   - predefinedPortC (C.int): The TCP port to listen on (0 for random).
 //   - enableRelayClientC (C.int): 1 if this node should enable relay communications (client mode)
 //   - enableRelayServiceC (C.int): 1 to set this node as a relay service (server mode),
-//   - waitPublicC (C.int): 1 to try any possible attempt to be publicly reachable, 0 otherwise.
+//   - knowsIsPublicC (C.int): 1 to assume public reachability, 0 otherwise (-> tries to assess it in any possible way).
 //   - maxConnectionsC (C.int): The maximum number of connections this node can maintain.
 //
 // Returns:
@@ -1153,7 +1153,7 @@ func CreateNode(
 	ipsJSONC *C.char,
 	enableRelayClientC C.int,
 	enableRelayServiceC C.int,
-	waitPublicC C.int,
+	knowsIsPublicC C.int,
 	maxConnectionsC C.int,
 ) *C.char {
 
@@ -1190,11 +1190,11 @@ func CreateNode(
 	ipsJSON := C.GoString(ipsJSONC)
 	enableRelayClient := int(enableRelayClientC) == 1
 	enableRelayService := int(enableRelayServiceC) == 1
-	waitPublic := int(waitPublicC) == 1
+	knowsIsPublic := int(knowsIsPublicC) == 1
 	maxConnections := int(maxConnectionsC)
 
-	log.Printf("[GO] 🔧 Instance %d: Config: Port=%d, IPsJSON=%s, EnableRelayClient=%t, EnableRelayService=%t, WaitToBePublic=%t, MaxConnections=%d",
-		instanceIndex, predefinedPort, ipsJSON, enableRelayClient, enableRelayService, waitPublic, maxConnections)
+	log.Printf("[GO] 🔧 Instance %d: Config: Port=%d, IPsJSON=%s, EnableRelayClient=%t, EnableRelayService=%t, KnowsIsPublic=%t, MaxConnections=%d",
+		instanceIndex, predefinedPort, ipsJSON, enableRelayClient, enableRelayService, knowsIsPublic, maxConnections)
 
 	// --- 4. Libp2p Options Assembly ---
 	listenAddrs, err := getListenAddrs(ipsJSON, predefinedPort)
@@ -1246,7 +1246,7 @@ func CreateNode(
 	// Prepare discovering the bootstrap peers
 	var idht *dht.IpfsDHT
 	isPublic := false
-	if waitPublic {
+	if !knowsIsPublic {
 		// Add any possible option to be publicly reachable
 		options = append(
 			options,
@@ -1266,11 +1266,8 @@ func CreateNode(
 			}),)
 		log.Printf("[GO]   - Instance %d: Trying to be publicly reachable.\n", instanceIndex)
 	} else {
-		if enableRelayService {
-			// If not trying to be public, we can set the reachability to public to consent local deployment and relay exploitation.
-			options = append(options, libp2p.ForceReachabilityPublic())
-			isPublic = true // We assume it's public if we are a relay service and not trying to be public ourselves.
-		}
+		options = append(options, libp2p.ForceReachabilityPublic())
+		isPublic = true
 	}
 
 	// Create the libp2p Host instance with the configured options for this instance.
@@ -1300,9 +1297,9 @@ func CreateNode(
 	// Give discovery mechanisms a moment to find the public address.
 	log.Printf("[GO] ⏳ Instance %d: Waiting for address discovery and NAT to settle...\n", instanceIndex)
 
-	if waitPublic {
+	if !knowsIsPublic {
 		// --- 🎯 : Wait for Public Reachability ---
-		// This replaces your old address polling loop. We wait a maximum of 30 seconds.
+		// This replaces the old address polling loop. We wait a maximum of 30 seconds.
 		isPublic = waitForPublicReachability(instanceHost, 30*time.Second)
 		if !isPublic {
 			log.Printf("[GO] ⚠️ Instance %d: The node may not be directly dialable.", instanceIndex)
