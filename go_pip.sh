@@ -16,9 +16,9 @@ python -m build
 #   username = __token__
 #   password = <PUT_TOKEN_HERE>
 #
-twine upload --verbose --repository testpypi dist/*
-pip uninstall unaiverse
-pip install --index-url https://test.pypi.org/simple/ --no-deps unaiverse
+# twine upload --verbose --repository testpypi dist/*
+# pip uninstall unaiverse
+# pip install --index-url https://test.pypi.org/simple/ --no-deps unaiverse
 
 # publish on the final, public portal and try to install it
 #twine upload dist/*

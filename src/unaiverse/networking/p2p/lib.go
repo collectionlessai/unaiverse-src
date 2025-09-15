@@ -47,7 +47,7 @@ import (
 
 	// protobuf
 	"google.golang.org/protobuf/proto"
-	pg "lib/proto-go"
+	pg "unaiverse/networking/p2p/lib/proto-go"
 
 	// PubSub library
 	pubsub "github.com/libp2p/go-libp2p-pubsub" // GossipSub implementation for publish/subscribe messaging

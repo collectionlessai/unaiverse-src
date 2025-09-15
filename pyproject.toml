@@ -46,7 +46,7 @@ classifiers = [
 ]
 
 [tool.setuptools.package-data]
-"unaiverse" = ["utils/lone_wolf.json", "utils/ask_lone_wolf.json"]
+"unaiverse" = ["utils/lone_wolf.json", "utils/ask_lone_wolf.json", "networking/p2p/lib.go"]
 
 [project.urls]
 A-Homepage = "https://unaiverse.io"

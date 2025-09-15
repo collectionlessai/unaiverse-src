@@ -129,7 +129,7 @@ if downloaded_shared_lib is None:
 if rebuild_needed:
     print(f"INFO: Rebuilding shared library because {reason}")
     try:
-        build_command = ["go", "build", "-buildmode=c-shared", "-o", lib_filename, "lib.go"]
+        build_command = ["go", "build", "-buildmode=c-shared", "-ldflags", "-s -w", "-o", lib_filename, "lib.go"]
         print(f"Running command: {' '.join(build_command)}")
         result = subprocess.run(
             build_command,
