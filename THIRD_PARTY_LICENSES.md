@@ -14,5 +14,6 @@
 | requests-toolbelt        | 1.0.0   | Apache 2.0                                        | https://toolbelt.readthedocs.io/                   |
 | torch                    | 2.8.0   | BSD-3-Clause                                      | https://pytorch.org/                               |
 | torchvision              | 0.23.0  | BSD                                               | https://github.com/pytorch/vision                  |
+| transformers             | 4.56.1  | Apache 2.0 License                                | https://github.com/huggingface/transformers        |
 | typing_extensions        | 4.15.0  | Python License                                    | https://github.com/python/typing_extensions        |
 | libp2p                   | 0.43.0  | MIT License                                       | https://github.com/libp2p/go-libp2p                |

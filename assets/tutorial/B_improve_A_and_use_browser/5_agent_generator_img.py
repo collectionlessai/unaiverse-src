@@ -33,7 +33,7 @@ node = Node(node_name="Test1", hosted=agent, hidden=True, clock_delta=1. / 30.)
 node.ask_to_get_in_touch(node_name="Test0")
 
 # Running node for 10 seconds
-node.run(max_time=10.0)
+node.run(max_time=45.0)
 
 # Printing the last received data from the ResNet agent
 out = agent.get_last_streamed_data('Test0')[0]

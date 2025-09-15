@@ -50,9 +50,20 @@ else:  # Linux and other Unix-like
 
 lib_filename = f"{lib_name}{lib_ext}"
 lib_path = os.path.join(lib_dir, lib_filename)
-downloaded_shared_lib = None
 
-if not os.path.exists(lib_path):
+if os.path.getmtime(go_source_file) > os.path.getmtime(lib_path):
+    print(f"INFO: Found a more recent Go source file, removing the existing library (if any)")
+    if os.path.exists(lib_path):
+        os.remove(lib_path)
+
+# Possible states
+shared_lib_was_downloaded = False
+shared_lib_was_already_there = os.path.exists(lib_path)
+must_recompile = False
+reason_to_recompile = ""
+_shared_lib = None  # This is where the loaded library will stay
+
+if not shared_lib_was_already_there:
     print(f"INFO: '{lib_filename}' not found. Attempting to automatically download it and save to '{lib_dir}'...")
     download_was_successful = False
     try:
@@ -65,20 +76,26 @@ if not os.path.exists(lib_path):
         download_was_successful = True
         print(f"INFO: Download complete")
     except Exception:
-        print(f"INFO: Download failed, attempting to compile from source (requires a Go compiler)...")
+        pass
 
     if download_was_successful:
         try:
-            downloaded_shared_lib = ctypes.CDLL(lib_path)
+            _shared_lib = ctypes.CDLL(lib_path)
+            shared_lib_was_downloaded = True
         except OSError as e:
-            downloaded_shared_lib = None
+            _shared_lib = None
             if os.path.exists(lib_path):
                 os.remove(lib_path)
-            print(f"INFO: The downloaded library was not compatible with this platform and was deleted. "
-                  f"Attempting to compile from source (requires a Go compiler)...")
+            reason_to_recompile = "The downloaded library was not compatible with this platform and was deleted."
+            must_recompile = True
+    else:
+        reason_to_recompile = "Failed to download the library."
+        must_recompile = True
 
 # --- Automatically initialize Go module if needed ---
-if downloaded_shared_lib is None:
+if must_recompile:
+    print(f"INFO: {reason_to_recompile}. Recompiling the libray - you need a Go compiler, or this procedure will fail "
+          f"(install it!)")
     if not os.path.exists(go_mod_file):
         print(f"INFO: 'go.mod' not found. Initializing Go module in '{lib_dir}'...")
         try:
@@ -106,28 +123,11 @@ if downloaded_shared_lib is None:
             )
             print("INFO: 'go.mod' and 'go.sum' created successfully.")
         except (subprocess.CalledProcessError, FileNotFoundError) as e:
-            print("FATAL: Failed to initialize Go module.", file=sys.stderr)
-            print("Please ensure Go is installed and in your system's PATH.", file=sys.stderr)
-
-            # If 'go mod' failed, print its output for debugging
-            if isinstance(e, subprocess.CalledProcessError):
-                print(f"Go command stderr:\n{e.stderr}", file=sys.stderr)
+            print("FATAL: Failed to initialize Go module. Please ensure Go is installed and in your system's PATH.",
+                  file=sys.stderr)
             raise e
 
-# --- Automatically build the shared library if it's missing or outdated ---
-rebuild_needed = False
-reason = ""
-
-if downloaded_shared_lib is None:
-    if not os.path.exists(lib_path):
-        rebuild_needed = True
-        reason = f"the shared library '{lib_filename}' was not found."
-    elif os.path.getmtime(go_source_file) > os.path.getmtime(lib_path):
-        rebuild_needed = True
-        reason = f"the last modification to '{go_source_file}' is more recent than the '{lib_filename}' last build."
-
-if rebuild_needed:
-    print(f"INFO: Rebuilding shared library because {reason}")
+    # --- Automatically build the shared library if it's missing or outdated ---
     try:
         build_command = ["go", "build", "-buildmode=c-shared", "-ldflags", "-s -w", "-o", lib_filename, "lib.go"]
         print(f"Running command: {' '.join(build_command)}")
@@ -141,25 +141,18 @@ if rebuild_needed:
         if result.stdout:
             print(f"Go build stdout:\n{result.stdout}")
         print(f"INFO: Successfully built '{lib_filename}'.")
-
     except (subprocess.CalledProcessError, FileNotFoundError) as e:
-        print(f"FATAL: Failed to build Go shared library.", file=sys.stderr)
-        print("Please ensure Go is installed and in your system's PATH.", file=sys.stderr)
-        if isinstance(e, subprocess.CalledProcessError):
-            print(f"Go compiler stderr:\n{e.stderr}", file=sys.stderr)
+        print("FATAL: Failed to initialize Go module. Please ensure Go is installed and in your system's PATH.",
+              file=sys.stderr)
         raise e
 
-# --- Library Loading ---
-if downloaded_shared_lib is None:
+# --- Library Loading (if not already downloaded and loaded-in-memory) ---
+if _shared_lib is None:
     try:
         _shared_lib = ctypes.CDLL(lib_path)
-
-        # Print(f"Successfully loaded Go library: {lib_path}")
     except OSError as e:
         print(f"Error loading shared library at {lib_path}: {e}", file=sys.stderr)
-        raise
-else:
-    _shared_lib = downloaded_shared_lib
+        raise e
 
 # --- Function Prototypes (argtypes and restype) ---
 # Using void* for returned C strings, requiring TypeInterface for conversion/freeing.
@@ -243,7 +236,6 @@ except ImportError:
 
 # Cast the loaded library object to the stub type
 _shared_lib_typed = cast(GoLibP2P, _shared_lib)
-
 
 # Attach the typed shared library object to the P2P class
 P2P.libp2p = _shared_lib_typed

@@ -135,6 +135,9 @@ class Node:
         self.last_alive_time = 0.
         self.skip_was_alive_check = os.getenv("NODE_IGNORE_ALIVE", "0") == "1"
 
+        # Alive messaging
+        self.run_start_time = 0.
+
         # Root server-related
         self.root_endpoint = 'https://unaiverse.io/api'  # WARNING: EDITING THIS ADDRESS VIOLATES THE LICENSE
         self.node_token = ""
@@ -767,7 +770,19 @@ class Node:
 
             # Main loop
             must_quit = False
+            self.run_start_time = self.clock.get_time()
             while not must_quit:
+
+                # Sending alive message every "K" seconds
+                if self.clock.get_time() - self.last_alive_time >= self.send_alive_every:
+                    was_alive = self.send_alive()
+
+                    # Checking only at the first run
+                    if self.last_alive_time == 0 and was_alive and not self.skip_was_alive_check:
+                        print(f"The node is already alive, maybe running in a different machine? "
+                              f"(set env variable NODE_IGNORE_ALIVE=1 to ignore this control)")
+                        break  # Stopping the running cycle
+                    self.last_alive_time = self.clock.get_time()
 
                 # Check inspector
                 if self.inspector_activated:
@@ -915,17 +930,6 @@ class Node:
                     self.get_node_token(peer_ids=[self.get_public_peer_id(), self.get_world_peer_id()])
                     last_get_token_time = self.clock.get_time()
 
-                # Sending alive message every "K" seconds
-                if self.clock.get_time() - self.last_alive_time >= self.send_alive_every:
-                    was_alive = self.send_alive()
-
-                    # Checking only at the first run
-                    if self.last_alive_time == 0 and was_alive and not self.skip_was_alive_check:
-                        print(f"The node is already alive, maybe running in a different machine? "
-                              f"(set env variable NODE_IGNORE_ALIVE=1 to ignore this control)")
-                        break  # Stopping the running cycle
-                    self.last_alive_time = self.clock.get_time()
-
                 # Check for address changes every "N" seconds
                 if self.clock.get_time() - last_address_check_time >= self.address_check_every:
                     self.out("Performing periodic check for address changes...")
@@ -994,7 +998,7 @@ class Node:
                 # Stop conditions
                 if cycles is not None and ((self.clock.get_cycle() + 1) >= cycles):
                     break
-                if max_time is not None and self.clock.get_time(passed=True) >= max_time:
+                if max_time is not None and (self.clock.get_time() - self.run_start_time) >= max_time:
                     break
 
         except KeyboardInterrupt:
