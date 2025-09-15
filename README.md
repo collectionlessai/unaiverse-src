@@ -39,7 +39,7 @@ Remarks:
 - Very first version: we think it will always stay alpha/beta/whatever 😎, but right now there are many features we plan to add and several parts to improve, **thanks to your feedback!**
 - Missing features (work-in-progress): browser-to-browser communication; agents running on mobile; actual social network features (right now it is very preliminary, not really showcasing where we want to go)
 
---
+---
 
 ## 📦 Installation
 
