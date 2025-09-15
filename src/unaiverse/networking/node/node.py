@@ -218,8 +218,6 @@ class Node:
                     port=(int(os.getenv("NODE_STARTING_PORT", "0")) + 3)
                     if int(os.getenv("NODE_STARTING_PORT", "0")) > 0 else 0)
 
-        print("MARIO")
-
         # Get first node token
         self.get_node_token(peer_ids=[p2p_u.peer_id, p2p_w.peer_id])  # Passing both the peer IDs
 
