@@ -89,7 +89,7 @@ class P2P:
 
             # Configure Python logging based on the flag
             if not enable_logging:
-                logger.setLevel(logging.WARNING)
+                logger.setLevel(logging.CRITICAL)
             else:
                 logger.setLevel(logging.INFO)
 
