@@ -316,8 +316,6 @@ func getListenAddrs(ipsJSON string, tcpPort int) ([]ma.Multiaddr, error) {
 		listenAddrs = append(listenAddrs, wsMaddr)
 	}
 
-	print(fmt.Sprintf("[GO] 🛫 Listening on addresses: %v\n", listenAddrs))
-
 	return listenAddrs, nil
 }
 
@@ -1402,6 +1400,7 @@ func CreateNode(
 		IsPublic:  isPublic,
 	}
 
+	log.Printf("[GO] 🌐 Instance %d: Node addresses: %v\n", instanceIndex, nodeAddresses)
 	log.Printf("[GO] 🎉 Instance %d: Node creation complete.\n", instanceIndex)
 	return jsonSuccessResponse(response)
 }
