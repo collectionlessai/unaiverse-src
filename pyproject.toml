@@ -19,7 +19,8 @@ dependencies = [
     "PyJWT",
     "Requests",
     "torch",
-    "torchvision"
+    "torchvision",
+    "transformers"
 ]
 license-files = ["LICENSE"]
 keywords = ["UNaIVERSE", "Collectionless AI", "AI", "Agentic AI", "Agents", "Machine Learning", "Learning Over Time"]
