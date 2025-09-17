@@ -308,7 +308,7 @@ func getListenAddrs(ipsJSON string, tcpPort int) ([]ma.Multiaddr, error) {
 		listenAddrs = append(listenAddrs, webrctMaddr)
 
 		// Create WebSocket Multiaddr
-		wsAddrStr := fmt.Sprintf("/ip4/%s/tcp/%d/ws", ip, wsPort)
+		wsAddrStr := fmt.Sprintf("/ip4/%s/tcp/%d/wss", ip, wsPort)
 		wsMaddr, err := ma.NewMultiaddr(wsAddrStr)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create WebSocket multiaddr for IP %s: %w", ip, err)
@@ -1255,12 +1255,12 @@ func CreateNode(
 		instanceIndex, predefinedPort, ipsJSON, enableRelayClient, enableRelayService, knowsIsPublic, maxConnections)
 	
 	// --- Generate Self-Signed Cert for WSS ---
-	// tlsConfig, err := generateSelfSignedCert()
-	// if err != nil {
-	// 	cleanupFailedCreate(instanceIndex)
-	// 	return jsonErrorResponse(fmt.Sprintf("Instance %d: Failed to generate self-signed certificate", instanceIndex), err)
-	// }
-	// log.Printf("[GO]   - Instance %d: Generated in-memory self-signed TLS certificate for WSS.\n", instanceIndex)
+	tlsConfig, err := generateSelfSignedCert()
+	if err != nil {
+		cleanupFailedCreate(instanceIndex)
+		return jsonErrorResponse(fmt.Sprintf("Instance %d: Failed to generate self-signed certificate", instanceIndex), err)
+	}
+	log.Printf("[GO]   - Instance %d: Generated in-memory self-signed TLS certificate for WSS.\n", instanceIndex)
 
 
 	// --- 4. Libp2p Options Assembly ---
@@ -1284,7 +1284,7 @@ func CreateNode(
 		libp2p.Transport(tcp.NewTCPTransport),
 		libp2p.Transport(quic.NewTransport),
 		libp2p.Transport(webrtc.New),
-		libp2p.Transport(ws.New),
+		libp2p.Transport(ws.New, ws.WithTLSConfig(tlsConfig)),
 		libp2p.ResourceManager(limiter),
 	}
 
