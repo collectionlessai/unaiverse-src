@@ -1943,7 +1943,7 @@ func GetNodeAddresses(
 	// Call the internal Go function with the resolved peer.ID or empty peer.ID for local
 	patch := make(map[string]string)
 	patch["193.205.7.181"] = "multaiverse.diism.unisi.it"
-	addresses, err := goGetNodeAddresses(instanceIndex, pidForInternalCall, patch)
+	addresses, err := goGetNodeAddresses(instanceIndex, pidForInternalCall, nil)
 	if err != nil {
 		return jsonErrorResponse(err.Error(), nil)
 	}
