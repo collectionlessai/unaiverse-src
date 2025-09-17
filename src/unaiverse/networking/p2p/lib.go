@@ -901,7 +901,7 @@ func writeDirectMessageFrame(w io.Writer, channel string, payload []byte) error 
 func goGetNodeAddresses(
 	instanceIndex int,
 	targetPID peer.ID, // Changed from targetPeerIDStr string
-	ipToDomain map[string]string,
+	ipToDomain map[string]string,  // TODO: remove
 ) ([]string, error) {
 	var resolvedPID peer.ID // This will be the ID we actually work with
 
@@ -989,7 +989,7 @@ func goGetNodeAddresses(
 					break
 				}
 			}
-			if !isDup {
+			if !isDup && !strings.Contains(fullAddrStr, "/ws") {
 				result = append(result, fullAddrStr)
 			}
 		}
