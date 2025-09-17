@@ -1420,7 +1420,7 @@ func CreateNode(
 	// --- Get Final Addresses ---
 	patch := make(map[string]string)
 	patch["193.205.7.181"] = "multaiverse.diism.unisi.it"
-	nodeAddresses, err := goGetNodeAddresses(instanceIndex, "", patch)
+	nodeAddresses, err := goGetNodeAddresses(instanceIndex, "", nil)
 	if err != nil {
         // This is a more critical failure if we can't even get local addresses.
 		cleanupFailedCreate(instanceIndex)
