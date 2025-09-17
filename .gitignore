@@ -63,6 +63,7 @@ wolf_img.png
 *.pem
 #unaiverse/networking/root/viewer/www/*
 unaiverse/networking/root/api/secret.json
+src/unaiverse/networking/p2p/lib.version.json
 *.egg-info
 *.dll
 *.so
