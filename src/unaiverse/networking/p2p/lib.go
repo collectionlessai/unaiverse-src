@@ -901,8 +901,7 @@ func writeDirectMessageFrame(w io.Writer, channel string, payload []byte) error 
 func goGetNodeAddresses(
 	instanceIndex int,
 	targetPID peer.ID, // Changed from targetPeerIDStr string
-	// ipToDomain map[string]string,
-	ipToDomain string,
+	ipToDomain map[string]string,
 ) ([]string, error) {
 	var resolvedPID peer.ID // This will be the ID we actually work with
 
@@ -1003,7 +1002,7 @@ func goGetNodeAddresses(
 	}
 
 	// If a mapping is provided, apply the transformations.
-    if ipToDomain != nil && len(ipToDomain) > 0 {
+    if ipToDomain != nil {
         log.Printf("[GO] 🔧 Instance %d: Patching addresses with domain mapping...\n", instanceIndex)
         patchedResult := make([]string, 0, len(result))
         for _, addrStr := range result {
@@ -1419,7 +1418,9 @@ func CreateNode(
 	}
 
 	// --- Get Final Addresses ---
-	nodeAddresses, err := goGetNodeAddresses(instanceIndex, "")
+	patch := make(map[string]string)
+	patch["193.205.7.181"] = "multaiverse.diism.unisi.it"
+	nodeAddresses, err := goGetNodeAddresses(instanceIndex, "", patch)
 	if err != nil {
         // This is a more critical failure if we can't even get local addresses.
 		cleanupFailedCreate(instanceIndex)
@@ -1940,7 +1941,9 @@ func GetNodeAddresses(
 	}
 
 	// Call the internal Go function with the resolved peer.ID or empty peer.ID for local
-	addresses, err := goGetNodeAddresses(instanceIndex, pidForInternalCall, "multaiverse.diism.unisi.it")
+	patch := make(map[string]string)
+	patch["193.205.7.181"] = "multaiverse.diism.unisi.it"
+	addresses, err := goGetNodeAddresses(instanceIndex, pidForInternalCall, patch)
 	if err != nil {
 		return jsonErrorResponse(err.Error(), nil)
 	}
