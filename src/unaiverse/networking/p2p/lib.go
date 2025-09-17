@@ -1263,8 +1263,8 @@ func CreateNode(
 	// log.Printf("[GO]   - Instance %d: Generated in-memory self-signed TLS certificate for WSS.\n", instanceIndex)
 
 	// use legit certificates
-	certPath := "etc/letsencrypt/live/multaiverse.diism.unisi.it/fullchain.pem"
-	keyPath := "etc/letsencrypt/live/multaiverse.diism.unisi.it/privkey.pem"
+	certPath := "/etc/letsencrypt/live/multaiverse.diism.unisi.it/fullchain.pem"
+	keyPath := "/etc/letsencrypt/live/multaiverse.diism.unisi.it/privkey.pem"
 	cert, err := tls.LoadX509KeyPair(certPath, keyPath)
     if err != nil {
         log.Printf("[GO] ❌ Instance %d: Error loading TLS certificate from %s and %s: %v\n", instanceIndex, certPath, keyPath, err)
