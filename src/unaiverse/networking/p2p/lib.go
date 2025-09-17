@@ -316,6 +316,8 @@ func getListenAddrs(ipsJSON string, tcpPort int) ([]ma.Multiaddr, error) {
 		listenAddrs = append(listenAddrs, wsMaddr)
 	}
 
+	print(fmt.Sprintf("[GO] 🛫 Listening on addresses: %v\n", listenAddrs))
+
 	return listenAddrs, nil
 }
 
