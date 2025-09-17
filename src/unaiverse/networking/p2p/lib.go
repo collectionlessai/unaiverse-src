@@ -26,6 +26,13 @@ import (
 	"sync"            // For synchronization primitives like Mutexes and RWMutexes to protect shared data
 	"time"            // For time-related functions (e.g., timeouts, timestamps)
 	"unsafe"          // For using Go pointers with C code (specifically C.free)
+	"crypto/rand"    // For generating cryptographic random numbers (e.g., for keys)
+	"crypto/rsa"     // For generating RSA keys (used in self-signed TLS certs)
+	"crypto/tls"     // For TLS configuration (used in WebSocket secure transport)
+	"crypto/x509"   // For creating X.509 certificates (used in self-signed TLS certs)
+	"crypto/x509/pkix" // For X.509 certificate subject information (used in self-signed TLS certs)
+	"math/big"      // For big integer operations (used in self-signed TLS certs)
+	
 
 	// Core libp2p libraries
 	libp2p "github.com/libp2p/go-libp2p" // Main libp2p package for creating a host
@@ -44,6 +51,7 @@ import (
 	quic "github.com/libp2p/go-libp2p/p2p/transport/quic" // QUIC transport for peer-to-peer connections (e.g., for mobile devices)
 	"github.com/libp2p/go-libp2p/p2p/transport/tcp"
 	webrtc "github.com/libp2p/go-libp2p/p2p/transport/webrtc" // WebRTC transport for peer-to-peer connections (e.g., for browsers or mobile devices)
+	ws "github.com/libp2p/go-libp2p/p2p/transport/websocket" // WebSocket transport for peer-to-peer connections (e.g., for browsers)
 
 	// protobuf
 	"google.golang.org/protobuf/proto"
@@ -266,9 +274,11 @@ func getListenAddrs(ipsJSON string, tcpPort int) ([]ma.Multiaddr, error) {
 	var listenAddrs []ma.Multiaddr
 	quicPort := 0
 	webrtcPort := 0
+	wsPort := 0
 	if tcpPort != 0 {
 		quicPort = tcpPort + 1
 		webrtcPort = tcpPort + 2
+		wsPort = tcpPort + 3
 	}
 
 	// --- Create Multiaddrs for both protocols from the single IP list ---
@@ -296,9 +306,57 @@ func getListenAddrs(ipsJSON string, tcpPort int) ([]ma.Multiaddr, error) {
 			return nil, fmt.Errorf("failed to create WebRTC multiaddr for IP %s: %w", ip, err)
 		}
 		listenAddrs = append(listenAddrs, webrctMaddr)
+
+		// Create WebSocket Multiaddr
+		wsAddrStr := fmt.Sprintf("/ip4/%s/tcp/%d/wss", ip, wsPort)
+		wsMaddr, err := ma.NewMultiaddr(wsAddrStr)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create WebSocket multiaddr for IP %s: %w", ip, err)
+		}
+		listenAddrs = append(listenAddrs, wsMaddr)
 	}
 
 	return listenAddrs, nil
+}
+
+// generateSelfSignedCert creates an in-memory self-signed TLS certificate.
+func generateSelfSignedCert() (*tls.Config, error) {
+	// Generate a new private key
+	priv, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		return nil, err
+	}
+
+	// Create a certificate template
+	template := x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject: pkix.Name{
+			Organization: []string{"Libp2p-Go Self-Signed"},
+		},
+		NotBefore:             time.Now(),
+		NotAfter:              time.Now().Add(time.Hour * 24 * 365), // Valid for 1 year
+		KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		BasicConstraintsValid: true,
+	}
+
+	// Create the certificate
+	derBytes, err := x509.CreateCertificate(rand.Reader, &template, &template, &priv.PublicKey, priv)
+	if err != nil {
+		return nil, err
+	}
+
+	// Create a tls.Certificate
+	cert := tls.Certificate{
+		Certificate: [][]byte{derBytes},
+		PrivateKey:  priv,
+	}
+
+	// Return a tls.Config
+	return &tls.Config{
+		Certificates:       []tls.Certificate{cert},
+		InsecureSkipVerify: true, // IMPORTANT: For self-signed certs
+	}, nil
 }
 
 func createResourceManager(maxConnections int) (network.ResourceManager, error) {
@@ -1195,6 +1253,15 @@ func CreateNode(
 
 	log.Printf("[GO] 🔧 Instance %d: Config: Port=%d, IPsJSON=%s, EnableRelayClient=%t, EnableRelayService=%t, KnowsIsPublic=%t, MaxConnections=%d",
 		instanceIndex, predefinedPort, ipsJSON, enableRelayClient, enableRelayService, knowsIsPublic, maxConnections)
+	
+	// --- Generate Self-Signed Cert for WSS ---
+	// tlsConfig, err := generateSelfSignedCert()
+	// if err != nil {
+	// 	cleanupFailedCreate(instanceIndex)
+	// 	return jsonErrorResponse(fmt.Sprintf("Instance %d: Failed to generate self-signed certificate", instanceIndex), err)
+	// }
+	// log.Printf("[GO]   - Instance %d: Generated in-memory self-signed TLS certificate for WSS.\n", instanceIndex)
+
 
 	// --- 4. Libp2p Options Assembly ---
 	listenAddrs, err := getListenAddrs(ipsJSON, predefinedPort)
@@ -1217,6 +1284,7 @@ func CreateNode(
 		libp2p.Transport(tcp.NewTCPTransport),
 		libp2p.Transport(quic.NewTransport),
 		libp2p.Transport(webrtc.New),
+		libp2p.Transport(ws.New),
 		libp2p.ResourceManager(limiter),
 	}
 
