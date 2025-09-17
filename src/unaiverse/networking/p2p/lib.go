@@ -901,6 +901,8 @@ func writeDirectMessageFrame(w io.Writer, channel string, payload []byte) error 
 func goGetNodeAddresses(
 	instanceIndex int,
 	targetPID peer.ID, // Changed from targetPeerIDStr string
+	// ipToDomain map[string]string,
+	ipToDomain string,
 ) ([]string, error) {
 	var resolvedPID peer.ID // This will be the ID we actually work with
 
@@ -999,6 +1001,27 @@ func goGetNodeAddresses(
 		log.Printf("[GO] ⚠️ goGetNodeAddresses: %s\n", errMsg)
 		return []string{}, nil // Return empty list, no error, if formatting yields nothing
 	}
+
+	// If a mapping is provided, apply the transformations.
+    if ipToDomain != nil && len(ipToDomain) > 0 {
+        log.Printf("[GO] 🔧 Instance %d: Patching addresses with domain mapping...\n", instanceIndex)
+        patchedResult := make([]string, 0, len(result))
+        for _, addrStr := range result {
+            patchedAddr := addrStr
+            for ip, domain := range ipToDomain {
+                // Construct the IP part of the multiaddress to replace
+                ip4Component := fmt.Sprintf("/ip4/%s/", ip)
+                if strings.Contains(patchedAddr, ip4Component) {
+                    // IMPORTANT: Replace /ip4/ with /dns4/ for a valid multiaddress
+                    dns4Component := fmt.Sprintf("/dns4/%s/", domain)
+                    patchedAddr = strings.Replace(patchedAddr, ip4Component, dns4Component, 1)
+                    log.Printf("[GO]   - Patched %s -> %s\n", addrStr, patchedAddr)
+                }
+            }
+            patchedResult = append(patchedResult, patchedAddr)
+        }
+        return patchedResult, nil // Return the newly patched list
+    }
 
 	return result, nil
 }
@@ -1917,7 +1940,7 @@ func GetNodeAddresses(
 	}
 
 	// Call the internal Go function with the resolved peer.ID or empty peer.ID for local
-	addresses, err := goGetNodeAddresses(instanceIndex, pidForInternalCall)
+	addresses, err := goGetNodeAddresses(instanceIndex, pidForInternalCall, "multaiverse.diism.unisi.it")
 	if err != nil {
 		return jsonErrorResponse(err.Error(), nil)
 	}
