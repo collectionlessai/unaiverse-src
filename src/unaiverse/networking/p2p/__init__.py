@@ -18,6 +18,7 @@ from . import golibp2p
 from . import lib_types
 import os
 import sys
+import json
 import ctypes
 import platform
 import requests
@@ -31,128 +32,159 @@ from .lib_types import TypeInterface  # Assuming TypeInterface handles the void*
 
 # --- Setup and Pre-build Checks ---
 
-# Define paths and library names
-lib_dir = os.path.dirname(__file__)
-go_mod_file = os.path.join(lib_dir, "go.mod")
+# Determine the correct library file extension and URL based on the OS
+os_to_ext = {
+    "Windows": ".dll",
+    "Darwin": ".dylib",
+    "Linux": ".so"
+}
+os_to_url = {
+    "Windows": "https://raw.githubusercontent.com/collectionlessai/unaiverse-misc/main/precompiled/lib.dll",
+    "Darwin": "https://raw.githubusercontent.com/collectionlessai/unaiverse-misc/main/precompiled/lib.dylib",
+    "Linux": "https://raw.githubusercontent.com/collectionlessai/unaiverse-misc/main/precompiled/lib.so"
+}
+
+current_os = platform.system()
+lib_ext = os_to_ext.get(current_os, ".so")
+lib_url = os_to_url.get(current_os, os_to_url["Linux"])
+
+# --- Configuration & Paths ---
+lib_dir = os.path.dirname(os.path.abspath(__file__))
 go_source_file = os.path.join(lib_dir, "lib.go")
-lib_name = "lib"
-
-# Determine the correct library file extension based on the OS
-if platform.system() == "Windows":
-    lib_url = "https://github.com/collectionlessai/unaiverse-misc/raw/main/precompiled/lib.dll"
-    lib_ext = ".dll"
-elif platform.system() == "Darwin":  # MacOS
-    lib_url = "https://github.com/collectionlessai/unaiverse-misc/raw/main/precompiled/lib.dylib"
-    lib_ext = ".dylib"
-else:  # Linux and other Unix-like
-    lib_url = "https://github.com/collectionlessai/unaiverse-misc/raw/main/precompiled/lib.so"
-    lib_ext = ".so"
-
-lib_filename = f"{lib_name}{lib_ext}"
+lib_filename = f"lib{lib_ext}"
 lib_path = os.path.join(lib_dir, lib_filename)
+go_mod_file = os.path.join(lib_dir, "go.mod")
+version_file = os.path.join(lib_dir, "lib.version.json")
 
-if os.path.getmtime(go_source_file) > os.path.getmtime(lib_path):
-    print(f"INFO: Found a more recent Go source file, removing the existing library (if any)")
-    if os.path.exists(lib_path):
-        os.remove(lib_path)
+# --- Helper Functions ---
 
-# Possible states
-shared_lib_was_downloaded = False
-shared_lib_was_already_there = os.path.exists(lib_path)
-must_recompile = False
-reason_to_recompile = ""
-_shared_lib = None  # This is where the loaded library will stay
-
-if not shared_lib_was_already_there:
-    print(f"INFO: '{lib_filename}' not found. Attempting to automatically download it and save to '{lib_dir}'...")
-    download_was_successful = False
+def load_shared_library(path):
+    """Attempt to load the shared library and return the handle."""
     try:
-        headers = {
-            "User-Agent": "python-requests/2.31.0"  # Any browser-like agent also works
-        }
-        response = requests.get(lib_url, headers=headers, allow_redirects=True)
-        with open(lib_path, "wb") as f:
+        print(f"INFO: Attempting to load library from '{path}'...")
+        return ctypes.CDLL(path)
+    except OSError as e:
+        print(f"INFO: Failed to load library: {e}")
+        return None
+
+def get_remote_version_info(url):
+    """Performs a HEAD request to get ETag from the remote file."""
+    try:
+        print(f"INFO: Checking remote version at '{url}'...")
+        response = requests.head(url, allow_redirects=True, timeout=10)
+        response.raise_for_status()
+        etag = response.headers.get("ETag")
+        return etag
+    except Exception as e:
+        print(f"INFO: Failed to get remote version info: {e}")
+        return None
+
+def download_library(url, path, etag):
+    """Downloads the shared library and saves version info."""
+    print(f"INFO: Downloading new library from '{url}'...")
+    try:
+        headers = {"User-Agent": "python-requests/2.31.0"}
+        response = requests.get(url, headers=headers, allow_redirects=True, timeout=30)
+        response.raise_for_status()
+        with open(path, "wb") as f:
             f.write(response.content)
-        download_was_successful = True
-        print(f"INFO: Download complete")
-    except Exception:
-        pass
+            
+        print("INFO: Download complete.")
+        return True
+    except Exception as e:
+        print(f"INFO: Failed to download library: {e}")
+        return False
 
-    if download_was_successful:
-        try:
-            _shared_lib = ctypes.CDLL(lib_path)
-            shared_lib_was_downloaded = True
-        except OSError as e:
-            _shared_lib = None
-            if os.path.exists(lib_path):
-                os.remove(lib_path)
-            reason_to_recompile = "The downloaded library was not compatible with this platform and was deleted."
-            must_recompile = True
-    else:
-        reason_to_recompile = "Failed to download the library."
-        must_recompile = True
-
-# --- Automatically initialize Go module if needed ---
-if must_recompile:
-    print(f"INFO: {reason_to_recompile}. Recompiling the libray - you need a Go compiler, or this procedure will fail "
-          f"(install it!)")
+def build_go_library():
+    """Build the Go shared library and saves version info."""
+    print("INFO: Building library from source...")
     if not os.path.exists(go_mod_file):
-        print(f"INFO: 'go.mod' not found. Initializing Go module in '{lib_dir}'...")
+        print(f"INFO: 'go.mod' not found. Initializing Go module...")
+        module_path = "unaiverse/networking/p2p/lib"
         try:
-
-            # Define a module path. This can be anything, but a path-like name is conventional.
-            module_path = "unaiverse/networking/p2p/lib"
-
-            # Run 'go mod init'
-            subprocess.run(
-                ["go", "mod", "init", module_path],
-                cwd=lib_dir,  # Run the command in the directory containing lib.go
-                check=True,  # Raise an exception if the command fails
-                capture_output=True,  # Capture stdout/stderr
-                text=True
-            )
-
-            # Run 'go mod tidy' to find dependencies and create go.sum
+            subprocess.run(["go", "mod", "init", module_path], cwd=lib_dir, check=True, capture_output=True, text=True)
             print("INFO: Go module initialized. Running 'go mod tidy'...")
-            subprocess.run(
-                ["go", "mod", "tidy"],
-                cwd=lib_dir,
-                check=True,
-                capture_output=True,
-                text=True
-            )
-            print("INFO: 'go.mod' and 'go.sum' created successfully.")
+            subprocess.run(["go", "mod", "tidy"], cwd=lib_dir, check=True, capture_output=True, text=True)
         except (subprocess.CalledProcessError, FileNotFoundError) as e:
-            print("FATAL: Failed to initialize Go module. Please ensure Go is installed and in your system's PATH.",
-                  file=sys.stderr)
+            print(f"FATAL: Failed to initialize Go module. Is Go installed? Error: {e}", file=sys.stderr)
             raise e
 
-    # --- Automatically build the shared library if it's missing or outdated ---
     try:
         build_command = ["go", "build", "-buildmode=c-shared", "-ldflags", "-s -w", "-o", lib_filename, "lib.go"]
-        print(f"Running command: {' '.join(build_command)}")
-        result = subprocess.run(
-            build_command,
-            cwd=lib_dir,
-            check=True,
-            capture_output=True,
-            text=True
-        )
-        if result.stdout:
-            print(f"Go build stdout:\n{result.stdout}")
+        subprocess.run(build_command, cwd=lib_dir, check=True, capture_output=True, text=True)
+            
         print(f"INFO: Successfully built '{lib_filename}'.")
+        return True
     except (subprocess.CalledProcessError, FileNotFoundError) as e:
-        print("FATAL: Failed to initialize Go module. Please ensure Go is installed and in your system's PATH.",
-              file=sys.stderr)
-        raise e
+        print(f"FATAL: Failed to build library. Is Go installed? Error: {e}", file=sys.stderr)
+        return False
 
-# --- Library Loading (if not already downloaded and loaded-in-memory) ---
+# --- Main Logic Flow ---
+_shared_lib = None
+should_update = False
+go_source_time = os.path.getmtime(go_source_file)
+
+# Step 1: Check for existing local binary and version info
+if os.path.exists(lib_path):
+    print(f"INFO: Found existing library '{lib_filename}'.")
+    if os.path.exists(version_file):
+        try:
+            with open(version_file, "r") as f:
+                version_info = json.load(f)
+            
+            if version_info.get("source") == "remote":
+                remote_etag = get_remote_version_info(lib_url)
+                if remote_etag and remote_etag != version_info.get("etag"):
+                    print("INFO: Remote binary is newer (different ETag). An update is required.")
+                    should_update = True
+                else:
+                    print("INFO: Local binary is up-to-date with remote.")
+            elif version_info.get("source") == "local":
+                if go_source_time > version_info.get("timestamp", 0):
+                    print("INFO: Go source file is newer than local binary. Re-compilation is required.")
+                    should_update = True
+                else:
+                    print("INFO: Local binary is up-to-date with source.")
+            
+        except (IOError, json.JSONDecodeError):
+            print("INFO: Could not read version file. Assuming outdated.")
+            should_update = True
+    else:
+        print("INFO: No version file found. Assuming outdated.")
+        should_update = True
+    
+    if should_update:
+        if os.path.exists(lib_path):
+            os.remove(lib_path)
+    else:
+        # Load if it exists and is up-to-date
+        _shared_lib = load_shared_library(lib_path)
+
+# Step 2: Try to get a library if none is loaded
+if _shared_lib is None:  # same as should_update being True
+    # Attempt to download the latest binary
+    remote_etag = get_remote_version_info(lib_url)
+    if remote_etag and download_library(lib_url, lib_path, remote_etag):
+        _shared_lib = load_shared_library(lib_path)
+        if _shared_lib is not None:
+            with open(version_file, "w") as f:
+                json.dump({"source": "remote", "etag": remote_etag}, f)
+    
+    # Step 3: Fallback to local build if download failed or the file is invalid
+    if _shared_lib is None:  # meaning that the download and load failed
+        print("INFO: Download failed or produced an invalid library. Building from source...")
+        if build_go_library():
+            _shared_lib = load_shared_library(lib_path)
+            if _shared_lib is not None:
+                with open(version_file, "w") as f:
+                    json.dump({"source": "local", "timestamp": go_source_time}, f)
+
+# Final check
 if _shared_lib is None:
-    try:
-        _shared_lib = ctypes.CDLL(lib_path)
-    except OSError as e:
-        print(f"Error loading shared library at {lib_path}: {e}", file=sys.stderr)
-        raise e
+    print("FATAL: Critical failure. Could not obtain or load the shared library.", file=sys.stderr)
+    sys.exit(1)
+else:
+    print("SUCCESS: Library is ready to use.")
 
 # --- Function Prototypes (argtypes and restype) ---
 # Using void* for returned C strings, requiring TypeInterface for conversion/freeing.
