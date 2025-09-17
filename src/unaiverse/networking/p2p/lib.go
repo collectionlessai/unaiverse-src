@@ -308,7 +308,7 @@ func getListenAddrs(ipsJSON string, tcpPort int) ([]ma.Multiaddr, error) {
 		listenAddrs = append(listenAddrs, webrctMaddr)
 
 		// Create WebSocket Multiaddr
-		wsAddrStr := fmt.Sprintf("/ip4/%s/tcp/%d/wss", ip, wsPort)
+		wsAddrStr := fmt.Sprintf("/ip4/%s/tcp/%d/ws", ip, wsPort)
 		wsMaddr, err := ma.NewMultiaddr(wsAddrStr)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create WebSocket multiaddr for IP %s: %w", ip, err)
