@@ -17,6 +17,7 @@ dependencies = [
     "protobuf",
     "psutil",
     "PyJWT",
+    "cryptography",
     "Requests",
     "torch",
     "torchvision",
