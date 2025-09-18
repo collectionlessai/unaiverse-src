@@ -1006,7 +1006,7 @@ func goGetNodeAddresses(
         log.Printf("[GO] 🔧 Instance %d: Selectively patching WSS addresses with domain mapping...\n", instanceIndex)
 		finalResult := make([]string, 0, len(result))
         for _, addrStr := range result {
-			if strings.Contains(addrStr, "/wss") || strings.HasSuffix(addrStr, "/tls/ws") {
+			if strings.Contains(addrStr, "/wss") || strings.Contains(addrStr, "/tls/ws") {
 				patchedAddr := addrStr
 				for ip, domain := range ipToDomain {
 					// Construct the IP part of the multiaddress to replace
