@@ -1316,16 +1316,17 @@ func CreateNode(
 	certPath := "/etc/letsencrypt/live/multaiverse.diism.unisi.it/fullchain.pem"
 	keyPath := "/etc/letsencrypt/live/multaiverse.diism.unisi.it/privkey.pem"
 	cert, err := tls.LoadX509KeyPair(certPath, keyPath)
+
     if err != nil {
-        log.Printf("[GO] ❌ Instance %d: Error loading TLS certificate from %s and %s: %v\n", instanceIndex, certPath, keyPath, err)
+        log.Printf("[GO] ⚠️ Instance %d: Could not load TLS certificate. WebSocket transport will be client-only (no WSS listener). Error: %v\n", instanceIndex, err)
+		options = append(options, libp2p.Transport(ws.New)) // add WS transport without TLS (client-only)
     } else {
+		log.Printf("[GO] ✅ Instance %d: TLS certificate loaded. Enabling WSS listener.\n", instanceIndex)
 		tlsConfig := &tls.Config{
 			Certificates: []tls.Certificate{cert},
 		}
-		options = append(options, libp2p.Transport(ws.New, ws.WithTLSConfig(tlsConfig)))
+		options = append(options, libp2p.Transport(ws.New, ws.WithTLSConfig(tlsConfig))) // add WS transport with TLS (WSS listener)
 	}
-
-	
 
 	// Configure Relay Service (ability to *be* a relay)
 	if enableRelayService {
