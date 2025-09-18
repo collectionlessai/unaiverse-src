@@ -1003,23 +1003,27 @@ func goGetNodeAddresses(
 
 	// If a mapping is provided, apply the transformations.
     if ipToDomain != nil {
-        log.Printf("[GO] 🔧 Instance %d: Patching addresses with domain mapping...\n", instanceIndex)
-        patchedResult := make([]string, 0, len(result))
+        log.Printf("[GO] 🔧 Instance %d: Selectively patching WSS addresses with domain mapping...\n", instanceIndex)
+		finalResult := make([]string, 0, len(result))
         for _, addrStr := range result {
-            patchedAddr := addrStr
-            for ip, domain := range ipToDomain {
-                // Construct the IP part of the multiaddress to replace
-                ip4Component := fmt.Sprintf("/ip4/%s/", ip)
-                if strings.Contains(patchedAddr, ip4Component) {
-                    // IMPORTANT: Replace /ip4/ with /dns4/ for a valid multiaddress
-                    dns4Component := fmt.Sprintf("/dns4/%s/", domain)
-                    patchedAddr = strings.Replace(patchedAddr, ip4Component, dns4Component, 1)
-                    log.Printf("[GO]   - Patched %s -> %s\n", addrStr, patchedAddr)
-                }
-            }
-            patchedResult = append(patchedResult, patchedAddr)
-        }
-        return patchedResult, nil // Return the newly patched list
+			if strings.Contains(addrStr, "/wss") || strings.HasSuffix(addrStr, "/tls/ws") {
+				patchedAddr := addrStr
+				for ip, domain := range ipToDomain {
+					// Construct the IP part of the multiaddress to replace
+					ip4Component := fmt.Sprintf("/ip4/%s/", ip)
+					if strings.Contains(patchedAddr, ip4Component) {
+						// IMPORTANT: Replace /ip4/ with /dns4/ for a valid multiaddress
+						dns4Component := fmt.Sprintf("/dns4/%s/", domain)
+						patchedAddr = strings.Replace(patchedAddr, ip4Component, dns4Component, 1)
+						log.Printf("[GO]   - Patched %s -> %s\n", addrStr, patchedAddr)
+					}
+				}
+            	finalResult = append(finalResult, patchedAddr)
+			} else {
+				finalResult = append(finalResult, addrStr)
+			}
+		}
+		return finalResult, nil
     }
 
 	return result, nil
@@ -1275,27 +1279,6 @@ func CreateNode(
 
 	log.Printf("[GO] 🔧 Instance %d: Config: Port=%d, IPsJSON=%s, EnableRelayClient=%t, EnableRelayService=%t, KnowsIsPublic=%t, MaxConnections=%d",
 		instanceIndex, predefinedPort, ipsJSON, enableRelayClient, enableRelayService, knowsIsPublic, maxConnections)
-	
-	// // --- Generate Self-Signed Cert for WSS ---
-	// tlsConfig, err := generateSelfSignedCert()
-	// if err != nil {
-	// 	cleanupFailedCreate(instanceIndex)
-	// 	return jsonErrorResponse(fmt.Sprintf("Instance %d: Failed to generate self-signed certificate", instanceIndex), err)
-	// }
-	// log.Printf("[GO]   - Instance %d: Generated in-memory self-signed TLS certificate for WSS.\n", instanceIndex)
-
-	// use legit certificates
-	certPath := "/etc/letsencrypt/live/multaiverse.diism.unisi.it/fullchain.pem"
-	keyPath := "/etc/letsencrypt/live/multaiverse.diism.unisi.it/privkey.pem"
-	cert, err := tls.LoadX509KeyPair(certPath, keyPath)
-    if err != nil {
-        log.Printf("[GO] ❌ Instance %d: Error loading TLS certificate from %s and %s: %v\n", instanceIndex, certPath, keyPath, err)
-    }
-
-	tlsConfig := &tls.Config{
-		Certificates: []tls.Certificate{cert},
-	}
-
 
 	// --- 4. Libp2p Options Assembly ---
 	listenAddrs, err := getListenAddrs(ipsJSON, predefinedPort)
@@ -1318,9 +1301,31 @@ func CreateNode(
 		libp2p.Transport(tcp.NewTCPTransport),
 		libp2p.Transport(quic.NewTransport),
 		libp2p.Transport(webrtc.New),
-		libp2p.Transport(ws.New, ws.WithTLSConfig(tlsConfig)),
 		libp2p.ResourceManager(limiter),
 	}
+
+	// // --- Generate Self-Signed Cert for WSS ---
+	// tlsConfig, err := generateSelfSignedCert()
+	// if err != nil {
+	// 	cleanupFailedCreate(instanceIndex)
+	// 	return jsonErrorResponse(fmt.Sprintf("Instance %d: Failed to generate self-signed certificate", instanceIndex), err)
+	// }
+	// log.Printf("[GO]   - Instance %d: Generated in-memory self-signed TLS certificate for WSS.\n", instanceIndex)
+
+	// use legit certificates
+	certPath := "/etc/letsencrypt/live/multaiverse.diism.unisi.it/fullchain.pem"
+	keyPath := "/etc/letsencrypt/live/multaiverse.diism.unisi.it/privkey.pem"
+	cert, err := tls.LoadX509KeyPair(certPath, keyPath)
+    if err != nil {
+        log.Printf("[GO] ❌ Instance %d: Error loading TLS certificate from %s and %s: %v\n", instanceIndex, certPath, keyPath, err)
+    } else {
+		tlsConfig := &tls.Config{
+			Certificates: []tls.Certificate{cert},
+		}
+		options = append(options, libp2p.Transport(ws.New, ws.WithTLSConfig(tlsConfig)))
+	}
+
+	
 
 	// Configure Relay Service (ability to *be* a relay)
 	if enableRelayService {
