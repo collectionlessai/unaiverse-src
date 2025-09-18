@@ -51,7 +51,7 @@ import (
 	quic "github.com/libp2p/go-libp2p/p2p/transport/quic" // QUIC transport for peer-to-peer connections (e.g., for mobile devices)
 	"github.com/libp2p/go-libp2p/p2p/transport/tcp"
 	webrtc "github.com/libp2p/go-libp2p/p2p/transport/webrtc" // WebRTC transport for peer-to-peer connections (e.g., for browsers or mobile devices)
-	// ws "github.com/libp2p/go-libp2p/p2p/transport/websocket" // WebSocket transport for peer-to-peer connections (e.g., for browsers)
+	ws "github.com/libp2p/go-libp2p/p2p/transport/websocket" // WebSocket transport for peer-to-peer connections (e.g., for browsers)
 
 	// protobuf
 	"google.golang.org/protobuf/proto"
@@ -989,7 +989,7 @@ func goGetNodeAddresses(
 					break
 				}
 			}
-			if !isDup && !strings.Contains(fullAddrStr, "/ws") {
+			if !isDup {
 				result = append(result, fullAddrStr)
 			}
 		}
@@ -1284,17 +1284,17 @@ func CreateNode(
 	// }
 	// log.Printf("[GO]   - Instance %d: Generated in-memory self-signed TLS certificate for WSS.\n", instanceIndex)
 
-	// // use legit certificates
-	// certPath := "/etc/letsencrypt/live/multaiverse.diism.unisi.it/fullchain.pem"
-	// keyPath := "/etc/letsencrypt/live/multaiverse.diism.unisi.it/privkey.pem"
-	// cert, err := tls.LoadX509KeyPair(certPath, keyPath)
-    // if err != nil {
-    //     log.Printf("[GO] ❌ Instance %d: Error loading TLS certificate from %s and %s: %v\n", instanceIndex, certPath, keyPath, err)
-    // }
+	// use legit certificates
+	certPath := "/etc/letsencrypt/live/multaiverse.diism.unisi.it/fullchain.pem"
+	keyPath := "/etc/letsencrypt/live/multaiverse.diism.unisi.it/privkey.pem"
+	cert, err := tls.LoadX509KeyPair(certPath, keyPath)
+    if err != nil {
+        log.Printf("[GO] ❌ Instance %d: Error loading TLS certificate from %s and %s: %v\n", instanceIndex, certPath, keyPath, err)
+    }
 
-	// tlsConfig := &tls.Config{
-	// 	Certificates: []tls.Certificate{cert},
-	// }
+	tlsConfig := &tls.Config{
+		Certificates: []tls.Certificate{cert},
+	}
 
 
 	// --- 4. Libp2p Options Assembly ---
@@ -1318,7 +1318,7 @@ func CreateNode(
 		libp2p.Transport(tcp.NewTCPTransport),
 		libp2p.Transport(quic.NewTransport),
 		libp2p.Transport(webrtc.New),
-		// libp2p.Transport(ws.New, ws.WithTLSConfig(tlsConfig)),
+		libp2p.Transport(ws.New, ws.WithTLSConfig(tlsConfig)),
 		libp2p.ResourceManager(limiter),
 	}
 
