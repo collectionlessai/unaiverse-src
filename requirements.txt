@@ -1,3 +1,4 @@
+cryptography
 opencv-python
 Flask
 flask_cors

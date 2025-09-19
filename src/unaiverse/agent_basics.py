@@ -1809,7 +1809,8 @@ class AgentBasics:
         """Remove a peer ID from the status of the agent, assuming it to be the represented by attributes that start
         with '_'."""
         for attr_name in dir(self):
-            if attr_name.startswith("_"):
+            if attr_name.startswith("_") and (not attr_name.startswith("__") and not attr_name.startswith("_Agent")
+                                              and not attr_name.startswith("_WAgent")):
                 try:
                     value = getattr(self, attr_name)
                     if isinstance(value, list):
@@ -1825,7 +1826,8 @@ class AgentBasics:
     def reset_agent_status_attrs(self):
         """Resets attributes that represent the status of the agent, assuming to be the ones that start with '_'."""
         for attr_name in dir(self):
-            if attr_name.startswith("_") and (not attr_name.startswith("__") and not attr_name.startswith("_Agent")):
+            if attr_name.startswith("_") and (not attr_name.startswith("__") and not attr_name.startswith("_Agent")
+                                              and not attr_name.startswith("_WAgent")):
                 try:
                     value = getattr(self, attr_name)
                     if isinstance(value, list):

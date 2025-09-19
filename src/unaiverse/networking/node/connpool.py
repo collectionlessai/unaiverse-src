@@ -173,12 +173,6 @@ class ConnectionPools:
             print(f"[DEBUG CONNECTIONS-POOL] Connecting to {addresses}")
 
         try:
-            a = []
-            for address in addresses:
-                if "/tcp/" not in address:
-                    a.append(address)
-            addresses = a
-
             winning_addr_info_dict = p2p.connect_to(addresses)
             peer_id = winning_addr_info_dict.get('ID')
             connected_addr_str = winning_addr_info_dict.get('Addrs')[0]

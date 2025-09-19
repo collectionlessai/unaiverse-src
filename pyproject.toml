@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "unaiverse"
-version = "0.1.0"
+version = "0.1.4"
 requires-python = ">3.10"
 dependencies = [
     "opencv-python",
@@ -17,9 +17,11 @@ dependencies = [
     "protobuf",
     "psutil",
     "PyJWT",
+    "cryptography",
     "Requests",
     "torch",
-    "torchvision"
+    "torchvision",
+    "transformers"
 ]
 license-files = ["LICENSE"]
 keywords = ["UNaIVERSE", "Collectionless AI", "AI", "Agentic AI", "Agents", "Machine Learning", "Learning Over Time"]
