@@ -451,7 +451,7 @@ func setupNotifiers(instanceIndex int) {
 			// or if there were multiple connection events. Update generously.
 			if epi, exists := instanceConnectedPeers[remotePeerID]; exists {
 				epi.Addrs = finalPeerAddrs // Update with the new comprehensive list
-				epi.Direction = directionString
+				// epi.Direction = directionString
 				instanceConnectedPeers[remotePeerID] = epi
 			} else {
 				instanceConnectedPeers[remotePeerID] = ExtendedPeerInfo{
