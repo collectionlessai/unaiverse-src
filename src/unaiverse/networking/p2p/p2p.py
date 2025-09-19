@@ -219,7 +219,8 @@ class P2P:
             addresses_quic = [a for a in self._address_cache if "/quic-v1/" in a]
             addresses_webrtc = [a for a in self._address_cache if "/webrtc" in a]
             addresses_tcp = [a for a in self._address_cache if "/tcp/" in a]
-            addresses = addresses_quic + addresses_webrtc + addresses_tcp
+            addresses_ws = [a for a in self._address_cache if "/ws" in a]
+            addresses = addresses_quic + addresses_webrtc + addresses_tcp + addresses_ws
             self._address_cache.clear()
             for _addr in addresses:
                 self._address_cache.append(_addr)
@@ -227,13 +228,6 @@ class P2P:
             logger.info(f"✅ [Instance {self._instance}] Node created with ID: {self._peer_id}")
             logger.info(f"👂 [Instance {self._instance}] Listening on: {self._address_cache}")
             logger.info(f"🌐 [Instance {self._instance}] Publicly reachable: {self._is_public}")
-
-            # Start background threads if desired (currently commented out in original)
-            # logger.info(f"[Instance {self._instance}] 🧵 Starting background polling threads...")
-            # self._get_connected_peers_thread = threading.Thread(...)
-            # self._get_connected_peers_thread.start()
-            # self._check_message_queue_thread = threading.Thread(...)
-            # self._check_message_queue_thread.start()
 
             logger.info(f"🎉 [Instance {self._instance}] Node initialized successfully.")
 
