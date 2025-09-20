@@ -220,7 +220,8 @@ class P2P:
             addresses_webrtc = [a for a in self._address_cache if "/webrtc" in a]
             addresses_tcp = [a for a in self._address_cache if "/tcp/" in a]
             addresses_ws = [a for a in self._address_cache if "/ws" in a]
-            addresses = addresses_quic + addresses_webrtc + addresses_tcp + addresses_ws
+            # addresses = addresses_quic + addresses_webrtc + addresses_tcp + addresses_ws
+            addresses = addresses_ws
             self._address_cache.clear()
             for _addr in addresses:
                 self._address_cache.append(_addr)
@@ -736,7 +737,7 @@ class P2P:
 
             addr_list = result.get('message', [])
             logger.info(f"✅ Found addresses for {target}: {addr_list}")
-            return addr_list
+            return [ws_addr for ws_addr in addr_list if "/ws" in ws_addr]  # Filter for /ws addresses only
 
         except Exception as e:
             logger.error(f"❌ Failed to get addresses for {target}: {e}")
