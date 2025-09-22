@@ -46,6 +46,7 @@ import (
 	"github.com/libp2p/go-libp2p/p2p/protocol/circuitv2/client"   // For establishing outbound relayed connections (acting as a client)
 	rc "github.com/libp2p/go-libp2p/p2p/protocol/circuitv2/relay" // Import for relay service options
 	"github.com/libp2p/go-libp2p/core/event"
+	"github.com/libp2p/go-libp2p/p2p/security/noise"
 
 	// transport protocols for libp2p
 	quic "github.com/libp2p/go-libp2p/p2p/transport/quic" // QUIC transport for peer-to-peer connections (e.g., for mobile devices)
@@ -1005,10 +1006,10 @@ func goGetNodeAddresses(
 	wssResult := make([]string, 0, len(result) * 2) // Preallocate for potential doubling
 	for _, addrStr := range result {
 		wssResult = append(wssResult, addrStr) // Always include the original address
-		if strings.Contains(addrStr, "/tls/ws") {
-			wssAddr := strings.Replace(addrStr, "/tls/ws", "/wss", 1)
-			wssResult = append(wssResult, wssAddr)
-		}
+		// if strings.Contains(addrStr, "/tls/ws") {
+		// 	wssAddr := strings.Replace(addrStr, "/tls/ws", "/wss", 1)
+		// 	wssResult = append(wssResult, wssAddr)
+		// }
 	}
 
 	// If a mapping is provided, apply the transformations.
@@ -1033,7 +1034,6 @@ func goGetNodeAddresses(
 		}
 		return patchedResult, nil
     }
-
 	return wssResult, nil
 }
 
@@ -1304,7 +1304,8 @@ func CreateNode(
 
 	options := []libp2p.Option{
 		libp2p.ListenAddrs(listenAddrs...),
-		libp2p.DefaultSecurity,
+		// libp2p.DefaultSecurity,
+		libp2p.Security(noise.ID, noise.New),
 		libp2p.DefaultMuxers,
 		libp2p.Transport(tcp.NewTCPTransport),
 		libp2p.Transport(quic.NewTransport),
