@@ -1002,11 +1002,22 @@ func goGetNodeAddresses(
 		return []string{}, nil // Return empty list, no error, if formatting yields nothing
 	}
 
+	// Add to the results the addresses with wss/ replacing tls/ws
+	wssResult := make([]string, 0, len(result) * 2) // Preallocate for potential doubling
+	for _, addrStr := range result {
+		wssResult = append(wssResult, addrStr) // Always include the original address
+		if strings.Contains(addrStr, "/tls/ws") {
+			wssAddr := strings.Replace(addrStr, "/tls/ws", "/wss", 1)
+			wssResult = append(wssResult, wssAddr)
+		}
+	}
+
 	// If a mapping is provided, apply the transformations.
     if ipToDomain != nil {
         log.Printf("[GO] 🔧 Instance %d: Selectively patching WSS addresses with domain mapping...\n", instanceIndex)
-		finalResult := make([]string, 0, len(result))
-        for _, addrStr := range result {
+		patchedResult := make([]string, 0, len(wssResult) * 2)
+        for _, addrStr := range wssResult {
+			patchedResult = append(patchedResult, addrStr) // Always include the original address
 			if strings.Contains(addrStr, "/wss") || strings.Contains(addrStr, "/tls/ws") {
 				patchedAddr := addrStr
 				for ip, domain := range ipToDomain {
@@ -1019,15 +1030,13 @@ func goGetNodeAddresses(
 						log.Printf("[GO]   - Patched %s -> %s\n", addrStr, patchedAddr)
 					}
 				}
-            	finalResult = append(finalResult, patchedAddr)
-			} else {
-				finalResult = append(finalResult, addrStr)
+            	patchedResult = append(patchedResult, patchedAddr)
 			}
 		}
-		return finalResult, nil
+		return patchedResult, nil
     }
 
-	return result, nil
+	return wssResult, nil
 }
 
 // closeSingleInstance performs the cleanup for a specific node instance.
