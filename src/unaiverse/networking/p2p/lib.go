@@ -46,8 +46,6 @@ import (
 	"github.com/libp2p/go-libp2p/p2p/protocol/circuitv2/client"   // For establishing outbound relayed connections (acting as a client)
 	rc "github.com/libp2p/go-libp2p/p2p/protocol/circuitv2/relay" // Import for relay service options
 	"github.com/libp2p/go-libp2p/core/event"
-	"github.com/libp2p/go-libp2p/p2p/security/noise"
-    "github.com/libp2p/go-libp2p/p2p/muxer/yamux"
 
 	// transport protocols for libp2p
 	quic "github.com/libp2p/go-libp2p/p2p/transport/quic" // QUIC transport for peer-to-peer connections (e.g., for mobile devices)
@@ -936,6 +934,7 @@ func goGetNodeAddresses(
 		candidateAddrs = append(candidateAddrs, instanceHost.Network().ListenAddresses()...)
 		candidateAddrs = append(candidateAddrs, instanceHost.Addrs()...)
 		candidateAddrs = append(candidateAddrs, instanceHost.Peerstore().Addrs(resolvedPID)...) // Use resolvedPID
+		log.Printf("[GO] ℹ️ Instance %d: All gathered addresses for LOCAL node %s: %v\n", instanceIndex, resolvedPID, candidateAddrs)
 	} else {
 		// --- Remote Peer Addresses ---
 		remotePeerAddrsInStore := instanceHost.Peerstore().Addrs(resolvedPID) // Use resolvedPID
@@ -1298,10 +1297,8 @@ func CreateNode(
 
 	options := []libp2p.Option{
 		libp2p.ListenAddrs(listenAddrs...),
-		// libp2p.DefaultSecurity,
-		// libp2p.DefaultMuxers,
-		libp2p.Security(noise.ID, noise.New),
-		libp2p.Muxer("/yamux/1.0.0", yamux.DefaultTransport),
+		libp2p.DefaultSecurity,
+		libp2p.DefaultMuxers,
 		libp2p.Transport(tcp.NewTCPTransport),
 		libp2p.Transport(quic.NewTransport),
 		libp2p.Transport(webrtc.New),
