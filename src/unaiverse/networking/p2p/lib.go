@@ -1006,10 +1006,10 @@ func goGetNodeAddresses(
 	wssResult := make([]string, 0, len(result) * 2) // Preallocate for potential doubling
 	for _, addrStr := range result {
 		wssResult = append(wssResult, addrStr) // Always include the original address
-		// if strings.Contains(addrStr, "/tls/ws") {
-		// 	wssAddr := strings.Replace(addrStr, "/tls/ws", "/wss", 1)
-		// 	wssResult = append(wssResult, wssAddr)
-		// }
+		if strings.Contains(addrStr, "/tls/ws") {
+			wssAddr := strings.Replace(addrStr, "/tls/ws", "/wss", 1)
+			wssResult = append(wssResult, wssAddr)
+		}
 	}
 
 	// If a mapping is provided, apply the transformations.
