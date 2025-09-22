@@ -934,7 +934,6 @@ func goGetNodeAddresses(
 		candidateAddrs = append(candidateAddrs, instanceHost.Network().ListenAddresses()...)
 		candidateAddrs = append(candidateAddrs, instanceHost.Addrs()...)
 		candidateAddrs = append(candidateAddrs, instanceHost.Peerstore().Addrs(resolvedPID)...) // Use resolvedPID
-		log.Printf("[GO] ℹ️ Instance %d: All gathered addresses for LOCAL node %s: %v\n", instanceIndex, resolvedPID, candidateAddrs)
 	} else {
 		// --- Remote Peer Addresses ---
 		remotePeerAddrsInStore := instanceHost.Peerstore().Addrs(resolvedPID) // Use resolvedPID
@@ -1019,18 +1018,17 @@ func goGetNodeAddresses(
         for _, addrStr := range wssResult {
 			patchedResult = append(patchedResult, addrStr) // Always include the original address
 			if strings.Contains(addrStr, "/wss") || strings.Contains(addrStr, "/tls/ws") {
-				patchedAddr := addrStr
 				for ip, domain := range ipToDomain {
 					// Construct the IP part of the multiaddress to replace
 					ip4Component := fmt.Sprintf("/ip4/%s/", ip)
-					if strings.Contains(patchedAddr, ip4Component) {
+					if strings.Contains(addrStr, ip4Component) {
 						// IMPORTANT: Replace /ip4/ with /dns4/ for a valid multiaddress
 						dns4Component := fmt.Sprintf("/dns4/%s/", domain)
-						patchedAddr = strings.Replace(patchedAddr, ip4Component, dns4Component, 1)
+						patchedAddr := strings.Replace(addrStr, ip4Component, dns4Component, 1)
 						log.Printf("[GO]   - Patched %s -> %s\n", addrStr, patchedAddr)
+						patchedResult = append(patchedResult, patchedAddr)
 					}
 				}
-            	patchedResult = append(patchedResult, patchedAddr)
 			}
 		}
 		return patchedResult, nil
