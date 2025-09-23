@@ -21,17 +21,16 @@ import (
 	"io"              // For input/output operations (e.g., reading from streams)
 	"log"             // For logging information, warnings, and errors
 	"net"             // For network-related errors and interfaces
+	"net/http"       // For HTTP server (used in WebSocket transport)
+	"net/http/httputil" // For HTTP utility functions (e.g., reverse proxy)
+	"net/url"          // For URL parsing and manipulation (e.g., in WebSocket transport)
 	"os"              // For interacting with the operating system (e.g., Stdout)
 	"strings"         // For string manipulations (e.g., trimming, splitting)
+	"strconv"
 	"sync"            // For synchronization primitives like Mutexes and RWMutexes to protect shared data
 	"time"            // For time-related functions (e.g., timeouts, timestamps)
 	"unsafe"          // For using Go pointers with C code (specifically C.free)
-	"crypto/rand"    // For generating cryptographic random numbers (e.g., for keys)
-	"crypto/rsa"     // For generating RSA keys (used in self-signed TLS certs)
 	"crypto/tls"     // For TLS configuration (used in WebSocket secure transport)
-	"crypto/x509"   // For creating X.509 certificates (used in self-signed TLS certs)
-	"crypto/x509/pkix" // For X.509 certificate subject information (used in self-signed TLS certs)
-	"math/big"      // For big integer operations (used in self-signed TLS certs)
 	
 
 	// Core libp2p libraries
@@ -119,6 +118,9 @@ var (
 
 	// Slices to hold state for each instance. Using arrays for fixed size.
 	hostInstances                      []host.Host
+	httpProxyServers                   []*http.Server
+	publicWssPorts                     []int
+	publicDomains                      []string
 	pubsubInstances                    []*pubsub.PubSub
 	contexts                           []context.Context
 	cancelContexts                     []context.CancelFunc
@@ -258,7 +260,6 @@ func cleanupFailedCreate(instanceIndex int) {
 
 func getListenAddrs(ipsJSON string, tcpPort int) ([]ma.Multiaddr, error) {
 	var ips []string
-
 	// --- Parse IPs from JSON ---
 	if ipsJSON == "" || ipsJSON == "[]" {
 		ips = []string{"0.0.0.0"} // Default if empty or not provided
@@ -283,80 +284,85 @@ func getListenAddrs(ipsJSON string, tcpPort int) ([]ma.Multiaddr, error) {
 
 	// --- Create Multiaddrs for both protocols from the single IP list ---
 	for _, ip := range ips {
-		// Create TCP Multiaddr
-		tcpAddrStr := fmt.Sprintf("/ip4/%s/tcp/%d", ip, tcpPort)
-		tcpMaddr, err := ma.NewMultiaddr(tcpAddrStr)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create TCP multiaddr for IP %s: %w", ip, err)
-		}
-		listenAddrs = append(listenAddrs, tcpMaddr)
+		// TCP
+		tcpMaddr, _ := ma.NewMultiaddr(fmt.Sprintf("/ip4/%s/tcp/%d", ip, tcpPort))
+		// QUIC
+		quicMaddr, _ := ma.NewMultiaddr(fmt.Sprintf("/ip4/%s/udp/%d/quic-v1", ip, quicPort))
+		// WebRTC
+		webrtcMaddr, _ := ma.NewMultiaddr(fmt.Sprintf("/ip4/%s/udp/%d/webrtc-direct", ip, webrtcPort))
 
-		// Create QUIC Multiaddr
-		quicAddrStr := fmt.Sprintf("/ip4/%s/udp/%d/quic-v1", ip, quicPort)
-		quicMaddr, err := ma.NewMultiaddr(quicAddrStr)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create QUIC multiaddr for IP %s: %w", ip, err)
-		}
-		listenAddrs = append(listenAddrs, quicMaddr)
-
-		// Create WebRTC (UDP) Multiaddr
-		webrctAddrStr := fmt.Sprintf("/ip4/%s/udp/%d/webrtc-direct", ip, webrtcPort)
-		webrctMaddr, err := ma.NewMultiaddr(webrctAddrStr)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create WebRTC multiaddr for IP %s: %w", ip, err)
-		}
-		listenAddrs = append(listenAddrs, webrctMaddr)
-
-		// Create WebSocket Multiaddr
-		wsAddrStr := fmt.Sprintf("/ip4/%s/tcp/%d/wss", ip, wsPort)
-		wsMaddr, err := ma.NewMultiaddr(wsAddrStr)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create WebSocket multiaddr for IP %s: %w", ip, err)
-		}
-		listenAddrs = append(listenAddrs, wsMaddr)
+		listenAddrs = append(listenAddrs, tcpMaddr, quicMaddr, webrtcMaddr)
 	}
+	// Add the INTERNAL, UNENCRYPTED WebSocket listener bound ONLY to localhost.
+	// Using port 0 lets the OS pick a free port, which we will discover later.
+	wsInternalMaddr, err := ma.NewMultiaddr(fmt.Sprintf("/ip4/127.0.0.1/tcp/%d/ws", wsPort))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create internal WebSocket multiaddr: %w", err)
+	}
+	listenAddrs = append(listenAddrs, wsInternalMaddr)
+
+	log.Printf("[GO] 🔧 Prepared Listen Addresses: %v\n", listenAddrs)
 
 	return listenAddrs, nil
 }
 
-// generateSelfSignedCert creates an in-memory self-signed TLS certificate.
-func generateSelfSignedCert() (*tls.Config, error) {
-	// Generate a new private key
-	priv, err := rsa.GenerateKey(rand.Reader, 2048)
+// startReverseProxy creates and starts a TLS-terminating reverse proxy in a new goroutine.
+// It proxies public WSS traffic from `publicPort` to the internal `targetPort`.
+func startReverseProxy(instanceIndex int, publicPort int, targetPort int, certPath string, keyPath string) (*http.Server, int, error) {
+	// --- 1. Load TLS certificates (this is now the proxy's job) ---
+	cert, err := tls.LoadX509KeyPair(certPath, keyPath)
 	if err != nil {
-		return nil, err
+		return nil, 0, fmt.Errorf("could not load TLS certificate for proxy: %w", err)
+	}
+	tlsConfig := &tls.Config{
+		Certificates: []tls.Certificate{cert},
 	}
 
-	// Create a certificate template
-	template := x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject: pkix.Name{
-			Organization: []string{"Libp2p-Go Self-Signed"},
-		},
-		NotBefore:             time.Now(),
-		NotAfter:              time.Now().Add(time.Hour * 24 * 365), // Valid for 1 year
-		KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
-		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-		BasicConstraintsValid: true,
-	}
-
-	// Create the certificate
-	derBytes, err := x509.CreateCertificate(rand.Reader, &template, &template, &priv.PublicKey, priv)
+	// --- 2. Create Listener Manually to Discover Port ---
+	listenAddr := fmt.Sprintf(":%d", publicPort)
+	listener, err := tls.Listen("tcp", listenAddr, tlsConfig)
 	if err != nil {
-		return nil, err
+		return nil, 0, fmt.Errorf("failed to create TLS listener on %s: %w", listenAddr, err)
 	}
 
-	// Create a tls.Certificate
-	cert := tls.Certificate{
-		Certificate: [][]byte{derBytes},
-		PrivateKey:  priv,
+	// Discover the actual port that was assigned by the OS.
+	// We get the address from the listener, cast it to a TCPAddr, and get the Port.
+	discoveredPort := listener.Addr().(*net.TCPAddr).Port
+
+	// --- 3. Define the target URL for the internal libp2p WebSocket listener ---
+	targetUrl, err := url.Parse(fmt.Sprintf("ws://127.0.0.1:%d", targetPort))
+	if err != nil {
+		listener.Close() // Clean up the listener if we fail here
+		return nil, 0, fmt.Errorf("internal error creating proxy target URL: %w", err)
 	}
 
-	// Return a tls.Config
-	return &tls.Config{
-		Certificates:       []tls.Certificate{cert},
-		InsecureSkipVerify: true, // IMPORTANT: For self-signed certs
-	}, nil
+	// --- 4. Create the reverse proxy instance ---
+	proxy := httputil.NewSingleHostReverseProxy(targetUrl)
+	proxy.Director = func(req *http.Request) {
+		req.URL.Scheme = "ws"
+		req.URL.Host = targetUrl.Host
+		req.Host = targetUrl.Host
+	}
+
+	// --- 5. Create the public-facing HTTPS server (without Addr, as we provide the listener) ---
+	server := &http.Server{
+		Handler:   proxy,
+		TLSConfig: tlsConfig, // Still useful for http/2 etc.
+	}
+
+	// --- 6. Run the server in a new goroutine with the pre-made listener ---
+	go func() {
+		log.Printf("[GO] ✅ Instance %d: Starting HTTPS reverse proxy on %s -> ws://127.0.0.1:%d\n", instanceIndex, listener.Addr().String(), targetPort)
+		// Use ServeTLS instead of ListenAndServeTLS
+		if err := server.Serve(listener); err != http.ErrServerClosed {
+			log.Printf("[GO] ❌ Instance %d: HTTPS proxy server failed: %v\n", instanceIndex, err)
+		} else {
+			log.Printf("[GO] 🛑 Instance %d: HTTPS proxy server shut down gracefully.\n", instanceIndex)
+		}
+	}()
+
+	// Return the server instance AND the discovered port
+	return server, discoveredPort, nil
 }
 
 func createResourceManager(maxConnections int) (network.ResourceManager, error) {
@@ -901,10 +907,7 @@ func writeDirectMessageFrame(w io.Writer, channel string, payload []byte) error 
 func goGetNodeAddresses(
 	instanceIndex int,
 	targetPID peer.ID, // Changed from targetPeerIDStr string
-	ipToDomain map[string]string,  // TODO: remove
 ) ([]string, error) {
-	var resolvedPID peer.ID // This will be the ID we actually work with
-
 	instanceHost := hostInstances[instanceIndex]
 	if instanceHost == nil {
 		errMsg := fmt.Sprintf("Instance %d: Host not initialized", instanceIndex)
@@ -912,33 +915,28 @@ func goGetNodeAddresses(
 		return nil, fmt.Errorf("%s", errMsg)
 	}
 
-	// Determine the actual Peer ID to use
-	if targetPID == "" { // peer.ID("") indicates request for local node
+	// Determine the actual Peer ID to resolve addresses for.
+	resolvedPID := targetPID
+	isLocalNode := false
+	if targetPID == "" {
 		resolvedPID = instanceHost.ID()
-	} else {
-		resolvedPID = targetPID
-		log.Printf("[GO] ℹ️ Instance %d: goGetNodeAddresses called for specific peer: %s\n", instanceIndex, resolvedPID.String())
+		isLocalNode = true
 	}
 
-	addrMap := make(map[string]ma.Multiaddr)
-	var candidateAddrs []ma.Multiaddr
+	// Use a map to automatically handle duplicate addresses.
+	addrSet := make(map[string]struct{})
 
-	// --- Address Gathering ---
-	// The logic below uses 'resolvedPID'
-	if resolvedPID == instanceHost.ID() { // Check if, after resolution, it's the local host
-		interfaceAddrs, err := instanceHost.Network().InterfaceListenAddresses()
-		if err != nil {
-		} else {
+	// --- 1. Gather all candidate addresses from the host and peerstore ---
+	var candidateAddrs []ma.Multiaddr
+	candidateAddrs = append(candidateAddrs, instanceHost.Peerstore().Addrs(resolvedPID)...)
+	if isLocalNode {
+		if interfaceAddrs, err := instanceHost.Network().InterfaceListenAddresses(); err == nil {
 			candidateAddrs = append(candidateAddrs, interfaceAddrs...)
 		}
 		candidateAddrs = append(candidateAddrs, instanceHost.Network().ListenAddresses()...)
 		candidateAddrs = append(candidateAddrs, instanceHost.Addrs()...)
-		candidateAddrs = append(candidateAddrs, instanceHost.Peerstore().Addrs(resolvedPID)...) // Use resolvedPID
 	} else {
 		// --- Remote Peer Addresses ---
-		remotePeerAddrsInStore := instanceHost.Peerstore().Addrs(resolvedPID) // Use resolvedPID
-		candidateAddrs = append(candidateAddrs, remotePeerAddrsInStore...)
-
 		connectedPeersMutexes[instanceIndex].RLock()
 		instanceConnectedPeers := connectedPeersInstances[instanceIndex]
 		if epi, exists := instanceConnectedPeers[resolvedPID]; exists { // Use resolvedPID
@@ -948,92 +946,59 @@ func goGetNodeAddresses(
 		connectedPeersMutexes[instanceIndex].RUnlock()
 	}
 
-	// Common processing for all gathered candidate addresses
+	// --- 2. Process and filter candidate addresses ---
 	for _, addr := range candidateAddrs {
-		if addr == nil {
+		if addr == nil || manet.IsIPLoopback(addr) || manet.IsIPUnspecified(addr) {
+			continue // Skip nil, loopback, and unspecified addresses
+		}
+		
+		// Use the idiomatic `peer.SplitAddr` to check if the address already includes a Peer ID.
+		transportAddr, idInAddr := peer.SplitAddr(addr)
+		if transportAddr == nil {
 			continue
 		}
-		if manet.IsIPLoopback(addr) || manet.IsIPUnspecified(addr) {
-			continue
+		var finalAddr ma.Multiaddr
+		switch {
+			case idInAddr == resolvedPID:
+				// Case A: The address is already perfect and has the correct Peer ID. Use it as is.
+				finalAddr = addr
+				
+			case idInAddr == "":
+				// Case B: The address is missing a Peer ID. This is common for addresses from the
+				// peerstore and for relayed addresses like `/p2p/RELAY_ID/p2p-circuit`. We must append ours.
+				p2pComponent, _ := ma.NewMultiaddr(fmt.Sprintf("/p2p/%s", resolvedPID.String()))
+				finalAddr = addr.Encapsulate(p2pComponent)
+
+			case idInAddr != resolvedPID:
+				// Case C: The address has the WRONG Peer ID. This is stale or incorrect data. Discard it.
+				log.Printf("[GO] ⚠️ Instance %d: Discarding stale address for peer %s: %s\n", instanceIndex, resolvedPID, addr)
+				continue
 		}
-		addrMap[addr.String()] = addr
+		addrSet[finalAddr.String()] = struct{}{}
 	}
 
-	if len(addrMap) == 0 {
-		errMsg := fmt.Sprintf("Instance %d: No suitable base addresses found for peer %s after gathering and filtering.", instanceIndex, resolvedPID)
-		log.Printf("[GO] ⚠️ goGetNodeAddresses: %s\n", errMsg)
-		return nil, fmt.Errorf("%s", errMsg)
+	// --- 3. Add the public proxied WSS address if we are querying for the local node. ---
+	if isLocalNode {
+		publicWssPort := publicWssPorts[instanceIndex]
+		publicDomain := publicDomains[instanceIndex]
+
+		if publicWssPort > 0 && publicDomain != "" {
+			wssAddrStr := fmt.Sprintf("/dns4/%s/tcp/%d/wss/p2p/%s", publicDomain, publicWssPort, resolvedPID.String())
+			addrSet[wssAddrStr] = struct{}{}
+		}
 	}
 
-	// --- Formatting Results ---
-	result := make([]string, 0, len(addrMap))
-	for _, currentAddr := range addrMap {
-		var fullAddrStr string
-		_, idInAddr := peer.SplitAddr(currentAddr)
-
-		if idInAddr == resolvedPID { // Use resolvedPID
-			fullAddrStr = currentAddr.String()
-		} else if idInAddr != "" && strings.Contains(currentAddr.String(), ma.ProtocolWithCode(ma.P_CIRCUIT).Name) {
-			fullAddrStr = fmt.Sprintf("%s/p2p/%s", currentAddr.String(), resolvedPID.String()) // Use resolvedPID
-		} else if idInAddr != "" && idInAddr != resolvedPID { // Use resolvedPID
-			continue
-		} else {
-			fullAddrStr = fmt.Sprintf("%s/p2p/%s", currentAddr.String(), resolvedPID.String()) // Use resolvedPID
-		}
-
-		if fullAddrStr != "" {
-			isDup := false
-			for _, rAddr := range result {
-				if rAddr == fullAddrStr {
-					isDup = true
-					break
-				}
-			}
-			if !isDup {
-				result = append(result, fullAddrStr)
-			}
-		}
+	// --- 4. Convert the final set of unique addresses to a slice for returning. ---
+	result := make([]string, 0, len(addrSet))
+	for addr := range addrSet {
+		result = append(result, addr)
 	}
 
 	if len(result) == 0 {
-		errMsg := fmt.Sprintf("Instance %d: No addresses to return for peer %s after formatting.", instanceIndex, resolvedPID)
-		log.Printf("[GO] ⚠️ goGetNodeAddresses: %s\n", errMsg)
-		return []string{}, nil // Return empty list, no error, if formatting yields nothing
+		log.Printf("[GO] ⚠️ goGetNodeAddresses: No suitable addresses found for peer %s.", resolvedPID)
 	}
 
-	// Add to the results the addresses with wss/ replacing tls/ws
-	wssResult := make([]string, 0, len(result) * 2) // Preallocate for potential doubling
-	for _, addrStr := range result {
-		wssResult = append(wssResult, addrStr) // Always include the original address
-		if strings.Contains(addrStr, "/tls/ws") {
-			wssAddr := strings.Replace(addrStr, "/tls/ws", "/wss", 1)
-			wssResult = append(wssResult, wssAddr)
-		}
-	}
-
-	// If a mapping is provided, apply the transformations.
-    if ipToDomain != nil {
-        log.Printf("[GO] 🔧 Instance %d: Selectively patching WSS addresses with domain mapping...\n", instanceIndex)
-		patchedResult := make([]string, 0, len(wssResult) * 2)
-        for _, addrStr := range wssResult {
-			patchedResult = append(patchedResult, addrStr) // Always include the original address
-			if strings.Contains(addrStr, "/wss") || strings.Contains(addrStr, "/tls/ws") {
-				for ip, domain := range ipToDomain {
-					// Construct the IP part of the multiaddress to replace
-					ip4Component := fmt.Sprintf("/ip4/%s/", ip)
-					if strings.Contains(addrStr, ip4Component) {
-						// IMPORTANT: Replace /ip4/ with /dns4/ for a valid multiaddress
-						dns4Component := fmt.Sprintf("/dns4/%s/", domain)
-						patchedAddr := strings.Replace(addrStr, ip4Component, dns4Component, 1)
-						log.Printf("[GO]   - Patched %s -> %s\n", addrStr, patchedAddr)
-						patchedResult = append(patchedResult, patchedAddr)
-					}
-				}
-			}
-		}
-		return patchedResult, nil
-    }
-	return wssResult, nil
+	return result, nil
 }
 
 // closeSingleInstance performs the cleanup for a specific node instance.
@@ -1061,6 +1026,20 @@ func closeSingleInstance(
 		log.Printf("[GO] ℹ️ Instance %d: Node was already closed (internal close call).\n", instanceIndex)
 		return jsonSuccessResponse(fmt.Sprintf("Instance %d: Node was already closed", instanceIndex))
 	}
+
+	// --- 🛑 SHUTDOWN HTTP PROXY FIRST 🛑 ---
+	instanceStateMutex.Lock()
+	proxyServer := httpProxyServers[instanceIndex]
+	if proxyServer != nil {
+		log.Printf("[GO]   - Instance %d: Shutting down HTTPS reverse proxy...\n", instanceIndex)
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := proxyServer.Shutdown(shutdownCtx); err != nil {
+			log.Printf("[GO] ⚠️ Instance %d: Error during proxy server shutdown: %v\n", instanceIndex, err)
+		}
+		httpProxyServers[instanceIndex] = nil // Clear the server from state
+	}
+	instanceStateMutex.Unlock()
 
 	// --- Cancel Main Context ---
 	// Acquire global lock to safely access/modify cancelContexts
@@ -1200,6 +1179,9 @@ func InitializeLibrary(
 
 	// Now, initialize all the state slices with the correct size
 	hostInstances = make([]host.Host, maxInstances)
+	httpProxyServers = make([]*http.Server, maxInstances)
+	publicWssPorts = make([]int, maxInstances)
+	publicDomains = make([]string, maxInstances)
 	pubsubInstances = make([]*pubsub.PubSub, maxInstances)
 	contexts = make([]context.Context, maxInstances)
 	cancelContexts = make([]context.CancelFunc, maxInstances)
@@ -1308,31 +1290,8 @@ func CreateNode(
 		libp2p.Transport(tcp.NewTCPTransport),
 		libp2p.Transport(quic.NewTransport),
 		libp2p.Transport(webrtc.New),
+		libp2p.Transport(ws.New),
 		libp2p.ResourceManager(limiter),
-	}
-
-	// // --- Generate Self-Signed Cert for WSS ---
-	// tlsConfig, err := generateSelfSignedCert()
-	// if err != nil {
-	// 	cleanupFailedCreate(instanceIndex)
-	// 	return jsonErrorResponse(fmt.Sprintf("Instance %d: Failed to generate self-signed certificate", instanceIndex), err)
-	// }
-	// log.Printf("[GO]   - Instance %d: Generated in-memory self-signed TLS certificate for WSS.\n", instanceIndex)
-
-	// use legit certificates
-	certPath := "/etc/letsencrypt/live/multaiverse.diism.unisi.it/fullchain.pem"
-	keyPath := "/etc/letsencrypt/live/multaiverse.diism.unisi.it/privkey.pem"
-	cert, err := tls.LoadX509KeyPair(certPath, keyPath)
-
-    if err != nil {
-        log.Printf("[GO] ⚠️ Instance %d: Could not load TLS certificate. WebSocket transport will be client-only (no WSS listener). Error: %v\n", instanceIndex, err)
-		options = append(options, libp2p.Transport(ws.New)) // add WS transport without TLS (client-only)
-    } else {
-		log.Printf("[GO] ✅ Instance %d: TLS certificate loaded. Enabling WSS listener.\n", instanceIndex)
-		tlsConfig := &tls.Config{
-			Certificates: []tls.Certificate{cert},
-		}
-		options = append(options, libp2p.Transport(ws.New, ws.WithTLSConfig(tlsConfig))) // add WS transport with TLS (WSS listener)
 	}
 
 	// Configure Relay Service (ability to *be* a relay)
@@ -1394,6 +1353,53 @@ func CreateNode(
 	hostInstances[instanceIndex] = instanceHost
 	log.Printf("[GO] ✅ Instance %d: Host created with ID: %s\n", instanceIndex, instanceHost.ID())
 
+	// --- DISCOVER INTERNAL WS PORT & START REVERSE PROXY ---
+	internalWsPort := 0
+	for _, addr := range instanceHost.Network().ListenAddresses() {
+		// Check if the address has a WebSocket component
+		if _, err := addr.ValueForProtocol(ma.P_WS); err == nil {
+			// It's a WS address, now get its TCP port
+			portStr, err := addr.ValueForProtocol(ma.P_TCP)
+			if err != nil {
+				continue
+			}
+			p, _ := strconv.Atoi(portStr)
+			if p > 0 {
+				internalWsPort = p
+				log.Printf("[GO] 🔍 Instance %d: Discovered internal WebSocket listener on port: %d\n", instanceIndex, internalWsPort)
+				break
+			}
+		}
+	}
+
+	if internalWsPort == 0 {
+		cleanupFailedCreate(instanceIndex)
+		return jsonErrorResponse(fmt.Sprintf("Instance %d: Failed to discover internal WebSocket port after host creation", instanceIndex), nil)
+	}
+
+	// Define the public port for WSS. This could be passed as a new parameter to CreateNode.
+	// For now, we derive it from the predefinedPort.
+	publicWssPort := 0
+	if predefinedPort != 0 {
+		publicWssPort = predefinedPort + 4 // Same logic as before
+	} else {
+        log.Printf("[GO] ℹ️ Instance %d: Base port is 0, requesting a RANDOM public WSS port for the proxy.\n", instanceIndex)
+    }
+
+	certPath := "/etc/letsencrypt/live/multaiverse.diism.unisi.it/fullchain.pem"
+	keyPath := "/etc/letsencrypt/live/multaiverse.diism.unisi.it/privkey.pem"
+	publicDomain := "multaiverse.diism.unisi.it"
+	
+    proxyServer, discoveredPublicPort, err := startReverseProxy(instanceIndex, publicWssPort, internalWsPort, certPath, keyPath)
+	if err != nil {
+		cleanupFailedCreate(instanceIndex)
+		return jsonErrorResponse(fmt.Sprintf("Instance %d: Failed to start reverse proxy", instanceIndex), err)
+	}
+	httpProxyServers[instanceIndex] = proxyServer
+	publicWssPorts[instanceIndex] = discoveredPublicPort
+	publicDomains[instanceIndex] = publicDomain
+	log.Printf("[GO]  Instance %d: Public WSS proxy is active on actual port: %d\n", instanceIndex, discoveredPublicPort)
+
 	// --- PubSub Initialization ---
 	if err := setupPubSub(instanceIndex); err != nil {
 		cleanupFailedCreate(instanceIndex)
@@ -1431,9 +1437,7 @@ func CreateNode(
 	}
 
 	// --- Get Final Addresses ---
-	patch := make(map[string]string)
-	patch["193.205.7.181"] = "multaiverse.diism.unisi.it"
-	nodeAddresses, err := goGetNodeAddresses(instanceIndex, "", patch)
+	nodeAddresses, err := goGetNodeAddresses(instanceIndex, "")
 	if err != nil {
         // This is a more critical failure if we can't even get local addresses.
 		cleanupFailedCreate(instanceIndex)
@@ -1954,9 +1958,7 @@ func GetNodeAddresses(
 	}
 
 	// Call the internal Go function with the resolved peer.ID or empty peer.ID for local
-	patch := make(map[string]string)
-	patch["193.205.7.181"] = "multaiverse.diism.unisi.it"
-	addresses, err := goGetNodeAddresses(instanceIndex, pidForInternalCall, patch)
+	addresses, err := goGetNodeAddresses(instanceIndex, pidForInternalCall)
 	if err != nil {
 		return jsonErrorResponse(err.Error(), nil)
 	}
