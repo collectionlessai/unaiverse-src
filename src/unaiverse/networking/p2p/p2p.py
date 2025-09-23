@@ -220,8 +220,7 @@ class P2P:
             addresses_webrtc = [a for a in self._address_cache if "/webrtc" in a]
             addresses_tcp = [a for a in self._address_cache if "/tcp/" in a]
             addresses_ws = [a for a in self._address_cache if "/ws" in a]
-            # addresses = addresses_quic + addresses_webrtc + addresses_tcp + addresses_ws
-            addresses = addresses_ws
+            addresses = addresses_quic + addresses_webrtc + addresses_tcp + addresses_ws
             self._address_cache.clear()
             for _addr in addresses:
                 self._address_cache.append(_addr)
