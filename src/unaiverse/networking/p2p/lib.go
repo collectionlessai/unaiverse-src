@@ -319,7 +319,7 @@ func startReverseProxy(instanceIndex int, publicPort int, targetPort int, certPa
 	}
 
 	// --- 2. Create Listener Manually to Discover Port ---
-	listenAddr := fmt.Sprintf(":%d", publicPort)
+	listenAddr := fmt.Sprintf("0.0.0.0:%d", publicPort)
 	listener, err := tls.Listen("tcp", listenAddr, tlsConfig)
 	if err != nil {
 		return nil, 0, fmt.Errorf("failed to create TLS listener on %s: %w", listenAddr, err)
