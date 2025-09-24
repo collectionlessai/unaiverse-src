@@ -1394,6 +1394,9 @@ func CreateNode(
 	log.Printf("[GO] ✅ Instance %d: Host created with ID: %s\n", instanceIndex, instanceHost.ID())
 
 	// TODO: for debugging
+	for _, proto := range instanceHost.Mux().Protocols() {
+		log.Printf("[GO]     - Instance %d: Muxer protocol: %s\n", instanceIndex, proto)
+	}
 	supportedProtocols, err := instanceHost.Peerstore().GetProtocols(instanceHost.ID())
 	if err != nil {
 		log.Printf("[GO] ⚠️ Instance %d: Could not get supported protocols for local host: %v\n", instanceIndex, err)
