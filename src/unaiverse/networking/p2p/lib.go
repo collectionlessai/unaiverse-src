@@ -320,7 +320,7 @@ func startReverseProxy(instanceIndex int, publicPort int, targetPort int, certPa
 
 	// --- 2. Create Listener Manually to Discover Port ---
 	listenAddr := fmt.Sprintf("0.0.0.0:%d", publicPort)
-	listener, err := tls.Listen("tcp", listenAddr, tlsConfig)
+	listener, err := tls.Listen("tcp4", listenAddr, tlsConfig)
 	if err != nil {
 		return nil, 0, fmt.Errorf("failed to create TLS listener on %s: %w", listenAddr, err)
 	}
@@ -1384,6 +1384,17 @@ func CreateNode(
 	}
 	hostInstances[instanceIndex] = instanceHost
 	log.Printf("[GO] ✅ Instance %d: Host created with ID: %s\n", instanceIndex, instanceHost.ID())
+
+	// TODO: for debugging
+	supportedProtocols, err := instanceHost.Peerstore().GetProtocols(instanceHost.ID())
+	if err != nil {
+		log.Printf("[GO] ⚠️ Instance %d: Could not get supported protocols for local host: %v\n", instanceIndex, err)
+	} else {
+		log.Printf("[GO] 📜 Instance %d: Host supports the following protocols:", instanceIndex)
+		for _, p := range supportedProtocols {
+			log.Printf("[GO]    - %s", p)
+		}
+	}
 
 	// --- DISCOVER INTERNAL WS PORT & START REVERSE PROXY ---
 	internalWsPort := 0
