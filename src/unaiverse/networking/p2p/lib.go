@@ -45,6 +45,10 @@ import (
 	"github.com/libp2p/go-libp2p/p2p/protocol/circuitv2/client"   // For establishing outbound relayed connections (acting as a client)
 	rc "github.com/libp2p/go-libp2p/p2p/protocol/circuitv2/relay" // Import for relay service options
 	"github.com/libp2p/go-libp2p/core/event"
+	"github.com/libp2p/go-libp2p/p2p/security/tls"
+	"github.com/libp2p/go-libp2p/p2p/security/noise"
+	"github.com/libp2p/go-libp2p/p2p/muxer/yamux"
+
 
 	// transport protocols for libp2p
 	quic "github.com/libp2p/go-libp2p/p2p/transport/quic" // QUIC transport for peer-to-peer connections (e.g., for mobile devices)
@@ -1317,8 +1321,12 @@ func CreateNode(
 
 	options := []libp2p.Option{
 		libp2p.ListenAddrs(listenAddrs...),
-		libp2p.DefaultSecurity,
-		libp2p.DefaultMuxers,
+		// libp2p.DefaultSecurity,
+		// libp2p.DefaultMuxers,
+		// This correctly adds both Noise and TLS for the libp2p handshake.
+		libp2p.Security(noise.ID, noise.New),
+		libp2p.Security(libp2ptls.ID, libp2ptls.New),
+		libp2p.Muxer("/yamux/1.0.0", yamux.DefaultTransport),
 		libp2p.Transport(tcp.NewTCPTransport),
 		libp2p.Transport(quic.NewTransport),
 		libp2p.Transport(webrtc.New),
