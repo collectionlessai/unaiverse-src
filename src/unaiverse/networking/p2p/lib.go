@@ -22,8 +22,8 @@ import (
 	"log"             // For logging information, warnings, and errors
 	"net"             // For network-related errors and interfaces
 	"net/http"       // For HTTP server (used in WebSocket transport)
-	"net/http/httputil" // For HTTP utility functions (e.g., reverse proxy)
-	"net/url"          // For URL parsing and manipulation (e.g., in WebSocket transport)
+	// "net/http/httputil" // For HTTP utility functions (e.g., reverse proxy)
+	// "net/url"          // For URL parsing and manipulation (e.g., in WebSocket transport)
 	"os"              // For interacting with the operating system (e.g., Stdout)
 	"strings"         // For string manipulations (e.g., trimming, splitting)
 	"strconv"
@@ -333,75 +333,75 @@ func startReverseProxy(instanceIndex int, publicPort int, targetPort int, certPa
 	// We get the address from the listener, cast it to a TCPAddr, and get the Port.
 	discoveredPort := listener.Addr().(*net.TCPAddr).Port
 
-	// --- 3. Create the Reverse Proxy Handler ---
-	// This is the target your proxy will forward requests to.
-	targetUrl, err := url.Parse(fmt.Sprintf("ws://127.0.0.1:%d", targetPort))
-	if err != nil {
-		listener.Close() // Clean up the listener
-		return nil, 0, fmt.Errorf("failed to parse target URL for proxy: %w", err)
-	}
-	// NewSingleHostReverseProxy creates a handler that forwards HTTP requests.
-	// It automatically handles WebSocket upgrade requests correctly.
-	proxyHandler := httputil.NewSingleHostReverseProxy(targetUrl)
+	// // --- 3. Create the Reverse Proxy Handler ---
+	// // This is the target your proxy will forward requests to.
+	// targetUrl, err := url.Parse(fmt.Sprintf("ws://127.0.0.1:%d", targetPort))
+	// if err != nil {
+	// 	listener.Close() // Clean up the listener
+	// 	return nil, 0, fmt.Errorf("failed to parse target URL for proxy: %w", err)
+	// }
+	// // NewSingleHostReverseProxy creates a handler that forwards HTTP requests.
+	// // It automatically handles WebSocket upgrade requests correctly.
+	// proxyHandler := httputil.NewSingleHostReverseProxy(targetUrl)
 
-	// --- 4. Create the HTTP server with the proxy handler ---
-	server := &http.Server{
-		Handler:   proxyHandler,
-		TLSConfig: tlsConfig,
-	}
-
-	// // --- 3. Create a Custom WebSocket Proxy Handler ---
-	// proxyHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-	// 	// Step A: Dial the backend libp2p ws server.
-	// 	backendAddr := fmt.Sprintf("127.0.0.1:%d", targetPort)
-	// 	backendConn, err := net.Dial("tcp", backendAddr)
-	// 	if err != nil {
-	// 		log.Printf("[GO] ❌ Instance %d: Proxy failed to connect to backend: %v\n", instanceIndex, err)
-	// 		http.Error(w, "Service unavailable", http.StatusServiceUnavailable)
-	// 		return
-	// 	}
-		
-	// 	// Step B: Hijack the incoming client connection to get the raw TCP socket.
-	// 	hijacker, ok := w.(http.Hijacker)
-	// 	if !ok {
-	// 		log.Printf("[GO] ❌ Instance %d: Webserver does not support hijacking\n", instanceIndex)
-	// 		http.Error(w, "Hijacking not supported", http.StatusInternalServerError)
-	// 		return
-	// 	}
-	// 	clientConn, _, err := hijacker.Hijack()
-	// 	if err != nil {
-	// 		log.Printf("[GO] ❌ Instance %d: Failed to hijack client connection: %v\n", instanceIndex, err)
-	// 		http.Error(w, "Failed to hijack", http.StatusInternalServerError)
-	// 		return
-	// 	}
-		
-	// 	// Step C: Forward the original HTTP request (including Upgrade headers) to the backend.
-	// 	// The libp2p node will handle the upgrade and turn the connection into a WebSocket.
-	// 	if err := r.Write(backendConn); err != nil {
-	// 		log.Printf("[GO] ❌ Instance %d: Failed to forward request to backend: %v\n", instanceIndex, err)
-	// 		clientConn.Close()
-	// 		backendConn.Close()
-	// 		return
-	// 	}
-
-	// 	// Step D: Copy data between the client and the backend in both directions.
-	// 	go func() {
-	// 		defer clientConn.Close()
-	// 		defer backendConn.Close()
-	// 		io.Copy(backendConn, clientConn)
-	// 	}()
-	// 	go func() {
-	// 		defer clientConn.Close()
-	// 		defer backendConn.Close()
-	// 		io.Copy(clientConn, backendConn)
-	// 	}()
-	// })
-
-	// // --- 4. Create the server with our new custom handler ---
+	// // --- 4. Create the HTTP server with the proxy handler ---
 	// server := &http.Server{
 	// 	Handler:   proxyHandler,
-	// 	TLSConfig: tlsConfig, // Still useful for http/2 etc.
+	// 	TLSConfig: tlsConfig,
 	// }
+
+	// --- 3. Create a Custom WebSocket Proxy Handler ---
+	proxyHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Step A: Dial the backend libp2p ws server.
+		backendAddr := fmt.Sprintf("127.0.0.1:%d", targetPort)
+		backendConn, err := net.Dial("tcp", backendAddr)
+		if err != nil {
+			log.Printf("[GO] ❌ Instance %d: Proxy failed to connect to backend: %v\n", instanceIndex, err)
+			http.Error(w, "Service unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		
+		// Step B: Hijack the incoming client connection to get the raw TCP socket.
+		hijacker, ok := w.(http.Hijacker)
+		if !ok {
+			log.Printf("[GO] ❌ Instance %d: Webserver does not support hijacking\n", instanceIndex)
+			http.Error(w, "Hijacking not supported", http.StatusInternalServerError)
+			return
+		}
+		clientConn, _, err := hijacker.Hijack()
+		if err != nil {
+			log.Printf("[GO] ❌ Instance %d: Failed to hijack client connection: %v\n", instanceIndex, err)
+			http.Error(w, "Failed to hijack", http.StatusInternalServerError)
+			return
+		}
+		
+		// Step C: Forward the original HTTP request (including Upgrade headers) to the backend.
+		// The libp2p node will handle the upgrade and turn the connection into a WebSocket.
+		if err := r.Write(backendConn); err != nil {
+			log.Printf("[GO] ❌ Instance %d: Failed to forward request to backend: %v\n", instanceIndex, err)
+			clientConn.Close()
+			backendConn.Close()
+			return
+		}
+
+		// Step D: Copy data between the client and the backend in both directions.
+		go func() {
+			defer clientConn.Close()
+			defer backendConn.Close()
+			io.Copy(backendConn, clientConn)
+		}()
+		go func() {
+			defer clientConn.Close()
+			defer backendConn.Close()
+			io.Copy(clientConn, backendConn)
+		}()
+	})
+
+	// --- 4. Create the server with our new custom handler ---
+	server := &http.Server{
+		Handler:   proxyHandler,
+		TLSConfig: tlsConfig, // Still useful for http/2 etc.
+	}
 
 	// --- 5. Run the server in a goroutine ---
 	go func() {
@@ -1463,8 +1463,8 @@ func CreateNode(
 	
     proxyServer, discoveredPublicPort, err := startReverseProxy(instanceIndex, publicWssPort, internalWsPort, certPath, keyPath)
 	if err != nil {
-		cleanupFailedCreate(instanceIndex)
-		return jsonErrorResponse(fmt.Sprintf("Instance %d: Failed to start reverse proxy", instanceIndex), err)
+		// cleanupFailedCreate(instanceIndex)
+		log.Printf(fmt.Sprintf("[GO] ❌ Instance %d: Failed to start reverse proxy", instanceIndex), err)
 	}
 	httpProxyServers[instanceIndex] = proxyServer
 	publicWssPorts[instanceIndex] = discoveredPublicPort
