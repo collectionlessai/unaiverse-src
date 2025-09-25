@@ -218,8 +218,8 @@ class P2P:
             # Re-ordering/sorting, discarding /p2p-circuit/ because right now it is useless and preferring /udp/
             addresses_quic = [a for a in self._address_cache if "/quic-v1/" in a]
             addresses_webrtc = [a for a in self._address_cache if "/webrtc" in a]
-            addresses_tcp = [a for a in self._address_cache if "/tcp/" in a]
-            addresses_ws = [a for a in self._address_cache if "/ws" in a]
+            addresses_tcp = [a for a in self._address_cache if ("/tcp/" in a and "/ws" not in a)]
+            addresses_ws = [a for a in self._address_cache if ("/ws" in a and "/tcp/" not in a)]
             addresses = addresses_quic + addresses_webrtc + addresses_tcp + addresses_ws
             self._address_cache.clear()
             for _addr in addresses:
