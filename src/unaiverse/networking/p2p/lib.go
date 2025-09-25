@@ -335,7 +335,7 @@ func startReverseProxy(instanceIndex int, publicPort int, targetPort int, certPa
 
 	// --- 3. Create the Reverse Proxy Handler ---
 	// This is the target your proxy will forward requests to.
-	targetUrl, err := url.Parse(fmt.Sprintf("ws://127.0.0.1:%d", targetPort))
+	targetUrl, err := url.Parse(fmt.Sprintf("http://127.0.0.1:%d", targetPort))
 	if err != nil {
 		listener.Close() // Clean up the listener
 		return nil, 0, fmt.Errorf("failed to parse target URL for proxy: %w", err)
