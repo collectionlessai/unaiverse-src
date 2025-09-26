@@ -61,6 +61,7 @@ class DataStream:
             name (str): The name of the stream.
             group (str): The name of the group to which the stream belongs.
             public (bool): If the stream is going to be served in the public net or the private one.
+            pubsub (bool): If the stream is going to be served by broadcasting (PubSub) or not.
 
         Returns:
             Stream: The modified stream with updated group name.
