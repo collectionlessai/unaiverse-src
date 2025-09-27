@@ -606,6 +606,9 @@ class ImageFileStream(BufferedDataStream):
         """
         if self.circular:
             idx %= self.__len__()
+        else:
+            if idx >= self.__len__() or idx < 0:
+                return None, -1
 
         image = Image.open(self.image_paths[idx])
         return image, self.clock.get_cycle() - self.first_cycle
@@ -692,6 +695,9 @@ class LabelStream(BufferedDataStream):
         """
         if self.circular:
             idx %= self.__len__()
+        else:
+            if idx >= self.__len__() or idx < 0:
+                return None, -1
 
         label = self.labels[idx].unsqueeze(0).to(self.device)  # Multi-label vector for the image
         return self.props.adapt_tensor_to_tensor_labels(label), self.clock.get_cycle() - self.first_cycle
