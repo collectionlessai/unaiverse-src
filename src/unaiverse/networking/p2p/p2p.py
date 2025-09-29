@@ -126,6 +126,7 @@ class P2P:
                  enable_relay_service: bool = False,
                  knows_is_public: bool = False,
                  max_connections: int = 1000,
+                 enble_autotls: bool = False,
                  ) -> None:
         """
         Initializes and starts a new libp2p node.
@@ -187,6 +188,7 @@ class P2P:
                 P2P._type_interface.to_go_bool(enable_relay_service),
                 P2P._type_interface.to_go_bool(knows_is_public),
                 P2P._type_interface.to_go_int(max_connections),
+                P2P._type_interface.to_go_bool(enble_autotls)
             )
             result = P2P._type_interface.from_go_ptr_to_json(result_ptr)
 
