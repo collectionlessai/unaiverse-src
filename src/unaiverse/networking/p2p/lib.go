@@ -26,7 +26,6 @@ import (
 	"sync"            // For synchronization primitives like Mutexes and RWMutexes to protect shared data
 	"time"            // For time-related functions (e.g., timeouts, timestamps)
 	"unsafe"          // For using Go pointers with C code (specifically C.free)
-	"crypto/tls"     // For TLS configuration (used in WebSocket secure transport)
 	
 
 	// Core libp2p libraries
@@ -47,6 +46,10 @@ import (
 	"github.com/libp2p/go-libp2p/p2p/transport/tcp"
 	webrtc "github.com/libp2p/go-libp2p/p2p/transport/webrtc" // WebRTC transport for peer-to-peer connections (e.g., for browsers or mobile devices)
 	ws "github.com/libp2p/go-libp2p/p2p/transport/websocket" // WebSocket transport for peer-to-peer connections (e.g., for browsers)
+
+	// --- AutoTLS Imports ---
+    "github.com/caddyserver/certmagic"
+    p2pforge "github.com/ipshipyard/p2p-forge/client"
 
 	// protobuf
 	"google.golang.org/protobuf/proto"
@@ -123,6 +126,7 @@ var (
 	rendezvousDiscoveredPeersInstances []*RendezvousState // Slice of pointers to the state struct
 	persistentChatStreamsInstances     []map[peer.ID]network.Stream      // map[instanceIndex]map[peerID]network.Stream
 	messageStoreInstances              []*MessageStore                   // map[instanceIndex]*MessageStore
+	certManagerInstances               []*p2pforge.P2PForgeCertMgr 	   // Slice of pointers to the cert manager
 
 	// Mutexes for protecting concurrent access to instance-specific data.
 	connectedPeersMutexes            []sync.RWMutex
@@ -223,6 +227,10 @@ func checkInstanceIndex(
 
 func cleanupFailedCreate(instanceIndex int) {
 	log.Printf("[GO] 🧹 Instance %d: Cleaning up after failed creation...", instanceIndex)
+	if certManagerInstances[instanceIndex] != nil {
+        certManagerInstances[instanceIndex].Stop()
+        certManagerInstances[instanceIndex] = nil
+    }
 	if hostInstances[instanceIndex] != nil { // Attempt cleanup before returning.
 		hostInstances[instanceIndex].Close()
 		hostInstances[instanceIndex] = nil
@@ -251,7 +259,7 @@ func cleanupFailedCreate(instanceIndex int) {
 	instanceStateMutex.Unlock()
 }
 
-func getListenAddrs(ipsJSON string, tcpPort int) ([]ma.Multiaddr, error) {
+func getListenAddrs(ipsJSON string, tcpPort int, useAutoTLS bool) ([]ma.Multiaddr, error) {
 	var ips []string
 	// --- Parse IPs from JSON ---
 	if ipsJSON == "" || ipsJSON == "[]" {
@@ -268,11 +276,11 @@ func getListenAddrs(ipsJSON string, tcpPort int) ([]ma.Multiaddr, error) {
 	var listenAddrs []ma.Multiaddr
 	quicPort := 0
 	webrtcPort := 0
-	wssPort := 0
+	wsPort := 0
 	if tcpPort != 0 {
 		quicPort = tcpPort + 1
 		webrtcPort = tcpPort + 2
-		wssPort = tcpPort + 3
+		wsPort = tcpPort + 3
 	}
 
 	// --- Create Multiaddrs for both protocols from the single IP list ---
@@ -283,10 +291,17 @@ func getListenAddrs(ipsJSON string, tcpPort int) ([]ma.Multiaddr, error) {
 		quicMaddr, _ := ma.NewMultiaddr(fmt.Sprintf("/ip4/%s/udp/%d/quic-v1", ip, quicPort))
 		// WebRTC
 		webrtcMaddr, _ := ma.NewMultiaddr(fmt.Sprintf("/ip4/%s/udp/%d/webrtc-direct", ip, webrtcPort))
-		// WebSocket
-		wssMaddr, _ := ma.NewMultiaddr(fmt.Sprintf("/ip4/%s/tcp/%d/wss", ip, wssPort))
+		listenAddrs = append(listenAddrs, tcpMaddr, quicMaddr, webrtcMaddr)
 
-		listenAddrs = append(listenAddrs, tcpMaddr, quicMaddr, webrtcMaddr, wssMaddr)
+		if useAutoTLS {
+            // This is the special multiaddr that triggers AutoTLS
+			wssMaddr, _ := ma.NewMultiaddr(fmt.Sprintf("/ip4/%s/tcp/%d/tls/sni/*.%s/ws", ip, tcpPort, p2pforge.DefaultForgeDomain))
+			listenAddrs = append(listenAddrs, wssMaddr)
+		} else {
+            // Fallback to a standard, non-secure WebSocket address
+			wsMaddr, _ := ma.NewMultiaddr(fmt.Sprintf("/ip4/%s/tcp/%d/ws", ip, wsPort))
+			listenAddrs = append(listenAddrs, wsMaddr)
+		}
 	}
 
 	log.Printf("[GO] 🔧 Prepared Listen Addresses: %v\n", listenAddrs)
@@ -888,13 +903,13 @@ func goGetNodeAddresses(
 			continue
 		}
 		
-		// handle cases for different transport protocols
-		if strings.Contains(transportAddr.String(), "/ws") {
-			// replace the /ip4/ip with /dns4/domain for WebSocket addresses
-			_, rest := ma.SplitFirst(transportAddr)
-			dns4Component, _ := ma.NewMultiaddr("/dns4/multaiverse.diism.unisi.it")
-			addr = dns4Component.Encapsulate(rest)
-		}
+		// // handle cases for different transport protocols
+		// if strings.Contains(transportAddr.String(), "/ws") {
+		// 	// replace the /ip4/ip with /dns4/domain for WebSocket addresses
+		// 	_, rest := ma.SplitFirst(transportAddr)
+		// 	dns4Component, _ := ma.NewMultiaddr("/dns4/multaiverse.diism.unisi.it")
+		// 	addr = dns4Component.Encapsulate(rest)
+		// }
 		
 		// handle cases based on presence and correctness of Peer ID in the address
 		switch {
@@ -954,6 +969,13 @@ func closeSingleInstance(
 		log.Printf("[GO] ℹ️ Instance %d: Node was already closed (internal close call).\n", instanceIndex)
 		return jsonSuccessResponse(fmt.Sprintf("Instance %d: Node was already closed", instanceIndex))
 	}
+
+	// --- Stop Cert Manager FIRST ---
+	if certManagerInstances[instanceIndex] != nil {
+        log.Printf("[GO]   - Instance %d: Stopping AutoTLS cert manager...\n", instanceIndex)
+        certManagerInstances[instanceIndex].Stop()
+        certManagerInstances[instanceIndex] = nil
+    }
 
 	// --- Cancel Main Context ---
 	// Acquire global lock to safely access/modify cancelContexts
@@ -1139,6 +1161,7 @@ func CreateNode(
 	enableRelayServiceC C.int,
 	knowsIsPublicC C.int,
 	maxConnectionsC C.int,
+	enableAutoTLSC C.int,
 ) *C.char {
 
 	instanceIndex := int(instanceIndexC)
@@ -1176,12 +1199,31 @@ func CreateNode(
 	enableRelayService := int(enableRelayServiceC) == 1
 	knowsIsPublic := int(knowsIsPublicC) == 1
 	maxConnections := int(maxConnectionsC)
+	enableAutoTLS := int(enableAutoTLSC) == 1
 
-	log.Printf("[GO] 🔧 Instance %d: Config: Port=%d, IPsJSON=%s, EnableRelayClient=%t, EnableRelayService=%t, KnowsIsPublic=%t, MaxConnections=%d",
-		instanceIndex, predefinedPort, ipsJSON, enableRelayClient, enableRelayService, knowsIsPublic, maxConnections)
+	log.Printf("[GO] 🔧 Instance %d: Config: Port=%d, IPsJSON=%s, EnableRelayClient=%t, EnableRelayService=%t, KnowsIsPublic=%t, MaxConnections=%d, AutoTLS=%t",
+		instanceIndex, predefinedPort, ipsJSON, enableRelayClient, enableRelayService, knowsIsPublic, maxConnections, enableAutoTLS)
+	
+	// --- AutoTLS Cert Manager Setup (if enabled) ---
+    var certManager *p2pforge.P2PForgeCertMgr
+    var err error
+    if enableAutoTLS {
+        log.Printf("[GO]   - Instance %d: AutoTLS is ENABLED. Setting up certificate manager...\n", instanceIndex)
+        certManager, err = p2pforge.NewP2PForgeCertMgr(
+            p2pforge.WithCAEndpoint(p2pforge.DefaultCAEndpoint), // Using production CA
+            p2pforge.WithCertificateStorage(&certmagic.FileStorage{Path: fmt.Sprintf("p2p-forge-certs-instance-%d", instanceIndex)}),
+            p2pforge.WithRegistrationDelay(5 * time.Second),
+        )
+        if err != nil {
+            cleanupFailedCreate(instanceIndex)
+            return jsonErrorResponse(fmt.Sprintf("Instance %d: Failed to create AutoTLS cert manager", instanceIndex), err)
+        }
+        certManager.Start()
+        certManagerInstances[instanceIndex] = certManager // Store for cleanup
+    }
 
 	// --- 4. Libp2p Options Assembly ---
-	listenAddrs, err := getListenAddrs(ipsJSON, predefinedPort)
+	listenAddrs, err := getListenAddrs(ipsJSON, predefinedPort, enableAutoTLS)
 	if err != nil {
 		cleanupFailedCreate(instanceIndex)
 		return jsonErrorResponse(fmt.Sprintf("Instance %d: Failed to create multiaddrs", instanceIndex), err)
@@ -1205,23 +1247,18 @@ func CreateNode(
 		libp2p.ResourceManager(limiter),
 	}
 
-	certPath := "/etc/letsencrypt/live/multaiverse.diism.unisi.it/fullchain.pem"
-	keyPath := "/etc/letsencrypt/live/multaiverse.diism.unisi.it/privkey.pem"
-	
-    // check if the certificates exist and eventually use them to start a secure websocket listen address
-	if _, err := os.Stat(certPath); err == nil {
-		if _, err := os.Stat(keyPath); err == nil {
-			log.Printf("[GO]   - Instance %d: TLS certificates found, setting up secure WebSocket listen address...\n", instanceIndex)
-			cert, err := tls.LoadX509KeyPair(certPath, keyPath)
-			if err != nil {
-				cleanupFailedCreate(instanceIndex)
-				return jsonErrorResponse("Failed to load TLS certificate", err)
-			}
-			tlsConfig := &tls.Config{Certificates: []tls.Certificate{cert},}
-			options = append(options, libp2p.Transport(ws.New, ws.WithTLSConfig(tlsConfig)))
-		}
-	} else {
-		log.Printf("[GO]   - Instance %d: TLS certificates not found, setting WebSocket without certificates.\n", instanceIndex)
+	// Get the TLS certs from the cert manager if AutoTLS is enabled
+	if enableAutoTLS {
+        options = append(options,
+            // Configure the WS transport with the AutoTLS cert manager's TLS Config
+            libp2p.Transport(ws.New, ws.WithTLSConfig(certManager.TLSConfig())),
+            // Use the AutoTLS address factory to advertise the correct public addresses
+            libp2p.AddrsFactory(certManager.AddressFactory()),
+            // Share the TCP listener between the plain TCP and WSS transport
+            libp2p.ShareTCPListener(),
+        )
+    } else {
+		log.Printf("[GO]   - Instance %d: No certificates found, setting up non-secure WebSocket.\n", instanceIndex)
 		options = append(options, libp2p.Transport(ws.New))
 	}
 
@@ -1283,6 +1320,12 @@ func CreateNode(
 	}
 	hostInstances[instanceIndex] = instanceHost
 	log.Printf("[GO] ✅ Instance %d: Host created with ID: %s\n", instanceIndex, instanceHost.ID())
+
+	// --- Link Host to Cert Manager ---
+    if enableAutoTLS {
+        certManager.ProvideHost(instanceHost)
+        log.Printf("[GO]   - Instance %d: Provided host to AutoTLS cert manager.\n", instanceIndex)
+    }
 	
 	// --- PubSub Initialization ---
 	if err := setupPubSub(instanceIndex); err != nil {

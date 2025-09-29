@@ -210,7 +210,8 @@ class Node:
                     enable_relay_service=offer_relay_facilities,
                     enable_relay_client=allow_connection_through_relay,
                     knows_is_public=os.getenv("NODE_IS_PUBLIC", "0") == "1",
-                    port=int(os.getenv("NODE_STARTING_PORT", "0")))
+                    port=int(os.getenv("NODE_STARTING_PORT", "0")),
+                    enable_autotls=os.getenv("NODE_USE_AUTOTLS", "0") == "1")
 
         # Create another P2P node for the private world (it has fields 'addresses', and 'peer_id', and 'libp2p')
         p2p_w = P2P(max_connections=1000,
@@ -219,7 +220,8 @@ class Node:
                     enable_relay_client=allow_connection_through_relay,
                     knows_is_public=os.getenv("NODE_IS_PUBLIC", "0") == "1",
                     port=(int(os.getenv("NODE_STARTING_PORT", "0")) + 4)
-                    if int(os.getenv("NODE_STARTING_PORT", "0")) > 0 else 0)
+                    if int(os.getenv("NODE_STARTING_PORT", "0")) > 0 else 0,
+                    enable_autotls=os.getenv("NODE_USE_AUTOTLS", "0") == "1")
 
         # Get first node token
         self.get_node_token(peer_ids=[p2p_u.peer_id, p2p_w.peer_id])  # Passing both the peer IDs

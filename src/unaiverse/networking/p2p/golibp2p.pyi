@@ -10,9 +10,9 @@ class GoLibP2P:
         """
         ...
     
-    def CreateNode(self, instance: int, port: int, ips: List[str], enable_relay_client: int, enable_relay_service: int, knows_is_public: int, max_connections: int) -> bytes:
+    def CreateNode(self, instance: int, port: int, ips: List[str], enable_relay_client: int, enable_relay_service: int, knows_is_public: int, max_connections: int, enable_autotls: int) -> bytes:
         """
-        CreateNode(instance: int, port: int, ips: List[str], enable_relay_client: int, enable_relay_service: int, knows_is_public: int, max_connections: int) -> bytes
+        CreateNode(instance: int, port: int, ips: List[str], enable_relay_client: int, enable_relay_service: int, knows_is_public: int, max_connections: int, enable_autotls: int) -> bytes
 
         Creates a node in the P2P network and returns a JSON string with node information.
         """
