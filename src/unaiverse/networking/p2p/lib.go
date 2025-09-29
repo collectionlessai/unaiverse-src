@@ -268,11 +268,11 @@ func getListenAddrs(ipsJSON string, tcpPort int) ([]ma.Multiaddr, error) {
 	var listenAddrs []ma.Multiaddr
 	quicPort := 0
 	webrtcPort := 0
-	wsPort := 0
+	wssPort := 0
 	if tcpPort != 0 {
 		quicPort = tcpPort + 1
 		webrtcPort = tcpPort + 2
-		wsPort = tcpPort + 3
+		wssPort = tcpPort + 3
 	}
 
 	// --- Create Multiaddrs for both protocols from the single IP list ---
@@ -284,9 +284,9 @@ func getListenAddrs(ipsJSON string, tcpPort int) ([]ma.Multiaddr, error) {
 		// WebRTC
 		webrtcMaddr, _ := ma.NewMultiaddr(fmt.Sprintf("/ip4/%s/udp/%d/webrtc-direct", ip, webrtcPort))
 		// WebSocket
-		wsMaddr, _ := ma.NewMultiaddr(fmt.Sprintf("/ip4/%s/tcp/%d/ws", ip, wsPort))
+		wssMaddr, _ := ma.NewMultiaddr(fmt.Sprintf("/ip4/%s/tcp/%d/wss", ip, wssPort))
 
-		listenAddrs = append(listenAddrs, tcpMaddr, quicMaddr, webrtcMaddr, wsMaddr)
+		listenAddrs = append(listenAddrs, tcpMaddr, quicMaddr, webrtcMaddr, wssMaddr)
 	}
 
 	log.Printf("[GO] 🔧 Prepared Listen Addresses: %v\n", listenAddrs)
