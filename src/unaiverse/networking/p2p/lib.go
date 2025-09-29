@@ -26,6 +26,7 @@ import (
 	"sync"            // For synchronization primitives like Mutexes and RWMutexes to protect shared data
 	"time"            // For time-related functions (e.g., timeouts, timestamps)
 	"unsafe"          // For using Go pointers with C code (specifically C.free)
+	"crypto/rand" // Make sure this is imported
 	
 
 	// Core libp2p libraries
@@ -40,6 +41,7 @@ import (
 	"github.com/libp2p/go-libp2p/p2p/protocol/circuitv2/client"   // For establishing outbound relayed connections (acting as a client)
 	rc "github.com/libp2p/go-libp2p/p2p/protocol/circuitv2/relay" // Import for relay service options
 	"github.com/libp2p/go-libp2p/core/event"
+	"github.com/libp2p/go-libp2p/core/crypto"
 
 	// transport protocols for libp2p
 	quic "github.com/libp2p/go-libp2p/p2p/transport/quic" // QUIC transport for peer-to-peer connections (e.g., for mobile devices)
@@ -65,7 +67,8 @@ import (
 
 // ChatProtocol defines the protocol ID string used for direct peer-to-peer messaging streams.
 // This ensures that both peers understand how to interpret the data on the stream.
-const ChatProtocol = "/chat/1.0.0"
+const UnaiverseChatProtocol = "/unaiverse-chat-protocol/1.0.0"
+const UnaiverseUserAgent = "unaiverse-p2p-node/1.0.0"
 
 // ExtendedPeerInfo holds information about a connected peer.
 type ExtendedPeerInfo struct {
@@ -223,6 +226,40 @@ func checkInstanceIndex(
 		return fmt.Errorf("invalid instance index: %d. Must be between 0 and %d", instanceIndex, maxInstances-1)
 	}
 	return nil
+}
+
+// loadOrCreateIdentity reads a private key from the given path for a specific instance.
+// If the key file does not exist, it generates a new one and saves it.
+func loadOrCreateIdentity(instanceIndex int) (crypto.PrivKey, error) {
+	keyPath := fmt.Sprintf("identity-instance-%d.key", instanceIndex)
+
+	if _, err := os.Stat(keyPath); err == nil {
+		// Key file exists, read it
+		bytes, err := os.ReadFile(keyPath)
+		if err != nil {
+			return nil, err
+		}
+		return crypto.UnmarshalPrivateKey(bytes)
+	} else if os.IsNotExist(err) {
+		// Key file does not exist, generate a new one
+		log.Printf("[GO] 💎 Instance %d: Generating new persistent peer identity in %s\n", instanceIndex, keyPath)
+		privk, _, err := crypto.GenerateEd25519Key(rand.Reader)
+		if err != nil {
+			return nil, err
+		}
+
+		bytes, err := crypto.MarshalPrivateKey(privk)
+		if err != nil {
+			return nil, err
+		}
+
+		// Write the key to a file with read-only permissions for the user.
+		err = os.WriteFile(keyPath, bytes, 0400)
+		return privk, err
+	} else {
+		// Another error occurred (e.g., permissions)
+		return nil, err
+	}
 }
 
 func cleanupFailedCreate(instanceIndex int) {
@@ -785,10 +822,10 @@ func setupDirectMessageHandler(
 		return
 	}
 
-	// Set a handler function for the ChatProtocol. This function will be called
+	// Set a handler function for the UnaiverseChatProtocol. This function will be called
 	// automatically by libp2p whenever a new incoming stream for this protocol is accepted.
 	// Use a closure to capture the instanceIndex.
-	instanceHost.SetStreamHandler(ChatProtocol, func(s network.Stream) {
+	instanceHost.SetStreamHandler(UnaiverseChatProtocol, func(s network.Stream) {
 		handleStream(instanceIndex, s)
 	})
 }
@@ -1205,14 +1242,21 @@ func CreateNode(
 	log.Printf("[GO] 🔧 Instance %d: Config: Port=%d, IPsJSON=%s, EnableRelayClient=%t, EnableRelayService=%t, KnowsIsPublic=%t, MaxConnections=%d, AutoTLS=%t",
 		instanceIndex, predefinedPort, ipsJSON, enableRelayClient, enableRelayService, knowsIsPublic, maxConnections, enableAutoTLS)
 	
+	// --- Load or Create Persistent Identity ---
+	privKey, err := loadOrCreateIdentity(instanceIndex)
+	if err != nil {
+		cleanupFailedCreate(instanceIndex)
+		return jsonErrorResponse(fmt.Sprintf("Instance %d: Failed to load or create identity key", instanceIndex), err)
+	}
+	
 	// --- AutoTLS Cert Manager Setup (if enabled) ---
     var certManager *p2pforge.P2PForgeCertMgr
-    var err error
     if enableAutoTLS {
         log.Printf("[GO]   - Instance %d: AutoTLS is ENABLED. Setting up certificate manager...\n", instanceIndex)
         certManager, err = p2pforge.NewP2PForgeCertMgr(
             p2pforge.WithCAEndpoint(p2pforge.DefaultCAEndpoint), // Using production CA
             p2pforge.WithCertificateStorage(&certmagic.FileStorage{Path: fmt.Sprintf("p2p-forge-certs-instance-%d", instanceIndex)}),
+			p2pforge.WithUserAgent(UnaiverseUserAgent),
             p2pforge.WithRegistrationDelay(5 * time.Second),
         )
         if err != nil {
@@ -1238,14 +1282,15 @@ func CreateNode(
 	}
 
 	options := []libp2p.Option{
+		libp2p.Identity(privKey),
 		libp2p.ListenAddrs(listenAddrs...),
 		libp2p.DefaultSecurity,
 		libp2p.DefaultMuxers,
 		libp2p.Transport(tcp.NewTCPTransport),
 		libp2p.Transport(quic.NewTransport),
 		libp2p.Transport(webrtc.New),
-		// libp2p.Transport(ws.New),
 		libp2p.ResourceManager(limiter),
+		libp2p.UserAgent(UnaiverseUserAgent),
 	}
 
 	// Get the TLS certs from the cert manager if AutoTLS is enabled
@@ -2017,9 +2062,9 @@ func SendMessageToPeer(
 			defer cancel()
 
 			newStream, err := instanceHost.NewStream(
-				network.WithAllowLimitedConn(streamCtx, "chat/1.0.0"),
+				network.WithAllowLimitedConn(streamCtx, UnaiverseChatProtocol),
 				pid,
-				ChatProtocol,
+				UnaiverseChatProtocol,
 			)
 
 			// Re-acquire lock *after* NewStream finishes or errors
