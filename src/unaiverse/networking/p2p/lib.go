@@ -21,12 +21,8 @@ import (
 	"io"              // For input/output operations (e.g., reading from streams)
 	"log"             // For logging information, warnings, and errors
 	"net"             // For network-related errors and interfaces
-	"net/http"       // For HTTP server (used in WebSocket transport)
-	"net/http/httputil" // For HTTP utility functions (e.g., reverse proxy)
-	"net/url"          // For URL parsing and manipulation (e.g., in WebSocket transport)
 	"os"              // For interacting with the operating system (e.g., Stdout)
 	"strings"         // For string manipulations (e.g., trimming, splitting)
-	"strconv"
 	"sync"            // For synchronization primitives like Mutexes and RWMutexes to protect shared data
 	"time"            // For time-related functions (e.g., timeouts, timestamps)
 	"unsafe"          // For using Go pointers with C code (specifically C.free)
@@ -118,9 +114,6 @@ var (
 
 	// Slices to hold state for each instance. Using arrays for fixed size.
 	hostInstances                      []host.Host
-	httpProxyServers                   []*http.Server
-	publicWssPorts                     []int
-	publicDomains                      []string
 	pubsubInstances                    []*pubsub.PubSub
 	contexts                           []context.Context
 	cancelContexts                     []context.CancelFunc
@@ -290,128 +283,15 @@ func getListenAddrs(ipsJSON string, tcpPort int) ([]ma.Multiaddr, error) {
 		quicMaddr, _ := ma.NewMultiaddr(fmt.Sprintf("/ip4/%s/udp/%d/quic-v1", ip, quicPort))
 		// WebRTC
 		webrtcMaddr, _ := ma.NewMultiaddr(fmt.Sprintf("/ip4/%s/udp/%d/webrtc-direct", ip, webrtcPort))
+		// WebSocket
+		wsMaddr, _ := ma.NewMultiaddr(fmt.Sprintf("/ip4/%s/tcp/%d/ws", ip, wsPort))
 
-		listenAddrs = append(listenAddrs, tcpMaddr, quicMaddr, webrtcMaddr)
+		listenAddrs = append(listenAddrs, tcpMaddr, quicMaddr, webrtcMaddr, wsMaddr)
 	}
-	// Add the INTERNAL, UNENCRYPTED WebSocket listener bound ONLY to localhost.
-	// Using port 0 lets the OS pick a free port, which we will discover later.
-	wsInternalMaddr, err := ma.NewMultiaddr(fmt.Sprintf("/ip4/127.0.0.1/tcp/%d/ws", wsPort))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create internal WebSocket multiaddr: %w", err)
-	}
-	listenAddrs = append(listenAddrs, wsInternalMaddr)
 
 	log.Printf("[GO] 🔧 Prepared Listen Addresses: %v\n", listenAddrs)
 
 	return listenAddrs, nil
-}
-
-// startReverseProxy creates and starts a TLS-terminating reverse proxy in a new goroutine.
-// It proxies public WSS traffic from `publicPort` to the internal `targetPort`.
-func startReverseProxy(instanceIndex int, publicPort int, targetPort int, certPath string, keyPath string) (*http.Server, int, error) {
-	// --- 1. Load TLS certificates (this is now the proxy's job) ---
-	cert, err := tls.LoadX509KeyPair(certPath, keyPath)
-	if err != nil {
-		return nil, 0, fmt.Errorf("could not load TLS certificate for proxy: %w", err)
-	}
-	tlsConfig := &tls.Config{
-		Certificates: []tls.Certificate{cert},
-	}
-
-	// --- 2. Create Listener Manually to Discover Port ---
-	listenAddr := fmt.Sprintf("0.0.0.0:%d", publicPort)
-	listener, err := tls.Listen("tcp4", listenAddr, tlsConfig)
-	if err != nil {
-		return nil, 0, fmt.Errorf("failed to create TLS listener on %s: %w", listenAddr, err)
-	}
-
-	// Discover the actual port that was assigned by the OS.
-	// We get the address from the listener, cast it to a TCPAddr, and get the Port.
-	discoveredPort := listener.Addr().(*net.TCPAddr).Port
-
-	// --- 3. Create the Reverse Proxy Handler ---
-	// This is the target your proxy will forward requests to.
-	targetUrl, err := url.Parse(fmt.Sprintf("http://127.0.0.1:%d", targetPort))
-	if err != nil {
-		listener.Close() // Clean up the listener
-		return nil, 0, fmt.Errorf("failed to parse target URL for proxy: %w", err)
-	}
-	// NewSingleHostReverseProxy creates a handler that forwards HTTP requests.
-	// It automatically handles WebSocket upgrade requests correctly.
-	proxyHandler := httputil.NewSingleHostReverseProxy(targetUrl)
-
-	// --- 4. Create the HTTP server with the proxy handler ---
-	server := &http.Server{
-		Handler:   proxyHandler,
-		TLSConfig: tlsConfig,
-	}
-
-	// // --- 3. Create a Custom WebSocket Proxy Handler ---
-	// proxyHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-	// 	// Step A: Dial the backend libp2p ws server.
-	// 	backendAddr := fmt.Sprintf("127.0.0.1:%d", targetPort)
-	// 	backendConn, err := net.Dial("tcp", backendAddr)
-	// 	if err != nil {
-	// 		log.Printf("[GO] ❌ Instance %d: Proxy failed to connect to backend: %v\n", instanceIndex, err)
-	// 		http.Error(w, "Service unavailable", http.StatusServiceUnavailable)
-	// 		return
-	// 	}
-		
-	// 	// Step B: Hijack the incoming client connection to get the raw TCP socket.
-	// 	hijacker, ok := w.(http.Hijacker)
-	// 	if !ok {
-	// 		log.Printf("[GO] ❌ Instance %d: Webserver does not support hijacking\n", instanceIndex)
-	// 		http.Error(w, "Hijacking not supported", http.StatusInternalServerError)
-	// 		return
-	// 	}
-	// 	clientConn, _, err := hijacker.Hijack()
-	// 	if err != nil {
-	// 		log.Printf("[GO] ❌ Instance %d: Failed to hijack client connection: %v\n", instanceIndex, err)
-	// 		http.Error(w, "Failed to hijack", http.StatusInternalServerError)
-	// 		return
-	// 	}
-		
-	// 	// Step C: Forward the original HTTP request (including Upgrade headers) to the backend.
-	// 	// The libp2p node will handle the upgrade and turn the connection into a WebSocket.
-	// 	if err := r.Write(backendConn); err != nil {
-	// 		log.Printf("[GO] ❌ Instance %d: Failed to forward request to backend: %v\n", instanceIndex, err)
-	// 		clientConn.Close()
-	// 		backendConn.Close()
-	// 		return
-	// 	}
-
-	// 	// Step D: Copy data between the client and the backend in both directions.
-	// 	go func() {
-	// 		defer clientConn.Close()
-	// 		defer backendConn.Close()
-	// 		io.Copy(backendConn, clientConn)
-	// 	}()
-	// 	go func() {
-	// 		defer clientConn.Close()
-	// 		defer backendConn.Close()
-	// 		io.Copy(clientConn, backendConn)
-	// 	}()
-	// })
-
-	// // --- 4. Create the server with our new custom handler ---
-	// server := &http.Server{
-	// 	Handler:   proxyHandler,
-	// 	TLSConfig: tlsConfig, // Still useful for http/2 etc.
-	// }
-
-	// --- 5. Run the server in a goroutine ---
-	go func() {
-		log.Printf("[GO] ✅ Instance %d: Starting HTTPS reverse proxy on %s -> ws://127.0.0.1:%d\n", instanceIndex, listener.Addr().String(), targetPort)
-		// Use ServeTLS instead of ListenAndServeTLS
-		if err := server.Serve(listener); err != http.ErrServerClosed {
-			log.Printf("[GO] ❌ Instance %d: HTTPS proxy server failed: %v\n", instanceIndex, err)
-		} else {
-			log.Printf("[GO] 🛑 Instance %d: HTTPS proxy server shut down gracefully.\n", instanceIndex)
-		}
-	}()
-
-	// Return the server instance AND the discovered port
-	return server, discoveredPort, nil
 }
 
 func createResourceManager(maxConnections int) (network.ResourceManager, error) {
@@ -966,10 +846,10 @@ func goGetNodeAddresses(
 
 	// Determine the actual Peer ID to resolve addresses for.
 	resolvedPID := targetPID
-	isLocalNode := false
-	if targetPID == "" {
+	isThisNode := false
+	if targetPID == "" || targetPID == instanceHost.ID(){
 		resolvedPID = instanceHost.ID()
-		isLocalNode = true
+		isThisNode = true
 	}
 
 	// Use a map to automatically handle duplicate addresses.
@@ -978,7 +858,7 @@ func goGetNodeAddresses(
 	// --- 1. Gather all candidate addresses from the host and peerstore ---
 	var candidateAddrs []ma.Multiaddr
 	candidateAddrs = append(candidateAddrs, instanceHost.Peerstore().Addrs(resolvedPID)...)
-	if isLocalNode {
+	if isThisNode {
 		if interfaceAddrs, err := instanceHost.Network().InterfaceListenAddresses(); err == nil {
 			candidateAddrs = append(candidateAddrs, interfaceAddrs...)
 		}
@@ -1002,11 +882,21 @@ func goGetNodeAddresses(
 		}
 		
 		// Use the idiomatic `peer.SplitAddr` to check if the address already includes a Peer ID.
+		var finalAddr ma.Multiaddr
 		transportAddr, idInAddr := peer.SplitAddr(addr)
 		if transportAddr == nil {
 			continue
 		}
-		var finalAddr ma.Multiaddr
+		
+		// handle cases for different transport protocols
+		if strings.Contains(transportAddr.String(), "/ws") {
+			// replace the /ip4/ip with /dns4/domain for WebSocket addresses
+			_, rest := ma.SplitFirst(transportAddr)
+			dns4Component, _ := ma.NewMultiaddr("/dns4/multaiverse.diism.unisi.it")
+			addr = dns4Component.Encapsulate(rest)
+		}
+		
+		// handle cases based on presence and correctness of Peer ID in the address
 		switch {
 			case idInAddr == resolvedPID:
 				// Case A: The address is already perfect and has the correct Peer ID. Use it as is.
@@ -1024,17 +914,6 @@ func goGetNodeAddresses(
 				continue
 		}
 		addrSet[finalAddr.String()] = struct{}{}
-	}
-
-	// --- 3. Add the public proxied WSS address if we are querying for the local node. ---
-	if isLocalNode {
-		publicWssPort := publicWssPorts[instanceIndex]
-		publicDomain := publicDomains[instanceIndex]
-
-		if publicWssPort > 0 && publicDomain != "" {
-			wssAddrStr := fmt.Sprintf("/dns4/%s/tcp/%d/wss/p2p/%s", publicDomain, publicWssPort, resolvedPID.String())
-			addrSet[wssAddrStr] = struct{}{}
-		}
 	}
 
 	// --- 4. Convert the final set of unique addresses to a slice for returning. ---
@@ -1075,20 +954,6 @@ func closeSingleInstance(
 		log.Printf("[GO] ℹ️ Instance %d: Node was already closed (internal close call).\n", instanceIndex)
 		return jsonSuccessResponse(fmt.Sprintf("Instance %d: Node was already closed", instanceIndex))
 	}
-
-	// --- 🛑 SHUTDOWN HTTP PROXY FIRST 🛑 ---
-	instanceStateMutex.Lock()
-	proxyServer := httpProxyServers[instanceIndex]
-	if proxyServer != nil {
-		log.Printf("[GO]   - Instance %d: Shutting down HTTPS reverse proxy...\n", instanceIndex)
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := proxyServer.Shutdown(shutdownCtx); err != nil {
-			log.Printf("[GO] ⚠️ Instance %d: Error during proxy server shutdown: %v\n", instanceIndex, err)
-		}
-		httpProxyServers[instanceIndex] = nil // Clear the server from state
-	}
-	instanceStateMutex.Unlock()
 
 	// --- Cancel Main Context ---
 	// Acquire global lock to safely access/modify cancelContexts
@@ -1228,9 +1093,6 @@ func InitializeLibrary(
 
 	// Now, initialize all the state slices with the correct size
 	hostInstances = make([]host.Host, maxInstances)
-	httpProxyServers = make([]*http.Server, maxInstances)
-	publicWssPorts = make([]int, maxInstances)
-	publicDomains = make([]string, maxInstances)
 	pubsubInstances = make([]*pubsub.PubSub, maxInstances)
 	contexts = make([]context.Context, maxInstances)
 	cancelContexts = make([]context.CancelFunc, maxInstances)
@@ -1339,8 +1201,28 @@ func CreateNode(
 		libp2p.Transport(tcp.NewTCPTransport),
 		libp2p.Transport(quic.NewTransport),
 		libp2p.Transport(webrtc.New),
-		libp2p.Transport(ws.New),
+		// libp2p.Transport(ws.New),
 		libp2p.ResourceManager(limiter),
+	}
+
+	certPath := "/etc/letsencrypt/live/multaiverse.diism.unisi.it/fullchain.pem"
+	keyPath := "/etc/letsencrypt/live/multaiverse.diism.unisi.it/privkey.pem"
+	
+    // check if the certificates exist and eventually use them to start a secure websocket listen address
+	if _, err := os.Stat(certPath); err == nil {
+		if _, err := os.Stat(keyPath); err == nil {
+			log.Printf("[GO]   - Instance %d: TLS certificates found, setting up secure WebSocket listen address...\n", instanceIndex)
+			cert, err := tls.LoadX509KeyPair(certPath, keyPath)
+			if err != nil {
+				cleanupFailedCreate(instanceIndex)
+				return jsonErrorResponse("Failed to load TLS certificate", err)
+			}
+			tlsConfig := &tls.Config{Certificates: []tls.Certificate{cert},}
+			options = append(options, libp2p.Transport(ws.New, ws.WithTLSConfig(tlsConfig)))
+		}
+	} else {
+		log.Printf("[GO]   - Instance %d: TLS certificates not found, setting WebSocket without certificates.\n", instanceIndex)
+		options = append(options, libp2p.Transport(ws.New))
 	}
 
 	// Configure Relay Service (ability to *be* a relay)
@@ -1401,68 +1283,7 @@ func CreateNode(
 	}
 	hostInstances[instanceIndex] = instanceHost
 	log.Printf("[GO] ✅ Instance %d: Host created with ID: %s\n", instanceIndex, instanceHost.ID())
-
-	// TODO: for debugging
-	for _, proto := range instanceHost.Mux().Protocols() {
-		log.Printf("[GO]     - Instance %d: Muxer protocol: %s\n", instanceIndex, proto)
-	}
-	supportedProtocols, err := instanceHost.Peerstore().GetProtocols(instanceHost.ID())
-	if err != nil {
-		log.Printf("[GO] ⚠️ Instance %d: Could not get supported protocols for local host: %v\n", instanceIndex, err)
-	} else {
-		log.Printf("[GO] 📜 Instance %d: Host supports the following protocols:", instanceIndex)
-		for _, p := range supportedProtocols {
-			log.Printf("[GO]    - %s", p)
-		}
-	}
-
-	// --- DISCOVER INTERNAL WS PORT & START REVERSE PROXY ---
-	internalWsPort := 0
-	for _, addr := range instanceHost.Network().ListenAddresses() {
-		// Check if the address has a WebSocket component
-		if _, err := addr.ValueForProtocol(ma.P_WS); err == nil {
-			// It's a WS address, now get its TCP port
-			portStr, err := addr.ValueForProtocol(ma.P_TCP)
-			if err != nil {
-				continue
-			}
-			p, _ := strconv.Atoi(portStr)
-			if p > 0 {
-				internalWsPort = p
-				log.Printf("[GO] 🔍 Instance %d: Discovered internal WebSocket listener on port: %d\n", instanceIndex, internalWsPort)
-				break
-			}
-		}
-	}
-
-	if internalWsPort == 0 {
-		cleanupFailedCreate(instanceIndex)
-		return jsonErrorResponse(fmt.Sprintf("Instance %d: Failed to discover internal WebSocket port after host creation", instanceIndex), nil)
-	}
-
-	// Define the public port for WSS. This could be passed as a new parameter to CreateNode.
-	// For now, we derive it from the predefinedPort.
-	publicWssPort := 0
-	if predefinedPort != 0 {
-		publicWssPort = predefinedPort + 4 // Same logic as before
-	} else {
-        log.Printf("[GO] ℹ️ Instance %d: Base port is 0, requesting a RANDOM public WSS port for the proxy.\n", instanceIndex)
-    }
-
-	certPath := "/etc/letsencrypt/live/multaiverse.diism.unisi.it/fullchain.pem"
-	keyPath := "/etc/letsencrypt/live/multaiverse.diism.unisi.it/privkey.pem"
-	publicDomain := "multaiverse.diism.unisi.it"
 	
-    proxyServer, discoveredPublicPort, err := startReverseProxy(instanceIndex, publicWssPort, internalWsPort, certPath, keyPath)
-	if err != nil {
-		// cleanupFailedCreate(instanceIndex)
-		log.Printf(fmt.Sprintf("[GO] ❌ Instance %d: Failed to start reverse proxy", instanceIndex), err)
-	}
-	httpProxyServers[instanceIndex] = proxyServer
-	publicWssPorts[instanceIndex] = discoveredPublicPort
-	publicDomains[instanceIndex] = publicDomain
-	log.Printf("[GO]  Instance %d: Public WSS proxy is active on actual port: %d\n", instanceIndex, discoveredPublicPort)
-
 	// --- PubSub Initialization ---
 	if err := setupPubSub(instanceIndex); err != nil {
 		cleanupFailedCreate(instanceIndex)
