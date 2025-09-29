@@ -1124,6 +1124,7 @@ func InitializeLibrary(
 	rendezvousDiscoveredPeersInstances = make([]*RendezvousState, maxInstances)
 	persistentChatStreamsInstances = make([]map[peer.ID]network.Stream, maxInstances)
 	messageStoreInstances = make([]*MessageStore, maxInstances)
+	certManagerInstances = make([]*p2pforge.P2PForgeCertMgr, maxInstances)
 
 	// Mutexes for protecting concurrent access to instance-specific data.
 	connectedPeersMutexes = make([]sync.RWMutex, maxInstances)
