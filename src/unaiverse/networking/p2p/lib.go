@@ -14,6 +14,7 @@ import (
 	"bytes"           // For byte buffer manipulations (e.g., encoding/decoding, separators)
 	"container/list"  // For an efficient ordered list (doubly-linked list for queues)
 	"context"         // For managing cancellation signals and deadlines across API boundaries and goroutines
+	"crypto/rand"     // For generating identity keys
 	"encoding/base64" // For encoding binary message data into JSON-safe strings
 	"encoding/binary" // For encoding/decoding length prefixes in stream communication
 	"encoding/json"   // For marshalling/unmarshalling data structures to/from JSON (used for C API communication)
@@ -26,36 +27,35 @@ import (
 	"sync"            // For synchronization primitives like Mutexes and RWMutexes to protect shared data
 	"time"            // For time-related functions (e.g., timeouts, timestamps)
 	"unsafe"          // For using Go pointers with C code (specifically C.free)
-	"crypto/rand" // Make sure this is imported
-	
 
 	// Core libp2p libraries
-	libp2p "github.com/libp2p/go-libp2p" // Main libp2p package for creating a host
-	dht "github.com/libp2p/go-libp2p-kad-dht"
-	"github.com/libp2p/go-libp2p/core/host"      // Defines the main Host interface, representing a libp2p node
-	"github.com/libp2p/go-libp2p/core/network"   // Defines network interfaces like Stream and Connection
-	"github.com/libp2p/go-libp2p/core/peer"      // Defines Peer ID and AddrInfo types
-	"github.com/libp2p/go-libp2p/core/peerstore" // Defines the Peerstore interface for storing peer metadata (addresses, keys)
-	"github.com/libp2p/go-libp2p/core/routing"
+	libp2p "github.com/libp2p/go-libp2p"                          // Main libp2p package for creating a host
+	dht "github.com/libp2p/go-libp2p-kad-dht"                     // Kademlia DHT implementation for peer discovery and routing
+	"github.com/libp2p/go-libp2p/core/crypto"                     // Defines cryptographic primitives (keys, signatures)
+	"github.com/libp2p/go-libp2p/core/event"                      // Event bus for subscribing to libp2p events (connections, reachability changes)
+	"github.com/libp2p/go-libp2p/core/host"                       // Defines the main Host interface, representing a libp2p node
+	"github.com/libp2p/go-libp2p/core/network"                    // Defines network interfaces like Stream and Connection
+	"github.com/libp2p/go-libp2p/core/peer"                       // Defines Peer ID and AddrInfo types
+	"github.com/libp2p/go-libp2p/core/peerstore"                  // Defines the Peerstore interface for storing peer metadata (addresses, keys)
+	"github.com/libp2p/go-libp2p/core/routing"                    // Defines the Routing interface for peer routing (e.g., DHT)
 	rcmgr "github.com/libp2p/go-libp2p/p2p/host/resource-manager" // For managing resources (bandwidth, memory) for libp2p hosts
 	"github.com/libp2p/go-libp2p/p2p/protocol/circuitv2/client"   // For establishing outbound relayed connections (acting as a client)
 	rc "github.com/libp2p/go-libp2p/p2p/protocol/circuitv2/relay" // Import for relay service options
-	"github.com/libp2p/go-libp2p/core/event"
-	"github.com/libp2p/go-libp2p/core/crypto"
 
 	// transport protocols for libp2p
-	quic "github.com/libp2p/go-libp2p/p2p/transport/quic" // QUIC transport for peer-to-peer connections (e.g., for mobile devices)
-	"github.com/libp2p/go-libp2p/p2p/transport/tcp"
+	quic "github.com/libp2p/go-libp2p/p2p/transport/quic"     // QUIC transport for peer-to-peer connections (e.g., for mobile devices)
+	"github.com/libp2p/go-libp2p/p2p/transport/tcp"           // TCP transport for peer-to-peer connections (most common)
 	webrtc "github.com/libp2p/go-libp2p/p2p/transport/webrtc" // WebRTC transport for peer-to-peer connections (e.g., for browsers or mobile devices)
-	ws "github.com/libp2p/go-libp2p/p2p/transport/websocket" // WebSocket transport for peer-to-peer connections (e.g., for browsers)
+	ws "github.com/libp2p/go-libp2p/p2p/transport/websocket"  // WebSocket transport for peer-to-peer connections (e.g., for browsers)
 
 	// --- AutoTLS Imports ---
-    "github.com/caddyserver/certmagic"
-    p2pforge "github.com/ipshipyard/p2p-forge/client"
+	"github.com/caddyserver/certmagic"                // Automatic TLS certificate management (used by p2p-forge)
+	p2pforge "github.com/ipshipyard/p2p-forge/client" // p2p-forge library for automatic TLS and domain management
 
 	// protobuf
-	"google.golang.org/protobuf/proto"
-	pg "unaiverse/networking/p2p/lib/proto-go"
+	pg "unaiverse/networking/p2p/lib/proto-go" // Generated Protobuf code for our message formats
+
+	"google.golang.org/protobuf/proto" // Core Protobuf library for marshalling/unmarshalling messages
 
 	// PubSub library
 	pubsub "github.com/libp2p/go-libp2p-pubsub" // GossipSub implementation for publish/subscribe messaging
@@ -68,7 +68,7 @@ import (
 // ChatProtocol defines the protocol ID string used for direct peer-to-peer messaging streams.
 // This ensures that both peers understand how to interpret the data on the stream.
 const UnaiverseChatProtocol = "/unaiverse-chat-protocol/1.0.0"
-const UnaiverseUserAgent = "unaiverse-p2p-node/1.0.0"
+const UnaiverseUserAgent = "go-libp2p/example/autotls"
 
 // ExtendedPeerInfo holds information about a connected peer.
 type ExtendedPeerInfo struct {
@@ -123,13 +123,13 @@ var (
 	pubsubInstances                    []*pubsub.PubSub
 	contexts                           []context.Context
 	cancelContexts                     []context.CancelFunc
-	topicsInstances                    []map[string]*pubsub.Topic        // map[instanceIndex]map[channel]*pubsub.Topic
-	subscriptionsInstances             []map[string]*pubsub.Subscription // map[instanceIndex]map[channel]*pubsub.Subscription
-	connectedPeersInstances            []map[peer.ID]ExtendedPeerInfo    // map[instanceIndex]map[peerID]ExtendedPeerInfo
-	rendezvousDiscoveredPeersInstances []*RendezvousState // Slice of pointers to the state struct
-	persistentChatStreamsInstances     []map[peer.ID]network.Stream      // map[instanceIndex]map[peerID]network.Stream
-	messageStoreInstances              []*MessageStore                   // map[instanceIndex]*MessageStore
-	certManagerInstances               []*p2pforge.P2PForgeCertMgr 	   // Slice of pointers to the cert manager
+	topicsInstances                    []map[string]*pubsub.Topic
+	subscriptionsInstances             []map[string]*pubsub.Subscription
+	connectedPeersInstances            []map[peer.ID]ExtendedPeerInfo
+	rendezvousDiscoveredPeersInstances []*RendezvousState
+	persistentChatStreamsInstances     []map[peer.ID]network.Stream
+	messageStoreInstances              []*MessageStore
+	certManagerInstances               []*p2pforge.P2PForgeCertMgr
 
 	// Mutexes for protecting concurrent access to instance-specific data.
 	connectedPeersMutexes            []sync.RWMutex
@@ -265,9 +265,9 @@ func loadOrCreateIdentity(instanceIndex int) (crypto.PrivKey, error) {
 func cleanupFailedCreate(instanceIndex int) {
 	log.Printf("[GO] 🧹 Instance %d: Cleaning up after failed creation...", instanceIndex)
 	if certManagerInstances[instanceIndex] != nil {
-        certManagerInstances[instanceIndex].Stop()
-        certManagerInstances[instanceIndex] = nil
-    }
+		certManagerInstances[instanceIndex].Stop()
+		certManagerInstances[instanceIndex] = nil
+	}
 	if hostInstances[instanceIndex] != nil { // Attempt cleanup before returning.
 		hostInstances[instanceIndex].Close()
 		hostInstances[instanceIndex] = nil
@@ -331,11 +331,11 @@ func getListenAddrs(ipsJSON string, tcpPort int, useAutoTLS bool) ([]ma.Multiadd
 		listenAddrs = append(listenAddrs, tcpMaddr, quicMaddr, webrtcMaddr)
 
 		if useAutoTLS {
-            // This is the special multiaddr that triggers AutoTLS
+			// This is the special multiaddr that triggers AutoTLS
 			wssMaddr, _ := ma.NewMultiaddr(fmt.Sprintf("/ip4/%s/tcp/%d/tls/sni/*.%s/ws", ip, tcpPort, p2pforge.DefaultForgeDomain))
 			listenAddrs = append(listenAddrs, wssMaddr)
 		} else {
-            // Fallback to a standard, non-secure WebSocket address
+			// Fallback to a standard, non-secure WebSocket address
 			wsMaddr, _ := ma.NewMultiaddr(fmt.Sprintf("/ip4/%s/tcp/%d/ws", ip, wsPort))
 			listenAddrs = append(listenAddrs, wsMaddr)
 		}
@@ -456,12 +456,12 @@ func setupNotifiers(instanceIndex int) {
 			remotePeerID := conn.RemotePeer()
 
 			// Get the host for this instance to query its network state.
-            instanceHost := hostInstances[instanceIndex]
-            if instanceHost == nil {
-                // This shouldn't happen if the notifier is active, but a safe check.
-                log.Printf("[GO] ⚠️ Instance %d: DisconnectedF: Host is nil, cannot perform connection check.\n", instanceIndex)
-                return
-            }
+			instanceHost := hostInstances[instanceIndex]
+			if instanceHost == nil {
+				// This shouldn't happen if the notifier is active, but a safe check.
+				log.Printf("[GO] ⚠️ Instance %d: DisconnectedF: Host is nil, cannot perform connection check.\n", instanceIndex)
+				return
+			}
 
 			// --- Check if this is the LAST connection to this peer ---
 			// libp2p can have multiple connections to a single peer (e.g., TCP, QUIC).
@@ -498,42 +498,42 @@ func setupNotifiers(instanceIndex int) {
 // node to confirm its public reachability. It includes a timeout to prevent
 // the startup from hanging indefinitely.
 func waitForPublicReachability(h host.Host, timeout time.Duration) bool {
-    // 1. Subscribe to the reachability event.
-    sub, err := h.EventBus().Subscribe(new(event.EvtLocalReachabilityChanged))
-    if err != nil {
-        log.Printf("[GO] ❌ Failed to subscribe to reachability events: %v", err)
+	// 1. Subscribe to the reachability event.
+	sub, err := h.EventBus().Subscribe(new(event.EvtLocalReachabilityChanged))
+	if err != nil {
+		log.Printf("[GO] ❌ Failed to subscribe to reachability events: %v", err)
 		return false
-    }
-    defer sub.Close() // Clean up the subscription when we're done.
+	}
+	defer sub.Close() // Clean up the subscription when we're done.
 
-    log.Printf("[GO] ⏳ Waiting for public reachability confirmation (timeout: %s)...", timeout)
+	log.Printf("[GO] ⏳ Waiting for public reachability confirmation (timeout: %s)...", timeout)
 
-    // 2. Wait for the event in a select loop with a timeout.
-    timeoutCh := time.After(timeout)
-    for {
-        select {
-        case evt := <-sub.Out():
-            // We received an event. Cast it to the correct type.
-            reachabilityEvent, ok := evt.(event.EvtLocalReachabilityChanged)
-            if !ok {
-                continue // Should not happen, but good practice to check.
-            }
+	// 2. Wait for the event in a select loop with a timeout.
+	timeoutCh := time.After(timeout)
+	for {
+		select {
+		case evt := <-sub.Out():
+			// We received an event. Cast it to the correct type.
+			reachabilityEvent, ok := evt.(event.EvtLocalReachabilityChanged)
+			if !ok {
+				continue // Should not happen, but good practice to check.
+			}
 
-            log.Printf("[GO] 💡 Reachability status changed to: %s", reachabilityEvent.Reachability)
+			log.Printf("[GO] 💡 Reachability status changed to: %s", reachabilityEvent.Reachability)
 
-            // Check if the new status is what we're waiting for.
-            if reachabilityEvent.Reachability == network.ReachabilityPublic {
-                log.Printf("[GO] ✅ Confirmed Public reachability via event.")
-                return true // Success! Return true.
-            } else if reachabilityEvent.Reachability == network.ReachabilityPrivate {
+			// Check if the new status is what we're waiting for.
+			if reachabilityEvent.Reachability == network.ReachabilityPublic {
+				log.Printf("[GO] ✅ Confirmed Public reachability via event.")
+				return true // Success! Return true.
+			} else if reachabilityEvent.Reachability == network.ReachabilityPrivate {
 				log.Printf("[GO] ⚠️ Node is behind a NAT or firewall (Private reachability).")
 				return false // Node is not publicly reachable.
-			} 
-        case <-timeoutCh:
-            log.Printf("[GO] ⚠️ Timed out waiting for public reachability.")
+			}
+		case <-timeoutCh:
+			log.Printf("[GO] ⚠️ Timed out waiting for public reachability.")
 			return false // Timeout. Return false.
-        }
-    }
+		}
+	}
 }
 
 // --- Core Logic Functions ---
@@ -899,7 +899,7 @@ func goGetNodeAddresses(
 	// Determine the actual Peer ID to resolve addresses for.
 	resolvedPID := targetPID
 	isThisNode := false
-	if targetPID == "" || targetPID == instanceHost.ID(){
+	if targetPID == "" || targetPID == instanceHost.ID() {
 		resolvedPID = instanceHost.ID()
 		isThisNode = true
 	}
@@ -932,14 +932,14 @@ func goGetNodeAddresses(
 		if addr == nil || manet.IsIPLoopback(addr) || manet.IsIPUnspecified(addr) {
 			continue // Skip nil, loopback, and unspecified addresses
 		}
-		
+
 		// Use the idiomatic `peer.SplitAddr` to check if the address already includes a Peer ID.
 		var finalAddr ma.Multiaddr
 		transportAddr, idInAddr := peer.SplitAddr(addr)
 		if transportAddr == nil {
 			continue
 		}
-		
+
 		// // handle cases for different transport protocols
 		// if strings.Contains(transportAddr.String(), "/ws") {
 		// 	// replace the /ip4/ip with /dns4/domain for WebSocket addresses
@@ -947,23 +947,23 @@ func goGetNodeAddresses(
 		// 	dns4Component, _ := ma.NewMultiaddr("/dns4/multaiverse.diism.unisi.it")
 		// 	addr = dns4Component.Encapsulate(rest)
 		// }
-		
+
 		// handle cases based on presence and correctness of Peer ID in the address
 		switch {
-			case idInAddr == resolvedPID:
-				// Case A: The address is already perfect and has the correct Peer ID. Use it as is.
-				finalAddr = addr
-				
-			case idInAddr == "":
-				// Case B: The address is missing a Peer ID. This is common for addresses from the
-				// peerstore and for relayed addresses like `/p2p/RELAY_ID/p2p-circuit`. We must append ours.
-				p2pComponent, _ := ma.NewMultiaddr(fmt.Sprintf("/p2p/%s", resolvedPID.String()))
-				finalAddr = addr.Encapsulate(p2pComponent)
+		case idInAddr == resolvedPID:
+			// Case A: The address is already perfect and has the correct Peer ID. Use it as is.
+			finalAddr = addr
 
-			case idInAddr != resolvedPID:
-				// Case C: The address has the WRONG Peer ID. This is stale or incorrect data. Discard it.
-				log.Printf("[GO] ⚠️ Instance %d: Discarding stale address for peer %s: %s\n", instanceIndex, resolvedPID, addr)
-				continue
+		case idInAddr == "":
+			// Case B: The address is missing a Peer ID. This is common for addresses from the
+			// peerstore and for relayed addresses like `/p2p/RELAY_ID/p2p-circuit`. We must append ours.
+			p2pComponent, _ := ma.NewMultiaddr(fmt.Sprintf("/p2p/%s", resolvedPID.String()))
+			finalAddr = addr.Encapsulate(p2pComponent)
+
+		case idInAddr != resolvedPID:
+			// Case C: The address has the WRONG Peer ID. This is stale or incorrect data. Discard it.
+			log.Printf("[GO] ⚠️ Instance %d: Discarding stale address for peer %s: %s\n", instanceIndex, resolvedPID, addr)
+			continue
 		}
 		addrSet[finalAddr.String()] = struct{}{}
 	}
@@ -1009,10 +1009,10 @@ func closeSingleInstance(
 
 	// --- Stop Cert Manager FIRST ---
 	if certManagerInstances[instanceIndex] != nil {
-        log.Printf("[GO]   - Instance %d: Stopping AutoTLS cert manager...\n", instanceIndex)
-        certManagerInstances[instanceIndex].Stop()
-        certManagerInstances[instanceIndex] = nil
-    }
+		log.Printf("[GO]   - Instance %d: Stopping AutoTLS cert manager...\n", instanceIndex)
+		certManagerInstances[instanceIndex].Stop()
+		certManagerInstances[instanceIndex] = nil
+	}
 
 	// --- Cancel Main Context ---
 	// Acquire global lock to safely access/modify cancelContexts
@@ -1221,13 +1221,13 @@ func CreateNode(
 	log.Printf("[GO] 🚀 Instance %d: Starting CreateNode...", instanceIndex)
 
 	// Initialize state maps and context for this instance
-    contexts[instanceIndex], cancelContexts[instanceIndex] = context.WithCancel(context.Background())
-    connectedPeersInstances[instanceIndex] = make(map[peer.ID]ExtendedPeerInfo)
-    persistentChatStreamsInstances[instanceIndex] = make(map[peer.ID]network.Stream)
-    topicsInstances[instanceIndex] = make(map[string]*pubsub.Topic)
-    subscriptionsInstances[instanceIndex] = make(map[string]*pubsub.Subscription)
-    messageStoreInstances[instanceIndex] = newMessageStore()
-    rendezvousDiscoveredPeersInstances[instanceIndex] = nil
+	contexts[instanceIndex], cancelContexts[instanceIndex] = context.WithCancel(context.Background())
+	connectedPeersInstances[instanceIndex] = make(map[peer.ID]ExtendedPeerInfo)
+	persistentChatStreamsInstances[instanceIndex] = make(map[peer.ID]network.Stream)
+	topicsInstances[instanceIndex] = make(map[string]*pubsub.Topic)
+	subscriptionsInstances[instanceIndex] = make(map[string]*pubsub.Subscription)
+	messageStoreInstances[instanceIndex] = newMessageStore()
+	rendezvousDiscoveredPeersInstances[instanceIndex] = nil
 
 	// --- Configuration ---
 	// Convert C integer parameters to Go types.
@@ -1241,31 +1241,32 @@ func CreateNode(
 
 	log.Printf("[GO] 🔧 Instance %d: Config: Port=%d, IPsJSON=%s, EnableRelayClient=%t, EnableRelayService=%t, KnowsIsPublic=%t, MaxConnections=%d, AutoTLS=%t",
 		instanceIndex, predefinedPort, ipsJSON, enableRelayClient, enableRelayService, knowsIsPublic, maxConnections, enableAutoTLS)
-	
+
 	// --- Load or Create Persistent Identity ---
 	privKey, err := loadOrCreateIdentity(instanceIndex)
 	if err != nil {
 		cleanupFailedCreate(instanceIndex)
 		return jsonErrorResponse(fmt.Sprintf("Instance %d: Failed to load or create identity key", instanceIndex), err)
 	}
-	
+
 	// --- AutoTLS Cert Manager Setup (if enabled) ---
-    var certManager *p2pforge.P2PForgeCertMgr
-    if enableAutoTLS {
-        log.Printf("[GO]   - Instance %d: AutoTLS is ENABLED. Setting up certificate manager...\n", instanceIndex)
-        certManager, err = p2pforge.NewP2PForgeCertMgr(
-            p2pforge.WithCAEndpoint(p2pforge.DefaultCAEndpoint), // Using production CA
-            p2pforge.WithCertificateStorage(&certmagic.FileStorage{Path: fmt.Sprintf("p2p-forge-certs-instance-%d", instanceIndex)}),
+	var certManager *p2pforge.P2PForgeCertMgr
+	if enableAutoTLS {
+		log.Printf("[GO]   - Instance %d: AutoTLS is ENABLED. Setting up certificate manager...\n", instanceIndex)
+		certManager, err = p2pforge.NewP2PForgeCertMgr(
+			p2pforge.WithCAEndpoint(p2pforge.DefaultCATestEndpoint),
+			// p2pforge.WithCAEndpoint(p2pforge.DefaultCAEndpoint),
+			p2pforge.WithCertificateStorage(&certmagic.FileStorage{Path: fmt.Sprintf("p2p-forge-certs-instance-%d", instanceIndex)}),
 			p2pforge.WithUserAgent(UnaiverseUserAgent),
-            p2pforge.WithRegistrationDelay(5 * time.Second),
-        )
-        if err != nil {
-            cleanupFailedCreate(instanceIndex)
-            return jsonErrorResponse(fmt.Sprintf("Instance %d: Failed to create AutoTLS cert manager", instanceIndex), err)
-        }
-        certManager.Start()
-        certManagerInstances[instanceIndex] = certManager // Store for cleanup
-    }
+			p2pforge.WithRegistrationDelay(10*time.Second),
+		)
+		if err != nil {
+			cleanupFailedCreate(instanceIndex)
+			return jsonErrorResponse(fmt.Sprintf("Instance %d: Failed to create AutoTLS cert manager", instanceIndex), err)
+		}
+		certManager.Start()
+		certManagerInstances[instanceIndex] = certManager // Store for cleanup
+	}
 
 	// --- 4. Libp2p Options Assembly ---
 	listenAddrs, err := getListenAddrs(ipsJSON, predefinedPort, enableAutoTLS)
@@ -1295,15 +1296,15 @@ func CreateNode(
 
 	// Get the TLS certs from the cert manager if AutoTLS is enabled
 	if enableAutoTLS {
-        options = append(options,
-            // Configure the WS transport with the AutoTLS cert manager's TLS Config
-            libp2p.Transport(ws.New, ws.WithTLSConfig(certManager.TLSConfig())),
-            // Use the AutoTLS address factory to advertise the correct public addresses
-            libp2p.AddrsFactory(certManager.AddressFactory()),
-            // Share the TCP listener between the plain TCP and WSS transport
-            libp2p.ShareTCPListener(),
-        )
-    } else {
+		options = append(options,
+			// Configure the WS transport with the AutoTLS cert manager's TLS Config
+			libp2p.Transport(ws.New, ws.WithTLSConfig(certManager.TLSConfig())),
+			// Use the AutoTLS address factory to advertise the correct public addresses
+			libp2p.AddrsFactory(certManager.AddressFactory()),
+			// Share the TCP listener between the plain TCP and WSS transport
+			libp2p.ShareTCPListener(),
+		)
+	} else {
 		log.Printf("[GO]   - Instance %d: No certificates found, setting up non-secure WebSocket.\n", instanceIndex)
 		options = append(options, libp2p.Transport(ws.New))
 	}
@@ -1313,10 +1314,10 @@ func CreateNode(
 		// limit := rc.DefaultLimit()         // open this to see the default limits
 		resources := rc.DefaultResources() // open this to see the default resource limits
 		// Set the duration for relayed connections. 0 means infinite.
-		ttl := 2 * time.Hour	// reduced to 2 hours, it will be the node's duty to refresh the reservation if needed.
+		ttl := 2 * time.Hour // reduced to 2 hours, it will be the node's duty to refresh the reservation if needed.
 		// limit.Duration = ttl
 		// resources.Limit = limit
-		resources.Limit = nil	// same as setting rc.WithInfiniteLimits()
+		resources.Limit = nil // same as setting rc.WithInfiniteLimits()
 		resources.ReservationTTL = ttl
 
 		// This single option enables the node to act as a relay for others, including hopping,
@@ -1351,7 +1352,7 @@ func CreateNode(
 				var err error
 				idht, err = dht.New(contexts[instanceIndex], h, dhtOptions...)
 				return idht, err
-			}),)
+			}))
 		log.Printf("[GO]   - Instance %d: Trying to be publicly reachable.\n", instanceIndex)
 	} else {
 		options = append(options, libp2p.ForceReachabilityPublic())
@@ -1368,11 +1369,11 @@ func CreateNode(
 	log.Printf("[GO] ✅ Instance %d: Host created with ID: %s\n", instanceIndex, instanceHost.ID())
 
 	// --- Link Host to Cert Manager ---
-    if enableAutoTLS {
-        certManager.ProvideHost(instanceHost)
-        log.Printf("[GO]   - Instance %d: Provided host to AutoTLS cert manager.\n", instanceIndex)
-    }
-	
+	if enableAutoTLS {
+		certManager.ProvideHost(instanceHost)
+		log.Printf("[GO]   - Instance %d: Provided host to AutoTLS cert manager.\n", instanceIndex)
+	}
+
 	// --- PubSub Initialization ---
 	if err := setupPubSub(instanceIndex); err != nil {
 		cleanupFailedCreate(instanceIndex)
@@ -1412,7 +1413,7 @@ func CreateNode(
 	// --- Get Final Addresses ---
 	nodeAddresses, err := goGetNodeAddresses(instanceIndex, "")
 	if err != nil {
-        // This is a more critical failure if we can't even get local addresses.
+		// This is a more critical failure if we can't even get local addresses.
 		cleanupFailedCreate(instanceIndex)
 		return jsonErrorResponse(
 			fmt.Sprintf("Instance %d: Failed to obtain node addresses after waiting for reachability", instanceIndex),
@@ -2174,7 +2175,7 @@ func SubscribeToTopic(
 		for existingChannel := range instanceTopics {
 			if strings.HasSuffix(existingChannel, ":rv") {
 				log.Printf("  - Instance %d: Removing existing rendezvous topic '%s' from instance state.\n", instanceIndex, existingChannel)
-				
+
 				// Close the topic handle if it exists.
 				if topic, exists := instanceTopics[existingChannel]; exists {
 					if err := topic.Close(); err != nil {
@@ -2182,13 +2183,13 @@ func SubscribeToTopic(
 					}
 					delete(instanceTopics, existingChannel)
 				}
-				
+
 				// Remove the subscription if it exists.
 				if sub, exists := instanceSubscriptions[existingChannel]; exists {
-					sub.Cancel() // Cancel the subscription
+					sub.Cancel()                                   // Cancel the subscription
 					delete(instanceSubscriptions, existingChannel) // Remove from map
 				}
-				
+
 				// Also clean up rendezvous discovered peers for this instance.
 				log.Printf("  - Instance %d: Resetting rendezvous state for new topic '%s'.\n", instanceIndex, channel)
 				rendezvousDiscoveredPeersMutexes[instanceIndex].Lock()
