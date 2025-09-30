@@ -1145,13 +1145,13 @@ func InitializeLibrary(
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
 	if int(enableLoggingC) == 1 {
 		golog.SetAllLoggers(golog.LevelInfo) // Set a default level
-		golog.SetLogLevel("p2p-library", "debug")
+		golog.SetLogLevel("p2p-library", "error")
 		// --- Add Specific Log Levels from the Example ---
 		// These are crucial for debugging AutoTLS and connectivity.
 		golog.SetLogLevel("autotls", "debug")
 		golog.SetLogLevel("p2p-forge", "debug")
-		golog.SetLogLevel("nat", "debug")
-        golog.SetLogLevel("basichost", "info")
+		golog.SetLogLevel("nat", "error")
+        golog.SetLogLevel("basichost", "error")
 	} else {
 		golog.SetAllLoggers(golog.LevelError)
 		golog.SetLogLevel("*", "FATAL")
@@ -1267,8 +1267,7 @@ func CreateNode(
 		logger.Infof("[GO]   - Instance %d: AutoTLS is ENABLED. Setting up certificate manager...\n", instanceIndex)
 		rawLogger := logger.Desugar()
 		certManager, err = p2pforge.NewP2PForgeCertMgr(
-			p2pforge.WithCAEndpoint(p2pforge.DefaultCATestEndpoint),
-			// p2pforge.WithCAEndpoint(p2pforge.DefaultCAEndpoint),
+			p2pforge.WithCAEndpoint(p2pforge.DefaultCAEndpoint),
 			p2pforge.WithCertificateStorage(&certmagic.FileStorage{Path: fmt.Sprintf("p2p-forge-certs-instance-%d", instanceIndex)}),
 			p2pforge.WithUserAgent(UnaiverseUserAgent),
 			p2pforge.WithRegistrationDelay(10*time.Second),
