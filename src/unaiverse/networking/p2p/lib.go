@@ -1348,7 +1348,7 @@ func CreateNode(
 	// Prepare discovering the bootstrap peers
 	var idht *dht.IpfsDHT
 	isPublic := false
-	if !knowsIsPublic {
+	if !knowsIsPublic || enableAutoTLS {
 		// Add any possible option to be publicly reachable
 		options = append(
 			options,
@@ -1405,10 +1405,12 @@ func CreateNode(
 	// Give discovery mechanisms a moment to find the public address.
 	logger.Infof("[GO] ⏳ Instance %d: Waiting for address discovery and NAT to settle...\n", instanceIndex)
 
-	if !knowsIsPublic {
+	if !knowsIsPublic || enableAutoTLS {
 		// --- 🎯 : Wait for Public Reachability ---
 		// This replaces the old address polling loop. We wait a maximum of 30 seconds.
 		isPublic = waitForPublicReachability(instanceHost, 30*time.Second)
+		// wait a few more seconds to let everything settle
+		time.Sleep(5 * time.Second)
 		if !isPublic {
 			logger.Warnf("[GO] ⚠️ Instance %d: The node may not be directly dialable.", instanceIndex)
 		}
