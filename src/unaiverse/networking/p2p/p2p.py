@@ -734,7 +734,7 @@ class P2P:
 
             addr_list = result.get('message', [])
             logger.info(f"✅ Found addresses for {target}: {addr_list}")
-            return addr_list
+            return [_addr for _addr in addr_list if '/ws' in _addr]
 
         except Exception as e:
             logger.error(f"❌ Failed to get addresses for {target}: {e}")
