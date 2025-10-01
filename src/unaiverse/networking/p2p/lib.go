@@ -68,7 +68,8 @@ import (
 
 // ChatProtocol defines the protocol ID string used for direct peer-to-peer messaging streams.
 // This ensures that both peers understand how to interpret the data on the stream.
-const UnaiverseChatProtocol = "/unaiverse-chat-protocol/1.0.0"
+// const UnaiverseChatProtocol = "/unaiverse-chat-protocol/1.0.0"
+const UnaiverseChatProtocol = "/chat/1.0.0"
 const UnaiverseUserAgent = "go-libp2p/example/autotls"
 
 // ExtendedPeerInfo holds information about a connected peer.
