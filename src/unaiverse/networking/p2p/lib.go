@@ -14,6 +14,7 @@ import (
 	"bytes"           // For byte buffer manipulations (e.g., encoding/decoding, separators)
 	"container/list"  // For an efficient ordered list (doubly-linked list for queues)
 	"context"         // For managing cancellation signals and deadlines across API boundaries and goroutines
+	"crypto/rand"     // For generating identity keys
 	"encoding/base64" // For encoding binary message data into JSON-safe strings
 	"encoding/binary" // For encoding/decoding length prefixes in stream communication
 	"encoding/json"   // For marshalling/unmarshalling data structures to/from JSON (used for C API communication)
@@ -21,6 +22,7 @@ import (
 	"io"              // For input/output operations (e.g., reading from streams)
 	"log"             // For logging information, warnings, and errors
 	"net"             // For network-related errors and interfaces
+	"os"              // For interacting with the operating system (e.g., Stdout)
 	"strings"         // For string manipulations (e.g., trimming, splitting)
 	"sync"            // For synchronization primitives like Mutexes and RWMutexes to protect shared data
 	"time"            // For time-related functions (e.g., timeouts, timestamps)
@@ -29,6 +31,7 @@ import (
 	// Core libp2p libraries
 	libp2p "github.com/libp2p/go-libp2p"                          // Main libp2p package for creating a host
 	dht "github.com/libp2p/go-libp2p-kad-dht"                     // Kademlia DHT implementation for peer discovery and routing
+	"github.com/libp2p/go-libp2p/core/crypto"                     // Defines cryptographic primitives (keys, signatures)
 	"github.com/libp2p/go-libp2p/core/event"                      // Event bus for subscribing to libp2p events (connections, reachability changes)
 	"github.com/libp2p/go-libp2p/core/host"                       // Defines the main Host interface, representing a libp2p node
 	"github.com/libp2p/go-libp2p/core/network"                    // Defines network interfaces like Stream and Connection
@@ -227,6 +230,40 @@ func checkInstanceIndex(
 		return fmt.Errorf("invalid instance index: %d. Must be between 0 and %d", instanceIndex, maxInstances-1)
 	}
 	return nil
+}
+
+// loadOrCreateIdentity reads a private key from the given path for a specific instance.
+// If the key file does not exist, it generates a new one and saves it.
+func loadOrCreateIdentity(instanceIndex int) (crypto.PrivKey, error) {
+	keyPath := fmt.Sprintf("identity-instance-%d.key", instanceIndex)
+
+	if _, err := os.Stat(keyPath); err == nil {
+		// Key file exists, read it
+		bytes, err := os.ReadFile(keyPath)
+		if err != nil {
+			return nil, err
+		}
+		return crypto.UnmarshalPrivateKey(bytes)
+	} else if os.IsNotExist(err) {
+		// Key file does not exist, generate a new one
+		logger.Infof("[GO] 💎 Instance %d: Generating new persistent peer identity in %s\n", instanceIndex, keyPath)
+		privk, _, err := crypto.GenerateEd25519Key(rand.Reader)
+		if err != nil {
+			return nil, err
+		}
+
+		bytes, err := crypto.MarshalPrivateKey(privk)
+		if err != nil {
+			return nil, err
+		}
+
+		// Write the key to a file with read-only permissions for the user.
+		err = os.WriteFile(keyPath, bytes, 0400)
+		return privk, err
+	} else {
+		// Another error occurred (e.g., permissions)
+		return nil, err
+	}
 }
 
 func cleanupFailedCreate(instanceIndex int) {
@@ -1218,9 +1255,15 @@ func CreateNode(
 	logger.Debugf("[GO] 🔧 Instance %d: Config: Port=%d, IPsJSON=%s, EnableRelayClient=%t, EnableRelayService=%t, KnowsIsPublic=%t, MaxConnections=%d, AutoTLS=%t",
 		instanceIndex, predefinedPort, ipsJSON, enableRelayClient, enableRelayService, knowsIsPublic, maxConnections, enableAutoTLS)
 
+	// --- Load or Create Persistent Identity ---
+	privKey, err := loadOrCreateIdentity(instanceIndex)
+	if err != nil {
+		cleanupFailedCreate(instanceIndex)
+		return jsonErrorResponse(fmt.Sprintf("Instance %d: Failed to load or create identity key", instanceIndex), err)
+	}
+
 	// --- AutoTLS Cert Manager Setup (if enabled) ---
 	var certManager *p2pforge.P2PForgeCertMgr
-	var err error
 	if enableAutoTLS {
 		logger.Debugf("[GO]   - Instance %d: AutoTLS is ENABLED. Setting up certificate manager...\n", instanceIndex)
 		rawLogger := logger.Desugar()
@@ -1254,6 +1297,7 @@ func CreateNode(
 	}
 
 	options := []libp2p.Option{
+		libp2p.Identity(privKey),
 		libp2p.ListenAddrs(listenAddrs...),
 		libp2p.DefaultSecurity,
 		libp2p.DefaultMuxers,
