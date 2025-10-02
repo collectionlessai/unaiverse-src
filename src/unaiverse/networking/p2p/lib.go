@@ -1410,8 +1410,29 @@ func CreateNode(
 		// --- 🎯 : Wait for Public Reachability ---
 		// This replaces the old address polling loop. We wait a maximum of 30 seconds.
 		isPublic = waitForPublicReachability(instanceHost, 30*time.Second)
-		// wait a few more seconds to let everything settle
-		time.Sleep(5 * time.Second)
+		// --- Robustly wait for a public address to appear in the host's list ---
+		if isPublic {
+			logger.Debugf("[GO]   - Instance %d: Reachability is Public. Now waiting for public address to be confirmed in host list...", instanceIndex)
+			pollCtx, cancel := context.WithTimeout(contexts[instanceIndex], 10*time.Second) // 10s timeout for this phase
+			defer cancel()
+			
+		POLL_LOOP:
+			for {
+				select {
+				case <-pollCtx.Done():
+					logger.Warnf("[GO] ⚠️ Instance %d: Timed out waiting for a public address to be added to the host's address list.", instanceIndex)
+					isPublic = false // Downgrade status if we timed out
+					break POLL_LOOP
+				case <-time.After(500 * time.Millisecond): // Poll every 500ms
+					for _, addr := range instanceHost.Addrs() {
+						if manet.IsPublicAddr(addr) {
+							logger.Infof("[GO]   - Instance %d: Confirmed public address in host list: %s", instanceIndex, addr)
+							break POLL_LOOP
+						}
+					}
+				}
+			}
+		}
 		if !isPublic {
 			logger.Warnf("[GO] ⚠️ Instance %d: The node may not be directly dialable.", instanceIndex)
 		}
