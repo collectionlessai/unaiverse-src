@@ -945,13 +945,10 @@ func goGetNodeAddresses(
 			continue
 		}
 
-		// // handle cases for different transport protocols
-		// if strings.Contains(transportAddr.String(), "/ws") {
-		// 	// replace the /ip4/ip with /dns4/domain for WebSocket addresses
-		// 	_, rest := ma.SplitFirst(transportAddr)
-		// 	dns4Component, _ := ma.NewMultiaddr("/dns4/multaiverse.diism.unisi.it")
-		// 	addr = dns4Component.Encapsulate(rest)
-		// }
+		// handle cases for different transport protocols
+		if strings.HasPrefix(transportAddr.String(), "/p2p-circuit/") {
+			continue
+		}
 
 		// handle cases based on presence and correctness of Peer ID in the address
 		switch {
