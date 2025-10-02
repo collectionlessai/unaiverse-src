@@ -1410,8 +1410,8 @@ func CreateNode(
 	logger.Debugf("[GO] ⏳ Instance %d: Waiting for address discovery and NAT to settle...\n", instanceIndex)
 
 	if enableAutoTLS {
-		// --- 🎯 FINAL: Wait for the EvtLocalAddressesUpdated containing the resolved WSS address ---
-		logger.Infof("[GO] ⏳ Instance %d: Waiting for the final public WSS address to be generated...", instanceIndex)
+		// --- Wait for the EvtLocalAddressesUpdated containing the resolved WSS address ---
+		logger.Debugf("[GO] ⏳ Instance %d: Waiting for the final public WSS address to be generated...", instanceIndex)
 
 		// 1. Subscribe to the event that fires *after* the AddrsFactory has run.
 		sub, err := instanceHost.EventBus().Subscribe(new(event.EvtLocalAddressesUpdated))
@@ -1427,7 +1427,7 @@ func CreateNode(
 			select {
 			case evt := <-sub.Out():
 				// We received an address update event.
-				logger.Infof("[GO] 🔔 Instance %d: Received address update event, checking for WSS address...\n", instanceIndex)
+				logger.Debugf("[GO] 🔔 Instance %d: Received address update event, checking for WSS address...\n", instanceIndex)
 				addrsEvent, ok := evt.(event.EvtLocalAddressesUpdated)
 				if !ok {
 					continue // Should not happen, but good practice.

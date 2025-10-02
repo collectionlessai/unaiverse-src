@@ -217,11 +217,11 @@ class P2P:
             self._address_cache: Optional[List[str]] = initial_addresses
             self._address_cache_time: float = time.monotonic()
             
-            # TODO: remove
-            addresses = [_addr for _addr in self._address_cache if '/ws' in _addr]
-            self._address_cache.clear()
-            for _addr in addresses:
-                self._address_cache.append(_addr)
+            # # TODO: remove
+            # addresses = [_addr for _addr in self._address_cache if '/ws' in _addr]
+            # self._address_cache.clear()
+            # for _addr in addresses:
+            #     self._address_cache.append(_addr)
 
             logger.info(f"✅ [Instance {self._instance}] Node created with ID: {self._peer_id}")
             logger.info(f"👂 [Instance {self._instance}] Listening on: {self._address_cache}")
@@ -734,7 +734,7 @@ class P2P:
 
             addr_list = result.get('message', [])
             logger.info(f"✅ Found addresses for {target}: {addr_list}")
-            return [_addr for _addr in addr_list if '/ws' in _addr]
+            return addr_list
 
         except Exception as e:
             logger.error(f"❌ Failed to get addresses for {target}: {e}")
