@@ -1264,10 +1264,10 @@ func CreateNode(
 
 	// --- AutoTLS Cert Manager Setup (if enabled) ---
 	var certManager *p2pforge.P2PForgeCertMgr
-	var certReadyChan chan struct{}
+	// var certReadyChan chan struct{}
 	if enableAutoTLS {
 		logger.Debugf("[GO]   - Instance %d: AutoTLS is ENABLED. Setting up certificate manager...\n", instanceIndex)
-		certReadyChan = make(chan struct{})
+		// certReadyChan = make(chan struct{})
 		rawLogger := logger.Desugar()
 		certManager, err = p2pforge.NewP2PForgeCertMgr(
 			p2pforge.WithCAEndpoint(p2pforge.DefaultCAEndpoint),
@@ -1275,7 +1275,7 @@ func CreateNode(
 			p2pforge.WithUserAgent(UnaiverseUserAgent),
 			p2pforge.WithRegistrationDelay(10*time.Second),
 			p2pforge.WithLogger(rawLogger.Sugar().Named("autotls")),
-			p2pforge.WithOnCertLoaded(func() {close(certReadyChan)}),
+			// p2pforge.WithOnCertLoaded(func() {close(certReadyChan)}),
 		)
 		if err != nil {
 			cleanupFailedCreate(instanceIndex)
@@ -1410,20 +1410,54 @@ func CreateNode(
 	logger.Debugf("[GO] ⏳ Instance %d: Waiting for address discovery and NAT to settle...\n", instanceIndex)
 
 	if enableAutoTLS {
-		// --- 🎯 NEW: Wait for the AutoTLS certificate to be provisioned ---
-		logger.Debugf("[GO] ⏳ Instance %d: Waiting for AutoTLS certificate to be provisioned (timeout: 90s)...", instanceIndex)
-		select {
-		case <-certReadyChan:
-			logger.Infof("[GO] ✅ Instance %d: AutoTLS certificate successfully loaded.", instanceIndex)
-			isPublic = true // If we got a certificate, we are by definition publicly reachable.
-		case <-time.After(90 * time.Second):
+		// --- 🎯 FINAL: Wait for the EvtLocalAddressesUpdated containing the resolved WSS address ---
+		logger.Infof("[GO] ⏳ Instance %d: Waiting for the final public WSS address to be generated...", instanceIndex)
+
+		// 1. Subscribe to the event that fires *after* the AddrsFactory has run.
+		sub, err := instanceHost.EventBus().Subscribe(new(event.EvtLocalAddressesUpdated))
+		if err != nil {
 			cleanupFailedCreate(instanceIndex)
-			return jsonErrorResponse("Timed out after 90s waiting for AutoTLS certificate", nil)
-		case <-contexts[instanceIndex].Done():
-			cleanupFailedCreate(instanceIndex)
-			return jsonErrorResponse("Node creation cancelled while waiting for certificate", nil)
+			return jsonErrorResponse("Failed to subscribe to address update events", err)
 		}
-		idht.Close() // DHT job is done, it was only needed for AutoNAT.
+		defer sub.Close()
+
+		// 2. Loop and inspect events until our condition is met or we time out.
+	WAIT_FOR_WSS_ADDR:
+		for {
+			select {
+			case evt := <-sub.Out():
+				// We received an address update event.
+				addrsEvent, ok := evt.(event.EvtLocalAddressesUpdated)
+				if !ok {
+					continue // Should not happen, but good practice.
+				}
+
+				// 3. Check the addresses in the event to see if our WSS address is ready.
+				for _, updatedAddr := range addrsEvent.Current {
+					addr := updatedAddr.Address
+					addrStr := addr.String()
+
+					// The condition for readiness: the address is public AND is a secure websocket address.
+					isPublicWSS := manet.IsPublicAddr(addr) && strings.Contains(addrStr, "/ws") && (strings.Contains(addrStr, "/tls/sni/") && !strings.Contains(addrStr, "*"))
+
+					if isPublicWSS {
+						logger.Infof("[GO] ✅ Instance %d: Confirmed final public WSS address: %s", instanceIndex, addrStr)
+						isPublic = true         // If we have a public WSS address, the node is public.
+						break WAIT_FOR_WSS_ADDR // Exit the loop, we are done.
+					}
+				}
+				// If we checked all addresses in this event and didn't find the WSS one, the loop continues, waiting for the next event.
+
+			case <-time.After(90 * time.Second):
+				cleanupFailedCreate(instanceIndex)
+				return jsonErrorResponse("Timed out after 90s waiting for the final WSS address", nil)
+
+			case <-contexts[instanceIndex].Done():
+				cleanupFailedCreate(instanceIndex)
+				return jsonErrorResponse("Node creation cancelled while waiting for final WSS address", nil)
+			}
+		}
+		idht.Close() // DHT job is done.
 
 	} else if !knowsIsPublic {
 		// --- Fallback to old reachability check ONLY if AutoTLS is disabled ---
