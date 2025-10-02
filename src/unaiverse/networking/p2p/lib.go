@@ -1264,8 +1264,10 @@ func CreateNode(
 
 	// --- AutoTLS Cert Manager Setup (if enabled) ---
 	var certManager *p2pforge.P2PForgeCertMgr
+	var certReadyChan chan struct{}
 	if enableAutoTLS {
 		logger.Debugf("[GO]   - Instance %d: AutoTLS is ENABLED. Setting up certificate manager...\n", instanceIndex)
+		certReadyChan = make(chan struct{})
 		rawLogger := logger.Desugar()
 		certManager, err = p2pforge.NewP2PForgeCertMgr(
 			p2pforge.WithCAEndpoint(p2pforge.DefaultCAEndpoint),
@@ -1273,6 +1275,7 @@ func CreateNode(
 			p2pforge.WithUserAgent(UnaiverseUserAgent),
 			p2pforge.WithRegistrationDelay(10*time.Second),
 			p2pforge.WithLogger(rawLogger.Sugar().Named("autotls")),
+			p2pforge.WithOnCertLoaded(func() {close(certReadyChan)}),
 		)
 		if err != nil {
 			cleanupFailedCreate(instanceIndex)
@@ -1406,46 +1409,37 @@ func CreateNode(
 	// Give discovery mechanisms a moment to find the public address.
 	logger.Debugf("[GO] ⏳ Instance %d: Waiting for address discovery and NAT to settle...\n", instanceIndex)
 
-	if !knowsIsPublic || enableAutoTLS {
-		// --- 🎯 : Wait for Public Reachability ---
-		// This replaces the old address polling loop. We wait a maximum of 30 seconds.
-		isPublic = waitForPublicReachability(instanceHost, 30*time.Second)
-		// --- Robustly wait for a public address to appear in the host's list ---
-		if isPublic {
-			logger.Debugf("[GO]   - Instance %d: Reachability is Public. Now waiting for public address to be confirmed in host list...", instanceIndex)
-			pollCtx, cancel := context.WithTimeout(contexts[instanceIndex], 10*time.Second) // 10s timeout for this phase
-			defer cancel()
-			
-		POLL_LOOP:
-			for {
-				select {
-				case <-pollCtx.Done():
-					logger.Warnf("[GO] ⚠️ Instance %d: Timed out waiting for a public address to be added to the host's address list.", instanceIndex)
-					isPublic = false // Downgrade status if we timed out
-					break POLL_LOOP
-				case <-time.After(500 * time.Millisecond): // Poll every 500ms
-					for _, addr := range instanceHost.Addrs() {
-						if manet.IsPublicAddr(addr) {
-							logger.Infof("[GO]   - Instance %d: Confirmed public address in host list: %s", instanceIndex, addr)
-							break POLL_LOOP
-						}
-					}
-				}
-			}
+	if enableAutoTLS {
+		// --- 🎯 NEW: Wait for the AutoTLS certificate to be provisioned ---
+		logger.Debugf("[GO] ⏳ Instance %d: Waiting for AutoTLS certificate to be provisioned (timeout: 90s)...", instanceIndex)
+		select {
+		case <-certReadyChan:
+			logger.Infof("[GO] ✅ Instance %d: AutoTLS certificate successfully loaded.", instanceIndex)
+			isPublic = true // If we got a certificate, we are by definition publicly reachable.
+		case <-time.After(90 * time.Second):
+			cleanupFailedCreate(instanceIndex)
+			return jsonErrorResponse("Timed out after 90s waiting for AutoTLS certificate", nil)
+		case <-contexts[instanceIndex].Done():
+			cleanupFailedCreate(instanceIndex)
+			return jsonErrorResponse("Node creation cancelled while waiting for certificate", nil)
 		}
+		idht.Close() // DHT job is done, it was only needed for AutoNAT.
+
+	} else if !knowsIsPublic {
+		// --- Fallback to old reachability check ONLY if AutoTLS is disabled ---
+		isPublic = waitForPublicReachability(instanceHost, 30*time.Second)
 		if !isPublic {
 			logger.Warnf("[GO] ⚠️ Instance %d: The node may not be directly dialable.", instanceIndex)
 		}
-		idht.Close() // Close DHT as we don't need it anymore for this simple node
-
-		// --- Cleanup Bootstrap Peers ---
-		// The connectedPeers map was flooded with bootstrap peers during DHT setup.
-		// We remove them now to keep the map clean for actual user connections.
-		logger.Debugf("[GO] 🧹 Instance %d: Cleaning up bootstrap peer connections from the tracked list...\n", instanceIndex)
-		connectedPeersMutexes[instanceIndex].Lock()
-		connectedPeersInstances[instanceIndex] = make(map[peer.ID]ExtendedPeerInfo) // Clear the map
-		connectedPeersMutexes[instanceIndex].Unlock()
+		idht.Close()
 	}
+
+	// --- Cleanup Bootstrap Peers ---
+	// In case thhe connectedPeers map was flooded with bootstrap peers during DHT setup, let's do this anyway.
+	logger.Debugf("[GO] 🧹 Instance %d: Cleaning up bootstrap peer connections from the tracked list...\n", instanceIndex)
+	connectedPeersMutexes[instanceIndex].Lock()
+	connectedPeersInstances[instanceIndex] = make(map[peer.ID]ExtendedPeerInfo) // Clear the map
+	connectedPeersMutexes[instanceIndex].Unlock()
 
 	// --- Get Final Addresses ---
 	nodeAddresses, err := goGetNodeAddresses(instanceIndex, "")
