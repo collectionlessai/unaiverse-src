@@ -1427,6 +1427,7 @@ func CreateNode(
 			select {
 			case evt := <-sub.Out():
 				// We received an address update event.
+				logger.Infof("[GO] 🔔 Instance %d: Received address update event, checking for WSS address...\n", instanceIndex)
 				addrsEvent, ok := evt.(event.EvtLocalAddressesUpdated)
 				if !ok {
 					continue // Should not happen, but good practice.
@@ -1835,9 +1836,9 @@ func DisconnectFrom(
 
 	logMsg := fmt.Sprintf("Instance %d: Disconnected from peer %s", instanceIndex, goPeerID)
 	if !exists && !closedNetworkConn && len(conns) == 0 {
-		logMsg = fmt.Sprintf("Instance %d: Peer %s was not connected or tracked", instanceIndex, goPeerID)
+		logMsg = fmt.Sprintf("Instance %d: Disconnected from peer %s (not connected or tracked)", instanceIndex, goPeerID)
 	}
-	logger.Infof("[GO] ✅ %s\n", logMsg)
+	logger.Infof("[GO] 🔌 %s\n", logMsg)
 
 	return jsonSuccessResponse(logMsg)
 }
