@@ -1151,8 +1151,8 @@ func InitializeLibrary(
 		// These are crucial for debugging AutoTLS and connectivity.
 		golog.SetLogLevel("autotls", "debug")
 		golog.SetLogLevel("p2p-forge", "debug")
-		golog.SetLogLevel("nat", "debug")
-		golog.SetLogLevel("basichost", "debug")
+		golog.SetLogLevel("nat", "info")
+		golog.SetLogLevel("basichost", "info")
 	} else {
 		golog.SetAllLoggers(golog.LevelError)
 		golog.SetLogLevel("*", "FATAL")
