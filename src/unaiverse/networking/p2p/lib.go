@@ -949,9 +949,9 @@ func goGetNodeAddresses(
 		if strings.HasPrefix(transportAddr.String(), "/p2p-circuit/") {
 			continue
 		}
-		if strings.Contains(transportAddr.String(), "/webrtc-direct/") {
-			continue
-		}
+		// if strings.Contains(transportAddr.String(), "/webrtc-direct/") {
+		// 	continue
+		// }
 
 		// handle cases based on presence and correctness of Peer ID in the address
 		switch {
