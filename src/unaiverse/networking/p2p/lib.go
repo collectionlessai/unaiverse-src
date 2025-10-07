@@ -1146,13 +1146,13 @@ func InitializeLibrary(
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
 	if int(enableLoggingC) == 1 {
 		golog.SetAllLoggers(golog.LevelInfo) // Set a default level
-		golog.SetLogLevel("p2p-library", "info")
+		golog.SetLogLevel("p2p-library", "debug")
 		// --- Add Specific Log Levels from the Example ---
 		// These are crucial for debugging AutoTLS and connectivity.
 		golog.SetLogLevel("autotls", "debug")
 		golog.SetLogLevel("p2p-forge", "debug")
 		golog.SetLogLevel("nat", "info")
-		golog.SetLogLevel("basichost", "info")
+		golog.SetLogLevel("basichost", "debug")
 	} else {
 		golog.SetAllLoggers(golog.LevelError)
 		golog.SetLogLevel("*", "FATAL")
@@ -2441,7 +2441,7 @@ func MessageQueueLength(
 	defer store.mu.Unlock()
 
 	totalLength := 0
-	/// TODO: this makes sense but not for the check we are doing from python, think about it
+	// TODO: this makes sense but not for the check we are doing from python, think about it
 	for _, messageList := range store.messagesByChannel {
 		totalLength += messageList.Len()
 	}
