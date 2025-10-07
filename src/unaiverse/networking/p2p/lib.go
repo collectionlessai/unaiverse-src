@@ -949,7 +949,7 @@ func goGetNodeAddresses(
 		if strings.HasPrefix(transportAddr.String(), "/p2p-circuit/") {
 			continue
 		}
-		if !strings.Contains(transportAddr.String(), "/tcp/") {
+		if strings.Contains(transportAddr.String(), "/webrtc-direct/") {
 			continue
 		}
 
@@ -1146,13 +1146,13 @@ func InitializeLibrary(
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
 	if int(enableLoggingC) == 1 {
 		golog.SetAllLoggers(golog.LevelInfo) // Set a default level
-		golog.SetLogLevel("p2p-library", "debug")
+		golog.SetLogLevel("p2p-library", "info")
 		// --- Add Specific Log Levels from the Example ---
 		// These are crucial for debugging AutoTLS and connectivity.
 		golog.SetLogLevel("autotls", "debug")
 		golog.SetLogLevel("p2p-forge", "debug")
 		golog.SetLogLevel("nat", "info")
-		golog.SetLogLevel("basichost", "debug")
+		golog.SetLogLevel("basichost", "info")
 	} else {
 		golog.SetAllLoggers(golog.LevelError)
 		golog.SetLogLevel("*", "FATAL")
