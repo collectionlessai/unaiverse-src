@@ -69,8 +69,6 @@ src/unaiverse/networking/p2p/lib.version.json
 *.so
 *.dylib
 lib.h
-go.mod
-go.sum
 mnist_data
 extracted_info.json
 stats.json
