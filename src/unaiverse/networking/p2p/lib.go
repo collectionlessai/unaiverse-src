@@ -309,7 +309,7 @@ func cleanupFailedCreate(instanceIndex int) {
 	instanceStateMutex.Unlock()
 }
 
-func getListenAddrs(ipsJSON string, tcpPort int, useTLS bool, domainName string) ([]ma.Multiaddr, error) {
+func getListenAddrs(ipsJSON string, tcpPort int, tlsMode string) ([]ma.Multiaddr, error) {
 	var ips []string
 	// --- Parse IPs from JSON ---
 	if ipsJSON == "" || ipsJSON == "[]" {
@@ -341,13 +341,13 @@ func getListenAddrs(ipsJSON string, tcpPort int, useTLS bool, domainName string)
 		webrtcMaddr, _ := ma.NewMultiaddr(fmt.Sprintf("/ip4/%s/udp/%d/webrtc-direct", ip, webrtcPort))
 		listenAddrs = append(listenAddrs, tcpMaddr, quicMaddr, webrtcMaddr)
 
-		if useTLS && domainName == "" {
+		if tlsMode == "autotls" {
 			// This is the special multiaddr that triggers AutoTLS
 			wssMaddr, _ := ma.NewMultiaddr(fmt.Sprintf("/ip4/%s/tcp/%d/tls/sni/*.%s/ws", ip, tcpPort, p2pforge.DefaultForgeDomain))
 			listenAddrs = append(listenAddrs, wssMaddr)
-		} else if useTLS && domainName != "" {
+		} else if tlsMode == "domain" {
 			// This is the standard secure WebSocket address with provided domain
-			wssMaddr, _ := ma.NewMultiaddr(fmt.Sprintf("/dns4/%s/tcp/%d/tls/ws", domainName, tcpPort))
+			wssMaddr, _ := ma.NewMultiaddr(fmt.Sprintf("/ip4/%s/tcp/%d/tls/ws", ip, tcpPort))
 			listenAddrs = append(listenAddrs, wssMaddr)
 		} else {
 			// Fallback to a standard, non-secure WebSocket address
@@ -1157,15 +1157,15 @@ func InitializeLibrary(
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
 	if int(enableLoggingC) == 1 {
 		golog.SetAllLoggers(golog.LevelInfo) // Set a default level
-		golog.SetLogLevel("p2p-library", "info")
+		golog.SetLogLevel("p2p-library", "debug")
 		// --- Add Specific Log Levels from the Example ---
 		// These are crucial for debugging AutoTLS and connectivity.
-		golog.SetLogLevel("autotls", "info")
-		golog.SetLogLevel("p2p-forge", "info")
-		golog.SetLogLevel("nat", "info")
-		golog.SetLogLevel("basichost", "info")
-		golog.SetLogLevel("p2p-circuit", "info") // Core circuit-v2 protocol logic
-		golog.SetLogLevel("relay", "info")
+		golog.SetLogLevel("autotls", "debug")
+		golog.SetLogLevel("p2p-forge", "debug")
+		golog.SetLogLevel("nat", "debug")
+		golog.SetLogLevel("basichost", "debug")
+		golog.SetLogLevel("p2p-circuit", "debug") // Core circuit-v2 protocol logic
+		golog.SetLogLevel("relay", "debug")
 	} else {
 		golog.SetAllLoggers(golog.LevelError)
 		golog.SetLogLevel("*", "FATAL")
@@ -1303,7 +1303,9 @@ func CreateNode(
 	}
 
 	// --- 4. Libp2p Options Assembly ---
-	listenAddrs, err := getListenAddrs(ipsJSON, predefinedPort, enableTLS, domainName)
+	tlsMode := "none"
+	if useCustomTLS { tlsMode = "domain" } else if useAutoTLS { tlsMode = "autotls" }
+	listenAddrs, err := getListenAddrs(ipsJSON, predefinedPort, tlsMode)
 	if err != nil {
 		cleanupFailedCreate(instanceIndex)
 		return jsonErrorResponse(fmt.Sprintf("Instance %d: Failed to create multiaddrs", instanceIndex), err)
@@ -1483,6 +1485,7 @@ func CreateNode(
 				for _, updatedAddr := range addrsEvent.Current {
 					addr := updatedAddr.Address
 					addrStr := addr.String()
+					logger.Debugf("[GO]     - Instance %d: Found address: %s\n", instanceIndex, addrStr)
 
 					// The condition for readiness: the address is public AND is a secure websocket address.
 					isPublicWSS := manet.IsPublicAddr(addr) && (strings.Contains(addrStr, "/tls/") && !strings.Contains(addrStr, "*"))
