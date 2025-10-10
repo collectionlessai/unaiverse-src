@@ -228,7 +228,7 @@ class Node:
 
         # Create another P2P node for the private world (it has fields 'addresses', and 'peer_id', and 'libp2p')
         p2p_w = P2P(identity_dir=p2p_w_identity_dir,
-                    port=int(os.getenv("NODE_STARTING_PORT", "0"))
+                    port=(int(os.getenv("NODE_STARTING_PORT", "0")) + 4)
                     if int(os.getenv("NODE_STARTING_PORT", "0")) > 0 else 0,
                     ips=None,
                     enable_relay_client=allow_connection_through_relay,

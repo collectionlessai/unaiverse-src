@@ -1160,12 +1160,12 @@ func InitializeLibrary(
 		golog.SetLogLevel("p2p-library", "info")
 		// --- Add Specific Log Levels from the Example ---
 		// These are crucial for debugging AutoTLS and connectivity.
-		golog.SetLogLevel("autotls", "debug")
-		golog.SetLogLevel("p2p-forge", "debug")
+		golog.SetLogLevel("autotls", "info")
+		golog.SetLogLevel("p2p-forge", "info")
 		golog.SetLogLevel("nat", "info")
-		golog.SetLogLevel("basichost", "debug")
-		golog.SetLogLevel("p2p-circuit", "debug") // Core circuit-v2 protocol logic
-		golog.SetLogLevel("relay", "debug")
+		golog.SetLogLevel("basichost", "info")
+		golog.SetLogLevel("p2p-circuit", "info") // Core circuit-v2 protocol logic
+		golog.SetLogLevel("relay", "info")
 	} else {
 		golog.SetAllLoggers(golog.LevelError)
 		golog.SetLogLevel("*", "FATAL")
@@ -1495,7 +1495,7 @@ func CreateNode(
 				}
 				// If we checked all addresses in this event and didn't find the WSS one, the loop continues, waiting for the next event.
 
-			case <-time.After(90 * time.Second):
+			case <-time.After(30 * time.Second):
 				cleanupFailedCreate(instanceIndex)
 				return jsonErrorResponse("Timed out after 90s waiting for the final WSS address", nil)
 
