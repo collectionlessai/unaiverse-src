@@ -15,7 +15,7 @@ import (
 	"container/list"  // For an efficient ordered list (doubly-linked list for queues)
 	"context"         // For managing cancellation signals and deadlines across API boundaries and goroutines
 	"crypto/rand"     // For generating identity keys
-	"crypto/tls"	  // For TLS configuration and certificates
+	"crypto/tls"      // For TLS configuration and certificates
 	"encoding/base64" // For encoding binary message data into JSON-safe strings
 	"encoding/binary" // For encoding/decoding length prefixes in stream communication
 	"encoding/json"   // For marshalling/unmarshalling data structures to/from JSON (used for C API communication)
@@ -24,11 +24,11 @@ import (
 	"log"             // For logging information, warnings, and errors
 	"net"             // For network-related errors and interfaces
 	"os"              // For interacting with the operating system (e.g., Stdout)
+	"path/filepath"   // For file path manipulations (e.g., saving/loading identity keys)
 	"strings"         // For string manipulations (e.g., trimming, splitting)
 	"sync"            // For synchronization primitives like Mutexes and RWMutexes to protect shared data
 	"time"            // For time-related functions (e.g., timeouts, timestamps)
 	"unsafe"          // For using Go pointers with C code (specifically C.free)
-	"path/filepath"   // For file path manipulations (e.g., saving/loading identity keys)
 
 	// Core libp2p libraries
 	libp2p "github.com/libp2p/go-libp2p"                          // Main libp2p package for creating a host
@@ -235,44 +235,44 @@ func checkInstanceIndex(
 }
 
 func loadOrCreateIdentity(keyPath string) (crypto.PrivKey, error) {
-    // Check if key file already exists.
-    if _, err := os.Stat(keyPath); err == nil {
-        // Key file exists, read and unmarshal it.
-        bytes, err := os.ReadFile(keyPath)
-        if err != nil {
-            return nil, fmt.Errorf("failed to read existing key file: %w", err)
-        }
+	// Check if key file already exists.
+	if _, err := os.Stat(keyPath); err == nil {
+		// Key file exists, read and unmarshal it.
+		bytes, err := os.ReadFile(keyPath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read existing key file: %w", err)
+		}
 		// load the key
-        privKey, err := crypto.UnmarshalPrivateKey(bytes)
-        if err != nil {
-            return nil, fmt.Errorf("failed to unmarshal corrupt private key: %w", err)
-        }
-        return privKey, nil
+		privKey, err := crypto.UnmarshalPrivateKey(bytes)
+		if err != nil {
+			return nil, fmt.Errorf("failed to unmarshal corrupt private key: %w", err)
+		}
+		return privKey, nil
 
-    } else if os.IsNotExist(err) {
-        // Key file does not exist, generate a new one.
-        logger.Infof("[GO] 💎 Generating new persistent peer identity in %s\n", keyPath)
-        privKey, _, err := crypto.GenerateEd25519Key(rand.Reader)
-        if err != nil {
-            return nil, fmt.Errorf("failed to generate new key: %w", err)
-        }
+	} else if os.IsNotExist(err) {
+		// Key file does not exist, generate a new one.
+		logger.Infof("[GO] 💎 Generating new persistent peer identity in %s\n", keyPath)
+		privKey, _, err := crypto.GenerateEd25519Key(rand.Reader)
+		if err != nil {
+			return nil, fmt.Errorf("failed to generate new key: %w", err)
+		}
 
-        // Marshal the new key to bytes.
-        bytes, err := crypto.MarshalPrivateKey(privKey)
-        if err != nil {
-            return nil, fmt.Errorf("failed to marshal new private key: %w", err)
-        }
+		// Marshal the new key to bytes.
+		bytes, err := crypto.MarshalPrivateKey(privKey)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal new private key: %w", err)
+		}
 
-        // Write the new key to a file.
-        if err := os.WriteFile(keyPath, bytes, 0400); err != nil {
-            return nil, fmt.Errorf("failed to write new key file: %w", err)
-        }
-        return privKey, nil
+		// Write the new key to a file.
+		if err := os.WriteFile(keyPath, bytes, 0400); err != nil {
+			return nil, fmt.Errorf("failed to write new key file: %w", err)
+		}
+		return privKey, nil
 
-    } else {
-        // Another error occurred (e.g., permissions).
-        return nil, fmt.Errorf("failed to stat key file: %w", err)
-    }
+	} else {
+		// Another error occurred (e.g., permissions).
+		return nil, fmt.Errorf("failed to stat key file: %w", err)
+	}
 }
 
 func cleanupFailedCreate(instanceIndex int) {
@@ -1165,7 +1165,7 @@ func InitializeLibrary(
 		golog.SetLogLevel("nat", "info")
 		golog.SetLogLevel("basichost", "debug")
 		golog.SetLogLevel("p2p-circuit", "debug") // Core circuit-v2 protocol logic
-    	golog.SetLogLevel("relay", "debug")
+		golog.SetLogLevel("relay", "debug")
 	} else {
 		golog.SetAllLoggers(golog.LevelError)
 		golog.SetLogLevel("*", "FATAL")
@@ -1278,11 +1278,11 @@ func CreateNode(
 
 	// --- Load or Create Persistent Identity ---
 	keyPath := filepath.Join(identityDir, "identity.key")
-    privKey, err := loadOrCreateIdentity(keyPath)
-    if err != nil {
-        cleanupFailedCreate(instanceIndex)
-        return jsonErrorResponse(fmt.Sprintf("Instance %d: Failed to prepare identity", instanceIndex), err)
-    }
+	privKey, err := loadOrCreateIdentity(keyPath)
+	if err != nil {
+		cleanupFailedCreate(instanceIndex)
+		return jsonErrorResponse(fmt.Sprintf("Instance %d: Failed to prepare identity", instanceIndex), err)
+	}
 
 	// --- AutoTLS Cert Manager Setup (if enabled) ---
 	var certManager *p2pforge.P2PForgeCertMgr
