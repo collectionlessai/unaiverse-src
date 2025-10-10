@@ -60,9 +60,6 @@ class Node:
                  hidden: bool = False,
                  clock_delta: float = 1. / 25.,
                  base_identity_dir: str = "./unaiverse_nodes_identity",
-                 domain: Optional[str] = None,
-                 tls_cert_path: Optional[str] = None,
-                 tls_key_path: Optional[str] = None,
                  only_certified_agents: bool = False,
                  allowed_node_ids: list[str] | set[str] = None,  # Optional: it is loaded from the online profile
                  world_masters_node_ids: list[str] | set[str] = None,  # Optional: it is loaded from the online profile
@@ -222,9 +219,9 @@ class Node:
                     knows_is_public=os.getenv("NODE_IS_PUBLIC", "0") == "1",
                     max_connections=1000,
                     enable_tls=os.getenv("NODE_USE_TLS", "0") == "1",
-                    domain_name=domain,
-                    tls_cert_path=tls_cert_path,
-                    tls_key_path=tls_key_path)
+                    domain_name=os.getenv("DOMAIN", None),
+                    tls_cert_path=os.getenv("TLS_CERT_PATH", None),
+                    tls_key_path=os.getenv("TLS_KEY_PATH", None))
 
         # Create another P2P node for the private world (it has fields 'addresses', and 'peer_id', and 'libp2p')
         p2p_w = P2P(identity_dir=p2p_w_identity_dir,
@@ -236,9 +233,9 @@ class Node:
                     knows_is_public=os.getenv("NODE_IS_PUBLIC", "0") == "1",
                     max_connections=1000,
                     enable_tls=os.getenv("NODE_USE_TLS", "0") == "1",
-                    domain_name=domain,
-                    tls_cert_path=tls_cert_path,
-                    tls_key_path=tls_key_path)
+                    domain_name=os.getenv("DOMAIN", None),
+                    tls_cert_path=os.getenv("TLS_CERT_PATH", None),
+                    tls_key_path=os.getenv("TLS_KEY_PATH", None))
 
         # Get first node token
         self.get_node_token(peer_ids=[p2p_u.peer_id, p2p_w.peer_id])  # Passing both the peer IDs
