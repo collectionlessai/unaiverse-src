@@ -15,6 +15,7 @@ import (
 	"container/list"  // For an efficient ordered list (doubly-linked list for queues)
 	"context"         // For managing cancellation signals and deadlines across API boundaries and goroutines
 	"crypto/rand"     // For generating identity keys
+	"crypto/tls"	  // For TLS configuration and certificates
 	"encoding/base64" // For encoding binary message data into JSON-safe strings
 	"encoding/binary" // For encoding/decoding length prefixes in stream communication
 	"encoding/json"   // For marshalling/unmarshalling data structures to/from JSON (used for C API communication)
@@ -27,6 +28,7 @@ import (
 	"sync"            // For synchronization primitives like Mutexes and RWMutexes to protect shared data
 	"time"            // For time-related functions (e.g., timeouts, timestamps)
 	"unsafe"          // For using Go pointers with C code (specifically C.free)
+	"path/filepath"   // For file path manipulations (e.g., saving/loading identity keys)
 
 	// Core libp2p libraries
 	libp2p "github.com/libp2p/go-libp2p"                          // Main libp2p package for creating a host
@@ -232,38 +234,45 @@ func checkInstanceIndex(
 	return nil
 }
 
-// loadOrCreateIdentity reads a private key from the given path for a specific instance.
-// If the key file does not exist, it generates a new one and saves it.
-func loadOrCreateIdentity(instanceIndex int) (crypto.PrivKey, error) {
-	keyPath := fmt.Sprintf("identity-instance-%d.key", instanceIndex)
+func loadOrCreateIdentity(keyPath string) (crypto.PrivKey, error) {
+    // Check if key file already exists.
+    if _, err := os.Stat(keyPath); err == nil {
+        // Key file exists, read and unmarshal it.
+        bytes, err := os.ReadFile(keyPath)
+        if err != nil {
+            return nil, fmt.Errorf("failed to read existing key file: %w", err)
+        }
+		// load the key
+        privKey, err := crypto.UnmarshalPrivateKey(bytes)
+        if err != nil {
+            return nil, fmt.Errorf("failed to unmarshal corrupt private key: %w", err)
+        }
+        return privKey, nil
 
-	if _, err := os.Stat(keyPath); err == nil {
-		// Key file exists, read it
-		bytes, err := os.ReadFile(keyPath)
-		if err != nil {
-			return nil, err
-		}
-		return crypto.UnmarshalPrivateKey(bytes)
-	} else if os.IsNotExist(err) {
-		// Key file does not exist, generate a new one
-		logger.Infof("[GO] 💎 Instance %d: Generating new persistent peer identity in %s\n", instanceIndex, keyPath)
-		privk, _, err := crypto.GenerateEd25519Key(rand.Reader)
-		if err != nil {
-			return nil, err
-		}
+    } else if os.IsNotExist(err) {
+        // Key file does not exist, generate a new one.
+        logger.Infof("[GO] 💎 Generating new persistent peer identity in %s\n", keyPath)
+        privKey, _, err := crypto.GenerateEd25519Key(rand.Reader)
+        if err != nil {
+            return nil, fmt.Errorf("failed to generate new key: %w", err)
+        }
 
-		bytes, err := crypto.MarshalPrivateKey(privk)
-		if err != nil {
-			return nil, err
-		}
+        // Marshal the new key to bytes.
+        bytes, err := crypto.MarshalPrivateKey(privKey)
+        if err != nil {
+            return nil, fmt.Errorf("failed to marshal new private key: %w", err)
+        }
 
-		// Write the key to a file with read-only permissions for the user.
-		err = os.WriteFile(keyPath, bytes, 0400)
-		return privk, err
-	} else {
-		// Another error occurred (e.g., permissions)
-		return nil, err
-	}
+        // Write the new key to a file.
+        if err := os.WriteFile(keyPath, bytes, 0400); err != nil {
+            return nil, fmt.Errorf("failed to write new key file: %w", err)
+        }
+        return privKey, nil
+
+    } else {
+        // Another error occurred (e.g., permissions).
+        return nil, fmt.Errorf("failed to stat key file: %w", err)
+    }
 }
 
 func cleanupFailedCreate(instanceIndex int) {
@@ -300,7 +309,7 @@ func cleanupFailedCreate(instanceIndex int) {
 	instanceStateMutex.Unlock()
 }
 
-func getListenAddrs(ipsJSON string, tcpPort int, useAutoTLS bool) ([]ma.Multiaddr, error) {
+func getListenAddrs(ipsJSON string, tcpPort int, useTLS bool, domainName string) ([]ma.Multiaddr, error) {
 	var ips []string
 	// --- Parse IPs from JSON ---
 	if ipsJSON == "" || ipsJSON == "[]" {
@@ -317,11 +326,9 @@ func getListenAddrs(ipsJSON string, tcpPort int, useAutoTLS bool) ([]ma.Multiadd
 	var listenAddrs []ma.Multiaddr
 	quicPort := 0
 	webrtcPort := 0
-	wsPort := 0
 	if tcpPort != 0 {
 		quicPort = tcpPort + 1
 		webrtcPort = tcpPort + 2
-		wsPort = tcpPort + 3
 	}
 
 	// --- Create Multiaddrs for both protocols from the single IP list ---
@@ -334,13 +341,17 @@ func getListenAddrs(ipsJSON string, tcpPort int, useAutoTLS bool) ([]ma.Multiadd
 		webrtcMaddr, _ := ma.NewMultiaddr(fmt.Sprintf("/ip4/%s/udp/%d/webrtc-direct", ip, webrtcPort))
 		listenAddrs = append(listenAddrs, tcpMaddr, quicMaddr, webrtcMaddr)
 
-		if useAutoTLS {
+		if useTLS && domainName == "" {
 			// This is the special multiaddr that triggers AutoTLS
 			wssMaddr, _ := ma.NewMultiaddr(fmt.Sprintf("/ip4/%s/tcp/%d/tls/sni/*.%s/ws", ip, tcpPort, p2pforge.DefaultForgeDomain))
 			listenAddrs = append(listenAddrs, wssMaddr)
+		} else if useTLS && domainName != "" {
+			// This is the standard secure WebSocket address with provided domain
+			wssMaddr, _ := ma.NewMultiaddr(fmt.Sprintf("/dns4/%s/tcp/%d/tls/ws", domainName, tcpPort))
+			listenAddrs = append(listenAddrs, wssMaddr)
 		} else {
 			// Fallback to a standard, non-secure WebSocket address
-			wsMaddr, _ := ma.NewMultiaddr(fmt.Sprintf("/ip4/%s/tcp/%d/ws", ip, wsPort))
+			wsMaddr, _ := ma.NewMultiaddr(fmt.Sprintf("/ip4/%s/tcp/%d/ws", ip, tcpPort))
 			listenAddrs = append(listenAddrs, wsMaddr)
 		}
 	}
@@ -949,9 +960,9 @@ func goGetNodeAddresses(
 		if strings.HasPrefix(transportAddr.String(), "/p2p-circuit/") {
 			continue
 		}
-		// if strings.Contains(transportAddr.String(), "/webrtc-direct/") {
-		// 	continue
-		// }
+		if strings.Contains(transportAddr.String(), "*") {
+			continue
+		}
 
 		// handle cases based on presence and correctness of Peer ID in the address
 		switch {
@@ -1208,13 +1219,17 @@ func InitializeLibrary(
 //export CreateNode
 func CreateNode(
 	instanceIndexC C.int,
+	identityDirC *C.char,
 	predefinedPortC C.int,
 	ipsJSONC *C.char,
 	enableRelayClientC C.int,
 	enableRelayServiceC C.int,
 	knowsIsPublicC C.int,
 	maxConnectionsC C.int,
-	enableAutoTLSC C.int,
+	enableTLSC C.int,
+	domainNameC *C.char,
+	tlsCertPathC *C.char,
+	tlsKeyPathC *C.char,
 ) *C.char {
 
 	instanceIndex := int(instanceIndexC)
@@ -1246,38 +1261,38 @@ func CreateNode(
 
 	// --- Configuration ---
 	// Convert C integer parameters to Go types.
+	identityDir := C.GoString(identityDirC)
 	predefinedPort := int(predefinedPortC)
 	ipsJSON := C.GoString(ipsJSONC)
 	enableRelayClient := int(enableRelayClientC) == 1
 	enableRelayService := int(enableRelayServiceC) == 1
 	knowsIsPublic := int(knowsIsPublicC) == 1
 	maxConnections := int(maxConnectionsC)
-	enableAutoTLS := int(enableAutoTLSC) == 1
-
-	logger.Debugf("[GO] 🔧 Instance %d: Config: Port=%d, IPsJSON=%s, EnableRelayClient=%t, EnableRelayService=%t, KnowsIsPublic=%t, MaxConnections=%d, AutoTLS=%t",
-		instanceIndex, predefinedPort, ipsJSON, enableRelayClient, enableRelayService, knowsIsPublic, maxConnections, enableAutoTLS)
+	enableTLS := int(enableTLSC) == 1
+	domainName := C.GoString(domainNameC)
+	tlsCertPath := C.GoString(tlsCertPathC)
+	tlsKeyPath := C.GoString(tlsKeyPathC)
+	// We already checked on the python side that the following three are all provided (if they are needed)
+	useAutoTLS := enableTLS && tlsCertPath == ""
+	useCustomTLS := enableTLS && tlsCertPath != ""
 
 	// --- Load or Create Persistent Identity ---
-	privKey, err := loadOrCreateIdentity(instanceIndex)
-	if err != nil {
-		cleanupFailedCreate(instanceIndex)
-		return jsonErrorResponse(fmt.Sprintf("Instance %d: Failed to load or create identity key", instanceIndex), err)
-	}
+	keyPath := filepath.Join(identityDir, "identity.key")
+    privKey, err := loadOrCreateIdentity(keyPath)
+    if err != nil {
+        cleanupFailedCreate(instanceIndex)
+        return jsonErrorResponse(fmt.Sprintf("Instance %d: Failed to prepare identity", instanceIndex), err)
+    }
 
 	// --- AutoTLS Cert Manager Setup (if enabled) ---
 	var certManager *p2pforge.P2PForgeCertMgr
-	// var certReadyChan chan struct{}
-	if enableAutoTLS {
+	if useAutoTLS {
 		logger.Debugf("[GO]   - Instance %d: AutoTLS is ENABLED. Setting up certificate manager...\n", instanceIndex)
-		// certReadyChan = make(chan struct{})
-		rawLogger := logger.Desugar()
 		certManager, err = p2pforge.NewP2PForgeCertMgr(
 			p2pforge.WithCAEndpoint(p2pforge.DefaultCAEndpoint),
-			p2pforge.WithCertificateStorage(&certmagic.FileStorage{Path: fmt.Sprintf("p2p-forge-certs-instance-%d", instanceIndex)}),
+			p2pforge.WithCertificateStorage(&certmagic.FileStorage{Path: filepath.Join(identityDir, "p2p-forge-certs")}),
 			p2pforge.WithUserAgent(UnaiverseUserAgent),
 			p2pforge.WithRegistrationDelay(10*time.Second),
-			p2pforge.WithLogger(rawLogger.Sugar().Named("autotls")),
-			// p2pforge.WithOnCertLoaded(func() {close(certReadyChan)}),
 		)
 		if err != nil {
 			cleanupFailedCreate(instanceIndex)
@@ -1288,7 +1303,7 @@ func CreateNode(
 	}
 
 	// --- 4. Libp2p Options Assembly ---
-	listenAddrs, err := getListenAddrs(ipsJSON, predefinedPort, enableAutoTLS)
+	listenAddrs, err := getListenAddrs(ipsJSON, predefinedPort, enableTLS, domainName)
 	if err != nil {
 		cleanupFailedCreate(instanceIndex)
 		return jsonErrorResponse(fmt.Sprintf("Instance %d: Failed to create multiaddrs", instanceIndex), err)
@@ -1307,23 +1322,52 @@ func CreateNode(
 		libp2p.DefaultSecurity,
 		libp2p.DefaultMuxers,
 		libp2p.Transport(tcp.NewTCPTransport),
+		libp2p.ShareTCPListener(),
 		libp2p.Transport(quic.NewTransport),
 		libp2p.Transport(webrtc.New),
 		libp2p.ResourceManager(limiter),
 		libp2p.UserAgent(UnaiverseUserAgent),
 	}
 
-	// Get the TLS certs from the cert manager if AutoTLS is enabled
-	if enableAutoTLS {
+	// Add WebSocket transport, with or without TLS based on cert availability
+	if useCustomTLS {
+		// We already have certificates, use them
+		logger.Debugf("[GO]   - Instance %d: Certificates provided, setting up secure WebSocket (WSS).\n", instanceIndex)
+		cert, err := tls.LoadX509KeyPair(tlsCertPath, tlsKeyPath)
+		if err != nil {
+			cleanupFailedCreate(instanceIndex)
+			return jsonErrorResponse(fmt.Sprintf("Instance %d: Failed to load Custom TLS certificate and key", instanceIndex), err)
+		}
+		tlsConfig := &tls.Config{Certificates: []tls.Certificate{cert}}
+		// let's also create a custom address factory to ensure we always advertise the correct domain name
+		domainAddressFactory := func(addrs []ma.Multiaddr) []ma.Multiaddr {
+			// Replace the IP part of the WSS address with our domain.
+			result := make([]ma.Multiaddr, 0, len(addrs))
+			for _, addr := range addrs {
+				if strings.Contains(addr.String(), "/tls/ws") || strings.Contains(addr.String(), "/wss") {
+					// This is our WSS listener. Create the public /dns4 version.
+					dnsAddr, _ := ma.NewMultiaddr(fmt.Sprintf("/dns4/%s/tcp/%d/tls/ws", domainName, predefinedPort))
+					result = append(result, dnsAddr)
+				} else {
+					// Keep other addresses (like QUIC) as they are.
+					result = append(result, addr)
+				}
+			}
+			return result
+		}
 		options = append(options,
-			// Configure the WS transport with the AutoTLS cert manager's TLS Config
+			libp2p.Transport(ws.New, ws.WithTLSConfig(tlsConfig)),
+			libp2p.AddrsFactory(domainAddressFactory),
+		)
+		logger.Debugf("[GO]   - Instance %d: Loaded custom TLS certificate and key for WSS.\n", instanceIndex)
+	} else if useAutoTLS {
+		// No certificates, create them automatically
+		options = append(options,
 			libp2p.Transport(ws.New, ws.WithTLSConfig(certManager.TLSConfig())),
-			// Use the AutoTLS address factory to advertise the correct public addresses
 			libp2p.AddrsFactory(certManager.AddressFactory()),
-			// Share the TCP listener between the plain TCP and WSS transport
-			libp2p.ShareTCPListener(),
 		)
 	} else {
+		// No certificates, use plain WS
 		logger.Debugf("[GO]   - Instance %d: No certificates found, setting up non-secure WebSocket.\n", instanceIndex)
 		options = append(options, libp2p.Transport(ws.New))
 	}
@@ -1354,7 +1398,7 @@ func CreateNode(
 	// Prepare discovering the bootstrap peers
 	var idht *dht.IpfsDHT
 	isPublic := false
-	if !knowsIsPublic || enableAutoTLS {
+	if !knowsIsPublic || enableTLS {
 		// Add any possible option to be publicly reachable
 		options = append(
 			options,
@@ -1388,7 +1432,7 @@ func CreateNode(
 	logger.Infof("[GO] ✅ Instance %d: Host created with ID: %s\n", instanceIndex, instanceHost.ID())
 
 	// --- Link Host to Cert Manager ---
-	if enableAutoTLS {
+	if useAutoTLS {
 		certManager.ProvideHost(instanceHost)
 		logger.Debugf("[GO]   - Instance %d: Provided host to AutoTLS cert manager.\n", instanceIndex)
 	}
@@ -1411,7 +1455,7 @@ func CreateNode(
 	// Give discovery mechanisms a moment to find the public address.
 	logger.Debugf("[GO] ⏳ Instance %d: Waiting for address discovery and NAT to settle...\n", instanceIndex)
 
-	if enableAutoTLS {
+	if enableTLS {
 		// --- Wait for the EvtLocalAddressesUpdated containing the resolved WSS address ---
 		logger.Debugf("[GO] ⏳ Instance %d: Waiting for the final public WSS address to be generated...", instanceIndex)
 
@@ -1441,7 +1485,7 @@ func CreateNode(
 					addrStr := addr.String()
 
 					// The condition for readiness: the address is public AND is a secure websocket address.
-					isPublicWSS := manet.IsPublicAddr(addr) && strings.Contains(addrStr, "/ws") && (strings.Contains(addrStr, "/tls/sni/") && !strings.Contains(addrStr, "*"))
+					isPublicWSS := manet.IsPublicAddr(addr) && (strings.Contains(addrStr, "/tls/") && !strings.Contains(addrStr, "*"))
 
 					if isPublicWSS {
 						logger.Infof("[GO] ✅ Instance %d: Confirmed final public WSS address: %s", instanceIndex, addrStr)

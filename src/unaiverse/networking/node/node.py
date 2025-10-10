@@ -59,6 +59,10 @@ class Node:
                  node_id: str | None = None,
                  hidden: bool = False,
                  clock_delta: float = 1. / 25.,
+                 base_identity_dir: str = "./unaiverse_nodes_identity",
+                 domain: Optional[str] = None,
+                 tls_cert_path: Optional[str] = None,
+                 tls_key_path: Optional[str] = None,
                  only_certified_agents: bool = False,
                  allowed_node_ids: list[str] | set[str] = None,  # Optional: it is loaded from the online profile
                  world_masters_node_ids: list[str] | set[str] = None,  # Optional: it is loaded from the online profile
@@ -186,6 +190,11 @@ class Node:
             if were_alive[0]:
                 raise GenException(f"Cannot access node {node_name}, it is already running! "
                                    f"(set env variable NODE_IGNORE_ALIVE=1 to ignore this control)")
+        
+        # Automatically create a unique data directory for this specific node
+        node_identity_dir = os.path.join(base_identity_dir, self.node_id)
+        p2p_u_identity_dir = os.path.join(node_identity_dir, "p2p_public")
+        p2p_w_identity_dir = os.path.join(node_identity_dir, "p2p_private")
 
         # Getting node ID of world masters, if needed
         if world_masters_node_names is not None and len(world_masters_node_names) > 0:
@@ -205,23 +214,31 @@ class Node:
         offer_relay_facilities = self.node_type is Node.WORLD  # Only world nodes offer relay facilities
 
         # Create P2P node in the whole universe (it has fields 'addresses', and 'peer_id', and 'libp2p')
-        p2p_u = P2P(max_connections=1000,
-                    ips=None,
-                    enable_relay_service=offer_relay_facilities,
-                    enable_relay_client=allow_connection_through_relay,
-                    knows_is_public=os.getenv("NODE_IS_PUBLIC", "0") == "1",
+        p2p_u = P2P(identity_dir=p2p_u_identity_dir,
                     port=int(os.getenv("NODE_STARTING_PORT", "0")),
-                    enable_autotls=os.getenv("NODE_USE_AUTOTLS", "0") == "1")
+                    ips=None,
+                    enable_relay_client=allow_connection_through_relay,
+                    enable_relay_service=offer_relay_facilities,
+                    knows_is_public=os.getenv("NODE_IS_PUBLIC", "0") == "1",
+                    max_connections=1000,
+                    enable_tls=os.getenv("NODE_USE_TLS", "0") == "1",
+                    domain_name=domain,
+                    tls_cert_path=tls_cert_path,
+                    tls_key_path=tls_key_path)
 
         # Create another P2P node for the private world (it has fields 'addresses', and 'peer_id', and 'libp2p')
-        p2p_w = P2P(max_connections=1000,
-                    ips=None,
-                    enable_relay_service=offer_relay_facilities,
-                    enable_relay_client=allow_connection_through_relay,
-                    knows_is_public=os.getenv("NODE_IS_PUBLIC", "0") == "1",
-                    port=(int(os.getenv("NODE_STARTING_PORT", "0")) + 4)
+        p2p_w = P2P(identity_dir=p2p_w_identity_dir,
+                    port=int(os.getenv("NODE_STARTING_PORT", "0"))
                     if int(os.getenv("NODE_STARTING_PORT", "0")) > 0 else 0,
-                    enable_autotls=os.getenv("NODE_USE_AUTOTLS", "0") == "1")
+                    ips=None,
+                    enable_relay_client=allow_connection_through_relay,
+                    enable_relay_service=offer_relay_facilities,
+                    knows_is_public=os.getenv("NODE_IS_PUBLIC", "0") == "1",
+                    max_connections=1000,
+                    enable_tls=os.getenv("NODE_USE_TLS", "0") == "1",
+                    domain_name=domain,
+                    tls_cert_path=tls_cert_path,
+                    tls_key_path=tls_key_path)
 
         # Get first node token
         self.get_node_token(peer_ids=[p2p_u.peer_id, p2p_w.peer_id])  # Passing both the peer IDs
