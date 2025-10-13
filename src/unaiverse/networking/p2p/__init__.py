@@ -194,8 +194,8 @@ _shared_lib.InitializeLibrary.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_i
 _shared_lib.InitializeLibrary.restype = None
 
 # Node Lifecycle & Info
-_shared_lib.CreateNode.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_int,
-                                   ctypes.c_int, ctypes.c_int]
+_shared_lib.CreateNode.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_int,
+                                   ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p]
 _shared_lib.CreateNode.restype = ctypes.c_void_p  # Treat returned *C.char as opaque pointer
 
 _shared_lib.CloseNode.argtypes = [ctypes.c_int]
@@ -218,12 +218,7 @@ _shared_lib.DisconnectFrom.argtypes = [ctypes.c_int, ctypes.c_char_p]
 _shared_lib.DisconnectFrom.restype = ctypes.c_void_p  # Treat returned *C.char as opaque pointer
 
 # Direct Messaging
-_shared_lib.SendMessageToPeer.argtypes = [
-    ctypes.c_int,  # Instance
-    ctypes.c_char_p,  # Channel
-    ctypes.c_char_p,  # Data buffer
-    ctypes.c_int,  # Data length
-]
+_shared_lib.SendMessageToPeer.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_int]
 _shared_lib.SendMessageToPeer.restype = ctypes.c_void_p  # Returns status code, not pointer
 
 # Message Queue

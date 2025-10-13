@@ -12,6 +12,7 @@
                  Code Repositories:  https://github.com/collectionlessai/
                  Main Developers:    Stefano Melacci (Project Leader), Christian Di Maio, Tommaso Guidi
 """
+import os
 import time
 import base64
 import logging
@@ -120,23 +121,33 @@ class P2P:
             logger.info("✅ Go library initialized successfully.")
 
     def __init__(self,
+                 identity_dir: str,
                  port: int = 0,
                  ips: List[str] = None,
                  enable_relay_client: bool = True,
                  enable_relay_service: bool = False,
                  knows_is_public: bool = False,
                  max_connections: int = 1000,
+                 enable_tls: bool = False,
+                 domain_name: Optional[str] = None,
+                 tls_cert_path: Optional[str] = None,
+                 tls_key_path: Optional[str] = None,
                  ) -> None:
         """
         Initializes and starts a new libp2p node.
 
         Args:
+            identity_dir: Directory path to load/store the node's private key and certificates.
             port: The (first) TCP port to listen on (0 for random).
             ips: A list of specific IP addresses to listen on. Defaults to ["0.0.0.0"].
             enable_relay_client: Enable listening to relayed connections for this node.
             enable_relay_service: Enable relay service capabilities for this node.
             knows_is_public: If you already know that the node is public this forces its public reachability. Otherwise it tries every possible attempt to make the node publicly reachable (UPnP, HolePunching, AutoNat via DHT...).
             max_connections: Maximum number of connections this node can handle.
+            enable_tls: Whether to enable AutoTLS certificate management (requires internet access).
+            domain_name: Optional domain name for TLS certificate (required if enable_tls is True).
+            tls_cert_path: Optional path to a custom TLS certificate file (PEM format).
+            tls_key_path: Optional path to a custom TLS private key file (PEM format).
 
         Raises:
             P2PError: If the node creation fails in the Go library.
@@ -163,6 +174,13 @@ class P2P:
 
         self._instance: int = assigned_instance_id
         logger.info(f"🚀 Attempting to initialize P2P Node with auto-assigned Instance ID: {self._instance}")
+        
+        os.makedirs(identity_dir, exist_ok=True)
+        # check if all the ingredients for TLS are provided if any is provided
+        if domain_name is not None or tls_cert_path is not None or tls_key_path is not None:
+            enable_tls = True
+            if domain_name is None or tls_cert_path is None or tls_key_path is None:
+                raise ValueError("If any TLS parameter is provided, all of domain_name, tls_cert_path, and tls_key_path must be provided.")
 
         self._port = port
         self._ips = ips if ips is not None else []
@@ -172,8 +190,6 @@ class P2P:
         self._max_connections = max_connections
         self._peer_id: Optional[str] = None
         self._peer_map: Dict[str, Any] = {}  # Map to store peer info {peer_id: info}
-        self._poll_interval = 5.0  # Polling interval for background threads
-        self._stop_event = threading.Event()
 
         logger.info(f"🐍 Creating Node (Instance ID: {self._instance})...")
         try:
@@ -181,12 +197,17 @@ class P2P:
             # Call the Go function
             result_ptr = P2P.libp2p.CreateNode(
                 P2P._type_interface.to_go_int(self._instance),
+                P2P._type_interface.to_go_string(identity_dir),
                 P2P._type_interface.to_go_int(port),
                 P2P._type_interface.to_go_json(self._ips),
                 P2P._type_interface.to_go_bool(enable_relay_client),
                 P2P._type_interface.to_go_bool(enable_relay_service),
                 P2P._type_interface.to_go_bool(knows_is_public),
                 P2P._type_interface.to_go_int(max_connections),
+                P2P._type_interface.to_go_bool(enable_tls),
+                P2P._type_interface.to_go_string(domain_name if domain_name else ""),
+                P2P._type_interface.to_go_string(tls_cert_path if tls_cert_path else ""),
+                P2P._type_interface.to_go_string(tls_key_path if tls_key_path else ""),
             )
             result = P2P._type_interface.from_go_ptr_to_json(result_ptr)
 
@@ -215,16 +236,6 @@ class P2P:
             self._address_cache: Optional[List[str]] = initial_addresses
             self._address_cache_time: float = time.monotonic()
 
-            # Re-ordering/sorting, discarding /p2p-circuit/ because right now it is useless and preferring /udp/
-            addresses_quic = [a for a in self._address_cache if "/quic-v1/" in a]
-            addresses_webrtc = [a for a in self._address_cache if "/webrtc" in a]
-            addresses_tcp = [a for a in self._address_cache if ("/tcp/" in a and "/ws" not in a)]
-            addresses_ws = [a for a in self._address_cache if ("/ws" in a and "/tcp/" not in a)]
-            addresses = addresses_quic + addresses_webrtc + addresses_tcp + addresses_ws
-            self._address_cache.clear()
-            for _addr in addresses:
-                self._address_cache.append(_addr)
-
             logger.info(f"✅ [Instance {self._instance}] Node created with ID: {self._peer_id}")
             logger.info(f"👂 [Instance {self._instance}] Listening on: {self._address_cache}")
             logger.info(f"🌐 [Instance {self._instance}] Publicly reachable: {self._is_public}")
@@ -240,9 +251,6 @@ class P2P:
                     P2P._instance_ids[self._instance] = False
                     logger.info(f"[Instance {self._instance}] Reclaimed instance ID {self._instance} due to creation failure.")
             raise  # Re-raise the exception that caused the failure
-
-        # # --- Background Threads ---
-        self._stop_event = threading.Event()  # Event to signal threads to stop
 
         logger.info("🎉 Node created successfully and background polling started.")
 
@@ -851,41 +859,6 @@ class P2P:
             logger.error(f"❌ Error fetching message queue length: {e}")
             return -1  # Indicate error
 
-    # --- Background Polling Methods ---
-
-    def _poll_connected_peers(self):
-        """Target function for the connected peers polling thread."""
-        logger.info("🧵 Starting connected peers polling thread...")
-        while not self._stop_event.is_set():
-            try:
-                self.get_connected_peers_info()
-
-            except Exception as e:
-
-                # Catch any unexpected errors within the loop itself
-                logger.error(f" CRITICAL: Uncaught error in connected peers polling loop: {e}")
-
-            # Wait for the specified interval or until stop event is set
-            self._stop_event.wait(self._poll_interval)
-        logger.info("🧵 Connected peers polling thread stopped.")
-
-    def _poll_message_queue(self):
-        """Target function for the message queue length polling thread."""
-        logger.info("🧵 Starting message queue polling thread...")
-        while not self._stop_event.is_set():
-            try:
-                self.get_message_queue_length()
-
-                # TODO: adapt the queue length to the actual version and change the logic accordingly
-                # if length > self._message_buffer_size * 0.8: # Example: Warn if queue is getting full
-                # logger.info(f"⚠️ Message queue length ({length}) is approaching limit ({self._message_buffer_size})")
-
-            except Exception as e:
-                logger.error(f" CRITICAL: Uncaught error in message queue polling loop: {e}")
-
-            self._stop_event.wait(self._poll_interval)
-        logger.info("🧵 Message queue polling thread stopped.")
-
     # --- Lifecycle Management ---
 
     def close(self, close_all: bool = False) -> None:
@@ -899,7 +872,6 @@ class P2P:
 
         # 1. Signal background threads to stop
         logger.info("  - Stopping background threads...")
-        self._stop_event.set()
 
         # 2. Wait briefly for threads to finish (optional, they are daemons)
         # self._get_connected_peers_thread.join(timeout=2)

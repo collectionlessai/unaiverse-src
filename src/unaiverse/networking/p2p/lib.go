@@ -14,6 +14,8 @@ import (
 	"bytes"           // For byte buffer manipulations (e.g., encoding/decoding, separators)
 	"container/list"  // For an efficient ordered list (doubly-linked list for queues)
 	"context"         // For managing cancellation signals and deadlines across API boundaries and goroutines
+	"crypto/rand"     // For generating identity keys
+	"crypto/tls"      // For TLS configuration and certificates
 	"encoding/base64" // For encoding binary message data into JSON-safe strings
 	"encoding/binary" // For encoding/decoding length prefixes in stream communication
 	"encoding/json"   // For marshalling/unmarshalling data structures to/from JSON (used for C API communication)
@@ -22,32 +24,42 @@ import (
 	"log"             // For logging information, warnings, and errors
 	"net"             // For network-related errors and interfaces
 	"os"              // For interacting with the operating system (e.g., Stdout)
+	"path/filepath"   // For file path manipulations (e.g., saving/loading identity keys)
 	"strings"         // For string manipulations (e.g., trimming, splitting)
 	"sync"            // For synchronization primitives like Mutexes and RWMutexes to protect shared data
 	"time"            // For time-related functions (e.g., timeouts, timestamps)
 	"unsafe"          // For using Go pointers with C code (specifically C.free)
 
 	// Core libp2p libraries
-	libp2p "github.com/libp2p/go-libp2p" // Main libp2p package for creating a host
-	dht "github.com/libp2p/go-libp2p-kad-dht"
-	"github.com/libp2p/go-libp2p/core/host"      // Defines the main Host interface, representing a libp2p node
-	"github.com/libp2p/go-libp2p/core/network"   // Defines network interfaces like Stream and Connection
-	"github.com/libp2p/go-libp2p/core/peer"      // Defines Peer ID and AddrInfo types
-	"github.com/libp2p/go-libp2p/core/peerstore" // Defines the Peerstore interface for storing peer metadata (addresses, keys)
-	"github.com/libp2p/go-libp2p/core/routing"
+	libp2p "github.com/libp2p/go-libp2p"                          // Main libp2p package for creating a host
+	dht "github.com/libp2p/go-libp2p-kad-dht"                     // Kademlia DHT implementation for peer discovery and routing
+	"github.com/libp2p/go-libp2p/core/crypto"                     // Defines cryptographic primitives (keys, signatures)
+	"github.com/libp2p/go-libp2p/core/event"                      // Event bus for subscribing to libp2p events (connections, reachability changes)
+	"github.com/libp2p/go-libp2p/core/host"                       // Defines the main Host interface, representing a libp2p node
+	"github.com/libp2p/go-libp2p/core/network"                    // Defines network interfaces like Stream and Connection
+	"github.com/libp2p/go-libp2p/core/peer"                       // Defines Peer ID and AddrInfo types
+	"github.com/libp2p/go-libp2p/core/peerstore"                  // Defines the Peerstore interface for storing peer metadata (addresses, keys)
+	"github.com/libp2p/go-libp2p/core/routing"                    // Defines the Routing interface for peer routing (e.g., DHT)
 	rcmgr "github.com/libp2p/go-libp2p/p2p/host/resource-manager" // For managing resources (bandwidth, memory) for libp2p hosts
 	"github.com/libp2p/go-libp2p/p2p/protocol/circuitv2/client"   // For establishing outbound relayed connections (acting as a client)
 	rc "github.com/libp2p/go-libp2p/p2p/protocol/circuitv2/relay" // Import for relay service options
-	"github.com/libp2p/go-libp2p/core/event"
 
 	// transport protocols for libp2p
-	quic "github.com/libp2p/go-libp2p/p2p/transport/quic" // QUIC transport for peer-to-peer connections (e.g., for mobile devices)
-	"github.com/libp2p/go-libp2p/p2p/transport/tcp"
-	webrtc "github.com/libp2p/go-libp2p/p2p/transport/webrtc" // WebRTC transport for peer-to-peer connections (e.g., for browsers or mobile devices)
+	quic "github.com/libp2p/go-libp2p/p2p/transport/quic"                 // QUIC transport for peer-to-peer connections (e.g., for mobile devices)
+	"github.com/libp2p/go-libp2p/p2p/transport/tcp"                       // TCP transport for peer-to-peer connections (most common)
+	webrtc "github.com/libp2p/go-libp2p/p2p/transport/webrtc"             // WebRTC transport for peer-to-peer connections (e.g., for browsers or mobile devices)
+	ws "github.com/libp2p/go-libp2p/p2p/transport/websocket"              // WebSocket transport for peer-to-peer connections (e.g., for browsers)
+	webtransport "github.com/libp2p/go-libp2p/p2p/transport/webtransport" // WebTransport transport for peer-to-peer connections (e.g., for browsers)
+
+	// --- AutoTLS Imports ---
+	"github.com/caddyserver/certmagic"                // Automatic TLS certificate management (used by p2p-forge)
+	golog "github.com/ipfs/go-log/v2"                 // IPFS logging library for structured logging
+	p2pforge "github.com/ipshipyard/p2p-forge/client" // p2p-forge library for automatic TLS and domain management
 
 	// protobuf
-	"google.golang.org/protobuf/proto"
-	pg "unaiverse/networking/p2p/lib/proto-go"
+	pg "unaiverse/networking/p2p/lib/proto-go" // Generated Protobuf code for our message formats
+
+	"google.golang.org/protobuf/proto" // Core Protobuf library for marshalling/unmarshalling messages
 
 	// PubSub library
 	pubsub "github.com/libp2p/go-libp2p-pubsub" // GossipSub implementation for publish/subscribe messaging
@@ -59,7 +71,9 @@ import (
 
 // ChatProtocol defines the protocol ID string used for direct peer-to-peer messaging streams.
 // This ensures that both peers understand how to interpret the data on the stream.
-const ChatProtocol = "/chat/1.0.0"
+// const UnaiverseChatProtocol = "/unaiverse-chat-protocol/1.0.0"
+const UnaiverseChatProtocol = "/chat/1.0.0"
+const UnaiverseUserAgent = "go-libp2p/example/autotls"
 
 // ExtendedPeerInfo holds information about a connected peer.
 type ExtendedPeerInfo struct {
@@ -100,8 +114,10 @@ type CreateNodeResponse struct {
 	IsPublic  bool     `json:"isPublic"`
 }
 
-// --- Multi-Instance State Management ---
+// --- Create a package-level logger ---
+var logger = golog.Logger("p2p-library")
 
+// --- Multi-Instance State Management ---
 var (
 	// Set the libp2p configuration parameters.
 	maxInstances       int
@@ -114,12 +130,13 @@ var (
 	pubsubInstances                    []*pubsub.PubSub
 	contexts                           []context.Context
 	cancelContexts                     []context.CancelFunc
-	topicsInstances                    []map[string]*pubsub.Topic        // map[instanceIndex]map[channel]*pubsub.Topic
-	subscriptionsInstances             []map[string]*pubsub.Subscription // map[instanceIndex]map[channel]*pubsub.Subscription
-	connectedPeersInstances            []map[peer.ID]ExtendedPeerInfo    // map[instanceIndex]map[peerID]ExtendedPeerInfo
-	rendezvousDiscoveredPeersInstances []*RendezvousState // Slice of pointers to the state struct
-	persistentChatStreamsInstances     []map[peer.ID]network.Stream      // map[instanceIndex]map[peerID]network.Stream
-	messageStoreInstances              []*MessageStore                   // map[instanceIndex]*MessageStore
+	topicsInstances                    []map[string]*pubsub.Topic
+	subscriptionsInstances             []map[string]*pubsub.Subscription
+	connectedPeersInstances            []map[peer.ID]ExtendedPeerInfo
+	rendezvousDiscoveredPeersInstances []*RendezvousState
+	persistentChatStreamsInstances     []map[peer.ID]network.Stream
+	messageStoreInstances              []*MessageStore
+	certManagerInstances               []*p2pforge.P2PForgeCertMgr
 
 	// Mutexes for protecting concurrent access to instance-specific data.
 	connectedPeersMutexes            []sync.RWMutex
@@ -150,7 +167,7 @@ func jsonErrorResponse(
 	if err != nil {
 		errMsg = fmt.Sprintf("%s: %s", message, err.Error())
 	}
-	log.Printf("[GO] ❌ Error: %s", errMsg)
+	logger.Errorf("[GO] ❌ Error: %s", errMsg)
 	// Ensure error messages are escaped properly for JSON embedding
 	escapedErrMsg := escapeStringForJSON(errMsg)
 	// Format into a standard {"state": "Error", "message": "..."} JSON structure.
@@ -218,8 +235,53 @@ func checkInstanceIndex(
 	return nil
 }
 
+func loadOrCreateIdentity(keyPath string) (crypto.PrivKey, error) {
+	// Check if key file already exists.
+	if _, err := os.Stat(keyPath); err == nil {
+		// Key file exists, read and unmarshal it.
+		bytes, err := os.ReadFile(keyPath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read existing key file: %w", err)
+		}
+		// load the key
+		privKey, err := crypto.UnmarshalPrivateKey(bytes)
+		if err != nil {
+			return nil, fmt.Errorf("failed to unmarshal corrupt private key: %w", err)
+		}
+		return privKey, nil
+
+	} else if os.IsNotExist(err) {
+		// Key file does not exist, generate a new one.
+		logger.Infof("[GO] 💎 Generating new persistent peer identity in %s\n", keyPath)
+		privKey, _, err := crypto.GenerateEd25519Key(rand.Reader)
+		if err != nil {
+			return nil, fmt.Errorf("failed to generate new key: %w", err)
+		}
+
+		// Marshal the new key to bytes.
+		bytes, err := crypto.MarshalPrivateKey(privKey)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal new private key: %w", err)
+		}
+
+		// Write the new key to a file.
+		if err := os.WriteFile(keyPath, bytes, 0400); err != nil {
+			return nil, fmt.Errorf("failed to write new key file: %w", err)
+		}
+		return privKey, nil
+
+	} else {
+		// Another error occurred (e.g., permissions).
+		return nil, fmt.Errorf("failed to stat key file: %w", err)
+	}
+}
+
 func cleanupFailedCreate(instanceIndex int) {
-	log.Printf("[GO] 🧹 Instance %d: Cleaning up after failed creation...", instanceIndex)
+	logger.Infof("[GO] 🧹 Instance %d: Cleaning up after failed creation...", instanceIndex)
+	if certManagerInstances[instanceIndex] != nil {
+		certManagerInstances[instanceIndex].Stop()
+		certManagerInstances[instanceIndex] = nil
+	}
 	if hostInstances[instanceIndex] != nil { // Attempt cleanup before returning.
 		hostInstances[instanceIndex].Close()
 		hostInstances[instanceIndex] = nil
@@ -248,9 +310,8 @@ func cleanupFailedCreate(instanceIndex int) {
 	instanceStateMutex.Unlock()
 }
 
-func getListenAddrs(ipsJSON string, tcpPort int) ([]ma.Multiaddr, error) {
+func getListenAddrs(ipsJSON string, tcpPort int, tlsMode string) ([]ma.Multiaddr, error) {
 	var ips []string
-
 	// --- Parse IPs from JSON ---
 	if ipsJSON == "" || ipsJSON == "[]" {
 		ips = []string{"0.0.0.0"} // Default if empty or not provided
@@ -266,37 +327,42 @@ func getListenAddrs(ipsJSON string, tcpPort int) ([]ma.Multiaddr, error) {
 	var listenAddrs []ma.Multiaddr
 	quicPort := 0
 	webrtcPort := 0
+	webtransPort := 0
 	if tcpPort != 0 {
 		quicPort = tcpPort + 1
 		webrtcPort = tcpPort + 2
+		webtransPort = tcpPort + 3
 	}
 
 	// --- Create Multiaddrs for both protocols from the single IP list ---
 	for _, ip := range ips {
-		// Create TCP Multiaddr
-		tcpAddrStr := fmt.Sprintf("/ip4/%s/tcp/%d", ip, tcpPort)
-		tcpMaddr, err := ma.NewMultiaddr(tcpAddrStr)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create TCP multiaddr for IP %s: %w", ip, err)
-		}
-		listenAddrs = append(listenAddrs, tcpMaddr)
+		// TCP
+		tcpMaddr, _ := ma.NewMultiaddr(fmt.Sprintf("/ip4/%s/tcp/%d", ip, tcpPort))
+		// QUIC
+		quicMaddr, _ := ma.NewMultiaddr(fmt.Sprintf("/ip4/%s/udp/%d/quic-v1", ip, quicPort))
+		// WebTransport
+		webtransMaddr, _ := ma.NewMultiaddr(fmt.Sprintf("/ip4/%s/udp/%d/quic-v1/webtransport", ip, webtransPort))
+		// WebRTC
+		webrtcMaddr, _ := ma.NewMultiaddr(fmt.Sprintf("/ip4/%s/udp/%d/webrtc-direct", ip, webrtcPort))
 
-		// Create QUIC Multiaddr
-		quicAddrStr := fmt.Sprintf("/ip4/%s/udp/%d/quic-v1", ip, quicPort)
-		quicMaddr, err := ma.NewMultiaddr(quicAddrStr)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create QUIC multiaddr for IP %s: %w", ip, err)
-		}
-		listenAddrs = append(listenAddrs, quicMaddr)
+		listenAddrs = append(listenAddrs, tcpMaddr, quicMaddr, webrtcMaddr, webtransMaddr)
 
-		// Create WebRTC (UDP) Multiaddr
-		webrctAddrStr := fmt.Sprintf("/ip4/%s/udp/%d/webrtc-direct", ip, webrtcPort)
-		webrctMaddr, err := ma.NewMultiaddr(webrctAddrStr)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create WebRTC multiaddr for IP %s: %w", ip, err)
+		if tlsMode == "autotls" {
+			// This is the special multiaddr that triggers AutoTLS
+			wssMaddr, _ := ma.NewMultiaddr(fmt.Sprintf("/ip4/%s/tcp/%d/tls/sni/*.%s/ws", ip, tcpPort, p2pforge.DefaultForgeDomain))
+			listenAddrs = append(listenAddrs, wssMaddr)
+		} else if tlsMode == "domain" {
+			// This is the standard secure WebSocket address with provided domain
+			wssMaddr, _ := ma.NewMultiaddr(fmt.Sprintf("/ip4/%s/tcp/%d/tls/ws", ip, tcpPort))
+			listenAddrs = append(listenAddrs, wssMaddr)
+		} else {
+			// Fallback to a standard, non-secure WebSocket address
+			wsMaddr, _ := ma.NewMultiaddr(fmt.Sprintf("/ip4/%s/tcp/%d/ws", ip, tcpPort))
+			listenAddrs = append(listenAddrs, wsMaddr)
 		}
-		listenAddrs = append(listenAddrs, webrctMaddr)
 	}
+
+	logger.Debugf("[GO] 🔧 Prepared Listen Addresses: %v\n", listenAddrs)
 
 	return listenAddrs, nil
 }
@@ -330,7 +396,7 @@ func setupPubSub(instanceIndex int) error {
 func setupNotifiers(instanceIndex int) {
 	hostInstances[instanceIndex].Network().Notify(&network.NotifyBundle{
 		ConnectedF: func(_ network.Network, conn network.Conn) {
-			log.Printf("[GO] 🔔 Instance %d: Event - Connected to %s (Direction: %s)\n", instanceIndex, conn.RemotePeer(), conn.Stat().Direction)
+			logger.Debugf("[GO] 🔔 Instance %d: Event - Connected to %s (Direction: %s)\n", instanceIndex, conn.RemotePeer(), conn.Stat().Direction)
 
 			remotePeerID := conn.RemotePeer()
 			instanceHost := hostInstances[instanceIndex] // Available in CreateNode's scope
@@ -368,7 +434,7 @@ func setupNotifiers(instanceIndex int) {
 			}
 
 			if len(finalPeerAddrs) == 0 {
-				log.Printf("[GO]   Instance %d: ConnectedF: Could not find any non-local addresses for %s immediately.\n", instanceIndex, remotePeerID)
+				logger.Debugf("[GO]   Instance %d: ConnectedF: Could not find any non-local addresses for %s immediately.\n", instanceIndex, remotePeerID)
 			}
 
 			// --- 3. Determine the direction ---
@@ -404,32 +470,32 @@ func setupNotifiers(instanceIndex int) {
 			}
 			instanceConnectedPeersMutex.Unlock()
 
-			log.Printf("[GO]   Instance %d: Updated ConnectedPeers for %s via ConnectedF. Total addresses: %d. List: %v\n", instanceIndex, remotePeerID, len(finalPeerAddrs), finalPeerAddrs)
+			logger.Debugf("[GO]   Instance %d: Updated ConnectedPeers for %s via ConnectedF. Total addresses: %d. List: %v\n", instanceIndex, remotePeerID, len(finalPeerAddrs), finalPeerAddrs)
 		},
 		DisconnectedF: func(_ network.Network, conn network.Conn) {
-			log.Printf("[GO] 🔔 Instance %d: Event - Disconnected from %s\n", instanceIndex, conn.RemotePeer())
+			logger.Debugf("[GO] 🔔 Instance %d: Event - Disconnected from %s\n", instanceIndex, conn.RemotePeer())
 			remotePeerID := conn.RemotePeer()
 
 			// Get the host for this instance to query its network state.
-            instanceHost := hostInstances[instanceIndex]
-            if instanceHost == nil {
-                // This shouldn't happen if the notifier is active, but a safe check.
-                log.Printf("[GO] ⚠️ Instance %d: DisconnectedF: Host is nil, cannot perform connection check.\n", instanceIndex)
-                return
-            }
+			instanceHost := hostInstances[instanceIndex]
+			if instanceHost == nil {
+				// This shouldn't happen if the notifier is active, but a safe check.
+				logger.Warnf("[GO] ⚠️ Instance %d: DisconnectedF: Host is nil, cannot perform connection check.\n", instanceIndex)
+				return
+			}
 
 			// --- Check if this is the LAST connection to this peer ---
 			// libp2p can have multiple connections to a single peer (e.g., TCP, QUIC).
 			// We only want to consider the peer fully disconnected when ALL connections are gone.
 			if len(instanceHost.Network().ConnsToPeer(remotePeerID)) == 0 {
-				log.Printf("[GO]   Instance %d: Last connection to %s closed. Removing from tracked peers.\n", instanceIndex, remotePeerID)
+				logger.Debugf("[GO]   Instance %d: Last connection to %s closed. Removing from tracked peers.\n", instanceIndex, remotePeerID)
 
 				// Handle disconnection for ConnectedPeers
 				instanceConnectedPeersMutex := &connectedPeersMutexes[instanceIndex]
 				instanceConnectedPeersMutex.Lock()
 				if _, exists := connectedPeersInstances[instanceIndex][remotePeerID]; exists {
 					delete(connectedPeersInstances[instanceIndex], remotePeerID)
-					log.Printf("[GO]   Instance %d: Removed %s from ConnectedPeers via DisconnectedF notifier.\n", instanceIndex, remotePeerID)
+					logger.Debugf("[GO]   Instance %d: Removed %s from ConnectedPeers via DisconnectedF notifier.\n", instanceIndex, remotePeerID)
 					//peerRemoved = true
 				}
 				instanceConnectedPeersMutex.Unlock()
@@ -437,13 +503,13 @@ func setupNotifiers(instanceIndex int) {
 				// Also clean up persistent stream if one existed for this peer
 				persistentChatStreamsMutexes[instanceIndex].Lock()
 				if stream, ok := persistentChatStreamsInstances[instanceIndex][remotePeerID]; ok {
-					log.Printf("[GO]   Instance %d: Cleaning up persistent stream for disconnected peer %s via DisconnectedF notifier.\n", instanceIndex, remotePeerID)
+					logger.Debugf("[GO]   Instance %d: Cleaning up persistent stream for disconnected peer %s via DisconnectedF notifier.\n", instanceIndex, remotePeerID)
 					_ = stream.Close() // Attempt graceful close
 					delete(persistentChatStreamsInstances[instanceIndex], remotePeerID)
 				}
 				persistentChatStreamsMutexes[instanceIndex].Unlock()
 			} else {
-				log.Printf("[GO]   Instance %d: DisconnectedF: Still have %d active connections to %s, not removing from tracked peers.\n", instanceIndex, len(instanceHost.Network().ConnsToPeer(remotePeerID)), remotePeerID)
+				logger.Debugf("[GO]   Instance %d: DisconnectedF: Still have %d active connections to %s, not removing from tracked peers.\n", instanceIndex, len(instanceHost.Network().ConnsToPeer(remotePeerID)), remotePeerID)
 			}
 		},
 	})
@@ -453,42 +519,42 @@ func setupNotifiers(instanceIndex int) {
 // node to confirm its public reachability. It includes a timeout to prevent
 // the startup from hanging indefinitely.
 func waitForPublicReachability(h host.Host, timeout time.Duration) bool {
-    // 1. Subscribe to the reachability event.
-    sub, err := h.EventBus().Subscribe(new(event.EvtLocalReachabilityChanged))
-    if err != nil {
-        log.Printf("[GO] ❌ Failed to subscribe to reachability events: %v", err)
+	// 1. Subscribe to the reachability event.
+	sub, err := h.EventBus().Subscribe(new(event.EvtLocalReachabilityChanged))
+	if err != nil {
+		logger.Errorf("[GO] ❌ Failed to subscribe to reachability events: %v", err)
 		return false
-    }
-    defer sub.Close() // Clean up the subscription when we're done.
+	}
+	defer sub.Close() // Clean up the subscription when we're done.
 
-    log.Printf("[GO] ⏳ Waiting for public reachability confirmation (timeout: %s)...", timeout)
+	logger.Debugf("[GO] ⏳ Waiting for public reachability confirmation (timeout: %s)...", timeout)
 
-    // 2. Wait for the event in a select loop with a timeout.
-    timeoutCh := time.After(timeout)
-    for {
-        select {
-        case evt := <-sub.Out():
-            // We received an event. Cast it to the correct type.
-            reachabilityEvent, ok := evt.(event.EvtLocalReachabilityChanged)
-            if !ok {
-                continue // Should not happen, but good practice to check.
-            }
+	// 2. Wait for the event in a select loop with a timeout.
+	timeoutCh := time.After(timeout)
+	for {
+		select {
+		case evt := <-sub.Out():
+			// We received an event. Cast it to the correct type.
+			reachabilityEvent, ok := evt.(event.EvtLocalReachabilityChanged)
+			if !ok {
+				continue // Should not happen, but good practice to check.
+			}
 
-            log.Printf("[GO] 💡 Reachability status changed to: %s", reachabilityEvent.Reachability)
+			logger.Infof("[GO] 💡 Reachability status changed to: %s", reachabilityEvent.Reachability)
 
-            // Check if the new status is what we're waiting for.
-            if reachabilityEvent.Reachability == network.ReachabilityPublic {
-                log.Printf("[GO] ✅ Confirmed Public reachability via event.")
-                return true // Success! Return true.
-            } else if reachabilityEvent.Reachability == network.ReachabilityPrivate {
-				log.Printf("[GO] ⚠️ Node is behind a NAT or firewall (Private reachability).")
+			// Check if the new status is what we're waiting for.
+			if reachabilityEvent.Reachability == network.ReachabilityPublic {
+				logger.Debugf("[GO] ✅ Confirmed Public reachability via event.")
+				return true // Success! Return true.
+			} else if reachabilityEvent.Reachability == network.ReachabilityPrivate {
+				logger.Warnf("[GO] ⚠️ Node is behind a NAT or firewall (Private reachability).")
 				return false // Node is not publicly reachable.
-			} 
-        case <-timeoutCh:
-            log.Printf("[GO] ⚠️ Timed out waiting for public reachability.")
+			}
+		case <-timeoutCh:
+			logger.Warnf("[GO] ⚠️ Timed out waiting for public reachability.")
 			return false // Timeout. Return false.
-        }
-    }
+		}
+	}
 }
 
 // --- Core Logic Functions ---
@@ -503,14 +569,14 @@ func storeReceivedMessage(
 ) {
 	// Check instance index validity
 	if err := checkInstanceIndex(instanceIndex); err != nil {
-		log.Printf("[GO] ❌ storeReceivedMessage: %v\n", err)
+		logger.Errorf("[GO] ❌ storeReceivedMessage: %v\n", err)
 		return // Cannot process message for invalid instance
 	}
 
 	// Get the message store for this instance
 	store := messageStoreInstances[instanceIndex]
 	if store == nil {
-		log.Printf("[GO] ❌ storeReceivedMessage: Message store not initialized for instance %d\n", instanceIndex)
+		logger.Errorf("[GO] ❌ storeReceivedMessage: Message store not initialized for instance %d\n", instanceIndex)
 		return // Cannot process message if store is nil
 	}
 
@@ -529,22 +595,22 @@ func storeReceivedMessage(
 	if !channelExists {
 		// If the channel does not exist, check if we can create a new message queue.
 		if len(store.messagesByChannel) >= maxUniqueChannels {
-			log.Printf("[GO] 🗑️ Instance %d: Message store full. Discarding message for new channel '%s'.\n", instanceIndex, channel)
+			logger.Warnf("[GO] 🗑️ Instance %d: Message store full. Discarding message for new channel '%s'.\n", instanceIndex, channel)
 			return
 		}
 		messageList = list.New()
 		store.messagesByChannel[channel] = messageList
-		log.Printf("[GO] ✨ Instance %d: Created new channel queue '%s'. Total channels: %d\n", instanceIndex, channel, len(store.messagesByChannel))
+		logger.Debugf("[GO] ✨ Instance %d: Created new channel queue '%s'. Total channels: %d\n", instanceIndex, channel, len(store.messagesByChannel))
 	}
 
 	// If the channel already has a message list, check its length.
 	if messageList.Len() >= maxChannelQueueLen {
-		log.Printf("[GO] 🗑️ Instance %d: Queue for channel '%s' full. Discarding message.\n", instanceIndex, channel)
+		logger.Warnf("[GO] 🗑️ Instance %d: Queue for channel '%s' full. Discarding message.\n", instanceIndex, channel)
 		return
 	}
 
 	messageList.PushBack(newMessage)
-	log.Printf("[GO] 📥 Instance %d: Queued message on channel '%s' from %s. New queue length: %d\n", instanceIndex, channel, from, messageList.Len())
+	logger.Debugf("[GO] 📥 Instance %d: Queued message on channel '%s' from %s. New queue length: %d\n", instanceIndex, channel, from, messageList.Len())
 }
 
 // readFromSubscription runs as a dedicated goroutine for each active PubSub subscription for a specific instance.
@@ -558,7 +624,7 @@ func readFromSubscription(
 
 	// Check instance index validity (should be done before launching goroutine, but defensive check)
 	if err := checkInstanceIndex(instanceIndex); err != nil {
-		log.Printf("[GO] ❌ readFromSubscription: %v. Exiting goroutine.\n", err)
+		logger.Errorf("[GO] ❌ readFromSubscription: %v. Exiting goroutine.\n", err)
 		return
 	}
 
@@ -568,17 +634,17 @@ func readFromSubscription(
 	instanceHost := hostInstances[instanceIndex]
 
 	if instanceCtx == nil || instanceHost == nil {
-		log.Printf("[GO] ❌ readFromSubscription: Context or Host not initialized for instance %d. Exiting goroutine.\n", instanceIndex)
+		logger.Errorf("[GO] ❌ readFromSubscription: Context or Host not initialized for instance %d. Exiting goroutine.\n", instanceIndex)
 		return
 	}
 
-	log.Printf("[GO] 👂 Instance %d: Started listener goroutine for topic: %s\n", instanceIndex, topic)
-	defer log.Printf("[GO] 👂 Instance %d: Exiting listener goroutine for topic: %s\n", instanceIndex, topic) // Log when goroutine exits
+	logger.Infof("[GO] 👂 Instance %d: Started listener goroutine for topic: %s\n", instanceIndex, topic)
+	defer logger.Infof("[GO] 👂 Instance %d: Exiting listener goroutine for topic: %s\n", instanceIndex, topic) // Log when goroutine exits
 
 	for {
 		// Check if the main context has been cancelled (e.g., during node shutdown).
 		if instanceCtx.Err() != nil {
-			log.Printf("[GO] 👂 Instance %d: Context cancelled, stopping listener goroutine for topic: %s\n", instanceIndex, topic)
+			logger.Debugf("[GO] 👂 Instance %d: Context cancelled, stopping listener goroutine for topic: %s\n", instanceIndex, topic)
 			return // Exit the goroutine.
 		}
 
@@ -588,22 +654,22 @@ func readFromSubscription(
 		if err != nil {
 			// Check for expected errors during shutdown or cancellation.
 			if err == context.Canceled || err == context.DeadlineExceeded || err == pubsub.ErrSubscriptionCancelled || instanceCtx.Err() != nil {
-				log.Printf("[GO] 👂 Instance %d: Subscription listener for topic '%s' stopping gracefully: %v\n", instanceIndex, topic, err)
+				logger.Debugf("[GO] 👂 Instance %d: Subscription listener for topic '%s' stopping gracefully: %v\n", instanceIndex, topic, err)
 				return // Exit goroutine cleanly.
 			}
 			// Handle EOF, which can sometimes occur. Treat it as a reason to stop.
 			if err == io.EOF {
-				log.Printf("[GO] 👂 Instance %d: Subscription listener for topic '%s' encountered EOF, stopping: %v\n", instanceIndex, topic, err)
+				logger.Debugf("[GO] 👂 Instance %d: Subscription listener for topic '%s' encountered EOF, stopping: %v\n", instanceIndex, topic, err)
 				return // Exit goroutine.
 			}
 			// Log other errors but attempt to continue (they might be transient).
-			log.Printf("[GO] ❌ Instance %d: Error reading from subscription '%s': %v. Continuing...\n", instanceIndex, topic, err)
+			logger.Errorf("[GO] ❌ Instance %d: Error reading from subscription '%s': %v. Continuing...\n", instanceIndex, topic, err)
 			// Pause briefly to avoid busy-looping on persistent errors.
 			time.Sleep(1 * time.Second)
 			continue // Continue the loop to try reading again.
 		}
 
-		log.Printf("[GO] 📬 Instance %d (id: %s): Received new PubSub message on topic '%s' from %s\n", instanceIndex, instanceHost.ID().String(), topic, msg.GetFrom())
+		logger.Infof("[GO] 📬 Instance %d (id: %s): Received new PubSub message on topic '%s' from %s\n", instanceIndex, instanceHost.ID().String(), topic, msg.GetFrom())
 
 		// Ignore messages published by the local node itself.
 		if msg.GetFrom() == instanceHost.ID() {
@@ -616,14 +682,14 @@ func readFromSubscription(
 			// 1. First, unmarshal the outer Protobuf message.
 			var protoMsg pg.Message
 			if err := proto.Unmarshal(msg.Data, &protoMsg); err != nil {
-				log.Printf("⚠️ Instance %d: Could not decode Protobuf message on topic '%s': %v\n", instanceIndex, topic, err)
+				logger.Warnf("⚠️ Instance %d: Could not decode Protobuf message on topic '%s': %v\n", instanceIndex, topic, err)
 				continue
 			}
 
 			// 2. The actual payload is a JSON string within the 'json_content' field.
 			jsonPayload := protoMsg.GetJsonContent()
 			if jsonPayload == "" {
-				log.Printf("⚠️ Instance %d: Rendezvous message on topic '%s' has empty JSON content.\n", instanceIndex, topic)
+				logger.Warnf("⚠️ Instance %d: Rendezvous message on topic '%s' has empty JSON content.\n", instanceIndex, topic)
 				continue
 			}
 
@@ -633,7 +699,7 @@ func readFromSubscription(
 				UpdateCount int64              `json:"update_count"`
 			}
 			if err := json.Unmarshal([]byte(jsonPayload), &updatePayload); err != nil {
-				log.Printf("[GO] ⚠️ Instance %d: Could not decode rendezvous update payload on topic '%s': %v\n", instanceIndex, topic, err)
+				logger.Warnf("[GO] ⚠️ Instance %d: Could not decode rendezvous update payload on topic '%s': %v\n", instanceIndex, topic, err)
 				continue // Skip this malformed message.
 			}
 
@@ -654,10 +720,10 @@ func readFromSubscription(
 			rendezvousState.UpdateCount = updatePayload.UpdateCount
 			rendezvousDiscoveredPeersMutexes[instanceIndex].Unlock()
 
-			log.Printf("[GO] ✅ Instance %d: Updated rendezvous peers from topic '%s'. Found %d peers. Update count: %d.\n", instanceIndex, topic, len(newPeerMap), updatePayload.UpdateCount)
+			logger.Debugf("[GO] ✅ Instance %d: Updated rendezvous peers from topic '%s'. Found %d peers. Update count: %d.\n", instanceIndex, topic, len(newPeerMap), updatePayload.UpdateCount)
 		} else {
 			// This is a standard message. Queue it as before.
-			log.Printf("[GO] 📝 Instance %d: Storing new pubsub message from topic '%s'.\n", instanceIndex, topic)
+			logger.Debugf("[GO] 📝 Instance %d: Storing new pubsub message from topic '%s'.\n", instanceIndex, topic)
 			storeReceivedMessage(instanceIndex, msg.GetFrom(), topic, msg.Data)
 		}
 	}
@@ -668,11 +734,11 @@ func readFromSubscription(
 // the channel name itself, and finally the Protobuf-encoded payload.
 func handleStream(instanceIndex int, s network.Stream) {
 	senderPeerID := s.Conn().RemotePeer()
-	log.Printf("[GO] 📥 Instance %d: Accepted new INCOMING stream from %s, storing for duplex communication.\n", instanceIndex, senderPeerID)
+	logger.Debugf("[GO] 📥 Instance %d: Accepted new INCOMING stream from %s, storing for duplex communication.\n", instanceIndex, senderPeerID)
 
 	// This defer block ensures cleanup happens when the stream is closed by either side.
 	defer func() {
-		log.Printf("[GO] 🧹 Instance %d: Inbound stream from %s closed. Removing from persistent map.\n", instanceIndex, senderPeerID)
+		logger.Debugf("[GO] 🧹 Instance %d: Inbound stream from %s closed. Removing from persistent map.\n", instanceIndex, senderPeerID)
 		persistentChatStreamsMutexes[instanceIndex].Lock()
 		delete(persistentChatStreamsInstances[instanceIndex], senderPeerID)
 		persistentChatStreamsMutexes[instanceIndex].Unlock()
@@ -690,23 +756,23 @@ func handleStream(instanceIndex int, s network.Stream) {
 		var totalLen uint32
 		if err := binary.Read(s, binary.BigEndian, &totalLen); err != nil {
 			if err == io.EOF {
-				log.Printf("[GO] 🔌 Instance %d: Direct stream with peer %s closed (EOF).\n", instanceIndex, senderPeerID)
+				logger.Debugf("[GO] 🔌 Instance %d: Direct stream with peer %s closed (EOF).\n", instanceIndex, senderPeerID)
 			} else if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-				log.Printf("[GO] ⏳ Instance %d: Timeout reading length from direct stream with %s: %v\n", instanceIndex, senderPeerID, err)
+				logger.Warnf("[GO] ⏳ Instance %d: Timeout reading length from direct stream with %s: %v\n", instanceIndex, senderPeerID, err)
 			} else {
-				log.Printf("[GO] ❌ Instance %d: Unexpected error reading length from direct stream with %s: %v\n", instanceIndex, senderPeerID, err)
+				logger.Errorf("[GO] ❌ Instance %d: Unexpected error reading length from direct stream with %s: %v\n", instanceIndex, senderPeerID, err)
 			}
 			return // Exit handler for any read error on length.
 		}
 
 		// --- Check the message size ---
 		if totalLen > MaxMessageSize {
-			log.Printf("[GO] ❌ Instance %d: Received message length %d exceeds limit (%d) from %s. Resetting stream.\n", instanceIndex, totalLen, MaxMessageSize, senderPeerID)
+			logger.Errorf("[GO] ❌ Instance %d: Received message length %d exceeds limit (%d) from %s. Resetting stream.\n", instanceIndex, totalLen, MaxMessageSize, senderPeerID)
 			s.Reset() // Forcefully close the stream due to protocol violation.
 			return
 		}
 		if totalLen == 0 {
-			log.Printf("[GO] ⚠️ Instance %d: Received zero length message frame from %s, continuing loop.\n", instanceIndex, senderPeerID)
+			logger.Warnf("[GO] ⚠️ Instance %d: Received zero length message frame from %s, continuing loop.\n", instanceIndex, senderPeerID)
 			continue
 		}
 
@@ -714,11 +780,11 @@ func handleStream(instanceIndex int, s network.Stream) {
 		var channelLen uint8
 		if err := binary.Read(s, binary.BigEndian, &channelLen); err != nil {
 			if err == io.EOF {
-				log.Printf("[GO] 🔌 Instance %d: Direct stream with peer %s closed (EOF).\n", instanceIndex, senderPeerID)
+				logger.Debugf("[GO] 🔌 Instance %d: Direct stream with peer %s closed (EOF).\n", instanceIndex, senderPeerID)
 			} else if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-				log.Printf("[GO] ⏳ Instance %d: Timeout reading channel-length from direct stream with %s: %v\n", instanceIndex, senderPeerID, err)
+				logger.Warnf("[GO] ⏳ Instance %d: Timeout reading channel-length from direct stream with %s: %v\n", instanceIndex, senderPeerID, err)
 			} else {
-				log.Printf("[GO] ❌ Instance %d: Unexpected error reading channel-length from direct stream with %s: %v\n", instanceIndex, senderPeerID, err)
+				logger.Errorf("[GO] ❌ Instance %d: Unexpected error reading channel-length from direct stream with %s: %v\n", instanceIndex, senderPeerID, err)
 			}
 			return // Exit handler for any read error on length.
 		}
@@ -727,11 +793,11 @@ func handleStream(instanceIndex int, s network.Stream) {
 		channelBytes := make([]byte, channelLen)
 		if _, err := io.ReadFull(s, channelBytes); err != nil {
 			if err == io.EOF {
-				log.Printf("[GO] 🔌 Instance %d: Direct stream with peer %s closed (EOF).\n", instanceIndex, senderPeerID)
+				logger.Debugf("[GO] 🔌 Instance %d: Direct stream with peer %s closed (EOF).\n", instanceIndex, senderPeerID)
 			} else if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-				log.Printf("[GO] ⏳ Instance %d: Timeout reading channel from direct stream with %s: %v\n", instanceIndex, senderPeerID, err)
+				logger.Warnf("[GO] ⏳ Instance %d: Timeout reading channel from direct stream with %s: %v\n", instanceIndex, senderPeerID, err)
 			} else {
-				log.Printf("[GO] ❌ Instance %d: Unexpected error reading channel from direct stream with %s: %v\n", instanceIndex, senderPeerID, err)
+				logger.Errorf("[GO] ❌ Instance %d: Unexpected error reading channel from direct stream with %s: %v\n", instanceIndex, senderPeerID, err)
 			}
 			return // Exit handler for any read error on length.
 		}
@@ -742,16 +808,17 @@ func handleStream(instanceIndex int, s network.Stream) {
 		payload := make([]byte, payloadLen)
 		if _, err := io.ReadFull(s, payload); err != nil {
 			if err == io.EOF {
-				log.Printf("[GO] 🔌 Instance %d: Direct stream with peer %s closed (EOF).\n", instanceIndex, senderPeerID)
+				logger.Debugf("[GO] 🔌 Instance %d: Direct stream with peer %s closed (EOF).\n", instanceIndex, senderPeerID)
 			} else if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-				log.Printf("[GO] ⏳ Instance %d: Timeout reading payload from direct stream with %s: %v\n", instanceIndex, senderPeerID, err)
+				logger.Warnf("[GO] ⏳ Instance %d: Timeout reading payload from direct stream with %s: %v\n", instanceIndex, senderPeerID, err)
 			} else {
-				log.Printf("[GO] ❌ Instance %d: Unexpected error reading payload from direct stream with %s: %v\n", instanceIndex, senderPeerID, err)
+				logger.Errorf("[GO] ❌ Instance %d: Unexpected error reading payload from direct stream with %s: %v\n", instanceIndex, senderPeerID, err)
 			}
 			return // Exit handler for any read error on length.
 		}
 
 		// 5. Store the message.
+		logger.Infof("[GO] 📨 Instance %d: Received direct message on channel '%s' from %s, storing.\n", instanceIndex, channel, senderPeerID)
 		storeReceivedMessage(instanceIndex, senderPeerID, channel, payload)
 	}
 }
@@ -766,21 +833,21 @@ func setupDirectMessageHandler(
 
 	// Check instance index validity
 	if err := checkInstanceIndex(instanceIndex); err != nil {
-		log.Printf("[GO] ❌ setupDirectMessageHandler: %v\n", err)
+		logger.Errorf("[GO] ❌ setupDirectMessageHandler: %v\n", err)
 		return // Cannot setup handler for invalid instance
 	}
 
 	instanceHost := hostInstances[instanceIndex]
 
 	if instanceHost == nil {
-		log.Printf("[GO] ❌ Instance %d: Cannot setup direct message handler: Host not initialized\n", instanceIndex)
+		logger.Errorf("[GO] ❌ Instance %d: Cannot setup direct message handler: Host not initialized\n", instanceIndex)
 		return
 	}
 
-	// Set a handler function for the ChatProtocol. This function will be called
+	// Set a handler function for the UnaiverseChatProtocol. This function will be called
 	// automatically by libp2p whenever a new incoming stream for this protocol is accepted.
 	// Use a closure to capture the instanceIndex.
-	instanceHost.SetStreamHandler(ChatProtocol, func(s network.Stream) {
+	instanceHost.SetStreamHandler(UnaiverseChatProtocol, func(s network.Stream) {
 		handleStream(instanceIndex, s)
 	})
 }
@@ -844,42 +911,35 @@ func goGetNodeAddresses(
 	instanceIndex int,
 	targetPID peer.ID, // Changed from targetPeerIDStr string
 ) ([]string, error) {
-	var resolvedPID peer.ID // This will be the ID we actually work with
-
 	instanceHost := hostInstances[instanceIndex]
 	if instanceHost == nil {
 		errMsg := fmt.Sprintf("Instance %d: Host not initialized", instanceIndex)
-		log.Printf("[GO] ❌ goGetNodeAddresses: %s\n", errMsg)
+		logger.Errorf("[GO] ❌ goGetNodeAddresses: %s\n", errMsg)
 		return nil, fmt.Errorf("%s", errMsg)
 	}
 
-	// Determine the actual Peer ID to use
-	if targetPID == "" { // peer.ID("") indicates request for local node
+	// Determine the actual Peer ID to resolve addresses for.
+	resolvedPID := targetPID
+	isThisNode := false
+	if targetPID == "" || targetPID == instanceHost.ID() {
 		resolvedPID = instanceHost.ID()
-	} else {
-		resolvedPID = targetPID
-		log.Printf("[GO] ℹ️ Instance %d: goGetNodeAddresses called for specific peer: %s\n", instanceIndex, resolvedPID.String())
+		isThisNode = true
 	}
 
-	addrMap := make(map[string]ma.Multiaddr)
-	var candidateAddrs []ma.Multiaddr
+	// Use a map to automatically handle duplicate addresses.
+	addrSet := make(map[string]struct{})
 
-	// --- Address Gathering ---
-	// The logic below uses 'resolvedPID'
-	if resolvedPID == instanceHost.ID() { // Check if, after resolution, it's the local host
-		interfaceAddrs, err := instanceHost.Network().InterfaceListenAddresses()
-		if err != nil {
-		} else {
+	// --- 1. Gather all candidate addresses from the host and peerstore ---
+	var candidateAddrs []ma.Multiaddr
+	candidateAddrs = append(candidateAddrs, instanceHost.Peerstore().Addrs(resolvedPID)...)
+	if isThisNode {
+		if interfaceAddrs, err := instanceHost.Network().InterfaceListenAddresses(); err == nil {
 			candidateAddrs = append(candidateAddrs, interfaceAddrs...)
 		}
 		candidateAddrs = append(candidateAddrs, instanceHost.Network().ListenAddresses()...)
 		candidateAddrs = append(candidateAddrs, instanceHost.Addrs()...)
-		candidateAddrs = append(candidateAddrs, instanceHost.Peerstore().Addrs(resolvedPID)...) // Use resolvedPID
 	} else {
 		// --- Remote Peer Addresses ---
-		remotePeerAddrsInStore := instanceHost.Peerstore().Addrs(resolvedPID) // Use resolvedPID
-		candidateAddrs = append(candidateAddrs, remotePeerAddrsInStore...)
-
 		connectedPeersMutexes[instanceIndex].RLock()
 		instanceConnectedPeers := connectedPeersInstances[instanceIndex]
 		if epi, exists := instanceConnectedPeers[resolvedPID]; exists { // Use resolvedPID
@@ -889,57 +949,55 @@ func goGetNodeAddresses(
 		connectedPeersMutexes[instanceIndex].RUnlock()
 	}
 
-	// Common processing for all gathered candidate addresses
+	// --- 2. Process and filter candidate addresses ---
 	for _, addr := range candidateAddrs {
-		if addr == nil {
+		if addr == nil || manet.IsIPLoopback(addr) || manet.IsIPUnspecified(addr) {
+			continue // Skip nil, loopback, and unspecified addresses
+		}
+
+		// Use the idiomatic `peer.SplitAddr` to check if the address already includes a Peer ID.
+		var finalAddr ma.Multiaddr
+		transportAddr, idInAddr := peer.SplitAddr(addr)
+		if transportAddr == nil {
 			continue
 		}
-		if manet.IsIPLoopback(addr) || manet.IsIPUnspecified(addr) {
+
+		// handle cases for different transport protocols
+		if strings.HasPrefix(transportAddr.String(), "/p2p-circuit/") {
 			continue
 		}
-		addrMap[addr.String()] = addr
+		if strings.Contains(transportAddr.String(), "*") {
+			continue
+		}
+
+		// handle cases based on presence and correctness of Peer ID in the address
+		switch {
+		case idInAddr == resolvedPID:
+			// Case A: The address is already perfect and has the correct Peer ID. Use it as is.
+			finalAddr = addr
+
+		case idInAddr == "":
+			// Case B: The address is missing a Peer ID. This is common for addresses from the
+			// peerstore and for relayed addresses like `/p2p/RELAY_ID/p2p-circuit`. We must append ours.
+			p2pComponent, _ := ma.NewMultiaddr(fmt.Sprintf("/p2p/%s", resolvedPID.String()))
+			finalAddr = addr.Encapsulate(p2pComponent)
+
+		case idInAddr != resolvedPID:
+			// Case C: The address has the WRONG Peer ID. This is stale or incorrect data. Discard it.
+			logger.Warnf("[GO] ⚠️ Instance %d: Discarding stale address for peer %s: %s\n", instanceIndex, resolvedPID, addr)
+			continue
+		}
+		addrSet[finalAddr.String()] = struct{}{}
 	}
 
-	if len(addrMap) == 0 {
-		errMsg := fmt.Sprintf("Instance %d: No suitable base addresses found for peer %s after gathering and filtering.", instanceIndex, resolvedPID)
-		log.Printf("[GO] ⚠️ goGetNodeAddresses: %s\n", errMsg)
-		return nil, fmt.Errorf("%s", errMsg)
-	}
-
-	// --- Formatting Results ---
-	result := make([]string, 0, len(addrMap))
-	for _, currentAddr := range addrMap {
-		var fullAddrStr string
-		_, idInAddr := peer.SplitAddr(currentAddr)
-
-		if idInAddr == resolvedPID { // Use resolvedPID
-			fullAddrStr = currentAddr.String()
-		} else if idInAddr != "" && strings.Contains(currentAddr.String(), ma.ProtocolWithCode(ma.P_CIRCUIT).Name) {
-			fullAddrStr = fmt.Sprintf("%s/p2p/%s", currentAddr.String(), resolvedPID.String()) // Use resolvedPID
-		} else if idInAddr != "" && idInAddr != resolvedPID { // Use resolvedPID
-			continue
-		} else {
-			fullAddrStr = fmt.Sprintf("%s/p2p/%s", currentAddr.String(), resolvedPID.String()) // Use resolvedPID
-		}
-
-		if fullAddrStr != "" {
-			isDup := false
-			for _, rAddr := range result {
-				if rAddr == fullAddrStr {
-					isDup = true
-					break
-				}
-			}
-			if !isDup {
-				result = append(result, fullAddrStr)
-			}
-		}
+	// --- 4. Convert the final set of unique addresses to a slice for returning. ---
+	result := make([]string, 0, len(addrSet))
+	for addr := range addrSet {
+		result = append(result, addr)
 	}
 
 	if len(result) == 0 {
-		errMsg := fmt.Sprintf("Instance %d: No addresses to return for peer %s after formatting.", instanceIndex, resolvedPID)
-		log.Printf("[GO] ⚠️ goGetNodeAddresses: %s\n", errMsg)
-		return []string{}, nil // Return empty list, no error, if formatting yields nothing
+		logger.Warnf("[GO] ⚠️ goGetNodeAddresses: No suitable addresses found for peer %s.", resolvedPID)
 	}
 
 	return result, nil
@@ -962,24 +1020,31 @@ func closeSingleInstance(
 
 	if !isInstInitialized {
 		// Should not happen if called from CloseNode after checking, but defensive
-		log.Printf("[GO] ℹ️ Instance %d: Node was not initialized (internal close call).\n", instanceIndex)
+		logger.Debugf("[GO] ℹ️ Instance %d: Node was not initialized (internal close call).\n", instanceIndex)
 		return jsonSuccessResponse(fmt.Sprintf("Instance %d: Node was not initialized", instanceIndex))
 	}
 
 	if !hostExists && !cancelExists {
-		log.Printf("[GO] ℹ️ Instance %d: Node was already closed (internal close call).\n", instanceIndex)
+		logger.Debugf("[GO] ℹ️ Instance %d: Node was already closed (internal close call).\n", instanceIndex)
 		return jsonSuccessResponse(fmt.Sprintf("Instance %d: Node was already closed", instanceIndex))
+	}
+
+	// --- Stop Cert Manager FIRST ---
+	if certManagerInstances[instanceIndex] != nil {
+		logger.Debugf("[GO]   - Instance %d: Stopping AutoTLS cert manager...\n", instanceIndex)
+		certManagerInstances[instanceIndex].Stop()
+		certManagerInstances[instanceIndex] = nil
 	}
 
 	// --- Cancel Main Context ---
 	// Acquire global lock to safely access/modify cancelContexts
 	instanceStateMutex.Lock()
 	if cancelContexts[instanceIndex] != nil {
-		log.Printf("[GO]   - Instance %d: Cancelling main context...\n", instanceIndex)
+		logger.Debugf("[GO]   - Instance %d: Cancelling main context...\n", instanceIndex)
 		cancelContexts[instanceIndex]()
 		// Do NOT set to nil here yet, wait until host is closed
 	} else {
-		log.Printf("[GO]   - Instance %d: Context was already nil.\n", instanceIndex)
+		logger.Debugf("[GO]   - Instance %d: Context was already nil.\n", instanceIndex)
 	}
 	instanceStateMutex.Unlock() // Release global lock
 
@@ -991,14 +1056,14 @@ func closeSingleInstance(
 	persistentChatStreamsMutexes[instanceIndex].Lock()
 	instancePersistentChatStreams := persistentChatStreamsInstances[instanceIndex]
 	if len(instancePersistentChatStreams) > 0 {
-		log.Printf("[GO]   - Instance %d: Closing %d persistent outgoing streams...\n", instanceIndex, len(instancePersistentChatStreams))
+		logger.Debugf("[GO]   - Instance %d: Closing %d persistent outgoing streams...\n", instanceIndex, len(instancePersistentChatStreams))
 		for pid, stream := range instancePersistentChatStreams {
-			log.Printf("[GO]     - Instance %d: Closing stream to %s\n", instanceIndex, pid)
+			logger.Debugf("[GO]     - Instance %d: Closing stream to %s\n", instanceIndex, pid)
 			_ = stream.Close() // Attempt graceful close
 		}
 		persistentChatStreamsInstances[instanceIndex] = make(map[peer.ID]network.Stream) // Clear the map
 	} else {
-		log.Printf("[GO]   - Instance %d: No persistent outgoing streams to close.\n", instanceIndex)
+		logger.Debugf("[GO]   - Instance %d: No persistent outgoing streams to close.\n", instanceIndex)
 	}
 	persistentChatStreamsMutexes[instanceIndex].Unlock() // Release instance-specific mutex
 
@@ -1008,9 +1073,9 @@ func closeSingleInstance(
 	instanceSubscriptions := subscriptionsInstances[instanceIndex]
 
 	if len(instanceSubscriptions) > 0 {
-		log.Printf("[GO]   - Instance %d: Ensuring PubSub subscriptions (%d) are cancelled...\n", instanceIndex, len(instanceSubscriptions))
+		logger.Debugf("[GO]   - Instance %d: Ensuring PubSub subscriptions (%d) are cancelled...\n", instanceIndex, len(instanceSubscriptions))
 		for channel, sub := range instanceSubscriptions {
-			log.Printf("[GO]     - Instance %d: Cancelling subscription to topic: %s\n", instanceIndex, channel)
+			logger.Debugf("[GO]     - Instance %d: Cancelling subscription to topic: %s\n", instanceIndex, channel)
 			sub.Cancel()
 		}
 	}
@@ -1024,20 +1089,20 @@ func closeSingleInstance(
 	// Acquire global lock to safely access/modify hostInstances and cancelContexts
 	instanceStateMutex.Lock()
 	if hostInstances[instanceIndex] != nil {
-		log.Printf("[GO]   - Instance %d: Closing host instance...\n", instanceIndex)
+		logger.Debugf("[GO]   - Instance %d: Closing host instance...\n", instanceIndex)
 		err := hostInstances[instanceIndex].Close()
 		hostInstances[instanceIndex] = nil // Set instance host to nil
 		// Now that host is closed, it's safe to set cancel context to nil
 		cancelContexts[instanceIndex] = nil
 		if err != nil {
 			hostErrStr = fmt.Sprintf("Instance %d: Error closing host: %v", instanceIndex, err)
-			log.Printf("[GO] ⚠️ %s (proceeding with cleanup)\n", hostErrStr)
+			logger.Warnf("[GO] ⚠️ %s (proceeding with cleanup)\n", hostErrStr)
 			// Continue cleanup even if host close fails
 		} else {
-			log.Printf("[GO]   - Instance %d: Host closed successfully.\n", instanceIndex)
+			logger.Debugf("[GO]   - Instance %d: Host closed successfully.\n", instanceIndex)
 		}
 	} else {
-		log.Printf("[GO]   - Instance %d: Host instance was already nil.\n", instanceIndex)
+		logger.Debugf("[GO]   - Instance %d: Host instance was already nil.\n", instanceIndex)
 		// If host was nil, ensure cancel context is also nil
 		cancelContexts[instanceIndex] = nil
 	}
@@ -1056,7 +1121,7 @@ func closeSingleInstance(
 		messageStoreInstances[instanceIndex].mu.Unlock()
 		messageStoreInstances[instanceIndex] = nil // Set instance store to nil
 	}
-	log.Printf("[GO]   - Instance %d: Cleared connected peers map and message buffer.\n", instanceIndex)
+	logger.Debugf("[GO]   - Instance %d: Cleared connected peers map and message buffer.\n", instanceIndex)
 
 	// Clear the rendezvous state for this instance
 	rendezvousDiscoveredPeersMutexes[instanceIndex].Lock()
@@ -1077,7 +1142,7 @@ func closeSingleInstance(
 		)
 	}
 
-	log.Printf("[GO] ✅ Instance %d: Node closed successfully.\n", instanceIndex)
+	logger.Infof("[GO] ✅ Instance %d: Node closed successfully.\n", instanceIndex)
 	return jsonSuccessResponse(fmt.Sprintf("Instance %d: Node closed successfully", instanceIndex))
 }
 
@@ -1097,9 +1162,19 @@ func InitializeLibrary(
 	// --- Configure Logging FIRST ---
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
 	if int(enableLoggingC) == 1 {
-		log.SetOutput(os.Stderr)
+		golog.SetAllLoggers(golog.LevelInfo) // Set a default level
+		golog.SetLogLevel("p2p-library", "info")
+		// --- Add Specific Log Levels from the Example ---
+		// These are crucial for debugging AutoTLS and connectivity.
+		golog.SetLogLevel("autotls", "info")
+		golog.SetLogLevel("p2p-forge", "info")
+		golog.SetLogLevel("nat", "info")
+		golog.SetLogLevel("basichost", "info")
+		golog.SetLogLevel("p2p-circuit", "info") // Core circuit-v2 protocol logic
+		golog.SetLogLevel("relay", "info")
 	} else {
-		log.SetOutput(io.Discard)
+		golog.SetAllLoggers(golog.LevelError)
+		golog.SetLogLevel("*", "FATAL")
 	}
 
 	maxInstances = int(maxInstancesC)
@@ -1118,6 +1193,7 @@ func InitializeLibrary(
 	rendezvousDiscoveredPeersInstances = make([]*RendezvousState, maxInstances)
 	persistentChatStreamsInstances = make([]map[peer.ID]network.Stream, maxInstances)
 	messageStoreInstances = make([]*MessageStore, maxInstances)
+	certManagerInstances = make([]*p2pforge.P2PForgeCertMgr, maxInstances)
 
 	// Mutexes for protecting concurrent access to instance-specific data.
 	connectedPeersMutexes = make([]sync.RWMutex, maxInstances)
@@ -1127,7 +1203,7 @@ func InitializeLibrary(
 
 	// Flag to track if a specific instance index has been initialized
 	isInitialized = make([]bool, maxInstances)
-	log.Printf("[GO] ✅ Go library initialized with MaxInstances=%d, MaxUniqueChannels=%d and MaxChannelQueueLen=%d\n", maxInstances, maxUniqueChannels, maxChannelQueueLen)
+	logger.Infof("[GO] ✅ Go library initialized with MaxInstances=%d, MaxUniqueChannels=%d and MaxChannelQueueLen=%d\n", maxInstances, maxUniqueChannels, maxChannelQueueLen)
 }
 
 // CreateNode initializes and starts a new libp2p host (node) for a specific instance.
@@ -1149,12 +1225,17 @@ func InitializeLibrary(
 //export CreateNode
 func CreateNode(
 	instanceIndexC C.int,
+	identityDirC *C.char,
 	predefinedPortC C.int,
 	ipsJSONC *C.char,
 	enableRelayClientC C.int,
 	enableRelayServiceC C.int,
 	knowsIsPublicC C.int,
 	maxConnectionsC C.int,
+	enableTLSC C.int,
+	domainNameC *C.char,
+	tlsCertPathC *C.char,
+	tlsKeyPathC *C.char,
 ) *C.char {
 
 	instanceIndex := int(instanceIndexC)
@@ -1173,31 +1254,68 @@ func CreateNode(
 	}
 	isInitialized[instanceIndex] = true
 	instanceStateMutex.Unlock()
-	log.Printf("[GO] 🚀 Instance %d: Starting CreateNode...", instanceIndex)
+	logger.Infof("[GO] 🚀 Instance %d: Starting CreateNode...", instanceIndex)
 
 	// Initialize state maps and context for this instance
-    contexts[instanceIndex], cancelContexts[instanceIndex] = context.WithCancel(context.Background())
-    connectedPeersInstances[instanceIndex] = make(map[peer.ID]ExtendedPeerInfo)
-    persistentChatStreamsInstances[instanceIndex] = make(map[peer.ID]network.Stream)
-    topicsInstances[instanceIndex] = make(map[string]*pubsub.Topic)
-    subscriptionsInstances[instanceIndex] = make(map[string]*pubsub.Subscription)
-    messageStoreInstances[instanceIndex] = newMessageStore()
-    rendezvousDiscoveredPeersInstances[instanceIndex] = nil
+	contexts[instanceIndex], cancelContexts[instanceIndex] = context.WithCancel(context.Background())
+	connectedPeersInstances[instanceIndex] = make(map[peer.ID]ExtendedPeerInfo)
+	persistentChatStreamsInstances[instanceIndex] = make(map[peer.ID]network.Stream)
+	topicsInstances[instanceIndex] = make(map[string]*pubsub.Topic)
+	subscriptionsInstances[instanceIndex] = make(map[string]*pubsub.Subscription)
+	messageStoreInstances[instanceIndex] = newMessageStore()
+	rendezvousDiscoveredPeersInstances[instanceIndex] = nil
 
 	// --- Configuration ---
 	// Convert C integer parameters to Go types.
+	identityDir := C.GoString(identityDirC)
 	predefinedPort := int(predefinedPortC)
 	ipsJSON := C.GoString(ipsJSONC)
 	enableRelayClient := int(enableRelayClientC) == 1
 	enableRelayService := int(enableRelayServiceC) == 1
 	knowsIsPublic := int(knowsIsPublicC) == 1
 	maxConnections := int(maxConnectionsC)
+	enableTLS := int(enableTLSC) == 1
+	domainName := C.GoString(domainNameC)
+	tlsCertPath := C.GoString(tlsCertPathC)
+	tlsKeyPath := C.GoString(tlsKeyPathC)
+	// We already checked on the python side that the following three are all provided (if they are needed)
+	useAutoTLS := enableTLS && tlsCertPath == ""
+	useCustomTLS := enableTLS && tlsCertPath != ""
 
-	log.Printf("[GO] 🔧 Instance %d: Config: Port=%d, IPsJSON=%s, EnableRelayClient=%t, EnableRelayService=%t, KnowsIsPublic=%t, MaxConnections=%d",
-		instanceIndex, predefinedPort, ipsJSON, enableRelayClient, enableRelayService, knowsIsPublic, maxConnections)
+	// --- Load or Create Persistent Identity ---
+	keyPath := filepath.Join(identityDir, "identity.key")
+	privKey, err := loadOrCreateIdentity(keyPath)
+	if err != nil {
+		cleanupFailedCreate(instanceIndex)
+		return jsonErrorResponse(fmt.Sprintf("Instance %d: Failed to prepare identity", instanceIndex), err)
+	}
+
+	// --- AutoTLS Cert Manager Setup (if enabled) ---
+	var certManager *p2pforge.P2PForgeCertMgr
+	if useAutoTLS {
+		logger.Debugf("[GO]   - Instance %d: AutoTLS is ENABLED. Setting up certificate manager...\n", instanceIndex)
+		certManager, err = p2pforge.NewP2PForgeCertMgr(
+			p2pforge.WithCAEndpoint(p2pforge.DefaultCAEndpoint),
+			p2pforge.WithCertificateStorage(&certmagic.FileStorage{Path: filepath.Join(identityDir, "p2p-forge-certs")}),
+			p2pforge.WithUserAgent(UnaiverseUserAgent),
+			p2pforge.WithRegistrationDelay(10*time.Second),
+		)
+		if err != nil {
+			cleanupFailedCreate(instanceIndex)
+			return jsonErrorResponse(fmt.Sprintf("Instance %d: Failed to create AutoTLS cert manager", instanceIndex), err)
+		}
+		certManager.Start()
+		certManagerInstances[instanceIndex] = certManager // Store for cleanup
+	}
 
 	// --- 4. Libp2p Options Assembly ---
-	listenAddrs, err := getListenAddrs(ipsJSON, predefinedPort)
+	tlsMode := "none"
+	if useCustomTLS {
+		tlsMode = "domain"
+	} else if useAutoTLS {
+		tlsMode = "autotls"
+	}
+	listenAddrs, err := getListenAddrs(ipsJSON, predefinedPort, tlsMode)
 	if err != nil {
 		cleanupFailedCreate(instanceIndex)
 		return jsonErrorResponse(fmt.Sprintf("Instance %d: Failed to create multiaddrs", instanceIndex), err)
@@ -1211,13 +1329,60 @@ func CreateNode(
 	}
 
 	options := []libp2p.Option{
+		libp2p.Identity(privKey),
 		libp2p.ListenAddrs(listenAddrs...),
 		libp2p.DefaultSecurity,
 		libp2p.DefaultMuxers,
 		libp2p.Transport(tcp.NewTCPTransport),
+		libp2p.ShareTCPListener(),
 		libp2p.Transport(quic.NewTransport),
+		libp2p.Transport(webtransport.New),
 		libp2p.Transport(webrtc.New),
 		libp2p.ResourceManager(limiter),
+		libp2p.UserAgent(UnaiverseUserAgent),
+	}
+
+	// Add WebSocket transport, with or without TLS based on cert availability
+	if useCustomTLS {
+		// We already have certificates, use them
+		logger.Debugf("[GO]   - Instance %d: Certificates provided, setting up secure WebSocket (WSS).\n", instanceIndex)
+		cert, err := tls.LoadX509KeyPair(tlsCertPath, tlsKeyPath)
+		if err != nil {
+			cleanupFailedCreate(instanceIndex)
+			return jsonErrorResponse(fmt.Sprintf("Instance %d: Failed to load Custom TLS certificate and key", instanceIndex), err)
+		}
+		tlsConfig := &tls.Config{Certificates: []tls.Certificate{cert}}
+		// let's also create a custom address factory to ensure we always advertise the correct domain name
+		domainAddressFactory := func(addrs []ma.Multiaddr) []ma.Multiaddr {
+			// Replace the IP part of the WSS address with our domain.
+			result := make([]ma.Multiaddr, 0, len(addrs))
+			for _, addr := range addrs {
+				if strings.Contains(addr.String(), "/tls/ws") || strings.Contains(addr.String(), "/wss") {
+					// This is our WSS listener. Create the public /dns4 version.
+					dnsAddr, _ := ma.NewMultiaddr(fmt.Sprintf("/dns4/%s/tcp/%d/tls/ws", domainName, predefinedPort))
+					result = append(result, dnsAddr)
+				} else {
+					// Keep other addresses (like QUIC) as they are.
+					result = append(result, addr)
+				}
+			}
+			return result
+		}
+		options = append(options,
+			libp2p.Transport(ws.New, ws.WithTLSConfig(tlsConfig)),
+			libp2p.AddrsFactory(domainAddressFactory),
+		)
+		logger.Debugf("[GO]   - Instance %d: Loaded custom TLS certificate and key for WSS.\n", instanceIndex)
+	} else if useAutoTLS {
+		// No certificates, create them automatically
+		options = append(options,
+			libp2p.Transport(ws.New, ws.WithTLSConfig(certManager.TLSConfig())),
+			libp2p.AddrsFactory(certManager.AddressFactory()),
+		)
+	} else {
+		// No certificates, use plain WS
+		logger.Debugf("[GO]   - Instance %d: No certificates found, setting up non-secure WebSocket.\n", instanceIndex)
+		options = append(options, libp2p.Transport(ws.New))
 	}
 
 	// Configure Relay Service (ability to *be* a relay)
@@ -1225,28 +1390,28 @@ func CreateNode(
 		// limit := rc.DefaultLimit()         // open this to see the default limits
 		resources := rc.DefaultResources() // open this to see the default resource limits
 		// Set the duration for relayed connections. 0 means infinite.
-		ttl := 2 * time.Hour	// reduced to 2 hours, it will be the node's duty to refresh the reservation if needed.
+		ttl := 2 * time.Hour // reduced to 2 hours, it will be the node's duty to refresh the reservation if needed.
 		// limit.Duration = ttl
 		// resources.Limit = limit
-		resources.Limit = nil	// same as setting rc.WithInfiniteLimits()
+		resources.Limit = nil // same as setting rc.WithInfiniteLimits()
 		resources.ReservationTTL = ttl
 
 		// This single option enables the node to act as a relay for others, including hopping,
 		// with our custom resource limits.
 		options = append(options, libp2p.EnableRelayService(rc.WithResources(resources)), libp2p.EnableNATService())
-		log.Printf("[GO]   - Instance %d: Relay service is ENABLED with custom resource configuration.\n", instanceIndex)
+		logger.Debugf("[GO]   - Instance %d: Relay service is ENABLED with custom resource configuration.\n", instanceIndex)
 	}
 
 	// EnableRelay (the ability to *use* relays) is default, we can explicitly disable it if needed.
 	if !enableRelayClient {
 		options = append(options, libp2p.DisableRelay()) // Explicitly disable using relays.
-		log.Printf("[GO]   - Instance %d: Relay client is DISABLED.\n", instanceIndex)
+		logger.Debugf("[GO]   - Instance %d: Relay client is DISABLED.\n", instanceIndex)
 	}
 
 	// Prepare discovering the bootstrap peers
 	var idht *dht.IpfsDHT
 	isPublic := false
-	if !knowsIsPublic {
+	if !knowsIsPublic || enableTLS {
 		// Add any possible option to be publicly reachable
 		options = append(
 			options,
@@ -1263,8 +1428,8 @@ func CreateNode(
 				var err error
 				idht, err = dht.New(contexts[instanceIndex], h, dhtOptions...)
 				return idht, err
-			}),)
-		log.Printf("[GO]   - Instance %d: Trying to be publicly reachable.\n", instanceIndex)
+			}))
+		logger.Debugf("[GO]   - Instance %d: Trying to be publicly reachable.\n", instanceIndex)
 	} else {
 		options = append(options, libp2p.ForceReachabilityPublic())
 		isPublic = true
@@ -1277,48 +1442,104 @@ func CreateNode(
 		return jsonErrorResponse(fmt.Sprintf("Instance %d: Failed to create host", instanceIndex), err)
 	}
 	hostInstances[instanceIndex] = instanceHost
-	log.Printf("[GO] ✅ Instance %d: Host created with ID: %s\n", instanceIndex, instanceHost.ID())
+	logger.Infof("[GO] ✅ Instance %d: Host created with ID: %s\n", instanceIndex, instanceHost.ID())
+
+	// --- Link Host to Cert Manager ---
+	if useAutoTLS {
+		certManager.ProvideHost(instanceHost)
+		logger.Debugf("[GO]   - Instance %d: Provided host to AutoTLS cert manager.\n", instanceIndex)
+	}
 
 	// --- PubSub Initialization ---
 	if err := setupPubSub(instanceIndex); err != nil {
 		cleanupFailedCreate(instanceIndex)
 		return jsonErrorResponse(fmt.Sprintf("Instance %d: Failed to create PubSub", instanceIndex), err)
 	}
-	log.Printf("[GO] ✅ Instance %d: PubSub (GossipSub) initialized.\n", instanceIndex)
+	logger.Debugf("[GO] ✅ Instance %d: PubSub (GossipSub) initialized.\n", instanceIndex)
 
 	// --- Setup Notifiers and Handlers ---
 	setupNotifiers(instanceIndex)
-	log.Printf("[GO] 🔔 Instance %d: Registered network event notifier.\n", instanceIndex)
+	logger.Debugf("[GO] 🔔 Instance %d: Registered network event notifier.\n", instanceIndex)
 
 	setupDirectMessageHandler(instanceIndex)
-	log.Printf("[GO] ✅ Instance %d: Direct message handler set up.\n", instanceIndex)
+	logger.Debugf("[GO] ✅ Instance %d: Direct message handler set up.\n", instanceIndex)
 
 	// --- Address Reporting ---
 	// Give discovery mechanisms a moment to find the public address.
-	log.Printf("[GO] ⏳ Instance %d: Waiting for address discovery and NAT to settle...\n", instanceIndex)
+	logger.Debugf("[GO] ⏳ Instance %d: Waiting for address discovery and NAT to settle...\n", instanceIndex)
 
-	if !knowsIsPublic {
-		// --- 🎯 : Wait for Public Reachability ---
-		// This replaces the old address polling loop. We wait a maximum of 30 seconds.
+	if enableTLS {
+		// --- Wait for the EvtLocalAddressesUpdated containing the resolved WSS address ---
+		logger.Debugf("[GO] ⏳ Instance %d: Waiting for the final public WSS address to be generated...", instanceIndex)
+
+		// 1. Subscribe to the event that fires *after* the AddrsFactory has run.
+		sub, err := instanceHost.EventBus().Subscribe(new(event.EvtLocalAddressesUpdated))
+		if err != nil {
+			cleanupFailedCreate(instanceIndex)
+			return jsonErrorResponse("Failed to subscribe to address update events", err)
+		}
+		defer sub.Close()
+
+		// 2. Loop and inspect events until our condition is met or we time out.
+	WAIT_FOR_WSS_ADDR:
+		for {
+			select {
+			case evt := <-sub.Out():
+				// We received an address update event.
+				logger.Debugf("[GO] 🔔 Instance %d: Received address update event, checking for WSS address...\n", instanceIndex)
+				addrsEvent, ok := evt.(event.EvtLocalAddressesUpdated)
+				if !ok {
+					continue // Should not happen, but good practice.
+				}
+
+				// 3. Check the addresses in the event to see if our WSS address is ready.
+				for _, updatedAddr := range addrsEvent.Current {
+					addr := updatedAddr.Address
+					addrStr := addr.String()
+					logger.Debugf("[GO]     - Instance %d: Found address: %s\n", instanceIndex, addrStr)
+
+					// The condition for readiness: the address is public AND is a secure websocket address.
+					isPublicWSS := manet.IsPublicAddr(addr) && (strings.Contains(addrStr, "/tls/") && !strings.Contains(addrStr, "*"))
+
+					if isPublicWSS {
+						logger.Infof("[GO] ✅ Instance %d: Confirmed final public WSS address: %s", instanceIndex, addrStr)
+						isPublic = true         // If we have a public WSS address, the node is public.
+						break WAIT_FOR_WSS_ADDR // Exit the loop, we are done.
+					}
+				}
+				// If we checked all addresses in this event and didn't find the WSS one, the loop continues, waiting for the next event.
+
+			case <-time.After(30 * time.Second):
+				cleanupFailedCreate(instanceIndex)
+				return jsonErrorResponse("Timed out after 90s waiting for the final WSS address", nil)
+
+			case <-contexts[instanceIndex].Done():
+				cleanupFailedCreate(instanceIndex)
+				return jsonErrorResponse("Node creation cancelled while waiting for final WSS address", nil)
+			}
+		}
+		idht.Close() // DHT job is done.
+
+	} else if !knowsIsPublic {
+		// --- Fallback to old reachability check ONLY if AutoTLS is disabled ---
 		isPublic = waitForPublicReachability(instanceHost, 30*time.Second)
 		if !isPublic {
-			log.Printf("[GO] ⚠️ Instance %d: The node may not be directly dialable.", instanceIndex)
+			logger.Warnf("[GO] ⚠️ Instance %d: The node may not be directly dialable.", instanceIndex)
 		}
-		idht.Close() // Close DHT as we don't need it anymore for this simple node
-
-		// --- Cleanup Bootstrap Peers ---
-		// The connectedPeers map was flooded with bootstrap peers during DHT setup.
-		// We remove them now to keep the map clean for actual user connections.
-		log.Printf("[GO] 🧹 Instance %d: Cleaning up bootstrap peer connections from the tracked list...\n", instanceIndex)
-		connectedPeersMutexes[instanceIndex].Lock()
-		connectedPeersInstances[instanceIndex] = make(map[peer.ID]ExtendedPeerInfo) // Clear the map
-		connectedPeersMutexes[instanceIndex].Unlock()
+		idht.Close()
 	}
+
+	// --- Cleanup Bootstrap Peers ---
+	// In case thhe connectedPeers map was flooded with bootstrap peers during DHT setup, let's do this anyway.
+	logger.Debugf("[GO] 🧹 Instance %d: Cleaning up bootstrap peer connections from the tracked list...\n", instanceIndex)
+	connectedPeersMutexes[instanceIndex].Lock()
+	connectedPeersInstances[instanceIndex] = make(map[peer.ID]ExtendedPeerInfo) // Clear the map
+	connectedPeersMutexes[instanceIndex].Unlock()
 
 	// --- Get Final Addresses ---
 	nodeAddresses, err := goGetNodeAddresses(instanceIndex, "")
 	if err != nil {
-        // This is a more critical failure if we can't even get local addresses.
+		// This is a more critical failure if we can't even get local addresses.
 		cleanupFailedCreate(instanceIndex)
 		return jsonErrorResponse(
 			fmt.Sprintf("Instance %d: Failed to obtain node addresses after waiting for reachability", instanceIndex),
@@ -1332,7 +1553,8 @@ func CreateNode(
 		IsPublic:  isPublic,
 	}
 
-	log.Printf("[GO] 🎉 Instance %d: Node creation complete.\n", instanceIndex)
+	logger.Infof("[GO] 🌐 Instance %d: Node addresses: %v\n", instanceIndex, nodeAddresses)
+	logger.Infof("[GO] 🎉 Instance %d: Node creation complete.\n", instanceIndex)
 	return jsonSuccessResponse(response)
 }
 
@@ -1354,7 +1576,7 @@ func ConnectTo(
 
 	instanceIndex := int(instanceIndexC)
 	goAddrsJSON := C.GoString(addrsJSONC)
-	log.Printf("[GO] 📞 Instance %d: Attempting to connect to peer with addresses: %s\n", instanceIndex, goAddrsJSON)
+	logger.Debugf("[GO] 📞 Instance %d: Attempting to connect to peer with addresses: %s\n", instanceIndex, goAddrsJSON)
 
 	// Check instance index validity
 	if err := checkInstanceIndex(instanceIndex); err != nil {
@@ -1398,7 +1620,7 @@ func ConnectTo(
 	for i := 1; i < len(addrStrings); i++ {
 		maddr, err := ma.NewMultiaddr(addrStrings[i])
 		if err != nil {
-			log.Printf("[GO] ⚠️ Instance %d: Skipping invalid multiaddress '%s' in list: %v\n", instanceIndex, addrStrings[i], err)
+			logger.Warnf("[GO] ⚠️ Instance %d: Skipping invalid multiaddress '%s' in list: %v\n", instanceIndex, addrStrings[i], err)
 			continue
 		}
 		// You might want to add a check here to ensure subsequent addresses are for the same peer ID
@@ -1407,7 +1629,7 @@ func ConnectTo(
 
 	// Check if attempting to connect to the local node itself.
 	if addrInfo.ID == instanceHost.ID() {
-		log.Printf("[GO] ℹ️ Instance %d: Attempting to connect to self (%s), skipping explicit connection.\n", instanceIndex, addrInfo.ID)
+		logger.Debugf("[GO] ℹ️ Instance %d: Attempting to connect to self (%s), skipping explicit connection.\n", instanceIndex, addrInfo.ID)
 		// Connecting to self is usually not necessary or meaningful in libp2p.
 		// Return success, indicating the "connection" is implicitly present.
 		return jsonSuccessResponse(addrInfo) // Caller frees.
@@ -1424,12 +1646,12 @@ func ConnectTo(
 	instanceHost.Peerstore().AddAddrs(addrInfo.ID, addrInfo.Addrs, peerstore.ConnectedAddrTTL)
 
 	// Initiate the connection attempt. libp2p will handle dialing and negotiation.
-	log.Printf("[GO]   - Instance %d: Attempting host.Connect to %s...\n", instanceIndex, addrInfo.ID)
+	logger.Debugf("[GO]   - Instance %d: Attempting host.Connect to %s...\n", instanceIndex, addrInfo.ID)
 	if err := instanceHost.Connect(connCtx, *addrInfo); err != nil {
 		// Check if the error was due to the connection timeout.
 		if connCtx.Err() == context.DeadlineExceeded {
 			errMsg := fmt.Sprintf("Instance %d: Connection attempt to %s timed out after 30s", instanceIndex, addrInfo.ID)
-			log.Printf("[GO] ❌ %s\n", errMsg)
+			logger.Errorf("[GO] ❌ %s\n", errMsg)
 			return jsonErrorResponse(errMsg, nil) // Return specific timeout error (caller frees).
 		}
 		// Handle other connection errors.
@@ -1446,13 +1668,13 @@ func ConnectTo(
 	var winningAddr string
 	if len(conns) > 0 {
 		winningAddr = fmt.Sprintf("%s/p2p/%s", conns[0].RemoteMultiaddr().String(), addrInfo.ID.String())
-		log.Printf("[GO] ✅ Instance %d: Successfully connected to peer %s via: %s\n", instanceIndex, addrInfo.ID, winningAddr)
+		logger.Debugf("[GO] ✅ Instance %d: Successfully connected to peer %s via: %s\n", instanceIndex, addrInfo.ID, winningAddr)
 	} else {
-		log.Printf("[GO] ⚠️ Instance %d: Connect succeeded for %s, but no active connection found immediately. It may be pending.\n", instanceIndex, addrInfo.ID)
+		logger.Warnf("[GO] ⚠️ Instance %d: Connect succeeded for %s, but no active connection found immediately. It may be pending.\n", instanceIndex, addrInfo.ID)
 	}
 
 	// Success: log the successful connection and return the response.
-	log.Printf("[GO] ✅ Instance %d: Successfully initiated connection to multiaddress: %s\n", instanceIndex, winningAddr)
+	logger.Infof("[GO] ✅ Instance %d: Successfully initiated connection to multiaddress: %s\n", instanceIndex, winningAddr)
 	winningAddrInfo, err := peer.AddrInfoFromString(winningAddr)
 	if err != nil {
 		return jsonErrorResponse("Invalid winner multiaddress.", err)
@@ -1483,7 +1705,7 @@ func ReserveOnRelay(
 	instanceIndex := int(instanceIndexC)
 	// Convert C string input to Go string.
 	goRelayPeerID := C.GoString(relayPeerIDC)
-	log.Printf("[GO] 🅿️ Instance %d: Attempting to reserve slot on relay with Peer ID: %s\n", instanceIndex, goRelayPeerID)
+	logger.Debugf("[GO] 🅿️ Instance %d: Attempting to reserve slot on relay with Peer ID: %s\n", instanceIndex, goRelayPeerID)
 
 	// Check instance index validity
 	if err := checkInstanceIndex(instanceIndex); err != nil {
@@ -1530,7 +1752,7 @@ func ReserveOnRelay(
 		errMsg := fmt.Sprintf("Instance %d: Not connected to relay %s. Must connect before reserving.", instanceIndex, relayInfo.ID)
 		return jsonErrorResponse(errMsg, nil)
 	}
-	log.Printf("[GO]   - Instance %d: Verified connection to relay: %s\n", instanceIndex, relayInfo.ID)
+	logger.Debugf("[GO]   - Instance %d: Verified connection to relay: %s\n", instanceIndex, relayInfo.ID)
 
 	// --- Attempt Reservation ---
 	// Use a separate context with potentially longer timeout for the reservation itself.
@@ -1581,10 +1803,10 @@ func ReserveOnRelay(
 		return jsonErrorResponse("Reservation succeeded but failed to construct any valid relayed multiaddr", nil)
 	}
 
-	log.Printf("[GO]   - Instance %d: Adding %d constructed relayed address(es) to local peerstore (ID: %s) expiring at: %s\n", instanceIndex, len(constructedAddrs), instanceHost.ID(), reservation.Expiration.Format(time.RFC3339))
+	logger.Debugf("[GO]   - Instance %d: Adding %d constructed relayed address(es) to local peerstore (ID: %s) expiring at: %s\n", instanceIndex, len(constructedAddrs), instanceHost.ID(), reservation.Expiration.Format(time.RFC3339))
 	instanceHost.Peerstore().AddAddrs(instanceHost.ID(), constructedAddrs, peerstore.PermanentAddrTTL)
 
-	log.Printf("[GO] ✅ Instance %d: Reservation successful on relay: %s.\n", instanceIndex, relayInfo.ID)
+	logger.Infof("[GO] ✅ Instance %d: Reservation successful on relay: %s.\n", instanceIndex, relayInfo.ID)
 
 	// Return the expiration time of the reservation as confirmation.
 	return jsonSuccessResponse(reservation.Expiration)
@@ -1609,7 +1831,7 @@ func DisconnectFrom(
 
 	instanceIndex := int(instanceIndexC)
 	goPeerID := C.GoString(peerIDC)
-	log.Printf("[GO] 🔌 Instance %d: Attempting to disconnect from peer: %s\n", instanceIndex, goPeerID)
+	logger.Debugf("[GO] 🔌 Instance %d: Attempting to disconnect from peer: %s\n", instanceIndex, goPeerID)
 
 	// Check instance index validity
 	if err := checkInstanceIndex(instanceIndex); err != nil {
@@ -1637,7 +1859,7 @@ func DisconnectFrom(
 	}
 
 	if pid == instanceHost.ID() {
-		log.Printf("[GO] ℹ️ Instance %d: Attempting to disconnect from self (%s), skipping.\n", instanceIndex, pid)
+		logger.Debugf("[GO] ℹ️ Instance %d: Attempting to disconnect from self (%s), skipping.\n", instanceIndex, pid)
 		return jsonSuccessResponse("Cannot disconnect from self")
 	}
 
@@ -1645,7 +1867,7 @@ func DisconnectFrom(
 	instancePersistentChatStreamsMutex.Lock()
 	stream, exists := instancePersistentChatStreams[pid]
 	if exists {
-		log.Printf("[GO]   ↳ Instance %d: Closing persistent outgoing stream to %s\n", instanceIndex, pid)
+		logger.Debugf("[GO]   ↳ Instance %d: Closing persistent outgoing stream to %s\n", instanceIndex, pid)
 		_ = stream.Close() // Attempt graceful close
 		delete(instancePersistentChatStreams, pid)
 	}
@@ -1655,16 +1877,16 @@ func DisconnectFrom(
 	conns := instanceHost.Network().ConnsToPeer(pid)
 	closedNetworkConn := false
 	if len(conns) > 0 {
-		log.Printf("[GO]   - Instance %d: Closing %d active network connection(s) to peer %s...\n", instanceIndex, len(conns), pid)
+		logger.Debugf("[GO]   - Instance %d: Closing %d active network connection(s) to peer %s...\n", instanceIndex, len(conns), pid)
 		err = instanceHost.Network().ClosePeer(pid) // This closes the underlying connection(s)
 		if err != nil {
-			log.Printf("[GO] ⚠️ Instance %d: Error closing network connection(s) to peer %s: %v (proceeding with cleanup)\n", instanceIndex, pid, err)
+			logger.Warnf("[GO] ⚠️ Instance %d: Error closing network connection(s) to peer %s: %v (proceeding with cleanup)\n", instanceIndex, pid, err)
 		} else {
-			log.Printf("[GO]   - Instance %d: Closed network connection(s) to peer: %s\n", instanceIndex, pid)
+			logger.Debugf("[GO]   - Instance %d: Closed network connection(s) to peer: %s\n", instanceIndex, pid)
 			closedNetworkConn = true
 		}
 	} else {
-		log.Printf("[GO] ℹ️ Instance %d: No active network connections found to peer %s.\n", instanceIndex, pid)
+		logger.Debugf("[GO] ℹ️ Instance %d: No active network connections found to peer %s.\n", instanceIndex, pid)
 	}
 
 	// --- Remove from Tracking Map for this instance ---
@@ -1674,9 +1896,9 @@ func DisconnectFrom(
 
 	logMsg := fmt.Sprintf("Instance %d: Disconnected from peer %s", instanceIndex, goPeerID)
 	if !exists && !closedNetworkConn && len(conns) == 0 {
-		logMsg = fmt.Sprintf("Instance %d: Peer %s was not connected or tracked", instanceIndex, goPeerID)
+		logMsg = fmt.Sprintf("Instance %d: Disconnected from peer %s (not connected or tracked)", instanceIndex, goPeerID)
 	}
-	log.Printf("[GO] ✅ %s\n", logMsg)
+	logger.Infof("[GO] 🔌 %s\n", logMsg)
 
 	return jsonSuccessResponse(logMsg)
 }
@@ -1722,7 +1944,7 @@ func GetConnectedPeers(
 		// Check if the connectedPeers map itself is initialized for this instance.
 		// This map should be initialized in CreateNode.
 		if instanceConnectedPeers == nil {
-			log.Printf("[GO] ⚠️ Instance %d: GetConnectedPeers: connectedPeersInstances map is nil. Returning empty list.\n", instanceIndex)
+			logger.Warnf("[GO] ⚠️ Instance %d: GetConnectedPeers: connectedPeersInstances map is nil. Returning empty list.\n", instanceIndex)
 			// Return success with an empty list.
 			return jsonSuccessResponse([]ExtendedPeerInfo{})
 		}
@@ -1732,13 +1954,13 @@ func GetConnectedPeers(
 		}
 	} else {
 		// If host is not ready, return the current state of the map (which should be empty if CreateNode was called correctly).
-		log.Printf("[GO] ⚠️ Instance %d: GetConnectedPeers called but host is not fully initialized. Returning potentially empty list based on map.\n", instanceIndex)
+		logger.Warnf("[GO] ⚠️ Instance %d: GetConnectedPeers called but host is not fully initialized. Returning potentially empty list based on map.\n", instanceIndex)
 		for _, peerInfo := range instanceConnectedPeers {
 			peersList = append(peersList, peerInfo)
 		}
 	}
 
-	log.Printf("[GO] ℹ️ Instance %d: Reporting %d currently tracked and active peers.\n", instanceIndex, len(peersList))
+	logger.Debugf("[GO] ℹ️ Instance %d: Reporting %d currently tracked and active peers.\n", instanceIndex, len(peersList))
 
 	// Return the list of active peers as a JSON success response.
 	return jsonSuccessResponse(peersList) // Caller frees.
@@ -1793,7 +2015,7 @@ func GetRendezvousPeers(
 	}
 
 	// The state exists, so return the whole struct.
-	log.Printf("[GO] ℹ️ Instance %d: Reporting %d rendezvous peers (UpdateCount: %d).\n", instanceIndex, len(rendezvousState.Peers), rendezvousState.UpdateCount)
+	logger.Debugf("[GO] ℹ️ Instance %d: Reporting %d rendezvous peers (UpdateCount: %d).\n", instanceIndex, len(rendezvousState.Peers), rendezvousState.UpdateCount)
 	return jsonSuccessResponse(responsePayload) // Caller frees.
 }
 
@@ -1897,7 +2119,7 @@ func SendMessageToPeer(
 		topic, exists := topicsInstances[instanceIndex][goChannel]
 		if !exists {
 			var err error
-			log.Printf("[GO]   - Instance %d: Joining PubSub topic '%s' for sending.\n", instanceIndex, goChannel)
+			logger.Debugf("[GO]   - Instance %d: Joining PubSub topic '%s' for sending.\n", instanceIndex, goChannel)
 			topic, err = instancePubsub.Join(goChannel) // ps is instancePubsub
 			if err != nil {
 				pubsubMutexes[instanceIndex].Unlock()
@@ -1905,7 +2127,7 @@ func SendMessageToPeer(
 				return jsonErrorResponse(fmt.Sprintf("Failed to join PubSub topic '%s'", goChannel), err)
 			}
 			topicsInstances[instanceIndex][goChannel] = topic // Store the new topic
-			log.Printf("[GO] ✅ Instance %d: Joined PubSub topic: %s for publishing.\n", instanceIndex, goChannel)
+			logger.Debugf("[GO] ✅ Instance %d: Joined PubSub topic: %s for publishing.\n", instanceIndex, goChannel)
 		}
 		pubsubMutexes[instanceIndex].Unlock() // Unlock after potentially joining
 
@@ -1914,7 +2136,7 @@ func SendMessageToPeer(
 			// Failed to publish to topic
 			return jsonErrorResponse(fmt.Sprintf("Failed to publish to topic '%s'", goChannel), err)
 		}
-		log.Printf("[GO] 🌍 Instance %d: Broadcast to topic '%s' (%d bytes)\n", instanceIndex, goChannel, len(goData))
+		logger.Infof("[GO] 🌍 Instance %d: Broadcast to topic '%s' (%d bytes)\n", instanceIndex, goChannel, len(goData))
 		return jsonSuccessResponse(fmt.Sprintf("Message broadcast to topic %s", goChannel))
 
 	} else if strings.Contains(goChannel, "::dm:") {
@@ -1941,16 +2163,16 @@ func SendMessageToPeer(
 
 		// If stream exists, try writing to it
 		if exists {
-			log.Printf("[GO]   ↳ Instance %d: Reusing existing stream to %s\n", instanceIndex, pid)
+			logger.Debugf("[GO]   ↳ Instance %d: Reusing existing stream to %s\n", instanceIndex, pid)
 			err = writeDirectMessageFrame(stream, goChannel, goData)
 			if err == nil {
 				// Success writing to existing stream
 				instancePersistentChatStreamsMutex.Unlock() // Unlock before returning
-				log.Printf("[GO] 📤 Instance %d: Sent direct message to %s (on existing stream)\n", instanceIndex, pid)
+				logger.Infof("[GO] 📤 Instance %d: Sent direct message to %s (on existing stream)\n", instanceIndex, pid)
 				return jsonSuccessResponse(fmt.Sprintf("Direct message sent to %s (reused stream).", pid))
 			}
 			// Write failed on existing stream - assume it's broken
-			log.Printf("[GO] ⚠️ Instance %d: Failed to write to existing stream for %s: %v. Closing and removing stream.", instanceIndex, pid, err)
+			logger.Warnf("[GO] ⚠️ Instance %d: Failed to write to existing stream for %s: %v. Closing and removing stream.", instanceIndex, pid, err)
 			// Close the stream (Reset is more abrupt, Close attempts graceful)
 			_ = stream.Close() // Ignore error during close, as we're removing it anyway
 			// Remove from map
@@ -1962,14 +2184,14 @@ func SendMessageToPeer(
 			// Stream does not exist, need to create a new one
 			instancePersistentChatStreamsMutex.Unlock()
 
-			log.Printf("[GO]   ↳ Instance %d: No existing stream to %s, creating new one...\n", instanceIndex, pid)
+			logger.Debugf("[GO]   ↳ Instance %d: No existing stream to %s, creating new one...\n", instanceIndex, pid)
 			streamCtx, cancel := context.WithTimeout(instanceCtx, 20*time.Second)
 			defer cancel()
 
 			newStream, err := instanceHost.NewStream(
-				network.WithAllowLimitedConn(streamCtx, "chat/1.0.0"),
+				network.WithAllowLimitedConn(streamCtx, UnaiverseChatProtocol),
 				pid,
-				ChatProtocol,
+				UnaiverseChatProtocol,
 			)
 
 			// Re-acquire lock *after* NewStream finishes or errors
@@ -1988,11 +2210,11 @@ func SendMessageToPeer(
 			// Double-check if another goroutine created a stream while we were unlocked
 			existingStream, existsNow := instancePersistentChatStreams[pid]
 			if existsNow {
-				log.Printf("[GO] ⚠️ Instance %d: Race condition: Another stream to %s was created. Using existing one and closing the new one.", instanceIndex, pid)
+				logger.Warnf("[GO] ⚠️ Instance %d: Race condition: Another stream to %s was created. Using existing one and closing the new one.", instanceIndex, pid)
 				_ = newStream.Close() // Close the redundant stream we just created.
 				stream = existingStream
 			} else {
-				log.Printf("[GO] ✅ Instance %d: Opened and stored new persistent stream to %s\n", instanceIndex, pid)
+				logger.Debugf("[GO] ✅ Instance %d: Opened and stored new persistent stream to %s\n", instanceIndex, pid)
 				instancePersistentChatStreams[pid] = newStream
 				stream = newStream
 				go handleStream(instanceIndex, newStream)
@@ -2001,7 +2223,7 @@ func SendMessageToPeer(
 			// --- Write message to the determined stream ---
 			err = writeDirectMessageFrame(stream, goChannel, goData)
 			if err != nil {
-				log.Printf("[GO] ❌ Instance %d: Failed to write initial message to stream for %s: %v. Closing and removing.", instanceIndex, pid, err)
+				logger.Errorf("[GO] ❌ Instance %d: Failed to write initial message to stream for %s: %v. Closing and removing.", instanceIndex, pid, err)
 				_ = stream.Close()
 				if currentStream, ok := instancePersistentChatStreams[pid]; ok && currentStream == stream {
 					delete(instancePersistentChatStreams, pid)
@@ -2009,7 +2231,7 @@ func SendMessageToPeer(
 				return jsonErrorResponse(fmt.Sprintf("Failed to write to new stream to '%s' (needs reconnect).", pid), err)
 			}
 
-			log.Printf("[GO] 📤 Instance %d: Sent direct message to %s (on NEW stream)\n", instanceIndex, pid)
+			logger.Infof("[GO] 📤 Instance %d: Sent direct message to %s (on NEW stream)\n", instanceIndex, pid)
 			return jsonSuccessResponse(fmt.Sprintf("Direct message sent to %s (new stream).", pid))
 		}
 	} else {
@@ -2037,7 +2259,7 @@ func SubscribeToTopic(
 	instanceIndex := int(instanceIndexC)
 	// Convert C string input to Go string.
 	channel := C.GoString(channelC)
-	log.Printf("[GO] <sub> Instance %d: Attempting to subscribe to topic: %s\n", instanceIndex, channel)
+	logger.Debugf("[GO] <sub> Instance %d: Attempting to subscribe to topic: %s\n", instanceIndex, channel)
 
 	// Check instance index validity
 	if err := checkInstanceIndex(instanceIndex); err != nil {
@@ -2064,7 +2286,7 @@ func SubscribeToTopic(
 
 	// Check if already subscribed to this topic for this instance.
 	if _, exists := instanceSubscriptions[channel]; exists {
-		log.Printf("[GO] <sub> Instance %d: Already subscribed to topic: %s\n", instanceIndex, channel)
+		logger.Debugf("[GO] <sub> Instance %d: Already subscribed to topic: %s\n", instanceIndex, channel)
 		// Return success, indicating the desired state is already met.
 		return jsonSuccessResponse(
 			fmt.Sprintf("Instance %d: Already subscribed to topic %s", instanceIndex, channel),
@@ -2074,34 +2296,34 @@ func SubscribeToTopic(
 	// If the channel ends with ":rv", it indicates a rendezvous topic, so we remove other ones
 	// from the instanceTopics and instanceSubscriptions list, and we clean the rendezvousDiscoveredPeersInstances.
 	if strings.HasSuffix(channel, ":rv") {
-		log.Printf("  - Instance %d: Joining rendezvous topic '%s'. Cleaning up previous rendezvous state.\n", instanceIndex, channel)
+		logger.Debugf("  - Instance %d: Joining rendezvous topic '%s'. Cleaning up previous rendezvous state.\n", instanceIndex, channel)
 		// Remove all existing rendezvous topics and subscriptions for this instance.
 		for existingChannel := range instanceTopics {
 			if strings.HasSuffix(existingChannel, ":rv") {
-				log.Printf("  - Instance %d: Removing existing rendezvous topic '%s' from instance state.\n", instanceIndex, existingChannel)
-				
+				logger.Debugf("  - Instance %d: Removing existing rendezvous topic '%s' from instance state.\n", instanceIndex, existingChannel)
+
 				// Close the topic handle if it exists.
 				if topic, exists := instanceTopics[existingChannel]; exists {
 					if err := topic.Close(); err != nil {
-						log.Printf("⚠️ Instance %d: Error closing topic handle for '%s': %v (proceeding with map cleanup)\n", instanceIndex, existingChannel, err)
+						logger.Warnf("⚠️ Instance %d: Error closing topic handle for '%s': %v (proceeding with map cleanup)\n", instanceIndex, existingChannel, err)
 					}
 					delete(instanceTopics, existingChannel)
 				}
-				
+
 				// Remove the subscription if it exists.
 				if sub, exists := instanceSubscriptions[existingChannel]; exists {
-					sub.Cancel() // Cancel the subscription
+					sub.Cancel()                                   // Cancel the subscription
 					delete(instanceSubscriptions, existingChannel) // Remove from map
 				}
-				
+
 				// Also clean up rendezvous discovered peers for this instance.
-				log.Printf("  - Instance %d: Resetting rendezvous state for new topic '%s'.\n", instanceIndex, channel)
+				logger.Debugf("  - Instance %d: Resetting rendezvous state for new topic '%s'.\n", instanceIndex, channel)
 				rendezvousDiscoveredPeersMutexes[instanceIndex].Lock()
 				rendezvousDiscoveredPeersInstances[instanceIndex] = nil
 				rendezvousDiscoveredPeersMutexes[instanceIndex].Unlock()
 			}
 		}
-		log.Printf("  - Instance %d: Cleaned up previous rendezvous state.\n", instanceIndex)
+		logger.Debugf("  - Instance %d: Cleaned up previous rendezvous state.\n", instanceIndex)
 	}
 
 	// --- Join the Topic ---
@@ -2115,7 +2337,7 @@ func SubscribeToTopic(
 	}
 	// Store the topic handle in the map for this instance.
 	instanceTopics[channel] = topic
-	log.Printf("[GO]   - Instance %d: Obtained topic handle for: %s\n", instanceIndex, channel)
+	logger.Debugf("[GO]   - Instance %d: Obtained topic handle for: %s\n", instanceIndex, channel)
 
 	// --- Subscribe to the Topic ---
 	// Create an actual subscription to receive messages from the topic.
@@ -2125,7 +2347,7 @@ func SubscribeToTopic(
 		err := topic.Close()
 		if err != nil {
 			// Log error but proceed with cleanup.
-			log.Printf("[GO] ⚠️ Instance %d: Error closing topic handle for '%s': %v (proceeding with map cleanup)\n", instanceIndex, channel, err)
+			logger.Warnf("[GO] ⚠️ Instance %d: Error closing topic handle for '%s': %v (proceeding with map cleanup)\n", instanceIndex, channel, err)
 		}
 		// Remove the topic handle from our local map for this instance.
 		delete(instanceTopics, channel)
@@ -2134,7 +2356,7 @@ func SubscribeToTopic(
 	}
 	// Store the subscription object in the map for this instance.
 	instanceSubscriptions[channel] = sub
-	log.Printf("[GO]   - Instance %d: Created subscription object for: %s\n", instanceIndex, channel)
+	logger.Debugf("[GO]   - Instance %d: Created subscription object for: %s\n", instanceIndex, channel)
 
 	// --- Start Listener Goroutine ---
 	// Launch a background goroutine that will continuously read messages
@@ -2142,7 +2364,7 @@ func SubscribeToTopic(
 	// Pass the instance index, subscription object, and topic name (for logging).
 	go readFromSubscription(instanceIndex, sub)
 
-	log.Printf("[GO] ✅ Instance %d: Subscribed successfully to topic: %s and started listener.\n", instanceIndex, channel)
+	logger.Debugf("[GO] ✅ Instance %d: Subscribed successfully to topic: %s and started listener.\n", instanceIndex, channel)
 	return jsonSuccessResponse(
 		fmt.Sprintf("Instance %d: Subscribed to topic %s", instanceIndex, channel),
 	) // Caller frees.
@@ -2167,7 +2389,7 @@ func UnsubscribeFromTopic(
 	instanceIndex := int(instanceIndexC)
 	// Convert C string input to Go string.
 	channel := C.GoString(channelC)
-	log.Printf("[GO] </sub> Instance %d: Attempting to unsubscribe from topic: %s\n", instanceIndex, channel)
+	logger.Debugf("[GO] </sub> Instance %d: Attempting to unsubscribe from topic: %s\n", instanceIndex, channel)
 
 	// Check instance index validity
 	if err := checkInstanceIndex(instanceIndex); err != nil {
@@ -2182,7 +2404,7 @@ func UnsubscribeFromTopic(
 	// Check if host and PubSub are initialized. This is mostly for cleaning local state maps
 	// if called after CloseNode, but Cancel/Close calls below require the instances.
 	if hostInstances[instanceIndex] == nil || pubsubInstances[instanceIndex] == nil {
-		log.Printf("[GO]  Instance %d: Host/PubSub not initialized during Unsubscribe. Cleaning up local subscription state only.\n", instanceIndex)
+		logger.Debugf("[GO]  Instance %d: Host/PubSub not initialized during Unsubscribe. Cleaning up local subscription state only.\n", instanceIndex)
 		// Allow local map cleanup even if instances are gone.
 	}
 
@@ -2194,7 +2416,7 @@ func UnsubscribeFromTopic(
 	// Find the subscription object in the map for this instance.
 	sub, subExists := instanceSubscriptions[channel]
 	if !subExists {
-		log.Printf("[GO] </sub> Instance %d: Not currently subscribed to topic: %s (or already unsubscribed)\n", instanceIndex, channel)
+		logger.Warnf("[GO] </sub> Instance %d: Not currently subscribed to topic: %s (or already unsubscribed)\n", instanceIndex, channel)
 		// Also remove potential stale topic handle if subscription is gone.
 		delete(instanceTopics, channel)
 		return jsonSuccessResponse(
@@ -2208,7 +2430,7 @@ func UnsubscribeFromTopic(
 	sub.Cancel()
 	// Remove the subscription entry from our local map for this instance.
 	delete(instanceSubscriptions, channel)
-	log.Printf("[GO]   - Instance %d: Cancelled subscription object for topic: %s\n", instanceIndex, channel)
+	logger.Debugf("[GO]   - Instance %d: Cancelled subscription object for topic: %s\n", instanceIndex, channel)
 
 	// --- Close the Topic Handle ---
 	// Find the corresponding topic handle for this instance. It's good practice to close this as well,
@@ -2216,18 +2438,18 @@ func UnsubscribeFromTopic(
 	// Explicit closing ensures resources related to the *handle* (like internal routing state) are released.
 	topic, topicExists := instanceTopics[channel]
 	if topicExists {
-		log.Printf("[GO]   - Instance %d: Closing topic handle for: %s\n", instanceIndex, channel)
+		logger.Debugf("[GO]   - Instance %d: Closing topic handle for: %s\n", instanceIndex, channel)
 		// Close the topic handle.
 		err := topic.Close()
 		if err != nil {
 			// Log error but proceed with cleanup.
-			log.Printf("[GO] ⚠️ Instance %d: Error closing topic handle for '%s': %v (proceeding with map cleanup)\n", instanceIndex, channel, err)
+			logger.Warnf("[GO] ⚠️ Instance %d: Error closing topic handle for '%s': %v (proceeding with map cleanup)\n", instanceIndex, channel, err)
 		}
 		// Remove the topic handle from our local map for this instance.
 		delete(instanceTopics, channel)
-		log.Printf("[GO]   - Instance %d: Removed topic handle from local map for topic: %s\n", instanceIndex, channel)
+		logger.Debugf("[GO]   - Instance %d: Removed topic handle from local map for topic: %s\n", instanceIndex, channel)
 	} else {
-		log.Printf("[GO]   - Instance %d: No topic handle found in local map for '%s' to close (already removed or possibly never stored?).\n", instanceIndex, channel)
+		logger.Debugf("[GO]   - Instance %d: No topic handle found in local map for '%s' to close (already removed or possibly never stored?).\n", instanceIndex, channel)
 		// Ensure removal from map even if handle wasn't found (e.g., inconsistent state).
 		delete(instanceTopics, channel)
 	}
@@ -2235,14 +2457,14 @@ func UnsubscribeFromTopic(
 	// If the channel ends with ":rv", it indicates a rendezvous topic, so we have closed the topic and the sub
 	// but we also need to clean the rendezvousDiscoveredPeersInstances.
 	if strings.HasSuffix(channel, ":rv") {
-		log.Printf("  - Instance %d: Unsubscribing from rendezvous topic. Clearing state.\n", instanceIndex)
+		logger.Debugf("  - Instance %d: Unsubscribing from rendezvous topic. Clearing state.\n", instanceIndex)
 		rendezvousDiscoveredPeersMutexes[instanceIndex].Lock()
 		rendezvousDiscoveredPeersInstances[instanceIndex] = nil
 		rendezvousDiscoveredPeersMutexes[instanceIndex].Unlock()
 	}
-	log.Printf("[GO]   - Instance %d: Cleaned up previous rendezvous state.\n", instanceIndex)
+	logger.Debugf("[GO]   - Instance %d: Cleaned up previous rendezvous state.\n", instanceIndex)
 
-	log.Printf("[GO] ✅ Instance %d: Unsubscribed successfully from topic: %s\n", instanceIndex, channel)
+	logger.Infof("[GO] ✅ Instance %d: Unsubscribed successfully from topic: %s\n", instanceIndex, channel)
 	return jsonSuccessResponse(
 		fmt.Sprintf("Instance %d: Unsubscribed from topic %s", instanceIndex, channel),
 	) // Caller frees.
@@ -2264,14 +2486,14 @@ func MessageQueueLength(
 
 	// Check instance index validity
 	if err := checkInstanceIndex(instanceIndex); err != nil {
-		log.Printf("[GO] ❌ MessageQueueLength: %v\n", err)
+		logger.Errorf("[GO] ❌ MessageQueueLength: %v\n", err)
 		return -1 // Indicate invalid instance index
 	}
 
 	// Get the message store for this instance
 	store := messageStoreInstances[instanceIndex]
 	if store == nil {
-		log.Printf("[GO] ❌ Instance %d: Message store not initialized.\n", instanceIndex)
+		logger.Errorf("[GO] ❌ Instance %d: Message store not initialized.\n", instanceIndex)
 		return 0 // Return 0 if store is nil (effectively empty)
 	}
 
@@ -2279,7 +2501,7 @@ func MessageQueueLength(
 	defer store.mu.Unlock()
 
 	totalLength := 0
-	/// TODO: this makes sense but not for the check we are doing from python, think about it
+	// TODO: this makes sense but not for the check we are doing from python, think about it
 	for _, messageList := range store.messagesByChannel {
 		totalLength += messageList.Len()
 	}
@@ -2312,7 +2534,7 @@ func PopMessages(
 	// Get the message store for this instance
 	store := messageStoreInstances[instanceIndex]
 	if store == nil {
-		log.Printf("[GO] ❌ Instance %d: PopMessages: Message store not initialized.\n", instanceIndex)
+		logger.Errorf("[GO] ❌ Instance %d: PopMessages: Message store not initialized.\n", instanceIndex)
 		return jsonErrorResponse(fmt.Sprintf("Instance %d: Message store not initialized", instanceIndex), nil)
 	}
 
@@ -2351,7 +2573,7 @@ func PopMessages(
 
 	jsonBytes, err := json.Marshal(payloads)
 	if err != nil {
-		log.Printf("[GO] ❌ Instance %d: PopMessages: Failed to marshal messages to JSON: %v\n", instanceIndex, err)
+		logger.Errorf("[GO] ❌ Instance %d: PopMessages: Failed to marshal messages to JSON: %v\n", instanceIndex, err)
 		// Messages have already been popped from the queue at this point.
 		// Returning an error is the best we can do.
 		return jsonErrorResponse(
@@ -2381,7 +2603,7 @@ func CloseNode(
 	instanceIndex := int(instanceIndexC)
 
 	if instanceIndex == -1 {
-		log.Println("[GO] 🛑 Closing all initialized instances of this node...")
+		logger.Debugf("[GO] 🛑 Closing all initialized instances of this node...")
 		successCount := 0
 		errorCount := 0
 		var errorMessages []string
@@ -2394,7 +2616,7 @@ func CloseNode(
 			instanceStateMutex.RUnlock()
 
 			if isInstInitialized {
-				log.Printf("[GO] 🛑 Attempting to close instance %d...\n", i)
+				logger.Debugf("[GO] 🛑 Attempting to close instance %d...\n", i)
 				// Call the single instance close logic internally
 				// This internal call will handle its own instance-specific locks
 				resultPtr := closeSingleInstance(i)
@@ -2408,33 +2630,33 @@ func CloseNode(
 				if err := json.Unmarshal([]byte(resultJSON), &result); err != nil {
 					errorCount++
 					errorMessages = append(errorMessages, fmt.Sprintf("Instance %d: Failed to parse close result: %v", i, err))
-					log.Printf("[GO] ❌ Instance %d: Failed to parse close result: %v\n", i, err)
+					logger.Errorf("[GO] ❌ Instance %d: Failed to parse close result: %v\n", i, err)
 				} else if result.State == "Error" {
 					errorCount++
 					errorMessages = append(errorMessages, fmt.Sprintf("Instance %d: %s", i, result.Message))
-					log.Printf("[GO] ❌ Instance %d: Close failed: %s\n", i, result.Message)
+					logger.Errorf("[GO] ❌ Instance %d: Close failed: %s\n", i, result.Message)
 				} else {
 					successCount++
-					log.Printf("[GO] ✅ Instance %d: Closed successfully.\n", i)
+					logger.Debugf("[GO] ✅ Instance %d: Closed successfully.\n", i)
 				}
 			}
 		}
 
 		summaryMsg := fmt.Sprintf("Closed %d nodes successfully, %d failed.", successCount, errorCount)
 		if errorCount > 0 {
-			log.Printf("[GO] ❌ Errors encountered during batch close:\n")
+			logger.Errorf("[GO] ❌ Errors encountered during batch close:\n")
 			for _, msg := range errorMessages {
-				log.Println(msg)
+				logger.Errorf(msg)
 			}
 			return jsonErrorResponse(summaryMsg, fmt.Errorf("details: %v", errorMessages))
 		}
 
-		log.Println("[GO] ✅ All initialized nodes closed.")
+		logger.Infof("[GO] 🛑 All initialized nodes closed.")
 		return jsonSuccessResponse(summaryMsg)
 
 	} else {
 		// --- Close a single specific instance ---
-		log.Printf("[GO] 🛑 Closing single node instance %d...\n", instanceIndex)
+		logger.Infof("[GO] 🛑 Closing single node instance %d...\n", instanceIndex)
 		// Check instance index validity for a single close
 		if err := checkInstanceIndex(instanceIndex); err != nil {
 			return jsonErrorResponse("Invalid instance index for single close", err) // Caller frees.
@@ -2474,7 +2696,7 @@ func FreeInt(
 
 	// Check for NULL pointer.
 	if i != nil {
-		log.Println("[GO] ⚠️ FreeInt called - Ensure a *C.int pointer was actually allocated and returned from Go (this is unusual).")
+		logger.Warnf("[GO] ⚠️ FreeInt called - Ensure a *C.int pointer was actually allocated and returned from Go (this is unusual).")
 		C.free(unsafe.Pointer(i)) // Free the memory if it was indeed allocated.
 	}
 }
@@ -2488,5 +2710,5 @@ func FreeInt(
 func main() {
 	// This message will typically only be seen if you run `go run lib.go`
 	// or build and run as a standard executable, NOT when used as a shared library.
-	log.Println("[GO] libp2p Go library main function (not executed in c-shared library mode)")
+	logger.Debugf("[GO] libp2p Go library main function (not executed in c-shared library mode)")
 }
