@@ -963,6 +963,9 @@ func goGetNodeAddresses(
 		if strings.Contains(transportAddr.String(), "*") {
 			continue
 		}
+		if !strings.Contains(transportAddr.String(), "/ws") {
+			continue
+		}
 
 		// handle cases based on presence and correctness of Peer ID in the address
 		switch {
