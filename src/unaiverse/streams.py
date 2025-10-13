@@ -61,6 +61,7 @@ class DataStream:
             name (str): The name of the stream.
             group (str): The name of the group to which the stream belongs.
             public (bool): If the stream is going to be served in the public net or the private one.
+            pubsub (bool): If the stream is going to be served by broadcasting (PubSub) or not.
 
         Returns:
             Stream: The modified stream with updated group name.
@@ -605,6 +606,9 @@ class ImageFileStream(BufferedDataStream):
         """
         if self.circular:
             idx %= self.__len__()
+        else:
+            if idx >= self.__len__() or idx < 0:
+                return None, -1
 
         image = Image.open(self.image_paths[idx])
         return image, self.clock.get_cycle() - self.first_cycle
@@ -691,6 +695,9 @@ class LabelStream(BufferedDataStream):
         """
         if self.circular:
             idx %= self.__len__()
+        else:
+            if idx >= self.__len__() or idx < 0:
+                return None, -1
 
         label = self.labels[idx].unsqueeze(0).to(self.device)  # Multi-label vector for the image
         return self.props.adapt_tensor_to_tensor_labels(label), self.clock.get_cycle() - self.first_cycle

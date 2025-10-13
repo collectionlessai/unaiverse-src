@@ -875,8 +875,9 @@ class NodeConn(ConnectionPools):
 
         for peer_id, misc in to_remove:
             del self.peer_id_to_misc[peer_id]
-            del self.peer_id_to_addrs[peer_id]
-            self.role_to_peer_ids[misc].remove(peer_id)
+            if peer_id in self.peer_id_to_addrs:
+                del self.peer_id_to_addrs[peer_id]
+            self.role_to_peer_ids[misc].discard(peer_id)
 
         # Setting new information
         if world_agents_list_peer_infos is not None and len(world_agents_list_peer_infos) > 0:
@@ -904,8 +905,9 @@ class NodeConn(ConnectionPools):
 
         for peer_id, misc in to_remove:
             del self.peer_id_to_misc[peer_id]
-            del self.peer_id_to_addrs[peer_id]
-            self.role_to_peer_ids[misc].remove(peer_id)
+            if peer_id in self.peer_id_to_addrs:
+                del self.peer_id_to_addrs[peer_id]
+            self.role_to_peer_ids[misc].discard(peer_id)
 
         # Setting new information
         if world_masters_list_peer_infos is not None and len(world_masters_list_peer_infos) > 0:
