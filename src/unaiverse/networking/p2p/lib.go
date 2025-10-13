@@ -45,10 +45,11 @@ import (
 	rc "github.com/libp2p/go-libp2p/p2p/protocol/circuitv2/relay" // Import for relay service options
 
 	// transport protocols for libp2p
-	quic "github.com/libp2p/go-libp2p/p2p/transport/quic"     // QUIC transport for peer-to-peer connections (e.g., for mobile devices)
-	"github.com/libp2p/go-libp2p/p2p/transport/tcp"           // TCP transport for peer-to-peer connections (most common)
-	webrtc "github.com/libp2p/go-libp2p/p2p/transport/webrtc" // WebRTC transport for peer-to-peer connections (e.g., for browsers or mobile devices)
-	ws "github.com/libp2p/go-libp2p/p2p/transport/websocket"  // WebSocket transport for peer-to-peer connections (e.g., for browsers)
+	quic "github.com/libp2p/go-libp2p/p2p/transport/quic"                 // QUIC transport for peer-to-peer connections (e.g., for mobile devices)
+	"github.com/libp2p/go-libp2p/p2p/transport/tcp"                       // TCP transport for peer-to-peer connections (most common)
+	webrtc "github.com/libp2p/go-libp2p/p2p/transport/webrtc"             // WebRTC transport for peer-to-peer connections (e.g., for browsers or mobile devices)
+	ws "github.com/libp2p/go-libp2p/p2p/transport/websocket"              // WebSocket transport for peer-to-peer connections (e.g., for browsers)
+	webtransport "github.com/libp2p/go-libp2p/p2p/transport/webtransport" // WebTransport transport for peer-to-peer connections (e.g., for browsers)
 
 	// --- AutoTLS Imports ---
 	"github.com/caddyserver/certmagic"                // Automatic TLS certificate management (used by p2p-forge)
@@ -326,9 +327,11 @@ func getListenAddrs(ipsJSON string, tcpPort int, tlsMode string) ([]ma.Multiaddr
 	var listenAddrs []ma.Multiaddr
 	quicPort := 0
 	webrtcPort := 0
+	webtransPort := 0
 	if tcpPort != 0 {
 		quicPort = tcpPort + 1
 		webrtcPort = tcpPort + 2
+		webtransPort = tcpPort + 3
 	}
 
 	// --- Create Multiaddrs for both protocols from the single IP list ---
@@ -337,9 +340,12 @@ func getListenAddrs(ipsJSON string, tcpPort int, tlsMode string) ([]ma.Multiaddr
 		tcpMaddr, _ := ma.NewMultiaddr(fmt.Sprintf("/ip4/%s/tcp/%d", ip, tcpPort))
 		// QUIC
 		quicMaddr, _ := ma.NewMultiaddr(fmt.Sprintf("/ip4/%s/udp/%d/quic-v1", ip, quicPort))
+		// WebTransport
+		webtransMaddr, _ := ma.NewMultiaddr(fmt.Sprintf("/ip4/%s/udp/%d/quic-v1/webtransport", ip, webtransPort))
 		// WebRTC
 		webrtcMaddr, _ := ma.NewMultiaddr(fmt.Sprintf("/ip4/%s/udp/%d/webrtc-direct", ip, webrtcPort))
-		listenAddrs = append(listenAddrs, tcpMaddr, quicMaddr, webrtcMaddr)
+
+		listenAddrs = append(listenAddrs, tcpMaddr, quicMaddr, webrtcMaddr, webtransMaddr)
 
 		if tlsMode == "autotls" {
 			// This is the special multiaddr that triggers AutoTLS
@@ -963,9 +969,6 @@ func goGetNodeAddresses(
 		if strings.Contains(transportAddr.String(), "*") {
 			continue
 		}
-		if !strings.Contains(transportAddr.String(), "/ws") {
-			continue
-		}
 
 		// handle cases based on presence and correctness of Peer ID in the address
 		switch {
@@ -1160,15 +1163,15 @@ func InitializeLibrary(
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
 	if int(enableLoggingC) == 1 {
 		golog.SetAllLoggers(golog.LevelInfo) // Set a default level
-		golog.SetLogLevel("p2p-library", "debug")
+		golog.SetLogLevel("p2p-library", "info")
 		// --- Add Specific Log Levels from the Example ---
 		// These are crucial for debugging AutoTLS and connectivity.
-		golog.SetLogLevel("autotls", "debug")
-		golog.SetLogLevel("p2p-forge", "debug")
-		golog.SetLogLevel("nat", "debug")
-		golog.SetLogLevel("basichost", "debug")
-		golog.SetLogLevel("p2p-circuit", "debug") // Core circuit-v2 protocol logic
-		golog.SetLogLevel("relay", "debug")
+		golog.SetLogLevel("autotls", "info")
+		golog.SetLogLevel("p2p-forge", "info")
+		golog.SetLogLevel("nat", "info")
+		golog.SetLogLevel("basichost", "info")
+		golog.SetLogLevel("p2p-circuit", "info") // Core circuit-v2 protocol logic
+		golog.SetLogLevel("relay", "info")
 	} else {
 		golog.SetAllLoggers(golog.LevelError)
 		golog.SetLogLevel("*", "FATAL")
@@ -1307,7 +1310,11 @@ func CreateNode(
 
 	// --- 4. Libp2p Options Assembly ---
 	tlsMode := "none"
-	if useCustomTLS { tlsMode = "domain" } else if useAutoTLS { tlsMode = "autotls" }
+	if useCustomTLS {
+		tlsMode = "domain"
+	} else if useAutoTLS {
+		tlsMode = "autotls"
+	}
 	listenAddrs, err := getListenAddrs(ipsJSON, predefinedPort, tlsMode)
 	if err != nil {
 		cleanupFailedCreate(instanceIndex)
@@ -1329,6 +1336,7 @@ func CreateNode(
 		libp2p.Transport(tcp.NewTCPTransport),
 		libp2p.ShareTCPListener(),
 		libp2p.Transport(quic.NewTransport),
+		libp2p.Transport(webtransport.New),
 		libp2p.Transport(webrtc.New),
 		libp2p.ResourceManager(limiter),
 		libp2p.UserAgent(UnaiverseUserAgent),
@@ -2356,7 +2364,7 @@ func SubscribeToTopic(
 	// Pass the instance index, subscription object, and topic name (for logging).
 	go readFromSubscription(instanceIndex, sub)
 
-	logger.Infof("[GO] ✅ Instance %d: Subscribed successfully to topic: %s and started listener.\n", instanceIndex, channel)
+	logger.Debugf("[GO] ✅ Instance %d: Subscribed successfully to topic: %s and started listener.\n", instanceIndex, channel)
 	return jsonSuccessResponse(
 		fmt.Sprintf("Instance %d: Subscribed to topic %s", instanceIndex, channel),
 	) // Caller frees.
