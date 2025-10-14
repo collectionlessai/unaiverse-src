@@ -61,8 +61,7 @@ class GoBuildCommand(build_py):
         # 2. Run Go commands
         try:
             # First, check if we need to initialize the Go module
-            if not (os.path.exists(os.path.join(GO_SOURCE_DIR, 'go.mod)')) and 
-                    os.path.exists(os.path.join(GO_SOURCE_DIR, 'go.sum'))):
+            if not os.path.exists(os.path.join(GO_SOURCE_DIR, 'go.mod)')):
                 print("--- Initializing Go module ---")
                 subprocess.run(
                     ['go', 'mod', 'init', 'unaiverse/networking/p2p/lib'],
