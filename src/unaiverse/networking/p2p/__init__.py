@@ -20,9 +20,9 @@ import os
 import sys
 import json
 import ctypes
+import hashlib
 import platform
-import requests
-import subprocess
+import warnings
 from typing import cast
 from .messages import Msg
 from .p2p import P2P, P2PError
@@ -30,161 +30,79 @@ from .golibp2p import GoLibP2P  # Your stub interface definition
 from .lib_types import TypeInterface  # Assuming TypeInterface handles the void* results
 
 
-# --- Setup and Pre-build Checks ---
-
-# Determine the correct library file extension and URL based on the OS
-os_to_ext = {
-    "Windows": ".dll",
-    "Darwin": ".dylib",
-    "Linux": ".so"
-}
-os_to_url = {
-    "Windows": "https://raw.githubusercontent.com/collectionlessai/unaiverse-misc/main/precompiled/lib.dll",
-    "Darwin": "https://raw.githubusercontent.com/collectionlessai/unaiverse-misc/main/precompiled/lib.dylib",
-    "Linux": "https://raw.githubusercontent.com/collectionlessai/unaiverse-misc/main/precompiled/lib.so"
-}
-
-current_os = platform.system()
-lib_ext = os_to_ext.get(current_os, ".so")
-lib_url = os_to_url.get(current_os, os_to_url["Linux"])
-
-# --- Configuration & Paths ---
-lib_dir = os.path.dirname(os.path.abspath(__file__))
-go_source_file = os.path.join(lib_dir, "lib.go")
-lib_filename = f"lib{lib_ext}"
-lib_path = os.path.join(lib_dir, lib_filename)
-go_mod_file = os.path.join(lib_dir, "go.mod")
-version_file = os.path.join(lib_dir, "lib.version.json")
-
 # --- Helper Functions ---
+def _get_lib_filename():
+    """Determines the correct shared library filename based on the OS."""
+    system = platform.system()
+    if system == 'Linux':
+        return 'unailib.so'
+    elif system == 'Darwin':
+        return 'unailib.dylib'
+    elif system == 'Windows':
+        return 'unailib.dll'
+    # This error should ideally never be reached if setup.py ran correctly.
+    raise ImportError(f"Unsupported operating system for shared library: {system}")
 
-def load_shared_library(path):
-    """Attempt to load the shared library and return the handle."""
-    try:
-        print(f"INFO: Attempting to load library from '{path}'...")
-        return ctypes.CDLL(path)
-    except OSError as e:
-        print(f"INFO: Failed to load library: {e}")
+def _get_file_hash(filepath):
+    """Calculates the SHA256 hash of a file, returning None if it doesn't exist."""
+    if not os.path.exists(filepath):
         return None
+    sha256_hash = hashlib.sha256()
+    with open(filepath, "rb") as f:
+        for byte_block in iter(lambda: f.read(4096), b""):
+            sha256_hash.update(byte_block)
+    return sha256_hash.hexdigest()
 
-def get_remote_version_info(url):
-    """Performs a HEAD request to get ETag from the remote file."""
-    try:
-        print(f"INFO: Checking remote version at '{url}'...")
-        response = requests.head(url, allow_redirects=True, timeout=10)
-        response.raise_for_status()
-        etag = response.headers.get("ETag")
-        return etag
-    except Exception as e:
-        print(f"INFO: Failed to get remote version info: {e}")
-        return None
-
-def download_library(url, path, etag):
-    """Downloads the shared library and saves version info."""
-    print(f"INFO: Downloading new library from '{url}'...")
-    try:
-        headers = {"User-Agent": "python-requests/2.31.0"}
-        response = requests.get(url, headers=headers, allow_redirects=True, timeout=30)
-        response.raise_for_status()
-        with open(path, "wb") as f:
-            f.write(response.content)
+def _developer_source_check():
+    """
+    If source files are present (i.e., in a dev environment), check if the
+    compiled library is in sync with the source code.
+    """
+    go_source_file = os.path.join(_lib_dir, 'lib.go')
+    hash_file = go_source_file + '.sha256'
+    
+    # This check only runs if all dev files are present. For users who
+    # installed from a wheel, these files won't exist, and this is skipped.
+    if os.path.exists(go_source_file) and os.path.exists(hash_file):
+        current_source_hash = _get_file_hash(go_source_file)
+        
+        stored_build_hash = None
+        with open(hash_file, 'r') as f:
+            stored_build_hash = f.read().strip()
             
-        print("INFO: Download complete.")
-        return True
-    except Exception as e:
-        print(f"INFO: Failed to download library: {e}")
-        return False
+        if current_source_hash != stored_build_hash:
+            # Use warnings.warn for a standard, non-intrusive developer warning.
+            warnings.warn(
+                "\n" + "="*80 +
+                "\nWARNING: The Go source file (lib.go) has been modified since the shared\n"
+                "library was last compiled. Your running code may not reflect recent changes.\n\n"
+                "To fix this, run: pip install -e .\n" +
+                "="*80,
+                UserWarning
+            )
 
-def build_go_library():
-    """Build the Go shared library and saves version info."""
-    print("INFO: Building library from source...")
-    if not os.path.exists(go_mod_file):
-        print(f"INFO: 'go.mod' not found. Initializing Go module...")
-        module_path = "unaiverse/networking/p2p/lib"
-        try:
-            subprocess.run(["go", "mod", "init", module_path], cwd=lib_dir, check=True, capture_output=True, text=True)
-            print("INFO: Go module initialized. Running 'go mod tidy'...")
-            subprocess.run(["go", "mod", "tidy"], cwd=lib_dir, check=True, capture_output=True, text=True)
-        except (subprocess.CalledProcessError, FileNotFoundError) as e:
-            print(f"FATAL: Failed to initialize Go module. Is Go installed? Error: {e}", file=sys.stderr)
-            raise e
-
-    try:
-        build_command = ["go", "build", "-buildmode=c-shared", "-ldflags", "-s -w", "-o", lib_filename, "lib.go"]
-        subprocess.run(build_command, cwd=lib_dir, check=True, capture_output=True, text=True)
-            
-        print(f"INFO: Successfully built '{lib_filename}'.")
-        return True
-    except (subprocess.CalledProcessError, FileNotFoundError) as e:
-        print(f"FATAL: Failed to build library. Is Go installed? Error: {e}", file=sys.stderr)
-        return False
-
-# --- Main Logic Flow ---
+# --- Main Library Loading ---
+# The shared library is guaranteed by the build process to be in this directory.
+_lib_dir = os.path.dirname(os.path.abspath(__file__))
+_lib_path = os.path.join(_lib_dir, _get_lib_filename())
 _shared_lib = None
-should_update = False
-go_source_time = os.path.getmtime(go_source_file)
 
-# Step 1: Check for existing local binary and version info
-if os.path.exists(lib_path):
-    print(f"INFO: Found existing library '{lib_filename}'.")
-    if os.path.exists(version_file):
-        try:
-            with open(version_file, "r") as f:
-                version_info = json.load(f)
-            
-            if version_info.get("source") == "remote":
-                remote_etag = get_remote_version_info(lib_url)
-                if remote_etag and remote_etag != version_info.get("etag"):
-                    print("INFO: Remote binary is newer (different ETag). An update is required.")
-                    should_update = True
-                else:
-                    print("INFO: Local binary is up-to-date with remote.")
-            elif version_info.get("source") == "local":
-                if go_source_time > version_info.get("timestamp", 0):
-                    print("INFO: Go source file is newer than local binary. Re-compilation is required.")
-                    should_update = True
-                else:
-                    print("INFO: Local binary is up-to-date with source.")
-            
-        except (IOError, json.JSONDecodeError):
-            print("INFO: Could not read version file. Assuming outdated.")
-            should_update = True
-    else:
-        print("INFO: No version file found. Assuming outdated.")
-        should_update = True
-    
-    if should_update:
-        if os.path.exists(lib_path):
-            os.remove(lib_path)
-    else:
-        # Load if it exists and is up-to-date
-        _shared_lib = load_shared_library(lib_path)
+try:
+    _shared_lib = ctypes.CDLL(_lib_path)
+except OSError as e:
+    print(
+        f"FATAL: Could not load the required p2p shared library from {_lib_path}.\n"
+        "This indicates a corrupted or missing installation. "
+        "Please try reinstalling the 'unaiverse' package.\n"
+        f"Underlying error: {e}",
+        file=sys.stderr
+    )
+    raise ImportError("Failed to load the UNaIVERSE p2p shared library.") from e
 
-# Step 2: Try to get a library if none is loaded
-if _shared_lib is None:  # same as should_update being True
-    # Attempt to download the latest binary
-    remote_etag = get_remote_version_info(lib_url)
-    if remote_etag and download_library(lib_url, lib_path, remote_etag):
-        _shared_lib = load_shared_library(lib_path)
-        if _shared_lib is not None:
-            with open(version_file, "w") as f:
-                json.dump({"source": "remote", "etag": remote_etag}, f)
-    
-    # Step 3: Fallback to local build if download failed or the file is invalid
-    if _shared_lib is None:  # meaning that the download and load failed
-        print("INFO: Download failed or produced an invalid library. Building from source...")
-        if build_go_library():
-            _shared_lib = load_shared_library(lib_path)
-            if _shared_lib is not None:
-                with open(version_file, "w") as f:
-                    json.dump({"source": "local", "timestamp": go_source_time}, f)
-
-# Final check
-if _shared_lib is None:
-    print("FATAL: Critical failure. Could not obtain or load the shared library.", file=sys.stderr)
-    sys.exit(1)
-else:
-    print("SUCCESS: Library is ready to use.")
+# Run the check after successfully loading the library.
+if _shared_lib is not None:
+    _developer_source_check()
+    print(f"UNaIVERSE: Successfully loaded p2p library from {_lib_path}")
 
 # --- Function Prototypes (argtypes and restype) ---
 # Using void* for returned C strings, requiring TypeInterface for conversion/freeing.
