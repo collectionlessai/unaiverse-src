@@ -5,3 +5,6 @@
 include src/unaiverse/networking/p2p/lib.go
 include src/unaiverse/networking/p2p/go.mod
 include src/unaiverse/networking/p2p/go.sum
+
+# Recursively include all files from the proto-go directory
+recursive-include src/unaiverse/networking/p2p/proto-go *
