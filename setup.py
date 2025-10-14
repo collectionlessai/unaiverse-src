@@ -91,11 +91,6 @@ class GoBuildExtCommand(build_ext):
 
         super().run()
 
-go_extension = Extension(
-    "unaiverse.networking.p2p.unailib",
-    sources=[]
-)
-
 setup(
     cmdclass={
         'build_ext': GoBuildExtCommand,
@@ -106,6 +101,5 @@ setup(
             GO_SOURCE_NAME + HASH_FILE_SUFFIX,
         ],
     },
-    ext_modules=[go_extension],
     zip_safe=False,
 )
