@@ -1,0 +1,72 @@
+# .github/workflows/release.yml
+name: Build and Publish Wheels to PyPI
+
+on:
+  push:
+    tags:
+      - 'v*' # Trigger on tags like v0.1.0, v1.2.3, etc.
+
+jobs:
+  build_wheels:
+    name: Build wheel for ${{ matrix.os }} (${{ matrix.arch }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        arch: [x64]
+        include:
+          # Add a specific job for Apple Silicon (arm64)
+          - os: macos-latest
+            arch: arm64
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.5'
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          architecture: ${{ matrix.arch }}
+
+      - name: Install build dependencies
+        run: pip install build
+
+      - name: Build the wheel and sdist
+        # The python -m build command automatically creates both the wheel and the sdist
+        run: python -m build
+        env:
+          CGO_ENABLED: "1"
+          GOARCH: ${{ matrix.arch == 'arm64' && 'arm64' || 'amd64' }}
+          GOOS: ${{ runner.os == 'Linux' && 'linux' || runner.os == 'Windows' && 'windows' || 'darwin' }}
+
+      - name: Store the packages as an artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-packages
+          path: ./dist/
+
+  publish_to_pypi:
+    name: Publish to PyPI
+    needs: build_wheels
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/unaiverse
+    permissions:
+      id-token: write # Required for trusted publishing
+
+    steps:
+      - name: Download all packages from artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: python-packages
+          path: dist/
+
+      - name: Publish package to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1

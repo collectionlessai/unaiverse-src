@@ -4,6 +4,7 @@ go 1.24.5
 
 require (
 	github.com/caddyserver/certmagic v0.25.0
+	github.com/ipfs/go-log/v2 v2.8.0
 	github.com/ipshipyard/p2p-forge v0.6.1
 	github.com/libp2p/go-libp2p v0.43.0
 	github.com/libp2p/go-libp2p-kad-dht v0.34.0
@@ -34,7 +35,6 @@ require (
 	github.com/ipfs/boxo v0.33.1 // indirect
 	github.com/ipfs/go-cid v0.5.0 // indirect
 	github.com/ipfs/go-datastore v0.8.2 // indirect
-	github.com/ipfs/go-log/v2 v2.8.0 // indirect
 	github.com/ipld/go-ipld-prime v0.21.0 // indirect
 	github.com/jackpal/go-nat-pmp v1.0.2 // indirect
 	github.com/jbenet/go-temp-err-catcher v0.1.0 // indirect

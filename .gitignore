@@ -54,6 +54,10 @@ unaiverse/networking/p2p/lib.h
 unaiverse/networking/p2p/lib.so
 unaiverse/networking/p2p/lib.dll
 unaiverse/networking/p2p/lib.dylib
+unaiverse/networking/p2p/unailib.h
+unaiverse/networking/p2p/unailib.so
+unaiverse/networking/p2p/unailib.dll
+unaiverse/networking/p2p/unailib.dylib
 unaiverse/networking/p2p/logs/*
 world_addresses.txt
 addresses.txt
