@@ -33,7 +33,7 @@ def get_file_hash(filepath):
     return sha256_hash.hexdigest()
 
 class GoBuildExtCommand(build_ext):
-    """Custom build_ext that compiles Go lib if needed and marks wheel as native."""
+    """Custom build_ext that builds the Go library."""
     def run(self):
         go_dir = get_go_source_dir()
         go_path = os.path.join(go_dir, GO_SOURCE_NAME)
@@ -60,16 +60,16 @@ class GoBuildExtCommand(build_ext):
         else:
             print("--- Go source unchanged; skipping build. ---")
 
-        # Trick: make setuptools think there’s a compiled ext
-        for ext in self.extensions:
-            ext.sources = []  # prevents clang call
-        super().run()
+    # Override build_extensions to skip C compilation entirely
+    def build_extensions(self):
+        print("--- Skipping C extension build (Go library already compiled). ---")
+        return
 
 
 # Fake extension only to mark wheel as platform-dependent
 go_extension = Extension(
     "unaiverse.networking.p2p.unailib",
-    sources=["src/unaiverse/networking/p2p/lib.go"],  # fake input
+    sources=["src/unaiverse/networking/p2p/lib.go"],  # dummy
 )
 
 setup(
