@@ -46,6 +46,9 @@ jobs:
     name: Publish to PyPI
     needs: build
     runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/unaiverse
     permissions:
       id-token: write  # necessario per il trusted publisher
     steps:
