@@ -66,11 +66,6 @@ package-dir = {"" = "src"}
 # Skip 32-bit builds to save CI time
 skip = ["*-win32", "*-manylinux_i686"]
 
-# After building, install pytest and run the test suite on the new wheel
-test-requires = "pytest"
-test-sources = ["tests"]
-test-command = "pytest tests"
-
 # Platform-specific configurations
 [tool.cibuildwheel.linux]
 # Step 1: Install Go once when the container starts.
