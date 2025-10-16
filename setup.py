@@ -69,8 +69,11 @@ class GoBuildExtCommand(build_ext):
         
         # Also copy the generated hash file to the final package directory
         dest_dir = os.path.dirname(dest_path)
-        print(f"--- Copying {hash_path} to {dest_dir} ---")
-        shutil.copy(hash_path, dest_dir)
+        if os.path.abspath(os.path.dirname(hash_path)) != os.path.abspath(dest_dir):
+            print(f"--- Copying {hash_path} to {dest_dir} ---")
+            shutil.copy(hash_path, dest_dir)
+        else:
+            print(f"--- Hash file is already in the source directory (editable install); skipping copy. ---")
 
 
 # Fake extension only to mark wheel as platform-dependent
