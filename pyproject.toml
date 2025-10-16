@@ -60,3 +60,23 @@ F-Documentation = "https://github.com/collectionlessai/unaiverse-src/blob/main/R
 
 [tool.setuptools]
 package-dir = {"" = "src"}
+
+# Platform-specific configurations
+[tool.cibuildwheel.linux]
+before-build = '''
+    curl -L -o go.tar.gz https://go.dev/dl/go1.24.5.linux-amd64.tar.gz && \
+    rm -rf /usr/local/go && \
+    tar -C /usr/local -xzf go.tar.gz && \
+    export PATH=/usr/local/go/bin:$PATH && \
+    go version
+'''
+
+[tool.cibuildwheel.macos]
+before-build = '''
+    brew install go@1.24 && \
+    export PATH="$(brew --prefix go@1.24)/bin:$PATH" && \
+    go version
+'''
+
+[tool.cibuildwheel.windows]
+before-build = "choco install golang --version 1.24.5 -y"
