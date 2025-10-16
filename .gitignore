@@ -72,6 +72,9 @@ src/unaiverse/networking/p2p/lib.version.json
 *.dll
 *.so
 *.dylib
+*.pyd
+unailib*
+*.sha256
 lib.h
 mnist_data
 extracted_info.json
