@@ -70,14 +70,7 @@ class GoBuildExtCommand(build_ext):
         # Also copy the generated hash file to the final package directory
         dest_dir = os.path.dirname(dest_path)
         print(f"--- Copying {hash_path} to {dest_dir} ---")
-        shutil.copyfile(hash_path, dest_dir)
-
-    # Override build_extensions to skip C compilation entirely
-    def build_extensions(self):
-        # We need to run our custom build logic here.
-        # The 'build_extensions' hook is called by setuptools before it
-        # tries to package the files.
-        self.run()
+        shutil.copy(hash_path, dest_dir)
 
 
 # Fake extension only to mark wheel as platform-dependent
