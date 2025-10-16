@@ -18,6 +18,7 @@ from . import golibp2p
 from . import lib_types
 import os
 import sys
+import glob
 import json
 import ctypes
 import hashlib
@@ -35,11 +36,11 @@ def _get_lib_filename():
     """Determines the correct shared library filename based on the OS."""
     system = platform.system()
     if system == 'Linux':
-        return 'unailib.so'
+        return 'unailib*.so'
     elif system == 'Darwin':
-        return 'unailib.dylib'
+        return 'unailib*.dylib'
     elif system == 'Windows':
-        return 'unailib.dll'
+        return 'unailib*.pyd'
     # This error should ideally never be reached if setup.py ran correctly.
     raise ImportError(f"Unsupported operating system for shared library: {system}")
 
@@ -84,10 +85,11 @@ def _developer_source_check():
 # --- Main Library Loading ---
 # The shared library is guaranteed by the build process to be in this directory.
 _lib_dir = os.path.dirname(os.path.abspath(__file__))
-_lib_path = os.path.join(_lib_dir, _get_lib_filename())
 _shared_lib = None
 
 try:
+    results = glob.glob(os.path.join(_lib_dir, _get_lib_filename()))
+    _lib_path = os.path.join(_lib_dir, results[0])
     _shared_lib = ctypes.CDLL(_lib_path)
 except OSError as e:
     print(

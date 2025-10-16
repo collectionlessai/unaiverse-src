@@ -67,17 +67,17 @@ class GoBuildExtCommand(build_ext):
         print(f"--- Copying {out_path} to {dest_path} ---")
         shutil.copyfile(out_path, dest_path)
         
-        # We call the superclass run method. It will see the .so file
-        # is already there and not try to build it again.
-        super().run()
+        # Also copy the generated hash file to the final package directory
+        dest_dir = os.path.dirname(dest_path)
+        print(f"--- Copying {hash_path} to {dest_dir} ---")
+        shutil.copyfile(hash_path, dest_dir)
 
     # Override build_extensions to skip C compilation entirely
     def build_extensions(self):
-        print("--- build_extensions override called. ---")
-        # We still need to call super() so that the extension objects are processed
-        # and the final files are placed correctly. The `run` method above has
-        # already done the heavy lifting.
-        super().build_extensions()
+        # We need to run our custom build logic here.
+        # The 'build_extensions' hook is called by setuptools before it
+        # tries to package the files.
+        self.run()
 
 
 # Fake extension only to mark wheel as platform-dependent
@@ -89,11 +89,6 @@ go_extension = Extension(
 setup(
     cmdclass={'build_ext': GoBuildExtCommand},
     ext_modules=[go_extension],
-    package_data={
-        'unaiverse.networking.p2p': [
-            os.path.basename(get_ext_filename_with_path()),
-            GO_SOURCE_NAME + HASH_FILE_SUFFIX,
-        ],
-    },
+    package_data={},
     zip_safe=False,
 )
