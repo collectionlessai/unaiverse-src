@@ -1,8 +1,9 @@
 # setup.py
 import os
+import shutil
+import hashlib
 import platform
 import subprocess
-import hashlib
 from setuptools import setup, Extension
 from setuptools.command.build_ext import build_ext
 
@@ -59,17 +60,30 @@ class GoBuildExtCommand(build_ext):
                 f.write(current_hash)
         else:
             print("--- Go source unchanged; skipping build. ---")
+        
+        # We get the final destination path for the extension and copy our pre-built library there.
+        dest_path = self.get_ext_fullpath(self.extensions[0].name)
+        os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+        print(f"--- Copying {out_path} to {dest_path} ---")
+        shutil.copyfile(out_path, dest_path)
+        
+        # We call the superclass run method. It will see the .so file
+        # is already there and not try to build it again.
+        super().run()
 
     # Override build_extensions to skip C compilation entirely
     def build_extensions(self):
-        print("--- Skipping C extension build (Go library already compiled). ---")
-        return
+        print("--- build_extensions override called. ---")
+        # We still need to call super() so that the extension objects are processed
+        # and the final files are placed correctly. The `run` method above has
+        # already done the heavy lifting.
+        super().build_extensions()
 
 
 # Fake extension only to mark wheel as platform-dependent
 go_extension = Extension(
     "unaiverse.networking.p2p.unailib",
-    sources=["src/unaiverse/networking/p2p/lib.go"],  # dummy
+    sources=[],  # dummy
 )
 
 setup(
