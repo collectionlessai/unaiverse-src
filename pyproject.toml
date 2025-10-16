@@ -68,7 +68,8 @@ skip = ["*-win32", "*-manylinux_i686"]
 
 # After building, install pytest and run the test suite on the new wheel
 test-requires = "pytest"
-test-command = "pytest {project}/tests"
+test-sources = ["tests"]
+test-command = "pytest tests"
 
 # Platform-specific configurations
 [tool.cibuildwheel.linux]
