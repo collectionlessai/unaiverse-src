@@ -74,11 +74,11 @@ def _developer_source_check():
         if current_source_hash != stored_build_hash:
             # Use warnings.warn for a standard, non-intrusive developer warning.
             warnings.warn(
-                "\n" + "="*80 +
+                "\033[93m" + "\n" + "="*80 +
                 "\nWARNING: The Go source file (lib.go) has been modified since the shared\n"
                 "library was last compiled. Your running code may not reflect recent changes.\n\n"
                 "To fix this, run: pip install -e .\n" +
-                "="*80,
+                "="*80 + "\033[0m",
                 UserWarning
             )
 
