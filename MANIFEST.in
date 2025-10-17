@@ -8,3 +8,6 @@ include src/unaiverse/networking/p2p/go.sum
 
 # Recursively include all files from the proto-go directory
 recursive-include src/unaiverse/networking/p2p/proto-go *
+
+# Include any compiled libraries (*.so, *.dylib, *.dll) from anywhere in the src directory.
+recursive-include src *.so *.dylib *.dll

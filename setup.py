@@ -21,7 +21,6 @@ class GoBuildExtCommand(build_ext):
     """Custom build_ext that builds the Go library directly to the final location."""
     def run(self):
         # 1. Get the one true destination path from setuptools.
-        # This will be the correctly named file inside the build/lib... directory.
         dest_path = self.get_ext_fullpath(self.extensions[0].name)
         os.makedirs(os.path.dirname(dest_path), exist_ok=True)
         go_dir = os.path.join('src', 'unaiverse', 'networking', 'p2p')
@@ -34,11 +33,11 @@ class GoBuildExtCommand(build_ext):
             with open(hash_path, 'r') as f:
                 stored_hash = f.read().strip()
 
-        # Check if the FINAL destination file needs to be built.
+        # 2. Check if the final destination file needs to be built.
         if current_hash != stored_hash or not os.path.exists(dest_path):
             print(f"--- Go source changed, building directly to {dest_path} ---")
             
-            # Build DIRECTLY to the final destination path.
+            # 3. Build to the final destination path.
             subprocess.run(
                 ['go', 'build', '-buildmode=c-shared', '-ldflags', '-s -w',
                  '-o', dest_path, GO_SOURCE_NAME],
@@ -50,9 +49,6 @@ class GoBuildExtCommand(build_ext):
             print("--- Go source unchanged; skipping build. ---")
         
         print(f"--- Build complete. Artifact is at {dest_path} ---")
-
-    def get_outputs(self):
-        return [self.get_ext_fullpath(self.extensions[0].name)]
 
 
 # A "marker" extension to trigger the build_ext command
