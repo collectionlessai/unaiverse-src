@@ -49,7 +49,6 @@ classifiers = [
 
 [tool.setuptools.package-data]
 "unaiverse" = ["utils/lone_wolf.json", "utils/ask_lone_wolf.json"]
-"unaiverse.networking.p2p" = ["*.so", "*.dylib", "*.dll"]
 
 [project.urls]
 A-Homepage = "https://unaiverse.io"

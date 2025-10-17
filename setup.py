@@ -34,11 +34,11 @@ class GoBuildExtCommand(build_ext):
             with open(hash_path, 'r') as f:
                 stored_hash = f.read().strip()
 
-        # 2. Check if the FINAL destination file needs to be built.
+        # Check if the FINAL destination file needs to be built.
         if current_hash != stored_hash or not os.path.exists(dest_path):
             print(f"--- Go source changed, building directly to {dest_path} ---")
             
-            # 3. Build DIRECTLY to the final destination path.
+            # Build DIRECTLY to the final destination path.
             subprocess.run(
                 ['go', 'build', '-buildmode=c-shared', '-ldflags', '-s -w',
                  '-o', dest_path, GO_SOURCE_NAME],
@@ -49,8 +49,10 @@ class GoBuildExtCommand(build_ext):
         else:
             print("--- Go source unchanged; skipping build. ---")
         
-        # 4. The copy step is now gone. It's no longer needed.
         print(f"--- Build complete. Artifact is at {dest_path} ---")
+
+    def get_outputs(self):
+        return [self.get_ext_fullpath(self.extensions[0].name)]
 
 
 # A "marker" extension to trigger the build_ext command
