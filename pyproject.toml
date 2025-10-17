@@ -68,11 +68,29 @@ skip = ["*-win32", "*-manylinux_i686"]
 
 # Platform-specific configurations
 [tool.cibuildwheel.linux]
-# Step 1: Install Go once when the container starts.
+# Step 1: Install the correct version of Go for the machine's architecture.
 before-all = '''
-    curl -L -o go.tar.gz https://go.dev/dl/go1.24.5.linux-amd64.tar.gz && \
-    rm -rf /usr/local/go && \
+    set -euxo pipefail
+    
+    # Detect architecture and set the corresponding Go arch name
+    case "$(uname -m)" in
+        x86_64)
+            GO_ARCH=amd64
+            ;;
+        aarch64)
+            GO_ARCH=arm64
+            ;;
+        *)
+            echo "Unsupported architecture: $(uname -m)"
+            exit 1
+            ;;
+    esac
+
+    # Download and install the correct Go binary
+    curl -L -o go.tar.gz "https://go.dev/dl/go1.24.5.linux-${GO_ARCH}.tar.gz"
+    rm -rf /usr/local/go
     tar -C /usr/local -xzf go.tar.gz
+    rm go.tar.gz
 '''
 # Step 2: Persistently add Go to the PATH for all subsequent steps.
 environment = { PATH = "/usr/local/go/bin:$PATH" }
