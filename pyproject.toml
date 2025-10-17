@@ -60,6 +60,8 @@ F-Documentation = "https://github.com/collectionlessai/unaiverse-src/blob/main/R
 
 [tool.setuptools]
 package-dir = {"" = "src"}
+[tool.setuptools.package-data]
+"unaiverse.networking.p2p" = ["*.so", "*.dylib", "*.dll"]
 
 # --- CIBUILDWHEEL CONFIGURATION ---
 [tool.cibuildwheel]
