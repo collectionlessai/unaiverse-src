@@ -64,7 +64,7 @@ package-dir = {"" = "src"}
 # --- CIBUILDWHEEL CONFIGURATION ---
 [tool.cibuildwheel]
 # Skip 32-bit builds to save CI time
-skip = ["*-win32", "*-manylinux_i686"]
+skip = ["*-win32", "*-manylinux_i686", "*-musllinux_*"]
 
 # Platform-specific configurations
 [tool.cibuildwheel.linux]
