@@ -1,17 +1,29 @@
 # setup.py
 import os
+import shutil
 import hashlib
+import platform
 import subprocess
 from setuptools import setup, Extension
 from setuptools.command.build_ext import build_ext
 
 
-# Define the path to your Go source file
-GO_SOURCE_PATH = os.path.join('src', 'unaiverse', 'networking', 'p2p', 'lib.go')
+GO_SOURCE_NAME = 'lib.go'
 HASH_FILE_SUFFIX = '.sha256'
 
+def get_ext_filename_with_path():
+    system = platform.system()
+    if system == 'Linux':
+        lib_name = 'unailib.so'
+    elif system == 'Darwin':
+        lib_name = 'unailib.dylib'
+    elif system == 'Windows':
+        lib_name = 'unailib.dll'
+    else:
+        raise RuntimeError(f"Unsupported OS: {system}")
+    return os.path.join('src', 'unaiverse', 'networking', 'p2p', lib_name)
+
 def get_file_hash(filepath):
-    """Computes the SHA256 hash of a file."""
     sha256_hash = hashlib.sha256()
     with open(filepath, "rb") as f:
         for byte_block in iter(lambda: f.read(4096), b""):
@@ -19,55 +31,58 @@ def get_file_hash(filepath):
     return sha256_hash.hexdigest()
 
 class GoBuildExtCommand(build_ext):
-    """
-    Custom build_ext command to build the Go shared library.
-    This overrides build_extension to integrate with setuptools' build process.
-    """
-    def build_extension(self, ext):
-        """Override the default C/C++ extension build process for our Go extension."""
-        
-        # Get the path for the final compiled library that setuptools expects
-        dest_path = self.get_ext_fullpath(ext.name)
-        os.makedirs(os.path.dirname(dest_path), exist_ok=True)
-        
-        # Use the source file defined in the Extension object
-        go_path = ext.sources[0]
-        go_dir = os.path.dirname(go_path)
-        go_source_file = os.path.basename(go_path)
-        
-        # Check hash to see if a rebuild is needed (this is good practice)
+    """Custom build_ext that builds the Go library."""
+    def run(self):
+        go_dir = os.path.join('src', 'unaiverse', 'networking', 'p2p')
+        go_path = os.path.join(go_dir, GO_SOURCE_NAME)
+        out_path = get_ext_filename_with_path()
         hash_path = go_path + HASH_FILE_SUFFIX
+        os.makedirs(os.path.dirname(out_path), exist_ok=True)
+
         current_hash = get_file_hash(go_path)
         stored_hash = None
         if os.path.exists(hash_path):
             with open(hash_path, 'r') as f:
                 stored_hash = f.read().strip()
 
-        # Rebuild if source has changed or the final library is missing
-        if current_hash != stored_hash or not os.path.exists(dest_path):
-            print(f"--- Building Go source '{go_path}' to '{dest_path}' ---")
+        # Only rebuild if Go source changed or lib missing
+        if current_hash != stored_hash or not os.path.exists(out_path):
+            print(f"--- Go source changed, building {out_path} ---")
             subprocess.run(
                 ['go', 'build', '-buildmode=c-shared', '-ldflags', '-s -w',
-                 '-o', dest_path, go_source_file],
+                 '-o', os.path.basename(out_path), GO_SOURCE_NAME],
                 check=True, cwd=go_dir
             )
-            # Store the new hash
             with open(hash_path, 'w') as f:
                 f.write(current_hash)
         else:
-            print(f"--- Go source '{go_path}' unchanged; skipping build. ---")
+            print("--- Go source unchanged; skipping build. ---")
         
-        print(f"--- Build complete for {dest_path} ---")
+        # We get the final destination path for the extension and copy our pre-built library there.
+        dest_path = self.get_ext_fullpath(self.extensions[0].name)
+        os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+        print(f"--- Copying {out_path} to {dest_path} ---")
+        shutil.copyfile(out_path, dest_path)
+        shutil.rmtree(out_path)  # Clean up temporary build output
+        
+        # Also copy the generated hash file to the final package directory
+        dest_dir = os.path.dirname(dest_path)
+        if os.path.abspath(os.path.dirname(hash_path)) != os.path.abspath(dest_dir):
+            print(f"--- Copying {hash_path} to {dest_dir} ---")
+            shutil.copy(hash_path, dest_dir)
+        else:
+            print(f"--- Hash file is already in the source directory (editable install); skipping copy. ---")
 
 
-# The Extension object now correctly lists the Go file as a source.
+# Fake extension only to mark wheel as platform-dependent
 go_extension = Extension(
     "unaiverse.networking.p2p.unailib",
-    sources=[GO_SOURCE_PATH],
+    sources=[],  # dummy
 )
 
 setup(
     cmdclass={'build_ext': GoBuildExtCommand},
     ext_modules=[go_extension],
+    package_data={},
     zip_safe=False,
 )

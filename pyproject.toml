@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "unaiverse"
-version = "0.1.7"
+version = "0.1.6"
 requires-python = ">3.10"
 dependencies = [
     "opencv-python",
@@ -47,6 +47,8 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Artificial Intelligence"
 ]
 
+[tool.setuptools.package-data]
+"unaiverse" = ["utils/lone_wolf.json", "utils/ask_lone_wolf.json"]
 
 [project.urls]
 A-Homepage = "https://unaiverse.io"
@@ -58,13 +60,6 @@ F-Documentation = "https://github.com/collectionlessai/unaiverse-src/blob/main/R
 
 [tool.setuptools]
 package-dir = {"" = "src"}
-
-[tool.setuptools.packages.find]
-where = ["src"]
-
-[tool.setuptools.package-data]
-"unaiverse" = ["utils/lone_wolf.json", "utils/ask_lone_wolf.json"]
-"unaiverse.networking.p2p" = ["*.so", "*.dylib", "*.dll"]
 
 # --- CIBUILDWHEEL CONFIGURATION ---
 [tool.cibuildwheel]
