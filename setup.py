@@ -63,7 +63,6 @@ class GoBuildExtCommand(build_ext):
         os.makedirs(os.path.dirname(dest_path), exist_ok=True)
         print(f"--- Copying {out_path} to {dest_path} ---")
         shutil.copyfile(out_path, dest_path)
-        shutil.rmtree(out_path)  # Clean up temporary build output
         
         # Also copy the generated hash file to the final package directory
         dest_dir = os.path.dirname(dest_path)
