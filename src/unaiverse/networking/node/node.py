@@ -344,10 +344,11 @@ class Node:
         Args:
             msg: The error message to be printed.
         """
+        when = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
         if self.print_enabled:
-            self.out("<ERROR> " + msg)
+            self.out(f"<ERROR> [{when}] " + msg)
         else:
-            print("<ERROR> " + msg)
+            print(f"<ERROR> [{when}] " + msg)
 
     def get_node_id_by_name(self, node_names: list[str], create_if_missing: bool = False,
                             node_type: str | None = None) -> tuple[list[str], list[bool]]:

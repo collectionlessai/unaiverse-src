@@ -43,6 +43,8 @@ class Clock:
             'europe.pool.ntp.org',
         ]
         self.__global_initial_t = self.__get_time_from_server()  # Real-time, wall-clock
+        if self.__global_initial_t == -1.:
+            raise ValueError("Unable to get the initial time (for synchronization purposes) from the NTP servers")
         self.__local_initial_t = datetime.now(timezone.utc).timestamp()  # Corresponding local time
         self.__timestamps = []  # List to store timestamps for cycles
         self.__time2cycle_cache = 0  # Cached cycle value for optimization
@@ -62,7 +64,10 @@ class Clock:
                 break
             except (NTPException, socket.gaierror):
                 continue
-        return datetime.fromtimestamp(response.tx_time, timezone.utc).timestamp()
+        if response is not None:
+            return datetime.fromtimestamp(response.tx_time, timezone.utc).timestamp()
+        else:
+            return -1.
 
     def __add_timestamp(self, timestamp: float):
         """Add a timestamp to the list of timestamps for the clock cycles.
