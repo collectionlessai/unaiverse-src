@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "unaiverse"
-version = "0.1.6"
+version = "0.1.5"
 requires-python = ">3.10"
 dependencies = [
     "opencv-python",
@@ -105,5 +105,3 @@ environment = { PATH = "$(brew --prefix go@1.24)/bin:$PATH" }
 # On Windows, choco handles the PATH modification automatically,
 # so we just need to install it once.
 before-all = "choco install golang --version 1.24.5 -y"
-# Force cgo to use clang, which correctly targets the native ARM64 architecture.
-environment = { CC = "clang" }
