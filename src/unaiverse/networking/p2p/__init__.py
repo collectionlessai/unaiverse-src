@@ -88,10 +88,11 @@ _lib_dir = os.path.dirname(os.path.abspath(__file__))
 _shared_lib = None
 
 try:
+    _lib_path = _lib_dir
     _results = glob.glob(os.path.join(_lib_dir, _get_lib_filename()))
     _lib_path = os.path.join(_lib_dir, _results[0])
     _shared_lib = ctypes.CDLL(_lib_path)
-except OSError as e:
+except (IndexError, OSError) as e:
     print(
         f"FATAL: Could not load the required p2p shared library from {_lib_path}.\n"
         "This indicates a corrupted or missing installation. "

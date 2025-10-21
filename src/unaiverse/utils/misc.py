@@ -18,6 +18,7 @@ import sys
 import time
 import json
 import math
+import shutil
 import threading
 from tqdm import tqdm
 from pathlib import Path
@@ -202,20 +203,24 @@ def show_images_grid(image_paths, max_cols=3):
 
 
 class FileTracker:
-    def __init__(self, folder, ext=".json"):
+    def __init__(self, folder, ext=".json", prefix=None, skip=None):
         self.folder = Path(folder)
         self.ext = ext.lower()
-        self.last_state = self._scan_files()
+        self.skip = skip
+        self.prefix = prefix
+        self.last_state = self.__scan_files()
 
-    def _scan_files(self):
+    def __scan_files(self):
         state = {}
         for file in self.folder.iterdir():
-            if file.is_file() and file.suffix.lower() == self.ext:
+            if ((file.is_file() and file.suffix.lower() == self.ext and
+                    (self.skip is None or file.name != self.skip)) and
+                    (self.prefix is None or file.name.startswith(self.prefix))):
                 state[file.name] = os.path.getmtime(file)
         return state
 
     def something_changed(self):
-        new_state = self._scan_files()
+        new_state = self.__scan_files()
         created = [f for f in new_state if f not in self.last_state]
         modified = [f for f in new_state
                     if f in self.last_state and new_state[f] != self.last_state[f]]
@@ -303,3 +308,175 @@ def get_key_considering_multiple_sources(key_variable: str | None) -> str:
         with open(key_file, "w") as f:
             f.write(key)
         return key
+
+
+class StatLoadedSaver:
+
+    def __init__(self, base_filename: str = "stats", save_dir: str = "./", max_size_mb: int = 5,
+                 dynamic_stats: set | list | tuple | None = None, static_stats: set | list | tuple | None = None,
+                 group_indexed_stats: set | list | tuple | None = None, group_key: str | None = None):
+        self.base_filename = base_filename
+        self.save_dir = save_dir
+        self.max_size_bytes = max_size_mb * 1024 * 1024
+
+        self.time_indexed_stats = dynamic_stats
+        self.static_stats = static_stats
+        self.group_indexed_stats = group_indexed_stats
+        self.group_key = group_key
+
+        self.changed_stats = set()
+        self.last_saved = {}  # (group_id, stat_name) -> last_saved_timestamp
+        self.__ensure_current_file()
+
+        assert group_indexed_stats is None or len(group_indexed_stats) == 0 or (group_key != None), \
+            "Specify the group key (if you have group indexed stats)"
+
+    def mark_stat_as_changed(self, stat_name):
+        self.changed_stats.add(stat_name)
+
+    def load_existing_data(self):
+        """Load all existing CSV files and rebuild last_saved timestamps."""
+        self.last_saved = {}  # Reset
+
+        # Find all files that match the pattern, to get the time indexed data
+        files = []
+        prefix = self.base_filename + "_"
+        for f_name in os.listdir(self.save_dir):
+            if f_name.startswith(prefix) and f_name.endswith(".csv"):
+                try:
+                    idx = int(f_name.split("_")[-1].split(".")[0])
+                    files.append((idx, f_name))
+                except ValueError:
+                    continue
+
+        # Sort by index to read in order
+        files.sort(reverse=True)  # From the oldest to the newest
+        stats = {}
+
+        for _, f_name in files:
+            path = os.path.join(self.save_dir, f_name)
+            with open(path, "r") as f:
+                lines = f.readlines()
+                for row in lines:
+                    row_tokens = row.split(',')
+                    group = row_tokens[0]
+                    stat_name = row_tokens[1]
+                    ts = row_tokens[2]
+                    val = float(row_tokens[3])
+                    last_ts = self.last_saved.get((group, stat_name), float("-1.0"))
+                    if ts > last_ts:
+                        self.last_saved[(group, stat_name)] = ts
+                    stats[self.group_key][group][stat_name][ts] = val
+
+        # Set file_index to one past the highest existing index
+        self.__ensure_current_file()
+
+    def save_incremental(self, stats):
+        """Save every static not-grouped stats to its own JSON file; save static grouped stats in a single, shared CSV;
+        save dynamic stats (grouped and not) to a single, shared CSV => only new data points since the last call."""
+
+        # Static (and not group indexed) => <base_filename>_<stat_name>.json
+        for stat_name in self.static_stats:
+            if stat_name not in self.group_indexed_stats:
+                if stat_name not in self.changed_stats:
+                    data = stats.get(stat_name, {})
+                    with open(os.path.join(self.save_dir, f"{self.base_filename}_{stat_name}.json"), "w") as f:
+                        json.dump(data, f)
+
+        # Static and group indexed => <base_filename>_static.csv
+        shared_static_stats_changed = False
+        for stat_name in self.static_stats:
+            if stat_name in self.group_indexed_stats:
+                if stat_name not in self.changed_stats:
+                    shared_static_stats_changed = True
+        if shared_static_stats_changed:
+            header = ["group"] + [s for s in self.static_stats if s in self.group_indexed_stats]
+            with open(os.path.join(self.save_dir, f"{self.base_filename}_static.csv"), "w") as f:
+                f.write(",".join(header) + "\n")
+
+                group_to_group_stats = stats[self.group_key]
+                for group_name, group_stats in group_to_group_stats.items():
+                    row = [group_name]
+                    for stat_name in self.static_stats:
+                        if stat_name in self.group_indexed_stats and stat_name in group_stats:
+                            row.append(group_stats[stat_name])
+                        f.write(",".join(row) + "\n")
+
+        # Dynamic (both group indexed and not group indexed) => <base_filename>_1.csv, <base_filename>_2.csv, ...
+        filename = self.__current_filename()
+        self.__ensure_current_file()
+
+        with open(filename, "a") as f:
+
+            # Dynamic and not group indexed (introducing a fake group to handle all of them the same way)
+            group_to_group_stats = {}
+            fake_group_for_not_grouped_stats = "<ungrouped>"
+            for stat_name in self.time_indexed_stats:
+                if stat_name not in self.group_indexed_stats and stat_name in stats:
+                    if fake_group_for_not_grouped_stats not in group_to_group_stats:
+                        group_to_group_stats[fake_group_for_not_grouped_stats] = {}
+                    group_to_group_stats[fake_group_for_not_grouped_stats][stat_name] = stats[stat_name]
+
+            # Dynamic and group indexed
+            if self.group_key in stats:
+                group_to_group_stats.update(stats[self.group_key])
+
+            # Dynamic (not they are all group indexed, thanks to the introduction of the fake group)
+            for group_name, group_stats in group_to_group_stats.items():
+                for stat_name in self.time_indexed_stats:
+                    if stat_name in self.group_indexed_stats and stat_name in group_stats:
+                        timestamps = group_stats[stat_name].keys()
+                        last_ts = self.last_saved.get((group_name, stat_name), float("-1.0"))
+
+                        for ts in timestamps:
+                            if ts > last_ts:
+                                value = group_stats[stat_name][ts]
+                                row = [group_name, stat_name, ts, value]
+                                f.write(",".join(row) + "\n")
+                                self.last_saved[(group_name, stat_name)] = ts
+
+        # Clearing markers
+        self.changed_stats = set()
+
+    def __current_filename(self):
+        """Always return the newest (index 1) file."""
+        return os.path.join(self.save_dir, f"{self.base_filename}_{1:06d}.csv")
+
+    def __ensure_current_file(self):
+        """Ensure the current newest file is stats_000001.csv. If rotation is needed, shift existing files upward."""
+        filename = self.__current_filename()  # This will return the file with suffix '_1'
+
+        # If current file exists but is too large, rotate all existing ones upward
+        if os.path.exists(filename) and os.path.getsize(filename) >= self.max_size_bytes:
+            self.__rotate_files_up()
+
+            # Create a new fresh file as _1
+            with open(filename, "w") as f:
+                header = ["group"] + [s for s in self.time_indexed_stats if s in self.group_indexed_stats]
+                f.write(",".join(header) + "\n")
+        elif not os.path.exists(filename):
+
+            # Create _1 if it does not exist
+            with open(filename, "w") as f:
+                header = ["group"] + [s for s in self.time_indexed_stats if s in self.group_indexed_stats]
+                f.write(",".join(header) + "\n")
+
+    def __rotate_files_up(self):
+        """Shift existing files upward by 1 index (e.g. _1 -> _2; _2 -> _3, etc.)."""
+        prefix = self.base_filename + "_"
+        files = []
+        for f_name in os.listdir(self.save_dir):
+            if f_name.startswith(prefix) and f_name.endswith(".csv"):
+                try:
+                    idx = int(f_name.split("_")[-1].split(".")[0])
+                    files.append((idx, f_name))
+                except ValueError:
+                    continue
+
+        # Sort descending so renaming does not overwrite
+        files.sort(reverse=True)
+
+        for idx, f_name in files:
+            src = os.path.join(self.save_dir, f_name)
+            dst = os.path.join(self.save_dir, f"{self.base_filename}_{idx+1:06d}.csv")
+            shutil.move(src, dst)

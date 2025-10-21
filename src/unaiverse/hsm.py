@@ -1078,6 +1078,14 @@ class HybridStateMachine:
         """
         return self.__action.name if self.__action is not None else None
 
+    def get_last_completed_action_name(self):
+        """Retrieves the name of the last action that was correctly executed.
+
+        Returns:
+            A string with the action's name, or `None` if no actions were executed before.
+        """
+        return self.__last_completed_action.name if self.__last_completed_action is not None else None
+
     def reset_state(self):
         """Resets the state machine to its initial state. This clears the current action, the previous state, and
         the limbo state. It also resets the step counters for all actions within the machine.
@@ -1451,6 +1459,7 @@ class HybridStateMachine:
 
                 # Update status
                 self.__state_changed = self.state != self.prev_state  # Checking if we are on a self-loop or not
+                self.__last_completed_action = self.__action  # This will be set also if the state does not change
 
                 # If we moved to another state, clearing all the pending annotations for the next possible actions
                 if self.__state_changed:

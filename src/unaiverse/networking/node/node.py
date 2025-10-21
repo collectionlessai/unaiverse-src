@@ -44,8 +44,8 @@ from unaiverse.utils.misc import GenException, get_key_considering_multiple_sour
 class Node:
 
     # Each node can host an agent or a world
-    AGENT = "agent"
-    WORLD = "world"
+    AGENT = "agent"  # Artificial agent
+    WORLD = "world"  # World agent
 
     # Each node outputs console text with a different color
     TEXT_COLORS = ('\033[91m', '\033[94m', '\033[92m', '\033[93m')
@@ -294,6 +294,7 @@ class Node:
                                                     if self.node_type is Node.WORLD else None
                                             },
                                             "world_roles_fsm": None,  # This will be filled later if this is a world
+                                            "world_stats_dynamic": None,  # This will be filled later if this is a world
                                             "hidden": hidden  # Marking the node as hidden (or not)
                                             },
                                    cv=cv)  # Adding CV here
@@ -1650,6 +1651,12 @@ class Node:
                 roles = profile.get_dynamic_profile()['world_roles_fsm'].keys()
                 new_agent.CUSTOM_ROLES = roles
                 new_agent.augment_roles()
+
+                # Setting up world stats
+                world_stats_dynamic_by_peer = profile.get_dynamic_profile()['world_stats_dynamic']
+                new_agent.STATS_DYNAMIC_SENT_BY_PEER.clear()
+                new_agent.STATS_DYNAMIC_SENT_BY_PEER.update(world_stats_dynamic_by_peer)  # in-place
+                new_agent.clear_stats()
 
                 # Updating node-level references
                 old_agent = self.agent

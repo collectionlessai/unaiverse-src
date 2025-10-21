@@ -13,6 +13,7 @@
                  Main Developers:    Stefano Melacci (Project Leader), Christian Di Maio, Tommaso Guidi
 """
 import os
+import json
 import torch
 import types
 import pickle
@@ -23,10 +24,10 @@ from unaiverse.hsm import HybridStateMachine
 from unaiverse.networking.p2p.messages import Msg
 from unaiverse.dataprops import DataProps, Data4Proc
 from unaiverse.networking.node.profile import NodeProfile
-from unaiverse.utils.misc import GenException, FileTracker
 from unaiverse.streams import BufferedDataStream, DataStream
 from unaiverse.networking.node.connpool import ConnectionPools
 from unaiverse.modules.utils import AgentProcessorChecker, ModuleWrapper
+from unaiverse.utils.misc import GenException, FileTracker, StatLoadedSaver
 
 
 class AgentBasics:
@@ -57,6 +58,19 @@ class AgentBasics:
 
     # Types of badges
     BADGE_TYPES = {'completed', 'attended', 'intermediate', 'pro'}
+
+    # Stats (world perspective - i.e., as the world organizes them)
+    WORLD_STATS_STATIC = {'graph'}
+    WORLD_STATS_STATIC_BY_PEER = {'state', 'action', 'last_action'}
+    WORLD_STATS_DYNAMIC = {'world_masters', 'world_agents', 'human_agents', 'artificial_agents'}
+    WORLD_STATS_DYNAMIC_BY_PEER = {}  # modify this in-place to introduce custom stats
+
+    # Stats (agent perspective - i.e., sent by every peer to the world)
+    STATS_STATIC_SENT_BY_PEER = {'connected_peers'} | WORLD_STATS_STATIC_BY_PEER
+    STATS_DYNAMIC_SENT_BY_PEER = WORLD_STATS_DYNAMIC_BY_PEER
+
+    # The type associated to a human: it is not exploited at a node-level, only at agent level
+    HUMAN = "human"  # Human agent
 
     def __init__(self,
                  proc: ModuleWrapper | torch.nn.Module | None,
@@ -118,6 +132,8 @@ class AgentBasics:
         self.public_agents = {}  # ID -> profile of lone wolves talking to this world in a public manner (profile)
         self.world_agents = {}  # ID -> profile of all agents living in this world (profile)
         self.world_masters = {}  # ID -> profile of all master-agents living in this world (profile)
+        self.human_agents = {}  # ID -> profile (human agents)
+        self.artificial_agents = {}  # ID -> profile (artificial agent)
         self.world_profile = None
         self.is_world = False  # If this instance is about a world: it will be discovered at creation time
 
@@ -132,6 +148,11 @@ class AgentBasics:
         self.last_buffered_peer_id_to_info = {}   # If buffering was turned on
         self.last_ref_uuid = None
         self.recipients = {}  # The peer IDs of the recipients of the next batch of direct messages
+
+        # Stats
+        self.stats = {}
+        self.clear_stats()
+        self.stats_loader_saver = None
 
         # Information inherited from the node that hosts this agent
         self._node_name = "unk"
@@ -231,18 +252,28 @@ class AgentBasics:
         # This where the world guesses roles.
         if self.is_world:
 
-            # Check JSON files in the world folder
-            json_tracker = FileTracker(self.world_folder, ext=".json")  # Case insensitive
+            # Check role-JSON files in the world folder
+            role_json_tracker = FileTracker(self.world_folder, ext=".json", skip="world.stats.json")
+
+            # Check stats-JSON file in the world folder
+            stats_json_tracker = FileTracker(self.world_folder, ext=".json", prefix="world.stats")
 
             # This usually does nothing, but if you like to dynamically create JSON files, overload this method
             self.create_behav_files()
 
-            # Loading and refactoring
-            self.load_and_refactor_action_file_and_behav_files(force_save=json_tracker.something_changed())
+            # Loading and refactoring roles and behaviors
+            self.load_and_refactor_action_file_and_behav_files(force_save=role_json_tracker.something_changed())
 
             # Building combination of default roles (considering public, world_agent, world_master default roles), and
             # agent/world specific roles
             self.augment_roles()
+
+            # This usually does nothing, but if you like to dynamically create the JSON file "world.stats.json",
+            # overload this method
+            self.create_stats_file()
+
+            # Loading and refactoring stats
+            self.load_and_refactor_stats_file(force_save=stats_json_tracker.something_changed())
 
         # Creating streams associated to the processor output
         self.create_proc_output_streams(buffered=self.buffer_generated)
@@ -309,14 +340,17 @@ class AgentBasics:
 
             # Guessing roles from the list of json files
             self.CUSTOM_ROLES = [os.path.splitext(f)[0] for f in os.listdir(self.world_folder)
-                                 if os.path.isfile(os.path.join(self.world_folder, f)) and f.lower().endswith(".json")]
+                                 if os.path.isfile(os.path.join(self.world_folder, f))
+                                 and f.lower().endswith(".json")
+                                 and f.lower() != "world.stats.json"]
             if len(self.CUSTOM_ROLES) == 0:
                 raise GenException(f"No world-role files (*.json) were found in the world folder {self.world_folder}")
 
             # Default behaviours (getting roles, that are the names of the files with extension "json")
             default_behav_files = [os.path.join(self.world_folder, f) for f in os.listdir(self.world_folder)
                                    if os.path.isfile(os.path.join(self.world_folder, f)) and
-                                   f.lower().endswith(".json")]
+                                   f.lower().endswith(".json")
+                                   and f.lower() != "world.stats.json"]
 
             # Loading action file
             action_file = os.path.join(self.world_folder, 'agent.py')
@@ -368,6 +402,112 @@ class AgentBasics:
         """This method is called when building a world object. In your custom world-class, you can overload this method
         and create the JSON files with the role-related behaviors, if you like. Recall that acting like this is not
         mandatory at all: you can just manually create the JSON  files, and this method will simply do nothing."""
+        pass
+
+    def load_and_refactor_stats_file(self, force_save: bool = False):
+        """This method is called when building a world object. It loads file "world.stats.json" (JSON) and refactors it.
+        It checks the validity of the file contents.
+
+            Args:
+                force_save: Boolean to force the saving of the JSON.
+        """
+
+        # World only: world discovers WORLD_STATS_DYNAMIC_BY_PEER from the JSON file 'world.stats.json' in world folder
+        if self.world_folder is not None and self.is_world:
+
+            # Loading stats
+            stats_definition = None
+            valid = False
+            stats_file_name = 'world.stats.json'
+            stats_file = os.path.join(self.world_folder, stats_file_name)
+            try:
+                if os.path.exists(stats_file):
+                    with open(stats_file, 'r', encoding='utf-8') as file:
+                        stats_definition = json.load(file)
+            except Exception as e:
+                raise GenException(f'Error while reading the {stats_file_name} file [{e}]')
+
+            # Checking stats
+            if stats_definition is not None:
+                valid = isinstance(stats_definition, dict)
+                if valid:
+                    valid &= len(stats_definition) > 0
+                    for stat_name, stat in stats_definition.items():
+                        valid &= isinstance(stat_name, str)
+                        valid &= isinstance(stat, dict)
+                        if valid:
+                            keys = set(list(stat.keys()))
+                            keys.add("min")
+                            keys.add("max")
+                            valid &= set(list(stat.keys())) == {"desc", "type", "min", "max"}
+                            if valid:
+                                valid &= isinstance(stat["name"], str)
+                                valid &= isinstance(stat["desc"], str)
+                                valid &= isinstance(stat["type"], str)
+                                if valid:
+                                    valid &= stat["type"] in ["number", "str"]
+                                    if "max" in stat.keys() and "min" in stat.keys():
+                                        try:
+                                            _max = float(stat["max"])
+                                            if _max != stat["max"]:
+                                                stat["max"] = _max
+                                                force_save = True
+                                        except ValueError:
+                                            valid &= False
+                                        try:
+                                            _min = float(stat["min"])
+                                            if _min != stat["min"]:
+                                                stat["min"] = _min
+                                        except ValueError:
+                                            valid &= False
+                                    else:
+                                        if "max" in stat.keys():
+                                            del stat["max"]
+                                            force_save = True
+                                        if "min" in stat.keys():
+                                            del stat["min"]
+                                            force_save = True
+
+                if valid and force_save:
+                    try:
+                        with open(stats_file, 'w', encoding='utf-8') as file:
+                            json.dump(stats_definition, file, indent=4)
+                    except Exception as e:
+                        raise GenException(f'Error while saving the {stats_file_name} file [{e}]')
+
+            # Adding dynamic stats to world profile
+            stats_definition = stats_definition if valid else {}
+            self._node_profile.get_dynamic_profile()['world_dynamic_stats'] = stats_definition
+
+            # Saving dynamic stats to the world object
+            self.WORLD_STATS_DYNAMIC_BY_PEER.clear()  # in-place
+            self.WORLD_STATS_DYNAMIC_BY_PEER.update(stats_definition)  # in-place
+
+            # Loading existing stats (if any)
+            self.clear_stats()
+            stats_folder_name = "stats"
+            stats_folder = os.path.join(self.world_folder, stats_folder_name)
+            if not os.path.exists(stats_folder) or not os.path.isdir(stats_folder):
+                os.makedirs(stats_folder, exist_ok=True)
+
+                self.stats_loader_saver = \
+                    StatLoadedSaver(base_filename="dynamic",
+                                    save_dir=stats_folder,
+                                    max_size_mb=5,
+                                    dynamic_stats=list(set(self.WORLD_STATS_DYNAMIC) |
+                                                       set(self.WORLD_STATS_DYNAMIC_BY_PEER.keys())),
+                                    static_stats=list(set(self.WORLD_STATS_STATIC) |
+                                                      set(self.WORLD_STATS_STATIC_BY_PEER)),
+                                    group_indexed_stats=list(set(self.WORLD_STATS_STATIC_BY_PEER) |
+                                                             set(self.WORLD_STATS_DYNAMIC_BY_PEER.keys())),
+                                    group_key="peer_stats")
+                self.stats_loader_saver.load_existing_data()
+
+    def create_stats_file(self):
+        """This method is called when building a world object. In your custom world-class, you can overload this method
+        and create the JSON file "world.stats.json" with the stats you want agents to log and send-back to the world,
+        if you like. Recall that acting like this is not mandatory at all: you can just manually create the JSON file
+        "world.stats.json", and this method will simply do nothing."""
         pass
 
     def out(self, msg: str):
@@ -465,6 +605,12 @@ class AgentBasics:
             self.err(f"Cannot add agent with peer ID {peer_id} - unknown role: {role}")
             return False
 
+        # Human or artificial?
+        if profile.get_static_profile()["node_type"] is AgentBasics.HUMAN:
+            self.human_agents[peer_id] = profile
+        else:
+            self.artificial_agents[peer_id] = profile
+
         # Check compatibility of the streams owned by the agent we are adding with our-agent's processor
         if self.proc_outputs is not None and self.proc_inputs is not None:
 
@@ -501,6 +647,11 @@ class AgentBasics:
                 del self.world_masters[peer_id]
             elif peer_id in self.public_agents:
                 del self.public_agents[peer_id]
+
+            if peer_id in self.artificial_agents:
+                del self.artificial_agents[peer_id]
+            elif peer_id in self.human_agents:
+                del self.artificial_agents[peer_id]
 
             # Clearing from the list of processor-input-compatible-streams
             if self.compat_in_streams is not None:
@@ -541,6 +692,8 @@ class AgentBasics:
         self.public_agents = {}
         self.world_masters = {}
         self.world_agents = {}
+        self.human_agents = {}
+        self.artificial_agents = {}
 
         # Clearing the list of processor-output-compatible-streams
         if self.compat_in_streams is not None and self.proc_inputs is not None:
@@ -1844,3 +1997,45 @@ class AgentBasics:
                         setattr(self, attr_name, False)
                 except AttributeError:
                     continue  # Skip read-only attributes
+
+    def clear_stats(self):
+        self.stats = {}
+        if self.is_world:
+            for k in self.WORLD_STATS_STATIC:
+                self.stats[k] = None
+            for k in self.WORLD_STATS_STATIC_BY_PEER:
+                self.stats[k] = None
+            for k in self.WORLD_STATS_DYNAMIC:
+                self.stats[k] = {}  # every dynamic stats is a dictionary: timestamp -> value
+            for k in self.WORLD_STATS_DYNAMIC_BY_PEER:
+                self.stats[k] = {}  # peer ID -> dynamic stat; every dynamic stats is a dictionary: timestamp -> value
+        else:
+            for k in self.STATS_STATIC_SENT_BY_PEER:
+                self.stats[k] = None
+            for k in self.STATS_DYNAMIC_SENT_BY_PEER:
+                self.stats[k] = {}  # every dynamic stats is a dictionary: timestamp -> value
+
+    def store_static_stats(self):
+        if not self.is_world:
+            for k in self.STATS_STATIC_SENT_BY_PEER:
+                if k == 'connected_peers':  # TODO don't send if the same (None)
+                    self.stats[k] = list(self.world_masters.keys()) + list(self.world_agents.keys())
+                elif k == 'state':
+                    self.stats[k] = self.behav.get_state_name()
+                elif k == 'action':
+                    self.stats[k] = self.behav.get_action_name()
+                elif k == 'last_action':
+                    self.stats[k] = self.behav.get_last_completed_action_name()
+
+    def store_dynamic_stat(self, stat_name: str, stat_value: int | float | str):
+        if not self.is_world:
+            if (stat_name in self.STATS_DYNAMIC_SENT_BY_PEER and
+                    (isinstance(stat_value, int) or isinstance(stat_value, float) or isinstance(stat_value, str))):
+                t = self._node_clock.get_time()
+                self.stats[stat_name][t] = float(stat_value) \
+                    if self.STATS_DYNAMIC_SENT_BY_PEER[stat_name]["type"] == "number" \
+                    else str(stat_value)
+
+    def save_stats_to_disk(self):
+        if self.is_world:
+            self.stats_loader_saver.save_incremental(self.stats)

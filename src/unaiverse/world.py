@@ -12,6 +12,9 @@
                  Code Repositories:  https://github.com/collectionlessai/
                  Main Developers:    Stefano Melacci (Project Leader), Christian Di Maio, Tommaso Guidi
 """
+import json
+import math
+import bisect
 from unaiverse.agent import AgentBasics
 from unaiverse.hsm import HybridStateMachine
 from unaiverse.networking.p2p.messages import Msg
@@ -173,3 +176,177 @@ class World(AgentBasics):
         This can be used to reset competition results or clean up state after a specific event.
         """
         self.agent_badges = {}
+
+    def get_stats(self, from_timestamp: float | None = None,
+                  compute_aggregated_custom_stats: bool = False) -> dict:
+        full_stats_requested = from_timestamp is None or from_timestamp < 0.
+
+        if full_stats_requested:
+            stats = self.stats
+        else:
+            sliced_stats = {
+                'peer_graph': self.stats['peer_graph'],
+                'peer_stats': {}
+            }
+            world_peer_stats = self.stats['peer_stats']
+            sliced_peer_stats = sliced_stats['peer_stats']
+            for peer_id, stat_name_tv_dict in world_peer_stats.items():
+                sliced_stat_name_tv_dict = {}
+                sliced_peer_stats[peer_id] = sliced_stat_name_tv_dict
+                for stat_name, tv_dict in stat_name_tv_dict.items():
+                    ts = list(tv_dict.keys())
+                    vs = list(tv_dict.values())
+                    i = bisect.bisect_left(ts, from_timestamp)
+                    sliced_stat_name_tv_dict[stat_name] = dict(zip(ts[i:], vs[i:]))
+            stats = sliced_stats
+
+        if compute_aggregated_custom_stats and len(self.WORLD_STATS_DYNAMIC_BY_PEER) > 0:
+            mean, std = self.__aggregate_time_indexed_stats_over_peers(stats)
+            stats['peer_stats']['<mean>'] = mean
+            stats['peer_stats']['<std>'] = std
+
+        # TODO: remove this, debug only
+        import os
+        t = self._node_clock.get_time_as_string()
+        json.dump(stats, open(os.path.join(self.world_folder, f"[{t}]_get_stats.json")), indent=4)
+
+        return stats
+
+    def add_stats_from_peer(self, peer_id: str, peer_stats: dict):
+        t = self._node_clock.get_time()
+
+        # World stats
+        if len(self.world_masters) != next(reversed(self.stats["world_masters"].values())):
+            self.stats["world_masters"][t] = len(self.world_masters)
+        if len(self.world_agents) != next(reversed(self.stats["world_agents"].values())):
+            self.stats["world_agents"][t] = len(self.world_agents)
+        if len(self.human_agents) != next(reversed(self.stats["human_agents"].values())):
+            self.stats["human_agents"][t] = len(self.human_agents)
+        if len(self.artificial_agents) != next(reversed(self.stats["artificial_agents"].values())):
+            self.stats["artificial_agents"][t] = len(self.artificial_agents)
+
+        # Static stats, without groups (i.e., the peer graph)
+        graph = self.stats["graph"]
+        if peer_id not in graph:
+            graph[peer_id] = set()
+        prev_connected_peers = graph[peer_id]
+        graph_changed = False
+        if "connected_peers" in peer_stats:
+            connected_peers = set(peer_stats["connected_peers"])
+            to_remove = prev_connected_peers - connected_peers
+            for _peer_id in connected_peers:
+                if _peer_id in graph:
+                    if peer_id not in graph[_peer_id]:
+                        graph[_peer_id].add(peer_id)
+                        graph_changed = True
+                else:
+                    graph[peer_id] = {peer_id}
+                    graph_changed = True
+            for _peer_id in to_remove:
+                if _peer_id in graph:
+                    if peer_id in graph[_peer_id]:
+                        graph[_peer_id].remove(peer_id)
+                        graph_changed = True
+        if graph_changed:
+            self.stats_loader_saver.mark_stat_as_changed("graph")
+
+        # Static stats, per peer
+        stats_per_peer = self.stats["stats_per_peer"]
+        if peer_id not in stats_per_peer:
+            stats_per_peer[peer_id] = {"state": None, "action": None, "last_action": None}
+        for stat_name, v in peer_stats.items():
+            if stat_name in self.WORLD_STATS_STATIC_BY_PEER:
+                if v != stats_per_peer[peer_id][stat_name]:
+                    stats_per_peer[peer_id][stat_name] = v
+                    self.stats_loader_saver.mark_stat_as_changed(stat_name)
+
+        # Dynamic stats, per peer (appending them)
+        for stat_name, tv_dict in peer_stats.items():
+            if stat_name in self.WORLD_STATS_DYNAMIC_BY_PEER.keys():
+                expected_type = self.WORLD_STATS_DYNAMIC_BY_PEER[stat_name]["type"]
+                if stat_name not in stats_per_peer[peer_id]:
+                    stats_per_peer[peer_id][stat_name] = {}
+                tv_dict_clean = {}
+                if len(stats_per_peer[peer_id][stat_name]) > 0:
+                    last_t = next(reversed(stats_per_peer[peer_id][stat_name].keys()))
+                else:
+                    last_t = -1.
+                for t, v in tv_dict.items():
+                    if (isinstance(t, float) and t > 0. and
+                            ((isinstance(v, float) or isinstance(v, int) and expected_type == 'number') or
+                             (isinstance(v, str) and expected_type == 'str')) and t > last_t):
+                        tv_dict_clean[t] = v if expected_type != "number" else float(v)
+                stats_per_peer[peer_id][stat_name].update(tv_dict_clean)
+
+        # TODO: remove this, debug only
+        import os
+        t = self._node_clock.get_time_as_string()
+        json.dump(self.stats, open(os.path.join(self.world_folder, f"[{t}]_add_stats_from_peer.json")), indent=4)
+        self.get_stats(None, compute_aggregated_custom_stats=True)
+        self.get_stats(self._node_clock.get_time() - 100.0, compute_aggregated_custom_stats=True)
+
+    def __aggregate_time_indexed_stats_over_peers(self, stats: dict) -> tuple[dict, dict]:
+        """Aggregate all time-indexed peer stats by aligning timestamps across peers, forward-filling missing values,
+        and computing mean + std at each timestamp.
+
+        Args:
+            stats: dictionary with structure stats['peer_stats'][peer_id][custom_key] = {timestamp: value}.
+
+        Returns:
+            Two dictionaries, mean_dict, std_dict where: mean_dict[custom_key][timestamp] = mean_value,
+            std_dict[custom_key][timestamp] = std_value
+        """
+        mean_dict = {}
+        std_dict = {}
+        peer_stats = stats.get("peer_stats", {})
+
+        for custom_key in self.WORLD_STATS_DYNAMIC_BY_PEER.keys():
+
+            # Skipping strings: we can only aggregate numbers
+            if self.WORLD_STATS_DYNAMIC_BY_PEER[custom_key]['type'] != 'number':
+                continue
+
+            # Collecting time series
+            peer_series = []
+            for peer_id, peer_data in peer_stats.items():
+                if custom_key in peer_data:
+                    tv_dict = peer_data[custom_key]
+                    if tv_dict:
+                        peer_series.append(tv_dict)
+
+            if not peer_series:
+                continue
+
+            # Merging all timestamps
+            all_times = sorted({t for series in peer_series for t in series.keys()})  # Set to list
+
+            # Forward filling of the timestamp that are not present in a series
+            aligned_values = []
+            for series in peer_series:
+                if len(series) == 0:
+                    continue
+                filled = []
+                last_val = next(iter(series.values()))  # Get the first value (going ahead...exception)
+                for t in all_times:
+                    if t in series:
+                        last_val = series[t]
+                    filled.append(last_val)
+                aligned_values.append(filled)
+
+            # Aggregate (mean + std) at each timestamp
+            mean_dict[custom_key] = {}
+            std_dict[custom_key] = {}
+            for i, t in enumerate(all_times):
+                vals = [peer_vals[i] for peer_vals in aligned_values if peer_vals[i] is not None]
+                if vals:
+                    mean_val = sum(vals) / float(len(vals))
+                    var = sum((x - mean_val) ** 2 for x in vals) / len(vals)
+                    std_val = math.sqrt(var)
+                else:
+                    mean_val = None
+                    std_val = None
+
+                mean_dict[custom_key][t] = mean_val
+                std_dict[custom_key][t] = std_val
+
+        return mean_dict, std_dict
