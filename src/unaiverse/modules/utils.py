@@ -16,6 +16,7 @@ import os
 import torch
 import random
 import inspect
+import threading
 import numpy as np
 from PIL import Image
 from torch.utils.data import DataLoader
@@ -245,6 +246,26 @@ class MultiIdentity(torch.nn.Module):
         return args
 
 
+class HumanModule(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.__out_text = None
+        self.__out_img = None
+        self.__event = threading.Event()
+
+    def forward(self, text: str, img: Image):
+        self.__out_text = None
+        self.__out_img = None
+        self.__event.clear()
+        self.__event.wait()  # Blocks until set (Waiting for human inputs)
+        return self.__out_text, self.__out_image
+
+    def go_ahead_human_processor(self, text: str, img: Image):
+        self.__out_text = text
+        self.__out_img = img
+        self.__event.set()  # Unblock forward(...)
+
+
 class ModuleWrapper(torch.nn.Module):
     def __init__(self,
                  module: torch.nn.Module | None = None,
@@ -320,8 +341,17 @@ class AgentProcessorChecker:
             self.proc_opts = {'optimizer': None, 'losses': [None] * len(self.proc_outputs)}
         else:
 
+            # String telling it is a human
+            if isinstance(self.proc, str) and self.proc.lower() == "human":
+                self.proc = ModuleWrapper(module=HumanModule())
+                self.proc.device = torch.device("cpu")
+                self.proc_inputs = [Data4Proc(data_type="text", pubsub=False, private_only=False),
+                                    Data4Proc(data_type="img", pubsub=False, private_only=False)]
+                self.proc_outputs = [Data4Proc(data_type="text", pubsub=False, private_only=False),
+                                     Data4Proc(data_type="img", pubsub=False, private_only=False)]
+
             # Wrapping to have the basic attributes (device)
-            if not isinstance(self.proc, ModuleWrapper):
+            elif not isinstance(self.proc, ModuleWrapper):
                 self.proc = ModuleWrapper(module=self.proc)
                 self.proc.device = torch.device("cpu")
 
