@@ -260,7 +260,7 @@ class HumanModule(torch.nn.Module):
         self.__event.wait()  # Blocks until set (Waiting for human inputs)
         return self.__out_text, self.__out_image
 
-    def go_ahead_human_processor(self, text: str, img: Image):
+    def go_ahead(self, text: str, img: Image):
         self.__out_text = text
         self.__out_img = img
         self.__event.set()  # Unblock forward(...)
