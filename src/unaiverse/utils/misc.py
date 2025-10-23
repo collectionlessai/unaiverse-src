@@ -326,6 +326,10 @@ class StatLoadedSaver:
 
         self.changed_stats = set()
         self.last_saved = {}  # (group_id, stat_name) -> last_saved_timestamp
+
+        if not os.path.exists(self.save_dir) or not os.path.isdir(self.save_dir):
+            os.makedirs(self.save_dir, exist_ok=True)
+
         self.__ensure_current_file()
 
         assert group_indexed_stats is None or len(group_indexed_stats) == 0 or (group_key != None), \
@@ -360,6 +364,8 @@ class StatLoadedSaver:
                 for row in lines:
                     row_tokens = row.split(',')
                     group = row_tokens[0]
+                    if group == "group":  # Header row
+                        continue
                     stat_name = row_tokens[1]
                     ts = row_tokens[2]
                     val = float(row_tokens[3])
@@ -389,9 +395,10 @@ class StatLoadedSaver:
             if stat_name in self.group_indexed_stats:
                 if stat_name not in self.changed_stats:
                     shared_static_stats_changed = True
-        if shared_static_stats_changed:
-            header = ["group"] + [s for s in self.static_stats if s in self.group_indexed_stats]
-            with open(os.path.join(self.save_dir, f"{self.base_filename}_static.csv"), "w") as f:
+        stats_list = [s for s in self.static_stats if s in self.group_indexed_stats]
+        if shared_static_stats_changed and len(stats_list) > 0:
+            header = ["group"] + stats_list
+            with open(os.path.join(self.save_dir, f"{self.base_filename}_static.json"), "w") as f:
                 f.write(",".join(header) + "\n")
 
                 group_to_group_stats = stats[self.group_key]
@@ -443,23 +450,26 @@ class StatLoadedSaver:
         return os.path.join(self.save_dir, f"{self.base_filename}_{1:06d}.csv")
 
     def __ensure_current_file(self):
-        """Ensure the current newest file is stats_000001.csv. If rotation is needed, shift existing files upward."""
+        """Ensure the current newest file is <base_filename>_000001.csv. If rotation is needed, shift existing files."""
         filename = self.__current_filename()  # This will return the file with suffix '_1'
+        stats_list = [s for s in self.time_indexed_stats if s in self.group_indexed_stats]
 
-        # If current file exists but is too large, rotate all existing ones upward
-        if os.path.exists(filename) and os.path.getsize(filename) >= self.max_size_bytes:
-            self.__rotate_files_up()
+        if len(stats_list) > 0:
 
-            # Create a new fresh file as _1
-            with open(filename, "w") as f:
-                header = ["group"] + [s for s in self.time_indexed_stats if s in self.group_indexed_stats]
-                f.write(",".join(header) + "\n")
-        elif not os.path.exists(filename):
+            # If current file exists but is too large, rotate all existing ones upward
+            if os.path.exists(filename) and os.path.getsize(filename) >= self.max_size_bytes:
+                self.__rotate_files_up()
 
-            # Create _1 if it does not exist
-            with open(filename, "w") as f:
-                header = ["group"] + [s for s in self.time_indexed_stats if s in self.group_indexed_stats]
-                f.write(",".join(header) + "\n")
+                # Create a new fresh file as _1
+                with open(filename, "w") as f:
+                    header = ["group"] + stats_list
+                    f.write(",".join(header) + "\n")
+            elif not os.path.exists(filename):
+
+                # Create _1 if it does not exist
+                with open(filename, "w") as f:
+                    header = ["group"] + stats_list
+                    f.write(",".join(header) + "\n")
 
     def __rotate_files_up(self):
         """Shift existing files upward by 1 index (e.g. _1 -> _2; _2 -> _3, etc.)."""
