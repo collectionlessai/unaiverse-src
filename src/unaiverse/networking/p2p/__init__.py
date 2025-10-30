@@ -19,30 +19,16 @@ from . import lib_types
 import os
 import sys
 import glob
-import json
 import ctypes
 import hashlib
-import platform
 import warnings
+import itertools
 from typing import cast
 from .messages import Msg
 from .p2p import P2P, P2PError
 from .golibp2p import GoLibP2P  # Your stub interface definition
 from .lib_types import TypeInterface  # Assuming TypeInterface handles the void* results
 
-
-# --- Helper Functions ---
-def _get_lib_filename():
-    """Determines the correct shared library filename based on the OS."""
-    system = platform.system()
-    if system == 'Linux':
-        return 'unailib*.so'
-    elif system == 'Darwin':
-        return 'unailib*.dylib'
-    elif system == 'Windows':
-        return 'unailib*.pyd'
-    # This error should ideally never be reached if setup.py ran correctly.
-    raise ImportError(f"Unsupported operating system for shared library: {system}")
 
 def _get_file_hash(filepath):
     """Calculates the SHA256 hash of a file, returning None if it doesn't exist."""
@@ -89,7 +75,10 @@ _shared_lib = None
 
 try:
     _lib_path = _lib_dir
-    _results = glob.glob(os.path.join(_lib_dir, _get_lib_filename()))
+    patterns = ["*.so", "*.pyd", "*.dll", "*.dylib"]
+    _results = list(itertools.chain.from_iterable(
+        glob.glob(os.path.join(_lib_dir, f"unailib{ext}")) for ext in patterns
+    ))
     _lib_path = os.path.join(_lib_dir, _results[0])
     _shared_lib = ctypes.CDLL(_lib_path)
 except (IndexError, OSError) as e:
