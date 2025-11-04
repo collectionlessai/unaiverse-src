@@ -439,9 +439,9 @@ class AgentBasics:
                             keys = set(list(stat.keys()))
                             keys.add("min")
                             keys.add("max")
-                            valid &= set(list(stat.keys())) == {"desc", "type", "min", "max"}
+                            valid &= keys == {"desc", "type", "max", "min"}
                             if valid:
-                                valid &= isinstance(stat["name"], str)
+                                valid &= isinstance(stat_name, str)
                                 valid &= isinstance(stat["desc"], str)
                                 valid &= isinstance(stat["type"], str)
                                 if valid:
@@ -477,7 +477,7 @@ class AgentBasics:
 
             # Adding dynamic stats to world profile
             stats_definition = stats_definition if valid else {}
-            self._node_profile.get_dynamic_profile()['world_dynamic_stats'] = stats_definition
+            self._node_profile.get_dynamic_profile()['world_stats_dynamic'] = stats_definition
 
             # Saving dynamic stats to the world object
             self.WORLD_STATS_DYNAMIC_BY_PEER.clear()  # in-place
@@ -490,18 +490,18 @@ class AgentBasics:
             if not os.path.exists(stats_folder) or not os.path.isdir(stats_folder):
                 os.makedirs(stats_folder, exist_ok=True)
 
-                self.stats_loader_saver = \
-                    StatLoadedSaver(base_filename="dynamic",
-                                    save_dir=stats_folder,
-                                    max_size_mb=5,
-                                    dynamic_stats=list(set(self.WORLD_STATS_DYNAMIC) |
-                                                       set(self.WORLD_STATS_DYNAMIC_BY_PEER.keys())),
-                                    static_stats=list(set(self.WORLD_STATS_STATIC) |
-                                                      set(self.WORLD_STATS_STATIC_BY_PEER)),
-                                    group_indexed_stats=list(set(self.WORLD_STATS_STATIC_BY_PEER) |
-                                                             set(self.WORLD_STATS_DYNAMIC_BY_PEER.keys())),
-                                    group_key="peer_stats")
-                self.stats_loader_saver.load_existing_data()
+            self.stats_loader_saver = \
+                StatLoadedSaver(base_filename="dynamic",
+                                save_dir=stats_folder,
+                                max_size_mb=5,
+                                dynamic_stats=list(set(self.WORLD_STATS_DYNAMIC) |
+                                                    set(self.WORLD_STATS_DYNAMIC_BY_PEER.keys())),
+                                static_stats=list(set(self.WORLD_STATS_STATIC) |
+                                                    set(self.WORLD_STATS_STATIC_BY_PEER)),
+                                group_indexed_stats=list(set(self.WORLD_STATS_STATIC_BY_PEER) |
+                                                            set(self.WORLD_STATS_DYNAMIC_BY_PEER.keys())),
+                                group_key="peer_stats")
+            self.stats_loader_saver.load_existing_data()
 
     def create_stats_file(self):
         """This method is called when building a world object. In your custom world-class, you can overload this method

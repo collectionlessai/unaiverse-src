@@ -995,9 +995,9 @@ class Node:
 
                 # Check for address changes every "N" seconds
                 if self.clock.get_time() - last_address_check_time >= self.address_check_every:
-                    self.out("Performing periodic check for address changes...")
-                    last_address_check_time = self.clock.get_time()
                     try:
+                        self.out("Performing periodic check for address changes...")
+                        last_address_check_time = self.clock.get_time()
                         current_public_addrs = self.conn.p2p_public.get_node_addresses()
                         current_private_addrs = self.conn.p2p_world.get_node_addresses()
                         profile_public_addrs = self.profile.get_dynamic_profile().get('peer_addresses', [])
@@ -1699,9 +1699,10 @@ class Node:
 
                 # Setting up world stats
                 world_stats_dynamic_by_peer = profile.get_dynamic_profile()['world_stats_dynamic']
-                new_agent.STATS_DYNAMIC_SENT_BY_PEER.clear()
-                new_agent.STATS_DYNAMIC_SENT_BY_PEER.update(world_stats_dynamic_by_peer)  # in-place
-                new_agent.clear_stats()
+                if world_stats_dynamic_by_peer:
+                    new_agent.STATS_DYNAMIC_SENT_BY_PEER.clear()
+                    new_agent.STATS_DYNAMIC_SENT_BY_PEER.update(world_stats_dynamic_by_peer)  # in-place
+                    new_agent.clear_stats()
 
                 # Updating node-level references
                 old_agent = self.agent
@@ -1963,12 +1964,35 @@ class Node:
 
         def is_suspicious(ast_node):
 
-            # Detect function calls
+            # Detect bare function calls like eval(...)
             if isinstance(ast_node, ast.Call):
+                # case: eval(...)  (ast.Name)
                 if isinstance(ast_node.func, ast.Name):
                     return ast_node.func.id in dangerous_functions
+                # case: something.eval(...)  (ast.Attribute)
                 elif isinstance(ast_node.func, ast.Attribute):
-                    return ast_node.func.attr in dangerous_functions
+                    attr_name = ast_node.func.attr
+                    # 1) If attribute name is one of the dangerous_functions, only flag it
+                    #    if the object is a suspicious module (os, subprocess, etc.)
+                    if attr_name in dangerous_functions:
+                        value = ast_node.func.value
+                        # example: os.system(...)  => ast.Name(id='os')
+                        if isinstance(value, ast.Name):
+                            if value.id in dangerous_modules:
+                                return True
+                        # example: package.subpackage.func(...) => ast.Attribute
+                        # check top-level name if possible: walk down to the leftmost Name
+                        left = value
+                        while isinstance(left, ast.Attribute):
+                            left = left.value
+                        if isinstance(left, ast.Name) and left.id in dangerous_modules:
+                            return True
+                    # 2) Also catch explicit module imports used directly:
+                    #    subprocess.run(...), os.system(...), etc.
+                    if isinstance(ast_node.func.value, ast.Name):
+                        if ast_node.func.value.id in dangerous_modules:
+                            # if the module is suspicious, any attribute call is risky
+                            return True
 
             # Detect imports
             if isinstance(ast_node, (ast.Import, ast.ImportFrom)):

@@ -179,6 +179,7 @@ class World(AgentBasics):
 
     def get_stats(self, from_timestamp: float | None = None,
                   compute_aggregated_custom_stats: bool = False) -> dict:
+        # TODO: filter by peer?
         full_stats_requested = from_timestamp is None or from_timestamp < 0.
 
         if full_stats_requested:
@@ -216,13 +217,13 @@ class World(AgentBasics):
         t = self._node_clock.get_time()
 
         # World stats
-        if len(self.world_masters) != next(reversed(self.stats["world_masters"].values())):
+        if len(self.world_masters) != next(reversed(self.stats["world_masters"].values()), -1):
             self.stats["world_masters"][t] = len(self.world_masters)
-        if len(self.world_agents) != next(reversed(self.stats["world_agents"].values())):
+        if len(self.world_agents) != next(reversed(self.stats["world_agents"].values()), -1):
             self.stats["world_agents"][t] = len(self.world_agents)
-        if len(self.human_agents) != next(reversed(self.stats["human_agents"].values())):
+        if len(self.human_agents) != next(reversed(self.stats["human_agents"].values()), -1):
             self.stats["human_agents"][t] = len(self.human_agents)
-        if len(self.artificial_agents) != next(reversed(self.stats["artificial_agents"].values())):
+        if len(self.artificial_agents) != next(reversed(self.stats["artificial_agents"].values()), -1):
             self.stats["artificial_agents"][t] = len(self.artificial_agents)
 
         # Static stats, without groups (i.e., the peer graph)

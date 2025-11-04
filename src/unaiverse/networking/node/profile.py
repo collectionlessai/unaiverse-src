@@ -94,6 +94,7 @@ class NodeProfile:
                         "streams_count": None
                     },
                     "world_roles_fsm": None,  # Dict of FSMs for world roles
+                    "world_stats_dynamic": None,
                     "hidden": None
                 },
                 'cv': cv
