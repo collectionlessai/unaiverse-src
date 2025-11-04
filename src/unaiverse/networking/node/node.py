@@ -32,7 +32,7 @@ from collections import deque
 from unaiverse.clock import Clock
 from unaiverse.world import World
 from unaiverse.agent import Agent
-from unaiverse.networking.p2p import P2P
+from unaiverse.networking.p2p import P2P, P2PError
 from unaiverse.networking.p2p.messages import Msg
 from datetime import datetime, timezone, timedelta
 from unaiverse.networking.node.connpool import NodeConn
@@ -209,33 +209,78 @@ class Node:
         P2P.setup_library(enable_logging=os.getenv("NODE_LIBP2PLOG", "0") == "1")
 
         offer_relay_facilities = self.node_type is Node.WORLD  # Only world nodes offer relay facilities
-
-        # Create P2P node in the whole universe (it has fields 'addresses', and 'peer_id', and 'libp2p')
-        p2p_u = P2P(identity_dir=p2p_u_identity_dir,
-                    port=int(os.getenv("NODE_STARTING_PORT", "0")),
-                    ips=None,
-                    enable_relay_client=allow_connection_through_relay,
-                    enable_relay_service=offer_relay_facilities,
-                    knows_is_public=os.getenv("NODE_IS_PUBLIC", "0") == "1",
-                    max_connections=1000,
-                    enable_tls=os.getenv("NODE_USE_TLS", "0") == "1",
-                    domain_name=os.getenv("DOMAIN", None),
-                    tls_cert_path=os.getenv("TLS_CERT_PATH", None),
-                    tls_key_path=os.getenv("TLS_KEY_PATH", None))
-
-        # Create another P2P node for the private world (it has fields 'addresses', and 'peer_id', and 'libp2p')
-        p2p_w = P2P(identity_dir=p2p_w_identity_dir,
-                    port=(int(os.getenv("NODE_STARTING_PORT", "0")) + 4)
+        
+        # --- PARALLEL P2P NODE CREATION ---
+        # 1. Define configurations for both nodes
+        p2p_u_config = {
+            "identity_dir": p2p_u_identity_dir,
+            "port": int(os.getenv("NODE_STARTING_PORT", "0")),
+            "ips": None,
+            "enable_relay_client": allow_connection_through_relay,
+            "enable_relay_service": offer_relay_facilities,
+            "knows_is_public": os.getenv("NODE_IS_PUBLIC", "0") == "1",
+            "max_connections": 1000,
+            "enable_tls": os.getenv("NODE_USE_TLS", "0") == "1",
+            "domain_name": os.getenv("DOMAIN", None),
+            "tls_cert_path": os.getenv("TLS_CERT_PATH", None),
+            "tls_key_path": os.getenv("TLS_KEY_PATH", None),
+        }
+        
+        p2p_w_config = {
+            "identity_dir": p2p_w_identity_dir,
+            "port": (int(os.getenv("NODE_STARTING_PORT", "0")) + 4)
                     if int(os.getenv("NODE_STARTING_PORT", "0")) > 0 else 0,
-                    ips=None,
-                    enable_relay_client=allow_connection_through_relay,
-                    enable_relay_service=offer_relay_facilities,
-                    knows_is_public=os.getenv("NODE_IS_PUBLIC", "0") == "1",
-                    max_connections=1000,
-                    enable_tls=os.getenv("NODE_USE_TLS", "0") == "1",
-                    domain_name=os.getenv("DOMAIN", None),
-                    tls_cert_path=os.getenv("TLS_CERT_PATH", None),
-                    tls_key_path=os.getenv("TLS_KEY_PATH", None))
+            "ips": None,
+            "enable_relay_client": allow_connection_through_relay,
+            "enable_relay_service": offer_relay_facilities,
+            "knows_is_public": os.getenv("NODE_IS_PUBLIC", "0") == "1",
+            "max_connections": 1000,
+            "enable_tls": os.getenv("NODE_USE_TLS", "0") == "1",
+            "domain_name": os.getenv("DOMAIN", None),
+            "tls_cert_path": os.getenv("TLS_CERT_PATH", None),
+            "tls_key_path": os.getenv("TLS_KEY_PATH", None),
+        }
+
+        # 2. Prepare a dictionary to store results or exceptions
+        results = {
+            "p2p_u": None,
+            "p2p_w": None
+        }
+        
+        # 3. Define the worker function for the threads
+        def create_p2p_instance(name: str, config: dict):
+            try:
+                # This is the slow, blocking call
+                instance = P2P(**config)
+                results[name] = instance
+            except Exception as e:
+                # Store the exception if creation fails
+                results[name] = e
+        
+        # 4. Create and start both threads
+        thread_u = threading.Thread(target=create_p2p_instance, args=("p2p_u", p2p_u_config))
+        thread_w = threading.Thread(target=create_p2p_instance, args=("p2p_w", p2p_w_config))
+
+        thread_u.start()
+        thread_w.start()
+
+        # 5. Wait for both threads to complete
+        # This BLOCKS the __init__ method until both are done.
+        thread_u.join()
+        thread_w.join()
+
+        # 6. Retrieve results and check for errors
+        p2p_u = results["p2p_u"]
+        p2p_w = results["p2p_w"]
+
+        if isinstance(p2p_u, Exception):
+            # We must re-raise the exception to fail the Node creation
+            raise P2PError(f"Failed to initialize public P2P node (p2p_u): {p2p_u}") from p2p_u
+        if isinstance(p2p_w, Exception):
+            raise P2PError(f"Failed to initialize private P2P node (p2p_w): {p2p_w}") from p2p_w
+        if p2p_u is None or p2p_w is None:
+            # This should not happen if threads ran, but it's a safe check
+            raise P2PError("P2P node creation did not complete, but no exception was caught.")
 
         # Get first node token
         self.get_node_token(peer_ids=[p2p_u.peer_id, p2p_w.peer_id])  # Passing both the peer IDs

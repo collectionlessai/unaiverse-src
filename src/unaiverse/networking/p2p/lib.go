@@ -515,48 +515,6 @@ func setupNotifiers(instanceIndex int) {
 	})
 }
 
-// waitForPublicReachability subscribes to the host's event bus and waits for the
-// node to confirm its public reachability. It includes a timeout to prevent
-// the startup from hanging indefinitely.
-func waitForPublicReachability(h host.Host, timeout time.Duration) bool {
-	// 1. Subscribe to the reachability event.
-	sub, err := h.EventBus().Subscribe(new(event.EvtLocalReachabilityChanged))
-	if err != nil {
-		logger.Errorf("[GO] ❌ Failed to subscribe to reachability events: %v", err)
-		return false
-	}
-	defer sub.Close() // Clean up the subscription when we're done.
-
-	logger.Debugf("[GO] ⏳ Waiting for public reachability confirmation (timeout: %s)...", timeout)
-
-	// 2. Wait for the event in a select loop with a timeout.
-	timeoutCh := time.After(timeout)
-	for {
-		select {
-		case evt := <-sub.Out():
-			// We received an event. Cast it to the correct type.
-			reachabilityEvent, ok := evt.(event.EvtLocalReachabilityChanged)
-			if !ok {
-				continue // Should not happen, but good practice to check.
-			}
-
-			logger.Infof("[GO] 💡 Reachability status changed to: %s", reachabilityEvent.Reachability)
-
-			// Check if the new status is what we're waiting for.
-			if reachabilityEvent.Reachability == network.ReachabilityPublic {
-				logger.Debugf("[GO] ✅ Confirmed Public reachability via event.")
-				return true // Success! Return true.
-			} else if reachabilityEvent.Reachability == network.ReachabilityPrivate {
-				logger.Warnf("[GO] ⚠️ Node is behind a NAT or firewall (Private reachability).")
-				return false // Node is not publicly reachable.
-			}
-		case <-timeoutCh:
-			logger.Warnf("[GO] ⚠️ Timed out waiting for public reachability.")
-			return false // Timeout. Return false.
-		}
-	}
-}
-
 // --- Core Logic Functions ---
 
 // storeReceivedMessage processes a raw message received either from a direct stream
@@ -1411,6 +1369,7 @@ func CreateNode(
 	// Prepare discovering the bootstrap peers
 	var idht *dht.IpfsDHT
 	isPublic := false
+	instanceCtx := contexts[instanceIndex]
 	if !knowsIsPublic || enableTLS {
 		// Add any possible option to be publicly reachable
 		options = append(
@@ -1426,11 +1385,13 @@ func CreateNode(
 					dht.BootstrapPeers(bootstrapAddrInfos...),
 				}
 				var err error
-				idht, err = dht.New(contexts[instanceIndex], h, dhtOptions...)
+				idht, err = dht.New(instanceCtx, h, dhtOptions...)
 				return idht, err
 			}))
 		logger.Debugf("[GO]   - Instance %d: Trying to be publicly reachable.\n", instanceIndex)
-	} else {
+	} 
+	if knowsIsPublic && enableRelayService {
+		// Force public reachability to test local relays
 		options = append(options, libp2p.ForceReachabilityPublic())
 		isPublic = true
 	}
@@ -1468,65 +1429,98 @@ func CreateNode(
 	// Give discovery mechanisms a moment to find the public address.
 	logger.Debugf("[GO] ⏳ Instance %d: Waiting for address discovery and NAT to settle...\n", instanceIndex)
 
-	if enableTLS {
-		// --- Wait for the EvtLocalAddressesUpdated containing the resolved WSS address ---
-		logger.Debugf("[GO] ⏳ Instance %d: Waiting for the final public WSS address to be generated...", instanceIndex)
+	// Subscribe to the two key events we need to wait for.
+	reachabilitySub, err := instanceHost.EventBus().Subscribe(new(event.EvtLocalReachabilityChanged))
+	if err != nil {
+		cleanupFailedCreate(instanceIndex)
+		return jsonErrorResponse("Failed to subscribe to reachability events", err)
+	}
+	defer reachabilitySub.Close()
 
-		// 1. Subscribe to the event that fires *after* the AddrsFactory has run.
-		sub, err := instanceHost.EventBus().Subscribe(new(event.EvtLocalAddressesUpdated))
-		if err != nil {
-			cleanupFailedCreate(instanceIndex)
-			return jsonErrorResponse("Failed to subscribe to address update events", err)
+	addrSub, err := instanceHost.EventBus().Subscribe(new(event.EvtLocalAddressesUpdated))
+	if err != nil {
+		cleanupFailedCreate(instanceIndex)
+		return jsonErrorResponse("Failed to subscribe to address update events", err)
+	}
+	defer addrSub.Close()
+
+	// --- State flags for our unified wait loop ---
+	var reachabilityKnown bool = knowsIsPublic
+	// If TLS is disabled, we don't need to wait for WSS addresses,
+	// so we can consider this condition true from beginning.
+	var addressesFinalized bool = !enableTLS
+	timeout := 30 * time.Second
+
+	WAIT_LOOP:
+	for {
+		// --- Check Exit Condition ---
+		// We can exit once we know our reachability AND our addresses are finalized.
+		if reachabilityKnown && addressesFinalized {
+			logger.Debugf("[GO] ✅ Instance %d: Discovery complete. Reachability: %s, Addresses: Finalized.",
+				instanceIndex, map[bool]string{true: "Public", false: "Private"}[isPublic])
+			break WAIT_LOOP
 		}
-		defer sub.Close()
 
-		// 2. Loop and inspect events until our condition is met or we time out.
-	WAIT_FOR_WSS_ADDR:
-		for {
-			select {
-			case evt := <-sub.Out():
-				// We received an address update event.
-				logger.Debugf("[GO] 🔔 Instance %d: Received address update event, checking for WSS address...\n", instanceIndex)
-				addrsEvent, ok := evt.(event.EvtLocalAddressesUpdated)
-				if !ok {
-					continue // Should not happen, but good practice.
-				}
-
-				// 3. Check the addresses in the event to see if our WSS address is ready.
-				for _, updatedAddr := range addrsEvent.Current {
-					addr := updatedAddr.Address
-					addrStr := addr.String()
-					logger.Debugf("[GO]     - Instance %d: Found address: %s\n", instanceIndex, addrStr)
-
-					// The condition for readiness: the address is public AND is a secure websocket address.
-					isPublicWSS := manet.IsPublicAddr(addr) && (strings.Contains(addrStr, "/tls/") && !strings.Contains(addrStr, "*"))
-
-					if isPublicWSS {
-						logger.Infof("[GO] ✅ Instance %d: Confirmed final public WSS address: %s", instanceIndex, addrStr)
-						isPublic = true         // If we have a public WSS address, the node is public.
-						break WAIT_FOR_WSS_ADDR // Exit the loop, we are done.
-					}
-				}
-				// If we checked all addresses in this event and didn't find the WSS one, the loop continues, waiting for the next event.
-
-			case <-time.After(30 * time.Second):
-				cleanupFailedCreate(instanceIndex)
-				return jsonErrorResponse("Timed out after 90s waiting for the final WSS address", nil)
-
-			case <-contexts[instanceIndex].Done():
-				cleanupFailedCreate(instanceIndex)
-				return jsonErrorResponse("Node creation cancelled while waiting for final WSS address", nil)
+		select {
+		// --- Event 1: Reachability Assessed ---
+		case evt := <-reachabilitySub.Out():
+			reachabilityEvt, ok := evt.(event.EvtLocalReachabilityChanged)
+			if !ok {
+				continue
 			}
-		}
-		idht.Close() // DHT job is done.
 
-	} else if !knowsIsPublic {
-		// --- Fallback to old reachability check ONLY if AutoTLS is disabled ---
-		isPublic = waitForPublicReachability(instanceHost, 30*time.Second)
-		if !isPublic {
-			logger.Warnf("[GO] ⚠️ Instance %d: The node may not be directly dialable.", instanceIndex)
+			if reachabilityEvt.Reachability == network.ReachabilityPublic {
+				isPublic = true
+			} else {
+				isPublic = false
+			}
+			reachabilityKnown = true	// reachability was assessed, either public or private
+			logger.Debugf("[GO] 🔔 Instance %d: Reachability assessed. Status: %s", instanceIndex, reachabilityEvt.Reachability)
+
+		// --- Event 2: Addresses Updated (for WSS) ---
+		case evt := <-addrSub.Out():
+			// We only care about this event if TLS is enabled AND we haven't found our WSS address yet.
+			if !enableTLS || addressesFinalized {
+				continue
+			}
+
+			addrsEvent, ok := evt.(event.EvtLocalAddressesUpdated)
+			if !ok {
+				continue
+			}
+
+			logger.Debugf("[GO] 🔔 Instance %d: Address update event. Checking for final WSS address...", instanceIndex)
+			for _, updatedAddr := range addrsEvent.Current {
+				addr := updatedAddr.Address
+				addrStr := updatedAddr.Address.String()
+				// A "final" WSS address is one that contains /tls/ and does NOT contain a wildcard (*).
+				// This works for both public (/dns4/...) and private (/ip4/192...) WSS addresses.
+				if manet.IsPublicAddr(addr) && strings.Contains(addrStr, "/tls/") && !strings.Contains(addrStr, "*") {
+					logger.Debugf("[GO] ✅ Instance %d: Final WSS address found: %s", instanceIndex, addrStr)
+					addressesFinalized = true
+					break
+				}
+			}
+
+		// --- Failsafes ---
+		case <-time.After(timeout):
+			// We timed out before *both* conditions were met.
+			cleanupFailedCreate(instanceIndex)
+			errMsg := fmt.Sprintf("Timed out after %s waiting for address discovery. (Reachability Known: %t, WSS Finalized: %t)",
+				timeout, reachabilityKnown, addressesFinalized)
+			return jsonErrorResponse(errMsg, nil)
+
+		case <-instanceCtx.Done():
+			cleanupFailedCreate(instanceIndex)
+			return jsonErrorResponse("Node creation cancelled while waiting for address discovery", nil)
 		}
-		idht.Close()
+	}
+	
+	// We must close the DHT *after* discovery is complete, as it's needed
+	// for the EvtLocalReachabilityChanged event.
+	if idht != nil {
+		logger.Debugf("[GO] 🛑 Instance %d: Closing DHT client...", instanceIndex)
+        idht.Close()
 	}
 
 	// --- Cleanup Bootstrap Peers ---
@@ -1554,7 +1548,8 @@ func CreateNode(
 	}
 
 	logger.Infof("[GO] 🌐 Instance %d: Node addresses: %v\n", instanceIndex, nodeAddresses)
-	logger.Infof("[GO] 🎉 Instance %d: Node creation complete.\n", instanceIndex)
+	reachabilityStatus := map[bool]string{true: "Public", false: "Private"}[isPublic]
+	logger.Infof("[GO] 🎉 Instance %d: Node creation complete. Reachability status: %s\n", instanceIndex, reachabilityStatus)
 	return jsonSuccessResponse(response)
 }
 
