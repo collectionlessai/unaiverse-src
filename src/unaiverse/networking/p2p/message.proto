@@ -4,6 +4,8 @@ syntax = "proto3";
 // Defines the package name, which helps in preventing naming conflicts.
 package p2p;
 
+import "google/protobuf/struct.proto";
+
 option go_package = "./proto-go";
 
 message Message {
@@ -17,6 +19,7 @@ message Message {
   oneof content {
     StreamSampleContent stream_sample = 6;
     string json_content = 7; // Umbrella for ALL other structured messages
+    StatBatch stats_update = 8;
   }
 }
 
@@ -37,6 +40,7 @@ message SampleData {
     TensorData tensor_data = 1;
     ImageData image_data = 2;
     TextData text_data = 3;
+    FileData file_data = 4;
   }
 }
 
@@ -52,4 +56,22 @@ message ImageData {
 
 message TextData {
   string data = 1;     // string of text
+}
+
+message FileData {
+  bytes content = 1;
+  string filename = 2;
+  string mime_type = 3;
+}
+
+// --- Definitions for the Optimized Path: Stat Updates ---
+message StatUpdate {
+  string peer_id = 1;
+  string stat_name = 2;
+  int64 timestamp = 3; // Use int64 for unix ms
+  google.protobuf.Value value = 4;
+}
+
+message StatBatch {
+  repeated StatUpdate updates = 1;
 }

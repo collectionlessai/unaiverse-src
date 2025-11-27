@@ -10,15 +10,15 @@ class GoLibP2P:
         """
         ...
     
-    def CreateNode(self, instance: int, identity_dir: str, port: int, ips: List[str], enable_relay_client: int, enable_relay_service: int, knows_is_public: int, max_connections: int, enable_tls: int, domain_name: str, tls_cert_path: str, tls_key_path: str) -> bytes:
+    def CreateNode(self, instance: int, node_config_json: bytes) -> int:
         """
-        CreateNode(instance: int, identity_dir: str, port: int, ips: List[str], enable_relay_client: int, enable_relay_service: int, knows_is_public: int, max_connections: int, enable_tls: int, domain_name: str, tls_cert_path: str, tls_key_path: str) -> bytes
+        CreateNode(instance: int, node_config_json: bytes) -> bytes
 
         Creates a node in the P2P network and returns a JSON string with node information.
         """
         ...
 
-    def ConnectTo(self, instance: int, multiaddrs_json: bytes) -> bytes:
+    def ConnectTo(self, instance: int, multiaddrs_json: bytes) -> int:
         """
         ConnectTo(instance: int, multiaddrs_json: bytes) -> bytes
 
@@ -26,7 +26,7 @@ class GoLibP2P:
         """
         ...
 
-    def ReserveOnRelay(self, instance: int, relay_peer_id: bytes) -> bytes:
+    def ReserveOnRelay(self, instance: int, relay_peer_id: bytes) -> int:
         """
         ReserveOnRelay(instance: int, relay_peer_id: bytes) -> bytes
 
@@ -34,7 +34,7 @@ class GoLibP2P:
         """
         ...
 
-    def DisconnectFrom(self, instance: int, peer_id: bytes) -> bytes:
+    def DisconnectFrom(self, instance: int, peer_id: bytes) -> int:
         """
         DisconnectFrom(instance: int, peer_id: bytes) -> bytes
 
@@ -42,7 +42,7 @@ class GoLibP2P:
         """
         ...
 
-    def GetConnectedPeers(self, instance: int) -> bytes:
+    def GetConnectedPeers(self, instance: int) -> int:
         """
         GetConnectedPeers(instance: int) -> bytes
 
@@ -50,7 +50,7 @@ class GoLibP2P:
         """
         ...
 
-    def GetRendezvousPeers(self, instance: int) -> bytes:
+    def GetRendezvousPeers(self, instance: int) -> int:
         """
         GetRendezvousPeers(instance: int) -> bytes
 
@@ -58,7 +58,7 @@ class GoLibP2P:
         """
         ...
 
-    def GetNodeAddresses(self, instance: int, arg: bytes) -> bytes:
+    def GetNodeAddresses(self, instance: int, arg: bytes) -> int:
         """
         GetNodeAddresses(instance: int, arg: bytes) -> bytes
 
@@ -72,13 +72,13 @@ class GoLibP2P:
         channel: bytes,
         data: bytes,
         data_len: int,
-    ) -> bytes:
+    ) -> int:
         """
         SendMessageToPeer(instance: int, channel: bytes, data: bytes, data_len: int) -> bytes
         """
         ...
 
-    def SubscribeToTopic(self, instance: int, topic_composite_key: bytes) -> bytes:
+    def SubscribeToTopic(self, instance: int, topic_composite_key: bytes) -> int:
         """
         SubscribeToTopic(instance: int, topic_composite_key: bytes) -> bytes
 
@@ -86,7 +86,7 @@ class GoLibP2P:
         """
         ...
     
-    def UnsubscribeFromTopic(self, instance: int, topic_composite_key: bytes) -> bytes:
+    def UnsubscribeFromTopic(self, instance: int, topic_composite_key: bytes) -> int:
         """
         UnsubscribeFromTopic(instance: int, topic_composite_key: bytes) -> bytes
 
@@ -102,7 +102,7 @@ class GoLibP2P:
         """
         ...
 
-    def PopMessages(self, instance: int) -> bytes:
+    def PopMessages(self, instance: int) -> int:
         """
         PopNMessages(instance: int) -> bytes
 
@@ -110,7 +110,7 @@ class GoLibP2P:
         """
         ...
 
-    def CloseNode(self, instance: int) -> bytes:
+    def CloseNode(self, instance: int) -> int:
         """
         CloseNode(instance: int) -> bytes
 

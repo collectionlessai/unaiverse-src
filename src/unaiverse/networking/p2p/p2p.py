@@ -14,9 +14,7 @@
 """
 import os
 import time
-import base64
 import logging
-import binascii
 import threading
 from .messages import Msg
 from .lib_types import TypeInterface
@@ -132,6 +130,9 @@ class P2P:
                  domain_name: Optional[str] = None,
                  tls_cert_path: Optional[str] = None,
                  tls_key_path: Optional[str] = None,
+                 dht_enabled: bool = False,
+                 dht_mode: str = "client",
+                 dht_keep: bool = True
                  ) -> None:
         """
         Initializes and starts a new libp2p node.
@@ -176,20 +177,43 @@ class P2P:
         logger.info(f"🚀 Attempting to initialize P2P Node with auto-assigned Instance ID: {self._instance}")
         
         os.makedirs(identity_dir, exist_ok=True)
-        # check if all the ingredients for TLS are provided if any is provided
-        if domain_name is not None or tls_cert_path is not None or tls_key_path is not None:
-            enable_tls = True
-            if domain_name is None or tls_cert_path is None or tls_key_path is None:
-                raise ValueError("If any TLS parameter is provided, all of domain_name, tls_cert_path, and tls_key_path must be provided.")
 
-        self._port = port
-        self._ips = ips if ips is not None else []
         self._enable_relay_client = enable_relay_client or enable_relay_service
-        self._enable_relay_service = enable_relay_service
-        self._knows_is_public = knows_is_public
-        self._max_connections = max_connections
         self._peer_id: Optional[str] = None
-        self._peer_map: Dict[str, Any] = {}  # Map to store peer info {peer_id: info}
+        
+        # TLS Validation Logic
+        has_custom_tls_args = (tls_cert_path is not None) or (tls_key_path is not None) or (domain_name is not None)
+        if has_custom_tls_args:
+             if domain_name is None or tls_cert_path is None or tls_key_path is None:
+                 raise ValueError("Custom TLS requires 'domain_name', 'tls_cert_path' and 'tls_key_path'.")
+        
+        use_auto_tls = enable_tls and not has_custom_tls_args
+        
+        # --- Build Configuration JSON ---
+        node_config = {
+            "identity_dir": identity_dir,
+            "predefined_port": port,
+            "listen_ips": ips,
+            "max_connections": max_connections,
+            "relay": {
+                "enable_client": self._enable_relay_client,
+                "enable_service": enable_relay_service,
+            },
+            "tls": {
+                "auto_tls": use_auto_tls,
+                "domain": domain_name if domain_name else "",
+                "cert_path": tls_cert_path if tls_cert_path else "",
+                "key_path": tls_key_path if tls_key_path else "",
+            },
+            "network": {
+                "force_public": knows_is_public,
+            },
+            "dht": {
+                "enabled": dht_enabled,
+                "mode": dht_mode if dht_enabled else "",
+                "keep": dht_keep
+            }
+        }
 
         logger.info(f"🐍 Creating Node (Instance ID: {self._instance})...")
         try:
@@ -197,17 +221,7 @@ class P2P:
             # Call the Go function
             result_ptr = P2P.libp2p.CreateNode(
                 P2P._type_interface.to_go_int(self._instance),
-                P2P._type_interface.to_go_string(identity_dir),
-                P2P._type_interface.to_go_int(port),
-                P2P._type_interface.to_go_json(self._ips),
-                P2P._type_interface.to_go_bool(enable_relay_client),
-                P2P._type_interface.to_go_bool(enable_relay_service),
-                P2P._type_interface.to_go_bool(knows_is_public),
-                P2P._type_interface.to_go_int(max_connections),
-                P2P._type_interface.to_go_bool(enable_tls),
-                P2P._type_interface.to_go_string(domain_name if domain_name else ""),
-                P2P._type_interface.to_go_string(tls_cert_path if tls_cert_path else ""),
-                P2P._type_interface.to_go_string(tls_key_path if tls_key_path else ""),
+                P2P._type_interface.to_go_json(node_config),
             )
             result = P2P._type_interface.from_go_ptr_to_json(result_ptr)
 
@@ -232,12 +246,8 @@ class P2P:
 
             self._peer_id = initial_addresses[0].split("/")[-1]
 
-            # Cache for the dynamic addresses property
-            self._address_cache: Optional[List[str]] = initial_addresses
-            self._address_cache_time: float = time.monotonic()
-
             logger.info(f"✅ [Instance {self._instance}] Node created with ID: {self._peer_id}")
-            logger.info(f"👂 [Instance {self._instance}] Listening on: {self._address_cache}")
+            logger.info(f"👂 [Instance {self._instance}] Listening on: {initial_addresses}")
             logger.info(f"🌐 [Instance {self._instance}] Publicly reachable: {self._is_public}")
 
             logger.info(f"🎉 [Instance {self._instance}] Node initialized successfully.")
@@ -292,8 +302,6 @@ class P2P:
             peer_info = result.get('message', {})
             logger.info(f"✅ Connection initiated to peer: {peer_info.get('ID', dest_peer_id)}")  # Use ID if available
 
-            # Optionally update internal peer map here
-            # self._peer_map[peer_info.get('ID')] = peer_info
             return peer_info
 
         except Exception as e:
@@ -337,20 +345,17 @@ class P2P:
 
             logger.info(f"✅ Successfully disconnected from {peer_id}")
 
-            # Optionally remove from internal peer map
-            # if peer_id in self._peer_map: del self._peer_map[peer_id]
-
         except Exception as e:
             logger.error(f"❌ Disconnection from {peer_id} failed: {e}")
             raise P2PError(f"Disconnection from {peer_id} failed") from e
 
-    def send_message_to_peer(self, channel: str, msg: Msg) -> None:
+    def send_message_to_peer(self, channel: str, msg_bytes: bytes) -> None:
         """
         Sends a direct message to a specific peer.
 
         Args:
             channel: The string identifying the channel for the communication.
-            msg: The message to send (Msg).
+            msg_bytes: The message to send (bytes).
 
         Raises:
             P2PError: If message sending fails (based on return code).
@@ -361,24 +366,16 @@ class P2P:
             logger.error("Invalid channel provided.")
             raise ValueError("Invalid channel provided.")
 
-        if not isinstance(msg, Msg):
-            logger.error("Invalid message provided (must be of type Msg).")
-            raise ValueError("Invalid message provided (must be of type Msg).")
-
         # Serialize the entire message object to bytes using Protobuf.
-        payload_bytes = msg.to_bytes()
-        payload_len = len(payload_bytes)
-        msg_content_type = msg.content_type
+        payload_len = len(msg_bytes)
         peer_id = channel.split("::dm:")[1].split('-')[0]  # Extract Peer ID from channel format
-
-        logger.info(f"📤 Sending message (type: {msg_content_type}, len: {payload_len}) to peer: {peer_id}...")
 
         # Call the Go function
         try:
             result_ptr = P2P.libp2p.SendMessageToPeer(
                 P2P._type_interface.to_go_int(self._instance),
                 P2P._type_interface.to_go_string(channel),
-                P2P._type_interface.to_go_bytes(payload_bytes),  # Pass bytes directly
+                P2P._type_interface.to_go_bytes(msg_bytes),  # Pass bytes directly
                 P2P._type_interface.to_go_int(payload_len),
             )
             result = P2P._type_interface.from_go_ptr_to_json(result_ptr)
@@ -391,20 +388,20 @@ class P2P:
                 logger.error(f"Failed to send direct message to '{peer_id}': {result.get('message', 'Unknown Go error')}")
                 raise P2PError(f"Failed to send direct message to '{peer_id}': {result.get('message', 'Unknown Go error')}")
 
-            logger.info(f"✅ Message sent successfully to {peer_id}.")
+            logger.info(f"✅ Successfully sent direct message to {peer_id[-5:]}.")
 
         except Exception as e:
             logger.error(f"❌ Sending direct message to {peer_id} failed: {e}")
             raise P2PError(f"Sending direct message to {peer_id} failed") from e
 
-    def broadcast_message(self, channel: str, msg: Msg) -> None:
+    def broadcast_message(self, channel: str, msg_bytes: bytes) -> None:
         """
         Broadcasts a message using PubSub to the node's own topic.
         Peers subscribed to this node's Peer ID topic will receive it.
 
         Args:
             channel: The Channel for this topic (e.g., owner_peer_id::ps:topic_name).
-            msg: The message to send (Msg).
+            msg_bytes: The message to send (bytes).
 
         Raises:
             P2PError: If broadcasting fails.
@@ -413,22 +410,16 @@ class P2P:
         """
         if not channel or not isinstance(channel, str):
             raise ValueError("Invalid channel provided.")
-        if not isinstance(msg, Msg):
-            raise ValueError("Invalid message provided (must be of type Msg).")
 
         # Serialize the entire message object to bytes using Protobuf.
-        payload_bytes = msg.to_bytes()
-        payload_len = len(payload_bytes)
-        msg_content_type = msg.content_type
-
-        logger.info(f"📢 Broadcasting message (type: {msg_content_type}, len: {payload_len}) to own topic ({self.peer_id})...")
+        payload_len = len(msg_bytes)
 
         # Call SendMessageToPeer with an empty peer_id string for broadcast
         try:
             result_ptr = P2P.libp2p.SendMessageToPeer(
                 P2P._type_interface.to_go_int(self._instance),
                 P2P._type_interface.to_go_string(channel),
-                P2P._type_interface.to_go_bytes(payload_bytes),
+                P2P._type_interface.to_go_bytes(msg_bytes),
                 P2P._type_interface.to_go_int(payload_len),
             )
 
@@ -446,14 +437,14 @@ class P2P:
             logger.error(f"❌ Broadcasting to {channel} failed: {e}")
             raise P2PError(f"Broadcasting to {channel} failed") from e
 
-        logger.info(f"✅ Message broadcast successfully to {channel}.")
+        logger.info(f"✅ Successfully broadcasted message on channel {channel}.")
 
-    def pop_messages(self) -> List[Msg]:
+    def pop_messages(self) -> List[bytes]:
         """
         Retrieves and removes the first message from the queue of each channel for this node instance.
 
         Returns:
-            A list of Msg objects. Returns an empty list if no messages were available.
+            A list of byte arrays (messages). Returns an empty list if no messages were available.
 
         Raises:
             P2PError: If popping messages failed internally in Go, or if data
@@ -491,69 +482,13 @@ class P2P:
 
             # Expecting a list of messages if not an error/empty dict
             if not isinstance(raw_result, list):
-
                 # This also covers the case where n=0 and Go returns "[]" which json.loads makes a list
                 # If it's not a list at this point, it's an unexpected format.
                 logger.error(f"[Instance {self._instance}] PopMessages: Unexpected response format, expected a list or "
                              f"specific state dictionary. Got: {type(raw_result)}")
                 raise P2PError(f"[Instance {self._instance}] PopMessages: Unexpected response format.")
 
-            # Process the list of message dictionaries
-            processed_messages: List[Msg] = []
-            for i, msg_dict in enumerate(raw_result):
-                try:
-                    if not isinstance(msg_dict, dict):
-                        logger.warning(f"[Instance {self._instance}] PopMessages: Item {i} in list is not a dict: {msg_dict}")
-                        continue  # Skip this malformed entry
-
-                    # Extract and validate required fields from the Go message structure
-                    # Go structure: {"from":"Qm...", "data":"BASE64_ENCODED_DATA"}
-                    verified_sender_id = msg_dict.get("from")
-                    base64_data = msg_dict.get("data")
-
-                    if not all([verified_sender_id is not None, base64_data is not None]):  # Type can be empty string
-                        logger.warning(f"[Instance {self._instance}] PopMessages: Message item {i} missing required fields (from, type, data): {msg_dict}")
-                        continue
-
-                    # Decode data
-                    decoded_data = base64.b64decode(base64_data)
-
-                    # Attempt to create the higher-level Msg object
-                    # This assumes Msg.from_bytes can parse your message protocol from decoded_data
-                    # and that Msg objects store sender, type, channel intrinsically or can be set.
-                    msg_obj = Msg.from_bytes(decoded_data)
-
-                    # --- CRITICAL SECURITY CHECK ---
-                    # Verify that the sender claimed inside the message payload
-                    # matches the cryptographically verified sender from the network layer.
-                    if msg_obj.sender != verified_sender_id:
-                        logger.error(f"SENDER MISMATCH! Network sender '{verified_sender_id}' does not match "
-                                     f"payload sender '{msg_obj.sender}'. Discarding message.")
-
-                        # In a real-world scenario, you might also want to penalize or disconnect
-                        # from a peer that sends such malformed/spoofed messages.
-                        continue  # Discard this message
-
-                    logger.debug(f"[Instance {self._instance}] Message popped from {verified_sender_id} on {msg_obj.channel}, "
-                                 f"content_type: {msg_obj.content_type}, len: {len(decoded_data)})")
-                    processed_messages.append(msg_obj)
-
-                except ValueError as ve:
-                    logger.error(f"Invalid message created, stopping. Error: {ve}")
-                    continue  # Skip problematic message
-                except (TypeError, binascii.Error) as decode_err:
-                    logger.error(f"[Instance {self._instance}] PopMessages: Failed to decode Base64 data for a message in batch: {decode_err}. Message dict: {msg_dict}")
-                    continue  # Skip problematic message
-                except Exception as msg_proc_err:  # Catch errors from Msg.from_bytes or attribute setting
-                    logger.error(f"[Instance {self._instance}] PopMessages: Error processing popped message item {i}: {msg_proc_err}. Message dict: {msg_dict}")
-                    continue  # Skip problematic message
-
-            if len(raw_result) > 0 and len(processed_messages) == 0:
-                logger.warning(f"[Instance {self._instance}] PopMessages: Received {len(raw_result)} messages from Go, but none could be processed into Msg objects.")
-
-                # This could indicate a persistent issue with message format or Msg class.
-
-            return processed_messages
+            return raw_result
 
         except P2PError:  # Re-raise P2PError directly
             raise
@@ -688,19 +623,16 @@ class P2P:
         return self._peer_id
 
     @property
-    def addresses(self) -> Optional[List[str]]:
+    def addresses(self) -> List[str]:
         """
-        Returns the list of multiaddresses the local node is listening on.
-        This property queries the Go layer directly, caching the result for performance.
+        Returns the LIVE list of multiaddresses from the Go engine.
+        Since Go caches this via events, this call is instant O(1).
         """
-        now = time.monotonic()
-        if self._address_cache is None or (now - self._address_cache_time > 5.0):
-            try:
-                self._address_cache = self.get_node_addresses()
-                self._address_cache_time = now
-            except P2PError as e:
-                logger.warning(f"Failed to refresh address cache, returning stale data. Error: {e}")
-        return self._address_cache  # This could be None if initial fetch failed or if the property was called before node creation
+        try:
+            return self.get_node_addresses()
+        except P2PError as e:
+            logger.warning(f"Failed to fetch addresses: {e}")
+            return []
 
     @property
     def is_public(self) -> Optional[bool]:
@@ -902,9 +834,6 @@ class P2P:
 
         # 4. Clear internal state
         self._peer_id = None
-        self._address_cache = None
-        self._address_cache_time = time.monotonic()
-        self._peer_map = {}
         with P2P._instance_lock:
             if close_all:
 

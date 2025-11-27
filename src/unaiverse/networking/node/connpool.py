@@ -13,6 +13,8 @@
                  Main Developers:    Stefano Melacci (Project Leader), Christian Di Maio, Tommaso Guidi
 """
 import math
+import base64
+import binascii
 from unaiverse.networking.p2p.messages import Msg
 from unaiverse.networking.p2p.p2p import P2P, P2PError
 from unaiverse.networking.node.tokens import TokenVerifier
@@ -377,7 +379,7 @@ class ConnectionPools:
 
         return self.pool_name_to_added_in_last_update, self.pool_name_to_removed_in_last_update
 
-    def get_messages(self, p2p_name: str, allowed_not_connected_peers: set | None = None):
+    def get_messages(self, p2p_name: str, allowed_not_connected_peers: set | None = None) -> list[Msg]:
         """Retrieves and verifies all messages from a specified P2P network.
 
         Args:
@@ -388,31 +390,66 @@ class ConnectionPools:
             A list of verified and processed message objects.
         """
         # Pop all messages
-        messages: list[Msg] = self[p2p_name].pop_messages()  # Pop all messages (list of messages - list[Msg])
-        ret = []
-        for m in messages:
-            if (m.sender in self.peer_id_to_pool_name or  # Check if expected sender
-                    (allowed_not_connected_peers is not None and m.sender in allowed_not_connected_peers)):
-                try:
-                    token_with_inspector_final_bit = m.piggyback
-                    token = token_with_inspector_final_bit[0:-1]
-                    inspector_mode = token_with_inspector_final_bit[-1]
-                    node_id, _ = self.verify_token(token, m.sender)
-                    if node_id is not None:
+        byte_messages: list[bytes] = self[p2p_name].pop_messages()  # Pop all messages
+        # Process the list of message dictionaries
+        processed_messages: list[Msg] = []
+        for i, msg_dict in enumerate(byte_messages):
+            try:
+                # Extract and validate required fields from the Go message structure
+                # Go structure: {"from":"Qm...", "data":"BASE64_ENCODED_DATA"}
+                verified_sender_id = msg_dict.get("from")
+                base64_data = msg_dict.get("data")
 
-                        # Replacing piggyback with the node ID and the flag telling if it is inspector
-                        m.piggyback = node_id + inspector_mode
-                        ret.append(m)
-                        if m.sender in self.peer_id_to_pool_name:
-                            self.peer_id_to_token[m.sender] = token
-                    else:
-                        print("Received a message missing expected info in the token payload (discarding it)")
-                except Exception as e:
-                    print(f"Received a message with an invalid piggyback token! (discarding it) [{e}]")
-            else:
-                if ConnectionPools.DEBUG:
-                    print("Received a message from a unknown sender (discarding it)")
-        return ret
+                # Decode data
+                decoded_data = base64.b64decode(base64_data)
+
+                # Attempt to create the higher-level Msg object
+                # This assumes Msg.from_bytes can parse your message protocol from decoded_data
+                # and that Msg objects store sender, type, channel intrinsically or can be set.
+                msg_obj = Msg.from_bytes(decoded_data)
+
+                # --- CRITICAL SECURITY CHECK ---
+                # Verify that the sender claimed inside the message payload
+                # matches the cryptographically verified sender from the network layer.
+                if msg_obj.sender != verified_sender_id:
+                    print(f"[DEBUG CONNECTIONS-POOL] SENDER MISMATCH! Network sender '{verified_sender_id}' does not match "
+                                f"payload sender '{msg_obj.sender}'. Discarding message.")
+
+                    # In a real-world scenario, you might also want to penalize or disconnect
+                    # from a peer that sends such malformed/spoofed messages.
+                    continue  # Discard this message
+                
+                # filter only valid messages to return
+                if (msg_obj.sender in self.peer_id_to_pool_name or  # Check if expected sender
+                    (allowed_not_connected_peers is not None and msg_obj.sender in allowed_not_connected_peers)):
+                    
+                    try:
+                        token_with_inspector_final_bit = msg_obj.piggyback
+                        token = token_with_inspector_final_bit[0:-1]
+                        inspector_mode = token_with_inspector_final_bit[-1]
+                        node_id, _ = self.verify_token(token, msg_obj.sender)
+                        if node_id is not None:
+                            # Replacing piggyback with the node ID and the flag telling if it is inspector
+                            msg_obj.piggyback = node_id + inspector_mode
+                            processed_messages.append(msg_obj)
+                            if msg_obj.sender in self.peer_id_to_pool_name:
+                                self.peer_id_to_token[msg_obj.sender] = token
+                        else:
+                            print("Received a message missing expected info in the token payload (discarding it)")
+                    except Exception as e:
+                        print(f"Received a message with an invalid piggyback token! (discarding it) [{e}]")
+            
+            except ValueError as ve:
+                print(f"[DEBUG CONNECTIONS-POOL]Invalid message created, stopping. Error: {ve}")
+                continue  # Skip problematic message
+            except (TypeError, binascii.Error) as decode_err:
+                print(f"[DEBUG CONNECTIONS-POOL] Failed to decode Base64 data for a message in batch: {decode_err}. Message dict: {msg_dict}")
+                continue  # Skip problematic message
+            except Exception as msg_proc_err:  # Catch errors from Msg.from_bytes or attribute setting
+                print(f"[DEBUG CONNECTIONS-POOL] Error processing popped message item {i}: {msg_proc_err}. Message dict: {msg_dict}")
+                continue  # Skip problematic message
+        
+        return processed_messages
 
     def get_added_after_updating(self, pool_name: str | None = None):
         """Retrieves the peers that were added in the last update cycle.
@@ -535,7 +572,7 @@ class ConnectionPools:
 
         # Sending direct message
         try:
-            p2p.send_message_to_peer(channel, msg)
+            p2p.send_message_to_peer(channel, msg_bytes=msg.to_bytes())
 
             # If the line above executes without raising an error, it was successful.
             return True
@@ -578,12 +615,13 @@ class ConnectionPools:
             return False
         return True
 
-    def unsubscribe(self, peer_id: str, channel: str):
+    def unsubscribe(self, peer_id: str, channel: str, default_p2p_name: str | None = None):
         """Unsubscribes from a topic/channel on a P2P network.
 
         Args:
             peer_id: The peer ID associated with the topic/channel.
             channel: The name of the channel to unsubscribe from.
+            default_p2p_name: An optional P2P network name to use if the peer's network is unknown.
 
         Returns:
             True if the unsubscription is successful, otherwise False.
@@ -598,7 +636,10 @@ class ConnectionPools:
         if p2p is None and peer_id in self.peer_id_to_p2p:
             p2p = self.peer_id_to_p2p[peer_id]
         if p2p is None:
-            return False
+            if default_p2p_name is not None:
+                p2p = self.p2p_name_to_p2p[default_p2p_name]
+            else:
+                return False
 
         try:
             p2p.unsubscribe_from_topic(channel)
@@ -607,7 +648,7 @@ class ConnectionPools:
         return True
 
     def publish(self, peer_id: str, channel: str,
-                content_type: str, content: bytes | dict | tuple | None = None):
+                content_type: str, content: bytes | dict | tuple | None = None, p2p: P2P | None = None):
         """Publishes a message to a topic/channel on a P2P network.
 
         Args:
@@ -642,7 +683,7 @@ class ConnectionPools:
 
         # Sending message via GossipSub
         try:
-            p2p.broadcast_message(channel, msg)
+            p2p.broadcast_message(channel, msg_bytes=msg.to_bytes())
 
             # If the line above executes without raising an error, it was successful.
             return True

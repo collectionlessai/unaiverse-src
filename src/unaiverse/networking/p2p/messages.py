@@ -13,11 +13,17 @@
                  Main Developers:    Stefano Melacci (Project Leader), Christian Di Maio, Tommaso Guidi
 """
 import io
+import os
 import gzip
 import json
 import torch
+import mimetypes
 from PIL import Image
+from typing import Any
+from dataclasses import dataclass
 from datetime import datetime, timezone
+from google.protobuf.json_format import MessageToDict, ParseDict
+from google.protobuf.struct_pb2 import Value, ListValue, NULL_VALUE
 
 # Import the Protobuf-generated module
 try:
@@ -25,6 +31,30 @@ try:
 except ImportError:
     print("Error: message_pb2.py not found. Please compile the .proto file first.")
     raise
+
+
+@dataclass
+class FileContainer:
+    """Helper class to distinguish a "File" from a generic byte string or text."""
+    content: bytes | str
+    filename: str
+    mime_type: str
+    
+    @classmethod
+    def from_path(cls, file_path: str):
+        # 1. Guess MIME type based on extension
+        mime_type, _ = mimetypes.guess_type(file_path)
+        if mime_type is None:
+            mime_type = "application/octet-stream"  # Safe fallback for binary
+
+        # 2. Extract clean filename
+        filename = os.path.basename(file_path)
+
+        # 3. Read file safely as BYTES (crucial for Protobuf)
+        with open(file_path, "rb") as f:
+            file_bytes = f.read()
+
+        return cls(content=file_bytes, filename=filename, mime_type=mime_type)
 
 
 class Msg:
@@ -46,14 +76,15 @@ class Msg:
     INSPECT_CMD = "inspect_cmd"
     WORLD_AGENTS_LIST = "world_agents_list"
     CONSOLE_AND_BEHAV_STATUS = "console_and_behav_status"
-    STATS_UPDATE = "stats_update"
+    STATS_UPDATE = "stats_update"  # agent -> world
     STATS_REQUEST = "stats_request"
+    STATS_RESPONSE = 'stats_response'  # world -> agent
 
     # Collections
     CONTENT_TYPES = {PROFILE, WORLD_APPROVAL, AGENT_APPROVAL, PROFILE_REQUEST, ADDRESS_UPDATE,
                      STREAM_SAMPLE, ACTION_REQUEST, ROLE_SUGGESTION, HSM, MISC, GET_CV_FROM_ROOT,
                      BADGE_SUGGESTIONS, INSPECT_ON, INSPECT_CMD, WORLD_AGENTS_LIST, CONSOLE_AND_BEHAV_STATUS,
-                     STATS_UPDATE, STATS_REQUEST}
+                     STATS_UPDATE, STATS_REQUEST, STATS_RESPONSE}
 
     def __init__(self,
                  sender: str | None = None,
@@ -104,8 +135,9 @@ class Msg:
         # Route the content to the correct builder
         if content_type == Msg.STREAM_SAMPLE:
             self._build_stream_sample_content(content)
+        elif content_type == Msg.STATS_UPDATE:
+            self._build_stats_update_content(content)
         else:
-
             # All other structured types use the generic json_content field
             self._build_json_content(content)
 
@@ -164,6 +196,8 @@ class Msg:
         payload_type = self._proto_msg.WhichOneof("content")
         if payload_type == "stream_sample":
             self._decoded_content = self._parse_stream_sample_content()
+        elif payload_type == "stats_update":
+            self._decoded_content = self._parse_stats_update_content()
         elif payload_type == "json_content":
             self._decoded_content = self._parse_json_content()
         else:
@@ -226,6 +260,13 @@ class Msg:
 
             elif isinstance(data, str):
                 stream_sample_pb.data.text_data.data = data
+            
+            elif isinstance(data, FileContainer):
+                # Auto-convert string content to bytes if needed
+                raw_bytes = data.content.encode('utf-8') if isinstance(data.content, str) else data.content
+                stream_sample_pb.data.file_data.content = raw_bytes
+                stream_sample_pb.data.file_data.filename = data.filename
+                stream_sample_pb.data.file_data.mime_type = data.mime_type
 
     def _parse_stream_sample_content(self) -> dict:
         """
@@ -258,6 +299,14 @@ class Msg:
 
             elif payload_type == "text_data":
                 data = data_payload.text_data.data
+            
+            elif payload_type == "file_data":
+                f_data = data_payload.file_data
+                data = FileContainer(
+                    content=f_data.content,
+                    filename=f_data.filename,
+                    mime_type=f_data.mime_type
+                )
 
             # Build the final Python dictionary for this sample
             py_dict[name] = {
@@ -266,3 +315,73 @@ class Msg:
                 'data_uuid': sample_pb.data_uuid if sample_pb.HasField("data_uuid") else None
             }
         return py_dict
+    
+    def _py_value_to_proto_value(self, py_val: Any) -> Value:
+        """Helper to convert a Python type into a google.protobuf.Value."""
+        if py_val is None:
+            return Value(null_value=NULL_VALUE)
+        if isinstance(py_val, (int, float)):
+            return Value(number_value=py_val)
+        if isinstance(py_val, str):
+            return Value(string_value=py_val)
+        if isinstance(py_val, bool):
+            return Value(bool_value=py_val)
+        if isinstance(py_val, list):
+            lv = ListValue()
+            for item in py_val:
+                lv.values.append(self._py_value_to_proto_value(item))
+            return Value(list_value=lv)
+        if isinstance(py_val, dict):
+            # This is recursive for dicts/structs
+            s = Value(struct_value={})
+            ParseDict(py_val, s.struct_value)
+            return s
+        
+        # Fallback
+        return Value(string_value=str(py_val))
+
+    def _build_stats_update_content(self, payload_list: list):
+        """Builds the StatBatch message from a List[Dict]."""
+        batch_pb = self._proto_msg.stats_update
+        
+        for update_dict in payload_list:
+            update_pb = batch_pb.updates.add()
+            update_pb.peer_id = update_dict['peer_id']
+            update_pb.stat_name = update_dict['stat_name']
+            update_pb.timestamp = int(update_dict['timestamp']) # Ensure int
+            
+            # Convert the Python 'value' to a Protobuf 'Value'
+            py_value = update_dict['value']
+            update_pb.value.CopyFrom(self._py_value_to_proto_value(py_value))
+
+    def _proto_value_to_py_value(self, proto_val: Value) -> Any:
+        """Helper to convert a google.protobuf.Value into a Python type."""
+        kind = proto_val.WhichOneof("kind")
+        if kind == "null_value":
+            return None
+        if kind == "number_value":
+            return proto_val.number_value
+        if kind == "string_value":
+            return proto_val.string_value
+        if kind == "bool_value":
+            return proto_val.bool_value
+        if kind == "list_value":
+            return [self._proto_value_to_py_value(v) for v in proto_val.list_value.values]
+        if kind == "struct_value":
+            # Use the helper to convert a Struct to a dict
+            return MessageToDict(proto_val.struct_value)
+        return None
+
+    def _parse_stats_update_content(self) -> list:
+        """Parses the StatBatch message back into a List[Dict]."""
+        py_list = []
+        batch_pb = self._proto_msg.stats_update
+        
+        for update_pb in batch_pb.updates:
+            py_list.append({
+                "peer_id": update_pb.peer_id,
+                "stat_name": update_pb.stat_name,
+                "timestamp": update_pb.timestamp,
+                "value": self._proto_value_to_py_value(update_pb.value)
+            })
+        return py_list

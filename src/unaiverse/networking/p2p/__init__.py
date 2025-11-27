@@ -104,8 +104,7 @@ _shared_lib.InitializeLibrary.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_i
 _shared_lib.InitializeLibrary.restype = None
 
 # Node Lifecycle & Info
-_shared_lib.CreateNode.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_int,
-                                   ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p]
+_shared_lib.CreateNode.argtypes = [ctypes.c_int, ctypes.c_char_p]
 _shared_lib.CreateNode.restype = ctypes.c_void_p  # Treat returned *C.char as opaque pointer
 
 _shared_lib.CloseNode.argtypes = [ctypes.c_int]

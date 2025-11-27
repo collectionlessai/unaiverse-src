@@ -123,6 +123,12 @@ class Clock:
         """
         passed_since_beginning = datetime.now(timezone.utc).timestamp() - self.__local_initial_t
         return self.__global_initial_t + passed_since_beginning if not passed else passed_since_beginning
+    
+    def get_time_ms(self) -> int:
+        """
+        Get the current time as an integer number of milliseconds since the Unix epoch.
+        """
+        return int(self.get_time() * 1000)
 
     def get_time_as_string(self) -> str:
         """Get the current time as a string (ISO format).

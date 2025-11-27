@@ -37,7 +37,7 @@ class NodeProfile:
             raise ValueError("Missing static profile data")
 
         # Forcing key order (important! otherwise the hash operation will not be consistent with the one on the server)
-        cv = [{k: _cv[k] for k in sorted(_cv)} for _cv in cv]
+        cv = [{k: _cv[k] for k in sorted(_cv)} for _cv in sorted(cv, key=lambda x: x['last_edit_utc'])]
 
         self._profile_data = \
             {
@@ -94,7 +94,6 @@ class NodeProfile:
                         "streams_count": None
                     },
                     "world_roles_fsm": None,  # Dict of FSMs for world roles
-                    "world_stats_dynamic": None,
                     "hidden": None
                 },
                 'cv': cv
