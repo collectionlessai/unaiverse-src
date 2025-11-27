@@ -11,6 +11,7 @@ from setuptools.command.build_ext import build_ext
 
 GO_SOURCE_NAME = 'lib.go'
 HASH_FILE_SUFFIX = '.sha256'
+BUILD_PURE_WHEEL = os.environ.get("UNAI_BUILD_PURE", "0") == "1"
 
 def get_ext_filename_with_path():
     system = platform.system()
@@ -100,15 +101,23 @@ class GoBuildExtCommand(build_ext):
                        cwd=go_dir, check=False)
 
 
-# Fake extension only to mark wheel as platform-dependent
-go_extension = Extension(
-    "unaiverse.networking.p2p.unailib",
-    sources=[],  # dummy
-)
+if BUILD_PURE_WHEEL:
+    # If building for Pyodide/Pure Python, include NO extensions
+    ext_modules = []
+    cmdclass = {}
+    print("--- Building Pure Python Wheel (No Go Extensions) ---")
+else:
+    # Standard native build with Go extension
+    go_extension = Extension(
+        "unaiverse.networking.p2p.unailib",
+        sources=[],
+    )
+    ext_modules = [go_extension]
+    cmdclass = {'build_ext': GoBuildExtCommand}
 
 setup(
-    cmdclass={'build_ext': GoBuildExtCommand},
-    ext_modules=[go_extension],
+    cmdclass=cmdclass,
+    ext_modules=ext_modules,
     package_data={},
     zip_safe=False,
 )
