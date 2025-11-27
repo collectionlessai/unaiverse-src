@@ -49,6 +49,31 @@ jobs:
           name: sdist-artifact
           path: dist/*.tar.gz
 
+  build_pure_wheel:
+    name: Build Pure Python Wheel (Pyodide)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Build Pure Wheel
+        env:
+          UNAI_BUILD_PURE: "1"
+        run: |
+          pip install build
+          python -m build --wheel
+
+      - name: Upload Pure Wheel artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-wheels-pure
+          path: dist/*.whl
+
   publish_package:
     name: Publish to PyPI
     needs: [build_wheels, build_sdist]
