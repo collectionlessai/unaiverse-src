@@ -207,9 +207,9 @@ class Node:
         # Here you can setup max_instances, max_channels, enable_logging at libp2p level etc.
         P2P.setup_library(enable_logging=os.getenv("NODE_LIBP2PLOG", "0") == "1")
 
-        offer_relay_facilities = self.node_type is Node.WORLD  # Only world nodes offer relay facilities
         # Helper to parse env bools
         env_is_public = os.getenv("NODE_IS_PUBLIC", "0") == "1"
+        env_is_public_relay = os.getenv("NODE_IS_PUBLIC_RELAY", "0") == "1"
         env_use_tls = os.getenv("NODE_USE_TLS", "0") == "1"
         env_start_port = int(os.getenv("NODE_STARTING_PORT", "0"))
         env_domain = os.getenv("DOMAIN", None)
@@ -223,7 +223,7 @@ class Node:
             "port": env_start_port,
             "ips": None,
             "enable_relay_client": allow_connection_through_relay,
-            "enable_relay_service": offer_relay_facilities,
+            "enable_relay_service": env_is_public_relay,
             "knows_is_public": env_is_public,
             "max_connections": 1000,
             "enable_tls": env_use_tls,
@@ -240,7 +240,7 @@ class Node:
             "port": (env_start_port + 4) if env_start_port > 0 else 0,
             "ips": None,
             "enable_relay_client": allow_connection_through_relay,
-            "enable_relay_service": offer_relay_facilities,
+            "enable_relay_service": self.node_type is Node.WORLD,
             "knows_is_public": env_is_public,
             "max_connections": 1000,
             "enable_tls": env_use_tls,
