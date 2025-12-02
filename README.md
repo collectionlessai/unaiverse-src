@@ -263,10 +263,10 @@ node.ask_to_get_in_touch(node_name="Test0")
 node.run(max_time=10.0)
 
 # Printing the last received data from the ResNet agent
-out = agent.get_last_streamed_data('ResNetAgent')[0]
+out = agent.get_last_streamed_data('Test0')[0]
 print(f"Received response: {out}")  # Now we expect a textual response
 print("")
-print(f"Notice: instead of using this agent, you can also: search for the ResNet node (ResNetAgent) "
+print(f"Notice: instead of using this agent, you can also: search for the ResNet node (Test0) "
       f"in the UNaIVERSE portal, connect to it using our in-browser agent, select a picture from "
       f"your disk, send it to the agent, get back the text response!")
 ```
