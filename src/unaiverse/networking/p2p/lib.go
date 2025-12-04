@@ -1415,9 +1415,9 @@ func CreateNode(
 	// --- 4. Libp2p Options Assembly ---
 	tlsMode := "none"
 	if cfg.TLS.AutoTLS {
-		tlsMode = "domain"
-	} else if cfg.TLS.Domain != "" {
 		tlsMode = "autotls"
+	} else if cfg.TLS.Domain != "" {
+		tlsMode = "domain"
 	}
 	listenAddrs, err := getListenAddrs(cfg.ListenIPs, cfg.PredefinedPort, tlsMode)
 	if err != nil {
@@ -1571,19 +1571,6 @@ func CreateNode(
 		logger.Debugf("[GO]   - Instance %d: Provided host to AutoTLS cert manager.\n", instanceIndex)
 	}
 
-	// --- PubSub Initialization ---
-	if err := setupPubSub(ni); err != nil {
-		return jsonErrorResponse(fmt.Sprintf("Instance %d: Failed to create PubSub", instanceIndex), err)
-	}
-	logger.Debugf("[GO] ✅ Instance %d: PubSub (GossipSub) initialized.\n", instanceIndex)
-
-	// --- Setup Notifiers and Handlers ---
-	setupNotifiers(ni)
-	logger.Debugf("[GO] 🔔 Instance %d: Registered network event notifier.\n", instanceIndex)
-
-	setupDirectMessageHandler(ni)
-	logger.Debugf("[GO] ✅ Instance %d: Direct message handler set up.\n", instanceIndex)
-
 	// Subscribe to Identification Completed Event.
 	identSub, err := ni.host.EventBus().Subscribe(new(event.EvtPeerIdentificationCompleted))
 	if err != nil {
@@ -1596,11 +1583,11 @@ func CreateNode(
 	logger.Debugf("[GO] ⏳ Instance %d: Waiting for address discovery and NAT to settle...\n", instanceIndex)
 
 	// Subscribe to the two key events we need to wait for.
-	reachabilitySub, err := ni.host.EventBus().Subscribe(new(event.EvtLocalReachabilityChanged))
+	reachSub, err := ni.host.EventBus().Subscribe(new(event.EvtLocalReachabilityChanged))
 	if err != nil {
 		return jsonErrorResponse("Failed to subscribe to reachability events", err)
 	}
-	defer reachabilitySub.Close()
+	defer reachSub.Close()
 
 	addrSub, err := ni.host.EventBus().Subscribe(new(event.EvtLocalAddressesUpdated))
 	if err != nil {
@@ -1609,39 +1596,20 @@ func CreateNode(
 	defer addrSub.Close()
 
 	// --- State flags for our unified wait loop ---
-	var reachabilityKnown bool = cfg.Network.ForcePublic
-	var addressesFinalized bool = !(cfg.TLS.Domain != "" || cfg.TLS.AutoTLS)
-
-	// If we have to wait for addresses, check if we already have them from a previous run or cache
-	if !addressesFinalized {
-		for _, addr := range ni.host.Addrs() {
-			addrStr := addr.String()
-			// Check for DNS4/6 explicitly, as IsPublicAddr implies IP logic
-			isDNS := strings.Contains(addrStr, "/dns4/") || strings.Contains(addrStr, "/dns6/")
-			isPublicIP := manet.IsPublicAddr(addr)
-
-			// We accept it if it's a TLS address AND (It's a Public IP OR It's a DNS address)
-			if (isPublicIP || isDNS) && strings.Contains(addrStr, "/tls/") && !strings.Contains(addrStr, "*") {
-				addressesFinalized = true
-				logger.Debugf("[GO] ✅ Instance %d: WSS address found during pre-check: %s", instanceIndex, addrStr)
-				break
-			}
-		}
-	}
-
-	// --- ROBUST WAIT LOOP ---
-	// We use a ticker to check for conditions that might not trigger events (or if we missed them).
-	// We also refuse to exit simply because "Reachability is known" if that reachability is Private
-	// and we haven't found a relay yet.
-	timeout := 30 * time.Second
+	waitingForWSS := cfg.TLS.Domain != "" || cfg.TLS.AutoTLS
+	timeoutCtx, timeoutCancel := context.WithTimeout(ni.ctx, 30*time.Second)
+    defer timeoutCancel()
+	// ticker for polling
 	ticker := time.NewTicker(500 * time.Millisecond)
-	defer ticker.Stop()
+    defer ticker.Stop()
+	logger.Debugf("[GO] ⏳ Instance %d: Entering wait loop (WSS Required: %t)...", instanceIndex, waitingForWSS)
 
-WAIT_LOOP:
+	WAIT_LOOP:
 	for {
 		// 1. Snapshot Current Status
 		hasRelayAddr := false
 		hasPublicAddr := false
+		wssConditionMet := false
 		currentAddrs := ni.host.Addrs()
 
 		for _, addr := range currentAddrs {
@@ -1655,93 +1623,72 @@ WAIT_LOOP:
 			if manet.IsPublicAddr(addr) {
 				hasPublicAddr = true
 			}
+			// 3. Check for WSS (Strict Mode)
+			if waitingForWSS {
+				if cfg.TLS.Domain != "" {
+					// --- CASE A: CUSTOM DOMAIN ---
+					// The address factory MUST have rewritten this to /dns4/<YourDomain>/...
+					if strings.Contains(addrStr, "/dns4/") && strings.Contains(addrStr, cfg.TLS.Domain) && strings.Contains(addrStr, "/tls/ws") {
+						wssConditionMet = true
+					}
+				} else if cfg.TLS.AutoTLS {
+					// --- CASE B: AUTOTLS ---
+					// The address MUST contain /sni/ AND it must NOT be the wildcard (*).
+					// Initial: /ip4/.../tls/sni/*.libp2p.direct/ws
+					// Final:   /ip4/.../tls/sni/12D3.libp2p.direct/ws
+					if strings.Contains(addrStr, "/tls/sni/") && strings.Contains(addrStr, "/ws") && !strings.Contains(addrStr, "*") {
+						wssConditionMet = true
+					}
+				}
+			}
 		}
 
-		// 2. Check Exit Conditions
-		// We only exit if we have finalized the specific WSS requirements (if any).
-		if addressesFinalized {
-			// A. Success: We are Public (or forced public)
-			if isPublic {
-				logger.Debugf("[GO] ✅ Instance %d: Ready (Public Reachability).", instanceIndex)
-				break WAIT_LOOP
-			}
+		// Check exit conditions
+		isWSSReady := !waitingForWSS || wssConditionMet
+		isConnectivityReady := isPublic || hasPublicAddr || hasRelayAddr
 
-			// B. Success: We found a Public IP (even if AutoNAT is silent/slow)
-			if hasPublicAddr {
-				isPublic = true // Infer public
-				logger.Debugf("[GO] ✅ Instance %d: Ready (Found Public IP).", instanceIndex)
-				break WAIT_LOOP
-			}
-
-			// C. Success: We are Private (or unknown) but we have secured a Relay
-			if hasRelayAddr {
-				// We don't change isPublic to true, because we are effectively private-but-reachable
-				logger.Debugf("[GO] ✅ Instance %d: Ready (Relay Secured).", instanceIndex)
-				break WAIT_LOOP
-			}
-			
-			// D. If Reachability is explicitly Private, but we have NO relay yet:
-			// We CONTINUE waiting. The old code broke here and returned empty addresses.
-		}
-
-		select {
-		// --- Event 1: Reachability Assessed ---
-		case evt := <-reachabilitySub.Out():
-			reachabilityEvt, ok := evt.(event.EvtLocalReachabilityChanged)
-			if !ok {
-				continue
-			}
-			if reachabilityEvt.Reachability == network.ReachabilityPublic {
+		if isWSSReady && isConnectivityReady {
+			// Determine final public status for the return object
+			if !isPublic && hasPublicAddr {
 				isPublic = true
-			} else {
-				isPublic = false
 			}
-			reachabilityKnown = true
-			logger.Debugf("[GO] 🔔 Instance %d: Reachability assessed. Status: %s", instanceIndex, reachabilityEvt.Reachability)
+			logger.Debugf("[GO] ✅ Instance %d: Ready! (Public: %t, Relay-ready: %t, WSS-Ready: %t)", instanceIndex, isPublic, hasRelayAddr, isWSSReady)
+			break WAIT_LOOP
+		}
 
-		// --- Event 2: Addresses Updated (for WSS) ---
-		case evt := <-addrSub.Out():
-			// Only useful if we are waiting for WSS
-			if addressesFinalized {
-				continue
+		// Wait for events or timeout
+		select {
+		case <-timeoutCtx.Done():
+			// TIMEOUT STRATEGY:
+			// If we have *any* valid addresses, we return success with a warning.
+			finalAddrs, _ := goGetNodeAddresses(ni, "")
+			if len(finalAddrs) > 0 {
+				logger.Warnf("[GO] ⚠️ Instance %d: Initialization timed out. (WSS-Ready: %t, Public: %t). Proceeding with %d addresses.", 
+					instanceIndex, isWSSReady, isPublic, len(finalAddrs))
+				break WAIT_LOOP
 			}
-			addrsEvent, ok := evt.(event.EvtLocalAddressesUpdated)
-			if !ok {
-				continue
-			}
-			for _, updatedAddr := range addrsEvent.Current {
-				addr := updatedAddr.Address
-				addrStr := updatedAddr.Address.String()
-				if manet.IsPublicAddr(addr) && strings.Contains(addrStr, "/tls/") && !strings.Contains(addrStr, "*") {
-					logger.Debugf("[GO] ✅ Instance %d: Final WSS address found: %s", instanceIndex, addrStr)
-					addressesFinalized = true
-					break
+			// Fail hard if we have nothing.
+			errMsg := fmt.Sprintf("Timed out. (WSS-Ready: %t, Public: %t, Relay: %t)", isWSSReady, isPublic, hasRelayAddr)
+			return jsonErrorResponse(errMsg, nil)
+
+		case evt := <-reachSub.Out():
+			rEvt, ok := evt.(event.EvtLocalReachabilityChanged)
+			if ok {
+				if rEvt.Reachability == network.ReachabilityPublic {
+					isPublic = true
+				} else {
+					isPublic = false
 				}
 			}
 
-		// --- Periodic Check ---
+		case <-addrSub.Out():
+			continue // Trigger re-evaluation
+
 		case <-ticker.C:
-			// The loop logic at the top handles the check
-			continue
-
-		// --- Failsafes ---
-		case <-time.After(timeout):
-			// TIMEOUT STRATEGY:
-			// If we have *any* valid addresses, we proceed with success but log a warning.
-			// This fixes the "AutoNAT silent" bug.
-			finalAddrs, _ := goGetNodeAddresses(ni, "")
-			if len(finalAddrs) > 0 {
-				logger.Warnf("[GO] ⚠️ Instance %d: Initialization timed out (AutoNAT/Relay slow), but valid addresses exist. Proceeding.", instanceIndex)
-				break WAIT_LOOP // Break manually to proceed to return success
-			}
-
-			// If we have absolutely nothing, we fail.
-			errMsg := fmt.Sprintf("Timed out after %s waiting for usable addresses. (Reachability: %t, WSS: %t)",
-				timeout, reachabilityKnown, addressesFinalized)
-			return jsonErrorResponse(errMsg, nil)
+			continue // Trigger re-evaluation
 
 		case <-ni.ctx.Done():
-			return jsonErrorResponse("Node creation cancelled while waiting for address discovery", nil)
+			return jsonErrorResponse("Node context cancelled during init", nil)
 		}
 	}
 
@@ -1754,6 +1701,21 @@ WAIT_LOOP:
 		go handleAddressUpdateEvents(ni, cacheSub)
 		logger.Debugf("[GO] 🧠 Instance %d: Address cache background listener started.", instanceIndex)
 	}
+
+	// --- PubSub Initialization ---
+	if err := setupPubSub(ni); err != nil {
+		return jsonErrorResponse(fmt.Sprintf("Instance %d: Failed to create PubSub", instanceIndex), err)
+	}
+	logger.Debugf("[GO] ✅ Instance %d: PubSub (GossipSub) initialized.\n", instanceIndex)
+
+	// --- Setup Notifiers and Handlers ---
+	setupNotifiers(ni)
+	logger.Debugf("[GO] 🔔 Instance %d: Registered network event notifier.\n", instanceIndex)
+
+	setupDirectMessageHandler(ni)
+	logger.Debugf("[GO] ✅ Instance %d: Direct message handler set up.\n", instanceIndex)
+
+	
 
 	// --- Close DHT if needed ---
 	if !cfg.DHT.Keep {
