@@ -458,6 +458,101 @@ func setupNotifiers(ni *NodeInstance) {
 	})
 }
 
+// onPeerIdentified checks protocols and adds the peer if they match.
+// It retrieves the direction from the active network connection.
+func onPeerIdentified(ni *NodeInstance, evt event.EvtPeerIdentificationCompleted) {
+	// 1. Protocol Check (The Gatekeeper)
+	// fast and race-free: we check the list provided by the event itself.
+	supportsChat := false
+	for _, p := range evt.Protocols {
+		if string(p) == UnaiverseChatProtocol {
+			supportsChat = true
+			break
+		}
+	}
+
+	if !supportsChat {
+		return // Ignore irrelevant peers
+	}
+
+	// 2. Determine Direction
+	// We use the connection object provided by the event.
+	direction := "unknown"
+	if evt.Conn != nil {
+		switch evt.Conn.Stat().Direction {
+		case network.DirInbound:
+			direction = "incoming"
+		case network.DirOutbound:
+			direction = "outgoing"
+		}
+	}
+
+	// // 3. Gather Addresses (Reuse your existing logic here)
+	// candidateAddrs := make([]ma.Multiaddr, 0)
+	// candidateAddrs = append(candidateAddrs, conn.RemoteMultiaddr())
+	// candidateAddrs = append(candidateAddrs, ni.host.Peerstore().Addrs(pid)...)
+	
+	// // ... (Insert your existing address deduplication logic here) ...
+	// finalPeerAddrs := candidateAddrs // Simplified for snippet
+
+	// 3. Gather Addresses
+	// Combine the addresses the peer reported (ListenAddrs) 
+	// with the actual address we are connected to (RemoteMultiaddr).
+	var newAddrs []ma.Multiaddr
+	
+	// Start with the address we are actually using
+	if evt.Conn != nil {
+		newAddrs = append(newAddrs, evt.Conn.RemoteMultiaddr())
+	}
+	// Add the addresses they claim to have
+	newAddrs = append(newAddrs, evt.ListenAddrs...)
+
+	// 4. Update the Map
+	ni.peersMutex.Lock()
+	defer ni.peersMutex.Unlock()
+
+	existing, exists := ni.connectedPeers[evt.Peer]
+	if !exists {
+		// --- CASE A: New Peer ---
+		logger.Infof("[GO] 🤝 Instance %d: New UNaIVERSE ConnectedPeer: %s (Dir: %s)", 
+			ni.instanceIndex, evt.Peer, direction)
+
+		ni.connectedPeers[evt.Peer] = ExtendedPeerInfo{
+			ID:          evt.Peer,
+			Addrs:       newAddrs,
+			ConnectedAt: time.Now(), // Set this ONCE
+			Direction:   direction,
+			Misc:        0,
+		}
+	} else {
+		// --- CASE B: Existing Peer (Merge) ---
+		logger.Debugf("[GO] 🔄 Instance %d: Updating existing ConnectedPeer %s", ni.instanceIndex, evt.Peer)
+
+		// 1. Merge Addresses (Deduplicate)
+		updatedAddrs := make(map[string]struct{})
+		for _, a := range existing.Addrs {
+			updatedAddrs[a.String()] = struct{}{}
+		}
+		for _, a := range newAddrs {
+			updatedAddrs[a.String()] = struct{}{}
+		}
+		finalAddrs := make([]ma.Multiaddr, 0, len(updatedAddrs))
+		for addrStr := range updatedAddrs {
+			addr, err := ma.NewMultiaddr(addrStr)
+			if err == nil {
+				finalAddrs = append(finalAddrs, addr)
+			}
+		}
+		existing.Addrs = finalAddrs
+
+		// 2. Update Direction?
+
+		// 3. Write back
+		// Note: We DO NOT update ConnectedAt. We want to know when we *first* met them.
+		ni.connectedPeers[evt.Peer] = existing
+	}
+}
+
 // handleIdentificationEvents is a long-running loop that processes
 // peer identification events. It must be called as a goroutine.
 func handleIdentificationEvents(ni *NodeInstance, sub event.Subscription) {
@@ -516,6 +611,9 @@ func handleAddressUpdateEvents(ni *NodeInstance, sub event.Subscription) {
 			newAddrs := make([]ma.Multiaddr, len(evt.Current))
 			newAddrsStr := make([]string, len(evt.Current))
 			for i, updatedAddr := range evt.Current {
+				if strings.HasPrefix(updatedAddr.Address.String(), "/p2p-circuit/") {
+					continue
+				}
 				newAddrs[i] = updatedAddr.Address
 				newAddrsStr[i] = updatedAddr.Address.String()
 			}
@@ -526,74 +624,6 @@ func handleAddressUpdateEvents(ni *NodeInstance, sub event.Subscription) {
             
 			logger.Debugf("[GO] 🔄 Instance %d: Updated local address cache. Addrs: %v", ni.instanceIndex, newAddrsStr)
 		}
-	}
-}
-
-// onPeerIdentified checks protocols and adds the peer if they match.
-// It retrieves the direction from the active network connection.
-func onPeerIdentified(ni *NodeInstance, evt event.EvtPeerIdentificationCompleted) {
-	// 1. Protocol Check (The Gatekeeper)
-	// fast and race-free: we check the list provided by the event itself.
-	supportsChat := false
-	for _, p := range evt.Protocols {
-		if string(p) == UnaiverseChatProtocol {
-			supportsChat = true
-			break
-		}
-	}
-
-	if !supportsChat {
-		return // Ignore irrelevant peers
-	}
-
-	// 2. Determine Direction
-	// We use the connection object provided by the event.
-	direction := "unknown"
-	if evt.Conn != nil {
-		switch evt.Conn.Stat().Direction {
-		case network.DirInbound:
-			direction = "incoming"
-		case network.DirOutbound:
-			direction = "outgoing"
-		}
-	}
-
-	// // 3. Gather Addresses (Reuse your existing logic here)
-	// candidateAddrs := make([]ma.Multiaddr, 0)
-	// candidateAddrs = append(candidateAddrs, conn.RemoteMultiaddr())
-	// candidateAddrs = append(candidateAddrs, ni.host.Peerstore().Addrs(pid)...)
-	
-	// // ... (Insert your existing address deduplication logic here) ...
-	// finalPeerAddrs := candidateAddrs // Simplified for snippet
-
-	// 3. Gather Addresses
-	// Combine the addresses the peer reported (ListenAddrs) 
-	// with the actual address we are connected to (RemoteMultiaddr).
-	var finalAddrs []ma.Multiaddr
-	
-	// Start with the address we are actually using
-	if evt.Conn != nil {
-		finalAddrs = append(finalAddrs, evt.Conn.RemoteMultiaddr())
-	}
-	// Add the addresses they claim to have
-	finalAddrs = append(finalAddrs, evt.ListenAddrs...)
-
-	// 4. Update the Map
-	ni.peersMutex.Lock()
-	defer ni.peersMutex.Unlock()
-
-	// Log if this is a new meaningful connection
-	if _, exists := ni.connectedPeers[evt.Peer]; !exists {
-		logger.Infof("[GO] 🤝 Instance %d: Peer Identified & Verified: %s (Dir: %s)", 
-			ni.instanceIndex, evt.Peer, direction)
-	}
-
-	ni.connectedPeers[evt.Peer] = ExtendedPeerInfo{
-		ID:          evt.Peer,
-		Addrs:       finalAddrs,
-		ConnectedAt: time.Now(),
-		Direction:   direction,
-		Misc:        0,
 	}
 }
 
@@ -1098,13 +1128,13 @@ func goGetNodeAddresses(
 			continue
 		}
 
-		// // handle cases for different transport protocols
-		// if strings.HasPrefix(transportAddr.String(), "/p2p-circuit/") {
-		// 	continue
-		// }
-		// if strings.Contains(transportAddr.String(), "*") {
-		// 	continue
-		// }
+		// handle cases for different transport protocols
+		if strings.HasPrefix(transportAddr.String(), "/p2p-circuit/") {
+			continue
+		}
+		if strings.Contains(transportAddr.String(), "*") {
+			continue
+		}
 
 		// handle cases based on presence and correctness of Peer ID in the address
 		switch {
@@ -1571,6 +1601,14 @@ func CreateNode(
 		logger.Debugf("[GO]   - Instance %d: Provided host to AutoTLS cert manager.\n", instanceIndex)
 	}
 
+	// --- Start Address Reporting & Caching ---
+	cacheSub, err := ni.host.EventBus().Subscribe(new(event.EvtLocalAddressesUpdated))
+	if err != nil {
+		return jsonErrorResponse(fmt.Sprintf("Instance %d: Failed to create address cache subscription", instanceIndex), err)
+	}
+	go handleAddressUpdateEvents(ni, cacheSub)
+	logger.Debugf("[GO] 🧠 Instance %d: Address cache background listener started.", instanceIndex)
+
 	// Subscribe to Identification Completed Event.
 	identSub, err := ni.host.EventBus().Subscribe(new(event.EvtPeerIdentificationCompleted))
 	if err != nil {
@@ -1578,128 +1616,43 @@ func CreateNode(
 	}
 	go handleIdentificationEvents(ni, identSub)
 
-	// --- Address Reporting ---
-	// Give discovery mechanisms a moment to find the public address.
-	logger.Debugf("[GO] ⏳ Instance %d: Waiting for address discovery and NAT to settle...\n", instanceIndex)
-
-	// Subscribe to the two key events we need to wait for.
+	// --- Wait for Reachability ---
+	// Subscribe to reachability events
 	reachSub, err := ni.host.EventBus().Subscribe(new(event.EvtLocalReachabilityChanged))
 	if err != nil {
 		return jsonErrorResponse("Failed to subscribe to reachability events", err)
 	}
 	defer reachSub.Close()
 
-	addrSub, err := ni.host.EventBus().Subscribe(new(event.EvtLocalAddressesUpdated))
-	if err != nil {
-		return jsonErrorResponse("Failed to subscribe to address update events", err)
-	}
-	defer addrSub.Close()
-
-	// --- State flags for our unified wait loop ---
-	waitingForWSS := cfg.TLS.Domain != "" || cfg.TLS.AutoTLS
 	timeoutCtx, timeoutCancel := context.WithTimeout(ni.ctx, 30*time.Second)
-    defer timeoutCancel()
-	// ticker for polling
-	ticker := time.NewTicker(500 * time.Millisecond)
-    defer ticker.Stop()
-	logger.Debugf("[GO] ⏳ Instance %d: Entering wait loop (WSS Required: %t)...", instanceIndex, waitingForWSS)
-
+	defer timeoutCancel()
+	logger.Debugf("[GO] ⏳ Instance %d: Waiting for reachability update.", instanceIndex)
+	
 	WAIT_LOOP:
-	for {
-		// 1. Snapshot Current Status
-		hasRelayAddr := false
-		hasPublicAddr := false
-		wssConditionMet := false
-		currentAddrs := ni.host.Addrs()
-
-		for _, addr := range currentAddrs {
-			if addr == nil || manet.IsIPLoopback(addr) || manet.IsIPUnspecified(addr) {
-				continue
-			}
-			addrStr := addr.String()
-			if strings.Contains(addrStr, "/p2p-circuit") {
-				hasRelayAddr = true
-			}
-			if manet.IsPublicAddr(addr) {
-				hasPublicAddr = true
-			}
-			// 3. Check for WSS (Strict Mode)
-			if waitingForWSS {
-				if cfg.TLS.Domain != "" {
-					// --- CASE A: CUSTOM DOMAIN ---
-					// The address factory MUST have rewritten this to /dns4/<YourDomain>/...
-					if strings.Contains(addrStr, "/dns4/") && strings.Contains(addrStr, cfg.TLS.Domain) && strings.Contains(addrStr, "/tls/ws") {
-						wssConditionMet = true
-					}
-				} else if cfg.TLS.AutoTLS {
-					// --- CASE B: AUTOTLS ---
-					// The address MUST contain /sni/ AND it must NOT be the wildcard (*).
-					// Initial: /ip4/.../tls/sni/*.libp2p.direct/ws
-					// Final:   /ip4/.../tls/sni/12D3.libp2p.direct/ws
-					if strings.Contains(addrStr, "/tls/sni/") && strings.Contains(addrStr, "/ws") && !strings.Contains(addrStr, "*") {
-						wssConditionMet = true
-					}
-				}
-			}
-		}
-
-		// Check exit conditions
-		isWSSReady := !waitingForWSS || wssConditionMet
-		isConnectivityReady := isPublic || hasPublicAddr || hasRelayAddr
-
-		if isWSSReady && isConnectivityReady {
-			// Determine final public status for the return object
-			if !isPublic && hasPublicAddr {
-				isPublic = true
-			}
-			logger.Debugf("[GO] ✅ Instance %d: Ready! (Public: %t, Relay-ready: %t, WSS-Ready: %t)", instanceIndex, isPublic, hasRelayAddr, isWSSReady)
-			break WAIT_LOOP
-		}
-
-		// Wait for events or timeout
+	for {		
 		select {
-		case <-timeoutCtx.Done():
-			// TIMEOUT STRATEGY:
-			// If we have *any* valid addresses, we return success with a warning.
-			finalAddrs, _ := goGetNodeAddresses(ni, "")
-			if len(finalAddrs) > 0 {
-				logger.Warnf("[GO] ⚠️ Instance %d: Initialization timed out. (WSS-Ready: %t, Public: %t). Proceeding with %d addresses.", 
-					instanceIndex, isWSSReady, isPublic, len(finalAddrs))
-				break WAIT_LOOP
-			}
-			// Fail hard if we have nothing.
-			errMsg := fmt.Sprintf("Timed out. (WSS-Ready: %t, Public: %t, Relay: %t)", isWSSReady, isPublic, hasRelayAddr)
-			return jsonErrorResponse(errMsg, nil)
-
 		case evt := <-reachSub.Out():
-			rEvt, ok := evt.(event.EvtLocalReachabilityChanged)
-			if ok {
-				if rEvt.Reachability == network.ReachabilityPublic {
-					isPublic = true
-				} else {
-					isPublic = false
-				}
+			rEvt := evt.(event.EvtLocalReachabilityChanged)
+			if rEvt.Reachability == network.ReachabilityPublic {
+				logger.Debugf("[GO] 📶 Instance %d: Reachability -> PUBLIC", instanceIndex)
+				isPublic = true
+			} else {
+                // If config forced us public, we ignore AutoNAT saying private.
+                // Otherwise, we accept reality.
+                if !cfg.Network.ForcePublic {
+				    isPublic = false
+                }
 			}
+			break WAIT_LOOP
+	
+		case <-timeoutCtx.Done():
+			logger.Warnf("[GO] ⚠️ Instance %d: Timeout. Proceeding with best effort. (Public: %t)", instanceIndex, isPublic)
+			break WAIT_LOOP
 
-		case <-addrSub.Out():
-			continue // Trigger re-evaluation
-
-		case <-ticker.C:
-			continue // Trigger re-evaluation
-
+		// 4. Node Shutdown
 		case <-ni.ctx.Done():
-			return jsonErrorResponse("Node context cancelled during init", nil)
+			return jsonErrorResponse("Context cancelled during init", nil)
 		}
-	}
-
-	// We start a PERMANENT subscription for the address cache.
-	// This is distinct from the temporary 'addrSub' used above for initialization.
-	cacheSub, err := ni.host.EventBus().Subscribe(new(event.EvtLocalAddressesUpdated))
-	if err != nil {
-		logger.Errorf("[GO] ❌ Instance %d: Failed to create address cache subscription: %v", instanceIndex, err)
-	} else {
-		go handleAddressUpdateEvents(ni, cacheSub)
-		logger.Debugf("[GO] 🧠 Instance %d: Address cache background listener started.", instanceIndex)
 	}
 
 	// --- PubSub Initialization ---
@@ -1715,8 +1668,6 @@ func CreateNode(
 	setupDirectMessageHandler(ni)
 	logger.Debugf("[GO] ✅ Instance %d: Direct message handler set up.\n", instanceIndex)
 
-	
-
 	// --- Close DHT if needed ---
 	if !cfg.DHT.Keep {
 		if ni.dht != nil {
@@ -1727,12 +1678,6 @@ func CreateNode(
 			ni.dht = nil
 		}
 	}
-
-	// --- Cleanup Bootstrap Peers ---
-	logger.Debugf("[GO] 🧹 Instance %d: Cleaning up bootstrap peer connections from the tracked list...\n", instanceIndex)
-	ni.peersMutex.Lock()
-	ni.connectedPeers = make(map[peer.ID]ExtendedPeerInfo) // Clear the map
-	ni.peersMutex.Unlock()
 
 	// --- Get Final Addresses ---
 	nodeAddresses, err := goGetNodeAddresses(ni, "")
