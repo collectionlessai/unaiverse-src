@@ -15,7 +15,6 @@ import (
 	"container/list"  // For an efficient ordered list (doubly-linked list for queues)
 	"context"         // For managing cancellation signals and deadlines across API boundaries and goroutines
 	"crypto/rand"     // For generating identity keys
-	mrand "math/rand"	// For basic random operations
 	"crypto/tls"      // For TLS configuration and certificates
 	"encoding/base64" // For encoding binary message data into JSON-safe strings
 	"encoding/binary" // For encoding/decoding length prefixes in stream communication
@@ -59,7 +58,7 @@ import (
 	p2pforge "github.com/ipshipyard/p2p-forge/client" // p2p-forge library for automatic TLS and domain management
 
 	// protobuf
-	pg "unaiverse/networking/p2p/lib/proto-go" // Generated Protobuf code for our message formats
+	pg "unailib/proto-go" // Generated Protobuf code for our message formats
 
 	"google.golang.org/protobuf/proto" // Core Protobuf library for marshalling/unmarshalling messages
 
@@ -187,7 +186,7 @@ type NodeInstance struct {
 }
 
 // --- Create a package-level logger ---
-var logger = golog.Logger("p2p-library")
+var logger = golog.Logger("unailib")
 
 // --- Multi-Instance State Management ---
 var (
@@ -368,15 +367,16 @@ func getListenAddrs(ips []string, tcpPort int, tlsMode string) ([]ma.Multiaddr, 
 
 		listenAddrs = append(listenAddrs, tcpMaddr, quicMaddr, webrtcMaddr, webtransMaddr)
 
-		if tlsMode == "autotls" {
+		switch tlsMode {
+		case "autotls":
 			// This is the special multiaddr that triggers AutoTLS
 			wssMaddr, _ := ma.NewMultiaddr(fmt.Sprintf("/ip4/%s/tcp/%d/tls/sni/*.%s/ws", ip, tcpPort, p2pforge.DefaultForgeDomain))
 			listenAddrs = append(listenAddrs, wssMaddr)
-		} else if tlsMode == "domain" {
+		case "domain":
 			// This is the standard secure WebSocket address with provided domain
 			wssMaddr, _ := ma.NewMultiaddr(fmt.Sprintf("/ip4/%s/tcp/%d/tls/ws", ip, tcpPort))
 			listenAddrs = append(listenAddrs, wssMaddr)
-		} else {
+		default:
 			// Fallback to a standard, non-secure WebSocket address
 			wsMaddr, _ := ma.NewMultiaddr(fmt.Sprintf("/ip4/%s/tcp/%d/ws", ip, tcpPort))
 			listenAddrs = append(listenAddrs, wsMaddr)
@@ -597,6 +597,41 @@ func onPeerIdentified(ni *NodeInstance, evt event.EvtPeerIdentificationCompleted
 	}
 }
 
+// Helper to filter peers for PeerSource
+func (ni *NodeInstance) isSuitableForPeerSource(pid peer.ID) bool {
+	ps := ni.host.Peerstore()
+
+	// 1. Check for Relay Hop Protocol (NEEDED)
+	protocols, err := ps.GetProtocols(pid)
+	if err != nil {
+		return false
+	}
+	isRelay := false
+	for _, proto := range protocols {
+		if proto == "/libp2p/circuit/relay/0.2.0/hop" {
+			isRelay = true
+			break
+		}
+	}
+	if !isRelay {
+		return false
+	}
+
+	// 2. By now we only check for WebRTC-Direct Address (Transport Layer)
+	// We iterate addresses to find one that contains the webrtc-direct component.
+	addrs := ps.Addrs(pid)
+	isSuitable := false
+	for _, addr := range addrs {
+		_, err := addr.ValueForProtocol(ma.P_WEBRTC_DIRECT) 
+		if err == nil {
+			isSuitable = true
+			break
+		}
+	}
+
+	return isSuitable
+}
+
 // PeerSource acts as the peer discovery backend for AutoRelay.
 // It combines a local cache lookup (fast/free) with a DHT random walk (slow/expensive).
 func (ni *NodeInstance) PeerSource(ctx context.Context, numPeers int) <-chan peer.AddrInfo {
@@ -616,12 +651,6 @@ func (ni *NodeInstance) PeerSource(ctx context.Context, numPeers int) <-chan pee
 
 		// --- PHASE 1: Scavenge Local Peerstore ---
 		localPeers := ni.host.Peerstore().Peers()
-
-		// Randomize to avoid staleness
-		mrand.Shuffle(len(localPeers), func(i, j int) {
-			localPeers[i], localPeers[j] = localPeers[j], localPeers[i]
-		})
-
 		for _, pid := range localPeers {
 			if peersFound >= numPeers {
 				return
@@ -630,17 +659,20 @@ func (ni *NodeInstance) PeerSource(ctx context.Context, numPeers int) <-chan pee
 				continue
 			}
 
-			info := ni.host.Peerstore().PeerInfo(pid)
-			if len(info.Addrs) == 0 {
-				continue
-			}
+			// Add it if it meets our criteria
+			if ni.isSuitableForPeerSource(pid) {
+				info := ni.host.Peerstore().PeerInfo(pid)
+				if len(info.Addrs) == 0 {
+					continue
+				}
 
-			select {
-			case out <- info:
-				sentPeers[pid] = struct{}{}
-				peersFound++
-			case <-ctx.Done():
-				return
+				select {
+				case out <- info:
+					sentPeers[pid] = struct{}{}
+					peersFound++
+				case <-ctx.Done():
+					return
+				}
 			}
 		}
 
@@ -1055,9 +1087,9 @@ func goGetNodeAddresses(
 	// --- 2. Process and filter candidate addresses ---
 	addrSet := make(map[string]struct{})
 	for _, addr := range candidateAddrs {
-		if addr == nil || manet.IsIPLoopback(addr) || manet.IsIPUnspecified(addr) {
-			continue
-		}
+		// if addr == nil || manet.IsIPLoopback(addr) || manet.IsIPUnspecified(addr) {
+		// 	continue
+		// }
 
 		// Use the idiomatic `peer.SplitAddr` to check if the address already includes a Peer ID.
 		var finalAddr ma.Multiaddr
@@ -1224,18 +1256,19 @@ func InitializeLibrary(
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
 	if int(enableLoggingC) == 1 {
 		golog.SetAllLoggers(golog.LevelInfo) // Set a default level
-		golog.SetLogLevel("p2p-library", "debug")
+		golog.SetLogLevel("unailib", "debug")
 		// --- Add Specific Log Levels from the Example ---
 		// These are crucial for debugging AutoTLS and connectivity.
-		golog.SetLogLevel("autotls", "info")
-		golog.SetLogLevel("p2p-forge", "info")
-		golog.SetLogLevel("nat", "info")
-		golog.SetLogLevel("basichost", "info")
-		golog.SetLogLevel("p2p-circuit", "debug") // Core circuit-v2 protocol logic
+		golog.SetLogLevel("autotls", "debug")
+		golog.SetLogLevel("p2p-forge", "debug")
+		golog.SetLogLevel("nat", "debug")
+		golog.SetLogLevel("basichost", "debug")
+		golog.SetLogLevel("p2p-circuit", "debug")
 		golog.SetLogLevel("relay", "debug")
+		golog.SetLogLevel("p2p-holepunch", "debug")
 	} else {
 		golog.SetAllLoggers(golog.LevelError)
-		golog.SetLogLevel("*", "FATAL")
+		// golog.SetAllLoggers(golog.LevelFatal)
 	}
 
 	maxInstances = int(maxInstancesC)
@@ -1300,7 +1333,7 @@ func CreateNode(
 	// Store it in the global slice
 	allInstances[instanceIndex] = ni
 	globalInstanceMutex.Unlock()
-	
+
 	logger.Infof("[GO] 🚀 Instance %d: Starting CreateNode...", instanceIndex)
 	// --- Centralized Cleanup on Failure ---
 	var success bool = false
@@ -1318,20 +1351,19 @@ func CreateNode(
 
 	// 1. Parse Configuration
 	configJSON := C.GoString(configJSONC)
-    var cfg NodeConfig
-    if err := json.Unmarshal([]byte(configJSON), &cfg); err != nil {
-        return jsonErrorResponse("Invalid Configuration JSON", err)
-    }
+	var cfg NodeConfig
+	if err := json.Unmarshal([]byte(configJSON), &cfg); err != nil {
+		return jsonErrorResponse("Invalid Configuration JSON", err)
+	}
 
 	// --- Sanity checks on the config ---
-	
 	// If one of the three parameters for custom certificates is specified, all three are required.
 	if cfg.TLS.Domain != "" || cfg.TLS.CertPath != "" || cfg.TLS.KeyPath != "" {
 		if cfg.TLS.Domain == "" || cfg.TLS.CertPath == "" || cfg.TLS.KeyPath == "" {
 			return jsonErrorResponse(fmt.Sprintf("Instance %d: Missing at least one of 'Domain', 'CertPath' or 'KeyPath'.", instanceIndex), nil)
 		}
-	}  // in the following, cfg.TLS.Domain != "" will be used as flag for useCustomTLS
-	
+	} // in the following, cfg.TLS.Domain != "" will be used as flag for useCustomTLS
+
 	// Having both customTLS and autoTLS is not allowed
 	if cfg.TLS.Domain != "" && cfg.TLS.AutoTLS {
 		return jsonErrorResponse(fmt.Sprintf("Instance %d: Cannot specify both a 'Domain' and 'AutoTLS'.", instanceIndex), nil)
@@ -1410,6 +1442,8 @@ func CreateNode(
 		libp2p.Transport(webrtc.New),
 		libp2p.ResourceManager(limiter),
 		libp2p.UserAgent(UnaiverseUserAgent),
+		libp2p.NATPortMap(),
+		libp2p.EnableHolePunching(),
 	}
 
 	// Add WebSocket transport, with or without TLS based on cert availability
@@ -1487,8 +1521,6 @@ func CreateNode(
 	if cfg.DHT.Enabled {
 		// Add any possible option to be publicly reachable
 		discoveryOpts := []libp2p.Option{
-			libp2p.NATPortMap(),
-			libp2p.EnableHolePunching(),
 			libp2p.EnableAutoNATv2(),
 			libp2p.Routing(func(h host.Host) (routing.PeerRouting, error) {
 				bootstrapAddrInfos := dht.GetDefaultBootstrapPeerAddrInfos()
@@ -1508,7 +1540,7 @@ func CreateNode(
 				return ni.dht, err
 			}),
 		}
-		
+
 		if cfg.Relay.EnableClient && !cfg.Relay.EnableService && cfg.DHT.Keep {
 			// Enable AutoRelay. This uses the services above (DHT, AutoNAT)
 			// to find relays and bind to one if we are private.
@@ -1553,8 +1585,6 @@ func CreateNode(
 	logger.Debugf("[GO] ✅ Instance %d: Direct message handler set up.\n", instanceIndex)
 
 	// Subscribe to Identification Completed Event.
-	// This fires when the Identify protocol finishes (protocols are known).
-	// We do this BEFORE waiting for addresses so we don't miss early connections.
 	identSub, err := ni.host.EventBus().Subscribe(new(event.EvtPeerIdentificationCompleted))
 	if err != nil {
 		return jsonErrorResponse("Failed to subscribe to ident events", err)
@@ -1582,32 +1612,76 @@ func CreateNode(
 	var reachabilityKnown bool = cfg.Network.ForcePublic
 	var addressesFinalized bool = !(cfg.TLS.Domain != "" || cfg.TLS.AutoTLS)
 
-	// If we have to wait for addresses, check if we already have them.
-    if !addressesFinalized {
-        for _, addr := range ni.host.Addrs() {
-             addrStr := addr.String()
-             // Check for DNS4/6 explicitly, as IsPublicAddr implies IP logic
-             isDNS := strings.Contains(addrStr, "/dns4/") || strings.Contains(addrStr, "/dns6/")
-             isPublicIP := manet.IsPublicAddr(addr)
-             
-             // We accept it if it's a TLS address AND (It's a Public IP OR It's a DNS address)
-             if (isPublicIP || isDNS) && strings.Contains(addrStr, "/tls/") && !strings.Contains(addrStr, "*") {
-                 addressesFinalized = true
-                 logger.Debugf("[GO] ✅ Instance %d: WSS address found during pre-check: %s", instanceIndex, addrStr)
-                 break
-             }
-        }
-    }
-	
+	// If we have to wait for addresses, check if we already have them from a previous run or cache
+	if !addressesFinalized {
+		for _, addr := range ni.host.Addrs() {
+			addrStr := addr.String()
+			// Check for DNS4/6 explicitly, as IsPublicAddr implies IP logic
+			isDNS := strings.Contains(addrStr, "/dns4/") || strings.Contains(addrStr, "/dns6/")
+			isPublicIP := manet.IsPublicAddr(addr)
+
+			// We accept it if it's a TLS address AND (It's a Public IP OR It's a DNS address)
+			if (isPublicIP || isDNS) && strings.Contains(addrStr, "/tls/") && !strings.Contains(addrStr, "*") {
+				addressesFinalized = true
+				logger.Debugf("[GO] ✅ Instance %d: WSS address found during pre-check: %s", instanceIndex, addrStr)
+				break
+			}
+		}
+	}
+
+	// --- ROBUST WAIT LOOP ---
+	// We use a ticker to check for conditions that might not trigger events (or if we missed them).
+	// We also refuse to exit simply because "Reachability is known" if that reachability is Private
+	// and we haven't found a relay yet.
 	timeout := 30 * time.Second
-	WAIT_LOOP:
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+
+WAIT_LOOP:
 	for {
-		// --- Check Exit Condition ---
-		// We can exit once we know our reachability AND our addresses are finalized.
-		if reachabilityKnown && addressesFinalized {
-			logger.Debugf("[GO] ✅ Instance %d: Discovery complete. Reachability: %s, Addresses: Finalized.",
-				instanceIndex, map[bool]string{true: "Public", false: "Private"}[isPublic])
-			break WAIT_LOOP
+		// 1. Snapshot Current Status
+		hasRelayAddr := false
+		hasPublicAddr := false
+		currentAddrs := ni.host.Addrs()
+
+		for _, addr := range currentAddrs {
+			if addr == nil || manet.IsIPLoopback(addr) || manet.IsIPUnspecified(addr) {
+				continue
+			}
+			addrStr := addr.String()
+			if strings.Contains(addrStr, "/p2p-circuit") {
+				hasRelayAddr = true
+			}
+			if manet.IsPublicAddr(addr) {
+				hasPublicAddr = true
+			}
+		}
+
+		// 2. Check Exit Conditions
+		// We only exit if we have finalized the specific WSS requirements (if any).
+		if addressesFinalized {
+			// A. Success: We are Public (or forced public)
+			if isPublic {
+				logger.Debugf("[GO] ✅ Instance %d: Ready (Public Reachability).", instanceIndex)
+				break WAIT_LOOP
+			}
+
+			// B. Success: We found a Public IP (even if AutoNAT is silent/slow)
+			if hasPublicAddr {
+				isPublic = true // Infer public
+				logger.Debugf("[GO] ✅ Instance %d: Ready (Found Public IP).", instanceIndex)
+				break WAIT_LOOP
+			}
+
+			// C. Success: We are Private (or unknown) but we have secured a Relay
+			if hasRelayAddr {
+				// We don't change isPublic to true, because we are effectively private-but-reachable
+				logger.Debugf("[GO] ✅ Instance %d: Ready (Relay Secured).", instanceIndex)
+				break WAIT_LOOP
+			}
+			
+			// D. If Reachability is explicitly Private, but we have NO relay yet:
+			// We CONTINUE waiting. The old code broke here and returned empty addresses.
 		}
 
 		select {
@@ -1617,33 +1691,27 @@ func CreateNode(
 			if !ok {
 				continue
 			}
-
 			if reachabilityEvt.Reachability == network.ReachabilityPublic {
 				isPublic = true
 			} else {
 				isPublic = false
 			}
-			reachabilityKnown = true	// reachability was assessed, either public or private
+			reachabilityKnown = true
 			logger.Debugf("[GO] 🔔 Instance %d: Reachability assessed. Status: %s", instanceIndex, reachabilityEvt.Reachability)
 
 		// --- Event 2: Addresses Updated (for WSS) ---
 		case evt := <-addrSub.Out():
-			// We only care about this event if TLS is enabled AND we haven't found our WSS address yet.
+			// Only useful if we are waiting for WSS
 			if addressesFinalized {
 				continue
 			}
-
 			addrsEvent, ok := evt.(event.EvtLocalAddressesUpdated)
 			if !ok {
 				continue
 			}
-
-			logger.Debugf("[GO] 🔔 Instance %d: Address update event. Checking for final WSS address...", instanceIndex)
 			for _, updatedAddr := range addrsEvent.Current {
 				addr := updatedAddr.Address
 				addrStr := updatedAddr.Address.String()
-				// A "final" WSS address is one that contains /tls/ and does NOT contain a wildcard (*).
-				// This works for both public (/dns4/...) and private (/ip4/192...) WSS addresses.
 				if manet.IsPublicAddr(addr) && strings.Contains(addrStr, "/tls/") && !strings.Contains(addrStr, "*") {
 					logger.Debugf("[GO] ✅ Instance %d: Final WSS address found: %s", instanceIndex, addrStr)
 					addressesFinalized = true
@@ -1651,10 +1719,24 @@ func CreateNode(
 				}
 			}
 
+		// --- Periodic Check ---
+		case <-ticker.C:
+			// The loop logic at the top handles the check
+			continue
+
 		// --- Failsafes ---
 		case <-time.After(timeout):
-			// We timed out before *both* conditions were met.
-			errMsg := fmt.Sprintf("Timed out after %s waiting for address discovery. (Reachability Known: %t, WSS Finalized: %t)",
+			// TIMEOUT STRATEGY:
+			// If we have *any* valid addresses, we proceed with success but log a warning.
+			// This fixes the "AutoNAT silent" bug.
+			finalAddrs, _ := goGetNodeAddresses(ni, "")
+			if len(finalAddrs) > 0 {
+				logger.Warnf("[GO] ⚠️ Instance %d: Initialization timed out (AutoNAT/Relay slow), but valid addresses exist. Proceeding.", instanceIndex)
+				break WAIT_LOOP // Break manually to proceed to return success
+			}
+
+			// If we have absolutely nothing, we fail.
+			errMsg := fmt.Sprintf("Timed out after %s waiting for usable addresses. (Reachability: %t, WSS: %t)",
 				timeout, reachabilityKnown, addressesFinalized)
 			return jsonErrorResponse(errMsg, nil)
 
@@ -1663,21 +1745,18 @@ func CreateNode(
 		}
 	}
 
-	// We start a PERMANENT subscription for the address cache. 
+	// We start a PERMANENT subscription for the address cache.
 	// This is distinct from the temporary 'addrSub' used above for initialization.
 	cacheSub, err := ni.host.EventBus().Subscribe(new(event.EvtLocalAddressesUpdated))
 	if err != nil {
-		// This is a critical failure for the cache, but not necessarily for the node startup.
 		logger.Errorf("[GO] ❌ Instance %d: Failed to create address cache subscription: %v", instanceIndex, err)
 	} else {
-		// Start the background listener. 
-		// It will immediately populate the cache via ni.host.Addrs() so we don't miss anything.
 		go handleAddressUpdateEvents(ni, cacheSub)
 		logger.Debugf("[GO] 🧠 Instance %d: Address cache background listener started.", instanceIndex)
 	}
 
 	// --- Close DHT if needed ---
-	if !cfg.DHT.Keep{
+	if !cfg.DHT.Keep {
 		if ni.dht != nil {
 			logger.Debugf("[GO]   - Instance %d: Closing DHT client...\n", instanceIndex)
 			if err := ni.dht.Close(); err != nil {
@@ -1688,7 +1767,6 @@ func CreateNode(
 	}
 
 	// --- Cleanup Bootstrap Peers ---
-	// In case thhe connectedPeers map was flooded with bootstrap peers during DHT setup, let's do this anyway.
 	logger.Debugf("[GO] 🧹 Instance %d: Cleaning up bootstrap peer connections from the tracked list...\n", instanceIndex)
 	ni.peersMutex.Lock()
 	ni.connectedPeers = make(map[peer.ID]ExtendedPeerInfo) // Clear the map
@@ -1697,7 +1775,6 @@ func CreateNode(
 	// --- Get Final Addresses ---
 	nodeAddresses, err := goGetNodeAddresses(ni, "")
 	if err != nil {
-		// This is a more critical failure if we can't even get local addresses.
 		return jsonErrorResponse(
 			fmt.Sprintf("Instance %d: Failed to obtain node addresses after waiting for reachability", instanceIndex),
 			err,
@@ -1713,7 +1790,6 @@ func CreateNode(
 	logger.Infof("[GO] 🌐 Instance %d: Node addresses: %v\n", instanceIndex, nodeAddresses)
 	reachabilityStatus := map[bool]string{true: "Public", false: "Private"}[isPublic]
 	logger.Infof("[GO] 🎉 Instance %d: Node creation complete. Reachability status: %s\n", instanceIndex, reachabilityStatus)
-	
 	success = true // Mark success to avoid cleanup in defer.
 	return jsonSuccessResponse(response)
 }

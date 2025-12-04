@@ -1,4 +1,4 @@
-module unaiverse/networking/p2p/lib
+module unailib
 
 go 1.24.5
 
