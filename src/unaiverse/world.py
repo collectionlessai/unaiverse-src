@@ -15,15 +15,17 @@
 import json
 import math
 import bisect
+from unaiverse.stats import Stats
 from unaiverse.agent import AgentBasics
 from unaiverse.hsm import HybridStateMachine
+from typing import List, Dict, Any
 from unaiverse.networking.p2p.messages import Msg
 from unaiverse.networking.node.profile import NodeProfile
 
 
 class World(AgentBasics):
 
-    def __init__(self, world_folder: str, merge_flat_stream_labels: bool = False):
+    def __init__(self, world_folder: str, merge_flat_stream_labels: bool = False, stats: Stats | None = None):
         """Initializes a World object, which acts as a special agent without a processor or behavior.
 
         Args:
@@ -41,6 +43,13 @@ class World(AgentBasics):
         self.proc_outputs = []  # Do not set it to None
         self.compat_in_streams = None
         self.compat_out_streams = None
+        
+        # Stats
+        if stats is not None:
+            self.stats = stats
+        else:
+            # fallback to default Stats class
+            self.stats = Stats(is_world=True, db_path=f"{self.world_folder}/stats/world_stats.db", cache_window_hours=2.0)
 
     def assign_role(self, profile: NodeProfile, is_world_master: bool) -> str:
         """Assigns an initial role to a newly connected agent.
@@ -176,178 +185,150 @@ class World(AgentBasics):
         This can be used to reset competition results or clean up state after a specific event.
         """
         self.agent_badges = {}
-
-    def get_stats(self, from_timestamp: float | None = None,
-                  compute_aggregated_custom_stats: bool = False) -> dict:
-        # TODO: filter by peer?
-        full_stats_requested = from_timestamp is None or from_timestamp < 0.
-
-        if full_stats_requested:
-            stats = self.stats
+    
+    def collect_and_store_own_stats(self):
+        """Collects this world's own stats and pushes them to the stats recorder."""
+        if self.stats is None:
+            return
+        
+        t = self._node_clock.get_time_ms()
+        _, own_private_pid = self.get_peer_ids()
+        
+        # Helper to add if value changed
+        def store_if_changed(stat_name, new_value):
+            last_value = self.stats.get_last_value(stat_name)
+            if last_value != new_value:
+                # Note: We pass the world's *own* peer_id for its *own* stats
+                self.stats.store_stat(stat_name, new_value, peer_id=own_private_pid, timestamp=t)
+        
+        try:
+            store_if_changed("world_masters", len(self.world_masters))
+            store_if_changed("world_agents", len(self.world_agents))
+            store_if_changed("human_agents", len(self.human_agents))
+            store_if_changed("artificial_agents", len(self.artificial_agents))
+        except Exception as e:
+            self.err(f"[Stats] Error updating own world stats: {e}")
+    
+    def _process_custom_stat(self, stat_name, value, peer_id, timestamp) -> bool:
+        """Hook for subclasses to intercept a stat. Return True if handled."""
+        return False
+    
+    def _extract_graph_node_info(self, peer_id: str) -> Dict[str, Any]:
+        """Helper to extract lightweight visualization data from NodeProfile."""
+        profile = None
+        if peer_id == self.get_peer_ids()[1]:
+            # this is the world itself
+            profile = self._node_profile
         else:
-            sliced_stats = {
-                'peer_graph': self.stats['peer_graph'],
-                'peer_stats': {}
-            }
-            world_peer_stats = self.stats['peer_stats']
-            sliced_peer_stats = sliced_stats['peer_stats']
-            for peer_id, stat_name_tv_dict in world_peer_stats.items():
-                sliced_stat_name_tv_dict = {}
-                sliced_peer_stats[peer_id] = sliced_stat_name_tv_dict
-                for stat_name, tv_dict in stat_name_tv_dict.items():
-                    ts = list(tv_dict.keys())
-                    vs = list(tv_dict.values())
-                    i = bisect.bisect_left(ts, from_timestamp)
-                    sliced_stat_name_tv_dict[stat_name] = dict(zip(ts[i:], vs[i:]))
-            stats = sliced_stats
+            profile = self.all_agents.get(peer_id)
+        if profile is None:
+            return {}
+        
+        # Accessing the inner private dict of NodeProfile based on your class structure
+        static_profile = profile.get_static_profile()
+        dynamic_profile = profile.get_dynamic_profile()
+        
+        return {
+            'Name': static_profile.get('node_name', '~'),
+            'Owner': static_profile.get('email', '~'),
+            'Role': dynamic_profile.get('connections', {}).get('role', 'unknown').split('~')[-1],
+            'Type': static_profile.get('node_type', '~'),
+            'Number of Badges': len(dynamic_profile.get('cv', [])),
+            'Current Action': self.stats.get_last_value('action', peer_id=peer_id) or '~',
+            'Current State': self.stats.get_last_value('state', peer_id=peer_id) or '~',
+        }
+    
+    def _update_graph(self, peer_id: str, connected_peers_list: List[str], timestamp: int):
+        """Updates both graph connectivity (edges) and node metadata."""
+        
+        # 1. initialize structure if missing (e.g. first run or after DB load)
+        graph_stat = self.stats._stats.setdefault("graph", {'nodes': {}, 'edges': {}})
+        
+        # Ensure sub-dicts exist (defensive programming against malformed DB loads)
+        if 'nodes' not in graph_stat: graph_stat['nodes'] = {}
+        if 'edges' not in graph_stat: graph_stat['edges'] = {}
+            
+        nodes = graph_stat['nodes']
+        edges = graph_stat['edges']
+        
+        # 2. Update Node Metadata
+        # We update the sender's info
+        nodes[peer_id] = self._extract_graph_node_info(peer_id)
+        
+        # We also ensure connected peers exist in 'nodes', even if we don't have their full profile yet
+        connected_peers = set(connected_peers_list)
+        for target_id in connected_peers:
+            if target_id not in nodes:
+                 # Try to fetch profile if we have it, otherwise placeholder
+                nodes[target_id] = self._extract_graph_node_info(target_id)
 
-        if compute_aggregated_custom_stats and len(self.WORLD_STATS_DYNAMIC_BY_PEER) > 0:
-            mean, std = self.__aggregate_time_indexed_stats_over_peers(stats)
-            stats['peer_stats']['<mean>'] = mean
-            stats['peer_stats']['<std>'] = std
+        # 3. Update Edges (Logic adapted from your previous code)
+        prev_connected_peers = edges.setdefault(peer_id, set())
 
-        # TODO: remove this, debug only
-        import os
-        t = self._node_clock.get_time_as_string()
-        json.dump(stats, open(os.path.join(self.world_folder, f"[{t}]_get_stats.json")), indent=4)
+        # Add reverse connections (Undirected/Bidirectional logic)
+        for _peer_id in connected_peers:
+            edges.setdefault(_peer_id, set()).add(peer_id)
+        
+        # Remove dropped reverse connections
+        to_remove = prev_connected_peers - connected_peers
+        for _peer_id in to_remove:
+            if _peer_id in edges and peer_id in edges[_peer_id]:
+                edges[_peer_id].remove(peer_id)
+        
+        # Update peer's own forward connections
+        edges[peer_id] = connected_peers
+        
+        # 4. Store
+        world_peer_id = self.get_peer_ids()[1]
+        self.stats.store_stat('graph', graph_stat, peer_id=world_peer_id, timestamp=timestamp)
+    
+    def add_peer_stats(self, peer_stats_batch: List[Dict[str, Any]], sender_peer_id: str | None = None):
+        """(World-only) Processes a batch of stats received from a peer."""
+        
+        # 1. Update own stats (this logic is now in the World)
+        self.collect_and_store_own_stats()
 
-        return stats
-
-    def add_stats_from_peer(self, peer_id: str, peer_stats: dict):
-        t = self._node_clock.get_time()
-
-        # World stats
-        if len(self.world_masters) != next(reversed(self.stats["world_masters"].values()), -1):
-            self.stats["world_masters"][t] = len(self.world_masters)
-        if len(self.world_agents) != next(reversed(self.stats["world_agents"].values()), -1):
-            self.stats["world_agents"][t] = len(self.world_agents)
-        if len(self.human_agents) != next(reversed(self.stats["human_agents"].values()), -1):
-            self.stats["human_agents"][t] = len(self.human_agents)
-        if len(self.artificial_agents) != next(reversed(self.stats["artificial_agents"].values()), -1):
-            self.stats["artificial_agents"][t] = len(self.artificial_agents)
-
-        # Static stats, without groups (i.e., the peer graph)
-        graph = self.stats["graph"]
-        if peer_id not in graph:
-            graph[peer_id] = set()
-        prev_connected_peers = graph[peer_id]
-        graph_changed = False
-        if "connected_peers" in peer_stats:
-            connected_peers = set(peer_stats["connected_peers"])
-            to_remove = prev_connected_peers - connected_peers
-            for _peer_id in connected_peers:
-                if _peer_id in graph:
-                    if peer_id not in graph[_peer_id]:
-                        graph[_peer_id].add(peer_id)
-                        graph_changed = True
-                else:
-                    graph[peer_id] = {peer_id}
-                    graph_changed = True
-            for _peer_id in to_remove:
-                if _peer_id in graph:
-                    if peer_id in graph[_peer_id]:
-                        graph[_peer_id].remove(peer_id)
-                        graph_changed = True
-        if graph_changed:
-            self.stats_loader_saver.mark_stat_as_changed("graph")
-
-        # Static stats, per peer
-        stats_per_peer = self.stats["stats_per_peer"]
-        if peer_id not in stats_per_peer:
-            stats_per_peer[peer_id] = {"state": None, "action": None, "last_action": None}
-        for stat_name, v in peer_stats.items():
-            if stat_name in self.WORLD_STATS_STATIC_BY_PEER:
-                if v != stats_per_peer[peer_id][stat_name]:
-                    stats_per_peer[peer_id][stat_name] = v
-                    self.stats_loader_saver.mark_stat_as_changed(stat_name)
-
-        # Dynamic stats, per peer (appending them)
-        for stat_name, tv_dict in peer_stats.items():
-            if stat_name in self.WORLD_STATS_DYNAMIC_BY_PEER.keys():
-                expected_type = self.WORLD_STATS_DYNAMIC_BY_PEER[stat_name]["type"]
-                if stat_name not in stats_per_peer[peer_id]:
-                    stats_per_peer[peer_id][stat_name] = {}
-                tv_dict_clean = {}
-                if len(stats_per_peer[peer_id][stat_name]) > 0:
-                    last_t = next(reversed(stats_per_peer[peer_id][stat_name].keys()))
-                else:
-                    last_t = -1.
-                for t, v in tv_dict.items():
-                    if (isinstance(t, float) and t > 0. and
-                            ((isinstance(v, float) or isinstance(v, int) and expected_type == 'number') or
-                             (isinstance(v, str) and expected_type == 'str')) and t > last_t):
-                        tv_dict_clean[t] = v if expected_type != "number" else float(v)
-                stats_per_peer[peer_id][stat_name].update(tv_dict_clean)
-
-        # TODO: remove this, debug only
-        import os
-        t = self._node_clock.get_time_as_string()
-        json.dump(self.stats, open(os.path.join(self.world_folder, f"[{t}]_add_stats_from_peer.json")), indent=4)
-        self.get_stats(None, compute_aggregated_custom_stats=True)
-        self.get_stats(self._node_clock.get_time() - 100.0, compute_aggregated_custom_stats=True)
-
-    def __aggregate_time_indexed_stats_over_peers(self, stats: dict) -> tuple[dict, dict]:
-        """Aggregate all time-indexed peer stats by aligning timestamps across peers, forward-filling missing values,
-        and computing mean + std at each timestamp.
-
-        Args:
-            stats: dictionary with structure stats['peer_stats'][peer_id][custom_key] = {timestamp: value}.
-
-        Returns:
-            Two dictionaries, mean_dict, std_dict where: mean_dict[custom_key][timestamp] = mean_value,
-            std_dict[custom_key][timestamp] = std_value
-        """
-        mean_dict = {}
-        std_dict = {}
-        peer_stats = stats.get("peer_stats", {})
-
-        for custom_key in self.WORLD_STATS_DYNAMIC_BY_PEER.keys():
-
-            # Skipping strings: we can only aggregate numbers
-            if self.WORLD_STATS_DYNAMIC_BY_PEER[custom_key]['type'] != 'number':
-                continue
-
-            # Collecting time series
-            peer_series = []
-            for peer_id, peer_data in peer_stats.items():
-                if custom_key in peer_data:
-                    tv_dict = peer_data[custom_key]
-                    if tv_dict:
-                        peer_series.append(tv_dict)
-
-            if not peer_series:
-                continue
-
-            # Merging all timestamps
-            all_times = sorted({t for series in peer_series for t in series.keys()})  # Set to list
-
-            # Forward filling of the timestamp that are not present in a series
-            aligned_values = []
-            for series in peer_series:
-                if len(series) == 0:
+        # 2. Process peer stats
+        connected_peers = []
+        for update in peer_stats_batch:
+            try:
+                p_id = update['peer_id']
+                if p_id != sender_peer_id:
+                    # TODO: decide if we want to filter the stats
+                    pass
+                stat_name = update['stat_name']
+                t = int(update['timestamp'])
+                v = update['value']
+                
+                # Call the hook (which also lives in the World now)
+                if self._process_custom_stat(stat_name, v, p_id, t):
+                    continue # The custom processor handled it
+                
+                # Generate the graph and sicard the connected_peers stat
+                if stat_name == 'connected_peers':
+                    # We need to wait for all the info to arrive before updating the graph.
+                    # Otherwise _extract_graph_node_info may not find data yet.
+                    connected_peers.append((p_id, v, t))
                     continue
-                filled = []
-                last_val = next(iter(series.values()))  # Get the first value (going ahead...exception)
-                for t in all_times:
-                    if t in series:
-                        last_val = series[t]
-                    filled.append(last_val)
-                aligned_values.append(filled)
 
-            # Aggregate (mean + std) at each timestamp
-            mean_dict[custom_key] = {}
-            std_dict[custom_key] = {}
-            for i, t in enumerate(all_times):
-                vals = [peer_vals[i] for peer_vals in aligned_values if peer_vals[i] is not None]
-                if vals:
-                    mean_val = sum(vals) / float(len(vals))
-                    var = sum((x - mean_val) ** 2 for x in vals) / len(vals)
-                    std_val = math.sqrt(var)
+                # 3. Push to the "dumb" Stats recorder
+                if stat_name in self.stats._all_keys:
+                    self.stats.store_stat(stat_name, v, peer_id=p_id, timestamp=t)
                 else:
-                    mean_val = None
-                    std_val = None
+                    self.err(f"[World] Unknown stat received: {stat_name}")
 
-                mean_dict[custom_key][t] = mean_val
-                std_dict[custom_key][t] = std_val
-
-        return mean_dict, std_dict
+            except Exception as e:
+                self.err(f"[World] Error processing stats update {update}: {e}")
+        
+        # Now update the graph for all collected connected_peers stats
+        for p_id, v, t in connected_peers:
+            self._update_graph(p_id, v, t)
+    
+    def debug_stats_dashboard(self):
+        """Helper to verify the dashboard looks correct during development."""
+        import plotly.io as pio
+        
+        print("[DEBUG] Rendering Dashboard...")
+        json_str = self.stats.plot()
+        if json_str:
+            pio.from_json(json_str).show()

@@ -27,11 +27,11 @@ import requests
 import threading
 import traceback
 from PIL import Image
-from typing import Optional
 from collections import deque
 from unaiverse.clock import Clock
 from unaiverse.world import World
 from unaiverse.agent import Agent
+from typing import Optional, Dict, Any
 from unaiverse.networking.p2p import P2P, P2PError
 from unaiverse.networking.p2p.messages import Msg
 from datetime import datetime, timezone, timedelta
@@ -134,6 +134,12 @@ class Node:
         self.send_alive_every = 2.5 * 60.  # Seconds
         self.last_alive_time = 0.
         self.skip_was_alive_check = os.getenv("NODE_IGNORE_ALIVE", "0") == "1"
+        
+        # stats reporting agent -> world
+        self.send_stats_every = 10.  # Seconds
+        # self.send_stats_every = 5 * 60.  # Seconds
+        self.save_stats_every = 10.  # Seconds
+        # self.save_stats_every = 15 * 60.  # Seconds
 
         # Alive messaging
         self.run_start_time = 0.
@@ -770,7 +776,8 @@ class Node:
 
             last_dynamic_profile_time = self.clock.get_time()
             last_get_token_time = self.clock.get_time()
-            last_address_check_time = self.clock.get_time()
+            last_stats_send_time = self.clock.get_time()
+            last_stats_save_time = self.clock.get_time()
             if not (cycles is None or cycles > 0):
                 raise GenException("Invalid number of cycles")
 
@@ -1064,6 +1071,26 @@ class Node:
                         except Exception as e:
                             self.err(f"Failed to renew relay reservation: {e}. Node may become unreachable.")
                             self.relay_reservation_expiry = None  # Stop trying if it fails
+                
+                # Send stats to the world
+                if self.node_type is Node.AGENT and self.agent.in_world():
+                    if self.clock.get_time() - last_stats_send_time >= self.send_stats_every:
+                        try:
+                            self.out(f"[NODE] Sending stats update to the world...")
+                            last_stats_send_time = self.clock.get_time()
+                            self.agent.send_stats_to_world()
+                        except Exception as e:
+                            self.err(f"Error while sending stats to the world (trying to go ahead...) [{e}]")
+                
+                # Save stats to disk if this is the world node
+                if self.node_type is Node.WORLD:
+                    if self.clock.get_time() - last_stats_save_time >= self.save_stats_every:
+                        try:
+                            self.out(f"[NODE] Saving stats to disk (world)...")
+                            last_stats_save_time = self.clock.get_time()
+                            self.world.stats.save_to_disk()
+                        except Exception as e:
+                            self.err(f"Error while saving stats to disk [{e}]")
 
                 # Taking to the inspector
                 if self.inspector_activated:
@@ -1334,12 +1361,16 @@ class Node:
                                 for key in keys_to_delete:
                                     del dynamic_profile[key]
 
+                                is_human = profile.get_static_profile()["node_type"] is self.hosted.HUMAN
                                 if not self.conn.send(msg.sender, channel_trail=None,
                                                       content={
-                                                          'world_profile': self.profile.get_all_profile(),
-                                                          'rendezvous_tag': self.clock.get_cycle(),
-                                                          'your_role': role,
-                                                          'agent_actions': self.world.agent_actions
+                                                        'world_profile': self.profile.get_all_profile(),
+                                                        'rendezvous_tag': self.clock.get_cycle(),
+                                                        'your_role': role,
+                                                        'agent_actions': self.world.agent_actions,
+                                                        'agent_stats_code': self.world.agent_stats_code,
+                                                        # 'initial_stats': self.world.stats.get_view() if is_human else None,
+                                                        'initial_stats': self.world.stats.plot() if is_human else None,
                                                       },
                                                       content_type=Msg.WORLD_APPROVAL):
                                     self.err("Failed to send world approval, removing (disconnecting) " + msg.sender)
@@ -1406,7 +1437,9 @@ class Node:
                         self.__join_world(profile=NodeProfile.from_dict(msg.content['world_profile']),
                                           role=msg.content['your_role'],
                                           agent_actions=msg.content['agent_actions'],
-                                          rendezvous_tag=msg.content['rendezvous_tag'])
+                                          agent_stats_code=msg.content.get('agent_stats_code', None),
+                                          rendezvous_tag=msg.content['rendezvous_tag'],
+                                          initial_stats=msg.content['initial_stats'])
 
             # (C) received an agent-connect-approval
             elif msg.content_type == Msg.AGENT_APPROVAL:
@@ -1601,19 +1634,74 @@ class Node:
                     self.err("Inspector command was not sent by the expected inspector node ID "
                              "or the inspector was not yet activated (Msg.INSPECT_ON not received yet)")
                     self.__purge(msg.sender)
+            
+            # (O) world got stats update from an agent
+            elif msg.content_type == Msg.STATS_UPDATE:
+                self.out(f"[NODE] Received a stats update from " + msg.sender)
+                if self.node_type is Node.WORLD:
+                    if msg.sender in self.world.all_agents:
+                        # This calls the world.add_stats_from_peer method
+                        self.world.add_peer_stats(msg.content)
+                    else:
+                        self.err(f"Received stats update from {msg.sender}, but they are not a known agent in this world.")
+                elif self.node_type is Node.AGENT:
+                    self.err("Receiving stats updates is not expected for an agent node.")
+            
+            # (P) got a request for stats from an agent
+            elif msg.content_type == Msg.STATS_REQUEST:
+                self.out(f"[NODE] Received a stats request from " + msg.sender)
+                if self.node_type is Node.WORLD:
+                    # 1. Extract filters from content
+                    filters = msg.content or {}
+                    # default values are added to query without any filter
+                    req_stats = filters.get('stat_names', [])
+                    req_peers = filters.get('peer_ids', None)
+                    time_range = filters.get('time_range', None)
+                    value_range = filters.get('value_range', None) # The numeric filter
+                    limit = filters.get('limit', None)
+                    
+                    # This is a fine-grain request, so we query the db
+                    response_payload = self.world.stats.query_history(
+                        stat_names=req_stats,
+                        peer_ids=req_peers,
+                        time_range=time_range,
+                        value_range=value_range,
+                        limit=limit,
+                        )
+                    
+                    # Send back as STATS_RESPONSE
+                    self.conn.send(msg.sender, channel_trail=None, 
+                                   content_type=Msg.STATS_RESPONSE, 
+                                   content=response_payload)
+                elif self.node_type is Node.AGENT:
+                    self.err("Receiving stats request is not expected for an agent node.")
+            
+            # (Q) agent got stats response from a world
+            elif msg.content_type == Msg.STATS_RESPONSE:
+                self.out(f"[NODE] Received a stats response from " + msg.sender)
+                if self.node_type is Node.AGENT:
+                    if msg.sender == self.conn.get_world_peer_id():
+                        self.agent.set_stats_view(msg.content)
+                    else:
+                        self.err(f"Received stats response from {msg.sender}, but it is not the world.")
+                elif self.node_type is Node.AGENT:
+                    self.err("Receiving stats response is not expected for a world node.")
 
         self.__interview_clean()
         self.__connected_without_ack_clean()
 
     def __join_world(self, profile: NodeProfile, role: int,
-                     agent_actions: str | None, rendezvous_tag: int):
+                     agent_actions: str | None, agent_stats_code: str | None,
+                     rendezvous_tag: int, initial_stats: Dict[str, Any] | None):
         """Performs the actual operation of joining a world after receiving confirmation.
 
         Args:
             profile: The profile of the world to join.
             role: The role assigned to the agent in the world (int).
             agent_actions: A string of code defining the agent's actions.
+            agent_stats_code: A string of code defining the statistics for this world.
             rendezvous_tag: The rendezvous tag from the world's profile.
+            initial_stats: When joining a world we eventually receive the recent history.
 
         Returns:
             True if the join operation is successful, otherwise False.
@@ -1654,6 +1742,25 @@ class Node:
                                    content={'addresses': complete_private_addrs})
                 except Exception as e:
                     self.err(f"An error occurred during relay reservation: {e}.")
+            
+            # Load custom stats class if provided
+            stats_class = None
+            if agent_stats_code is not None and len(agent_stats_code) > 0:
+                # Checking code
+                if not Node.__analyze_code(agent_stats_code):
+                    self.err("Invalid agent stats code (syntax errors or unsafe code) was provided by the world, "
+                             "blocking the join operation")
+                    return False
+                try:
+                    stats_mod = types.ModuleType("dynamic_stats_module")
+                    exec(agent_stats_code, stats_mod.__dict__)
+                    if not hasattr(stats_mod, 'WStats'):
+                        self.err("World sent stats.py, but it lacks a 'WStats' class. Using default Stats.")
+                    else:
+                        stats_class = stats_mod.WStats
+                        self.out("Loaded custom WStats class from world.")
+                except Exception as e:
+                    self.err(f"Failed to exec custom stats.py from world: {e}. Using default Stats.")
 
             # Subscribing to the world rendezvous topic, from which we will get fresh information
             # about the world agents and masters
@@ -1699,7 +1806,10 @@ class Node:
                 # Cloning attributes of the existing agent
                 for key, value in self.agent.__dict__.items():
                     if hasattr(new_agent, key):  # This will skip ROLE_BITS_TO_STR, CUSTOM_ROLES, etc...
-                        setattr(new_agent, key, value)
+                        if key == 'stats' and stats_class is not None:
+                            new_agent.stats = stats_class(is_world=False)
+                        else:
+                            setattr(new_agent, key, value)
 
                 # Telling the FSM that actions are related to this new agent
                 new_agent.behav.set_actionable(new_agent)
@@ -1710,19 +1820,19 @@ class Node:
                 new_agent.CUSTOM_ROLES = roles
                 new_agent.augment_roles()
 
-                # Setting up world stats
-                world_stats_dynamic_by_peer = profile.get_dynamic_profile()['world_stats_dynamic']
-                if world_stats_dynamic_by_peer:
-                    new_agent.STATS_DYNAMIC_SENT_BY_PEER.clear()
-                    new_agent.STATS_DYNAMIC_SENT_BY_PEER.update(world_stats_dynamic_by_peer)  # in-place
-                    new_agent.clear_stats()
-
                 # Updating node-level references
                 old_agent = self.agent
                 self.agent = new_agent
                 self.hosted = new_agent
             else:
                 old_agent = self.agent
+                if stats_class is not None:
+                    self.out("Replacing default stats with custom WStats from world.")
+                    old_agent.stats = stats_class(is_world=False)
+
+            # inject the stats history
+            if initial_stats is not None:
+                self.agent.set_stats_view(initial_stats)
 
             # Saving the world profile
             self.agent.world_profile = profile

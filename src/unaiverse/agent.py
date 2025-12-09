@@ -16,6 +16,7 @@ import copy
 import json
 import uuid
 import torch
+from unaiverse.stats import Stats
 from unaiverse.dataprops import DataProps
 from unaiverse.agent_basics import AgentBasics
 from unaiverse.streams import BufferedDataStream
@@ -46,6 +47,9 @@ class Agent(AgentBasics):
         self._preferred_streams = []  # List of preferred streams
         self._cur_preferred_stream = 0  # ID of the current preferred stream from the list
         self._repeat = 1  # Number of repetitions of the playlist
+        
+        # Stats
+        self.stats = Stats(is_world=False)
 
     def remove_peer_from_agent_status_attrs(self, peer_id):
         super().remove_peer_from_agent_status_attrs(peer_id)
@@ -1388,15 +1392,15 @@ class Agent(AgentBasics):
             min_or_max = "minimum" if cmp == "min" else "maximum"
             leq_or_geq = "<=" if cmp == "min" else ">="
 
-        for agent, eval_result in self._eval_results.items():
+        for agent_peer_id, eval_result in self._eval_results.items():
             if cmp not in ["min", "max"]:
-                self.out(f"Checking if result {eval_result} {cmp} {thres}, for agent {agent}")
+                self.out(f"Checking if result {eval_result} {cmp} {thres}, for agent {agent_peer_id}")
             else:
                 if thres >= 0:
                     self.out(f"Checking if result {eval_result} is the {min_or_max} so far, "
-                             f"only if {leq_or_geq} {thres}, for agent {agent}")
+                             f"only if {leq_or_geq} {thres}, for agent {agent_peer_id}")
                 else:
-                    self.out(f"Checking if result {eval_result} is the {min_or_max} so far, for agent {agent}")
+                    self.out(f"Checking if result {eval_result} is the {min_or_max} so far, for agent {agent_peer_id}")
 
             if eval_result < 0.:
                 self.err(f"Invalid evaluation result: {eval_result}")
@@ -1420,16 +1424,16 @@ class Agent(AgentBasics):
 
                 if good_if_true:
                     if outcome:
-                        msgs.append(f"Agent {agent} passed with {alias} {eval_result}/{thres}")
-                        self._valid_cmp_agents.add(agent)
+                        msgs.append(f"Agent {agent_peer_id} passed with {alias} {eval_result}/{thres}")
+                        self._valid_cmp_agents.add(agent_peer_id)
                     else:
-                        msgs.append(f"Agent {agent} did not pass")
+                        msgs.append(f"Agent {agent_peer_id} did not pass")
                 else:
                     if outcome:
-                        msgs.append(f"Agent {agent} did not pass")
+                        msgs.append(f"Agent {agent_peer_id} did not pass")
                     else:
-                        msgs.append(f"Agent {agent} passed with {alias} {eval_result}/{thres}")
-                        self._valid_cmp_agents.add(agent)
+                        msgs.append(f"Agent {agent_peer_id} passed with {alias} {eval_result}/{thres}")
+                        self._valid_cmp_agents.add(agent_peer_id)
 
                 if len(msgs) > 1:
                     msgs[-1] = str(msgs[-1].lower())[0] + msgs[-1][1:]
@@ -1439,15 +1443,15 @@ class Agent(AgentBasics):
                         (cmp == "max" and (thres < 0 or eval_result >= thres) and
                          (eval_result > best_so_far or best_so_far < 0))):
                     best_so_far = eval_result
-                    self._valid_cmp_agents = {agent}
-                    msgs = [f"The best agent is {agent}"]
+                    self._valid_cmp_agents = {agent_peer_id}
+                    msgs = [f"The best agent is {agent_peer_id}"]
                 else:
                     msgs = [f"No best agent found for the considered threshold ({thres})"]
 
         if len(self._valid_cmp_agents) == 0:
 
             # # cheating (hack):
-            # self._valid_cmp_agents.append(agent)
+            # self._valid_cmp_agents.append(agent_peer_id)
             # self.out(", ".join(msgs))
             # return True
             self.err(f"The evaluation was not passed by any agents")
@@ -1455,6 +1459,69 @@ class Agent(AgentBasics):
         else:
             self.out(", ".join(msgs))
             return True
+    
+    def collect_and_store_own_stats(self):
+        """Collects this agent's own stats and pushes them to the stats recorder."""
+        if self.stats is None:
+            return
+
+        _, own_private_pid = self.get_peer_ids()
+        t = self._node_clock.get_time_ms()
+        try:
+            info = self._node_conn['p2p_world'].get_connected_peers_info()
+            peers_list = [i['id'] for i in info]
+            self.stats.store_stat('connected_peers', peers_list, own_private_pid, t)
+        except Exception:
+             self.stats.store_stat('connected_peers', [], own_private_pid, t)
+
+        try:
+            behav = self.behav
+            self.stats.store_stat('state', behav.get_state_name(), own_private_pid, t)
+            self.stats.store_stat('action', behav.get_action_name(), own_private_pid, t)
+            self.stats.store_stat('last_action', behav.get_last_completed_action_name(), own_private_pid, t)
+        except Exception as e:
+            self.err(f"[Stats] Error storing HSM stats: {e}")
+    
+    def send_stats_to_world(self):
+        """
+        Sends the agent's currently buffered stats to the world and clears them.
+        """
+        if not self.in_world():
+            self.deb("[send_stats_to_world] Not in a world, skipping stats send.")
+            return
+
+        world_peer_id = self._node_conn.get_world_peer_id()
+        if world_peer_id is None:
+            self.err("[send_stats_to_world] In world, but world_peer_id is None.")
+            return
+
+        self.collect_and_store_own_stats()  # update own stats
+        payload = self.stats.get_payload_for_world()
+        if not payload:
+            self.deb("[send_stats_to_world] No stats to send.")
+            return
+
+        self.out(f"[AGENT] Sending stats update to world {world_peer_id}...")
+        
+        # Send all stats
+        if not self._node_conn.send(world_peer_id,
+                                    channel_trail=None,
+                                    content=payload,
+                                    content_type=Msg.STATS_UPDATE):
+            self.err("Failed to send stats update to world.")
+        
+        # TODO: remove, this is just for testing
+        if not self._node_conn.send(world_peer_id,
+                                    channel_trail=None,
+                                    content={'stat_names': []},  # query without any filter
+                                    content_type=Msg.STATS_REQUEST):
+             self.err("Failed to request stats to world.")
+    
+    def set_stats_view(self, received_view):
+        """
+        Set the _world_view attribute of the Stats object.
+        """
+        self.stats.set_view(received_view)
 
     def suggest_role_to_world(self, agent: str | None, role: str):
         """Suggests a role change for one or more agents to the world master. It iterates through the involved agents,

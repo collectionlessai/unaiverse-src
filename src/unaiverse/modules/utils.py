@@ -12,6 +12,7 @@
                  Code Repositories:  https://github.com/collectionlessai/
                  Main Developers:    Stefano Melacci (Project Leader), Christian Di Maio, Tommaso Guidi
 """
+import io
 import os
 import torch
 import random
@@ -708,3 +709,16 @@ class AgentProcessorChecker:
             else:
                 self.proc_optional_inputs.append({"has_default": False, "default_value": None})
             i += 1
+
+class HumanModule(torch.nn.Module):
+                    def __init__(self):
+                        super().__init__()
+                        self.__out_text = None
+                        self.__out_img = None
+
+                    def prepare_data(self, text: str = None, img: bytes = None):
+                        self.__out_text = text
+                        self.__out_img = Image.open(io.BytesIO(img)) if img is not None else None #img (bytes): remember to call .toPy()
+
+                    def forward(self, text: str, img: Image):
+                        return self.__out_text, self.__out_img

@@ -1672,8 +1672,11 @@ class HybridStateMachine:
             True if the file was written, False otherwise.
         """
         if only_if_changed is not None and os.path.exists(filename):
-            existing = HybridStateMachine(actionable=only_if_changed).load(filename)
-            if str(existing) == str(self):
+            try:
+                existing = HybridStateMachine(actionable=only_if_changed).load(filename)
+                if str(existing) == str(self):
+                    return False
+            except Exception:
                 return False
 
         with (open(filename, 'w') as file):
