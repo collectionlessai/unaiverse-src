@@ -1361,7 +1361,7 @@ class Node:
                                 for key in keys_to_delete:
                                     del dynamic_profile[key]
 
-                                is_human = profile.get_static_profile()["node_type"] is self.hosted.HUMAN
+                                is_human = profile.get_static_profile()["node_type"] == self.hosted.HUMAN
                                 if not self.conn.send(msg.sender, channel_trail=None,
                                                       content={
                                                         'world_profile': self.profile.get_all_profile(),
