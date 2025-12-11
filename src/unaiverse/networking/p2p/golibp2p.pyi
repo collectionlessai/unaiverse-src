@@ -2,7 +2,7 @@ from typing import List
 
 
 class GoLibP2P:
-    def InitializeLibrary(self, max_instances: int, max_num_channels: int, max_queue_per_channel: int, max_msg_size: int, enable_logging: int) -> None:
+    def InitializeLibrary(self, max_instances: int, max_num_channels: int, max_queue_per_channel: int, max_msg_size: int, log_config: bytes) -> None:
         """
         InitializeLibrary(max_instances: int, max_queue_per_channel: int, max_num_channels: int, max_msg_size: int, enable_logging: int) -> bytes
 

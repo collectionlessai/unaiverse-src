@@ -100,7 +100,7 @@ if _shared_lib is not None:
 # Using void* for returned C strings, requiring TypeInterface for conversion/freeing.
 
 # Define argtypes for the Go init function here
-_shared_lib.InitializeLibrary.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int]
+_shared_lib.InitializeLibrary.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_char_p]
 _shared_lib.InitializeLibrary.restype = None
 
 # Node Lifecycle & Info

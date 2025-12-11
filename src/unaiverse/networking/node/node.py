@@ -1655,19 +1655,21 @@ class Node:
                     filters = msg.content or {}
                     # default values are added to query without any filter
                     req_stats = filters.get('stat_names', [])
-                    req_peers = filters.get('peer_ids', None)
-                    time_range = filters.get('time_range', None)
+                    req_peers = filters.get('peer_ids', [])
+                    # time_range = filters.get('time_range', None)
+                    time_range = filters.get('time_range', 0)
                     value_range = filters.get('value_range', None) # The numeric filter
                     limit = filters.get('limit', None)
                     
-                    # This is a fine-grain request, so we query the db
-                    response_payload = self.world.stats.query_history(
-                        stat_names=req_stats,
-                        peer_ids=req_peers,
-                        time_range=time_range,
-                        value_range=value_range,
-                        limit=limit,
-                        )
+                    # # This is a fine-grain request, so we query the db
+                    # response_payload = self.world.stats.query_history(
+                    #     stat_names=req_stats,
+                    #     peer_ids=req_peers,
+                    #     time_range=time_range,
+                    #     value_range=value_range,
+                    #     limit=limit,
+                    #     )
+                    response_payload = self.world.stats.plot(since_timestamp=time_range)
                     
                     # Send back as STATS_RESPONSE
                     self.conn.send(msg.sender, channel_trail=None, 
@@ -1681,7 +1683,7 @@ class Node:
                 self.out(f"[NODE] Received a stats response from " + msg.sender)
                 if self.node_type is Node.AGENT:
                     if msg.sender == self.conn.get_world_peer_id():
-                        self.agent.set_stats_view(msg.content)
+                        self.agent.update_stats_view(msg.content, self.agent.overwrite_stats)
                     else:
                         self.err(f"Received stats response from {msg.sender}, but it is not the world.")
                 elif self.node_type is Node.AGENT:
@@ -1832,7 +1834,7 @@ class Node:
 
             # inject the stats history
             if initial_stats is not None:
-                self.agent.set_stats_view(initial_stats)
+                self.agent.update_stats_view(initial_stats, overwrite=True)
 
             # Saving the world profile
             self.agent.world_profile = profile

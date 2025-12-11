@@ -650,14 +650,23 @@ func (ni *NodeInstance) isSuitableForPeerSource(pid peer.ID) bool {
 	// 2. By now we only check for WebRTC-Direct Address (Transport Layer)
 	// We iterate addresses to find one that contains the webrtc-direct component.
 	addrs := ps.Addrs(pid)
+	isSuitableWRTC := false
+	isSuitableWSS := false
 	isSuitable := false
 	for _, addr := range addrs {
 		_, err := addr.ValueForProtocol(ma.P_WEBRTC_DIRECT) 
 		if err == nil {
-			isSuitable = true
-			break
+			isSuitableWRTC = true
+		}
+		_, err = addr.ValueForProtocol(ma.P_WS) 
+		if err == nil {
+			_, err := addr.ValueForProtocol(ma.P_TLS) 
+			if err == nil {
+				isSuitableWSS = true
+			}
 		}
 	}
+	isSuitable = isSuitableWRTC && isSuitableWSS
 
 	return isSuitable
 }
@@ -1280,27 +1289,25 @@ func InitializeLibrary(
 	maxUniqueChannelsC C.int,
 	maxChannelQueueLenC C.int,
 	maxMessageSizeC C.int,
-	enableLoggingC C.int,
+	logConfigJSONC *C.char,
 ) {
 	// --- Configure Logging FIRST ---
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
-	if int(enableLoggingC) == 1 {
-		golog.SetAllLoggers(golog.LevelInfo) // Set a default level
-		golog.SetLogLevel("unailib", "debug")
-		// --- Add Specific Log Levels from the Example ---
-		// These are crucial for debugging AutoTLS and connectivity.
-		golog.SetLogLevel("autotls", "debug")
-		golog.SetLogLevel("p2p-forge", "debug")
-		golog.SetLogLevel("nat", "debug")
-		golog.SetLogLevel("basichost", "debug")
-		golog.SetLogLevel("p2p-circuit", "debug")
-		golog.SetLogLevel("relay", "debug")
-		golog.SetLogLevel("p2p-holepunch", "debug")
-	} else {
-		golog.SetAllLoggers(golog.LevelError)
-		// golog.SetAllLoggers(golog.LevelFatal)
+	configStr := C.GoString(logConfigJSONC)
+	golog.SetAllLoggers(golog.LevelError)
+	if configStr != "" {
+		var logLevels map[string]string
+		if err := json.Unmarshal([]byte(configStr), &logLevels); err != nil {
+			log.Printf("[GO] ⚠️ Invalid log config JSON: %v. Using defaults.\n", err)
+		} else {
+			for logger, levelStr := range logLevels {
+				if err := golog.SetLogLevel(logger, levelStr); err != nil {
+					log.Printf("[GO] ⚠️ Failed to set log level for '%s': %v\n", logger, err)
+				}
+			}
+		}
 	}
-
+	
 	maxInstances = int(maxInstancesC)
 	maxUniqueChannels = int(maxUniqueChannelsC)
 	maxChannelQueueLen = int(maxChannelQueueLenC)

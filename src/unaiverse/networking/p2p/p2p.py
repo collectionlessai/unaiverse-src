@@ -89,8 +89,19 @@ class P2P:
             # Configure Python logging based on the flag
             if not enable_logging:
                 logger.setLevel(logging.CRITICAL)
+                _log_config = ""
             else:
                 logger.setLevel(logging.INFO)
+                _log_config = {
+                    'unailib': 'debug',
+                    'autotls': 'debug',
+                    'p2p-forge': 'debug',
+                    'nat': 'debug',
+                    'basichost': 'debug',
+                    'p2p-circuit': 'debug',
+                    'relay': 'debug',
+                    'p2p-holepunch': 'debug',
+                }
 
             logger.info("🐍 Setting up and initializing P2P library core with user settings...")
             cls._type_interface = TypeInterface(cls.libp2p)
@@ -112,7 +123,7 @@ class P2P:
                 cls._type_interface.to_go_int(_max_channels),
                 cls._type_interface.to_go_int(_max_queue),
                 cls._type_interface.to_go_int(_max_msg_size),
-                cls._type_interface.to_go_bool(enable_logging)
+                cls._type_interface.to_go_json(_log_config)
             )
 
             cls._library_initialized = True

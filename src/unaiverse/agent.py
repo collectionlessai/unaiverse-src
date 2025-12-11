@@ -50,6 +50,7 @@ class Agent(AgentBasics):
         
         # Stats
         self.stats = Stats(is_world=False)
+        self.overwrite_stats = False  # Whether to overwrite stats when receiving the next STATS_RESPONSE from the world
 
     def remove_peer_from_agent_status_attrs(self, peer_id):
         super().remove_peer_from_agent_status_attrs(peer_id)
@@ -1501,27 +1502,27 @@ class Agent(AgentBasics):
             self.deb("[send_stats_to_world] No stats to send.")
             return
 
-        self.out(f"[AGENT] Sending stats update to world {world_peer_id}...")
-        
         # Send all stats
+        self.out(f"[AGENT] Sending stats update to world {world_peer_id}...")
         if not self._node_conn.send(world_peer_id,
                                     channel_trail=None,
                                     content=payload,
                                     content_type=Msg.STATS_UPDATE):
             self.err("Failed to send stats update to world.")
         
-        # TODO: remove, this is just for testing
+        # Ask the updates to the world (no overwrite required)
+        self.out(f"[AGENT] Requesting stats update from world {world_peer_id}...")
         if not self._node_conn.send(world_peer_id,
                                     channel_trail=None,
-                                    content={'stat_names': []},  # query without any filter
+                                    content={'time_range': self.stats._max_seen_timestamp},
                                     content_type=Msg.STATS_REQUEST):
              self.err("Failed to request stats to world.")
     
-    def set_stats_view(self, received_view):
+    def update_stats_view(self, received_view, overwrite: bool = False):
         """
-        Set the _world_view attribute of the Stats object.
+        Updates the _world_view attribute of the Stats object.
         """
-        self.stats.set_view(received_view)
+        self.stats.update_view(received_view, overwrite)
 
     def suggest_role_to_world(self, agent: str | None, role: str):
         """Suggests a role change for one or more agents to the world master. It iterates through the involved agents,

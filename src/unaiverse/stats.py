@@ -390,6 +390,7 @@ class Stats:
         else:
             # --- Agent Initialization (Simple Buffer) ---
             self._world_view: Dict[str, Any] = {}
+            self._min_window_duration = timedelta(hours=3.0)  # cache for the _world_view
             self._update_batch: List[Dict[str, Any]] = []
     
     def _out(self, msg: str):
@@ -648,14 +649,62 @@ class Stats:
             })
     
     # --- AGENT API ---
-    def set_view(self, view_data: Dict[str, Any]):
+    def update_view(self, view_data: Dict[str, Any], overwrite: bool = False):
         """
         (Agent-side) Replaces the local view with data received from World.
         This is 'dumb' storage: we don't parse it, we just store it for plotting.
+        
+        The view has this structure:
+        {
+            "world": { "stat_name": value_or_timeseries },
+            "peers": { "peer_id": { "stat_name": value_or_timeseries } }
+        }
+        For Dynamic stats, returns a list of lists: [[timestamp, value], ...] for efficient JSON/Plotly usage.
+        
+        Args:
+            view_data: The snapshot received from the world.
+            overwrite: If True, replaces the entire current view instead of merging.
         """
         if self._is_world:
             return
-        self._world_view = view_data
+        
+        # Initialize empty structure if needed
+        if not self._world_view or overwrite:
+            self._world_view = {'world': {}, 'peers': {}}
+        
+        def _update_max_ts(ts):
+            """Helper to update the max seen timestamp from a time-series."""
+            # Dynamic stats come as [[ts, val], [ts, val]...]
+            if isinstance(ts, list) and len(ts) > 0 and isinstance(ts[0], list):
+                # The last item is usually the newest in sorted time-series
+                last_ts = ts[-1][0]
+                if last_ts > self._max_seen_timestamp:
+                    self._max_seen_timestamp = int(last_ts)
+        
+        def _merge_dict(target: Dict, source: Dict):
+            """
+            Helper to merge source into target with special handling for dynamic stats.
+            Copies a source dict { "stat_name": value_or_timeseries } into target.
+            """
+            for stat_name, val_or_ts in source.items():
+                if stat_name in self._all_dynamic_keys:
+                    _update_max_ts(val_or_ts)
+                    if stat_name not in target:
+                        target[stat_name] = []
+                    target[stat_name].extend(val_or_ts)
+                else:
+                    target[stat_name] = val_or_ts
+        
+        # 1. Merge World (Ungrouped) Stats
+        if 'world' in view_data:
+            _merge_dict(self._world_view.setdefault('world', {}), view_data['world'])
+        
+        # 2. Merge Peer (Grouped) Stats
+        if 'peers' in view_data:
+            target_peers = self._world_view.setdefault('peers', {})
+            for peer_id, peer_data in view_data['peers'].items():
+                target_peer = target_peers.setdefault(peer_id, {})
+                _merge_dict(target_peer, peer_data)
     
     def _get_last_val_from_view(self, view: Dict, name: str) -> str:
         """Helper to extract a scalar value safely from the view snapshot.
@@ -986,20 +1035,27 @@ class Stats:
 
     # --- WORLD API (QUERYING) ---
     def query_history(self, 
-                      stat_names: List[str], 
-                      peer_ids: List[str] | None = None,
-                      time_range: Tuple[int, int] | None = None,
+                      stat_names: List[str] = [], 
+                      peer_ids: List[str] = [],
+                      time_range: Union[Tuple[int, int], int, None] = None,
                       value_range: Tuple[float, float] | None = None,
                       limit: int | None = None) -> Dict[str, Any]:
         """
         (World-only) Queries the SQLite DB for specific stats, potentially filtering by VALUE.
         Returns the same structure as get_view(), allowing the agent to ingest it seamlessly.
+        Automatically flushes the current memory buffer to DB before querying
+        to ensure "read-your-writes" consistency.
         
         Args:
             value_range: (min, max) - Only returns rows where val_num is within range.
         """
         if not self._is_world or not self._db_conn:
             return {}
+        
+        # Flush the cached upadtes to db before querying
+        self._save_static_to_db()
+        self._save_dynamic_to_db()
+        self._db_conn.commit()
 
         snapshot = {'world': {}, 'peers': {}}
         
@@ -1150,13 +1206,13 @@ class Stats:
             self._deb('SQLite connection closed.')
     
     # --- PLOTTING INTERFACE ---
-    def plot(self) -> str | None:
+    def plot(self, since_timestamp: int = 0) -> str | None:
         """
         Default dashboard implementation. 
         Visualizes Core Stats: Topology, Agent Counts, States, and Actions.
         """
         # 1. Get Data view
-        view = self.get_view() if self._is_world else self._world_view
+        view = self.get_view(since_timestamp) if self._is_world else self._world_view
         if not view:
             return None
             
@@ -1282,7 +1338,7 @@ class Stats:
             edges_data = raw_graph['edges']
             nodes_data = raw_graph['nodes']
         else:
-            # Fallback for old DB data
+            # Fallback for simple graphs without node details
             edges_data = raw_graph 
             nodes_data = {}
 
