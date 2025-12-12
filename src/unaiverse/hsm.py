@@ -1752,6 +1752,7 @@ class HybridStateMachine:
                         act_name, act_args, act_ready, act_id = action_list_tuple
                         msg = None
                     else:
+                        print(action_list_tuple)
                         act_name, act_args, act_ready, act_id, msg = action_list_tuple
 
                     # Recall that act_id can be set to -1 in the original file, meaning "automatically set the act_id"

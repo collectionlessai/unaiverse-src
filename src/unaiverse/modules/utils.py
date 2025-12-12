@@ -14,6 +14,7 @@
 """
 import io
 import os
+import io
 import torch
 import random
 import inspect
@@ -210,6 +211,10 @@ def get_proc_inputs_and_proc_outputs_for_image_classification(y_dim: int):
     return proc_inputs, proc_outputs
 
 
+def isinstance_fcn(obj, class_to_check):
+    return isinstance(obj, class_to_check)
+
+
 def error_rate_mnist_test_set(network: torch.nn.Module, mnist_data_save_path: str):
 
     # Getting MNIST test set
@@ -250,21 +255,9 @@ class MultiIdentity(torch.nn.Module):
 class HumanModule(torch.nn.Module):
     def __init__(self):
         super().__init__()
-        self.__out_text = None
-        self.__out_img = None
-        self.__event = threading.Event()
 
-    def forward(self, text: str, img: Image):
-        self.__out_text = None
-        self.__out_img = None
-        self.__event.clear()
-        self.__event.wait()  # Blocks until set (Waiting for human inputs)
-        return self.__out_text, self.__out_image
-
-    def go_ahead(self, text: str, img: Image):
-        self.__out_text = text
-        self.__out_img = img
-        self.__event.set()  # Unblock forward(...)
+    def forward(self, text: str = None, img: Image = None):
+        return text, img
 
 
 class ModuleWrapper(torch.nn.Module):
@@ -315,14 +308,17 @@ class AgentProcessorChecker:
 
         assert proc is None or isinstance(proc, torch.nn.Module), "Processor (proc) must be a torch.nn.Module"
         assert (proc_inputs is None or (
-                isinstance(proc_inputs, list) and (len(proc_inputs) == 0 or
-                                                   len(proc_inputs) > 0 and isinstance(proc_inputs[0], Data4Proc)))), \
+                isinstance_fcn(proc_inputs, list) and (len(proc_inputs) == 0 or
+                                                       (len(proc_inputs) > 0 and
+                                                       isinstance_fcn(proc_inputs[0], Data4Proc))))), \
             "Invalid proc_inputs: it must be None or a list of Data4Proc"
         assert (proc_outputs is None or (
-                isinstance(proc_inputs, list) and (len(proc_inputs) == 0 or
-                                                   len(proc_inputs) > 0 and isinstance(proc_inputs[0], Data4Proc)))), \
+                isinstance_fcn(proc_inputs, list) and (len(proc_inputs) == 0 or
+                                                       (len(proc_inputs) > 0 and
+                                                       isinstance_fcn(proc_inputs[0], Data4Proc))))), \
             "Invalid proc_inputs: it must be None or a list of Data4Proc"
-        assert (proc_opts is None or isinstance(proc_opts, dict)), "Invalid proc_opts: it must be None or a dictionary"
+        assert (proc_opts is None or isinstance_fcn(proc_opts, dict)), \
+            "Invalid proc_opts: it must be None or a dictionary"
 
         # Saving as attributes
         self.proc = proc

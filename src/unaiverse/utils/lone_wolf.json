@@ -4,15 +4,27 @@
     "prev_state": null,
     "limbo_state": null,
     "state_actions": {
-        "ready": [null, null, 0, false],
-        "done_gen": [null, null, 1, false]
+        "ready": [null, null, 0, false, 0.0],
+        "i_asked_a_wolf": [null, null, 1, false, 0.0],
+        "the_asked_wolf_is_done": [null, null, 2, false, 0.0],
+        "i_did_generate": [null, null, 3, false, 0.0]
     },
     "transitions": {
         "ready": {
-            "done_gen": [["do_gen", {"timeout": 7.5}, false, 0]]
+            "i_asked_a_wolf": [["ask_gen", {"u_hashes": ["<agent>:processor"], "samples": 1}, false, 0]],
+            "i_did_generate": [["do_gen", {"timeout": 90.0}, false, 1]]
         },
-        "done_gen": {
-            "ready": [["nop", {}, true, 3]]
+        "i_asked_a_wolf": {
+            "the_asked_wolf_is_done": [
+                ["done_gen", {}, false, 2],
+                ["nop", {"delay":  90.0}, true, 3]
+            ]
+        },
+        "the_asked_wolf_is_done": {
+            "ready": [["nop", {}, true, 4]]
+        },
+        "i_did_generate": {
+            "ready": [["nop", {}, true, 5]]
         }
     },
     "cur_action": null

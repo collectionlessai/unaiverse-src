@@ -95,6 +95,16 @@ class Agent(AgentBasics):
                      f"and result of sending is {ret}")
         return at_least_one_completed
 
+    def set_engaged_partner(self, agent: str):
+        """Virtually forces the engagement with a single agent, clearing all existing engagements.
+
+        Returns:
+            True all the times.
+        """
+        self._engaged_agents.clear()
+        self._engaged_agents.add(agent)
+        return True
+
     def send_engagement(self):
         """Offer engagement to the agents whose identifiers are in self._found_agents.
 
@@ -1473,7 +1483,7 @@ class Agent(AgentBasics):
             peers_list = [i['id'] for i in info]
             self.stats.store_stat('connected_peers', peers_list, own_private_pid, t)
         except Exception:
-             self.stats.store_stat('connected_peers', [], own_private_pid, t)
+            self.stats.store_stat('connected_peers', [], own_private_pid, t)
 
         try:
             behav = self.behav
@@ -1516,7 +1526,7 @@ class Agent(AgentBasics):
                                     channel_trail=None,
                                     content={'time_range': self.stats._max_seen_timestamp},
                                     content_type=Msg.STATS_REQUEST):
-             self.err("Failed to request stats to world.")
+            self.err("Failed to request stats to world.")
     
     def update_stats_view(self, received_view, overwrite: bool = False):
         """

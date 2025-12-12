@@ -185,6 +185,10 @@ class DataStream:
         else:
             return None
 
+    def get_(self, requested_by: str | None = None) -> torch.Tensor:
+        """Wrapper of 'get'."""
+        return self.get(requested_by)
+
     def get_timestamp(self) -> float:
         return self.data_timestamp
 

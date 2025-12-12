@@ -138,9 +138,10 @@ class AgentBasics:
         self.last_buffered_peer_id_to_info = {}   # If buffering was turned on
         self.last_ref_uuid = None
         self.recipients = {}  # The peer IDs of the recipients of the next batch of direct messages
+        self.overridden_action_step = None
 
         # Stats
-        self.stats: Stats = None
+        self.stats: Stats | None = None
         self.agent_stats_code = None
 
         # Information inherited from the node that hosts this agent
@@ -185,7 +186,7 @@ class AgentBasics:
                 if template_string == "serve":
                     json_to_load = "lone_wolf.json"
                 elif template_string == "ask":
-                    json_to_load = "ask_lone_wolf.json"
+                    json_to_load = "lone_wolf.json"
                 else:
                     raise ValueError("Invalid behav_lone_wolf: it must be an HybridStateMachine or a string "
                                      "in ('serve', 'ask')")
@@ -266,6 +267,9 @@ class AgentBasics:
                             self.agent_stats_code = file.read()    
                     except Exception as e:
                         raise GenException(f'Error while reading/loading the stats.py file: {stats_file} [{e}]')
+
+        # Creating streams associated to the processor input (right now we assume there is no need to buffer them)
+        self.create_proc_input_streams(buffered=False)
 
         # Creating streams associated to the processor output
         self.create_proc_output_streams(buffered=self.buffer_generated)
@@ -869,6 +873,33 @@ class AgentBasics:
             if _peer_id == peer_id and _name_or_group == name_or_group:
                 return net_hash
         return None
+
+    def create_proc_input_streams(self, buffered: bool = False):
+        """Creates the processor input streams based on the `proc_inputs` defined for the agent.
+
+        Args:
+            buffered: If True, the created streams will be of type BufferedDataStream.
+        """
+
+        # Adding input streams (grouped together), passing the node clock
+        if self.proc_inputs is not None:
+            for i, procs in enumerate(self.proc_inputs):
+                procs.set_group("processor_in")  # Adding default group info, forced, do not change this!
+
+                # Creating the streams
+                for props in procs.props:
+                    if not buffered:
+                        stream = DataStream(props=props.clone(), clock=self._node_clock)
+                    else:
+                        stream = BufferedDataStream(props=props.clone(), clock=self._node_clock)
+
+                    self.add_stream(stream, owned=True)
+
+                    # forcing the input stream to be compatible with proc inputs
+                    public_peer_id, private_peer_id = self.get_peer_ids()
+                    peer_id = public_peer_id if stream.is_public() else private_peer_id
+                    net_hash = stream.net_hash(peer_id)
+                    self.compat_in_streams[i].add((net_hash, props.get_name()))
 
     def create_proc_output_streams(self, buffered: bool = False):
         """Creates the processor output streams based on the `proc_outputs` defined for the agent.
@@ -1655,6 +1686,9 @@ class AgentBasics:
                 else:
                     raise ValueError(f"Unexpected scenario: recipient set ({recipient}) and sending on a pubsub stream")
 
+    def force_action_step(self, step: int):
+        self.overridden_action_step = step if step >= 0 else None
+
     def get_action_step(self):
         """Retrieve the current action step from the agent's private/world behavior.
 
@@ -1662,7 +1696,7 @@ class AgentBasics:
             The current action step object from the HybridStateMachine's active action, or None if no action.
         """
         behav = self.behav if self.behav.is_enabled() else self.behav_lone_wolf
-        return behav.get_action_step()
+        return behav.get_action_step() if self.overridden_action_step is None else self.overridden_action_step
 
     def is_last_action_step(self):
         """Check if the agent's current action (private/world behaviour) is on its last step.
