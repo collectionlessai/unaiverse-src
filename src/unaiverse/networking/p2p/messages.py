@@ -17,11 +17,10 @@ import os
 import gzip
 import json
 import torch
-import mimetypes
 from PIL import Image
 from typing import Any
-from dataclasses import dataclass
 from datetime import datetime, timezone
+from unaiverse.dataprops import FileContainer
 from google.protobuf.json_format import MessageToDict, ParseDict
 from google.protobuf.struct_pb2 import Value, ListValue, NULL_VALUE
 
@@ -31,30 +30,6 @@ try:
 except ImportError:
     print("Error: message_pb2.py not found. Please compile the .proto file first.")
     raise
-
-
-@dataclass
-class FileContainer:
-    """Helper class to distinguish a "File" from a generic byte string or text."""
-    content: bytes | str
-    filename: str
-    mime_type: str
-    
-    @classmethod
-    def from_path(cls, file_path: str):
-        # 1. Guess MIME type based on extension
-        mime_type, _ = mimetypes.guess_type(file_path)
-        if mime_type is None:
-            mime_type = "application/octet-stream"  # Safe fallback for binary
-
-        # 2. Extract clean filename
-        filename = os.path.basename(file_path)
-
-        # 3. Read file safely as BYTES (crucial for Protobuf)
-        with open(file_path, "rb") as f:
-            file_bytes = f.read()
-
-        return cls(content=file_bytes, filename=filename, mime_type=mime_type)
 
 
 class Msg:

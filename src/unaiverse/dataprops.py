@@ -12,10 +12,37 @@
                  Code Repositories:  https://github.com/collectionlessai/
                  Main Developers:    Stefano Melacci (Project Leader), Christian Di Maio, Tommaso Guidi
 """
+import os
 import torch
+import mimetypes
 from PIL import Image
 from typing import Callable, Any
+from dataclasses import dataclass
 from transformers import AutoTokenizer, PreTrainedTokenizerBase
+
+
+@dataclass
+class FileContainer:
+    """Helper class to distinguish a "File" from a generic byte string or text."""
+    content: bytes | str
+    filename: str
+    mime_type: str
+    
+    @classmethod
+    def from_path(cls, file_path: str):
+        # 1. Guess MIME type based on extension
+        mime_type, _ = mimetypes.guess_type(file_path)
+        if mime_type is None:
+            mime_type = "application/octet-stream"  # Safe fallback for binary
+
+        # 2. Extract clean filename
+        filename = os.path.basename(file_path)
+
+        # 3. Read file safely as BYTES (crucial for Protobuf)
+        with open(file_path, "rb") as f:
+            file_bytes = f.read()
+
+        return cls(content=file_bytes, filename=filename, mime_type=mime_type)
 
 
 class Data4Proc:

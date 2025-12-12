@@ -1059,62 +1059,91 @@ class Stats:
 
         snapshot = {'world': {}, 'peers': {}}
         
-        # We only query DYNAMIC stats here usually, but we can add static if needed.
-        # Focusing on dynamic for plotting logic.
+        # A. Query the static stats
+        query_static = ['SELECT peer_id, stat_name, val_json FROM static_stats WHERE 1=1']
+        params_static = []
+
+        if stat_names:
+            query_static.append(f'AND stat_name IN ({",".join(["?"]*len(stat_names))})')
+            params_static.extend(stat_names)
+        if peer_ids:
+            query_static.append(f'AND peer_id IN ({",".join(["?"]*len(peer_ids))})')
+            params_static.extend(peer_ids)
+
+        try:
+            cursor = self._db_conn.execute(' '.join(query_static), params_static)
+            for pid, sname, vjson in cursor:
+                val = self._validate_type(json.loads(vjson))
+                # Handle special Graph reconstruction if needed (legacy format support)
+                if sname == 'graph':
+                    # Handle both legacy format (just edges) and new format (nodes+edges) safely
+                    if isinstance(val, dict) and 'edges' in val:
+                        # Convert the edge lists back to sets
+                        val['edges'] = {k: set(v) for k, v in val['edges'].items()}
+                        # Ensure nodes dict exists
+                        if 'nodes' not in val:
+                            val['nodes'] = {}
+                    else:
+                        # Convert entire dict to sets (as it was before)
+                        edges_set = {k: set(v) for k, v in val.items()}
+                        # Migrate to new structure on the fly
+                        val = {'nodes': {}, 'edges': edges_set}
+
+                # Static stats format: value (direct)
+                if pid in (None, 'None', ''):
+                    snapshot['world'][sname] = val
+                else:
+                    snapshot['peers'].setdefault(pid, {})[sname] = val
+        except Exception as e:
+            self._err(f'Query history (static) failed: {e}')
         
-        query_parts = ['SELECT timestamp, peer_id, stat_name, val_num, val_str, val_json FROM dynamic_stats WHERE 1=1']
-        params = []
+        # B. Query the dynamic stats
+        query_dyn = ['SELECT timestamp, peer_id, stat_name, val_num, val_str, val_json FROM dynamic_stats WHERE 1=1']
+        params_dyn = []
 
         # 1. Stat Names
         if stat_names:
-            query_parts.append(f'AND stat_name IN ({','.join(['?']*len(stat_names))})')
-            params.extend(stat_names)
+            query_dyn.append(f'AND stat_name IN ({','.join(['?']*len(stat_names))})')
+            params_dyn.extend(stat_names)
         
         # 2. Peer IDs
         if peer_ids:
-            query_parts.append(f'AND peer_id IN ({','.join(['?']*len(peer_ids))})')
-            params.extend(peer_ids)
+            query_dyn.append(f'AND peer_id IN ({','.join(['?']*len(peer_ids))})')
+            params_dyn.extend(peer_ids)
             
-        # 3. Time Range
-        if time_range:
-            query_parts.append('AND timestamp >= ? AND timestamp <= ?')
-            params.extend([time_range[0], time_range[1]])
+        if time_range is not None:
+            if isinstance(time_range, int):
+                # Treated as "Since X"
+                query_dyn.append('AND timestamp >= ?')
+                params_dyn.append(time_range)
+            elif isinstance(time_range, (tuple, list)) and len(time_range) == 2:
+                # Treated as "Between X and Y"
+                query_dyn.append('AND timestamp >= ? AND timestamp <= ?')
+                params_dyn.extend([time_range[0], time_range[1]])
 
         # 4. Value Range (The logic requested by user)
         if value_range:
-            # Note: This only works for numeric stats. 
-            # If the stat is stored as string/json, this filter might hide it or error depending on DB strictness.
-            query_parts.append('AND val_num IS NOT NULL AND val_num >= ? AND val_num <= ?')
-            params.extend([value_range[0], value_range[1]])
+            query_dyn.append('AND val_num IS NOT NULL AND val_num >= ? AND val_num <= ?')
+            params_dyn.extend([value_range[0], value_range[1]])
             
-        query_parts.append('ORDER BY timestamp ASC')
+        query_dyn.append('ORDER BY timestamp ASC')
         
         # add the limit
-        query_parts.append('LIMIT 1000' if limit is None else f'LIMIT {limit}')
+        query_dyn.append('LIMIT 5000' if limit is None else f'LIMIT {limit}')
 
         try:
-            cursor = self._db_conn.execute(' '.join(query_parts), params)
-            
+            cursor = self._db_conn.execute(' '.join(query_dyn), params_dyn)
             for ts, pid, sname, vnum, vstr, vjson in cursor:
-                # Determine value
-                if vnum is not None:
-                    val = self._validate_type(sname, vnum)
-                elif vstr is not None:
-                    val = self._validate_type(sname, vstr)
-                else:
-                    val = self._validate_type(sname, json.loads(vjson))
+                ts = int(ts)
+                val = vnum if vnum is not None else (vstr if vstr is not None else json.loads(vjson))
+                val = self._validate_type(sname, val)
                 
                 # Structure construction
                 if pid in (None, 'None', ''): # Handling world stats
-                    if sname not in snapshot['world']: 
-                        snapshot['world'][sname] = []
-                    snapshot['world'][sname].append([ts, val])
+                    target_ts = snapshot['world'].setdefault(sname, [])
                 else: # Handling peer stats
-                    if pid not in snapshot['peers']: 
-                        snapshot['peers'][pid] = {}
-                    if sname not in snapshot['peers'][pid]: 
-                        snapshot['peers'][pid][sname] = []
-                    snapshot['peers'][pid][sname].append([ts, val])
+                    target_ts = snapshot['peers'].setdefault(pid, {}).setdefault(sname, [])
+                target_ts.append([ts, val])
                     
         except Exception as e:
             self._err(f'Query history failed: {e}')

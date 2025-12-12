@@ -1683,7 +1683,8 @@ class Node:
                 self.out(f"[NODE] Received a stats response from " + msg.sender)
                 if self.node_type is Node.AGENT:
                     if msg.sender == self.conn.get_world_peer_id():
-                        self.agent.update_stats_view(msg.content, self.agent.overwrite_stats)
+                        # self.agent.update_stats_view(msg.content, self.agent.overwrite_stats)
+                        pass
                     else:
                         self.err(f"Received stats response from {msg.sender}, but it is not the world.")
                 elif self.node_type is Node.AGENT:
@@ -2028,7 +2029,7 @@ class Node:
             peer_id: The peer ID of the node to purge.
         """
         self.hosted.remove_agent(peer_id)
-        self.conn.remove(peer_id)
+        # self.conn.remove(peer_id)
 
         # Clearing also the contents of the list of interviews
         if peer_id in self.agents_to_interview:
