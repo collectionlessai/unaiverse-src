@@ -164,6 +164,7 @@ type NodeInstance struct {
 	// Address Cache
     addrMutex  sync.RWMutex
     localAddrs []ma.Multiaddr
+    relayAddrs []ma.Multiaddr
 
 	// PubSub State
 	pubsubMutex   sync.RWMutex
@@ -473,29 +474,22 @@ func handleAddressUpdateEvents(ni *NodeInstance, sub event.Subscription) {
 		select {
 		case <-ni.ctx.Done():
 			return
-		case e, ok := <-sub.Out():
+		case _, ok := <-sub.Out():
 			if !ok {
 				return
 			}
-			evt := e.(event.EvtLocalAddressesUpdated)
-
-			// The event contains the snapshot of Current addresses.
-			// We just replace our cache with this list.
-			newAddrs := make([]ma.Multiaddr, len(evt.Current))
-			newAddrsStr := make([]string, len(evt.Current))
-			for i, updatedAddr := range evt.Current {
-				if strings.HasPrefix(updatedAddr.Address.String(), "/p2p-circuit/") {
-					continue
-				}
-				newAddrs[i] = updatedAddr.Address
-				newAddrsStr[i] = updatedAddr.Address.String()
-			}
-
+			// We only use the event as a trigger but we take the addresses from the Host
+			allAddresses := ni.host.Addrs()
 			ni.addrMutex.Lock()
-			ni.localAddrs = newAddrs
-			ni.addrMutex.Unlock()
+        	ni.localAddrs = allAddresses
+            ni.addrMutex.Unlock()
             
-			logger.Debugf("[GO] 🔄 Instance %d: Updated local address cache. Addrs: %v", ni.instanceIndex, newAddrsStr)
+            // Log addresses to verify
+            addrsStr := make([]string, len(allAddresses))
+            for i, a := range allAddresses {
+                addrsStr[i] = a.String()
+            }
+			logger.Debugf("[GO] 🔄 Instance %d: Updated local addresses (updating cache). Addrs: %v", ni.instanceIndex, addrsStr)
 		}
 	}
 }
@@ -1018,6 +1012,7 @@ func goGetNodeAddresses(
 	if isThisNode {
 		ni.addrMutex.RLock()
 		candidateAddrs = append(candidateAddrs, ni.localAddrs...)
+		candidateAddrs = append(candidateAddrs, ni.relayAddrs...)
 		ni.addrMutex.RUnlock()
 	} else {
 		// --- Remote Peer Addresses ---
@@ -1154,6 +1149,12 @@ func (ni *NodeInstance) Close() error {
 	ni.peersMutex.Lock()
 	ni.connectedPeers = make(map[peer.ID]ExtendedPeerInfo) // Clear the map
 	ni.peersMutex.Unlock()
+
+	// Clear also the addresses
+	ni.addrMutex.Lock()
+	ni.localAddrs = nil
+	ni.relayAddrs = nil
+	ni.addrMutex.Unlock()
 
 	// Clear the MessageStore for this instance
 	if ni.messageStore != nil {
@@ -1741,8 +1742,6 @@ func ReserveOnRelay(
 	goRelayPeerID := C.GoString(relayPeerIDC)
 	logger.Debugf("[GO] 🅿️ Instance %d: Attempting to reserve slot on relay with Peer ID: %s\n", ni.instanceIndex, goRelayPeerID)
 
-	
-
 	// --- Decode Peer ID and build AddrInfo from Peerstore ---
 	relayPID, err := peer.Decode(goRelayPeerID)
 	if err != nil {
@@ -1795,7 +1794,7 @@ func ReserveOnRelay(
 	// --- Construct Relayed Addresses and Update Local Peerstore ---
 	// We construct a relayed address for each public address of the relay to maximize reachability.
 	var constructedAddrs []ma.Multiaddr
-	for _, relayAddr := range relayInfo.Addrs {
+	for _, relayAddr := range reservation.Addrs {
 		// We only want to use public, usable addresses for the circuit
 		if manet.IsIPLoopback(relayAddr) || manet.IsIPUnspecified(relayAddr) {
 			continue
@@ -1806,9 +1805,8 @@ func ReserveOnRelay(
 		if _, idInAddr := peer.SplitAddr(relayAddr); idInAddr == "" {
 			baseRelayAddrStr = fmt.Sprintf("%s/p2p/%s", relayAddr.String(), relayInfo.ID.String())
 		}
-
-		constructedAddrStr := fmt.Sprintf("%s/p2p-circuit/p2p/%s", baseRelayAddrStr, ni.host.ID().String())
-		constructedAddr, err := ma.NewMultiaddr(constructedAddrStr)
+		
+		constructedAddr, err := ma.NewMultiaddr(fmt.Sprintf("%s/p2p-circuit", baseRelayAddrStr))
 		if err == nil {
 			constructedAddrs = append(constructedAddrs, constructedAddr)
 		}
@@ -1818,8 +1816,24 @@ func ReserveOnRelay(
 		return jsonErrorResponse("Reservation succeeded but failed to construct any valid relayed multiaddr", nil)
 	}
 
-	logger.Debugf("[GO]   - Instance %d: Adding %d constructed relayed address(es) to local peerstore (ID: %s) expiring at: %s\n", ni.instanceIndex, len(constructedAddrs), ni.host.ID(), reservation.Expiration.Format(time.RFC3339))
-	ni.host.Peerstore().AddAddrs(ni.host.ID(), constructedAddrs, peerstore.PermanentAddrTTL)
+	logger.Debugf("[GO] 🔗 Instance %d: Constructed %d Relayed Addresses:", ni.instanceIndex, len(constructedAddrs))
+	for _, addr := range constructedAddrs {
+		logger.Debugf("[GO]      -> %s", addr.String())
+	}
+	// Tell the Network to start listening on these addresses.
+    // This activates the circuit transport for this specific relay, updates host.Addrs(),
+    // and triggers the EvtLocalAddressesUpdated event automatically.
+    if err := ni.host.Network().Listen(constructedAddrs...); err != nil {
+		// If listening fails, it's not fatal for the reservation (we still have the slot),
+		// but it implies we might not be reachable via those specific paths.
+		logger.Warnf("[GO] ⚠️ Instance %d: Failed to start listener on some relayed addresses: %v", ni.instanceIndex, err)
+	} else {
+		logger.Debugf("[GO] ✅ Instance %d: Successfully started listening on relayed addresses.", ni.instanceIndex)
+	}
+	// Also add them directly to the istance
+	ni.addrMutex.Lock()
+    ni.relayAddrs = constructedAddrs 
+    ni.addrMutex.Unlock()
 
 	logger.Infof("[GO] ✅ Instance %d: Reservation successful on relay: %s.\n", ni.instanceIndex, relayInfo.ID)
 

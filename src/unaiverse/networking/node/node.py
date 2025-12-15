@@ -1801,19 +1801,6 @@ class Node:
                         datetime.fromisoformat(expiry_utc.replace('Z', '+00:00')))
                     self.out(f"Reserved relay slot. Expires at "
                              f"{self.relay_reservation_expiry.strftime('%Y-%m-%d %H:%M:%S')} UTC")
-
-                    self.out("Fetching updated address list from transport layer...")
-                    complete_private_addrs = self.conn.p2p_world.addresses
-
-                    # Update the profile with this definitive list (IN-PLACE)
-                    address_list = self.profile.get_dynamic_profile()['private_peer_addresses']
-                    address_list.clear()
-                    address_list.extend(complete_private_addrs)
-
-                    self.out("Notifying world of the complete updated address list...")
-                    await self.conn.send(peer_id, channel_trail=None,
-                                         content_type=Msg.ADDRESS_UPDATE,
-                                         content={'addresses': complete_private_addrs})
                 except Exception as e:
                     self.err(f"An error occurred during relay reservation: {e}.")
             
