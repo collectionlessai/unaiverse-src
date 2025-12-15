@@ -251,7 +251,7 @@ class Node:
             "knows_is_public": env_is_public,
             "max_connections": 1000,
             "enable_tls": env_use_tls,
-            "domain_name": env_cert_path,
+            "domain_name": env_domain,
             "tls_cert_path": env_cert_path,
             "tls_key_path": env_key_path,
             "dht_enabled": True,
