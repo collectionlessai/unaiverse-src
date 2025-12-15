@@ -131,13 +131,13 @@ class Action:
         # Status
         self.__cannot_be_run_anymore = False
 
-    def __call__(self, requester: object | None = None, requested_args: dict | None = None,
-                 request_time: float = -1, request_uuid: str | None = None):
+    async def __call__(self, requester: object | None = None, requested_args: dict | None = None,
+                       request_time: float = -1, request_uuid: str | None = None):
         """Executes the action's associated method. This is the main entry point for running an action. It handles
         multistep logic by updating the step counter and checking for completion based on steps, time, or timeout.
         It also injects dynamic arguments like the `requester`, `request_time`, and `request_uuid` into the method's
         arguments before execution. If the action is a multistep action and has a completion step, it handles that
-        callback as well.
+        callback as well (async).
 
         Args:
             requester: The object that requested the action.
@@ -232,7 +232,7 @@ class Action:
                       f"requested by {requester_str}, with actual params: {actual_args}")
 
             # Calling the method here
-            ret = self.__fcn(**actual_args)
+            ret = await self.__fcn(**actual_args)
 
             if HybridStateMachine.DEBUG:
                 print(f"[DEBUG HSM] Returned: {ret}")
@@ -681,10 +681,10 @@ class State:
         if self.msg is not None:
             self.msg = html.unescape(self.msg)
 
-    def __call__(self, *args, **kwargs):
+    async def __call__(self, *args, **kwargs):
         """Executes the state's logic. If a `waiting_time` is set, it starts a timer. If an `action` is associated with
         the state, it resets the action's step counter and then executes the action by calling it. It returns the
-        result of the action's execution.
+        result of the action's execution (async).
 
         Args:
             *args: Positional arguments to pass to the action's `__call__` method.
@@ -703,7 +703,7 @@ class State:
             if HybridStateMachine.DEBUG:
                 print("[DEBUG HSM] Running action on state: " + self.action.name)
             self.action.reset_step()
-            return self.action(*args, **kwargs)
+            return await self.action(*args, **kwargs)
         else:
             return None
 
@@ -1297,21 +1297,21 @@ class HybridStateMachine:
         """
         self.enabled = yes_or_not
 
-    def act_states(self):
+    async def act_states(self):
         """Executes the inner action of the current state, if one exists. This method is for actions that occur upon
-        entering a state but do not cause an immediate transition. It only runs if the state machine is enabled.
+        entering a state but do not cause an immediate transition. It only runs if the state machine is enabled (async).
         """
         if not self.enabled:
             return
 
         if self.state is not None:  # When in the middle of an action, the state is Nones
-            self.states[self.state]()  # Run the action (if any)
+            await self.states[self.state]()  # Run the action (if any)
 
-    def act_transitions(self, requested_only: bool = False):
+    async def act_transitions(self, requested_only: bool = False):
         """This is the core execution loop for transitions. It finds all feasible actions from the current state and,
         using a policy, selects and executes one. It handles single-step and multistep actions, managing state changes,
         timeouts, and failed executions. It returns an integer status code indicating the outcome (e.g., transition
-        done, try again, move to next action).
+        done, try again, move to next action) (async).
 
         Args:
             requested_only: A boolean to consider only actions that have pending requests.
@@ -1387,9 +1387,9 @@ class HybridStateMachine:
             request_uuid = self.__cur_feasible_actions_status['selected_request_uuid']
 
             # Call action
-            action_call_returned_true = action(requester=requester,
-                                               requested_args=requested_args,
-                                               request_time=request_time, request_uuid=request_uuid)
+            action_call_returned_true = await action(requester=requester,
+                                                     requested_args=requested_args,
+                                                     request_time=request_time, request_uuid=request_uuid)
 
             # Status can be one of these:
             # 0: action fully done;
@@ -1525,17 +1525,17 @@ class HybridStateMachine:
         self.__state_changed = False
         return -1
 
-    def act(self):
+    async def act(self):
         """A high-level method that combines `act_states` and `act_transitions` to run the state machine. It repeatedly
         processes states and transitions until a blocking state is reached or all feasible actions have been tried,
-        thus ensuring a complete processing cycle in one call.
+        thus ensuring a complete processing cycle in one call (async).
         """
 
         # It keeps processing states and actions, until all the current feasible actions fail
         # (also when a step of a multistep action is executed) or a blocking state is reached
         while True:
-            self.act_states()
-            ret = self.act_transitions(self.must_wait())
+            await self.act_states()
+            ret = await self.act_transitions(self.must_wait())
             if ret != 0 or (self.state is not None and self.states[self.state].blocking):
                 break
 
@@ -1752,7 +1752,6 @@ class HybridStateMachine:
                         act_name, act_args, act_ready, act_id = action_list_tuple
                         msg = None
                     else:
-                        print(action_list_tuple)
                         act_name, act_args, act_ready, act_id, msg = action_list_tuple
 
                     # Recall that act_id can be set to -1 in the original file, meaning "automatically set the act_id"

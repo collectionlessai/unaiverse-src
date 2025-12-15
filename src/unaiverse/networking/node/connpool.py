@@ -29,7 +29,8 @@ class ConnectionPools:
 
         Args:
             max_connections: The maximum total number of connections allowed across all pools.
-            pool_name_to_p2p_name_and_ratio: A dictionary mapping pool names to a list containing the associated P2P network name and its connection ratio.
+            pool_name_to_p2p_name_and_ratio: A dictionary mapping pool names to a list containing the associated P2P
+                network name and its connection ratio.
             p2p_name_to_p2p: A dictionary mapping P2P network names to their corresponding P2P objects.
             public_key: An optional public key for token verification.
             token: An optional initial token for authentication.
@@ -148,8 +149,8 @@ class ConnectionPools:
         """
         return self.p2p_name_to_p2p[p2p_name]
 
-    def conn_routing_fcn(self, connected_peer_infos: list, p2p: P2P):
-        """A placeholder function that must be implemented to route connected peers to the correct pool.
+    async def conn_routing_fcn(self, connected_peer_infos: list, p2p: P2P):
+        """A placeholder function that must be implemented to route connected peers to the correct pool (async).
 
         Args:
             connected_peer_infos: A list of dictionaries containing information about connected peers.
@@ -161,8 +162,8 @@ class ConnectionPools:
         raise NotImplementedError("You must implement conn_routing_fcn!")
 
     @staticmethod
-    def __connect(p2p: P2P, addresses: list[str]):
-        """Establishes a connection to a peer via a P2P network.
+    async def __connect(p2p: P2P, addresses: list[str]):
+        """Establishes a connection to a peer via a P2P network (async).
 
         Args:
             p2p: The P2P network object to use for the connection.
@@ -190,8 +191,8 @@ class ConnectionPools:
             return None, False
 
     @staticmethod
-    def disconnect(p2p: P2P, peer_id: str):
-        """Disconnects from a specific peer on a P2P network.
+    async def disconnect(p2p: P2P, peer_id: str):
+        """Disconnects from a specific peer on a P2P network (async).
 
         Args:
             p2p: The P2P network object to use for disconnection.
@@ -214,8 +215,8 @@ class ConnectionPools:
         """
         self.__token = token
 
-    def verify_token(self, token: str, peer_id: str):
-        """Verifies a received token using the provided public key.
+    async def verify_token(self, token: str, peer_id: str):
+        """Verifies a received token using the provided public key (async).
 
         Args:
             token: The token string to verify.
@@ -230,8 +231,8 @@ class ConnectionPools:
             node_id, cv_hash = self.__token_verifier.verify_token(token, p2p_peer=peer_id)
             return node_id, cv_hash  # If the verification fails, this is None, None
 
-    def connect(self, addresses: list[str], p2p_name: str):
-        """Connects to a peer on a specified P2P network.
+    async def connect(self, addresses: list[str], p2p_name: str):
+        """Connects to a peer on a specified P2P network (async).
 
         Args:
             addresses: A list of addresses of the peer to connect to.
@@ -243,7 +244,7 @@ class ConnectionPools:
         p2p = self.p2p_name_to_p2p[p2p_name]
 
         # Connecting
-        peer_id, through_relay = ConnectionPools.__connect(p2p, addresses)
+        peer_id, through_relay = await ConnectionPools.__connect(p2p, addresses)
         return peer_id, through_relay
 
     def add(self, peer_info: dict, pool_name: str):
@@ -277,8 +278,8 @@ class ConnectionPools:
         else:
             return False
 
-    def remove(self, peer_id: str):
-        """Removes a peer from its connection pool and disconnects from it.
+    async def remove(self, peer_id: str):
+        """Removes a peer from its connection pool and disconnects from it (async).
 
         Args:
             peer_id: The peer ID to remove.
@@ -291,7 +292,7 @@ class ConnectionPools:
             pool, _, p2p = self.pool_name_to_pool_triple[pool_name]
 
             # Disconnecting
-            disc = ConnectionPools.disconnect(p2p, peer_id)
+            disc = await ConnectionPools.disconnect(p2p, peer_id)
             pool.remove(peer_id)
             del self.pool_name_to_peer_infos[pool_name][peer_id]
             del self.peer_id_to_pool_name[peer_id]
@@ -337,8 +338,8 @@ class ConnectionPools:
         """
         return list(self.peer_id_to_pool_name.keys())
 
-    def update(self):
-        """Refreshes the connection pools by checking for new and lost connections.
+    async def update(self):
+        """Refreshes the connection pools by checking for new and lost connections (async).
 
         Args:
             None.
@@ -356,7 +357,7 @@ class ConnectionPools:
             if connected_peer_infos is not None:
 
                 # Routing to the right queue / filtering
-                pool_name_and_peer_ids_to_peer_info = self.conn_routing_fcn(connected_peer_infos, p2p)
+                pool_name_and_peer_ids_to_peer_info = await self.conn_routing_fcn(connected_peer_infos, p2p)
 
                 # Parsing the generated index
                 for pool_name, connected_peer_ids_to_connected_peer_infos \
@@ -379,12 +380,13 @@ class ConnectionPools:
 
         return self.pool_name_to_added_in_last_update, self.pool_name_to_removed_in_last_update
 
-    def get_messages(self, p2p_name: str, allowed_not_connected_peers: set | None = None) -> list[Msg]:
-        """Retrieves and verifies all messages from a specified P2P network.
+    async def get_messages(self, p2p_name: str, allowed_not_connected_peers: set | None = None) -> list[Msg]:
+        """Retrieves and verifies all messages from a specified P2P network (async).
 
         Args:
             p2p_name: The name of the P2P network to fetch messages from.
-            allowed_not_connected_peers: An optional set of peer IDs to allow messages from, even if they are not in the pools.
+            allowed_not_connected_peers: An optional set of peer IDs to allow messages from, even if they are not
+                in the pools.
 
         Returns:
             A list of verified and processed message objects.
@@ -412,8 +414,8 @@ class ConnectionPools:
                 # Verify that the sender claimed inside the message payload
                 # matches the cryptographically verified sender from the network layer.
                 if msg_obj.sender != verified_sender_id:
-                    print(f"[DEBUG CONNECTIONS-POOL] SENDER MISMATCH! Network sender '{verified_sender_id}' does not match "
-                                f"payload sender '{msg_obj.sender}'. Discarding message.")
+                    print(f"[DEBUG CONNECTIONS-POOL] SENDER MISMATCH! Network sender '{verified_sender_id}' "
+                          f"does not match payload sender '{msg_obj.sender}'. Discarding message.")
 
                     # In a real-world scenario, you might also want to penalize or disconnect
                     # from a peer that sends such malformed/spoofed messages.
@@ -421,13 +423,13 @@ class ConnectionPools:
                 
                 # filter only valid messages to return
                 if (msg_obj.sender in self.peer_id_to_pool_name or  # Check if expected sender
-                    (allowed_not_connected_peers is not None and msg_obj.sender in allowed_not_connected_peers)):
-                    
+                        (allowed_not_connected_peers is not None and msg_obj.sender in allowed_not_connected_peers)):
+
                     try:
                         token_with_inspector_final_bit = msg_obj.piggyback
                         token = token_with_inspector_final_bit[0:-1]
                         inspector_mode = token_with_inspector_final_bit[-1]
-                        node_id, _ = self.verify_token(token, msg_obj.sender)
+                        node_id, _ = await self.verify_token(token, msg_obj.sender)
                         if node_id is not None:
                             # Replacing piggyback with the node ID and the flag telling if it is inspector
                             msg_obj.piggyback = node_id + inspector_mode
@@ -443,10 +445,12 @@ class ConnectionPools:
                 print(f"[DEBUG CONNECTIONS-POOL]Invalid message created, stopping. Error: {ve}")
                 continue  # Skip problematic message
             except (TypeError, binascii.Error) as decode_err:
-                print(f"[DEBUG CONNECTIONS-POOL] Failed to decode Base64 data for a message in batch: {decode_err}. Message dict: {msg_dict}")
+                print(f"[DEBUG CONNECTIONS-POOL] Failed to decode Base64 data for a message in batch: {decode_err}. "
+                      f"Message dict: {msg_dict}")
                 continue  # Skip problematic message
             except Exception as msg_proc_err:  # Catch errors from Msg.from_bytes or attribute setting
-                print(f"[DEBUG CONNECTIONS-POOL] Error processing popped message item {i}: {msg_proc_err}. Message dict: {msg_dict}")
+                print(f"[DEBUG CONNECTIONS-POOL] Error processing popped message item {i}: {msg_proc_err}. "
+                      f"Message dict: {msg_dict}")
                 continue  # Skip problematic message
         
         return processed_messages
@@ -533,9 +537,9 @@ class ConnectionPools:
                 c += len(v)
             return c
 
-    def send(self, peer_id: str, channel_trail: str | None,
-             content_type: str, content: bytes | dict | None = None, p2p: P2P | None = None):
-        """Sends a direct message to a specific peer.
+    async def send(self, peer_id: str, channel_trail: str | None,
+                   content_type: str, content: bytes | dict | None = None, p2p: P2P | None = None):
+        """Sends a direct message to a specific peer (async).
 
         Args:
             peer_id: The peer ID to send the message to.
@@ -583,8 +587,8 @@ class ConnectionPools:
                 print("[DEBUG CONNECTIONS-POOL] Sending error is: " + str(e))
             return False
 
-    def subscribe(self, peer_id: str, channel: str, default_p2p_name: str | None = None):
-        """Subscribes to a topic/channel on a P2P network.
+    async def subscribe(self, peer_id: str, channel: str, default_p2p_name: str | None = None):
+        """Subscribes to a topic/channel on a P2P network (async).
 
         Args:
             peer_id: The peer ID associated with the topic/channel.
@@ -611,12 +615,12 @@ class ConnectionPools:
 
         try:
             p2p.subscribe_to_topic(channel)
-        except (P2PError, ValueError) as e:
+        except (P2PError, ValueError):
             return False
         return True
 
-    def unsubscribe(self, peer_id: str, channel: str, default_p2p_name: str | None = None):
-        """Unsubscribes from a topic/channel on a P2P network.
+    async def unsubscribe(self, peer_id: str, channel: str, default_p2p_name: str | None = None):
+        """Unsubscribes from a topic/channel on a P2P network (async).
 
         Args:
             peer_id: The peer ID associated with the topic/channel.
@@ -647,9 +651,9 @@ class ConnectionPools:
             return False
         return True
 
-    def publish(self, peer_id: str, channel: str,
-                content_type: str, content: bytes | dict | tuple | None = None, p2p: P2P | None = None):
-        """Publishes a message to a topic/channel on a P2P network.
+    async def publish(self, peer_id: str, channel: str,
+                      content_type: str, content: bytes | dict | tuple | None = None):
+        """Publishes a message to a topic/channel on a P2P network (async).
 
         Args:
             peer_id: The peer ID associated with the topic/channel.
@@ -687,7 +691,7 @@ class ConnectionPools:
 
             # If the line above executes without raising an error, it was successful.
             return True
-        except P2PError as e:
+        except P2PError:
 
             # If send_message_to_peer fails, it will raise a P2PError. We catch it here.
             return False
@@ -782,8 +786,8 @@ class NodeConn(ConnectionPools):
         """Resets the rendezvous tag to its initial state."""
         self.rendezvous_tag = -1
 
-    def conn_routing_fcn(self, connected_peer_infos: list, p2p: P2P):
-        """Routes connected peers to the correct connection pool based on their network and role.
+    async def conn_routing_fcn(self, connected_peer_infos: list, p2p: P2P):
+        """Routes connected peers to the correct connection pool based on their network and role (async).
 
         Args:
             connected_peer_infos: A list of dictionaries with information about connected peers.
@@ -820,7 +824,7 @@ class NodeConn(ConnectionPools):
                         print("[DEBUG CONNECTIONS-POOL] Inspector peer id: " + str(self.inspector_peer_id))
                         print(f"[DEBUG CONNECTIONS-POOL] Unable to determine the peer type for {peer_id}: "
                               f"cannot say if world agent, master, world node, inspector (disconnecting it)")
-                    ConnectionPools.disconnect(p2p, peer_id)
+                    await ConnectionPools.disconnect(p2p, peer_id)
                     continue
 
                 if inbound:
@@ -1205,8 +1209,8 @@ class NodeConn(ConnectionPools):
             ret += super().get_all_connected_peer_infos(p)
         return ret
 
-    def set_world_agents_and_world_masters_lists_from_rendezvous(self):
-        """Updates the lists of world agents and masters using data from the rendezvous topic."""
+    async def set_world_agents_and_world_masters_lists_from_rendezvous(self):
+        """Updates the lists of world agents and masters using data from the rendezvous topic (async)."""
         rendezvous_state = self.p2p_world.get_rendezvous_peers_info()
 
         if rendezvous_state is not None:
@@ -1238,8 +1242,8 @@ class NodeConn(ConnectionPools):
                 self.set_world_agents_list(world_agents_peer_infos)
                 self.set_world_masters_list(world_masters_peer_infos)
 
-    def get_cv_hash_from_last_token(self, peer_id):
-        """Retrieves the CV hash from the last token received from a peer.
+    async def get_cv_hash_from_last_token(self, peer_id):
+        """Retrieves the CV hash from the last token received from a peer (async).
 
         Args:
             peer_id: The peer ID to query.
@@ -1249,33 +1253,33 @@ class NodeConn(ConnectionPools):
         """
         token = self.get_last_token(peer_id)
         if token is not None:
-            _, cv_hash = self.verify_token(token, peer_id)
+            _, cv_hash = await self.verify_token(token, peer_id)
             return cv_hash
         else:
             return None
 
-    def remove(self, peer_id: str):
-        """Removes a peer and its associated information from all lists and pools.
+    async def remove(self, peer_id: str):
+        """Removes a peer and its associated information from all lists and pools (async).
 
         Args:
             peer_id: The peer ID to remove.
         """
-        super().remove(peer_id)
+        await super().remove(peer_id)
         if peer_id in self.peer_id_to_addrs:
             del self.peer_id_to_addrs[peer_id]
 
-    def remove_all_world_agents(self):
-        """Removes all connected world agents from the pools and role lists."""
+    async def remove_all_world_agents(self):
+        """Removes all connected world agents from the pools and role lists (async)."""
         peer_infos = self.get_all_connected_peer_infos(NodeConn.WORLD)
         for c in peer_infos:
             peer_id = c['id']
-            self.remove(peer_id)
+            await self.remove(peer_id)
             for role, peer_ids in self.role_to_peer_ids.items():
                 if role & 1 == NodeConn.WORLD:
                     peer_ids.remove(peer_id)
 
-    def subscribe(self, peer_id: str, channel: str, default_p2p_name: str | None = None):
-        """Subscribes to a channel, defaulting to the world P2P network if a network is not specified.
+    async def subscribe(self, peer_id: str, channel: str, default_p2p_name: str | None = None):
+        """Subscribes to a channel, defaulting to the world P2P network if a network is not specified (async).
 
         Args:
             peer_id: The peer ID associated with the channel.
@@ -1285,11 +1289,13 @@ class NodeConn(ConnectionPools):
         Returns:
             True if successful, False otherwise.
         """
-        return super().subscribe(peer_id, channel,
-                                 default_p2p_name=NodeConn.P2P_WORLD if default_p2p_name is None else default_p2p_name)
+        return await super().subscribe(peer_id, channel,
+                                       default_p2p_name=NodeConn.P2P_WORLD
+                                       if default_p2p_name is None else default_p2p_name)
 
-    def get_messages(self, p2p_name: str, allowed_not_connected_peers: set | None = None):
-        """Retrieves messages, allowing for messages from known world agents and masters even if not in a connection pool.
+    async def get_messages(self, p2p_name: str, allowed_not_connected_peers: set | None = None) -> list[Msg]:
+        """Retrieves messages, allowing for messages from known world agents and masters even if not in a
+        connection pool (async).
 
         Args:
             p2p_name: The name of the P2P network to get messages from.
@@ -1299,4 +1305,4 @@ class NodeConn(ConnectionPools):
             A list of verified and processed message objects.
         """
         assert allowed_not_connected_peers is None, "This param (allowed_not_connected_peers is ignored in NodeConn"
-        return super().get_messages(p2p_name, allowed_not_connected_peers=self.world_agents_and_world_masters_list)
+        return await super().get_messages(p2p_name, allowed_not_connected_peers=self.world_agents_and_world_masters_list)

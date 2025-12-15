@@ -694,7 +694,7 @@ class Stats:
                     target[stat_name].extend(val_or_ts)
                 else:
                     target[stat_name] = val_or_ts
-        
+
         # 1. Merge World (Ungrouped) Stats
         if 'world' in view_data:
             _merge_dict(self._world_view.setdefault('world', {}), view_data['world'])

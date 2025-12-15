@@ -46,6 +46,7 @@ class P2P:
     Attributes:
         libp2p (LibP2P): Static class attribute holding the loaded Go library instance.
                          Must be set before instantiating P2P. Example: P2P.libp2p = LibP2P()
+    Properties:
         peer_id (str): The Peer ID of the initialized local node.
         addresses (Optional[List[str]]): List of multiaddresses the local node is listening on.
         is_public (bool): Whether the node is publicly reachable.

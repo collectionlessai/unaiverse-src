@@ -49,7 +49,8 @@ class World(AgentBasics):
             self.stats = stats
         else:
             # fallback to default Stats class
-            self.stats = Stats(is_world=True, db_path=f"{self.world_folder}/stats/world_stats.db", cache_window_hours=2.0)
+            self.stats = Stats(is_world=True, db_path=f"{self.world_folder}/stats/world_stats.db",
+                               cache_window_hours=2.0)
 
     def assign_role(self, profile: NodeProfile, is_world_master: bool) -> str:
         """Assigns an initial role to a newly connected agent.
@@ -78,8 +79,8 @@ class World(AgentBasics):
         else:
             return AgentBasics.ROLE_BITS_TO_STR[AgentBasics.ROLE_WORLD_AGENT]
 
-    def set_role(self, peer_id: str, role: int):
-        """Sets a new role for a specific agent and broadcasts this change to the agent.
+    async def set_role(self, peer_id: str, role: int):
+        """Sets a new role for a specific agent and broadcasts this change to the agent (async).
 
         It computes the new role and sends a message containing the new role and the corresponding default behavior
         for that role.
@@ -98,16 +99,16 @@ class World(AgentBasics):
         if new_role != role:
             self._node_conn.set_role(peer_id, new_role)
             self.out("Telling an agent that his role changed")
-            if not self._node_conn.send(peer_id, channel_trail=None,
-                                        content={'peer_id': peer_id, 'role': new_role,
-                                                 'default_behav':
-                                                     self.role_to_behav[
-                                                         self.ROLE_BITS_TO_STR[new_role_without_base_int]]
-                                                     if self.role_to_behav is not None else
-                                                     str(HybridStateMachine(None))},
-                                        content_type=Msg.ROLE_SUGGESTION):
+            if not (await self._node_conn.send(peer_id, channel_trail=None,
+                                               content={'peer_id': peer_id, 'role': new_role,
+                                                        'default_behav':
+                                                            self.role_to_behav[
+                                                                self.ROLE_BITS_TO_STR[new_role_without_base_int]]
+                                                            if self.role_to_behav is not None else
+                                                            str(HybridStateMachine(None))},
+                                               content_type=Msg.ROLE_SUGGESTION)):
                 self.err("Failed to send role change, removing (disconnecting) " + peer_id)
-                self._node_purge_fcn(peer_id)
+                await self._node_purge_fcn(peer_id)
             else:
                 self.role_changed_by_world = True
 

@@ -204,7 +204,7 @@ class AgentBasics:
                 raise GenException("No world folder was indicated (world_folder argument)")
 
     def set_node_info(self, clock: Clock, conn: ConnectionPools, profile: NodeProfile,
-                      out_fcn, ask_to_get_in_touch_fcn, purge_fcn, agents_waiting, print_level):
+                            out_fcn, ask_to_get_in_touch_fcn, purge_fcn, agents_waiting, print_level):
         """Set the required information from the node that hosts this agent.
 
         Args:
@@ -237,8 +237,38 @@ class AgentBasics:
                 stream_dict = self.known_streams[net_hash]
                 for stream_obj in stream_dict.values():
                     self.add_stream(stream_obj, owned=True)  # This will also re-add streams using the node clock
-        self.remove_streams("<public_peer_id>", owned_too=True)
-        self.remove_streams("<private_peer_id>", owned_too=True)
+
+        # Removing place-holder streams
+        for peer_id in ["<public_peer_id>", "<private_peer_id>"]:
+            to_remove = []
+            for net_hash in self.known_streams.keys():
+                if DataProps.peer_id_from_net_hash(net_hash) == peer_id:
+                    for _name, _stream in self.known_streams[net_hash].items():
+                        to_remove.append((net_hash, _name))
+
+            # Removing
+            for (net_hash, name) in to_remove:
+                del self.known_streams[net_hash][name]
+                if len(self.known_streams[net_hash]) == 0:
+                    del self.known_streams[net_hash]
+
+                # Removing all the owned streams (environment and processor streams are of course "owned")
+                if net_hash in self.owned_streams:
+                    if name in self.owned_streams[net_hash]:
+                        del self.owned_streams[net_hash][name]
+                        if len(self.owned_streams[net_hash]) == 0:
+                            del self.owned_streams[net_hash]
+                if net_hash in self.env_streams:
+                    if name in self.env_streams[net_hash]:
+                        del self.env_streams[net_hash][name]
+                        if len(self.env_streams[net_hash]) == 0:
+                            del self.env_streams[net_hash]
+                if net_hash in self.proc_streams:
+                    if name in self.proc_streams[net_hash]:
+                        del self.proc_streams[net_hash][name]
+                        if len(self.proc_streams[net_hash]) == 0:
+                            del self.proc_streams[net_hash]
+                self.out(f"Successfully removed known stream with network hash {net_hash}, stream name: {name}")
 
         # World only: loading action files and refactoring (or building) JSON files of the different roles.
         # This where the world guesses roles.
@@ -282,9 +312,7 @@ class AgentBasics:
         AgentBasics.DEBUG = _debug_flag
         ConnectionPools.DEBUG = _debug_flag
         HybridStateMachine.DEBUG = _debug_flag
-
-        # Subscribing/creating our own pubsub
-        return self.subscribe_to_pubsub_owned_streams()
+        return True
 
     def augment_roles(self):
         """Augment the custom roles (role1, role2, etc.) with the default ones (public, world_master, etc.), generating
@@ -311,15 +339,15 @@ class AgentBasics:
                         self.ROLE_STR_TO_BITS[augmented_role_str] = augmented_role_int
                         self.ROLE_BITS_TO_STR[augmented_role_int] = augmented_role_str
 
-    def clear_world_related_data(self):
-        """Destroy all the cached information that is about a world (useful when leaving a world)."""
+    async def clear_world_related_data(self):
+        """Destroy all the cached information that is about a world (useful when leaving a world) (async)."""
 
         # Clearing status variables
         self.reset_agent_status_attrs()
 
         # Clear/reset
-        self.__remove_all_world_private_streams()
-        self.__remove_all_world_related_agents()
+        await self.__remove_all_world_private_streams()
+        await self.__remove_all_world_related_agents()
         self._node_conn.reset_rendezvous_tag()
 
     def load_and_refactor_action_file_and_behav_files(self, force_save: bool = False):
@@ -464,8 +492,8 @@ class AgentBasics:
         else:
             return None
 
-    def add_agent(self, peer_id: str, profile: NodeProfile) -> bool:
-        """Add a new known agent.
+    async def add_agent(self, peer_id: str, profile: NodeProfile) -> bool:
+        """Add a new known agent (async).
 
         Args:
             peer_id: The unique identifier of the peer.
@@ -476,7 +504,7 @@ class AgentBasics:
         """
 
         # If the agent was already there, we remove it and add it again (in case of changes)
-        self.remove_agent(peer_id)  # It has no effects if the agent is not existing
+        await self.remove_agent(peer_id)  # It has no effects if the agent is not existing
 
         # Guessing the type of agent to add (accordingly to the default roles shared by every agent)
         role = self._node_conn.get_role(peer_id)
@@ -506,22 +534,24 @@ class AgentBasics:
             # Check compatibility of the environmental streams of the agent we are adding with our-agent's processor
             environmental_streams = profile.get_dynamic_profile()['streams']
             if (environmental_streams is not None and
-                    not self.add_compatible_streams(peer_id, environmental_streams,
-                                                    buffered=False, public=public)):  # This will also "add" the stream
+                    not (await self.add_compatible_streams(peer_id, environmental_streams,
+                                                           buffered=False,
+                                                           public=public))):  # This will also "add" the stream
                 return False
 
             # Check compatibility of the generated streams of the agent we are adding with our-agent's processor
             proc_streams = profile.get_dynamic_profile()['proc_outputs']
             if (proc_streams is not None and
-                    not self.add_compatible_streams(peer_id, profile.get_dynamic_profile()['proc_outputs'],
-                                                    buffered=False, public=public)):  # This will also "add" the stream
+                    not (await self.add_compatible_streams(peer_id, profile.get_dynamic_profile()['proc_outputs'],
+                                                           buffered=False,
+                                                           public=public))):  # This will also "add" the stream
                 return False
 
         self.out(f"Successfully added agent with peer ID {peer_id} (public: {public})")
         return True
 
-    def remove_agent(self, peer_id: str):
-        """Remove an agent.
+    async def remove_agent(self, peer_id: str):
+        """Remove an agent (async).
 
         Args:
             peer_id: The unique identifier of the peer to remove.
@@ -563,7 +593,7 @@ class AgentBasics:
                         self.compat_out_streams[i].remove(net_hash_name)
 
             # Clearing streams owned by the removed agent from the list of known streams
-            self.remove_streams(peer_id)
+            await self.remove_streams(peer_id)
 
             # Removing from the status variables
             self.remove_peer_from_agent_status_attrs(peer_id)
@@ -701,8 +731,8 @@ class AgentBasics:
             ret.append(stream_dict)
         return ret
 
-    def remove_streams(self, peer_id: str, name: str | None = None, owned_too: bool = False):
-        """Remove a known stream.
+    async def remove_streams(self, peer_id: str, name: str | None = None, owned_too: bool = False):
+        """Remove a known stream (async).
 
         Args:
             peer_id: The hash of each stream included the peer ID of the owner, so this is the peer ID associated with
@@ -731,7 +761,7 @@ class AgentBasics:
             # Unsubscribing to pubsub
             if DataProps.is_pubsub_from_net_hash(net_hash):
                 if peer_id != "<private_peer_id>" and peer_id != "<public_peer_id>":
-                    if not self._node_conn.unsubscribe(peer_id, channel=net_hash):
+                    if not (await self._node_conn.unsubscribe(peer_id, channel=net_hash)):
                         self.err(f"Failed in unsubscribing from pubsub, peer_id: {peer_id}, channel: {net_hash}")
                     else:
                         self.out(f"Successfully unsubscribed from pubsub, peer_id: {peer_id}, channel: {net_hash}")
@@ -922,11 +952,11 @@ class AgentBasics:
 
                     self.add_stream(stream, owned=True)
 
-    def add_compatible_streams(self, peer_id: str,
-                               streams_in_profile: list[DataProps], buffered: bool = False,
-                               add_all: bool = False, public: bool = True) -> bool:
+    async def add_compatible_streams(self, peer_id: str,
+                                     streams_in_profile: list[DataProps], buffered: bool = False,
+                                     add_all: bool = False, public: bool = True) -> bool:
         """Add to the list of processor-compatible-streams those streams provided as arguments that are actually
-        found to be compatible with the processor (if they are pubsub, it also subscribes to them).
+        found to be compatible with the processor (if they are pubsub, it also subscribes to them) (async).
 
         Args:
             peer_id: The peer ID of the agent providing the streams.
@@ -1023,14 +1053,14 @@ class AgentBasics:
         # Opening PubSubs
         for net_hash in net_hashes_to_subscribe:
             self.out(f"Opening channel for the not-owned but processor-compatible stream {net_hash}")
-            if not self._node_conn.subscribe(peer_id, channel=net_hash):
+            if not (await self._node_conn.subscribe(peer_id, channel=net_hash)):
                 self.err(f"Error subscribing to {net_hash}")
                 return False
 
         return True
 
-    def subscribe_to_pubsub_owned_streams(self) -> bool:
-        """Subscribes to all owned streams that are marked as PubSub.
+    async def subscribe_to_pubsub_owned_streams(self) -> bool:
+        """Subscribes to all owned streams that are marked as PubSub (async).
 
         Returns:
             True if all subscriptions were successful, False otherwise.
@@ -1044,7 +1074,7 @@ class AgentBasics:
                 self.out(f"Opening channel for the owned stream {net_hash}")
                 peer_id = DataStream.peer_id_from_net_hash(net_hash)  # Guessing peer ID from the net hash
 
-                if not self._node_conn.subscribe(peer_id, channel=net_hash):
+                if not (await self._node_conn.subscribe(peer_id, channel=net_hash)):
                     self.err(f"Cannot open a channel for owned stream hash {net_hash}")
                     return False
         return True
@@ -1072,16 +1102,16 @@ class AgentBasics:
         if len(list_of_props) > 0:
             dynamic_profile['streams'] = list_of_props
 
-    def send_profile_to_all(self):
-        """Sends the agent's profile to all known agents."""
+    async def send_profile_to_all(self):
+        """Sends the agent's profile to all known agents (async)."""
 
         for peer_id in self.all_agents.keys():
             self.out(f"Sending profile to {peer_id}")
-            if not self._node_conn.send(peer_id, channel_trail=None,
-                                        content=self._node_profile.get_all_profile(),
-                                        content_type=Msg.PROFILE):
+            if not (await self._node_conn.send(peer_id, channel_trail=None,
+                                               content=self._node_profile.get_all_profile(),
+                                               content_type=Msg.PROFILE)):
                 self.err("Failed to send profile, removing (disconnecting) " + peer_id)
-                self.remove_agent(peer_id)
+                await self.remove_agent(peer_id)
 
     def generate(self, input_net_hashes: list[str] | None = None,
                  inputs: list[str | torch.Tensor | Image] | None = None,
@@ -1347,8 +1377,8 @@ class AgentBasics:
         # Returning a list of float values and the data tags of the targets
         return [loss_value.item() for loss_value in loss_values], data_tags
 
-    def behave(self):
-        """Behave in the current environment, calling the state-machines of the public and private networks."""
+    async def behave(self):
+        """Behave in the current environment, calling the state-machines of the public and private networks (async)."""
 
         if self.in_world():
             self.out("Behaving (world)...")
@@ -1357,7 +1387,7 @@ class AgentBasics:
             else:
                 self.behav_lone_wolf.enable(False)
                 self.behav.enable(True)
-                self.behav.act()
+                await self.behav.act()
                 self.behav.enable(False)
 
         self.out("Behaving (public)...")
@@ -1366,7 +1396,7 @@ class AgentBasics:
         else:
             self.behav.enable(False)
             self.behav_lone_wolf.enable(True)
-            self.behav_lone_wolf.act()
+            await self.behav_lone_wolf.act()
             self.behav_lone_wolf.enable(False)
 
     def learn_behave(self, state: int, last_action: int, prev_state: int):
@@ -1623,8 +1653,8 @@ class AgentBasics:
             self.out(f"Skipping sample from {net_hash} (data stream is unknown)")
             return False
 
-    def send_stream_samples(self):
-        """Collect and send stream samples from all owned streams to appropriate recipients."""
+    async def send_stream_samples(self):
+        """Collect and send stream samples from all owned streams to appropriate recipients (async)."""
 
         # Get samples from all the owned streams
         for net_hash, streams_dict in self.owned_streams.items():
@@ -1663,9 +1693,9 @@ class AgentBasics:
                     self.deb(f"[send_stream_samples] Sending stream samples of the whole {net_hash} by pubsub")
 
                     peer_id = DataStream.peer_id_from_net_hash(net_hash)  # Guessing agent peer ID from the net hash
-                    ret = self._node_conn.publish(peer_id, channel=net_hash,
-                                                  content_type=Msg.STREAM_SAMPLE,
-                                                  content=content)
+                    ret = await self._node_conn.publish(peer_id, channel=net_hash,
+                                                        content_type=Msg.STREAM_SAMPLE,
+                                                        content=content)
 
                     self.deb(f"[send_stream_samples] Sending returned: " + str(ret))
 
@@ -1678,9 +1708,9 @@ class AgentBasics:
 
                         peer_id = _recipient  # Peer ID from the recipient information
                         name_or_group = DataProps.name_or_group_from_net_hash(net_hash)
-                        ret = self._node_conn.send(peer_id, channel_trail=name_or_group,
-                                                   content_type=Msg.STREAM_SAMPLE,
-                                                   content=content)
+                        ret = await self._node_conn.send(peer_id, channel_trail=name_or_group,
+                                                         content_type=Msg.STREAM_SAMPLE,
+                                                         content=content)
 
                         self.deb(f"[send_stream_samples] Sending returned: " + str(ret))
                 else:
@@ -1846,19 +1876,19 @@ class AgentBasics:
         s += "\n\t\t" + (str(self.proc).replace("\n", "\n\t\t") if self.proc is not None else "none")
         return s
 
-    def __remove_all_world_related_agents(self):
-        """Remove all world-related agents (masters and regular agents) from the agent's known lists."""
+    async def __remove_all_world_related_agents(self):
+        """Remove all world-related agents (masters and regular agents) from the agent's known lists (async)."""
 
         to_remove = list(self.world_masters.keys())
         for peer_id in to_remove:
-            self.remove_agent(peer_id)
+            await self.remove_agent(peer_id)
 
         to_remove = list(self.world_agents.keys())
         for peer_id in to_remove:
-            self.remove_agent(peer_id)
+            await self.remove_agent(peer_id)
 
-    def __remove_all_world_private_streams(self):
-        """Remove all known streams that are flagged as not-public and are not owned by this agent."""
+    async def __remove_all_world_private_streams(self):
+        """Remove all known streams that are flagged as not-public and are not owned by this agent (async)."""
 
         # Find what to remove
         to_remove = []
@@ -1869,7 +1899,7 @@ class AgentBasics:
 
         # Remove it
         for (peer_id, name) in to_remove:
-            self.remove_streams(peer_id, name)
+            await self.remove_streams(peer_id, name)
 
         # Clear recipients associated to these streams
         recipient_net_hashes = list(self.recipients.keys())

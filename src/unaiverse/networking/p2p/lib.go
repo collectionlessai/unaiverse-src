@@ -12,6 +12,7 @@ import "C" // Enables CGo features, allowing Go to call C code and vice-versa.
 import (
 	// Standard Go libraries
 	"bytes"           // For byte buffer manipulations (e.g., encoding/decoding, separators)
+	"errors"          // For handling some types of errors
 	"container/list"  // For an efficient ordered list (doubly-linked list for queues)
 	"context"         // For managing cancellation signals and deadlines across API boundaries and goroutines
 	"crypto/rand"     // For generating identity keys
@@ -950,6 +951,9 @@ func handleStream(ni *NodeInstance, s network.Stream) {
 				logger.Debugf("[GO] 🔌 Instance %d: Direct stream with peer %s closed (EOF).\n", ni.instanceIndex, senderPeerID)
 			} else if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
 				logger.Warnf("[GO] ⏳ Instance %d: Timeout reading length from direct stream with %s: %v\n", ni.instanceIndex, senderPeerID, err)
+			} else if errors.Is(err, network.ErrReset) {
+                // network.ErrReset indicates the stream was closed gracefully/reset by the peer or locally.
+                logger.Warnf("[GO] ⚙️ Instance %d: Direct stream with peer %s reset (graceful teardown/libp2p).", ni.instanceIndex, senderPeerID)
 			} else {
 				logger.Errorf("[GO] ❌ Instance %d: Unexpected error reading length from direct stream with %s: %v\n", ni.instanceIndex, senderPeerID, err)
 			}
@@ -1294,7 +1298,7 @@ func InitializeLibrary(
 	// --- Configure Logging FIRST ---
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
 	configStr := C.GoString(logConfigJSONC)
-	golog.SetAllLoggers(golog.LevelError)
+	golog.SetAllLoggers(golog.LevelFatal)
 	if configStr != "" {
 		var logLevels map[string]string
 		if err := json.Unmarshal([]byte(configStr), &logLevels); err != nil {
