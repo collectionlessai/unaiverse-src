@@ -347,11 +347,11 @@ func getListenAddrs(ips []string, tcpPort int, tlsMode string) ([]ma.Multiaddr, 
 
 	var listenAddrs []ma.Multiaddr
 	quicPort := 0
-	webrtcPort := 0
+	// webrtcPort := 0
 	webtransPort := 0
 	if tcpPort != 0 {
 		quicPort = tcpPort + 1
-		webrtcPort = tcpPort + 2
+		// webrtcPort = tcpPort + 2
 		webtransPort = tcpPort + 3
 	}
 
@@ -363,10 +363,11 @@ func getListenAddrs(ips []string, tcpPort int, tlsMode string) ([]ma.Multiaddr, 
 		quicMaddr, _ := ma.NewMultiaddr(fmt.Sprintf("/ip4/%s/udp/%d/quic-v1", ip, quicPort))
 		// WebTransport
 		webtransMaddr, _ := ma.NewMultiaddr(fmt.Sprintf("/ip4/%s/udp/%d/quic-v1/webtransport", ip, webtransPort))
-		// WebRTC
-		webrtcMaddr, _ := ma.NewMultiaddr(fmt.Sprintf("/ip4/%s/udp/%d/webrtc-direct", ip, webrtcPort))
+		// // WebRTC
+		// webrtcMaddr, _ := ma.NewMultiaddr(fmt.Sprintf("/ip4/%s/udp/%d/webrtc-direct", ip, webrtcPort))
 
-		listenAddrs = append(listenAddrs, tcpMaddr, quicMaddr, webrtcMaddr, webtransMaddr)
+		// listenAddrs = append(listenAddrs, tcpMaddr, quicMaddr, webrtcMaddr, webtransMaddr)
+		listenAddrs = append(listenAddrs, tcpMaddr, quicMaddr, webtransMaddr)
 
 		switch tlsMode {
 		case "autotls":
@@ -457,135 +458,6 @@ func setupNotifiers(ni *NodeInstance) {
 			}
 		},
 	})
-}
-
-// onPeerIdentified checks protocols and adds the peer if they match.
-// It retrieves the direction from the active network connection.
-func onPeerIdentified(ni *NodeInstance, evt event.EvtPeerIdentificationCompleted) {
-	// 1. Protocol Check (The Gatekeeper)
-	// fast and race-free: we check the list provided by the event itself.
-	supportsChat := false
-	for _, p := range evt.Protocols {
-		if string(p) == UnaiverseChatProtocol {
-			supportsChat = true
-			break
-		}
-	}
-
-	if !supportsChat {
-		return // Ignore irrelevant peers
-	}
-
-	// 2. Determine Direction
-	// We use the connection object provided by the event.
-	direction := "unknown"
-	if evt.Conn != nil {
-		switch evt.Conn.Stat().Direction {
-		case network.DirInbound:
-			direction = "incoming"
-		case network.DirOutbound:
-			direction = "outgoing"
-		}
-	}
-
-	// // 3. Gather Addresses (Reuse your existing logic here)
-	// candidateAddrs := make([]ma.Multiaddr, 0)
-	// candidateAddrs = append(candidateAddrs, conn.RemoteMultiaddr())
-	// candidateAddrs = append(candidateAddrs, ni.host.Peerstore().Addrs(pid)...)
-	
-	// // ... (Insert your existing address deduplication logic here) ...
-	// finalPeerAddrs := candidateAddrs // Simplified for snippet
-
-	// 3. Gather Addresses
-	// Combine the addresses the peer reported (ListenAddrs) 
-	// with the actual address we are connected to (RemoteMultiaddr).
-	var newAddrs []ma.Multiaddr
-	
-	// Start with the address we are actually using
-	if evt.Conn != nil {
-		newAddrs = append(newAddrs, evt.Conn.RemoteMultiaddr())
-	}
-	// Add the addresses they claim to have
-	newAddrs = append(newAddrs, evt.ListenAddrs...)
-
-	// 4. Update the Map
-	ni.peersMutex.Lock()
-	defer ni.peersMutex.Unlock()
-
-	existing, exists := ni.connectedPeers[evt.Peer]
-	if !exists {
-		// --- CASE A: New Peer ---
-		logger.Infof("[GO] 🤝 Instance %d: New UNaIVERSE ConnectedPeer: %s (Dir: %s)", 
-			ni.instanceIndex, evt.Peer, direction)
-
-		ni.connectedPeers[evt.Peer] = ExtendedPeerInfo{
-			ID:          evt.Peer,
-			Addrs:       newAddrs,
-			ConnectedAt: time.Now(), // Set this ONCE
-			Direction:   direction,
-			Misc:        0,
-		}
-	} else {
-		// --- CASE B: Existing Peer (Merge) ---
-		logger.Debugf("[GO] 🔄 Instance %d: Updating existing ConnectedPeer %s", ni.instanceIndex, evt.Peer)
-
-		// 1. Merge Addresses (Deduplicate)
-		updatedAddrs := make(map[string]struct{})
-		for _, a := range existing.Addrs {
-			updatedAddrs[a.String()] = struct{}{}
-		}
-		for _, a := range newAddrs {
-			updatedAddrs[a.String()] = struct{}{}
-		}
-		finalAddrs := make([]ma.Multiaddr, 0, len(updatedAddrs))
-		for addrStr := range updatedAddrs {
-			addr, err := ma.NewMultiaddr(addrStr)
-			if err == nil {
-				finalAddrs = append(finalAddrs, addr)
-			}
-		}
-		existing.Addrs = finalAddrs
-
-		// 2. Update Direction?
-
-		// 3. Write back
-		// Note: We DO NOT update ConnectedAt. We want to know when we *first* met them.
-		ni.connectedPeers[evt.Peer] = existing
-	}
-}
-
-// handleIdentificationEvents is a long-running loop that processes
-// peer identification events. It must be called as a goroutine.
-func handleIdentificationEvents(ni *NodeInstance, sub event.Subscription) {
-	// Ensure the subscription is closed when the goroutine exits
-	defer sub.Close()
-
-	logger.Debugf("[GO] 👂 Instance %d: Started identification event listener.", ni.instanceIndex)
-
-	for {
-		select {
-		// 1. Stop if the node context is cancelled (Node closing)
-		case <-ni.ctx.Done():
-			logger.Debugf("[GO] 🛑 Instance %d: Stopping identification listener (Context Done).", ni.instanceIndex)
-			return
-
-		// 2. Process new events
-		case evt, ok := <-sub.Out():
-			if !ok {
-				// Subscription channel closed unexpectedly
-				return
-			}
-
-			// Type assertion to ensure we have the right event
-			idEvt, ok := evt.(event.EvtPeerIdentificationCompleted)
-			if !ok {
-				continue
-			}
-
-			// Pass the logic to your helper
-			onPeerIdentified(ni, idEvt)
-		}
-	}
 }
 
 // handleAddressUpdateEvents listens for libp2p address changes and updates the local cache.
@@ -927,6 +799,36 @@ func readFromSubscription(
 // the channel name itself, and finally the Protobuf-encoded payload.
 func handleStream(ni *NodeInstance, s network.Stream) {
 	senderPeerID := s.Conn().RemotePeer()
+	ni.peersMutex.Lock()
+	existing, exists := ni.connectedPeers[senderPeerID]
+
+	// 1. Gather fresh info (Addresses & Direction)
+	direction := "incoming"
+	if s.Stat().Direction == network.DirOutbound {
+		direction = "outgoing"
+	}
+	knownAddrs := ni.host.Peerstore().Addrs(senderPeerID)
+	if len(knownAddrs) == 0 {
+		knownAddrs = []ma.Multiaddr{s.Conn().RemoteMultiaddr()}
+	}
+
+	if !exists {
+		// CASE A: New Application Peer
+		ni.connectedPeers[senderPeerID] = ExtendedPeerInfo{
+			ID:          senderPeerID,
+			Addrs:       knownAddrs,
+			ConnectedAt: time.Now(),
+			Direction:   direction,
+		}
+		logger.Infof("[GO] ➕ Instance %d: Peer %s promoted to Application Peer (Incoming Stream).", ni.instanceIndex, senderPeerID)
+	} else {
+		// CASE B: Existing Peer - Update Addresses
+		// We keep ConnectedAt and Direction from the original session start.
+		existing.Addrs = knownAddrs
+		ni.connectedPeers[senderPeerID] = existing
+		logger.Debugf("[GO] 🔄 Instance %d: Refreshed addresses for existing Application Peer %s.", ni.instanceIndex, senderPeerID)
+	}
+	ni.peersMutex.Unlock()
 	logger.Debugf("[GO] 📥 Instance %d: Accepted new INCOMING stream from %s, storing for duplex communication.\n", ni.instanceIndex, senderPeerID)
 
 	// This defer block ensures cleanup happens when the stream is closed by either side.
@@ -1619,13 +1521,6 @@ func CreateNode(
 	}
 	go handleAddressUpdateEvents(ni, cacheSub)
 	logger.Debugf("[GO] 🧠 Instance %d: Address cache background listener started.", instanceIndex)
-
-	// Subscribe to Identification Completed Event.
-	identSub, err := ni.host.EventBus().Subscribe(new(event.EvtPeerIdentificationCompleted))
-	if err != nil {
-		return jsonErrorResponse("Failed to subscribe to ident events", err)
-	}
-	go handleIdentificationEvents(ni, identSub)
 
 	// --- Wait for Reachability ---
 	// Subscribe to reachability events

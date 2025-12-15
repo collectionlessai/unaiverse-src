@@ -853,7 +853,7 @@ class Node:
             processor_text_stream = None
             cap = None
             ready_to_interact = False
-            interact_mode_opts = {}
+            interact_mode_opts = None
 
             if interact_mode:
                 if self.agent is None:
