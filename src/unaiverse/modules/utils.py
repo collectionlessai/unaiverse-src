@@ -231,7 +231,10 @@ def error_rate_mnist_test_set(network: torch.nn.Module, mnist_data_save_path: st
     n = 0
     training_flag_backup = network.training
     network.eval()
+    device = next(network.parameters()).device
     for x, y in mnist_test:
+        x = x.to(device)
+        y = y.to(device)
         o = network(x)
         c = torch.argmax(o, dim=1)
         error_rate += float(torch.sum(c != y).item())
