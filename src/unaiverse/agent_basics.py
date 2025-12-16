@@ -204,7 +204,7 @@ class AgentBasics:
                 raise GenException("No world folder was indicated (world_folder argument)")
 
     def set_node_info(self, clock: Clock, conn: ConnectionPools, profile: NodeProfile,
-                            out_fcn, ask_to_get_in_touch_fcn, purge_fcn, agents_waiting, print_level):
+                      out_fcn, ask_to_get_in_touch_fcn, purge_fcn, agents_waiting, print_level):
         """Set the required information from the node that hosts this agent.
 
         Args:

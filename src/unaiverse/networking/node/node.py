@@ -661,9 +661,9 @@ class Node:
                                          p2p=self.conn.p2p_name_to_p2p[
                                              NodeConn.P2P_PUBLIC if public else NodeConn.P2P_WORLD])):
                 if run_count < 2:
-                    return self.ask_to_get_in_touch(addresses=addresses, public=public,
-                                                    before_updating_pools_fcn=before_updating_pools_fcn,
-                                                    run_count=run_count+1)
+                    return await self.ask_to_get_in_touch(addresses=addresses, public=public,
+                                                          before_updating_pools_fcn=before_updating_pools_fcn,
+                                                          run_count=run_count + 1)
                 else:
                     self.err("Connection failed! (ping-pong max trials exceeded)")
                     return None

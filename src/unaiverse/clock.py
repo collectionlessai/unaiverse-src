@@ -44,7 +44,18 @@ class Clock:
         ]
         self.__global_initial_t = self.__get_time_from_server()  # Real-time, wall-clock
         if self.__global_initial_t == -1.:
-            raise ValueError("Unable to get the initial time (for synchronization purposes) from the NTP servers")
+            self.__global_initial_t = datetime.now(timezone.utc).timestamp()
+            print("Unable to get the initial time (for synchronization purposes) from the NTP servers")
+            user_choice = input("Proceed with local time? (y/n)")
+            go_ahead = False
+            while not go_ahead:
+                if user_choice.strip().lower() == 'y':
+                    print("Proceeding with local time.")
+                    go_ahead = True
+                elif user_choice.strip().lower() == 'n':
+                    raise ValueError("Unable to get the initial time (for synchronization purposes) from the NTP servers")
+                else:
+                    print("Invalid input: please enter 'y' or 'n'.")
         self.__local_initial_t = datetime.now(timezone.utc).timestamp()  # Corresponding local time
         self.__timestamps = []  # List to store timestamps for cycles
         self.__time2cycle_cache = 0  # Cached cycle value for optimization
