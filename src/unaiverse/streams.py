@@ -21,6 +21,7 @@ import pathlib
 from PIL import Image
 from .clock import Clock
 from .dataprops import DataProps
+from datetime import datetime, timezone
 from unaiverse.utils.misc import show_images_grid
 
 
@@ -31,7 +32,7 @@ class DataStream:
 
     def __init__(self,
                  props: DataProps,
-                 clock: Clock = Clock()) -> None:
+                 clock: Clock = Clock(current_time=datetime.now(timezone.utc).timestamp())) -> None:
         """Initialize a DataStream.
 
         Args:
@@ -234,7 +235,8 @@ class BufferedDataStream(DataStream):
     Data stream with buffer support to store historical data.
     """
 
-    def __init__(self, props: DataProps, clock: Clock = Clock(), is_static: bool = False):
+    def __init__(self, props: DataProps, clock: Clock = Clock(current_time=datetime.now(timezone.utc).timestamp()),
+                 is_static: bool = False):
         """Initialize a BufferedDataStream.
 
         Args:

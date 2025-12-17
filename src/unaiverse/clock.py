@@ -27,12 +27,13 @@ class Clock:
     to track cycles, manage timestamps, and calculate the time differences between cycles.
     """
 
-    def __init__(self, min_delta: float = -1):
+    def __init__(self, min_delta: float = -1, current_time: float = -1.):
         """Initialize a Clock instance.
 
         Args:
             min_delta (float): Minimum time (in seconds) between consecutive cycles.
                                 If less than or equal to zero, the cycles will be real-time-based.
+            current_time (float): Default -1. (meaning "not used"); it is a hard-way to force the time from the outside.
         """
         self.min_delta = min_delta  # Min-time passed between consecutive cycles (seconds) - if <=0, it is real-time
         self.cycle = -1  # Internal index, not shared outside (the value -1 is only used at creation/reset time)
@@ -42,20 +43,12 @@ class Clock:
             'asia.pool.ntp.org',
             'europe.pool.ntp.org',
         ]
-        self.__global_initial_t = self.__get_time_from_server()  # Real-time, wall-clock
+        if current_time > 0.:
+            self.__global_initial_t = current_time
+        else:
+            self.__global_initial_t = self.__get_time_from_server()  # Real-time, wall-clock
         if self.__global_initial_t == -1.:
-            self.__global_initial_t = datetime.now(timezone.utc).timestamp()
-            print("Unable to get the initial time (for synchronization purposes) from the NTP servers")
-            user_choice = input("Proceed with local time? (y/n)")
-            go_ahead = False
-            while not go_ahead:
-                if user_choice.strip().lower() == 'y':
-                    print("Proceeding with local time.")
-                    go_ahead = True
-                elif user_choice.strip().lower() == 'n':
-                    raise ValueError("Unable to get the initial time (for synchronization purposes) from the NTP servers")
-                else:
-                    print("Invalid input: please enter 'y' or 'n'.")
+            raise ValueError("Unable to get the initial time (for synchronization purposes) from the NTP servers")
         self.__local_initial_t = datetime.now(timezone.utc).timestamp()  # Corresponding local time
         self.__timestamps = []  # List to store timestamps for cycles
         self.__time2cycle_cache = 0  # Cached cycle value for optimization

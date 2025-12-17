@@ -106,7 +106,20 @@ class Node:
         self.node_type = Node.AGENT if (isinstance(hosted, Agent) and not isinstance(hosted, World)) else Node.WORLD
         self.agent = hosted if self.node_type is Node.AGENT else None
         self.world = hosted if self.node_type is Node.WORLD else None
-        self.clock = Clock(min_delta=clock_delta)  # Node clock
+        try:
+            self.clock = Clock(min_delta=clock_delta)  # Node clock (synch by NTP servers)
+        except ValueError as e:
+            print(e)
+            user_choice = input("Proceed with local time? (y/n) ")
+            go_ahead = False
+            while not go_ahead:
+                if user_choice.strip().lower() == 'y':
+                    print("Proceeding with local time.")
+                    go_ahead = True
+                elif user_choice.strip().lower() == 'n':
+                    raise e
+            self.clock = Clock(min_delta=clock_delta,
+                               current_time=datetime.now(timezone.utc).timestamp())  # Node clock (not synced at all!)
         self.conn = None  # Manages the network operations in the P2P network
         self.talk_to_relay_based_nodes = talk_to_relay_based_nodes
 

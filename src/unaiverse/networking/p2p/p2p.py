@@ -94,6 +94,7 @@ class P2P:
             else:
                 logger.setLevel(logging.INFO)
                 _log_config = {
+                    'net/identify': 'info',
                     'unailib': 'info',
                     'autotls': 'info',
                     'p2p-forge': 'info',
