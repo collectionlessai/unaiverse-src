@@ -12,11 +12,14 @@
                  Code Repositories:  https://github.com/collectionlessai/
                  Main Developers:    Stefano Melacci (Project Leader), Christian Di Maio, Tommaso Guidi
 """
+import time
 import ntplib
 import bisect
 import socket
+import requests
 from ntplib import NTPException
 from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 
 
 class Clock:
@@ -43,12 +46,13 @@ class Clock:
             'asia.pool.ntp.org',
             'europe.pool.ntp.org',
         ]
+        self.__http_time_server = "https://www.google.com"
         if current_time > 0.:
             self.__global_initial_t = current_time
         else:
             self.__global_initial_t = self.__get_time_from_server()  # Real-time, wall-clock
         if self.__global_initial_t == -1.:
-            raise ValueError("Unable to get the initial time (for synchronization purposes) from the NTP servers")
+            raise ValueError("Unable to get the initial time (for synchronization purposes) from the time servers")
         self.__local_initial_t = datetime.now(timezone.utc).timestamp()  # Corresponding local time
         self.__timestamps = []  # List to store timestamps for cycles
         self.__time2cycle_cache = 0  # Cached cycle value for optimization
@@ -61,9 +65,9 @@ class Clock:
         """
         c = ntplib.NTPClient()
         response = None
-        for i in range(0, 10):
+        for i in range(0, len(self.__servers)):
             try:
-                server = self.__servers[i % len(self.__servers)]
+                server = self.__servers[i]
                 response = c.request(server, version=3)
                 break
             except (NTPException, socket.gaierror):
@@ -71,7 +75,23 @@ class Clock:
         if response is not None:
             return datetime.fromtimestamp(response.tx_time, timezone.utc).timestamp()
         else:
-            return -1.
+
+            # If the firewall is blocking NTP, we go by HTTP, which is way less accurate
+            # (here we also adjust time with the estimated round-trip-time, midpoint method)
+            try:
+                start_time = time.time()
+                response = requests.head(self.__http_time_server, timeout=5)
+                end_time = time.time()
+                server_date_str = response.headers.get('date')
+                if not server_date_str:
+                    return -1.
+                server_time = parsedate_to_datetime(server_date_str).timestamp()
+                rtt = end_time - start_time
+                corrected_server_time = server_time + (rtt / 2)
+                return datetime.fromtimestamp(corrected_server_time, timezone.utc).timestamp()
+            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError,
+                    requests.exceptions.HTTPError, ValueError):
+                return -1.
 
     def __add_timestamp(self, timestamp: float):
         """Add a timestamp to the list of timestamps for the clock cycles.
