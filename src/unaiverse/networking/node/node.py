@@ -110,9 +110,9 @@ class Node:
             self.clock = Clock(min_delta=clock_delta)  # Node clock (synch by NTP servers)
         except ValueError as e:
             print(e)
-            user_choice = input("Proceed with local time (strongly NOT suggested)? (y/n) ")
             go_ahead = False
             while not go_ahead:
+                user_choice = input("Proceed with local time (strongly NOT suggested)? (y/n) ")
                 if user_choice.strip().lower() == 'y':
                     print("Proceeding with local time.")
                     go_ahead = True
