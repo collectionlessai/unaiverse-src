@@ -1443,7 +1443,8 @@ class AgentBasics:
         """
 
         # If the role in the profile is not the provided role, a profile-cheater was found
-        if self.ROLE_STR_TO_BITS[profile.get_dynamic_profile()['connections']['role']] != role:
+        if (profile.get_dynamic_profile()['connections']['role'] in self.ROLE_STR_TO_BITS and
+                self.ROLE_STR_TO_BITS[profile.get_dynamic_profile()['connections']['role']] != role):
             self.out(f"Cheater found: "
                      f"{profile.get_dynamic_profile()['connections']['role']} != {self.ROLE_BITS_TO_STR[role]}")
             return False  # Cheater found

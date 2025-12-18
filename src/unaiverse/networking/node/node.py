@@ -2028,32 +2028,39 @@ class Node:
 
             if role & 1 == 0:
 
-                # Ensuring that the interviewed agent is out of every world
-                # (if it were in the same world in which we are, it would connect in a private manner) and
-                # possibly fulfilling the optional constraint of accepting only certified agent,
-                # then asking the hosted entity for additional custom evaluation
-                # if (eval_dynamic_profile['connections']['world_peer_id'] is None and
-                if not self.only_certified_agents or eval_static_profile['certified'] is True:
-                    return self.hosted.evaluate_profile(role, profile)
-                else:
-                    self.out(f"Peer f{peer_id} is not certified "
-                             f"and I expect certified peers only")
-                    return False
+                if self.node_type is Node.AGENT:
+
+                    # Ensuring that the interviewed agent is out of every world
+                    # (if it were in the same world in which we are, it would connect in a private manner) and
+                    # possibly fulfilling the optional constraint of accepting only certified agent,
+                    # then asking the hosted entity for additional custom evaluation
+                    if (not self.only_certified_agents or 'certified' in eval_static_profile and
+                            eval_static_profile['certified'] is True):
+                        return self.hosted.evaluate_profile(role, profile)
+                    else:
+                        self.out(f"Peer f{peer_id} is not certified "
+                                 f"and maybe I expect certified peers only")
+                        return False
+
+                elif self.node_type is Node.WORLD:
+                    if (eval_dynamic_profile['connections']['world_peer_id'] is not None and
+                            eval_dynamic_profile['connections']['world_peer_id'] != self.get_world_peer_id()):
+                        self.out(f"Peer f{peer_id} tried to connect to this world, but it is already part of another"
+                                 f"world")
+                        return False
+
             else:
 
                 if self.node_type is Node.AGENT:
 
                     # Ensuring that the interviewed agent is in the same world where we are and
                     # possibly fulfilling the optional constraint of accepting only certified agent
-                    if (eval_dynamic_profile['connections']['world_peer_id'] is not None and
-                            eval_dynamic_profile['connections']['world_peer_id'] ==
-                            my_dynamic_profile['connections']['world_peer_id'] and
-                            (not self.only_certified_agents or 'certified' in eval_static_profile and
-                             eval_static_profile['certified'] is True)):
+                    if (not self.only_certified_agents or 'certified' in eval_static_profile and
+                            eval_static_profile['certified'] is True):
                         return self.hosted.evaluate_profile(role, profile)
                     else:
-                        self.out(f"Peer f{peer_id} is living in a different world, of it is not certified "
-                                 f"and maybe I expect certified only")
+                        self.out(f"Peer f{peer_id} is not certified "
+                                 f"and maybe I expect certified peers only")
                         return False
 
                 elif self.node_type is Node.WORLD:
