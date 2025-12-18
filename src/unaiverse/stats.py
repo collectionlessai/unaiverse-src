@@ -527,7 +527,7 @@ class Stats:
     # --- SHARED API ---
     def store_stat(self, stat_name: str, value: Any, peer_id: str, timestamp: int):
         """Unified API to store a stat. It then calls private methods to
-        differentiate between static and dynaimc stats.
+        differentiate between static and dynamic stats.
         """
         if stat_name not in self._all_keys:
             self._err(f'Stat "{stat_name}" is not defined.')

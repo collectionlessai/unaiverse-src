@@ -2032,12 +2032,12 @@ class Node:
                 # (if it were in the same world in which we are, it would connect in a private manner) and
                 # possibly fulfilling the optional constraint of accepting only certified agent,
                 # then asking the hosted entity for additional custom evaluation
-                if (eval_dynamic_profile['connections']['world_peer_id'] is None and
-                        (not self.only_certified_agents or eval_static_profile['certified'] is True)):
+                # if (eval_dynamic_profile['connections']['world_peer_id'] is None and
+                if not self.only_certified_agents or eval_static_profile['certified'] is True:
                     return self.hosted.evaluate_profile(role, profile)
                 else:
-                    self.out(f"Peer f{peer_id} is already living in a world, of it is not certified "
-                             f"and maybe I expect certified only")
+                    self.out(f"Peer f{peer_id} is not certified "
+                             f"and I expect certified peers only")
                     return False
             else:
 

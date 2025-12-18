@@ -96,14 +96,19 @@ class Agent(AgentBasics):
                      f"and result of sending is {ret}")
         return at_least_one_completed
 
-    async def set_engaged_partner(self, agent: str):
-        """Virtually forces the engagement with a single agent, clearing all existing engagements (async).
+    async def set_engaged_partner(self, agent: str | list[str] | set[str]):
+        """Virtually forces the engagement with a single agent (or a group of agents), clearing all existing
+        engagements (async).
 
         Returns:
             True all the times.
         """
         self._engaged_agents.clear()
-        self._engaged_agents.add(agent)
+        if isinstance(agent, str):
+            agent = [agent]
+        for a in agent:
+            self._engaged_agents.add(a)
+        self._available = len(self._engaged_agents) == 0
         return True
 
     async def send_engagement(self):
