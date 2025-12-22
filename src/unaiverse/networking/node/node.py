@@ -66,7 +66,8 @@ class Node:
                  world_masters_node_ids: list[str] | set[str] = None,  # Optional: it is loaded from the online profile
                  world_masters_node_names: list[str] | set[str] = None,  # Optional: it will be converted to node IDs
                  allow_connection_through_relay: bool = True,
-                 talk_to_relay_based_nodes: bool = True):
+                 talk_to_relay_based_nodes: bool = True,
+                 run_hook: callable = None):
         """Initializes a new instance of the Node class.
 
         Args:
@@ -83,6 +84,7 @@ class Node:
             world_masters_node_names: A list or set of world masters' node names (using IDs is preferable).
             allow_connection_through_relay: A flag to allow connections through a relay.
             talk_to_relay_based_nodes: A flag to allow talking to relay-based nodes.
+            run_hook: A function taking the Node instance as argument, called every cycle.
         """
 
         # Checking main arguments
@@ -101,6 +103,7 @@ class Node:
 
         # Main attributes
         self.node_id = node_id
+        self.run_hook = run_hook
         self.unaiverse_key = unaiverse_key
         self.hosted = hosted
         self.node_type = Node.AGENT if (isinstance(hosted, Agent) and not isinstance(hosted, World)) else Node.WORLD
@@ -150,10 +153,8 @@ class Node:
         self.skip_was_alive_check = os.getenv("NODE_IGNORE_ALIVE", "0") == "1"
         
         # stats reporting agent -> world
-        self.send_stats_every = 10.  # Seconds
-        # self.send_stats_every = 5 * 60.  # Seconds
-        self.save_stats_every = 10.  # Seconds
-        # self.save_stats_every = 15 * 60.  # Seconds
+        self.send_stats_every = 30.  # Seconds
+        self.save_stats_every = 5 * 60.  # Seconds
 
         # Alive messaging
         self.run_start_time = 0.
@@ -1174,6 +1175,17 @@ class Node:
                 # Taking to the inspector
                 if self.inspector_activated:
                     await self.__send_to_inspector()
+                
+                # Execute User Callback
+                if self.run_hook is not None:
+                    try:
+                        self.run_hook(self)
+                        # if asyncio.iscoroutinefunction(self.run_hook):
+                        #     await self.run_hook(self)
+                        # else:
+                        #     self.run_hook(self)
+                    except Exception as e:
+                        self.err(f"Error in step_callback: {e}")
 
                 # Stop conditions
                 if cycles is not None and ((self.clock.get_cycle() + 1) >= cycles):
