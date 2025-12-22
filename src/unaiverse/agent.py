@@ -1531,7 +1531,7 @@ class Agent(AgentBasics):
         self.out(f"[AGENT] Requesting stats update from world {world_peer_id}...")
         if not (await self._node_conn.send(world_peer_id,
                                            channel_trail=None,
-                                           content={'time_range': self.stats._max_seen_timestamp},
+                                           content={'time_range': self.stats.max_seen_timestamp},
                                            content_type=Msg.STATS_REQUEST)):
             self.err("Failed to request stats to world.")
     

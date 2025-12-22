@@ -244,17 +244,15 @@ class World(AgentBasics):
         
         # 1. initialize structure if missing (e.g. first run or after DB load)
         graph_stat = self.stats._stats.setdefault("graph", {'nodes': {}, 'edges': {}})
-        
-        # Ensure sub-dicts exist (defensive programming against malformed DB loads)
-        if 'nodes' not in graph_stat: graph_stat['nodes'] = {}
-        if 'edges' not in graph_stat: graph_stat['edges'] = {}
             
-        nodes = graph_stat['nodes']
-        edges = graph_stat['edges']
+        nodes = graph_stat.setdefault('nodes', {})
+        edges = graph_stat.setdefault('edges', {})
         
         # 2. Update Node Metadata
         # We update the sender's info
-        nodes[peer_id] = self._extract_graph_node_info(peer_id)
+        node_data = self._extract_graph_node_info(peer_id)
+        node_data['last_seen'] = timestamp 
+        nodes[peer_id] = node_data
         
         # We also ensure connected peers exist in 'nodes', even if we don't have their full profile yet
         connected_peers = set(connected_peers_list)
@@ -282,6 +280,34 @@ class World(AgentBasics):
         # 4. Store
         world_peer_id = self.get_peer_ids()[1]
         self.stats.store_stat('graph', graph_stat, peer_id=world_peer_id, timestamp=timestamp)
+    
+    def _prune_graph(self):
+        """Removes nodes that are no longer connected to the World."""
+        graph_stat = self.stats._stats.get("graph")
+        if not graph_stat:
+            return
+
+        nodes = graph_stat.get('nodes', {})
+        edges = graph_stat.get('edges', {})
+
+        # Get the active/inactive peers
+        active_peers = set(self.all_agents.keys())
+        # active_peers_in_world = set(self.world_agents.keys()) | set(self.world_masters.keys())
+        active_peers.add(self.get_peer_ids()[1])
+        current_graph_nodes = set(nodes.keys())
+        dead_peers = current_graph_nodes - active_peers
+
+        if not dead_peers:
+            return
+
+        # 2. Kill Zombies
+        for pid in dead_peers:
+            nodes.pop(pid, None)  # Nodes
+            edges.pop(pid, None)  # Outgoing edges
+
+            # Remove incoming edges
+            for other_pid in edges:
+                edges[other_pid].discard(pid)
     
     def add_peer_stats(self, peer_stats_batch: List[Dict[str, Any]], sender_peer_id: str | None = None):
         """(World-only) Processes a batch of stats received from a peer."""
@@ -313,7 +339,7 @@ class World(AgentBasics):
                     continue
 
                 # 3. Push to the "dumb" Stats recorder
-                if stat_name in self.stats._all_keys:
+                if stat_name in self.stats.all_keys:
                     self.stats.store_stat(stat_name, v, peer_id=p_id, timestamp=t)
                 else:
                     self.err(f"[World] Unknown stat received: {stat_name}")
@@ -324,6 +350,9 @@ class World(AgentBasics):
         # Now update the graph for all collected connected_peers stats
         for p_id, v, t in connected_peers:
             self._update_graph(p_id, v, t)
+        
+        # Clean the graph from potentially stale peers
+        self._prune_graph()
     
     def debug_stats_dashboard(self):
         """Helper to verify the dashboard looks correct during development."""

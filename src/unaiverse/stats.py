@@ -27,8 +27,8 @@ THEME = {
     # Main structural colors (Dark Mode optimized)
     'bg_paper': 'rgba(0,0,0,0)',    # Transparent to blend with container
     'bg_plot': 'rgba(0,0,0,0)',     # Transparent plot area
-    'text_main': '#e0e0e0',         # Primary text color
-    'text_light': '#a0a0a0',        # Secondary/Axis text color
+    'text_main': '#7e7e7e',         # Primary text color
+    'text_light': '#7e7e7e',        # Secondary/Axis text color
     
     # UI Element specific
     'grid': '#333333',              # Grid lines
@@ -63,19 +63,26 @@ class UIPlot:
     """
     def __init__(self, title: str = '', height: int = 400):
         self._data: List[Dict[str, Any]] = []
+        
+        # Define the standard axis style for a "boxed" look
+        axis_style = {
+            'gridcolor': THEME['grid'],
+            'gridwidth': 1,
+            'griddash': 'dot',
+            'color': THEME['text_light'],
+            'showline': True,           # Draw the axis line
+            'mirror': True,             # Mirror it on top/right (creates the box)
+            'linewidth': 2,             # Width of the box border
+            'linecolor': THEME['grid'],  # Color of the box border
+            'zeroline': False,          # Prevents double-thick border lines at 0
+            'layer': 'below traces'     # Key fix: puts grid BEHIND the box border
+        }
+        
         self._layout: Dict[str, Any] = {
             'title': title,
             'height': height,
-            'xaxis': {
-                'title': 'Time', 
-                'gridcolor': THEME['grid'], 
-                'color': THEME['text_light']
-            },
-            'yaxis': {
-                'title': 'Value', 
-                'gridcolor': THEME['grid'], 
-                'color': THEME['text_light']
-            },
+            'xaxis': {**axis_style, 'title': 'Time'},
+            'yaxis': {**axis_style, 'title': 'Value'},
             'margin': {'l': 50, 'r': 50, 'b': 50, 't': 50},
             # Default dark theme friendly styling
             'paper_bgcolor': THEME['bg_paper'],
@@ -187,7 +194,7 @@ class UIPlot:
             'y': y,
             'xanchor': xanchor,
             'yanchor': yanchor,
-            'bgcolor': 'rgba(0,0,0,0)',
+            'bgcolor': THEME['bg_paper'],
             'bordercolor': THEME['edge'],
             'borderwidth': 1
         }
@@ -207,24 +214,26 @@ class DefaultBaseDash:
             "title": title,
             "height": 800,
             "template": "plotly_dark",
-            "paper_bgcolor": "#111111", 
+            "paper_bgcolor": THEME['bg_paper'], 
             "grid": {"rows": 2, "columns": 2, "pattern": "independent"},
             
             # --- ROW 1 ---
             # Top Left (Graph)
-            "xaxis1": {"domain": [0, 0.48], "visible": False}, 
-            "yaxis1": {"domain": [0.55, 1], "visible": False},
+            "xaxis1": {"domain": [0, 0.48]}, 
+            "yaxis1": {"domain": [0.56, 1]},
+            # "xaxis1": {"domain": [0, 0.48], "visible": False}, 
+            # "yaxis1": {"domain": [0.58, 1], "visible": False},
             # Top Right (Timeseries)
             "xaxis2": {"domain": [0.52, 1]},
-            "yaxis2": {"domain": [0.55, 1]},
+            "yaxis2": {"domain": [0.56, 1]},
             
             # --- ROW 2 ---
             # Bot Left (Bar)
             "xaxis3": {"domain": [0, 0.48]},
-            "yaxis3": {"domain": [0, 0.45]},
+            "yaxis3": {"domain": [0, 0.44]},
             # Bot Right (Bar)
             "xaxis4": {"domain": [0.52, 1]},
-            "yaxis4": {"domain": [0, 0.45]},
+            "yaxis4": {"domain": [0, 0.44]},
             
             "showlegend": True,
             "legend": {
@@ -234,7 +243,7 @@ class DefaultBaseDash:
                 "xanchor": "left",
                 "yanchor": "top",
                 "bgcolor": "rgba(0,0,0,0)",
-                "font": {"color": "#e0e0e0"}
+                "font": {"color": THEME['text_main']}
             },
             "margin": {"l": 50, "r": 50, "t": 80, "b": 50}
         }
@@ -274,12 +283,12 @@ class DefaultBaseDash:
         # Add Title via Annotation
         if src_l.get("title"):
             self.layout.setdefault("annotations", []).append({
-                "text": src_l["title"],
+                "text": f"<b>{src_l['title']}</b>",
                 "x": (x_dom[0] + x_dom[1]) / 2, 
                 "y": y_dom[1] + 0.02,
                 "xref": "paper", "yref": "paper", 
-                "showarrow": False, "xanchor": "center",
-                "font": {"size": 14, "color": "#aaaaaa"} 
+                "showarrow": False, "xanchor": "center", "yanchor": "bottom",
+                "font": {"size": 14, "color": THEME['text_main']} 
             })
 
     def to_json(self):
@@ -299,7 +308,7 @@ class Stats:
             - store_static(stat_name, value, peer_id)
             - store_dynamic(stat_name, value, peer_id, timestamp)
       3.  Smart Branching: The store_... methods internally branch
-            (if self._is_world: ...) to handle their specific roles:
+            (if self.is_world: ...) to handle their specific roles:
               - Agent: Buffers for network, de-duplicates statics.
               - World: Updates hot cache, buffers for DB.
       4.  Persistence (SQLite):
@@ -352,8 +361,8 @@ class Stats:
                  db_path: str | None = None,  # only needed by the world
                  cache_window_hours: float = 2.0):  # only needed by the world
         
-        self._is_world: bool = is_world
-        self._max_seen_timestamp: int = 0
+        self.is_world: bool = is_world
+        self.max_seen_timestamp: int = 0
         
         # --- Integrate custom statistics ---
         self.WORLD_STATS_STATIC_SCHEMA = self.CORE_WORLD_STATS_STATIC_SCHEMA | self.CUSTOM_WORLD_STATS_STATIC_SCHEMA
@@ -364,21 +373,21 @@ class Stats:
         self.OUTER_STATS_DYNAMIC_SCHEMA = self.CORE_OUTER_STATS_DYNAMIC_SCHEMA | self.CUSTOM_OUTER_STATS_DYNAMIC_SCHEMA
         
         # --- Master key sets for easier lookup ---
-        self._all_static_keys: Set[str] = set()
-        self._all_dynamic_keys: Set[str] = set()
-        self._all_keys: Set[str] = set()
-        self._world_grouped_keys: Set[str] = set()
-        self._world_ungrouped_keys: Set[str] = set()
-        self._agent_grouped_keys: Set[str] = set()
-        self._agent_ungrouped_keys: Set[str] = set()
-        self._stat_types: Dict[str, str] = {}
+        self.all_static_keys: Set[str] = set()
+        self.all_dynamic_keys: Set[str] = set()
+        self.all_keys: Set[str] = set()
+        self.world_grouped_keys: Set[str] = set()
+        self.world_ungrouped_keys: Set[str] = set()
+        self.agent_grouped_keys: Set[str] = set()
+        self.agent_ungrouped_keys: Set[str] = set()
+        self.stat_types: Dict[str, str] = {}
         self._initialize_key_sets()
 
-        if self._is_world:
+        if self.is_world:
             # --- World Configuration ---
             self._stats: Dict[str, Any] = {self.GROUP_KEY: {}}
-            self._min_window_duration = timedelta(hours=cache_window_hours)
-            self._db_path = db_path
+            self.min_window_duration = timedelta(hours=cache_window_hours)
+            self.db_path = db_path
             self._db_conn: Optional[sqlite3.Connection] = None
             self._static_db_buffer: List[Tuple[str, str]] = []
             self._dynamic_db_buffer: List[Tuple[float, str, str, str]] = []
@@ -390,7 +399,7 @@ class Stats:
         else:
             # --- Agent Initialization (Simple Buffer) ---
             self._world_view: Dict[str, Any] = {}
-            self._min_window_duration = timedelta(hours=3.0)  # cache for the _world_view
+            self.min_window_duration = timedelta(hours=3.0)  # cache for the _world_view
             self._update_batch: List[Dict[str, Any]] = []
     
     def _out(self, msg: str):
@@ -404,13 +413,13 @@ class Stats:
     def _deb(self, msg: str):
         """Prints a debug message if enabled."""
         if self.DEBUG:
-            prefix = '[DEBUG ' + ('WORLD' if self._is_world else 'AGENT') + ']'
+            prefix = '[DEBUG ' + ('WORLD' if self.is_world else 'AGENT') + ']'
             self._out(f'{prefix} [Stats] {msg}')
     
     def _initialize_key_sets(self):
         """Populates the master key sets and the type for later use."""
         # This map holds: {'graph': <class 'dict'>, 'state': <class 'str'>}
-        self._stat_types: Dict[str, type] = {}
+        self.stat_types: Dict[str, type] = {}
         self._stat_defaults: Dict[str, Any] = {}
         
         # 1. Combine all schema definitions
@@ -427,37 +436,37 @@ class Stats:
         }
 
         # 2. Build the key sets AND the type map
-        self._all_static_keys = set()
+        self.all_static_keys = set()
         for name, (type_obj, default) in all_static_schemas.items():
-            self._all_static_keys.add(name)
-            self._stat_types[name] = type_obj
+            self.all_static_keys.add(name)
+            self.stat_types[name] = type_obj
             self._stat_defaults[name] = default
 
-        self._all_dynamic_keys = set()
+        self.all_dynamic_keys = set()
         for name, (type_obj, default) in all_dynamic_schemas.items():
-            self._all_dynamic_keys.add(name)
-            self._stat_types[name] = type_obj
+            self.all_dynamic_keys.add(name)
+            self.stat_types[name] = type_obj
             self._stat_defaults[name] = default
         
-        self._all_keys = self._all_static_keys | self._all_dynamic_keys
+        self.all_keys = self.all_static_keys | self.all_dynamic_keys
         # World perspective
-        self._world_ungrouped_keys = {name for name in self.WORLD_STATS_STATIC_SCHEMA | self.WORLD_STATS_DYNAMIC_SCHEMA}
-        self._world_grouped_keys = {name for name in (self.AGENT_STATS_STATIC_SCHEMA | self.AGENT_STATS_DYNAMIC_SCHEMA |
+        self.world_ungrouped_keys = {name for name in self.WORLD_STATS_STATIC_SCHEMA | self.WORLD_STATS_DYNAMIC_SCHEMA}
+        self.world_grouped_keys = {name for name in (self.AGENT_STATS_STATIC_SCHEMA | self.AGENT_STATS_DYNAMIC_SCHEMA |
                                                       self.OUTER_STATS_STATIC_SCHEMA | self.OUTER_STATS_DYNAMIC_SCHEMA)}
-        self._agent_ungrouped_keys = {name for name in self.AGENT_STATS_STATIC_SCHEMA | self.AGENT_STATS_DYNAMIC_SCHEMA}
-        self._agent_grouped_keys = {name for name in self.OUTER_STATS_STATIC_SCHEMA | self.OUTER_STATS_DYNAMIC_SCHEMA}
+        self.agent_ungrouped_keys = {name for name in self.AGENT_STATS_STATIC_SCHEMA | self.AGENT_STATS_DYNAMIC_SCHEMA}
+        self.agent_grouped_keys = {name for name in self.OUTER_STATS_STATIC_SCHEMA | self.OUTER_STATS_DYNAMIC_SCHEMA}
     
     def _init_db(self):
         """(World-only) Connects to SQLite and creates tables if they don't exist."""
-        if not self._is_world:
+        if not self.is_world:
             return
         
         try:
-            db_dir = os.path.dirname(self._db_path)
+            db_dir = os.path.dirname(self.db_path)
             if db_dir:
                 os.makedirs(db_dir, exist_ok=True)
             
-            self._db_conn = sqlite3.connect(self._db_path)
+            self._db_conn = sqlite3.connect(self.db_path)
             self._db_conn.execute('PRAGMA journal_mode=WAL;')
             self._db_conn.execute('PRAGMA synchronous=NORMAL;')
             
@@ -484,19 +493,19 @@ class Stats:
                 );
             """)
             self._db_conn.commit()
-            self._deb(f'SQLite DB initialized at {self._db_path}')
+            self._deb(f'SQLite DB initialized at {self.db_path}')
         except Exception as e:
             self._err(f'CRITICAL: Failed to initialize SQLite DB: {e}')
             self._db_conn = None
 
     def _initialize_cache_structure(self):
         """(World-only) Ensures the _stats dict has the correct structure (SortedDicts/dicts)."""
-        if not self._is_world:
+        if not self.is_world:
             return
 
         self._stats.setdefault(self.GROUP_KEY, {})
-        for key in self._world_ungrouped_keys:
-            if key in self._all_dynamic_keys:
+        for key in self.world_ungrouped_keys:
+            if key in self.all_dynamic_keys:
                 self._stats.setdefault(key, SortedDict())
             else:
                 self._stats.setdefault(key, self._stat_defaults[key]) # e.g., 'graph'
@@ -504,22 +513,22 @@ class Stats:
         # Grouped keys are initialized on-demand by _get_peer_stat_cache
         # But we must ensure existing loaded peers have their structures
         for _, peer_data in self._stats[self.GROUP_KEY].items():
-            for key in self._world_grouped_keys:
-                if key in self._all_dynamic_keys:
+            for key in self.world_grouped_keys:
+                if key in self.all_dynamic_keys:
                     # If loaded from DB, it's not a SortedDict yet.
                     # It will be populated by _hydrate_dynamic_caches_from_db
                     peer_data.setdefault(key, SortedDict())
 
     def _get_peer_stat_cache(self, peer_id: str, stat_name: str) -> Union[SortedDict, dict, None]:
         """(World-only) Helper to get or create the cache structure for a peer stat on demand."""
-        if not self._is_world:
+        if not self.is_world:
             return
         
         peer_cache = self._stats[self.GROUP_KEY].setdefault(peer_id, {})
         if stat_name not in peer_cache:
-            if stat_name in self._all_dynamic_keys:
+            if stat_name in self.all_dynamic_keys:
                 peer_cache[stat_name] = SortedDict()
-            elif stat_name in self._all_static_keys:
+            elif stat_name in self.all_static_keys:
                 peer_cache[stat_name] = self._stat_defaults[stat_name]
         
         return peer_cache.get(stat_name)
@@ -529,20 +538,20 @@ class Stats:
         """Unified API to store a stat. It then calls private methods to
         differentiate between static and dynamic stats.
         """
-        if stat_name not in self._all_keys:
+        if stat_name not in self.all_keys:
             self._err(f'Stat "{stat_name}" is not defined.')
         
         # disambiguate between static and dynamic stats
-        if stat_name in self._all_static_keys:
+        if stat_name in self.all_static_keys:
             self._store_static(stat_name, value, peer_id, timestamp)
         else:
             self._store_dynamic(stat_name, value, peer_id, timestamp)
     
     def _validate_type(self, stat_name, value):
-        if stat_name not in self._stat_types:
-            raise KeyError(f'Statistic "{stat_name}" is not defined in the _stat_types schema.')
+        if stat_name not in self.stat_types:
+            raise KeyError(f'Statistic "{stat_name}" is not defined in the stat_types schema.')
         
-        schema_type = self._stat_types.get(stat_name)  # no default to str because it's a silent fail
+        schema_type = self.stat_types.get(stat_name)  # no default to str because it's a silent fail
         if isinstance(value, schema_type):
             return value
         else:
@@ -578,12 +587,12 @@ class Stats:
         - On World: Updates the hot cache and adds to the DB buffer.
         """
         value = self._validate_type(stat_name, value)
-        if self._is_world:
+        if self.is_world:
             # --- WORLD LOGIC ---
-            if timestamp > self._max_seen_timestamp:
-                self._max_seen_timestamp = timestamp
+            if timestamp > self.max_seen_timestamp:
+                self.max_seen_timestamp = timestamp
             # 1. Update hot cache
-            if stat_name in self._world_ungrouped_keys:
+            if stat_name in self.world_ungrouped_keys:
                 self._stats[stat_name] = value
             else:
                 peer_cache = self._stats[self.GROUP_KEY].setdefault(peer_id, {})
@@ -613,13 +622,13 @@ class Stats:
         - On World: Uses provided timestamp, updates hot cache, adds to DB buffer.
         """
         value = self._validate_type(stat_name, value)
-        if self._is_world:
+        if self.is_world:
             # --- WORLD LOGIC ---
-            if timestamp > self._max_seen_timestamp:
-                self._max_seen_timestamp = timestamp
+            if timestamp > self.max_seen_timestamp:
+                self.max_seen_timestamp = timestamp
             cache = None
             # 1. Update hot cache
-            if stat_name in self._world_ungrouped_keys:
+            if stat_name in self.world_ungrouped_keys:
                 cache = self._stats.get(stat_name)
             else:
                 cache = self._get_peer_stat_cache(peer_id, stat_name)
@@ -628,7 +637,7 @@ class Stats:
             if isinstance(cache, SortedDict):
                 # Insert new value and prune outdated ones
                 cache[timestamp] = value
-                cutoff = timestamp - int(self._min_window_duration.total_seconds() * 1000)
+                cutoff = timestamp - int(self.min_window_duration.total_seconds() * 1000)
                 while cache and cache.peekitem(0)[0] < cutoff:
                     cache.popitem(0)
             
@@ -665,7 +674,7 @@ class Stats:
             view_data: The snapshot received from the world.
             overwrite: If True, replaces the entire current view instead of merging.
         """
-        if self._is_world:
+        if self.is_world:
             return
         
         # Initialize empty structure if needed
@@ -678,8 +687,8 @@ class Stats:
             if isinstance(ts, list) and len(ts) > 0 and isinstance(ts[0], list):
                 # The last item is usually the newest in sorted time-series
                 last_ts = ts[-1][0]
-                if last_ts > self._max_seen_timestamp:
-                    self._max_seen_timestamp = int(last_ts)
+                if last_ts > self.max_seen_timestamp:
+                    self.max_seen_timestamp = int(last_ts)
         
         def _merge_dict(target: Dict, source: Dict):
             """
@@ -687,7 +696,7 @@ class Stats:
             Copies a source dict { "stat_name": value_or_timeseries } into target.
             """
             for stat_name, val_or_ts in source.items():
-                if stat_name in self._all_dynamic_keys:
+                if stat_name in self.all_dynamic_keys:
                     _update_max_ts(val_or_ts)
                     if stat_name not in target:
                         target[stat_name] = []
@@ -730,7 +739,7 @@ class Stats:
     
     def get_payload_for_world(self) -> List[Dict[str, Any]]:
         """(Agent-only) Gathers, returns, and clears all stats to be sent to the world."""
-        if self._is_world:
+        if self.is_world:
             return []
         
         # self._update_agent_static()  # Ensure static stats are fresh in the batch
@@ -751,12 +760,12 @@ class Stats:
         }
         For Dynamic stats, returns a list of lists: [[timestamp, value], ...] for efficient JSON/Plotly usage.
         """
-        if not self._is_world:
+        if not self.is_world:
             return {}
         snapshot = {'world': {}, 'peers': {}}
         
         # 1. Process World (Ungrouped) Stats
-        for stat_name in self._world_ungrouped_keys:
+        for stat_name in self.world_ungrouped_keys:
             val = self._stats.get(stat_name)
             if val is not None:
                 snapshot['world'][stat_name] = self._serialize_value(val, since_timestamp)
@@ -795,9 +804,9 @@ class Stats:
         - If peer_id is provided, it searches for a grouped stat for that peer.
         Returns the last value, or None if not found.
         """
-        if stat_name in self._all_static_keys:
+        if stat_name in self.all_static_keys:
             return self._get_last_static_value(stat_name, peer_id)
-        elif stat_name in self._all_dynamic_keys:
+        elif stat_name in self.all_dynamic_keys:
             return self._get_last_dynamic_value(stat_name, peer_id)
         else:
             self._err(f'get_last_value: Unknown stat_name "{stat_name}"')
@@ -810,18 +819,18 @@ class Stats:
         - If peer_id is provided, it searches for a grouped stat for that peer.
         Returns None if the stat is not found or has no entries.
         """
-        if not self._is_world:
+        if not self.is_world:
             return None # Agents don't have this cache
             
         cache: Optional[SortedDict] = None
         
         if peer_id is None:
             # --- This is an ungrouped (world) stat ---
-            if stat_name in self._world_ungrouped_keys:
+            if stat_name in self.world_ungrouped_keys:
                 cache = self._stats.get(stat_name)
         else:
             # --- This is a grouped (peer) stat ---
-            if stat_name in self._world_grouped_keys:
+            if stat_name in self.world_grouped_keys:
                 peer_cache = self._stats.get(self.GROUP_KEY, {}).get(peer_id)
                 if peer_cache:
                     cache = peer_cache.get(stat_name)
@@ -839,17 +848,17 @@ class Stats:
         - If peer_id is provided, it searches for a grouped stat for that peer.
         Returns None if the stat is not found.
         """
-        if not self._is_world:
+        if not self.is_world:
             return None # Agents don't have this cache
         
         value: Any | None = None
         if peer_id is None:
             # --- This is an ungrouped (world) stat ---
-            if stat_name in self._world_ungrouped_keys:
+            if stat_name in self.world_ungrouped_keys:
                 value = self._stats.get(stat_name)
         else:
             # --- This is a grouped (peer) stat ---
-            if stat_name in self._world_grouped_keys:
+            if stat_name in self.world_grouped_keys:
                 peer_cache = self._stats.get(self.GROUP_KEY, {}).get(peer_id)
                 if peer_cache:
                     value = peer_cache.get(stat_name)
@@ -858,7 +867,7 @@ class Stats:
     # --- WORLD API (PERSISTENCE) ---
     def save_to_disk(self):
         """(World-only) Saves the static snapshot and dynamic buffer to SQLite."""
-        if not self._is_world or not self._db_conn:
+        if not self.is_world or not self._db_conn:
             return
         self._deb(f'Saving world stats to DB...')
         try:
@@ -915,15 +924,15 @@ class Stats:
         This method handles peers that have disconnected or stopped sending data,
         preventing their old data from haunting the RAM forever.
         """
-        if not self._is_world:
+        if not self.is_world:
             return
 
         # Calculate cutoff based on latest timestamp
-        window_ms = int(self._min_window_duration.total_seconds() * 1000)
-        cutoff = self._max_seen_timestamp - window_ms
+        window_ms = int(self.min_window_duration.total_seconds() * 1000)
+        cutoff = self.max_seen_timestamp - window_ms
 
         # 1. Prune Ungrouped Stats (World Stats)
-        for key in self._world_ungrouped_keys:
+        for key in self.world_ungrouped_keys:
             cache = self._stats.get(key)
             if isinstance(cache, SortedDict):  # only true for dynamic stats
                 # Remove items older than cutoff
@@ -957,7 +966,7 @@ class Stats:
     # --- WORLD API (LOADING) ---
     def _load_existing_stats(self):
         """(World-only) Loads existing stats from disk to hydrate the cache."""
-        if not self._is_world or not self._db_conn:
+        if not self.is_world or not self._db_conn:
             return
         self._deb('Loading existing stats from disk...')
         self._load_static_from_db()
@@ -966,32 +975,8 @@ class Stats:
 
     def _load_static_from_db(self):
         """(World-only) Loads the static_stats table into the _stats hot cache."""
-        if not self._db_conn:
-            return
-        try:
-            cursor = self._db_conn.execute("SELECT peer_id, stat_name, val_json, timestamp FROM static_stats")
-            for peer_id, stat_name, value_json, timestamp in cursor:
-                value = json.loads(value_json)
-                if stat_name == 'graph':
-                    # Handle both legacy format (just edges) and new format (nodes+edges) safely
-                    if isinstance(value, dict) and 'edges' in value:
-                        # Convert the edge lists back to sets
-                        value['edges'] = {k: set(v) for k, v in value['edges'].items()}
-                        # Ensure nodes dict exists
-                        if 'nodes' not in value:
-                            value['nodes'] = {}
-                    else:
-                        # Convert entire dict to sets (as it was before)
-                        edges_set = {k: set(v) for k, v in value.items()}
-                        # Migrate to new structure on the fly
-                        value = {'nodes': {}, 'edges': edges_set}
-                self._store_static(stat_name, value, peer_id, timestamp)
-            
-            # Clear the buffer generated by loading
-            self._static_db_buffer = []
-            self._deb("Loaded static stats snapshot from DB.")
-        except Exception as e:
-            self._err(f"Failed to load static stats from DB: {e}")
+        # There are no default static stats that are meaningful to load at startup (graph, state...)
+        pass
             
     def _hydrate_dynamic_caches_from_db(self):
         """(World-only) Queries SQLite for 'hot' data to fill dynamic caches."""
@@ -1004,8 +989,8 @@ class Stats:
             if max_ts_result is None or max_ts_result[0] is None:
                 self._deb('No dynamic stats found in DB. Hydration skipped.')
                 return # No data in DB, nothing to load
-            self._max_seen_timestamp = int(max_ts_result[0])
-            cutoff_t_ms = self._max_seen_timestamp - int(self._min_window_duration.total_seconds() * 1000)
+            self.max_seen_timestamp = int(max_ts_result[0])
+            cutoff_t_ms = self.max_seen_timestamp - int(self.min_window_duration.total_seconds() * 1000)
 
             cursor = self._db_conn.execute("""
                 SELECT timestamp, peer_id, stat_name, val_num, val_str, val_json 
@@ -1049,7 +1034,7 @@ class Stats:
         Args:
             value_range: (min, max) - Only returns rows where val_num is within range.
         """
-        if not self._is_world or not self._db_conn:
+        if not self.is_world or not self._db_conn:
             return {}
         
         # Flush the cached upadtes to db before querying
@@ -1156,7 +1141,7 @@ class Stats:
         std_dict = {}
         peer_stats = stats.get(self.GROUP_KEY, {})
         
-        number_stats = {name for name, type_obj in self._stat_types.items()
+        number_stats = {name for name, type_obj in self.stat_types.items()
                         if type_obj in (int, float)}
 
         for stat_name in number_stats:
@@ -1214,7 +1199,7 @@ class Stats:
     
     def shutdown(self):
         """Call this explicitly when your application is closing."""
-        if self._is_world and self._db_conn:
+        if self.is_world and self._db_conn:
             self._deb('Shutdown: Saving final stats...')
             try:
                 self.save_to_disk()
@@ -1225,7 +1210,7 @@ class Stats:
             self._deb('SQLite connection closed.')
     
     def __del__(self):
-        if self._is_world and self._db_conn:
+        if self.is_world and self._db_conn:
             try:
                 # Final save on exit, if any buffer
                 self.save_to_disk()
@@ -1241,7 +1226,7 @@ class Stats:
         Visualizes Core Stats: Topology, Agent Counts, States, and Actions.
         """
         # 1. Get Data view
-        view = self.get_view(since_timestamp) if self._is_world else self._world_view
+        view = self.get_view(since_timestamp) if self.is_world else self._world_view
         if not view:
             return None
             
@@ -1250,8 +1235,11 @@ class Stats:
         # --- Panel 1: Network Topology (Top Left) ---
         p1 = UIPlot(title="World Topology")
         self._populate_graph(p1, view, "graph")
-        p1.set_layout_opt('xaxis', {'visible': False})
-        p1.set_layout_opt('yaxis', {'visible': False})
+        # p1.set_layout_opt('xaxis', {'visible': False})
+        # p1.set_layout_opt('yaxis', {'visible': False})
+        clean_axis = {'showgrid': False, 'showticklabels': False, 'zeroline': False}
+        p1.set_layout_opt('xaxis', clean_axis)
+        p1.set_layout_opt('yaxis', clean_axis)
         dash.add_panel(p1, "top_left")
 
         # --- Panel 2: System Counters (Table) ---
@@ -1270,13 +1258,20 @@ class Stats:
                 color_override=color,
                 title_override=label
             )
-        p2.set_layout_opt('xaxis', {'title': None, 'visible': False})
+        # p2.set_layout_opt('xaxis', {'title': None, 'visible': False})
+        p2.set_layout_opt('xaxis', {'title': None, 'showticklabels': False}) 
         p2.set_layout_opt('yaxis', {'title': None})
         dash.add_panel(p2, "top_right")
 
         # --- Panel 3: State Distribution (Bar) ---
         p3 = UIPlot(title="State Distribution")
-        self._populate_distribution(p3, view, "state")
+        # self._populate_distribution(p3, view, "state")
+        self._populate_graph(p3, view, "graph")
+        # p1.set_layout_opt('xaxis', {'visible': False})
+        # p1.set_layout_opt('yaxis', {'visible': False})
+        clean_axis = {'showgrid': False, 'showticklabels': False, 'zeroline': False}
+        p3.set_layout_opt('xaxis', clean_axis)
+        p3.set_layout_opt('yaxis', clean_axis)
         p3.set_layout_opt("xaxis", {"title": None})
         dash.add_panel(p3, "bot_left")
 
@@ -1443,13 +1438,13 @@ class Stats:
             'marker': {
                 'color': node_color, 
                 'size': 12,
-                'line': {'width': 2, 'color': THEME['node_border']}
+                'line': {'width': 2, 'color': THEME['edge']}
             }
         })
 
         # 5. Layout overrides
-        panel.set_layout_opt('xaxis', {'visible': False})
-        panel.set_layout_opt('yaxis', {'visible': False})
+        # panel.set_layout_opt('xaxis', {'visible': False})
+        # panel.set_layout_opt('yaxis', {'visible': False})
     
     def _populate_distribution(self, panel: UIPlot, view: Dict, stat_name: str):
         """
