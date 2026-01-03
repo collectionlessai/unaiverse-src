@@ -56,6 +56,7 @@ class Clock:
         self.__local_initial_t = datetime.now(timezone.utc).timestamp()  # Corresponding local time
         self.__timestamps = []  # List to store timestamps for cycles
         self.__time2cycle_cache = 0  # Cached cycle value for optimization
+        self.__last_monotonic_ms = -1
 
     def __get_time_from_server(self) -> float:
         """Get the current time from an NTP server.
@@ -148,11 +149,23 @@ class Clock:
         passed_since_beginning = datetime.now(timezone.utc).timestamp() - self.__local_initial_t
         return self.__global_initial_t + passed_since_beginning if not passed else passed_since_beginning
     
-    def get_time_ms(self) -> int:
+    def get_time_ms(self, monotonic: bool = False) -> int:
         """
         Get the current time as an integer number of milliseconds since the Unix epoch.
         """
-        return int(self.get_time() * 1000)
+
+        if monotonic:
+            target = self.__last_monotonic_ms + 1
+            while True:
+                now = int(self.get_time() * 1000)
+                if now >= target:
+                    self.__last_monotonic_ms = now
+                    return now
+                time.sleep(0.0001)
+        else:
+            now = int(self.get_time() * 1000)
+            self.__last_monotonic_ms = now
+            return now
 
     def get_time_as_string(self) -> str:
         """Get the current time as a string (ISO format).

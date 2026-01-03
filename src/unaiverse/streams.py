@@ -196,6 +196,9 @@ class DataStream:
     def get_tag(self) -> int:
         return self.data_tag
 
+    def set_tag(self, data_tag: int):
+        self.data_tag = data_tag
+
     def get_uuid(self, expected: bool = False) -> str | None:
         return self.data_uuid if not expected else self.data_uuid_expected
 
@@ -205,10 +208,6 @@ class DataStream:
         else:
             self.data_uuid_expected = ref_uuid
 
-        # When we "set" a UUID, even if None, we unmark the "clear UUID" flag, to be sure that nobody is going to
-        # accidentally clear this information
-        self.data_uuid_clearable = False
-
     def mark_uuid_as_clearable(self):
         self.data_uuid_clearable = True
 
@@ -217,6 +216,13 @@ class DataStream:
             self.data_uuid = None
             self.data_uuid_expected = None
             self.data_uuid_clearable = False
+            return True
+        return False
+
+    def clear_uuid(self):
+        self.data_uuid = None
+        self.data_uuid_expected = None
+        return True
 
     def set_props(self, data_stream: 'DataStream'):
         """Set (edit) the data properties picking up the ones of another DataStream.
@@ -236,11 +242,12 @@ class BufferedDataStream(DataStream):
     """
 
     def __init__(self, props: DataProps, clock: Clock = Clock(current_time=datetime.now(timezone.utc).timestamp()),
-                 is_static: bool = False):
+                 is_static: bool = False, is_queue: bool = False):
         """Initialize a BufferedDataStream.
 
         Args:
             is_static (bool): If True, the buffer stores only one item that is reused.
+            is_queue (bool): If True, the buffer acts as a data queue.
         """
         super().__init__(props=props, clock=clock)
 
@@ -249,6 +256,7 @@ class BufferedDataStream(DataStream):
         self.text_buffer = []
 
         self.is_static = is_static  # A static stream store only one sample and always yields it
+        self.is_queue = is_queue
 
         # We need to remember the fist cycle in which we started buffering and the last one we buffered
         self.first_cycle = -1
@@ -276,8 +284,15 @@ class BufferedDataStream(DataStream):
         if (self.last_get_cycle != cycle and
                 (self.props.delta <= 0. or self.props.delta <= (self.clock.get_time() - self.data_timestamp))):
             self.last_get_cycle = cycle
-            self.buffered_data_index += 1
-            new_data, new_tag = self[self.buffered_data_index]
+
+            if not self.is_queue:
+                self.buffered_data_index += 1
+                new_data, new_tag = self[self.buffered_data_index]
+            else:
+                new_data, new_tag = self[0]
+                if new_data is not None:
+                    self.data_buffer.pop(0)
+                    self.text_buffer.pop(0)
             self.data = new_data
             self.data_timestamp = self.clock.get_cycle_time()
             self.data_tag = new_tag
@@ -293,6 +308,9 @@ class BufferedDataStream(DataStream):
         Returns:
             bool: True if the data was buffered.
         """
+        if self.is_queue and data is None:
+            return True
+
         ret = super().set(data, data_tag)
 
         if ret:
@@ -302,6 +320,8 @@ class BufferedDataStream(DataStream):
                     self.text_buffer.append(self.props.to_text(data))
                 elif self.props.is_text():
                     self.text_buffer.append(data)
+                else:
+                    self.text_buffer.append("")
 
                 # Boilerplate
                 if self.first_cycle < 0:
@@ -309,14 +329,18 @@ class BufferedDataStream(DataStream):
                     self.last_cycle = self.first_cycle
                 else:
 
-                    # Filling gaps with "None"
-                    cycle = self.clock.get_cycle()
-                    if cycle > self.last_cycle + 1:
-                        for cycle in range(cycle, self.last_cycle + 1):
-                            self.data_buffer.append((None, -1))
-                        self.last_cycle = cycle - 1
+                    if not self.is_queue:
 
-                    self.last_cycle += 1
+                        # Filling gaps with "None"
+                        cycle = self.clock.get_cycle()
+                        if cycle > self.last_cycle + 1:
+                            for cycle in range(cycle, self.last_cycle + 1):
+                                self.data_buffer.append((None, -1))
+                            self.last_cycle = cycle - 1
+
+                        self.last_cycle += 1
+                    else:
+                        self.last_cycle = self.clock.get_cycle()
         return ret
 
     def __getitem__(self, idx: int) -> tuple[torch.Tensor | None, int]:

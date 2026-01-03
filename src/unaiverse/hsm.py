@@ -24,6 +24,140 @@ import importlib.resources
 from collections.abc import Callable
 
 
+class ActionRequest:
+    def __init__(self, requester: object, action: 'Action',
+                 args: dict | None = None, timestamp: float = -1., uuid: str | None = None):
+        self.requester = requester
+        self.action = action
+        self.args = args
+        self.timestamp = timestamp
+        self.uuid = uuid
+        self.by_insertion_order_id = -1
+        self.by_requester_insertion_order_id = -1
+
+    def get_order_id(self, by_requester: bool = False) -> int:
+        if not by_requester:
+            return self.by_insertion_order_id
+        else:
+            return self.by_requester_insertion_order_id
+
+    def is_valid(self):
+        return self.by_insertion_order_id >= 0 and self.by_requester_insertion_order_id >= 0
+
+    def has_dummy_requester(self):
+        return self.requester is None
+
+    def to_tuple(self):
+        return self.requester, self.args, self.timestamp, self.uuid
+
+    def alter_arg(self, arg_name: str, arg_value: object):
+        if arg_name in self.args:
+            self.args[arg_name] = arg_value
+            return True
+        else:
+            return False
+
+    def set_arg(self, arg_name: str, arg_value: object):
+        self.args[arg_name] = arg_value
+
+    def get_arg(self, arg_name):
+        return self.args[arg_name] if arg_name in self.args else None
+
+    def __str__(self):
+        """Provides a string representation of the `ActionRequest` instance.
+
+        Returns:
+            A string containing a formatted summary of the instance.
+        """
+        return f"(action={self.action.name}, requester={self.requester}, timestamp={self.timestamp}, uuid={self.uuid})"
+
+
+class ActionRequestList:
+    def __init__(self, max_per_requester: int = -1):
+        self.by_insertion_order = []
+        self.by_requester_and_by_insertion_order = {}
+        self.max_per_requester = max_per_requester
+
+    def add(self, req: ActionRequest):
+
+        # Updating by-requester index
+        if req.requester not in self.by_requester_and_by_insertion_order:
+            self.by_requester_and_by_insertion_order[req.requester] = []
+        if 0 < self.max_per_requester <= len(self.by_requester_and_by_insertion_order[req.requester]):
+            self.remove(self.get_oldest_request(req.requester))
+        by_requester_insertion_order_id = len(self.by_requester_and_by_insertion_order[req.requester])
+        self.by_requester_and_by_insertion_order[req.requester].append(req)
+
+        # Updating direct global index
+        insertion_order_id = len(self.by_insertion_order)
+        self.by_insertion_order.append(req)
+
+        # Updating reverse indices
+        req.by_insertion_order_id = insertion_order_id
+        req.by_requester_insertion_order_id = by_requester_insertion_order_id
+
+    def remove(self, req: ActionRequest):
+        if req.is_valid():
+            for i in range(req.by_insertion_order_id + 1, len(self.by_insertion_order)):
+                self.by_insertion_order[i].by_insertion_order_id -= 1
+            del self.by_insertion_order[req.by_insertion_order_id]
+
+            d = self.by_requester_and_by_insertion_order[req.requester]
+            for i in range(req.by_requester_insertion_order_id + 1, len(d)):
+                d[i].by_requester_insertion_order_id -= 1
+            del d[req.by_requester_insertion_order_id]
+
+    def get_request(self, req_order_id: int, requester: object | None = None):
+        if req_order_id < 0 and req_order_id != -1:
+            return None
+        if requester is None:
+            return self.by_insertion_order[req_order_id] if req_order_id < len(self.by_insertion_order) else None
+        else:
+            if requester not in self.by_requester_and_by_insertion_order:
+                return None
+            return self.by_requester_and_by_insertion_order[requester][req_order_id] \
+                if req_order_id < len(self.by_requester_and_by_insertion_order[requester]) else None
+
+    def get_oldest_request(self, requester: object | None = None):
+        return self.get_request(0, requester)
+
+    def get_most_recent_request(self, requester: object | None = None):
+        return self.get_request(-1, requester)
+
+    def get_requests(self, requester: object | None = None, simplified: bool = False):
+        if requester is None:
+            if not simplified:
+                return self.by_insertion_order
+            else:
+                return [req.to_tuple() for req in self.by_insertion_order]
+        else:
+            if requester in self.by_requester_and_by_insertion_order:
+                if not simplified:
+                    return self.by_requester_and_by_insertion_order[requester]
+                else:
+                    reqs = self.by_requester_and_by_insertion_order[requester]
+                    return [req.to_tuple() for req in reqs]
+            else:
+                return []
+
+    def is_requester_known(self, requester: object):
+        return requester in self.by_requester_and_by_insertion_order
+
+    def __len__(self):
+        return len(self.by_insertion_order)
+
+    def __iter__(self):
+        return iter(self.by_insertion_order)
+
+    def __str__(self):
+        """Provides a string representation of the `ActionRequestList` instance.
+
+        Returns:
+            A string containing a formatted summary of the instance.
+        """
+        return "{" + ", ".join([str(r) for r in self.by_insertion_order]) + "}"
+
+
 class Action:
 
     # Candidate argument names (when calling an action) that tells that such an action is multi-steps
@@ -50,7 +184,8 @@ class Action:
                  idx: int = -1,
                  ready: bool = True,
                  wildcards: dict[str, str | float | int] | None = None,
-                 msg: str | None = None):
+                 msg: str | None = None,
+                 avoid_changing_ready: bool = False):
         """Initializes an `Action` object, which encapsulates a method to be executed on a given object (`actionable`)
         with specified arguments. It sets up various properties for managing multistep actions, including
         `total_steps`, `total_time`, and `timeout`. It also handles wildcard argument replacement and checks for the
@@ -65,13 +200,15 @@ class Action:
             ready: A boolean indicating if the action is ready to be executed.
             wildcards: A dictionary for replacing placeholder values in arguments.
             msg: An optional human-readable message.
+            avoid_changing_ready: A boolean indicating that the selected ready state should not be changed by
+                internal rules.
         """
         # Basic properties
         self.name = name  # Name of the action (name of the corresponding method)
         self.args = args  # Dictionary of arguments to pass to the action
         self.actionable = actionable  # Object on which the method whose name is self.name is searched
         self.ready = ready  # Boolean flag telling if the action can considered ready to be executed
-        self.requests = {}  # List of requests to make this action ready to be executed (customizable)
+        self.requests = ActionRequestList()  # List of requests to make this action ready to be executed (customizable)
         self.id = idx  # Unique ID of the action (-1 if not needed)
         self.msg = msg  # Human-readable message associated to this instance of action
 
@@ -97,30 +234,31 @@ class Action:
         # Number of steps of this function
         self.__step = -1  # Default initial step index (remark: "step INDEX", so when it is 0 it means a step was done)
         self.__total_steps = 1  # Total step of an action (a multi-steps action has != 1 steps)
-        self.__guess_total_steps(self.__get_actual_params({}))  # This will "guess" the value of self.__total_steps
+        self.__guess_total_steps(self.get_actual_params({}))  # This will "guess" the value of self.__total_steps
 
         # Time-based metrics
         self.__starting_time = 0
         self.__total_time = 0  # A total time <= 0 means "no total time at all"
-        self.__guess_total_time(self.__get_actual_params({}))  # This will "guess" the value of self.__total_time
+        self.__guess_total_time(self.get_actual_params({}))  # This will "guess" the value of self.__total_time
 
         # Time-based metrics
         self.__timeout_starting_time = 0
         self.__timeout = 0  # A timeout <= 0 means "no total time at all"
-        self.__guess_timeout(self.__get_actual_params({}))  # This will "guess" the value of self.__timeout
+        self.__guess_timeout(self.get_actual_params({}))  # This will "guess" the value of self.__timeout
 
         # Time-based metrics
         self.__delay = 0
-        self.__guess_delay(self.__get_actual_params({}))  # This will "guess" the value of self.__delay
+        self.__guess_delay(self.get_actual_params({}))  # This will "guess" the value of self.__delay
 
         # Fixing (if no options are specified, assuming a single-step action)
         if self.__total_steps <= 0 and self.__total_time <= 0:
             self.__total_steps = 1
 
         # Fixing (forcing NOT-ready on some actions)
-        for prefix in Action.NOT_READY_PREFIXES:
-            if self.name.startswith(prefix):
-                self.ready = False
+        if not avoid_changing_ready:
+            for prefix in Action.NOT_READY_PREFIXES:
+                if self.name.startswith(prefix):
+                    self.ready = False
 
         self.__has_completion_step = False
         for completed_name in Action.COMPLETED_NAMES:
@@ -131,8 +269,7 @@ class Action:
         # Status
         self.__cannot_be_run_anymore = False
 
-    async def __call__(self, requester: object | None = None, requested_args: dict | None = None,
-                       request_time: float = -1, request_uuid: str | None = None):
+    async def __call__(self, request: ActionRequest | None = None):
         """Executes the action's associated method. This is the main entry point for running an action. It handles
         multistep logic by updating the step counter and checking for completion based on steps, time, or timeout.
         It also injects dynamic arguments like the `requester`, `request_time`, and `request_uuid` into the method's
@@ -140,16 +277,14 @@ class Action:
         callback as well (async).
 
         Args:
-            requester: The object that requested the action.
-            requested_args: Additional arguments provided by the requester.
-            request_time: The time of the request.
-            request_uuid: A unique ID for the request.
+            request: The ActionRequest object or None, if the action was not requested by other agents.
 
         Returns:
             A boolean indicating whether the action was executed successfully.
         """
-        self.__check_if_args_exist(requested_args, exception=True)
-        actual_args = self.__get_actual_params(requested_args)  # Getting the actual values of the arguments
+        request_args = request.args if request is not None else {}
+        self.__check_if_args_exist(request_args, exception=True)
+        actual_args = self.get_actual_params(request_args)  # Getting the actual values of the arguments
 
         if self.msg is not None:
             Action.out_fcn(self.msg)
@@ -197,19 +332,19 @@ class Action:
             # Setting up the requester
             for req_arg_name in Action.REQUESTER_ARG_NAMES:
                 if req_arg_name in actual_args:
-                    actual_args[req_arg_name] = requester
+                    actual_args[req_arg_name] = request.requester if request is not None else None
                     break
 
             # Setting up the request time
             for req_time_name in Action.REQUEST_TIME_NAMES:
                 if req_time_name in actual_args:
-                    actual_args[req_time_name] = request_time
+                    actual_args[req_time_name] = request.timestamp if request is not None else -1.
                     break
 
             # Setting up the request uuid
             for req_uuid_name in Action.REQUEST_UUID_NAMES:
                 if req_uuid_name in actual_args:
-                    actual_args[req_uuid_name] = request_uuid
+                    actual_args[req_uuid_name] = request.uuid if request is not None else None
                     break
 
             # Fixing (if no options are specified, assuming a single-step action)
@@ -224,10 +359,10 @@ class Action:
             self.__step += 1  # This is a step index, so self.__step == 0 means "done 1 step"
 
             if HybridStateMachine.DEBUG:
-                if requester is None:
+                if request is None or request.requester is None:
                     requester_str = "nobody"
                 else:
-                    requester_str = requester
+                    requester_str = request.requester
                 print(f"[DEBUG HSM] Calling function {self.name} (multi_steps: {self.is_multi_steps()}), "
                       f"requested by {requester_str}, with actual params: {actual_args}")
 
@@ -435,30 +570,39 @@ class Action:
         self.wildcards = wildcards if wildcards is not None else {}
         self.__replace_wildcard_values()
 
-    def add_request(self, generic_request_obj: object, args: dict, timestamp: float, uuid: str):
+    def add_request(self, signature: object, args: dict, timestamp: float, uuid: str):
         """Adds a new request to the action's internal list. This is used to track pending requests that might make the
         action ready to be executed.
 
         Args:
-            generic_request_obj: The object making the request.
+            signature: The object making the request.
             args: The arguments associated with the request.
             timestamp: The time the request was made.
             uuid: A unique ID for the request.
         """
-        if generic_request_obj not in self.requests:
-            self.requests[generic_request_obj] = (args, timestamp, uuid)
+        req = ActionRequest(signature, self, args, timestamp, uuid)
+        self.requests.add(req)
 
-    def clear_requests(self):
-        """Clears all pending requests from the action's list.
-        """
-        self.requests = {}
+    def clear_requests(self, signature: object | None = None):
+        """Clears all pending requests from the action's list."""
+        if signature is None:
+            self.requests = ActionRequestList()
+        else:
+            if self.requests.is_requester_known(signature):
+                requests = self.requests.get_requests(signature)
+                for req in requests:
+                    self.requests.remove(req)
 
-    def get_requests(self):
-        """Retrieves the dictionary of pending requests. Each entry in the dictionary maps a requester to its
-        arguments, timestamp, and UUID.
+    def clear_request(self, signature: object, req_id: int):
+        req = self.requests.get_request(req_id, signature)
+        if req is not None:
+            self.requests.remove(req)
+
+    def get_list_of_requests(self) -> ActionRequestList:
+        """Retrieves the list of pending requests.
 
         Returns:
-            A dictionary of pending requests.
+            The list of pending requests, i.e., an object of type ActionRequestList.
         """
         return self.requests
 
@@ -503,8 +647,8 @@ class Action:
         """
         return self.__total_time
 
-    def __get_actual_params(self, additional_args: dict | None):
-        """A private helper method that resolves all parameters for an action's execution. It combines the action's
+    def get_actual_params(self, additional_args: dict | None):
+        """A helper method that resolves all parameters for an action's execution. It combines the action's
         default arguments, initial arguments, and any additional arguments provided during the call, ensuring all
         necessary parameters have a value.
 
@@ -787,11 +931,11 @@ class State:
 
 class HybridStateMachine:
     DEBUG = True
-    DEFAULT_WILDCARDS = {'<world>': '<world>', '<agent>': '<agent>'}
+    DEFAULT_WILDCARDS = {'<world>': '<world>', '<agent>': '<agent>', '<partner>': '<partner>'}
 
     def __init__(self, actionable: object, wildcards: dict[str, str | float | int] | None = None,
                  request_signature_checker: Callable[[object], bool] | None = None,
-                 policy: Callable[[list[Action]], int] | None = None):
+                 policy: Callable[[list[Action]], tuple[int, ActionRequest | None]] | None = None):
         """Initializes a `HybridStateMachine` object, which orchestrates states and transitions. It manages a set of
         states and actions, and handles the logic for transitions between states based on conditions and a defined
         policy. It sets up initial and current states, wildcards for dynamic arguments, and references to an
@@ -819,6 +963,8 @@ class HybridStateMachine:
         self.wildcards: dict[str, str | float | int] | None = wildcards \
             if wildcards is not None else {}  # From a wildcards string to a specific value (used in action arguments)
         self.policy = policy if policy is not None else self.__policy_first_requested_or_first_ready
+        self.policy_filter = None
+        self.policy_filter_opts = {}
 
         # Actions can be requested from the "outside": each request if checked by this function, if any
         self.request_signature_checker: Callable[[object], bool] | None = request_signature_checker
@@ -931,6 +1077,32 @@ class HybridStateMachine:
             if state_obj.action is not None:
                 state_obj.action.actionable = obj
 
+    def set_policy(self, policy_fcn: Callable[[list[Action]], tuple[int, ActionRequest | None]]):
+        """Sets the policy to be used in selecting what action to perform in the current state.
+
+        Args:
+            policy_fcn: A function that takes a list of `Action` objects that are candidates for execution, and returns
+                the index of the selected action and an ActionRequest object with the action-requester details (object,
+                arguments, time, and UUID), or -1 and None if no action is selected.
+        """
+        self.policy = policy_fcn
+
+    def set_policy_filter(self, filter_fcn: Callable[
+                              [int, ActionRequest | None, list[Action], dict], tuple[int, ActionRequest | None]],
+                          filter_fcn_opts: dict):
+        """Sets the filter function that will overload the decision of the policy.
+
+        Args:
+            filter_fcn: A function that takes the decision of the policy, a list of `Action` objects
+                that are candidates for execution, and a customizable dict of options, and returns the index of the
+                selected action and an ActionRequest with the requested details (requests, arguments, time, and UUID),
+                or -1 and None if no action is selected.
+            filter_fcn_opts: A reference to the dictionary of custom options that will be passed to the filter function.
+        """
+        self.policy_filter = filter_fcn
+        self.policy_filter_opts = filter_fcn_opts
+        self.policy_filter_opts.clear()
+
     def set_wildcards(self, wildcards: dict[str, str | float | int] | None):
         """Sets the dictionary of wildcards that are used to dynamically replace placeholder values in action
         arguments. It updates all actions with the new wildcard dictionary.
@@ -1026,7 +1198,7 @@ class HybridStateMachine:
             act = sta_obj.action if sta_obj is not None else None
         else:
             act = Action(name=action, args=args, idx=len(self.__id_to_action),
-                         actionable=self.actionable, wildcards=self.wildcards)
+                         actionable=self.actionable, wildcards=self.wildcards, avoid_changing_ready=True)
             self.__id_to_action.append(act)
         if waiting_time is None:
             waiting_time = sta_obj.waiting_time if sta_obj is not None else 0.  # Default waiting time
@@ -1129,7 +1301,7 @@ class HybridStateMachine:
 
     def add_transit(self, from_state: str, to_state: str,
                     action: str, args: dict | None = None, ready: bool = True,
-                    act_id: int | None = None, msg: str | None = None):
+                    act_id: int | None = None, msg: str | None = None, avoid_changing_ready: bool = False):
         """Defines a transition between two states with an associated action. This method is central to building the
         state machine's logic. It can also handle loading and integrating a complete state machine from a file,
         resolving any state name clashes.
@@ -1142,6 +1314,8 @@ class HybridStateMachine:
             ready: A boolean indicating if the action is ready by default.
             act_id: An optional unique ID for the action.
             msg: An optional human-readable message for the action.
+            avoid_changing_ready: A boolean indicating that the selected ready state should not be changed by
+                internal rules.
         """
 
         # Plugging a previously loaded HSM
@@ -1225,7 +1399,8 @@ class HybridStateMachine:
                                  f"{existing_action.to_list()}")
 
         # Adding the new action
-        new_action = Action(name=action, args=args, idx=act_id, actionable=self.actionable, ready=ready, msg=msg)
+        new_action = Action(name=action, args=args, idx=act_id, actionable=self.actionable, ready=ready, msg=msg,
+                            avoid_changing_ready=avoid_changing_ready)
         self.transitions[from_state][to_state].append(new_action)
         self.__id_to_action.append(new_action)
 
@@ -1261,7 +1436,7 @@ class HybridStateMachine:
                 for _action in _action_list:
                     self.add_transit(from_state=_from_state, to_state=_to_state, action=_action.name,
                                      args=copy.deepcopy(_action.args_with_wildcards), ready=_action.ready,
-                                     act_id=None, msg=_action.msg)
+                                     act_id=None, msg=_action.msg, avoid_changing_ready=True)
 
         if make_a_copy:
             self.state = hsm.state
@@ -1343,10 +1518,7 @@ class HybridStateMachine:
                     'actions_list': actions_list,
                     'to_state_list': to_state_list,
                     'selected_idx': 0,
-                    'selected_requester': None,
-                    'selected_requested_args': {},
-                    'selected_request_time': -1.,
-                    'selected_request_uuid': None
+                    'selected_request': None
                 }
         else:
 
@@ -1361,8 +1533,46 @@ class HybridStateMachine:
             # otherwise, select a new one following a certain policy (actually, first-come first-served)
             if self.__action is None:
 
+                if HybridStateMachine.DEBUG:
+                    print(f"[DEBUG HSM] Considering the following list of actions: "
+                          f"{[a.__str__() for a in actions_list]}")
+
                 # Naive policy: take the first action that is ready
-                _idx, (_requester, (_requested_args, _request_time, _request_uuid)) = self.policy(actions_list)
+                _idx, _request = self.policy(actions_list)
+
+                if _idx < 0:
+                    if HybridStateMachine.DEBUG:
+                        print(f"[DEBUG HSM] Policy selected no actions")
+
+                    # No actions were applied
+                    self.__cur_feasible_actions_status = None
+                    self.__state_changed = False
+                    return -1  # Early stop
+                else:
+                    if HybridStateMachine.DEBUG:
+                        print(f"[DEBUG HSM] Policy selected {actions_list[_idx].__str__()} whose requester is "
+                              f"{_request.requester if _request is not None else None}")
+
+                # Revisiting decisions due to the policy filter
+                if self.policy_filter is not None:
+                    _idx_f, _request_f = self.policy_filter(_idx, _request, actions_list, self.policy_filter_opts)
+
+                    if _idx_f != _idx or _request_f != _request:
+                        _idx = _idx_f
+                        _request = _request_f
+                        if _idx < 0:
+                            if HybridStateMachine.DEBUG:
+                                print(f"[DEBUG HSM] After the policy filter, policy selected no actions")
+
+                            # No actions were applied
+                            self.__cur_feasible_actions_status = None
+                            self.__state_changed = False
+                            return -1  # Early stop
+                        else:
+                            if HybridStateMachine.DEBUG:
+                                print(f"[DEBUG HSM] After the policy filter, policy selected "
+                                      f"{actions_list[_idx].__str__()}"
+                                      f" whose requester is {_request.requester if _request is not None else None}")
 
                 # Saving current action
                 self.limbo_state = self.state
@@ -1370,26 +1580,15 @@ class HybridStateMachine:
                 self.__action = actions_list[_idx]
                 self.__action.reset_step()  # Resetting
                 self.__cur_feasible_actions_status['selected_idx'] = _idx
-                self.__cur_feasible_actions_status['selected_requester'] = _requester
-                self.__cur_feasible_actions_status['selected_requested_args'] = _requested_args
-                self.__cur_feasible_actions_status['selected_request_time'] = _request_time
-                self.__cur_feasible_actions_status['selected_request_uuid'] = _request_uuid
-
-                if HybridStateMachine.DEBUG:
-                    print(f"[DEBUG HSM] Policy selected {self.__action.__str__()} whose requester is {_requester}")
+                self.__cur_feasible_actions_status['selected_request'] = _request
 
             # References
             action = self.__action
             idx = self.__cur_feasible_actions_status['selected_idx']
-            requester = self.__cur_feasible_actions_status['selected_requester']
-            requested_args = self.__cur_feasible_actions_status['selected_requested_args']
-            request_time = self.__cur_feasible_actions_status['selected_request_time']
-            request_uuid = self.__cur_feasible_actions_status['selected_request_uuid']
+            request = self.__cur_feasible_actions_status['selected_request']
 
             # Call action
-            action_call_returned_true = await action(requester=requester,
-                                                     requested_args=requested_args,
-                                                     request_time=request_time, request_uuid=request_uuid)
+            action_call_returned_true = await action(request=request)
 
             # Status can be one of these:
             # 0: action fully done;
@@ -1448,9 +1647,8 @@ class HybridStateMachine:
             if status == 0:  # Done
 
                 # Clearing request
-                requests = self.__action.get_requests()
-                if requester is not None and requester in requests:
-                    del requests[requester]
+                if request is not None:
+                    self.__action.get_list_of_requests().remove(request)
 
                 # State transition
                 self.prev_state = self.limbo_state
@@ -1461,19 +1659,21 @@ class HybridStateMachine:
                 self.__state_changed = self.state != self.prev_state  # Checking if we are on a self-loop or not
                 self.__last_completed_action = self.__action  # This will be set also if the state does not change
 
-                # If we moved to another state, clearing all the pending annotations for the next possible actions
+                # If we moved to another state
+                # (this is not true anymore: "clearing all the pending annotations for the next possible actions")
                 if self.__state_changed:
                     if HybridStateMachine.DEBUG:
                         print(f"[DEBUG HSM] Moving to state: {self.state}")
-                    for to_state, action_list in self.transitions[self.state].items():
-                        for i, act in enumerate(action_list):
-                            act.clear_requests()
+                    # for to_state, action_list in self.transitions[self.state].items():
+                    #    for i, act in enumerate(action_list):
+                    #        act.clear_requests()
 
                     # Propagating (trying to propagate forward the residual requests)
-                    residual_requests = self.__action.get_requests()
-                    for _requester, (_requested_args, _request_time, _request_uuid) in residual_requests.items():
-                        self.request_action(_requester, action_name=self.__action.name, args=_requested_args,
-                                            from_state=None, to_state=None, timestamp=_request_time, uuid=_request_uuid)
+                    list_of_residual_requests = self.__action.get_list_of_requests()
+                    for req in list_of_residual_requests:
+                        self.request_action(req.requester, action_name=self.__action.name, args=req.args,
+                                            from_state=None, to_state=None, timestamp=req.timestamp,
+                                            uuid=req.uuid)
 
                 if HybridStateMachine.DEBUG:
                     print(f"[DEBUG HSM] Correctly completed action: {self.__action.name}")
@@ -1497,9 +1697,8 @@ class HybridStateMachine:
             elif status == 2:  # Move to the next action
 
                 # Clearing request
-                requests = self.__action.get_requests()
-                if requester is not None and requester in requests:
-                    del requests[requester]
+                if request is not None:
+                    self.__action.get_list_of_requests().remove(request)
 
                 # Back to the original state
                 self.state = self.limbo_state
@@ -1600,7 +1799,7 @@ class HybridStateMachine:
                     print(f"[DEBUG HSM] Comparing with action: {str(action)}")
                 if action.same_as(name=action_name, args=args):
                     if HybridStateMachine.DEBUG:
-                        print("[DEBUG HSM] Requested action found, adding request to the queue")
+                        print(f"[DEBUG HSM] Requested action found in state {from_state}, adding request to the queue")
 
                     # Action found, let's save the suggestion
                     action.add_request(signature, args, timestamp=timestamp, uuid=uuid)
@@ -1757,7 +1956,8 @@ class HybridStateMachine:
                     # Recall that act_id can be set to -1 in the original file, meaning "automatically set the act_id"
                     self.add_transit(from_state, to_state,
                                      action=act_name, args=act_args, ready=act_ready,
-                                     act_id=act_id if act_id >= 0 else None, msg=msg)
+                                     act_id=act_id if act_id >= 0 else None, msg=msg,
+                                     avoid_changing_ready=True)
 
         return self
 
@@ -1869,8 +2069,7 @@ class HybridStateMachine:
                 print(f"{state} --> {to_state} {action}")
 
     # Noinspection PyMethodMayBeStatic
-    def __policy_first_requested_or_first_ready(self, actions_list: list[Action]) \
-            -> tuple[int, tuple[object | None, tuple[dict, float, str | None]]]:
+    def __policy_first_requested_or_first_ready(self, actions_list: list[Action]) -> tuple[int, ActionRequest | None]:
         """This is the default policy for selecting which action to execute from a list of feasible actions.
         It prioritizes actions that have been explicitly requested (i.e., have pending requests) on a first-come,
         first-served basis. If no requested actions are found, it then selects the first action in the list that is
@@ -1878,15 +2077,22 @@ class HybridStateMachine:
     
         Args:
             actions_list: A list of `Action` objects that are candidates for execution.
-    
+
         Returns:
-            A tuple containing the index of the selected action and a tuple of the requester details (object,
-                arguments, time, and UUID), or -1 and `None` if no action is selected.
+            The index of the selected action and the ActionRequest object with the requester details (object,
+                arguments, time, and UUID), or -1 and the None if no action is selected.
         """
         for i, action in enumerate(actions_list):
-            if len(action.get_requests()) > 0:
-                return i, next(iter(action.get_requests().items()))
+            _list_of_requests = action.get_list_of_requests()
+            if len(_list_of_requests) > 0:
+                _selected_action_idx = i
+                _selected_request = _list_of_requests.get_oldest_request()
+                return _selected_action_idx, _selected_request
         for i, action in enumerate(actions_list):
             if action.is_ready(consider_requests=False):
-                return i, (None, ({}, -1., None))
-        return -1, (None, ({}, -1., None))
+                _selected_action_idx = i
+                _selected_request = None
+                return _selected_action_idx, _selected_request
+        _selected_action_idx = -1
+        _selected_request = None
+        return _selected_action_idx, _selected_request

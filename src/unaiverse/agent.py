@@ -63,7 +63,7 @@ class Agent(AgentBasics):
         self._last_recorded_stream_num = 1
 
     async def set_next_action(self, agent: str | None, action: str, args: dict | None = None,
-                              ref_uuid: str | None = None):
+                              from_state: str | None = None, to_state: str | None = None, ref_uuid: str | None = None):
         """Try to tell another agent what is the next action it should run (async).
 
         Args:
@@ -71,6 +71,8 @@ class Agent(AgentBasics):
                 (if None the agents in self._engaged_agents will be considered).
             action: The name of the action to be executed by the agent.
             args: A dictionary of arguments for the action. Defaults to None.
+            from_state: The optional starting state from which the action should be executed.
+            to_state: The optional destination state where the action should lead if correctly executed.
             ref_uuid: An optional UUID for referencing the action. Defaults to None.
 
         Returns:
@@ -89,7 +91,8 @@ class Agent(AgentBasics):
         _, private_peer_id = self.get_peer_ids()
         for _peer_id in involved_agents:
             ret = await self._node_conn.send(_peer_id, channel_trail=None,
-                                             content={"action_name": action, "args": args, "uuid": ref_uuid},
+                                             content={"action_name": action, "args": args,
+                                                      "from_state": from_state, "to_state": to_state, "uuid": ref_uuid},
                                              content_type=Msg.ACTION_REQUEST)
             at_least_one_completed = at_least_one_completed or ret
             self.deb(f"[set_next_action] {self._node_name} sent action: {action}, with args: {args}, "
@@ -263,6 +266,19 @@ class Agent(AgentBasics):
         self._available = True
         return True
 
+    async def disconnect(self, agent: str):
+        """Disconnects an agent (async).
+
+        Args:
+            agent: The peer ID of the agent to disconnect.
+
+        Returns:
+            Always True.
+        """
+        self.out(f"Disconnecting agent: {agent}")
+        await self._node_purge_fcn(agent)  # This will also call remove_agent, that will call remove_streams
+        return True
+
     async def disconnect_by_role(self, role: str | list[str]):
         """Disconnects from all agents that match a specified role (async).
         It finds the agents and calls the node's purge function on each.
@@ -304,7 +320,7 @@ class Agent(AgentBasics):
         self.out(f"Checking if all these agents are not connected to me anymore: {involved_agents}")
         all_disconnected = True
         for agent in involved_agents:
-            if agent in self.world_agents or agent in self.public_agents or agent in self._node_agents_waiting\
+            if agent in self.world_agents or agent in self.public_agents or agent in self._node_agents_waiting \
                     or self._node_conn.is_connected(agent):
                 all_disconnected = False
                 break
@@ -394,7 +410,8 @@ class Agent(AgentBasics):
         return at_least_one_completed
 
     async def ask_gen(self, agent: str | None = None, u_hashes: list[str] | None = None,
-                      samples: int = 100, time: float = -1., timeout: float = -1., ask_uuid: str | None = None,
+                      samples: int = 100, from_state: str | None = None, to_state: str | None = None,
+                      time: float = -1., timeout: float = -1., ask_uuid: str | None = None,
                       ignore_uuid: bool = False):
         """Asking for generation.
 
@@ -403,6 +420,8 @@ class Agent(AgentBasics):
                 for a set of agents (if None the agents in self._engaged_agents will be considered).
             u_hashes: A list of input stream hashes for generation. Defaults to None.
             samples: The number of samples to generate. Defaults to 100.
+            from_state: The optional starting state from which the generation should be executed.
+            to_state: The optional destination state where the generation should lead if correctly executed.
             time: The time duration for generation. Defaults to -1.
             timeout: The timeout for the generation request. Defaults to -1.
             ask_uuid: Specify the UUID of the action (if None - default -, it is randomly generated).
@@ -436,7 +455,7 @@ class Agent(AgentBasics):
                 u_hashes_copy[i] = self.user_stream_hash_to_net_hash(u_hashes[i])
 
         # Generate a new UUID for this request
-        ref_uuid = uuid.uuid4().hex[0:8] if ask_uuid is None else ask_uuid
+        ref_uuid = AgentBasics.generate_uuid() if ask_uuid is None else ask_uuid
         if ignore_uuid:
             ref_uuid = None
 
@@ -479,6 +498,7 @@ class Agent(AgentBasics):
             ret = await self.__ask_gen_or_learn(for_what="gen", agent=peer_id,
                                                 u_hashes=u_hashes_copy,
                                                 yhat_hashes=None,
+                                                from_state=from_state, to_state=to_state,
                                                 samples=samples, time=time, timeout=timeout, ref_uuid=ref_uuid)
             self.deb(f"[ask_gen] Asking {peer_id} returned {ret}")
             if ret:
@@ -504,10 +524,15 @@ class Agent(AgentBasics):
                         stream.set_uuid(None, expected=False)
                         stream.set_uuid(ref_uuid, expected=True)  # Setting the "expected" one
 
+                        # There will be no callbacks in the case of 1 sample, so mark the streams to clear UUID when
+                        # getting such single sample
+                        if samples == 1:
+                            stream.mark_uuid_as_clearable()
+
         self.deb(f"[ask_gen] Overall, the action ask_gen will return {len(correctly_asked) > 0}")
         return len(correctly_asked) > 0
 
-    async def do_gen(self, u_hashes: list[str] | None = None,
+    async def do_gen(self, u_hashes: list[str] | None = None, extra_hashes: list[str] | None = None,
                      samples: int = 100, time: float = -1., timeout: float = -1.,
                      _requester: str | list | None = None, _request_time: float = -1., _request_uuid: str | None = None,
                      _completed: bool = False) -> bool:
@@ -515,6 +540,8 @@ class Agent(AgentBasics):
 
         Args:
             u_hashes: A list of input stream hashes for generation. Defaults to None.
+            extra_hashes: A list of streams that might be used in a custom manner when overloading this function
+                (warning: they are not passed to the processor).
             samples: The number of samples to generate. Defaults to 100.
             time: The max time duration for whole generation process. Defaults to -1.
             timeout: The timeout for generation attempts: if calling the generate action fails for more than "timeout"
@@ -555,16 +582,42 @@ class Agent(AgentBasics):
                         self.err(f"Unknown agent: {_requester} (fully skipping generation)")
                         return False
 
+        # Create a copy of the input hashes, normalizing them in the appropriate way
+        u_hashes_copy = None
+        if u_hashes is not None:
+            u_hashes_copy: list[str | None] | None = [None] * len(u_hashes)
+            for i in range(len(u_hashes_copy)):
+                if u_hashes_copy[i] == "<playlist>":
+
+                    # From <playlist> to the current element of the playlist
+                    u_hashes_copy[i] = self._preferred_streams[self._cur_preferred_stream]
+                else:
+
+                    # From a user specified hash to a net hash (peer_id:name_or_group to peer_id::ps:name_or_group)
+                    u_hashes_copy[i] = self.user_stream_hash_to_net_hash(u_hashes[i])
+
+        # Create a copy of the input hashes, normalizing them in the appropriate way
+        extra_hashes_copy = None
+        if extra_hashes is not None:
+            extra_hashes_copy: list[str | None] | None = [None] * len(extra_hashes)
+            for i in range(len(extra_hashes_copy)):
+                if extra_hashes_copy[i] == "<playlist>":
+
+                    # From <playlist> to the current element of the playlist
+                    extra_hashes_copy[i] = self._preferred_streams[self._cur_preferred_stream]
+                else:
+
+                    # From a user specified hash to a net hash (peer_id:name_or_group to peer_id::ps:name_or_group)
+                    extra_hashes_copy[i] = self.user_stream_hash_to_net_hash(extra_hashes[i])
+
         # Check what is the step ID of the multistep action
         k = self.get_action_step()
 
         # In the first step of this action, we change the UUID of the local stream associated to the input data we will
         # use to handle this action, setting expectations to avoid handling tags of old data
         if k == 0:
-
-            # Warning: we are not normalizing the hashes, we should do it if this action is called directly
-            if u_hashes is not None:
-                for net_hash in u_hashes:
+            if u_hashes_copy is not None:
+                for net_hash in u_hashes_copy:
                     if net_hash in self.known_streams:
                         for stream_name, stream_obj in self.known_streams[net_hash].items():
 
@@ -577,23 +630,42 @@ class Agent(AgentBasics):
                         self.out(f"Unknown stream mentioned in u_hashes: {net_hash}")
                         return False
 
+            if extra_hashes_copy is not None:
+                for net_hash in extra_hashes_copy:
+                    if net_hash in self.known_streams:
+                        for stream_name, stream_obj in self.known_streams[net_hash].items():
+
+                            # If the data arrived before this action, then the UUID is already set, and here there is
+                            # no need to do anything; if the data has not yet arrived (common case) ...
+                            if stream_obj.get_uuid(expected=False) != _request_uuid:
+                                stream_obj.set_uuid(None, expected=False)  # Clearing UUID
+                                stream_obj.set_uuid(_request_uuid, expected=True)  # Setting expectations
+                    else:
+                        self.out(f"Unknown stream mentioned in extra_hashes: {net_hash}")
+                        return False
+
         if not _completed:
             self.out(f"Generating signal")
-            ret = self.__process_streams(u_hashes=u_hashes, yhat_hashes=None, learn=False,
+            ret = self.__process_streams(u_hashes=u_hashes_copy, yhat_hashes=None, learn=False,
                                          recipient=_requester, ref_uuid=_request_uuid)
             if not ret:
                 self.out(f"Generating signal failed")
             else:
                 if not self.is_multi_steps_action():
-                    self.out(f"Completing signal generation (degenerate single-step case of a multi-step action")
-                    ret = await self.__complete_do(do_what="gen", peer_id_who_asked=_requester, all_hashes=u_hashes,
+                    self.out(f"Completing signal generation (degenerate single-step case of a multi-step action)")
+                    all_hashes = ((u_hashes_copy if u_hashes_copy is not None else []) +
+                                  (extra_hashes_copy if extra_hashes_copy is not None else []))
+                    ret = await self.__complete_do(do_what="gen", peer_id_who_asked=_requester,
+                                                   all_hashes=all_hashes,
                                                    send_back_confirmation=False)
                     if not ret:
                         self.out(f"Completing signal generation failed")
             return ret
         else:
             self.out(f"Completing signal generation")
-            ret = await self.__complete_do(do_what="gen", peer_id_who_asked=_requester, all_hashes=u_hashes)
+            all_hashes = ((u_hashes_copy if u_hashes_copy is not None else []) +
+                          (extra_hashes_copy if extra_hashes_copy is not None else []))
+            ret = await self.__complete_do(do_what="gen", peer_id_who_asked=_requester, all_hashes=all_hashes)
             if not ret:
                 self.out(f"Completing signal generation failed")
             return ret
@@ -621,6 +693,7 @@ class Agent(AgentBasics):
 
         # Clearing the UUID of the local streams associated to the agent who generated
         for net_hash, stream_dict in processor_streams.items():
+            self.remove_recipient(net_hash, _requester)
             for stream_obj in stream_dict.values():
                 stream_obj.set_uuid(None, expected=False)
                 stream_obj.set_uuid(None, expected=True)
@@ -628,15 +701,18 @@ class Agent(AgentBasics):
         # If one or more of my streams where used as arguments of the generation request I did (ask_gen), then their
         # UUID must be cleared...we clear them all
         for net_hash, stream_dict in self.owned_streams.items():
+            self.remove_recipient(net_hash, _requester)
             for stream_obj in stream_dict.values():
                 if stream_obj.props.is_public() != self.behaving_in_world():
                     stream_obj.set_uuid(None, expected=False)
                     stream_obj.set_uuid(None, expected=True)
+
         return True
 
     async def ask_learn(self, agent: str | None = None,
                         u_hashes: list[str] | None = None, yhat_hashes: list[str] | None = None,
-                        samples: int = 100, time: float = -1., timeout: float = -1., ask_uuid: str | None = None,
+                        samples: int = 100, from_state: str | None = None, to_state: str | None = None,
+                        time: float = -1., timeout: float = -1., ask_uuid: str | None = None,
                         ignore_uuid: str | None = None):
         """Asking for learning to generate (async).
 
@@ -646,10 +722,12 @@ class Agent(AgentBasics):
             u_hashes: A list of input stream hashes for inference. Defaults to None.
             yhat_hashes: A list of target stream hashes to be used for loss computation. Defaults to None.
             samples: The number of samples to learn from. Defaults to 100.
+            from_state: The optional starting state from which learning should be executed.
+            to_state: The optional destination state where learning should lead if correctly executed.
             time: The time duration for generation. Defaults to -1.
             timeout: The timeout for the generation request. Defaults to -1.
             ask_uuid: Specify the action UUID (default = None, i.e., it is automatically generated).
-            ignore_uuid: If Trie, the UUID is fully ignored (i.e, forced to None).
+            ignore_uuid: If True, the UUID is fully ignored (i.e, forced to None).
 
         Returns:
             True if the learning request was successfully sent to at least one involved agent, False otherwise.
@@ -691,7 +769,7 @@ class Agent(AgentBasics):
                 yhat_hashes_copy[i] = self.user_stream_hash_to_net_hash(yhat_hashes_copy[i])
 
         # Generate a new UUID for this request
-        ref_uuid = uuid.uuid4().hex[0:8] if ask_uuid is None else ask_uuid
+        ref_uuid = AgentBasics.generate_uuid() if ask_uuid is None else ask_uuid
         if ignore_uuid:
             ref_uuid = None
 
@@ -758,7 +836,9 @@ class Agent(AgentBasics):
             ret = await self.__ask_gen_or_learn(for_what="learn", agent=peer_id,
                                                 u_hashes=u_hashes_copy,
                                                 yhat_hashes=yhat_hashes_copy,
-                                                samples=samples, time=time, timeout=timeout, ref_uuid=ref_uuid)
+                                                samples=samples,
+                                                from_state=from_state, to_state=to_state,
+                                                time=time, timeout=timeout, ref_uuid=ref_uuid)
             self.deb(f"[ask_learn] Asking {peer_id} returned {ret}")
             if ret:
                 correctly_asked.append(peer_id)
@@ -783,10 +863,16 @@ class Agent(AgentBasics):
                         stream.set_uuid(None, expected=False)
                         stream.set_uuid(ref_uuid, expected=True)  # Setting the "expected" one
 
+                        # There will be no callbacks in the case of 1 sample, so mark the streams to clear UUID when
+                        # getting such single sample
+                        if samples == 1:
+                            stream.mark_uuid_as_clearable()
+
         self.deb(f"[ask_learn] Overall the action ask_learn will return {len(correctly_asked) > 0}")
         return len(correctly_asked) > 0
 
     async def do_learn(self, yhat_hashes: list[str] | None = None, u_hashes: list[str] | None = None,
+                       extra_hashes: list[str] | None = None,
                        samples: int = 100, time: float = -1., timeout: float = -1.,
                        _requester: str | None = None, _request_time: float = -1., _request_uuid: str | None = None,
                        _completed: bool = False) -> bool:
@@ -795,6 +881,8 @@ class Agent(AgentBasics):
         Args:
             yhat_hashes: A list of target stream hashes to be used for loss computation. Defaults to None.
             u_hashes: A list of input stream hashes for inference. Defaults to None.
+            extra_hashes: A list of streams that might be used in a custom manner when overloading this function
+                (warning: they are not passed to the processor).
             samples: The number of samples to learn from. Defaults to 100.
             time: The max time duration of the learning procedure. Defaults to -1.
             timeout: The timeout for learning attempts: if calling the learning action fails for more than "timeout"
@@ -821,13 +909,53 @@ class Agent(AgentBasics):
         # Check what is the step ID of the multistep action
         k = self.get_action_step()
 
+        # Create a copy of the input hashes, normalizing them in the appropriate way
+        u_hashes_copy = None
+        if u_hashes is not None:
+            u_hashes_copy: list[str | None] | None = [None] * len(u_hashes)
+            for i in range(len(u_hashes_copy)):
+                if u_hashes_copy[i] == "<playlist>":
+
+                    # From <playlist> to the current element of the playlist
+                    u_hashes_copy[i] = self._preferred_streams[self._cur_preferred_stream]
+                else:
+
+                    # From a user specified hash to a net hash (peer_id:name_or_group to peer_id::ps:name_or_group)
+                    u_hashes_copy[i] = self.user_stream_hash_to_net_hash(u_hashes[i])
+
+        # Create a copy of the input hashes, normalizing them in the appropriate way
+        yhat_hashes_copy = None
+        if yhat_hashes is not None:
+            yhat_hashes_copy: list[str | None] | None = [None] * len(yhat_hashes)
+            for i in range(len(yhat_hashes_copy)):
+                if yhat_hashes_copy[i] == "<playlist>":
+
+                    # From <playlist> to the current element of the playlist
+                    yhat_hashes_copy[i] = self._preferred_streams[self._cur_preferred_stream]
+                else:
+
+                    # From a user specified hash to a net hash (peer_id:name_or_group to peer_id::ps:name_or_group)
+                    yhat_hashes_copy[i] = self.user_stream_hash_to_net_hash(yhat_hashes[i])
+
+        # Create a copy of the input hashes, normalizing them in the appropriate way
+        extra_hashes_copy = None
+        if extra_hashes is not None:
+            extra_hashes_copy: list[str | None] | None = [None] * len(extra_hashes)
+            for i in range(len(extra_hashes_copy)):
+                if extra_hashes_copy[i] == "<playlist>":
+
+                    # From <playlist> to the current element of the playlist
+                    extra_hashes_copy[i] = self._preferred_streams[self._cur_preferred_stream]
+                else:
+
+                    # From a user specified hash to a net hash (peer_id:name_or_group to peer_id::ps:name_or_group)
+                    extra_hashes_copy[i] = self.user_stream_hash_to_net_hash(extra_hashes[i])
+
         # In the first step of this action, we change the UUID of the local stream associated to the input data we will
         # use to handle this action, setting expectations to avoid handling tags of old data
         if k == 0:
-
-            # Warning: we are not normalizing the hashes, we should do it if this action is called directly
-            if u_hashes is not None:
-                for net_hash in u_hashes:
+            if u_hashes_copy is not None:
+                for net_hash in u_hashes_copy:
                     if net_hash in self.known_streams:
                         for stream_obj in self.known_streams[net_hash].values():
 
@@ -837,9 +965,8 @@ class Agent(AgentBasics):
                                 stream_obj.set_uuid(None, expected=False)  # Clearing UUID
                                 stream_obj.set_uuid(_request_uuid, expected=True)  # Setting expectations
 
-            # Warning: we are not normalizing the hashes, we should do it if this action is called directly
-            if yhat_hashes is not None:
-                for net_hash in yhat_hashes:
+            if yhat_hashes_copy is not None:
+                for net_hash in yhat_hashes_copy:
                     if net_hash in self.known_streams:
                         for stream_obj in self.known_streams[net_hash].values():
                             if stream_obj.get_uuid(expected=False) != _request_uuid:
@@ -847,15 +974,17 @@ class Agent(AgentBasics):
                                 stream_obj.set_uuid(_request_uuid, expected=True)  # Setting expectations
 
         if not _completed:
-            self.out(f"Learning to generate signal {yhat_hashes}")
-            ret = self.__process_streams(u_hashes=u_hashes, yhat_hashes=yhat_hashes, learn=True,
+            self.out(f"Learning to generate signal {yhat_hashes_copy}")
+            ret = self.__process_streams(u_hashes=u_hashes_copy, yhat_hashes=yhat_hashes_copy, learn=True,
                                          recipient=_requester, ref_uuid=_request_uuid)
             if not ret:
-                self.out(f"Learning to generate signal {yhat_hashes} failed")
+                self.out(f"Learning to generate signal {yhat_hashes_copy} failed")
             return ret
         else:
-            self.out(f"Completing learning to generate signal {yhat_hashes}")
-            all_hashes = (u_hashes if u_hashes is not None else []) + (yhat_hashes if yhat_hashes is not None else [])
+            self.out(f"Completing learning to generate signal {yhat_hashes_copy}")
+            all_hashes = ((u_hashes_copy if u_hashes_copy is not None else []) +
+                          (yhat_hashes_copy if yhat_hashes_copy is not None else []) +
+                          (extra_hashes_copy if extra_hashes_copy is not None else []))
             ret = await self.__complete_do(do_what="learn", peer_id_who_asked=_requester, all_hashes=all_hashes)
             if not ret:
                 self.out(f"Completing learning to generate signal {yhat_hashes} failed")
@@ -884,6 +1013,7 @@ class Agent(AgentBasics):
 
         # Clearing the UUID of the local streams associated to the agent who learned
         for net_hash, stream_dict in processor_streams.items():
+            self.remove_recipient(net_hash, _requester)
             for stream_obj in stream_dict.values():
                 stream_obj.set_uuid(None, expected=False)
                 stream_obj.set_uuid(None, expected=True)
@@ -891,6 +1021,7 @@ class Agent(AgentBasics):
         # If one or more of my streams where used as arguments of the learning request I did (ask_learn), then their
         # UUID must be cleared...we clear them all
         for net_hash, stream_dict in self.owned_streams.items():
+            self.remove_recipient(net_hash, _requester)
             for stream_obj in stream_dict.values():
                 if stream_obj.props.is_public() != self.behaving_in_world():
                     stream_obj.set_uuid(None, expected=False)
@@ -1627,7 +1758,10 @@ class Agent(AgentBasics):
     async def __ask_gen_or_learn(self, for_what: str, agent: str,
                                  u_hashes: list[str] | None,
                                  yhat_hashes: list[str] | None,
-                                 samples: int = 100, time: float = -1., timeout: float = -1.,
+                                 samples: int = 100,
+                                 from_state: str | None = None,
+                                 to_state: str | None = None,
+                                 time: float = -1., timeout: float = -1.,
                                  ref_uuid: str | None = None):
         """A private helper method that encapsulates the logic for sending a 'do_gen' or 'do_learn' action request to
         another agent. It handles the normalization of stream hashes, sets up recipients for direct messages, and adds
@@ -1639,6 +1773,8 @@ class Agent(AgentBasics):
             u_hashes: A list of input stream hashes.
             yhat_hashes: A list of target stream hashes (for learning).
             samples: The number of samples.
+            from_state: The optional starting state from which the 'do_gen'/'do_learn' should be executed.
+            to_state: The optional destination state where the 'do_gen'/'do_learn' should lead if correctly executed.
             time: The time duration.
             timeout: The request timeout.
             ref_uuid: The UUID for the request.
@@ -1666,19 +1802,21 @@ class Agent(AgentBasics):
         if u_hashes is not None:
             for u_hash in u_hashes:
                 if not DataProps.is_pubsub_from_net_hash(u_hash):
-                    self.recipients[u_hash] = agent
+                    self.add_recipient(u_hash, agent, samples)
         if yhat_hashes is not None:
             for yhat_hash in yhat_hashes:
                 if not DataProps.is_pubsub_from_net_hash(yhat_hash):
-                    self.recipients[yhat_hash] = agent
+                    self.add_recipient(yhat_hash, agent, samples)
 
         # Triggering
         if for_what == "gen":
             if await self.set_next_action(agent, action="do_gen", args={"u_hashes": u_hashes,
                                                                         "samples": samples, "time": time,
                                                                         "timeout": timeout},
+                                          from_state=from_state, to_state=to_state,
                                           ref_uuid=ref_uuid):
-                self._agents_who_were_asked.add(agent)
+                if samples > 1:
+                    self._agents_who_were_asked.add(agent)
                 return True
             else:
                 self.err(f"Unable to ask {agent} to generate")
@@ -1688,8 +1826,10 @@ class Agent(AgentBasics):
                                                                           "yhat_hashes": yhat_hashes,
                                                                           "samples": samples, "time": time,
                                                                           "timeout": timeout},
+                                          from_state=from_state, to_state=to_state,
                                           ref_uuid=ref_uuid):
-                self._agents_who_were_asked.add(agent)
+                if samples > 1:
+                    self._agents_who_were_asked.add(agent)
                 return True
             else:
                 self.err(f"Unable to ask {agent} to learn to generate")
@@ -1780,9 +1920,8 @@ class Agent(AgentBasics):
                 if self.behaving_in_world() != stream_obj.props.is_public():
 
                     # Guessing recipient of the communication
-                    if i == 0:
-                        self.recipients[net_hash] = recipient \
-                            if not DataProps.is_pubsub_from_net_hash(net_hash) else None
+                    if i == 0 and not DataProps.is_pubsub_from_net_hash(net_hash):
+                        self.add_recipient(net_hash, recipient)
 
                     self.deb(f"[__process_streams] Setting the {i}-th network output to stream with "
                              f"net_hash: {net_hash}, name: {name}")
@@ -1825,13 +1964,15 @@ class Agent(AgentBasics):
                         if y_text is not None:
                             self.out("Generated: \"" + y_text + "\"")
 
-        for stream_dict in self.proc_streams.values():
+        for net_hash, stream_dict in self.proc_streams.items():
             for stream_obj in stream_dict.values():
                 if stream_obj.props.is_public() != self.behaving_in_world():
                     stream_obj.mark_uuid_as_clearable()
+                    self.mark_recipient_as_removable(net_hash, peer_id_who_asked)
 
         if all_hashes is not None:
             for net_hash in all_hashes:
+                self.remove_recipient(net_hash, peer_id_who_asked)
                 for stream_obj in self.known_streams[net_hash].values():
                     stream_obj.set_uuid(None, expected=False)
                     stream_obj.set_uuid(None, expected=True)

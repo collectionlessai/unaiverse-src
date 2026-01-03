@@ -4,20 +4,25 @@
     "prev_state": null,
     "limbo_state": null,
     "state_actions": {
-        "ready": [null, null, 0, false, 0.0],
-        "i_asked_a_wolf": [null, null, 1, false, 0.0],
-        "i_did_generate": [null, null, 2, false, 0.0]
+        "ready": [null, null, 0, true, 0.0],
+        "generated": [null, null, 1, false, 0.0],
+        "self_generated": [null, null, 2, false, 0.0],
+        "asked": [null, null, 3, false, 0.0]
     },
     "transitions": {
         "ready": {
-            "i_asked_a_wolf": [["ask_gen", {"u_hashes": ["<agent>:processor"], "samples": 1}, false, 0]],
-            "i_did_generate": [["do_gen", {"timeout": 90.0}, false, 1]]
+            "generated": [["do_gen", {"timeout": 90.0}, false, 0]],
+            "self_generated": [["do_gen", {"u_hashes": ["<agent>:processor_in"], "samples": 1}, true, 1]]
         },
-        "i_asked_a_wolf": {
-            "ready": [["nop", {}, true, 2]]
+        "self_generated": {
+            "asked": [["ask_gen", {"agent": "<partner>", "u_hashes": ["<agent>:processor"], "samples": 1,
+                "ask_uuid": "<ask_uuid>"}, true, 2]]
         },
-        "i_did_generate": {
+        "asked": {
             "ready": [["nop", {}, true, 3]]
+        },
+        "generated": {
+            "ready": [["nop", {}, true, 4]]
         }
     },
     "cur_action": null

@@ -12,13 +12,11 @@
                  Code Repositories:  https://github.com/collectionlessai/
                  Main Developers:    Stefano Melacci (Project Leader), Christian Di Maio, Tommaso Guidi
 """
-import io
 import os
-import io
 import torch
 import random
 import inspect
-import threading
+import logging
 import numpy as np
 from PIL import Image
 from torch.utils.data import DataLoader
@@ -260,6 +258,46 @@ class HumanModule(torch.nn.Module):
         super().__init__()
 
     def forward(self, text: str = None, img: Image = None):
+        return text, img
+
+
+class LoggerModule(torch.nn.Module):
+    def __init__(self, log_file="app_log.txt"):
+        super().__init__()
+        self.log_file = log_file
+        self._initialized = False
+        self._logger = logging.getLogger("CallableLogger")
+        self._logger.setLevel(logging.INFO)
+        self.__handler = None
+        self._idx = 0
+        self._objects = ["telescope", "hammer", "compass", "anchor", "lantern", "keyboard", "cat", "dog", "tiger",
+                         "zebra", "batman", "superman", "candy", "table", "chair", "balloon", "kitchen", "sofa", "lamp",
+                         "arrow", "green", "red", "blue", "yellow", "magenta", "brown", "pink", "orange", "white",
+                         "paris", "rome", "boston", "york", "berlin", "singapore", "taiwan", "japan", "china",
+                         "turkey", "italy", "france", "germany", "spain", "madrid", "barcelona", "portugal",
+                         "norway", "sweden", "belgium", "romania", "sunny", "snowy", "rainy"]
+        random.shuffle(self._objects)
+
+    def __setup_logger(self):
+        self.__handler = logging.FileHandler(self.log_file, mode='w')  # 'w' mode overwrites the file
+        formatter = logging.Formatter('%(message)s')
+        self.__handler.setFormatter(formatter)
+        self._logger.addHandler(self.__handler)
+        self._initialized = True
+
+    def forward(self, text: str, img: Image = None):
+        if not self._initialized:
+            self.__setup_logger()
+        self._logger.info("-------------------------------------------------------------------------------")
+        self._logger.info(f"[INPUT] text={text if text is not None else None}, "
+                          f"img={img.size if img is not None else None}")
+        # text = random.choice(objects)
+        text = f"{self._idx}_{self._objects[self._idx]}"
+        self._idx = (self._idx + 1) % len(self._objects)
+        img = None
+        self._logger.info(f"[OUTPUT] text={text}, img={None}")
+        self._logger.info("-------------------------------------------------------------------------------")
+        self.__handler.flush()
         return text, img
 
 

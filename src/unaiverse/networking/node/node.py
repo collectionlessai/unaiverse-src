@@ -204,7 +204,7 @@ class Node:
             node_ids, were_alive = self.get_node_id_by_name([node_name],
                                                             create_if_missing=True)
             self.node_id = node_ids[0]
-            if were_alive[0]:
+            if were_alive[0] and not self.skip_was_alive_check:
                 raise GenException(f"Cannot access node {node_name}, it is already running! "
                                    f"(set env variable NODE_IGNORE_ALIVE=1 to ignore this control)")
         
@@ -251,9 +251,9 @@ class Node:
             "domain_name": env_domain,
             "tls_cert_path": env_cert_path,
             "tls_key_path": env_key_path,
-            "dht_enabled": True,
+            "dht_enabled": False,  # TODO set to True,
             "dht_mode": 'client',
-            "dht_keep": True
+            "dht_keep": False  # TODO set to True
         }
         
         p2p_w_config = {
@@ -268,7 +268,7 @@ class Node:
             "domain_name": env_domain,
             "tls_cert_path": env_cert_path,
             "tls_key_path": env_key_path,
-            "dht_enabled": True,
+            "dht_enabled": False,  # TODO set to True,
             "dht_mode": 'client',
             "dht_keep": False  # close it after autonat
         }
@@ -455,7 +455,7 @@ class Node:
                 else:
                     node_ids.append(None)
                     were_alive.append(None)
-                missing.append(i)
+                    missing.append(i)
         except Exception as e:
             raise GenException(f"Error while retrieving nodes named {node_names} from server! [{e}]")
 
@@ -690,7 +690,7 @@ class Node:
             self.agents_expected_to_send_ack[peer_id] = self.clock.get_time()
             self.out(f"Current set of {len(self.agents_expected_to_send_ack)} connected peer IDs that will get our "
                      f"profile and are expected to send a confirmation: "
-                     f"{self.agents_expected_to_send_ack.keys()}")
+                     f"{list(self.agents_expected_to_send_ack.keys())}")
             return peer_id
         else:
             self.err("Connection failed!")
@@ -826,6 +826,7 @@ class Node:
         await self.hosted.subscribe_to_pubsub_owned_streams()
 
         # Asking to join a World or connect to an Agent, if specified
+        joined_this_world = None
         got_in_touch_with_this_lone_wolf = None
         if join_world is not None:
             if isinstance(join_world, str):
@@ -836,6 +837,8 @@ class Node:
                 raise GenException("Invalid value for the 'join_world' argument")
             if ret is None:
                 raise GenException(f"Unable to connect to world: {join_world}")
+            else:
+                joined_this_world = ret  # saving peer ID
         if get_in_touch is not None:
             if isinstance(get_in_touch, str):
                 ret = await self.ask_to_get_in_touch(node_name=get_in_touch, **kwargs)
@@ -862,46 +865,39 @@ class Node:
             # Interactive mode (useful when chatting with lone wolves)
             keyboard_queue = None
             keyboard_listener = None
-            processor_net_hash = None
             processor_img_stream = None
             processor_text_stream = None
             cap = None
-            ready_to_interact = False
-            interact_mode_opts = None
+            splash_text_shown = False
+            interact_mode_opts: dict | None = None
+            log_interact_mode = True
 
             if interact_mode:
                 if self.agent is None:
                     raise GenException("Interactive mode is only valid for agents")
-
-                interact_mode_opts = {"lone_wolf_peer_id": got_in_touch_with_this_lone_wolf} \
-                    if got_in_touch_with_this_lone_wolf is not None else {}
-                processor_text_net_hash = None
-                processor_img_net_hash = None
+                interact_mode_opts = ({"ready_to_interact": False} |
+                                      ({"lone_wolf_peer_id": got_in_touch_with_this_lone_wolf}
+                                       if got_in_touch_with_this_lone_wolf is not None else
+                                       {"world_peer_id": joined_this_world}))
                 looking_for_public_streams = "lone_wolf_peer_id" in interact_mode_opts
-                for net_hash, stream_dict in self.agent.proc_streams.items():
-                    for stream in stream_dict.values():
-                        if (processor_text_stream is None and stream.props.is_public() == looking_for_public_streams
-                                and stream.props.is_text()):
-                            processor_text_stream = stream
-                            processor_text_net_hash = net_hash
-                        if (processor_img_stream is None and stream.props.is_public() == looking_for_public_streams
-                                and stream.props.is_img()):
-                            processor_img_stream = stream
-                            processor_img_net_hash = net_hash
+                for stream in self.agent.owned_streams[self.agent.get_proc_input_net_hash()].values():
+                    if (processor_text_stream is None and stream.props.is_public() == looking_for_public_streams
+                            and stream.props.is_text()):
+                        processor_text_stream = stream
+                    if (processor_img_stream is None and stream.props.is_public() == looking_for_public_streams
+                            and stream.props.is_img()):
+                        processor_img_stream = stream
 
-                if processor_text_net_hash is None:
+                if processor_text_stream is None:
                     raise GenException("Interactive mode requires a processor that generates a text stream")
-                if not (processor_img_net_hash is None or (processor_text_net_hash == processor_img_net_hash)):
-                    raise GenException("Interactive mode requires the same processor to generate text and img streams")
-                processor_net_hash = processor_text_net_hash
 
                 def keyboard_listener(k_queue):
                     while True:
                         webcam_shot = None
                         keyboard_msg = input()  # Get from keyboards
                         if cap is not None:
-                            ret, got_shot = cap.read()  # Get from webcam
-                            if ret:
+                            _ret, got_shot = cap.read()  # Get from webcam
+                            if _ret:
                                 target_area = 224 * 224
                                 webcam_shot = Image.fromarray(cv2.cvtColor(got_shot, cv2.COLOR_BGR2RGB))
                                 width, height = webcam_shot.size
@@ -918,9 +914,7 @@ class Node:
                             k_queue.put((keyboard_msg, webcam_shot))  # Store in the asynch queue
 
                         if keyboard_msg.strip() == "exit" or keyboard_msg.strip() == "quit":
-                            break
-
-                        if not self.agent.in_world():  # If the world disconnected
+                            k_queue.put((keyboard_msg, webcam_shot))  # Store in the asynch queue
                             break
 
                 keyboard_queue = queue.Queue()  # Create a thread-safe queue for communication
@@ -1003,77 +997,58 @@ class Node:
 
                 # Trigger HSM of the agent
                 if self.node_type is Node.AGENT:
-                    if interact_mode_opts is not None:
+                    if interact_mode_opts is not None and interact_mode_opts['ready_to_interact']:
                         try:
+                            if not splash_text_shown:
+                                splash_text_shown = True
+                                if "lone_wolf_peer_id" in interact_mode_opts:
+                                    self.agent.behav_lone_wolf.update_wildcard("<partner>",
+                                                                               interact_mode_opts['lone_wolf_peer_id'])
+                                    print(f"\n*** Connected to agent: {interact_mode_opts['lone_wolf_peer_id']} ***")
+                                else:
+                                    print(f"\n*** Connected to world: {interact_mode_opts['world_peer_id']}")
+                                keyboard_listener.start()
+                                cap = cv2.VideoCapture(0) if processor_img_stream is not None else None
+                                print(f"*** Entering interactive mode ***\n\n👉 ", end="")
 
-                            # Waiting until we meet a state named "ready"
-                            if not ready_to_interact:
-                                behav = self.agent.behav_lone_wolf \
-                                    if "lone_wolf_peer_id" in interact_mode_opts else self.agent.behav
-                                if behav.state == "ready":
-                                    ready_to_interact = True
-                                    keyboard_listener.start()
-                                    cap = cv2.VideoCapture(0) if processor_img_stream is not None else None
-                                    print(f"\n*** Entering interactive text mode ***\n\n👉 ", end="")
-
-                                    original_stdout = sys.stdout  # Valid screen-related stream
-                                    sys.stdout = open('interact_stdout.txt',
-                                                      'w')  # Open(os.devnull, 'w')  # null stream
-                                    interact_mode_opts["stdout"] = [original_stdout, sys.stdout]
+                                original_stdout = sys.stdout  # Valid screen-related stream
+                                if log_interact_mode:
+                                    sys.stdout = open('interact_stdout.txt', 'w')
+                                else:
+                                    sys.stdout = open(os.devnull, 'w')  # null stream
+                                interact_mode_opts["stdout"] = [original_stdout, sys.stdout]
 
                             # Getting message from keyboard
                             msg, image_pil = keyboard_queue.get_nowait()
-
-                            # Quit?
                             msg = msg.strip()
-                            if msg == "exit" or msg == "quit":
+
+                            if msg.lower() == "exit" or msg.lower() == "quit":
+
+                                # Quit?
                                 must_quit = True
+                                sys.stdout = interact_mode_opts["stdout"][0]
                                 interact_mode_opts["stdout"][1].close()
                                 if cap is not None:
                                     cap.release()
+
+                                if self.agent.in_world():
+                                    await self.leave_world()
+                                connected_peer_ids = list(self.agent.all_agents.keys())
+                                for peer_id in connected_peer_ids:
+                                    await self.leave(peer_id)
                             else:
 
-                                # Asking the to generate (the request will be immediately sent)
-                                if "lone_wolf_peer_id" in interact_mode_opts:
-                                    behav = self.agent.behav_lone_wolf
-                                    other_behav = self.agent.behav
-
-                                    other_behav.enable(False)
-                                    behav.enable(True)
-                                    await self.agent.ask_gen(agent=interact_mode_opts["lone_wolf_peer_id"],
-                                                             u_hashes=[processor_net_hash],
-                                                             samples=1)
-                                    behav.enable(False)
-                                else:
-                                    self.agent.behav.request_action(action_name="ask_gen",
-                                                                    args={},
-                                                                    signature=self.get_world_peer_id(),
-                                                                    timestamp=self.clock.get_time(),
-                                                                    uuid=None)
-                                    behav = self.agent.behav
-                                    other_behav = self.agent.behav_lone_wolf
-                                    await self.agent.behave()
-
-                                # Loading the message and image to the processor's output streams
-                                # they will be sent at the next clock cycle
-                                other_behav.enable(False)
-                                behav.enable(True)
+                                # Putting message in the processor input stream
                                 if processor_img_stream is not None:
-                                    [msg, image_pil], _ = self.agent.generate(input_net_hashes=None,
-                                                                              inputs=[msg, image_pil])
                                     processor_text_stream.set(msg)
                                     processor_img_stream.set(image_pil)
                                 else:
-                                    [msg], _ = self.agent.generate(input_net_hashes=None,
-                                                                   inputs=[msg])
                                     processor_text_stream.set(msg)
-                                behav.enable(False)
                         except queue.Empty:
-                            await self.agent.behave()  # If nothing has been typed (+ enter)
-                    else:
+                            pass  # If nothing has been typed (+ enter)
 
-                        # Ordinary behaviour
-                        await self.agent.behave()
+                    # Ordinary behaviour
+                    await self.agent.behave()
 
                 # Send dynamic profile every "N" seconds
                 if (self.clock.get_time() - last_dynamic_profile_time >= self.send_dynamic_profile_every
@@ -1207,6 +1182,15 @@ class Node:
             print(f"An error occurred: {e}")
             traceback.print_exc()
 
+        if self.cursor_hidden:
+            sys.stdout.write("\033[?25h")  # Re-enabling cursor
+
+        if self.agent.in_world():
+            await self.leave_world()
+        connected_peer_ids = list(self.agent.all_agents.keys())
+        for peer_id in connected_peer_ids:
+            await self.leave(peer_id)
+
     async def __handle_network_connections(self):
         """Manages new and lost network connections (async)."""
         
@@ -1219,6 +1203,8 @@ class Node:
         new_peer_ids_by_pool, removed_peer_ids_by_pool = await self.conn.update()
         if len(new_peer_ids_by_pool) > 0 or len(removed_peer_ids_by_pool) > 0:
             self.out("Current status of the pools, right after the update:\n" + str(self.conn))
+        else:
+            self.out("Current status of the pools, without having updated them:\n" + str(self.conn))
 
         # Checking if some peers were removed
         an_agent_left_the_world = False
@@ -1375,6 +1361,10 @@ class Node:
 
         self.out("Got " + str(len(public_messages)) + " messages from the public net")
         self.out("Got " + str(len(world_messages)) + " messages from the world/private net")
+
+        # Sorting messages
+        public_messages = self.__sort_messages_by_priority(public_messages)
+        world_messages = self.__sort_messages_by_priority(world_messages)
 
         # Process all messages
         all_messages = public_messages + world_messages
@@ -1536,6 +1526,10 @@ class Node:
                                                 rendezvous_tag=msg.content['rendezvous_tag'],
                                                 initial_stats=msg.content['initial_stats'])
 
+                        # Enabling interactive mode, if public
+                        if interact_mode_opts is not None and 'lone_wolf_peer_id' not in interact_mode_opts:
+                            interact_mode_opts['ready_to_interact'] = True
+
             # (C) received an agent-connect-approval
             elif msg.content_type == Msg.AGENT_APPROVAL:
                 self.out("Received an agent-connect-approval message...")
@@ -1549,6 +1543,10 @@ class Node:
                     # Adding the agent
                     await self.__join_agent(profile=NodeProfile.from_dict(msg.content['my_profile']),
                                             peer_id=msg.sender)
+
+                    # Enabling interactive mode, if public
+                    if interact_mode_opts is not None and 'lone_wolf_peer_id' in interact_mode_opts:
+                        interact_mode_opts['ready_to_interact'] = True
 
             # (D) requested for a profile
             elif msg.content_type == Msg.PROFILE_REQUEST:
@@ -1607,17 +1605,23 @@ class Node:
                         net_hash = DataProps.normalize_net_hash(msg.channel)
                         if net_hash in self.agent.known_streams:
                             stream_dict = self.agent.known_streams[net_hash]
+                            peer_id = DataProps.peer_id_from_net_hash(net_hash)
+                            group = DataProps.name_or_group_from_net_hash(net_hash)
+                            owner_account = self.agent.all_agents[peer_id].get_static_profile()['email']
+                            agent_name = self.agent.all_agents[peer_id].get_static_profile()['node_name']
                             sys.stdout = interact_mode_opts["stdout"][0]  # Output on
                             for name, stream_obj in stream_dict.items():
                                 if stream_obj.props.is_text():
                                     msg = stream_obj.get(requested_by="print")  # Getting message
-                                    print(f"\n『 {msg} 』")  # Printing to screen
+                                    msg = "\n   ｜".join([line[i:i + 120] for line in msg.splitlines()
+                                                         for i in range(0, len(line), 120)])
+                                    print(f"\n💬 [{owner_account}/{agent_name}.{group}.{name}]\n   ｜{msg}")  # Printing
                                 if stream_obj.props.is_img():
                                     img = stream_obj.get(requested_by="print")  # Getting image
-                                    filename = "wolf_img.png"
+                                    filename = f"{net_hash.replace(':', '_')}.{name}.png"
                                     img.save(filename)
-                                    msg = f"(saved image to {filename})"
-                                    print(f"\n『 {msg} 』")  # Printing to screen
+                                    print(f"\n🖼️ [{owner_account}/{agent_name}.{group}.{name}]\n   "
+                                          f"｜Saved image to {filename})")
                             print("\n👉 ", end="")
                             sys.stdout = interact_mode_opts["stdout"][1]  # Output off
 
@@ -1635,11 +1639,14 @@ class Node:
                     else:
                         behav = self.agent.behav_lone_wolf \
                             if msg.sender in self.agent.public_agents else self.agent.behav
-                        behav.request_action(action_name=msg.content['action_name'],
-                                             args=msg.content['args'],
-                                             signature=msg.sender,
-                                             timestamp=self.clock.get_time(),
-                                             uuid=msg.content['uuid'])
+                        if not behav.request_action(action_name=msg.content['action_name'],
+                                                    args=msg.content['args'],
+                                                    signature=msg.sender,
+                                                    timestamp=self.clock.get_time(),
+                                                    uuid=msg.content['uuid'],
+                                                    from_state=msg.content.get('from_state', None),
+                                                    to_state=msg.content.get('to_state', None)):
+                            self.out("Cannot enqueue the request, incompatible action")
 
                 elif self.node_type is Node.WORLD:
                     self.err("Unexpected action request received by this world node, sent by: " + msg.sender)
@@ -1901,6 +1908,10 @@ class Node:
                 new_agent.behav.set_actionable(new_agent)
                 new_agent.behav_lone_wolf.set_actionable(new_agent)
 
+                # Inheriting the pre-defined policy filter (if any)
+                new_agent.set_policy_filter(self.agent.policy_filter, public=False)
+                new_agent.set_policy_filter(self.agent.policy_filter_lone_wolf, public=True)
+
                 # Setting up roles
                 roles = profile.get_dynamic_profile()['world_roles_fsm'].keys()
                 new_agent.CUSTOM_ROLES = roles
@@ -1997,6 +2008,7 @@ class Node:
             self.out(f"Interview failed: "
                      f"unable to send a profile request to peer ID {peer_id}")
             return False
+        self.out(f"Interview list expanded: profile request sent to peer ID {peer_id}")
 
         # Put the agent in the list of agents to interview
         self.agents_to_interview[peer_id] = [self.clock.get_time(), None]  # Peer ID -> [time, profile]; no profile yet
@@ -2060,6 +2072,8 @@ class Node:
                         self.out(f"Peer f{peer_id} tried to connect to this world, but it is already part of another"
                                  f"world")
                         return False
+                    else:
+                        return True
 
             else:
 
@@ -2130,6 +2144,25 @@ class Node:
         # Clearing the temporary list of connected agents
         if peer_id in self.agents_expected_to_send_ack:
             del self.agents_expected_to_send_ack[peer_id]
+
+    @staticmethod
+    def __sort_messages_by_priority(messages):
+        """Sort messages by priority: world approval and agent approval first."""
+
+        _world_approval_messages = []
+        _agent_approval_messages = []
+        _action_messages = []
+        _other_messages = []
+        for _msg in messages:
+            if _msg.content_type == Msg.WORLD_APPROVAL:
+                _world_approval_messages.append(_msg)
+            elif _msg.content_type == Msg.AGENT_APPROVAL:
+                _agent_approval_messages.append(_msg)
+            elif _msg.content_type == Msg.ACTION_REQUEST:
+                _action_messages.append(_msg)
+            else:
+                _other_messages.append(_msg)
+        return _world_approval_messages + _agent_approval_messages + _action_messages + _other_messages
 
     def __root(self, api: str, payload: dict):
         """Sends a POST request to the root server's API endpoint.

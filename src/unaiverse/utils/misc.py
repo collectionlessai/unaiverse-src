@@ -18,7 +18,7 @@ import sys
 import time
 import json
 import math
-import shutil
+import random
 import threading
 from tqdm import tqdm
 from pathlib import Path
@@ -308,3 +308,40 @@ def get_key_considering_multiple_sources(key_variable: str | None) -> str:
         with open(key_file, "w") as f:
             f.write(key)
         return key
+
+
+class PolicyFilterSelfGen:
+    def __init__(self, wait: float, add_random_up_to: float = 0.):
+        self.wait = wait
+        self.add_random_up_to = max(add_random_up_to, 0.)
+        if wait <= 0.:
+            raise GenException("Invalid number of seconds ('wait' must be > 0)")
+
+    def __call__(self, action_id, request, all_actions, policy_filter_opts):
+        """Run the policy filter."""
+
+        # Getting basic info from the policy options (reference ot agent, and to the last time do_gen was approved)
+        if 'first_t' not in policy_filter_opts:
+            policy_filter_opts['first_t'] = -1
+        _agent, _first_t = policy_filter_opts['agent'], policy_filter_opts['first_t']
+
+        # If the agent lives in the TuringHotel world...
+        action = all_actions[action_id]
+        action_name = action.name
+
+        # We want to handle as an exception the case of "do_gen" with "u_hashes=[...processor_in]" (self-generation)
+        if action_name == "do_gen":
+
+            # Saving the time when the action we were looking for was actually selected by the policy
+            if _first_t < 0:
+                _first_t = time.monotonic()
+                policy_filter_opts['first_t'] = _first_t
+
+            # Don't generate, don't do anything, if it passed less than 5 seconds from when we decided to generate
+            if time.monotonic() - _first_t < (self.wait + random.uniform(0, self.add_random_up_to)):
+                return -1, None
+            else:
+                policy_filter_opts['first_t'] = -1  # Clearing
+
+        # Returning the revised policy decision
+        return action_id, request
