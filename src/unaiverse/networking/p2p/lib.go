@@ -840,7 +840,6 @@ func handleStream(ni *NodeInstance, s network.Stream) {
 	ni.streamsMutex.Unlock()
 
 	for {
-	    logger.Debugf("[GO] @@@@@@@ READING LOOP START")
 		// 1. Read the 4-byte total length prefix.
 		var totalLen uint32
 		if err := binary.Read(s, binary.BigEndian, &totalLen); err != nil {
@@ -856,8 +855,6 @@ func handleStream(ni *NodeInstance, s network.Stream) {
 			}
 			return // Exit handler for any read error on length.
 		}
-
-		logger.Debugf("[GO] @@@@@@@ READING LOOP 1")
 
 		// --- Check the message size ---
 		if totalLen > MaxMessageSize {
@@ -883,8 +880,6 @@ func handleStream(ni *NodeInstance, s network.Stream) {
 			return // Exit handler for any read error on length.
 		}
 
-		logger.Debugf("[GO] @@@@@@@ READING LOOP 2")
-
 		// 3. Read the channel name string.
 		channelBytes := make([]byte, channelLen)
 		if _, err := io.ReadFull(s, channelBytes); err != nil {
@@ -899,8 +894,6 @@ func handleStream(ni *NodeInstance, s network.Stream) {
 		}
 		channel := string(channelBytes)
 
-		logger.Debugf("[GO] @@@@@@@ READING LOOP 3")
-
 		// 4. Read the Protobuf payload.
 		payloadLen := totalLen - uint32(channelLen) - 1 // Subtract channel len byte and channel string
 		payload := make([]byte, payloadLen)
@@ -914,8 +907,6 @@ func handleStream(ni *NodeInstance, s network.Stream) {
 			}
 			return // Exit handler for any read error on length.
 		}
-
-		logger.Debugf("[GO] @@@@@@@ READING LOOP 4")
 
 		// 5. Store the message.
 		logger.Infof("[GO] 📨 Instance %d: Received direct message on channel '%s' from %s, storing.\n", ni.instanceIndex, channel, senderPeerID)
@@ -2141,7 +2132,6 @@ func SendMessageToPeer(
 		// If stream exists, try writing to it
 		if exists {
 			logger.Debugf("[GO]   ↳ Instance %d: Reusing existing stream to %s\n", ni.instanceIndex, pid)
-            logger.Debugf("[GO] @@@@@@@ WRITING MESSAGE")
 			err = writeDirectMessageFrame(stream, goChannel, goData)
 			if err == nil {
 				// Success writing to existing stream
@@ -2201,7 +2191,6 @@ func SendMessageToPeer(
 			}
 
 			// --- Write message to the determined stream ---
-			logger.Debugf("[GO] @@@@@@@ WRITING MESSAGE (else)")
 			err = writeDirectMessageFrame(stream, goChannel, goData)
 			if err != nil {
 				logger.Errorf("[GO] ❌ Instance %d: Failed to write initial message to stream for %s: %v. Closing and removing.", ni.instanceIndex, pid, err)
