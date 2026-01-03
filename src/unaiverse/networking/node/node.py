@@ -1203,8 +1203,6 @@ class Node:
         new_peer_ids_by_pool, removed_peer_ids_by_pool = await self.conn.update()
         if len(new_peer_ids_by_pool) > 0 or len(removed_peer_ids_by_pool) > 0:
             self.out("Current status of the pools, right after the update:\n" + str(self.conn))
-        else:
-            self.out("Current status of the pools, without having updated them:\n" + str(self.conn))
 
         # Checking if some peers were removed
         an_agent_left_the_world = False
