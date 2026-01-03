@@ -172,6 +172,15 @@ class ConnectionPools:
         Returns:
             A tuple containing the peer ID and a boolean indicating if the connection was established through a relay.
         """
+
+        force: str | None = None
+        # force: str | None = 'tcp'
+        if force is not None:
+            _addresses = [a for a in addresses if force in a]
+            addresses.clear()
+            for a in _addresses:
+                addresses.append(a)
+
         if ConnectionPools.DEBUG:
             print(f"[DEBUG CONNECTIONS-POOL] Connecting to {addresses}")
 

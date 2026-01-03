@@ -103,6 +103,7 @@ class P2P:
                     'p2p-circuit': 'info',
                     'relay': 'info',
                     'p2p-holepunch': 'info',
+                    'tcp-tpt': 'info',
                 }
 
             logger.info("🐍 Setting up and initializing P2P library core with user settings...")

@@ -251,9 +251,9 @@ class Node:
             "domain_name": env_domain,
             "tls_cert_path": env_cert_path,
             "tls_key_path": env_key_path,
-            "dht_enabled": False,  # TODO set to True,
+            "dht_enabled": True,
             "dht_mode": 'client',
-            "dht_keep": False  # TODO set to True
+            "dht_keep": True
         }
         
         p2p_w_config = {
@@ -268,7 +268,7 @@ class Node:
             "domain_name": env_domain,
             "tls_cert_path": env_cert_path,
             "tls_key_path": env_key_path,
-            "dht_enabled": False,  # TODO set to True,
+            "dht_enabled": True,
             "dht_mode": 'client',
             "dht_keep": False  # close it after autonat
         }
