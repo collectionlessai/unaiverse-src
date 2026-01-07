@@ -1670,10 +1670,10 @@ class HybridStateMachine:
             # Pruning too old requests
             idx_to_remove = []
             for i, action in enumerate(actions_list):
-                action.requests.remove_due_to_timeout(HybridStateMachine.REQUEST_VALIDITY_TIMEOUT)
-                if not ((action.is_ready() and (not requested_only or len(action.requests) > 0) and
-                         not action.is_delayed(self.states[self.state].starting_time))):
-                    idx_to_remove.append(i)
+                if len(action.requests) > 0:
+                    action.requests.remove_due_to_timeout(HybridStateMachine.REQUEST_VALIDITY_TIMEOUT)
+                    if len(action.requests) == 0:
+                        idx_to_remove.append(i)
             for i in idx_to_remove:
                 del actions_list[i]
                 del to_state_list[i]
