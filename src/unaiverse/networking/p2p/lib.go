@@ -794,8 +794,9 @@ func readFromSubscription(
 // the channel name itself, and finally the Protobuf-encoded payload.
 func handleStream(ni *NodeInstance, s network.Stream) {
 	senderPeerID := s.Conn().RemotePeer()
+	streamID := s.ID()
 	ni.peersMutex.Lock()
-	existing, exists := ni.connectedPeers[senderPeerID]
+	existingPeer, peerExists := ni.connectedPeers[senderPeerID]
 
 	// 1. Gather fresh info (Addresses & Direction)
 	direction := "incoming"
@@ -807,7 +808,7 @@ func handleStream(ni *NodeInstance, s network.Stream) {
 		knownAddrs = []ma.Multiaddr{s.Conn().RemoteMultiaddr()}
 	}
 
-	if !exists {
+	if !peerExists {
 		// CASE A: New Application Peer
 		ni.connectedPeers[senderPeerID] = ExtendedPeerInfo{
 			ID:          senderPeerID,
@@ -816,102 +817,79 @@ func handleStream(ni *NodeInstance, s network.Stream) {
 			Direction:   direction,
 			Relayed:     false,
 		}
-		logger.Infof("[GO] ➕ Instance %d: Peer %s promoted to Application Peer (Incoming Stream).", ni.instanceIndex, senderPeerID)
+		logger.Infof("[GO] ➕ Instance %d: Peer %s promoted to App Peer via Stream %s (Incoming).", ni.instanceIndex, senderPeerID, streamID)
 	} else {
 		// CASE B: Existing Peer - Update Addresses
 		// We keep ConnectedAt and Direction from the original session start.
-		existing.Addrs = knownAddrs
-		ni.connectedPeers[senderPeerID] = existing
-		logger.Debugf("[GO] 🔄 Instance %d: Refreshed addresses for existing Application Peer %s.", ni.instanceIndex, senderPeerID)
+		existingPeer.Addrs = knownAddrs
+		ni.connectedPeers[senderPeerID] = existingPeer
+		logger.Debugf("[GO] 🔄 Instance %d: Refreshed addresses for Peer %s via Stream %s.", ni.instanceIndex, senderPeerID, streamID)
 	}
 	ni.peersMutex.Unlock()
-	logger.Debugf("[GO] 📥 Instance %d: Accepted new INCOMING stream from %s, storing for duplex communication.\n", ni.instanceIndex, senderPeerID)
-
-	// This defer block ensures cleanup happens when the stream is closed by either side.
-	defer func() {
-		logger.Debugf("[GO] 🧹 Instance %d: Inbound stream from %s closed. Removing from persistent map.\n", ni.instanceIndex, senderPeerID)
-		ni.streamsMutex.Lock()
-		delete(ni.persistentChatStreams, senderPeerID)
-		ni.streamsMutex.Unlock()
-		s.Close() // Ensure the stream is fully closed.
-	}()
+	logger.Debugf("[GO] 📥 Instance %d: Accepted INCOMING stream %s from %s. Storing for duplex use.\n", ni.instanceIndex, streamID, senderPeerID)
 
 	// Store the newly accepted stream so we can use it to send messages back to this peer.
 	ni.streamsMutex.Lock()
 	ni.persistentChatStreams[senderPeerID] = s
 	ni.streamsMutex.Unlock()
 
+	// This defer block ensures cleanup happens when the stream is closed by either side.
+	defer func() {
+		logger.Debugf("[GO] 🧹 Instance %d: Stream %s with %s closed. Removing from map.\n", ni.instanceIndex, streamID, senderPeerID)
+		ni.streamsMutex.Lock()
+		if current, ok := ni.persistentChatStreams[senderPeerID]; ok && current == s {
+			delete(ni.persistentChatStreams, senderPeerID)
+		}
+		ni.streamsMutex.Unlock()
+		s.Close() // Ensure the stream is fully closed.
+	}()
+
 	for {
-		// 1. Read the 4-byte total length prefix.
+		// Read 4-byte total length
 		var totalLen uint32
 		if err := binary.Read(s, binary.BigEndian, &totalLen); err != nil {
 			if err == io.EOF {
-				logger.Debugf("[GO] 🔌 Instance %d: Direct stream with peer %s closed (EOF).\n", ni.instanceIndex, senderPeerID)
+				logger.Debugf("[GO] 🔌 Instance %d: Stream %s with %s closed (EOF).\n", ni.instanceIndex, streamID, senderPeerID)
 			} else if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-				logger.Warnf("[GO] ⏳ Instance %d: Timeout reading length from direct stream with %s: %v\n", ni.instanceIndex, senderPeerID, err)
+				logger.Warnf("[GO] ⏳ Instance %d: Timeout reading length from Stream %s (%s): %v\n", ni.instanceIndex, streamID, senderPeerID, err)
 			} else if errors.Is(err, network.ErrReset) {
-                // network.ErrReset indicates the stream was closed gracefully/reset by the peer or locally.
-                logger.Warnf("[GO] ⚙️ Instance %d: Direct stream with peer %s reset (graceful teardown/libp2p).", ni.instanceIndex, senderPeerID)
+				logger.Warnf("[GO] ⚙️ Instance %d: Stream %s with %s reset.\n", ni.instanceIndex, streamID, senderPeerID)
 			} else {
-				logger.Errorf("[GO] ❌ Instance %d: Unexpected error reading length from direct stream with %s: %v\n", ni.instanceIndex, senderPeerID, err)
+				logger.Errorf("[GO] ❌ Instance %d: Error reading length from Stream %s (%s): %v\n", ni.instanceIndex, streamID, senderPeerID, err)
 			}
-			return // Exit handler for any read error on length.
-		}
-
-		// --- Check the message size ---
-		if totalLen > MaxMessageSize {
-			logger.Errorf("[GO] ❌ Instance %d: Received message length %d exceeds limit (%d) from %s. Resetting stream.\n", ni.instanceIndex, totalLen, MaxMessageSize, senderPeerID)
-			s.Reset() // Forcefully close the stream due to protocol violation.
 			return
 		}
-		if totalLen == 0 {
-			logger.Warnf("[GO] ⚠️ Instance %d: Received zero length message frame from %s, continuing loop.\n", ni.instanceIndex, senderPeerID)
-			continue
+
+		if totalLen > MaxMessageSize {
+			logger.Errorf("[GO] ❌ Instance %d: Message len %d exceeds limit on Stream %s. Resetting.\n", ni.instanceIndex, totalLen, streamID)
+			s.Reset()
+			return
 		}
 
-		// 2. Read the 1-byte channel name length.
+		// Read Channel Length
 		var channelLen uint8
 		if err := binary.Read(s, binary.BigEndian, &channelLen); err != nil {
-			if err == io.EOF {
-				logger.Debugf("[GO] 🔌 Instance %d: Direct stream with peer %s closed (EOF).\n", ni.instanceIndex, senderPeerID)
-			} else if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-				logger.Warnf("[GO] ⏳ Instance %d: Timeout reading channel-length from direct stream with %s: %v\n", ni.instanceIndex, senderPeerID, err)
-			} else {
-				logger.Errorf("[GO] ❌ Instance %d: Unexpected error reading channel-length from direct stream with %s: %v\n", ni.instanceIndex, senderPeerID, err)
-			}
-			return // Exit handler for any read error on length.
+			logger.Errorf("[GO] ❌ Instance %d: Error reading channel len from Stream %s: %v\n", ni.instanceIndex, streamID, err)
+			return
 		}
 
-		// 3. Read the channel name string.
+		// Read Channel Name
 		channelBytes := make([]byte, channelLen)
 		if _, err := io.ReadFull(s, channelBytes); err != nil {
-			if err == io.EOF {
-				logger.Debugf("[GO] 🔌 Instance %d: Direct stream with peer %s closed (EOF).\n", ni.instanceIndex, senderPeerID)
-			} else if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-				logger.Warnf("[GO] ⏳ Instance %d: Timeout reading channel from direct stream with %s: %v\n", ni.instanceIndex, senderPeerID, err)
-			} else {
-				logger.Errorf("[GO] ❌ Instance %d: Unexpected error reading channel from direct stream with %s: %v\n", ni.instanceIndex, senderPeerID, err)
-			}
-			return // Exit handler for any read error on length.
+			logger.Errorf("[GO] ❌ Instance %d: Error reading channel from Stream %s: %v\n", ni.instanceIndex, streamID, err)
+			return
 		}
 		channel := string(channelBytes)
 
-		// 4. Read the Protobuf payload.
-		payloadLen := totalLen - uint32(channelLen) - 1 // Subtract channel len byte and channel string
+		// Read Payload
+		payloadLen := totalLen - uint32(channelLen) - 1
 		payload := make([]byte, payloadLen)
 		if _, err := io.ReadFull(s, payload); err != nil {
-			if err == io.EOF {
-				logger.Debugf("[GO] 🔌 Instance %d: Direct stream with peer %s closed (EOF).\n", ni.instanceIndex, senderPeerID)
-			} else if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-				logger.Warnf("[GO] ⏳ Instance %d: Timeout reading payload from direct stream with %s: %v\n", ni.instanceIndex, senderPeerID, err)
-			} else {
-				logger.Errorf("[GO] ❌ Instance %d: Unexpected error reading payload from direct stream with %s: %v\n", ni.instanceIndex, senderPeerID, err)
-			}
-			return // Exit handler for any read error on length.
+			logger.Errorf("[GO] ❌ Instance %d: Error reading payload from Stream %s: %v\n", ni.instanceIndex, streamID, err)
+			return
 		}
 
-		// 5. Store the message.
-		logger.Infof("[GO] 📨 Instance %d: Received direct message on channel '%s' from %s, storing.\n", ni.instanceIndex, channel, senderPeerID)
+		logger.Infof("[GO] 📨 Instance %d: Received msg on channel '%s' via Stream %s from %s.\n", ni.instanceIndex, channel, streamID, senderPeerID)
 		storeReceivedMessage(ni, senderPeerID, channel, payload)
 	}
 }
@@ -1487,7 +1465,7 @@ func CreateNode(
 			}),
 		}
 
-		if cfg.Relay.EnableClient && !cfg.Relay.EnableService && cfg.DHT.Keep {
+		if cfg.Relay.EnableClient && !cfg.Relay.EnableService && cfg.DHT.Keep && !cfg.Network.ForcePublic {
 			// Enable AutoRelay. This uses the services above (DHT, AutoNAT)
 			// to find relays and bind to one if we are private.
 			discoveryOpts = append(discoveryOpts, libp2p.EnableAutoRelayWithPeerSource(ni.PeerSource, autorelay.WithBootDelay(time.Second*10)))
@@ -2127,36 +2105,34 @@ func SendMessageToPeer(
 			return jsonErrorResponse("Attempt to send direct message to self is invalid", nil)
 		}
 
-		instancePersistentChatStreamsMutex := &ni.streamsMutex
-		instancePersistentChatStreamsMutex.Lock()
-		stream, exists := ni.persistentChatStreams[pid]
+		ni.streamsMutex.Lock()
+		stream, streamExists := ni.persistentChatStreams[pid]
+		ni.streamsMutex.Unlock()
 
 		// If stream exists, try writing to it
-		if exists {
-			logger.Debugf("[GO]   ↳ Instance %d: Reusing existing stream to %s\n", ni.instanceIndex, pid)
+		if streamExists {
+			logger.Debugf("[GO]   ↳ Instance %d: Reusing stream %s to %s\n", ni.instanceIndex, stream.ID(), pid)
 			err = writeDirectMessageFrame(stream, goChannel, goData)
 			if err == nil {
-				// Success writing to existing stream
-				instancePersistentChatStreamsMutex.Unlock() // Unlock before returning
-				logger.Infof("[GO] 📤 Instance %d: Sent direct message to %s (on existing stream)\n", ni.instanceIndex, pid)
+				logger.Infof("[GO] 📤 Instance %d: Sent to %s via Stream %s (Reused)\n", ni.instanceIndex, pid, stream.ID())
 				return jsonSuccessResponse(fmt.Sprintf("Direct message sent to %s (reused stream).", pid))
 			}
-			// Write failed on existing stream - assume it's broken
-			logger.Warnf("[GO] ⚠️ Instance %d: Failed to write to existing stream for %s: %v. Closing and removing stream.", ni.instanceIndex, pid, err)
-			// Close the stream (Reset is more abrupt, Close attempts graceful)
-			_ = stream.Close() // Ignore error during close, as we're removing it anyway
-			// Remove from map
-			delete(ni.persistentChatStreams, pid)
-			// Unlock and return specific error
-			instancePersistentChatStreamsMutex.Unlock()
-			return jsonErrorResponse(fmt.Sprintf("Failed to write to existing stream for %s. Closing and removing stream.", pid), err)
+			
+			// Write failed? Now we lock to remove the broken stream.
+			logger.Warnf("[GO] ⚠️ Instance %d: Write failed on Stream %s to %s: %v. Removing.\n", ni.instanceIndex, stream.ID(), pid, err)
+			ni.streamsMutex.Lock()
+			// Check if the stream in the map is still the broken one before deleting
+			if s, ok := ni.persistentChatStreams[pid]; ok && s == stream {
+				delete(ni.persistentChatStreams, pid)
+			}
+			ni.streamsMutex.Unlock()
+			_ = stream.Close() // Close the broken stream
+			return jsonErrorResponse(fmt.Sprintf("Failed to write to stream %s (closed).", pid), err)
 		} else {
 			// Stream does not exist, need to create a new one
-			instancePersistentChatStreamsMutex.Unlock()
-
-			logger.Debugf("[GO]   ↳ Instance %d: No existing stream to %s, creating new one...\n", ni.instanceIndex, pid)
+			logger.Debugf("[GO]   ↳ Instance %d: Creating NEW stream to %s...\n", ni.instanceIndex, pid)
 			streamCtx, cancel := context.WithTimeout(ni.ctx, 20*time.Second)
-			// defer cancel()  // TODO commented by Stefano
+			defer cancel()
 
 			newStream, err := ni.host.NewStream(
 				network.WithAllowLimitedConn(streamCtx, UnaiverseChatProtocol),
@@ -2164,46 +2140,40 @@ func SendMessageToPeer(
 				UnaiverseChatProtocol,
 			)
 
-			cancel()  // TODO added by Stefano
-
-			// Re-acquire lock *after* NewStream finishes or errors
-			instancePersistentChatStreamsMutex.Lock()
-			defer instancePersistentChatStreamsMutex.Unlock()
-
 			if err != nil {
-				// Failed to open a *new* stream
-				if streamCtx.Err() == context.DeadlineExceeded || err == context.DeadlineExceeded {
-					return jsonErrorResponse(fmt.Sprintf("Failed to open new stream to %s: Timeout", pid), err)
-				}
 				return jsonErrorResponse(fmt.Sprintf("Failed to open new stream to %s.", pid), err)
 			}
 
 			// --- RACE CONDITION HANDLING ---
 			// Double-check if another goroutine created a stream while we were unlocked
+			ni.streamsMutex.Lock()
 			existingStream, existsNow := ni.persistentChatStreams[pid]
 			if existsNow {
-				logger.Warnf("[GO] ⚠️ Instance %d: Race condition: Another stream to %s was created. Using existing one and closing the new one.", ni.instanceIndex, pid)
+				logger.Warnf("[GO] ⚠️ Instance %d: Race detected. Using existing stream %s, closing our new %s.\n", ni.instanceIndex, existingStream.ID(), newStream.ID())
 				_ = newStream.Close() // Close the redundant stream we just created.
 				stream = existingStream
 			} else {
-				logger.Debugf("[GO] ✅ Instance %d: Opened and stored new persistent stream to %s\n", ni.instanceIndex, pid)
+				logger.Debugf("[GO] ✅ Instance %d: Opened and stored new persistent stream %s to %s\n", ni.instanceIndex, newStream.ID(), pid)
 				ni.persistentChatStreams[pid] = newStream
 				stream = newStream
 				go handleStream(ni, newStream)
 			}
+			ni.streamsMutex.Unlock()
 
 			// --- Write message to the determined stream ---
 			err = writeDirectMessageFrame(stream, goChannel, goData)
 			if err != nil {
-				logger.Errorf("[GO] ❌ Instance %d: Failed to write initial message to stream for %s: %v. Closing and removing.", ni.instanceIndex, pid, err)
+				logger.Errorf("[GO] ❌ Instance %d: Write failed on NEW stream %s to %s: %v.\n", ni.instanceIndex, stream.ID(), pid, err)
 				_ = stream.Close()
-				if currentStream, ok := ni.persistentChatStreams[pid]; ok && currentStream == stream {
+				ni.streamsMutex.Lock()
+				if s, ok := ni.persistentChatStreams[pid]; ok && s == stream {
 					delete(ni.persistentChatStreams, pid)
 				}
+				ni.streamsMutex.Unlock()
 				return jsonErrorResponse(fmt.Sprintf("Failed to write to new stream to '%s' (needs reconnect).", pid), err)
 			}
 
-			logger.Infof("[GO] 📤 Instance %d: Sent direct message to %s (on NEW stream)\n", ni.instanceIndex, pid)
+			logger.Infof("[GO] 📤 Instance %d: Sent to %s via Stream %s (New)\n", ni.instanceIndex, pid, stream.ID())
 			return jsonSuccessResponse(fmt.Sprintf("Direct message sent to %s (new stream).", pid))
 		}
 	} else {
