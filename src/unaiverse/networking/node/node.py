@@ -1225,9 +1225,9 @@ class Node:
         if self.cursor_hidden:
             sys.stdout.write("\033[?25h")  # Re-enabling cursor
 
-        if self.agent.in_world():
+        if self.node_type is Node.AGENT and self.agent.in_world():
             await self.leave_world()
-        connected_peer_ids = list(self.agent.all_agents.keys())
+        connected_peer_ids = list(self.hosted.all_agents.keys())
         for peer_id in connected_peer_ids:
             await self.leave(peer_id)
 
