@@ -769,15 +769,19 @@ class DataProps:
             return data
         elif not isinstance(data, torch.Tensor):
             return None
-        elif len(data.shape) > 2:  # Can only print 1d data (recall that 1d data has 2 dimensions, due to batch size)
-            return None
-
-        if data.shape[0] != 1:
-            return None  # "Code designed for a batch of only 1 element
 
         if self.is_tensor():
             if not self.has_tensor_labels():
+                str_rep = f"{'x'.join(map(str, data.shape))} tensor ({data.dtype})\n{data.cpu().numpy()}"
+                if len(str_rep) > 110:
+                    str_rep = str_rep[0:(110-3)] + "..."
+                return str_rep
+
+            if len(data.shape) > 2:  # Can only print 1d data (recall that 1d data has 2 dimensions, due to batch size)
                 return None
+
+            if data.shape[0] != 1:
+                return None  # "Code designed for a batch of only 1 element
 
             if self.is_tensor_token_ids():
 

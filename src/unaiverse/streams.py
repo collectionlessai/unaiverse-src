@@ -159,7 +159,8 @@ class DataStream:
         Returns:
             bool: True if data was accepted based on time constraints, else False.
         """
-        if self.props.delta <= 0. or self.props.delta <= (self.clock.get_time() - self.data_timestamp):
+        if (self.enabled and
+                (self.props.delta <= 0. or self.props.delta <= (self.clock.get_time() - self.data_timestamp))):
             self.data = self.props.adapt_tensor_to_tensor_labels(data) if data is not None else None
             self.data_timestamp = self.clock.get_cycle_time()
             self.data_tag = data_tag if data_tag >= 0 else self.clock.get_cycle()
@@ -208,7 +209,7 @@ class DataStream:
         else:
             self.data_uuid_expected = ref_uuid
 
-    def mark_uuid_as_clearable(self):
+    def mark_uuid_as_clearable(self, net_hash):
         self.data_uuid_clearable = True
 
     def clear_uuid_if_marked_as_clearable(self):

@@ -174,7 +174,7 @@ class ConnectionPools:
         """
 
         force: str | None = None
-        # force: str | None = 'tcp'
+        force: str | None = 'udp'
         if force is not None:
             _addresses = [a for a in addresses if force in a]
             addresses.clear()
@@ -527,7 +527,10 @@ class ConnectionPools:
         Returns:
             The name of the pool the peer is in.
         """
-        return self.peer_id_to_pool_name[peer_id]
+        if peer_id in self.peer_id_to_pool_name:
+            return self.peer_id_to_pool_name[peer_id]
+        else:
+            return None
 
     def size(self, pool_name: str | None = None):
         """Returns the number of connections in a specific pool or the total number across all pools.

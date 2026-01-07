@@ -39,7 +39,8 @@ from datetime import datetime, timezone, timedelta
 from unaiverse.networking.node.connpool import NodeConn
 from unaiverse.networking.node.profile import NodeProfile
 from unaiverse.streams import DataProps, BufferedDataStream
-from unaiverse.utils.misc import GenException, get_key_considering_multiple_sources, save_node_addresses_to_file
+from unaiverse.utils.misc import (GenException, get_key_considering_multiple_sources, save_node_addresses_to_file,
+                                  PolicyFilterHuman, prepare_app_dir)
 
 
 class Node:
@@ -60,7 +61,7 @@ class Node:
                  node_id: str | None = None,
                  hidden: bool = False,
                  clock_delta: float = 1. / 25.,
-                 base_identity_dir: str = "./unaiverse_nodes_identity",
+                 base_identity_dir: str | None = None,
                  only_certified_agents: bool = False,
                  allowed_node_ids: list[str] | set[str] = None,  # Optional: it is loaded from the online profile
                  world_masters_node_ids: list[str] | set[str] = None,  # Optional: it is loaded from the online profile
@@ -146,6 +147,7 @@ class Node:
         # Interview of newly connected nodes
         self.interview_timeout = 45.  # Seconds
         self.connect_without_ack_timeout = 45.  # Seconds
+        self.reconnected = set()
         
         # Alive messaging
         self.send_alive_every = 2.5 * 60.  # Seconds
@@ -209,6 +211,8 @@ class Node:
                                    f"(set env variable NODE_IGNORE_ALIVE=1 to ignore this control)")
         
         # Automatically create a unique data directory for this specific node
+        if base_identity_dir is None:
+            base_identity_dir = prepare_app_dir(app_name="unaiverse")
         node_identity_dir = os.path.join(base_identity_dir, self.node_id)
         p2p_u_identity_dir = os.path.join(node_identity_dir, "p2p_public")
         p2p_w_identity_dir = os.path.join(node_identity_dir, "p2p_private")
@@ -658,6 +662,10 @@ class Node:
             except Exception as e:
                 GenException(f"Error while retrieving addresses of node named {node_name} [{e}]")
 
+        if addresses is None or len(addresses) == 0:
+            self.err(f"Addresses of {node_name} were not found, cannot connect!")
+            return None
+
         # Connecting
         self.out("Connecting to another agent/world...")
         peer_id, through_relay = await self.conn.connect(addresses,
@@ -867,55 +875,64 @@ class Node:
             keyboard_listener = None
             processor_img_stream = None
             processor_text_stream = None
+            processor_whatever_stream = None
             cap = None
             splash_text_shown = False
             interact_mode_opts: dict | None = None
             log_interact_mode = True
 
             if interact_mode:
+                from prompt_toolkit import prompt
+                from prompt_toolkit.patch_stdout import patch_stdout
+
                 if self.agent is None:
                     raise GenException("Interactive mode is only valid for agents")
-                interact_mode_opts = ({"ready_to_interact": False} |
+                pf = PolicyFilterHuman()
+                self.agent.set_policy_filter(pf, public=True)
+                self.agent.set_policy_filter(pf, public=False)
+                interact_mode_opts = ({"ready_to_interact": False, "set_hsm_debug_state": Agent.get_hsm_debug_state()} |
                                       ({"lone_wolf_peer_id": got_in_touch_with_this_lone_wolf}
                                        if got_in_touch_with_this_lone_wolf is not None else
                                        {"world_peer_id": joined_this_world}))
-                looking_for_public_streams = "lone_wolf_peer_id" in interact_mode_opts
-                for stream in self.agent.owned_streams[self.agent.get_proc_input_net_hash()].values():
-                    if (processor_text_stream is None and stream.props.is_public() == looking_for_public_streams
-                            and stream.props.is_text()):
+                public_streams = "lone_wolf_peer_id" in interact_mode_opts
+                proc_streams = self.agent.owned_streams[self.agent.get_proc_input_net_hash(public=public_streams)]
+                for stream in proc_streams.values():
+                    if processor_text_stream is None and stream.props.is_text():
                         processor_text_stream = stream
-                    if (processor_img_stream is None and stream.props.is_public() == looking_for_public_streams
-                            and stream.props.is_img()):
+                    if processor_img_stream is None and stream.props.is_img():
                         processor_img_stream = stream
+                    if processor_whatever_stream is None and (not stream.props.is_img() and not stream.props.is_text()):
+                        processor_whatever_stream = stream
 
                 if processor_text_stream is None:
                     raise GenException("Interactive mode requires a processor that generates a text stream")
 
                 def keyboard_listener(k_queue):
-                    while True:
-                        webcam_shot = None
-                        keyboard_msg = input()  # Get from keyboards
-                        if cap is not None:
-                            _ret, got_shot = cap.read()  # Get from webcam
-                            if _ret:
-                                target_area = 224 * 224
-                                webcam_shot = Image.fromarray(cv2.cvtColor(got_shot, cv2.COLOR_BGR2RGB))
-                                width, height = webcam_shot.size
-                                current_area = width * height
+                    with patch_stdout(raw=True):  # type: ignore
+                        while True:
+                            webcam_shot = None
+                            keyboard_msg = prompt("\n👉 ")  # Get from keyboards
+                            if cap is not None:
+                                _ret, got_shot = cap.read()  # Get from webcam
+                                if _ret:
+                                    target_area = 224 * 224
+                                    webcam_shot = Image.fromarray(cv2.cvtColor(got_shot, cv2.COLOR_BGR2RGB))
+                                    width, height = webcam_shot.size
+                                    current_area = width * height
 
-                                if current_area > target_area:
-                                    scale_factor = math.sqrt(target_area / current_area)
-                                    new_width = int(round(width * scale_factor))
-                                    new_height = int(round(height * scale_factor))
-                                    webcam_shot = webcam_shot.resize((new_width, new_height),
-                                                                     Image.Resampling.LANCZOS)
+                                    if current_area > target_area:
+                                        scale_factor = math.sqrt(target_area / current_area)
+                                        new_width = int(round(width * scale_factor))
+                                        new_height = int(round(height * scale_factor))
+                                        webcam_shot = webcam_shot.resize((new_width, new_height),
+                                                                         Image.Resampling.LANCZOS)
 
-                        if keyboard_msg is not None and len(keyboard_msg) > 0:
-                            k_queue.put((keyboard_msg, webcam_shot))  # Store in the asynch queue
+                            if keyboard_msg is not None and len(keyboard_msg) > 0:
+                                k_queue.put((keyboard_msg, webcam_shot, "whatever"))  # Store in the asynch queue
 
-                        if keyboard_msg.strip() == "exit" or keyboard_msg.strip() == "quit":
-                            k_queue.put((keyboard_msg, webcam_shot))  # Store in the asynch queue
-                            break
+                            if keyboard_msg.strip() == "exit" or keyboard_msg.strip() == "quit":
+                                k_queue.put((keyboard_msg, webcam_shot, "whatever"))  # Store in the asynch queue
+                                break
 
                 keyboard_queue = queue.Queue()  # Create a thread-safe queue for communication
                 keyboard_listener = threading.Thread(target=keyboard_listener, args=(keyboard_queue,), daemon=True)
@@ -997,29 +1014,35 @@ class Node:
 
                 # Trigger HSM of the agent
                 if self.node_type is Node.AGENT:
-                    if interact_mode_opts is not None and interact_mode_opts['ready_to_interact']:
+                    if interact_mode and interact_mode_opts['ready_to_interact']:
                         try:
                             if not splash_text_shown:
                                 splash_text_shown = True
                                 if "lone_wolf_peer_id" in interact_mode_opts:
                                     self.agent.behav_lone_wolf.update_wildcard("<partner>",
                                                                                interact_mode_opts['lone_wolf_peer_id'])
-                                    print(f"\n*** Connected to agent: {interact_mode_opts['lone_wolf_peer_id']} ***")
+                                    print(f"\n*** Connected to agent {interact_mode_opts['lone_wolf_peer_id']} ***")
                                 else:
-                                    print(f"\n*** Connected to world: {interact_mode_opts['world_peer_id']}")
-                                keyboard_listener.start()
+                                    print(f"\n*** Connected to world {interact_mode_opts['world_peer_id']} ***")
                                 cap = cv2.VideoCapture(0) if processor_img_stream is not None else None
-                                print(f"*** Entering interactive mode ***\n\n👉 ", end="")
+                                print(f"*** Entering interactive mode ***\n")
+                                keyboard_listener.start()
+                                time.sleep(1)
 
                                 original_stdout = sys.stdout  # Valid screen-related stream
                                 if log_interact_mode:
-                                    sys.stdout = open('interact_stdout.txt', 'w')
+                                    sys.stdout = open('interact_stdout.txt', 'w', buffering=1)
                                 else:
                                     sys.stdout = open(os.devnull, 'w')  # null stream
                                 interact_mode_opts["stdout"] = [original_stdout, sys.stdout]
 
+                                self.agent.behav_lone_wolf.print_stream = interact_mode_opts["stdout"][1]  # Output off
+                                self.agent.behav_lone_wolf.print_ending = "\n"
+                                self.agent.behav.print_stream = interact_mode_opts["stdout"][1]  # Output off
+                                self.agent.behav.print_ending = "\n"
+
                             # Getting message from keyboard
-                            msg, image_pil = keyboard_queue.get_nowait()
+                            msg, image_pil, whatever = keyboard_queue.get_nowait()
                             msg = msg.strip()
 
                             if msg.lower() == "exit" or msg.lower() == "quit":
@@ -1027,6 +1050,7 @@ class Node:
                                 # Quit?
                                 must_quit = True
                                 sys.stdout = interact_mode_opts["stdout"][0]
+                                sys.stdout = os.fdopen(sys.stdout.fileno(), 'w', buffering=1)
                                 interact_mode_opts["stdout"][1].close()
                                 if cap is not None:
                                     cap.release()
@@ -1039,16 +1063,32 @@ class Node:
                             else:
 
                                 # Putting message in the processor input stream
+                                processor_text_stream.enable()
+                                processor_text_stream.set(msg)
+                                processor_text_stream.disable()
                                 if processor_img_stream is not None:
-                                    processor_text_stream.set(msg)
+                                    processor_img_stream.enable()
                                     processor_img_stream.set(image_pil)
-                                else:
-                                    processor_text_stream.set(msg)
+                                    processor_img_stream.disable()
+                                if processor_whatever_stream is not None:
+                                    processor_whatever_stream.enable()
+                                    processor_whatever_stream.set(whatever)
+                                    processor_whatever_stream.disable()
                         except queue.Empty:
                             pass  # If nothing has been typed (+ enter)
 
+                    if interact_mode and splash_text_shown:
+                        self.agent.set_hsm_debug_state(False)
+                        self.agent.behav_lone_wolf.print_stream = interact_mode_opts["stdout"][0]  # Output on
+                        self.agent.behav.print_stream = interact_mode_opts["stdout"][0]  # Output on
+
                     # Ordinary behaviour
                     await self.agent.behave()
+
+                    if interact_mode and splash_text_shown:
+                        self.agent.behav_lone_wolf.print_stream = interact_mode_opts["stdout"][1]  # Output off
+                        self.agent.behav.print_stream = interact_mode_opts["stdout"][1]  # Output off
+                        self.agent.set_hsm_debug_state(interact_mode_opts["set_hsm_debug_state"])
 
                 # Send dynamic profile every "N" seconds
                 if (self.clock.get_time() - last_dynamic_profile_time >= self.send_dynamic_profile_every
@@ -1171,7 +1211,7 @@ class Node:
         except KeyboardInterrupt:
             if self.cursor_hidden:
                 sys.stdout.write("\033[?25h")  # Re-enabling cursor
-            if cycles == 1:
+            if cycles is not None and cycles == 1:
                 raise KeyboardInterrupt  # Node synch will catch this
             else:
                 print("\nDetected Ctrl+C! Exiting gracefully...")
@@ -1232,6 +1272,15 @@ class Node:
         # Handling newly connected peers
         an_agent_joined_the_world = False
         added_peers = False
+        for r in self.reconnected:
+            pool_name = self.conn.get_pool_of(r)
+            if pool_name is None:
+                continue
+            if pool_name not in new_peer_ids_by_pool:
+                new_peer_ids_by_pool[pool_name] = {r}
+            else:
+                new_peer_ids_by_pool[pool_name].add(r)
+        self.reconnected.clear()
         for pool_name, new_peer_ids in new_peer_ids_by_pool.items():
             for peer_id in new_peer_ids:
                 added_peers = True
@@ -1356,6 +1405,7 @@ class Node:
         # Fetching all messages,
         public_messages = await self.conn.get_messages(p2p_name=NodeConn.P2P_PUBLIC)
         world_messages = await self.conn.get_messages(p2p_name=NodeConn.P2P_WORLD)
+        interact_mode = interact_mode_opts is not None
 
         self.out("Got " + str(len(public_messages)) + " messages from the public net")
         self.out("Got " + str(len(world_messages)) + " messages from the world/private net")
@@ -1368,6 +1418,7 @@ class Node:
         all_messages = public_messages + world_messages
         if len(all_messages) > 0:
             self.out("Processing all messages...")
+        is_private_message = False
 
         for i, msg in enumerate(all_messages):
             if i < len(public_messages):
@@ -1376,6 +1427,7 @@ class Node:
             else:
                 self.out("Processing world/private message " + str(i - len(public_messages) + 1)
                          + "/" + str(len(world_messages)) + ": " + str(msg))
+                is_private_message = True
 
             # Checking
             if not isinstance(msg, Msg):
@@ -1525,7 +1577,7 @@ class Node:
                                                 initial_stats=msg.content['initial_stats'])
 
                         # Enabling interactive mode, if public
-                        if interact_mode_opts is not None and 'lone_wolf_peer_id' not in interact_mode_opts:
+                        if interact_mode and 'lone_wolf_peer_id' not in interact_mode_opts:
                             interact_mode_opts['ready_to_interact'] = True
 
             # (C) received an agent-connect-approval
@@ -1543,7 +1595,7 @@ class Node:
                                             peer_id=msg.sender)
 
                     # Enabling interactive mode, if public
-                    if interact_mode_opts is not None and 'lone_wolf_peer_id' in interact_mode_opts:
+                    if interact_mode and 'lone_wolf_peer_id' in interact_mode_opts:
                         interact_mode_opts['ready_to_interact'] = True
 
             # (D) requested for a profile
@@ -1599,7 +1651,7 @@ class Node:
                     self.agent.get_stream_sample(net_hash=msg.channel, sample_dict=msg.content)
 
                     # Printing messages to screen, if needed (useful when chatting with lone wolves)
-                    if interact_mode_opts is not None and "stdout" in interact_mode_opts:
+                    if interact_mode and "stdout" in interact_mode_opts:
                         net_hash = DataProps.normalize_net_hash(msg.channel)
                         if net_hash in self.agent.known_streams:
                             stream_dict = self.agent.known_streams[net_hash]
@@ -1609,18 +1661,27 @@ class Node:
                             agent_name = self.agent.all_agents[peer_id].get_static_profile()['node_name']
                             sys.stdout = interact_mode_opts["stdout"][0]  # Output on
                             for name, stream_obj in stream_dict.items():
+                                data = stream_obj.get(requested_by="print")
+                                if data is None:
+                                    continue
                                 if stream_obj.props.is_text():
-                                    msg = stream_obj.get(requested_by="print")  # Getting message
+                                    msg = data  # Getting message
                                     msg = "\n   ｜".join([line[i:i + 120] for line in msg.splitlines()
                                                          for i in range(0, len(line), 120)])
                                     print(f"\n💬 [{owner_account}/{agent_name}.{group}.{name}]\n   ｜{msg}")  # Printing
-                                if stream_obj.props.is_img():
-                                    img = stream_obj.get(requested_by="print")  # Getting image
+                                elif stream_obj.props.is_img():
+                                    img = data  # Getting image
                                     filename = f"{net_hash.replace(':', '_')}.{name}.png"
                                     img.save(filename)
                                     print(f"\n🖼️ [{owner_account}/{agent_name}.{group}.{name}]\n   "
                                           f"｜Saved image to {filename})")
-                            print("\n👉 ", end="")
+                                else:
+                                    msg = stream_obj.props.to_text(data)
+                                    msg = "\n   ｜".join([line[i:i + 120] for line in msg.splitlines()
+                                                         for i in range(0, len(line), 120)])
+                                    print(f"\n🗂️ [{owner_account}/{agent_name}.{group}.{name}]\n   "
+                                          f"｜Got a sample of type {stream_obj.props.data_type}, "
+                                          f"tag {stream_obj.get_tag()}\n   ｜{msg}")
                             sys.stdout = interact_mode_opts["stdout"][1]  # Output off
 
                 elif self.node_type is Node.WORLD:
@@ -1689,6 +1750,17 @@ class Node:
             elif msg.content_type == Msg.MISC:
                 self.out("Received a misc message...")
                 self.out(msg.content)
+                if (not is_private_message and msg.content is not None and isinstance(msg.content, dict) and
+                        'ping' in msg.content and msg.content['ping'] == 'pong'):
+                    if (msg.sender in self.hosted.all_agents or
+                            (self.node_type is Node.WORLD and msg.sender in self.world.private_peer_of)):
+                        if self.node_type is Node.WORLD and msg.sender in self.world.private_peer_of:
+                            await self.hosted.remove_agent(self.world.private_peer_of[msg.sender])
+                            await self.__purge(self.world.private_peer_of[msg.sender])
+                        else:
+                            await self.hosted.remove_agent(msg.sender)
+                        self.out(f"Reconnection detected for peer {msg.sender}")
+                        self.reconnected.add(msg.sender)
 
             # (K) got a request to re-download the CV from the root server
             elif msg.content_type == Msg.GET_CV_FROM_ROOT:

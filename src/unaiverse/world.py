@@ -43,6 +43,9 @@ class World(AgentBasics):
         self.proc_outputs = []  # Do not set it to None
         self.compat_in_streams = None
         self.compat_out_streams = None
+
+        # Map from public peer IDs to private peer IDs
+        self.private_peer_of = {}
         
         # Stats
         if stats is not None:
@@ -186,7 +189,27 @@ class World(AgentBasics):
         This can be used to reset competition results or clean up state after a specific event.
         """
         self.agent_badges = {}
-    
+
+    async def add_agent(self, peer_id: str, profile: NodeProfile) -> bool:
+        if await super().add_agent(peer_id, profile):
+            public_peer_id = profile.get_dynamic_profile()["peer_id"]
+            self.private_peer_of[public_peer_id] = peer_id
+            return True
+        else:
+            return False
+
+    async def remove_agent(self, peer_id: str):
+        profile = None
+        if peer_id in self.all_agents:
+            profile = self.all_agents[peer_id]
+        if await super().remove_agent(peer_id):
+            public_peer_id = profile.get_dynamic_profile()["peer_id"]
+            if public_peer_id in self.private_peer_of:
+                del self.private_peer_of[public_peer_id]
+            return True
+        else:
+            return False
+
     def collect_and_store_own_stats(self):
         """Collects this world's own stats and pushes them to the stats recorder."""
         if self.stats is None:

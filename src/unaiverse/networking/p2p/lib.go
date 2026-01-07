@@ -84,6 +84,7 @@ type ExtendedPeerInfo struct {
 	ConnectedAt time.Time      `json:"connected_at"` // Timestamp when the connection was established.
 	Direction   string         `json:"direction"`    // Direction of the connection: "inbound" or "outbound".
 	Misc        int            `json:"misc"`         // Misc information (integer), custom usage
+	Relayed     bool           `json:"relayed"`      // Currently unused (but used in JS)
 }
 
 // RendezvousState holds the discovered peers from a rendezvous topic,
@@ -813,6 +814,7 @@ func handleStream(ni *NodeInstance, s network.Stream) {
 			Addrs:       knownAddrs,
 			ConnectedAt: time.Now(),
 			Direction:   direction,
+			Relayed:     false,
 		}
 		logger.Infof("[GO] ➕ Instance %d: Peer %s promoted to Application Peer (Incoming Stream).", ni.instanceIndex, senderPeerID)
 	} else {

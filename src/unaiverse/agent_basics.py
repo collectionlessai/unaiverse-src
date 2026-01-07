@@ -108,8 +108,8 @@ class AgentBasics:
         self.proc_last_inputs = None
         self.proc_last_outputs = None
         self.proc_optional_inputs = None
-        self.proc_net_hash = None
-        self.proc_in_net_hash = None
+        self.proc_net_hash = {'public': None, 'private': None}
+        self.proc_in_net_hash = {'public': None, 'private': None}
         self.merge_flat_stream_labels = merge_flat_stream_labels
         self.buffer_generated = buffer_generated
         self.buffer_generated_by_others = buffer_generated_by_others
@@ -152,6 +152,7 @@ class AgentBasics:
         self.last_ref_uuid = None
         self.recipients = {}  # The peer IDs of the recipients of the next batch of direct messages
         self.overridden_action_step = None
+        self.locked_set_proc_input = False
 
         # Stats
         self.stats: Stats | None = None
@@ -167,6 +168,7 @@ class AgentBasics:
         self._node_purge_fcn = None
         self._node_agents_waiting = None
         self._debug_flag = False
+        self._basic_print_on = True
 
         # Checking
         if not (self.proc is None or
@@ -242,7 +244,7 @@ class AgentBasics:
         self._node_ask_to_get_in_touch_fcn = ask_to_get_in_touch_fcn
         self._node_purge_fcn = purge_fcn
         self._node_agents_waiting = agents_waiting
-        _debug_flag = print_level > 1
+        self._debug_flag = print_level > 1
 
         # Adding peer_id information into the already existing stream data (if any)
         # (initially marked with generic wildcards like <public_peer_id>, ...)
@@ -323,17 +325,29 @@ class AgentBasics:
         self.update_streams_in_profile()
 
         # Print level
-        Stats.DEBUG = _debug_flag
-        AgentBasics.DEBUG = _debug_flag
-        ConnectionPools.DEBUG = _debug_flag
-        HybridStateMachine.DEBUG = _debug_flag
+        AgentBasics.debug_printing(self._debug_flag)
         return True
 
-    def get_proc_output_net_hash(self):
-        return self.proc_net_hash
+    @staticmethod
+    def debug_printing(on: bool = False):
+        Stats.DEBUG = on
+        AgentBasics.DEBUG = on
+        ConnectionPools.DEBUG = on
+        HybridStateMachine.DEBUG = on
 
-    def get_proc_input_net_hash(self):
-        return self.proc_in_net_hash
+    @staticmethod
+    def get_hsm_debug_state():
+        return HybridStateMachine.DEBUG
+
+    @staticmethod
+    def set_hsm_debug_state(on: bool):
+        HybridStateMachine.DEBUG = on
+
+    def get_proc_output_net_hash(self, public: bool = True):
+        return self.proc_net_hash['public'] if public else self.proc_net_hash['private']
+
+    def get_proc_input_net_hash(self, public: bool = True):
+        return self.proc_in_net_hash['public'] if public else self.proc_in_net_hash['private']
 
     @staticmethod
     def generate_uuid():
@@ -467,6 +481,15 @@ class AgentBasics:
             msg: The error message string to print.
         """
         self.out("<ERROR> " + msg)
+
+    def print(self, msg: str):
+        """Print a message to the console, no matter what.
+
+        Args:
+            msg: The message string to print.
+        """
+        if self._basic_print_on:
+            print(msg)
 
     def deb(self, msg: str):
         """Print an error message to the console, if debug is enabled for this agent (it reuses the agent-out-function).
@@ -919,6 +942,8 @@ class AgentBasics:
         Returns:
             The corresponding network hash string (peer_id::dm:... or peer_id::ps:name_or_group), or None if not found.
         """
+        if "::" in user_stream_hash:
+            return user_stream_hash  # It was already fine
         components = user_stream_hash.split(":")
         peer_id = components[0]
         name_or_group = components[-1]
@@ -953,7 +978,10 @@ class AgentBasics:
                     public_peer_id, private_peer_id = self.get_peer_ids()
                     peer_id = public_peer_id if stream.is_public() else private_peer_id
                     net_hash = stream.net_hash(peer_id)
-                    self.proc_in_net_hash = net_hash
+                    if stream.is_public():
+                        self.proc_in_net_hash['public'] = net_hash
+                    else:
+                        self.proc_in_net_hash['private'] = net_hash
 
                     # forcing the input stream to be compatible with proc inputs
                     self.compat_in_streams[i].add((net_hash, props.get_name()))
@@ -982,7 +1010,10 @@ class AgentBasics:
                     public_peer_id, private_peer_id = self.get_peer_ids()
                     peer_id = public_peer_id if stream.is_public() else private_peer_id
                     net_hash = stream.net_hash(peer_id)
-                    self.proc_net_hash = net_hash
+                    if stream.is_public():
+                        self.proc_net_hash['public'] = net_hash
+                    else:
+                        self.proc_net_hash['private'] = net_hash
 
     async def add_compatible_streams(self, peer_id: str,
                                      streams_in_profile: list[DataProps], buffered: bool = False,
@@ -1518,6 +1549,7 @@ class AgentBasics:
             default_behav_hsm.load(default_behav)
             self.behav = HybridStateMachine(self, policy=self.policy_default)
             self.behav.include(default_behav_hsm, make_a_copy=True)
+            self.behav.set_role(base_role_str)
             self.set_policy_filter(self.policy_filter, public=False)
 
     def in_world(self):
@@ -1694,7 +1726,13 @@ class AgentBasics:
                     self.out(f"Skipping sample named {name}: tag={data_tag}, uuid={data_uuid}" +
                              (", data is None!" if data is None else ""))
                     if AgentBasics.DEBUG:
-                        self.deb(f"data={self.known_streams[net_hash][name].props.to_text(data)}")
+                        if net_hash not in self.known_streams:
+                            self.deb(f"The net hash {net_hash} was not found in the set of known streams")
+                        else:
+                            if name not in self.known_streams[net_hash]:
+                                self.deb(f"The net hash was known, but the data stream named {name} is not known")
+                            else:
+                                self.deb(f"data={self.known_streams[net_hash][name].props.to_text(data)}")
             return True
 
         # If this stream is not known at all...
@@ -1766,6 +1804,7 @@ class AgentBasics:
                         for name in content.keys():
                             content[name]['data'] = self.callback_before_sending_sample(content_data[name],
                                                                                         net_hash, name, _recipient)
+                            self.deb(f"[send_stream_samples] - Sending {content[name]['data']}")
                         ret = await self._node_conn.send(peer_id, channel_trail=name_or_group,
                                                          content_type=Msg.STREAM_SAMPLE,
                                                          content=content)
@@ -1775,6 +1814,18 @@ class AgentBasics:
                 else:
                     raise ValueError(f"Unexpected scenario: recipients set ({list(recipients.keys())}) "
                                      f"and sending on a pubsub stream")
+
+    def disable_proc_input(self, public: bool):
+        stream_dict = self.owned_streams[self.get_proc_input_net_hash(public=public)]
+        for stream_obj in stream_dict.values():
+            if stream_obj.is_public() == public:
+                stream_obj.disable()
+
+    def enable_proc_input(self, public: bool):
+        stream_dict = self.owned_streams[self.get_proc_input_net_hash(public=public)]
+        for stream_obj in stream_dict.values():
+            if stream_obj.is_public() == public:
+                stream_obj.enable()
 
     def set_proc_input(self, data: str | Image | torch.Tensor | None, public: bool = False,
                        uuid: str | None = None, data_type: str = "auto"):
@@ -1884,20 +1935,24 @@ class AgentBasics:
                 self.policy_filter_lone_wolf = filter_fcn
                 self.behav_lone_wolf.set_policy_filter(self.policy_filter_lone_wolf, self.policy_filter_lone_wolf_opts)
                 self.policy_filter_lone_wolf_opts['agent'] = self   # Forced (do it *after* set_policy_filter)
+                self.policy_filter_lone_wolf_opts['public'] = True
             else:
                 self.policy_filter = filter_fcn
                 self.behav.set_policy_filter(self.policy_filter, self.policy_filter_opts)
                 self.policy_filter_opts['agent'] = self   # Forced (do it *after* set_policy_filter)
+                self.policy_filter_opts['public'] = False
             return True
         elif callable(filter_method_name_or_policy_fcn):
             if public:
                 self.policy_filter_lone_wolf = filter_method_name_or_policy_fcn
                 self.behav_lone_wolf.set_policy_filter(self.policy_filter_lone_wolf, self.policy_filter_lone_wolf_opts)
                 self.policy_filter_lone_wolf_opts['agent'] = self   # Forced (do it *after* set_policy_filter)
+                self.policy_filter_lone_wolf_opts['public'] = True
             else:
                 self.policy_filter = filter_method_name_or_policy_fcn
                 self.behav.set_policy_filter(self.policy_filter, self.policy_filter_opts)
                 self.policy_filter_opts['agent'] = self   # Forced (do it *after* set_policy_filter)
+                self.policy_filter_opts['public'] = False
             return True
         return False
 

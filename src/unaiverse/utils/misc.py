@@ -23,6 +23,7 @@ import threading
 from tqdm import tqdm
 from pathlib import Path
 from datetime import datetime
+from unaiverse.modules.utils import HumanModule
 
 
 class GenException(Exception):
@@ -228,7 +229,7 @@ class FileTracker:
         return created or modified
 
 
-def prepare_key_dir(app_name):
+def prepare_app_dir(app_name: str = "unaiverse"):
     app_name = app_name.lower()
     if os.name == "nt":  # Windows
         if os.getenv("APPDATA") is not None:
@@ -245,7 +246,7 @@ def get_key_considering_multiple_sources(key_variable: str | None) -> str:
 
     # Creating folder (if needed) to store the key
     try:
-        key_dir = prepare_key_dir(app_name="UNaIVERSE")
+        key_dir = prepare_app_dir(app_name="UNaIVERSE")
     except Exception:
         raise GenException("Cannot create folder to store the key file")
     key_file = os.path.join(key_dir, "key")
@@ -330,7 +331,7 @@ class PolicyFilterSelfGen:
         action_name = action.name
 
         # We want to handle as an exception the case of "do_gen" with "u_hashes=[...processor_in]" (self-generation)
-        if action_name == "do_gen":
+        if action_name == "do_gen" or action_name == "do_learn":
 
             # Saving the time when the action we were looking for was actually selected by the policy
             if _first_t < 0:
@@ -345,3 +346,79 @@ class PolicyFilterSelfGen:
 
         # Returning the revised policy decision
         return action_id, request
+
+
+class PolicyFilterHuman:
+    def __init__(self):
+        pass
+
+    def __call__(self, action_id, request, all_actions, policy_filter_opts):
+        """Run the policy filter."""
+
+        # Getting basic info from the policy options (reference to agent)
+        agent = policy_filter_opts['agent']
+        public = policy_filter_opts['public']
+
+        # Ensuring the input stream is disabled (important)
+        agent.disable_proc_input(public=public)
+
+        # If the agent lives in the TuringHotel world...
+        action = all_actions[action_id]
+        action_name = action.name
+
+        # We want to handle as an exception the case of "do_gen"
+        if action_name == "do_gen" or action_name == "do_learn":
+
+            # Ensuring the input stream is enabled (important)
+            agent.enable_proc_input(public=public)
+
+            # Checking the type of action (dashed or solid)
+            if request is not None:
+                is_dashed = True
+                mark = request.get_mark()
+                already_altered_request = False
+                if mark is not None and mark == "altered_by_policy_filter":
+                    already_altered_request = True
+            else:
+                is_dashed = False
+                already_altered_request = False  # Unused (dashed only)
+
+            # We alter the original request, forcing the input hashes to be the processor input
+            if is_dashed:
+                proc_input_net_hash = agent.get_proc_input_net_hash(public=public)
+
+                if not already_altered_request:
+
+                    # Original u_hashes
+                    u_hashes = request.get_arg("u_hashes")
+
+                    # Moving original u_hashes to extra_hashes
+                    extra_hashes = request.get_arg("extra_hashes")
+                    if extra_hashes is not None:
+                        request.alter_arg("extra_hashes", extra_hashes + u_hashes)
+                    else:
+                        request.set_arg("extra_hashes", u_hashes)
+                    request.alter_arg("u_hashes", [proc_input_net_hash])
+                    request.set_mark("altered_by_policy_filter")
+
+                # Guessing the data tag of the data (heuristic, using the first u_hash)
+                stream_dict = agent.known_streams[request.get_arg("extra_hashes")[0]]
+                data_tag = -1
+                for stream_obj in stream_dict.values():
+                    data_tag = stream_obj.get_tag()
+                    if data_tag != -1:
+                        break
+
+                # Preparing the input stream with the request UUID and the data tag of the original u_hashes
+                stream_dict = agent.owned_streams[proc_input_net_hash]
+                for stream_obj in stream_dict.values():
+                    stream_obj.set_uuid(request.uuid, expected=False)
+                    stream_obj.set_uuid(request.uuid, expected=True)
+                    stream_obj.set_tag(data_tag)
+
+        # Returning the revised policy decision
+        return action_id, request
+
+
+def has_human_processor(agent):
+    return agent.proc is not None and isinstance(agent.proc.module, HumanModule)

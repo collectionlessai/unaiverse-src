@@ -14,9 +14,11 @@
 """
 import io
 import os
+import re
 import json
 import copy
 import html
+import sys
 import time
 import inspect
 import graphviz
@@ -34,6 +36,14 @@ class ActionRequest:
         self.uuid = uuid
         self.by_insertion_order_id = -1
         self.by_requester_insertion_order_id = -1
+        self.mark = None
+        self.hidden = False
+
+    def set_mark(self, mark: object):
+        self.mark = mark
+
+    def get_mark(self):
+        return self.mark
 
     def get_order_id(self, by_requester: bool = False) -> int:
         if not by_requester:
@@ -77,6 +87,7 @@ class ActionRequestList:
         self.by_insertion_order = []
         self.by_requester_and_by_insertion_order = {}
         self.max_per_requester = max_per_requester
+        self.by_insertion_order_entering_time = []
 
     def add(self, req: ActionRequest):
 
@@ -96,16 +107,42 @@ class ActionRequestList:
         req.by_insertion_order_id = insertion_order_id
         req.by_requester_insertion_order_id = by_requester_insertion_order_id
 
+        # Saving joining time
+        self.by_insertion_order_entering_time.append(time.perf_counter())
+
     def remove(self, req: ActionRequest):
         if req.is_valid():
             for i in range(req.by_insertion_order_id + 1, len(self.by_insertion_order)):
                 self.by_insertion_order[i].by_insertion_order_id -= 1
             del self.by_insertion_order[req.by_insertion_order_id]
+            del self.by_insertion_order_entering_time[req.by_insertion_order_id]
 
             d = self.by_requester_and_by_insertion_order[req.requester]
             for i in range(req.by_requester_insertion_order_id + 1, len(d)):
                 d[i].by_requester_insertion_order_id -= 1
             del d[req.by_requester_insertion_order_id]
+
+    def remove_due_to_timeout(self, timeout_secs: float):
+        to_remove = []
+        for i, req in enumerate(self.by_insertion_order):
+            if (time.perf_counter() - self.by_insertion_order_entering_time[i]) >= timeout_secs:
+                to_remove.append(req)
+        for req in to_remove:
+            self.remove(req)
+
+    def move_request_to_back(self, req: ActionRequest):
+        self.remove(req)
+        self.add(req)
+
+    def move_requester_to_back(self, requester: object):
+        requests = self.get_requests(requester)
+        if requests is not None and len(requests) > 0:
+            requests_copy = []
+            for req in requests:
+                requests_copy.append(req)
+                self.remove(req)
+            for req in requests_copy:
+                self.add(req)
 
     def get_request(self, req_order_id: int, requester: object | None = None):
         if req_order_id < 0 and req_order_id != -1:
@@ -183,7 +220,6 @@ class Action:
     def __init__(self, name: str, args: dict, actionable: object,
                  idx: int = -1,
                  ready: bool = True,
-                 wildcards: dict[str, str | float | int] | None = None,
                  msg: str | None = None,
                  avoid_changing_ready: bool = False):
         """Initializes an `Action` object, which encapsulates a method to be executed on a given object (`actionable`)
@@ -198,7 +234,6 @@ class Action:
             actionable: The object on which the method will be executed.
             idx: A unique ID for the action.
             ready: A boolean indicating if the action is ready to be executed.
-            wildcards: A dictionary for replacing placeholder values in arguments.
             msg: An optional human-readable message.
             avoid_changing_ready: A boolean indicating that the selected ready state should not be changed by
                 internal rules.
@@ -218,6 +253,7 @@ class Action:
 
         # Reference elements
         self.args_with_wildcards = copy.deepcopy(self.args)  # Backup of the originally provided arguments
+        self.msg_with_wildcards = self.msg
         self.__fcn = self.__action_name_to_callable(name)  # The real method to be called
         self.__sig = inspect.signature(self.__fcn)  # Signature of the method for argument inspection
 
@@ -228,8 +264,7 @@ class Action:
         self.__check_if_args_exist(self.args, exception=True)  # Checking arguments
 
         # Argument values replaced by wildcards (commonly assumed to be in the format <value>)
-        self.wildcards = wildcards if wildcards is not None else {}  # Value-to-value (es: <playlist> to this:and:this)
-        self.__replace_wildcard_values()  # This will alter self.arg in function of the provided wildcards
+        self.wildcards = {}  # Value-to-value (es: <playlist> to this:and:this)
 
         # Number of steps of this function
         self.__step = -1  # Default initial step index (remark: "step INDEX", so when it is 0 it means a step was done)
@@ -398,14 +433,22 @@ class Action:
                 f"ready: {self.ready}, requests: {str(self.requests)}, msg: {str(self.msg)}]")
 
     def set_as_ready(self):
-        """Sets the action's ready flag to `True`, indicating it can now be executed.
-        """
+        """Sets the action's ready flag to `True`, indicating it can now be executed."""
         self.ready = True
 
     def set_as_not_ready(self):
-        """Sets the action's ready flag to `False`, preventing it from being executed.
-        """
+        """Sets the action's ready flag to `False`, preventing it from being executed."""
         self.ready = False
+
+    def set_msg(self, msg):
+        """Sets the message associated to this action."""
+
+        if msg is not None:
+            self.msg = html.unescape(msg)
+            self.msg_with_wildcards = self.msg
+        else:
+            self.msg = None
+            self.msg_with_wildcards = None
 
     def is_ready(self, consider_requests: bool = True):
         """Checks if the action is ready to be executed. It returns `True` if the `ready` flag is set or if there are
@@ -709,8 +752,13 @@ class Action:
         else:
             self.args = copy.deepcopy(self.args_with_wildcards)  # Restore a backup before applying wildcards
 
-        for k, v in self.args.items():
-            for wildcard_from, wildcard_to in self.wildcards.items():
+        if self.msg_with_wildcards is None:
+            self.msg_with_wildcards = self.msg
+        else:
+            self.msg = self.msg_with_wildcards
+
+        for wildcard_from, wildcard_to in self.wildcards.items():
+            for k, v in self.args.items():
                 if not isinstance(wildcard_to, str):
                     if wildcard_from == v:
                         self.args[k] = wildcard_to
@@ -722,6 +770,9 @@ class Action:
                     elif isinstance(v, str):
                         if wildcard_from in v:
                             self.args[k] = v.replace(wildcard_from, wildcard_to)
+
+            if self.msg is not None:
+                self.msg = self.msg.replace(wildcard_from, str(wildcard_to))
 
     def __guess_total_steps(self, args):
         """A private helper method that attempts to determine the total number of steps for a multistep action by
@@ -819,11 +870,15 @@ class State:
         self.waiting_time = waiting_time  # Number of seconds to wait in the current state before acting
         self.starting_time = 0.
         self.blocking = blocking
-        self.msg = msg  # Human-readable message associated to this instance of action
+        self.msg = msg  # Human-readable message associated to this instance of state
 
         # Fix UNICODE chars
         if self.msg is not None:
             self.msg = html.unescape(self.msg)
+
+        # Message parts replaced by wildcards (commonly assumed to be in the format <value>)
+        self.wildcards = {}  # Value-to-value (es: <playlist> to this:and:this)
+        self.msg_with_wildcards = self.msg
 
     async def __call__(self, *args, **kwargs):
         """Executes the state's logic. If a `waiting_time` is set, it starts a timer. If an `action` is associated with
@@ -861,6 +916,16 @@ class State:
         """
         return (f"[State: {self.name}] id: {self.id}, waiting_time: {self.waiting_time}, blocking: {self.blocking}, "
                 f"action -> {self.action if self.action is not None else 'none'}, msg: {self.msg}")
+
+    def set_msg(self, msg):
+        """Sets the message associated to this state."""
+
+        if msg is not None:
+            self.msg = html.unescape(msg)
+            self.msg_with_wildcards = self.msg
+        else:
+            self.msg = None
+            self.msg_with_wildcards = None
 
     def must_wait(self):
         """Checks if the state needs to wait before it can transition. It compares the current elapsed time since
@@ -928,10 +993,34 @@ class State:
         """
         self.blocking = blocking
 
+    def set_wildcards(self, wildcards: dict[str, str | float | int] | None):
+        """Replaces wildcard values in the state messages. This method is used to dynamically
+        configure state messages with context-specific data.
+
+        Args:
+            wildcards: A dictionary mapping wildcard placeholders to their concrete values.
+        """
+        self.wildcards = wildcards if wildcards is not None else {}
+        self.__replace_wildcard_values()
+
+    def __replace_wildcard_values(self):
+        """A private helper method that replaces placeholder values (wildcards) in the state message.
+        It handles both single-value and list-based wildcards.
+        """
+        if self.msg_with_wildcards is None:
+            self.msg_with_wildcards = self.msg
+        else:
+            self.msg = self.msg_with_wildcards
+
+        if self.msg is not None:
+            for wildcard_from, wildcard_to in self.wildcards.items():
+                self.msg = self.msg.replace(wildcard_from, str(wildcard_to))
+
 
 class HybridStateMachine:
     DEBUG = True
-    DEFAULT_WILDCARDS = {'<world>': '<world>', '<agent>': '<agent>', '<partner>': '<partner>'}
+    DEFAULT_WILDCARDS = {'<world>': '<world>', '<agent>': '<agent>', '<partner>': '<partner>', '<role>': '<role>'}
+    REQUEST_VALIDITY_TIMEOUT = 10.0  # Seconds
 
     def __init__(self, actionable: object, wildcards: dict[str, str | float | int] | None = None,
                  request_signature_checker: Callable[[object], bool] | None = None,
@@ -965,6 +1054,8 @@ class HybridStateMachine:
         self.policy = policy if policy is not None else self.__policy_first_requested_or_first_ready
         self.policy_filter = None
         self.policy_filter_opts = {}
+        self.welcome_msg = None
+        self.welcome_msg_with_wildcards = None
 
         # Actions can be requested from the "outside": each request if checked by this function, if any
         self.request_signature_checker: Callable[[object], bool] | None = request_signature_checker
@@ -982,15 +1073,38 @@ class HybridStateMachine:
 
         # Forcing output function
         self.__last_printed_msg = None
+        self.print_stream = sys.stdout
+        self.print_start = ""
+        self.print_ending = "\n"
+        self.print_fcn = print
 
         def wrapped_out_fcn(msg: str):
             if msg is not None:
                 if msg != self.__last_printed_msg:
-                    print(msg)
                     self.__last_printed_msg = msg
+
+                    # Handle a bit of HTML (<br/>, <a href=...>...</a>, <strong>...</strong>)
+                    msg = (msg.replace('<br/>', '\n').replace('<strong>', '')
+                           .replace('</strong>', ''))
+                    pattern = r'<a\s+href=[\'"](.*?)[\'"][^>]*>(.*?)</a>'
+                    msg = re.sub(pattern, r'\2 (\1)', msg)
+                    self.print_fcn(self.print_start + msg, end=self.print_ending, file=self.print_stream)
 
         State.out_fcn = wrapped_out_fcn
         Action.out_fcn = wrapped_out_fcn
+
+    def set_print_fcn(self, print_fcn):
+        self.print_fcn = print_fcn
+
+    def set_welcome_message(self, msg):
+        """Sets a message that will be printed only once when the initial state is reached."""
+
+        if msg is not None:
+            self.welcome_msg = html.unescape(msg)
+            self.welcome_msg_with_wildcards = self.welcome_msg
+        else:
+            self.welcome_msg = None
+            self.welcome_msg_with_wildcards = None
 
     def to_dict(self):
         """Serializes the state machine's current configuration into a dictionary. This includes its states,
@@ -1006,6 +1120,9 @@ class HybridStateMachine:
             'role': self.role,
             'prev_state': self.prev_state,
             'limbo_state': self.limbo_state,
+            'welcome_msg':
+                self.welcome_msg_with_wildcards.encode("ascii", "xmlcharrefreplace").decode(
+                    "ascii") if self.welcome_msg_with_wildcards is not None else None,
             'state_actions': {
                 state.name: state.to_list() for state in self.__id_to_state
             },
@@ -1113,6 +1230,15 @@ class HybridStateMachine:
         self.wildcards = wildcards if wildcards is not None else {}
         for action in self.__id_to_action:
             action.set_wildcards(self.wildcards)
+        for state in self.__id_to_state:
+            state.set_wildcards(self.wildcards)
+        if self.welcome_msg is not None:
+            if self.welcome_msg_with_wildcards is None:
+                self.welcome_msg_with_wildcards = self.welcome_msg
+            else:
+                self.welcome_msg = self.welcome_msg_with_wildcards
+            for wildcard_from, wildcard_to in self.wildcards.items():
+                self.welcome_msg = self.welcome_msg.replace(wildcard_from, str(wildcard_to))
 
     def set_role(self, role: str):
         """Sets the role of the agent associated with this state machine. This can be used to influence state machine
@@ -1122,6 +1248,7 @@ class HybridStateMachine:
             role: The string representation of the new role.
         """
         self.role = role
+        self.update_wildcard("<role>", self.role)
 
     def get_wildcards(self):
         """Retrieves the dictionary of wildcards currently used by the state machine.
@@ -1172,7 +1299,8 @@ class HybridStateMachine:
         return self.get_action_step() >= 0
 
     def add_state(self, state: str, action: str = None, args: dict | None = None, state_id: int | None = None,
-                  waiting_time: float | None = None, blocking: bool | None = None, msg: str | None = None):
+                  waiting_time: float | None = None, blocking: bool | None = None,
+                  msg: str | None = None, msg_action: str | None = None):
         """Adds a new state to the state machine. This method can create a new state with an optional inner action or
         update an existing state. It assigns a unique ID to the state and its action.
 
@@ -1184,6 +1312,7 @@ class HybridStateMachine:
             waiting_time: A float representing a delay before the state can transition.
             blocking: A boolean indicating if the state is blocking.
             msg: A human-readable message for the state.
+            msg_action: A human-readable message for the action running on this state.
         """
         if args is None:
             args = {}
@@ -1198,16 +1327,19 @@ class HybridStateMachine:
             act = sta_obj.action if sta_obj is not None else None
         else:
             act = Action(name=action, args=args, idx=len(self.__id_to_action),
-                         actionable=self.actionable, wildcards=self.wildcards, avoid_changing_ready=True)
+                         actionable=self.actionable, avoid_changing_ready=True,
+                         msg=msg_action)
+            act.set_wildcards(self.wildcards)
             self.__id_to_action.append(act)
         if waiting_time is None:
             waiting_time = sta_obj.waiting_time if sta_obj is not None else 0.  # Default waiting time
         if blocking is None:
             blocking = sta_obj.blocking if sta_obj is not None else True  # Default blocking
         if msg is None:
-            msg = sta_obj.msg if sta_obj is not None else None
+            msg = sta_obj.msg_with_wildcards if sta_obj is not None else None
 
         sta = State(name=state, idx=state_id, action=act, waiting_time=waiting_time, blocking=blocking, msg=msg)
+        sta.set_wildcards(self.wildcards)
         if state not in self.states:
             self.__id_to_state.append(sta)
         else:
@@ -1428,7 +1560,7 @@ class HybridStateMachine:
                            args=copy.deepcopy(_state.action.args_with_wildcards) if _state.action is not None else None,
                            state_id=None,
                            blocking=_state.blocking,
-                           msg=_state.msg)
+                           msg=_state.msg_with_wildcards)
 
         # Copy all the transitions of the HSM
         for _from_state, _to_states in hsm.transitions.items():
@@ -1436,13 +1568,14 @@ class HybridStateMachine:
                 for _action in _action_list:
                     self.add_transit(from_state=_from_state, to_state=_to_state, action=_action.name,
                                      args=copy.deepcopy(_action.args_with_wildcards), ready=_action.ready,
-                                     act_id=None, msg=_action.msg, avoid_changing_ready=True)
+                                     act_id=None, msg=_action.msg_with_wildcards, avoid_changing_ready=True)
 
         if make_a_copy:
             self.state = hsm.state
             self.prev_state = hsm.state
             self.initial_state = hsm.initial_state
             self.limbo_state = hsm.limbo_state
+            self.set_welcome_message(hsm.welcome_msg_with_wildcards)
 
     def must_wait(self):
         """Checks if the current state is in a waiting period before any transitions can occur.
@@ -1505,26 +1638,46 @@ class HybridStateMachine:
 
             actions_list = []
             to_state_list = []
+            attempts_to_serve_a_request_list = []
 
             for to_state, action_list in self.transitions[self.state].items():
                 for i, action in enumerate(action_list):
+
+                    # Pruning too old requests
+                    action.requests.remove_due_to_timeout(HybridStateMachine.REQUEST_VALIDITY_TIMEOUT)
+
                     if (action.is_ready() and (not requested_only or len(action.requests) > 0) and
                             not action.is_delayed(self.states[self.state].starting_time)):
                         actions_list.append(action)
                         to_state_list.append(to_state)
+                        attempts_to_serve_a_request_list.append(0)
 
             if len(actions_list) > 0:
                 self.__cur_feasible_actions_status = {
                     'actions_list': actions_list,
                     'to_state_list': to_state_list,
                     'selected_idx': 0,
-                    'selected_request': None
+                    'selected_request': None,
+                    'attempts_to_serve_a_request_list': attempts_to_serve_a_request_list
                 }
         else:
 
             # Reloading the already computed set of actions, wait flags, etc. (when in the middle of an action)
             actions_list = self.__cur_feasible_actions_status['actions_list']
             to_state_list = self.__cur_feasible_actions_status['to_state_list']
+            attempts_to_serve_a_request_list = self.__cur_feasible_actions_status['attempts_to_serve_a_request_list']
+
+            # Pruning too old requests
+            idx_to_remove = []
+            for i, action in enumerate(actions_list):
+                action.requests.remove_due_to_timeout(HybridStateMachine.REQUEST_VALIDITY_TIMEOUT)
+                if not ((action.is_ready() and (not requested_only or len(action.requests) > 0) and
+                         not action.is_delayed(self.states[self.state].starting_time))):
+                    idx_to_remove.append(i)
+            for i in idx_to_remove:
+                del actions_list[i]
+                del to_state_list[i]
+                del attempts_to_serve_a_request_list[i]
 
         # Using the selected policy to decide what action to apply
         while len(actions_list) > 0:
@@ -1614,7 +1767,7 @@ class HybridStateMachine:
                             if action.get_step() >= 0:
                                 status = 0  # Done, the action is fully completed
                             else:
-                                status = 2  # Move to the next action
+                                status = 2  # Move to the next action (or to the next request of the same action)
                     else:
                         if HybridStateMachine.DEBUG:
                             print(f"[DEBUG HSM] multistep action {self.__action.name} can still be run")
@@ -1624,7 +1777,7 @@ class HybridStateMachine:
 
                     # Single-step actions
                     if not action.has_a_timeout() or action.is_timed_out():
-                        status = 2  # Move to the next action
+                        status = 2  # Move to the next action (or to the next request of the same action)
                     else:
                         status = 1  # Try again (one more time, until timeout is reached)
                 else:
@@ -1694,11 +1847,12 @@ class HybridStateMachine:
 
                 return 1  # Transition not-done: no need to check other actions, the current one will be run again
 
-            elif status == 2:  # Move to the next action
+            elif status == 2:  # Move to the next action (or to the next request of the same action)
 
                 # Clearing request
                 if request is not None:
-                    self.__action.get_list_of_requests().remove(request)
+                    self.__action.requests.move_request_to_back(request)  # Rotating to avoid starvation
+                    attempts_to_serve_a_request_list[idx] += 1
 
                 # Back to the original state
                 self.state = self.limbo_state
@@ -1707,8 +1861,9 @@ class HybridStateMachine:
                     print(f"[DEBUG HSM] Tried and failed (failed execution): {action.name}")
 
                 # Purging action from the current list
-                del actions_list[idx]
-                del to_state_list[idx]
+                if request is None or attempts_to_serve_a_request_list[idx] >= len(self.__action.requests):
+                    del actions_list[idx]
+                    del to_state_list[idx]
 
                 # Update status
                 self.__state_changed = False
@@ -1733,6 +1888,10 @@ class HybridStateMachine:
         # It keeps processing states and actions, until all the current feasible actions fail
         # (also when a step of a multistep action is executed) or a blocking state is reached
         while True:
+            if self.welcome_msg is not None and self.state is not None and self.state == self.initial_state:
+                State.out_fcn(self.welcome_msg)
+                self.set_welcome_message(None)
+
             await self.act_states()
             ret = await self.act_transitions(self.must_wait())
             if ret != 0 or (self.state is not None and self.states[self.state].blocking):
@@ -1916,7 +2075,8 @@ class HybridStateMachine:
         self.state = hsm_data['state']
         self.prev_state = hsm_data['prev_state']
         self.limbo_state = hsm_data['limbo_state']
-        self.role = hsm_data.get('role', None)
+        self.set_role(hsm_data.get('role', None))
+        self.set_welcome_message(hsm_data.get('welcome_msg', None))
 
         # Getting states
         self.states = {}
