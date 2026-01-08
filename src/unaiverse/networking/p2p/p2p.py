@@ -110,7 +110,7 @@ class P2P:
                     'autonat': 'debug',
                     # "rcmgr": "debug",
                     "swarm2": "debug",
-                    "yamux": "debug"
+                    # "yamux": "debug"
                 }
 
             logger.info("🐍 Setting up and initializing P2P library core with user settings...")

@@ -188,29 +188,29 @@ type NodeInstance struct {
 // --- Create a package-level logger ---
 var logger = golog.Logger("unailib")
 
-// Create a writer to capture logging from yamux
-var yamuxLogger = golog.Logger("yamux")
-// 1. Create the Adapter
-type GologAdapter struct {
-	Logger golog.StandardLogger
-}
+// // Create a writer to capture logging from yamux
+// var yamuxLogger = golog.Logger("yamux")
+// // 1. Create the Adapter
+// type GologAdapter struct {
+// 	Logger golog.StandardLogger
+// }
 
-func (a *GologAdapter) Write(p []byte) (n int, err error) {
-	// Yamux logs end with a newline, which golog will also add. Trim it.
-	msg := string(bytes.TrimSpace(p))
+// func (a *GologAdapter) Write(p []byte) (n int, err error) {
+// 	// Yamux logs end with a newline, which golog will also add. Trim it.
+// 	msg := string(bytes.TrimSpace(p))
 
-	// 2. Parse the level (Yamux prefixes logs with [ERR] or [WARN])
-	if strings.Contains(msg, "[ERR]") {
-		a.Logger.Error(msg)
-	} else if strings.Contains(msg, "[WARN]") {
-		a.Logger.Warn(msg)
-	} else {
-		// Default to info or debug for anything else
-		a.Logger.Info(msg)
-	}
+// 	// 2. Parse the level (Yamux prefixes logs with [ERR] or [WARN])
+// 	if strings.Contains(msg, "[ERR]") {
+// 		a.Logger.Error(msg)
+// 	} else if strings.Contains(msg, "[WARN]") {
+// 		a.Logger.Warn(msg)
+// 	} else {
+// 		// Default to info or debug for anything else
+// 		a.Logger.Info(msg)
+// 	}
 
-	return len(p), nil
-}
+// 	return len(p), nil
+// }
 
 // --- Multi-Instance State Management ---
 var (
@@ -1344,8 +1344,27 @@ func CreateNode(
 	}
 
 	// Dereference to create a copy of the struct
+	// DefaultConfig is used to return a default configuration
+	// func DefaultConfig() *Config {
+	// 	return &Config{
+	// 		AcceptBacklog:           256,
+	// 		PingBacklog:             32,
+	// 		EnableKeepAlive:         true,
+	// 		KeepAliveInterval:       30 * time.Second,
+	// 		MeasureRTTInterval:      30 * time.Second,
+	// 		ConnectionWriteTimeout:  10 * time.Second,
+	// 		MaxIncomingStreams:      1000,
+	// 		InitialStreamWindowSize: initialStreamWindow,
+	// 		MaxStreamWindowSize:     maxStreamWindow,
+	// 		LogOutput:               os.Stderr,
+	// 		ReadBufSize:             4096,
+	// 		MaxMessageSize:          64 * 1024,
+	// 		WriteCoalesceDelay:      100 * time.Microsecond,
+	// 	}
+	// }
 	tpt := *yamux.DefaultTransport
-	tpt.LogOutput = &GologAdapter{Logger: yamuxLogger}
+	// tpt.LogOutput = &GologAdapter{Logger: yamuxLogger}
+	tpt.MaxStreamWindowSize = uint32(160 * 1024 * 1024)
 
 	options := []libp2p.Option{
 		libp2p.Identity(privKey),
