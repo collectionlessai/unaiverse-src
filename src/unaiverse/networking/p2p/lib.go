@@ -47,11 +47,9 @@ import (
 	autorelay "github.com/libp2p/go-libp2p/p2p/host/autorelay"
 
 	// transport protocols for libp2p
-	quic "github.com/libp2p/go-libp2p/p2p/transport/quic"                 // QUIC transport for peer-to-peer connections (e.g., for mobile devices)
 	"github.com/libp2p/go-libp2p/p2p/transport/tcp"                       // TCP transport for peer-to-peer connections (most common)
 	webrtc "github.com/libp2p/go-libp2p/p2p/transport/webrtc"             // WebRTC transport for peer-to-peer connections (e.g., for browsers or mobile devices)
 	ws "github.com/libp2p/go-libp2p/p2p/transport/websocket"              // WebSocket transport for peer-to-peer connections (e.g., for browsers)
-	webtransport "github.com/libp2p/go-libp2p/p2p/transport/webtransport" // WebTransport transport for peer-to-peer connections (e.g., for browsers)
 
 	// --- AutoTLS Imports ---
 	"github.com/caddyserver/certmagic"                // Automatic TLS certificate management (used by p2p-forge)
