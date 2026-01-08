@@ -108,7 +108,7 @@ class P2P:
                     'dht': 'debug',
                     'autorelay': 'debug',
                     'autonat': 'debug',
-                    "rcmgr": "debug",
+                    # "rcmgr": "debug",
                     "swarm2": "debug",
                 }
 
@@ -145,7 +145,6 @@ class P2P:
                  enable_relay_client: bool = True,
                  enable_relay_service: bool = False,
                  knows_is_public: bool = False,
-                 max_connections: int = 1000,
                  enable_tls: bool = False,
                  domain_name: Optional[str] = None,
                  tls_cert_path: Optional[str] = None,
@@ -164,7 +163,6 @@ class P2P:
             enable_relay_client: Enable listening to relayed connections for this node.
             enable_relay_service: Enable relay service capabilities for this node.
             knows_is_public: If you already know that the node is public this forces its public reachability. Otherwise it tries every possible attempt to make the node publicly reachable (UPnP, HolePunching, AutoNat via DHT...).
-            max_connections: Maximum number of connections this node can handle.
             enable_tls: Whether to enable AutoTLS certificate management (requires internet access).
             domain_name: Optional domain name for TLS certificate (required if enable_tls is True).
             tls_cert_path: Optional path to a custom TLS certificate file (PEM format).
@@ -214,7 +212,6 @@ class P2P:
             "identity_dir": identity_dir,
             "predefined_port": port,
             "listen_ips": ips,
-            "max_connections": max_connections,
             "relay": {
                 "enable_client": self._enable_relay_client,
                 "enable_service": enable_relay_service,

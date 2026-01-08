@@ -41,7 +41,6 @@ import (
 	"github.com/libp2p/go-libp2p/core/peer"                       // Defines Peer ID and AddrInfo types
 	"github.com/libp2p/go-libp2p/core/peerstore"                  // Defines the Peerstore interface for storing peer metadata (addresses, keys)
 	"github.com/libp2p/go-libp2p/core/routing"                    // Defines the Routing interface for peer routing (e.g., DHT)
-	rcmgr "github.com/libp2p/go-libp2p/p2p/host/resource-manager" // For managing resources (bandwidth, memory) for libp2p hosts
 	"github.com/libp2p/go-libp2p/p2p/protocol/circuitv2/client"   // For establishing outbound relayed connections (acting as a client)
 	rc "github.com/libp2p/go-libp2p/p2p/protocol/circuitv2/relay" // Import for relay service options
 	autorelay "github.com/libp2p/go-libp2p/p2p/host/autorelay"
@@ -114,7 +113,6 @@ type NodeConfig struct {
     IdentityDir     string   `json:"identity_dir"`
     PredefinedPort  int      `json:"predefined_port"`
     ListenIPs       []string `json:"listen_ips"`
-    MaxConnections  int      `json:"max_connections"`
     
     // Group Relay Logic
     Relay struct {
@@ -372,11 +370,6 @@ func getListenAddrs(ips []string, tcpPort int, tlsMode string) ([]ma.Multiaddr, 
 	logger.Debugf("[GO] 🔧 Prepared Listen Addresses: %v\n", listenAddrs)
 
 	return listenAddrs, nil
-}
-
-func createResourceManager() (network.ResourceManager, error) {
-	limits := rcmgr.InfiniteLimits
-	return rcmgr.NewResourceManager(rcmgr.NewFixedLimiter(limits))
 }
 
 func setupPubSub(ni *NodeInstance) error {
@@ -1325,13 +1318,6 @@ func CreateNode(
 		return jsonErrorResponse(fmt.Sprintf("Instance %d: Failed to create multiaddrs", instanceIndex), err)
 	}
 
-	// Setup Resource Manager
-	// limiter, err := createResourceManager(cfg.MaxConnections)
-	limiter, err := createResourceManager()
-	if err != nil {
-		return jsonErrorResponse(fmt.Sprintf("Instance %d: Failed to create resource manager", instanceIndex), err)
-	}
-
 	options := []libp2p.Option{
 		libp2p.Identity(privKey),
 		libp2p.ListenAddrs(listenAddrs...),
@@ -1340,7 +1326,7 @@ func CreateNode(
 		libp2p.Transport(tcp.NewTCPTransport),
 		libp2p.ShareTCPListener(),
 		libp2p.Transport(webrtc.New),
-		libp2p.ResourceManager(limiter),
+		libp2p.DefaultResourceManager,
 		libp2p.UserAgent(UnaiverseUserAgent),
 		libp2p.NATPortMap(),
 		libp2p.EnableHolePunching(),
