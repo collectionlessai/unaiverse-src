@@ -348,28 +348,12 @@ func getListenAddrs(ips []string, tcpPort int, tlsMode string) ([]ma.Multiaddr, 
     }
 
 	var listenAddrs []ma.Multiaddr
-	quicPort := 0
-	// webrtcPort := 0
-	webtransPort := 0
-	if tcpPort != 0 {
-		quicPort = tcpPort + 1
-		// webrtcPort = tcpPort + 2
-		webtransPort = tcpPort + 3
-	}
 
 	// --- Create Multiaddrs for both protocols from the single IP list ---
 	for _, ip := range ips {
 		// TCP
 		tcpMaddr, _ := ma.NewMultiaddr(fmt.Sprintf("/ip4/%s/tcp/%d", ip, tcpPort))
-		// QUIC
-		quicMaddr, _ := ma.NewMultiaddr(fmt.Sprintf("/ip4/%s/udp/%d/quic-v1", ip, quicPort))
-		// WebTransport
-		webtransMaddr, _ := ma.NewMultiaddr(fmt.Sprintf("/ip4/%s/udp/%d/quic-v1/webtransport", ip, webtransPort))
-		// // WebRTC
-		// webrtcMaddr, _ := ma.NewMultiaddr(fmt.Sprintf("/ip4/%s/udp/%d/webrtc-direct", ip, webrtcPort))
-
-		// listenAddrs = append(listenAddrs, tcpMaddr, quicMaddr, webrtcMaddr, webtransMaddr)
-		listenAddrs = append(listenAddrs, tcpMaddr, quicMaddr, webtransMaddr)
+		listenAddrs = append(listenAddrs, tcpMaddr)
 
 		switch tlsMode {
 		case "autotls":
@@ -392,14 +376,9 @@ func getListenAddrs(ips []string, tcpPort int, tlsMode string) ([]ma.Multiaddr, 
 	return listenAddrs, nil
 }
 
-func createResourceManager(maxConnections int) (network.ResourceManager, error) {
-	limits := rcmgr.DefaultLimits
-	libp2p.SetDefaultServiceLimits(&limits)
-	myLimits := rcmgr.PartialLimitConfig{
-		System: rcmgr.ResourceLimits{Conns: rcmgr.LimitVal(maxConnections)},
-	}
-	concreteLimits := myLimits.Build(limits.AutoScale())
-	return rcmgr.NewResourceManager(rcmgr.NewFixedLimiter(concreteLimits))
+func createResourceManager() (network.ResourceManager, error) {
+	limits := rcmgr.InfiniteLimits
+	return rcmgr.NewResourceManager(rcmgr.NewFixedLimiter(limits))
 }
 
 func setupPubSub(ni *NodeInstance) error {
@@ -1349,7 +1328,8 @@ func CreateNode(
 	}
 
 	// Setup Resource Manager
-	limiter, err := createResourceManager(cfg.PredefinedPort)
+	// limiter, err := createResourceManager(cfg.MaxConnections)
+	limiter, err := createResourceManager()
 	if err != nil {
 		return jsonErrorResponse(fmt.Sprintf("Instance %d: Failed to create resource manager", instanceIndex), err)
 	}
@@ -1361,8 +1341,6 @@ func CreateNode(
 		libp2p.DefaultMuxers,
 		libp2p.Transport(tcp.NewTCPTransport),
 		libp2p.ShareTCPListener(),
-		libp2p.Transport(quic.NewTransport),
-		libp2p.Transport(webtransport.New),
 		libp2p.Transport(webrtc.New),
 		libp2p.ResourceManager(limiter),
 		libp2p.UserAgent(UnaiverseUserAgent),
