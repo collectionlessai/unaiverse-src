@@ -44,7 +44,6 @@ import (
 	"github.com/libp2p/go-libp2p/p2p/protocol/circuitv2/client"   // For establishing outbound relayed connections (acting as a client)
 	rc "github.com/libp2p/go-libp2p/p2p/protocol/circuitv2/relay" // Import for relay service options
 	autorelay "github.com/libp2p/go-libp2p/p2p/host/autorelay"
-	"github.com/libp2p/go-libp2p/p2p/muxer/yamux"
 
 	// transport protocols for libp2p
 	"github.com/libp2p/go-libp2p/p2p/transport/tcp"                       // TCP transport for peer-to-peer connections (most common)
@@ -379,15 +378,15 @@ func getListenAddrs(ips []string, tcpPort int, tlsMode string) ([]ma.Multiaddr, 
 		switch tlsMode {
 		case "autotls":
 			// This is the special multiaddr that triggers AutoTLS
-			wssMaddr, _ := ma.NewMultiaddr(fmt.Sprintf("/ip4/%s/tcp/%d/tls/sni/*.%s/ws", ip, tcpPort, p2pforge.DefaultForgeDomain))
+			wssMaddr, _ := ma.NewMultiaddr(fmt.Sprintf("/ip4/%s/tcp/%d/tls/sni/*.%s/ws", ip, tcpPort+1, p2pforge.DefaultForgeDomain))
 			listenAddrs = append(listenAddrs, wssMaddr)
 		case "domain":
 			// This is the standard secure WebSocket address with provided domain
-			wssMaddr, _ := ma.NewMultiaddr(fmt.Sprintf("/ip4/%s/tcp/%d/tls/ws", ip, tcpPort))
+			wssMaddr, _ := ma.NewMultiaddr(fmt.Sprintf("/ip4/%s/tcp/%d/tls/ws", ip, tcpPort+1))
 			listenAddrs = append(listenAddrs, wssMaddr)
 		default:
 			// Fallback to a standard, non-secure WebSocket address
-			wsMaddr, _ := ma.NewMultiaddr(fmt.Sprintf("/ip4/%s/tcp/%d/ws", ip, tcpPort))
+			wsMaddr, _ := ma.NewMultiaddr(fmt.Sprintf("/ip4/%s/tcp/%d/ws", ip, tcpPort+1))
 			listenAddrs = append(listenAddrs, wsMaddr)
 		}
 	}
@@ -1343,38 +1342,23 @@ func CreateNode(
 		return jsonErrorResponse(fmt.Sprintf("Instance %d: Failed to create multiaddrs", instanceIndex), err)
 	}
 
-	// Dereference to create a copy of the struct
-	// DefaultConfig is used to return a default configuration
-	// func DefaultConfig() *Config {
-	// 	return &Config{
-	// 		AcceptBacklog:           256,
-	// 		PingBacklog:             32,
-	// 		EnableKeepAlive:         true,
-	// 		KeepAliveInterval:       30 * time.Second,
-	// 		MeasureRTTInterval:      30 * time.Second,
-	// 		ConnectionWriteTimeout:  10 * time.Second,
-	// 		MaxIncomingStreams:      1000,
-	// 		InitialStreamWindowSize: initialStreamWindow,
-	// 		MaxStreamWindowSize:     maxStreamWindow,
-	// 		LogOutput:               os.Stderr,
-	// 		ReadBufSize:             4096,
-	// 		MaxMessageSize:          64 * 1024,
-	// 		WriteCoalesceDelay:      100 * time.Microsecond,
-	// 	}
+	// var clampedDialer = &net.Dialer{
+	// 	Control: func(network, address string, c syscall.RawConn) error {
+	// 		return c.Control(func(fd uintptr) {
+	// 			// Force MSS to 1300 (Safe for 1492 MTU)
+	// 			// Linux/Unix constant. For Windows cross-compile, use golang.org/x/sys/unix
+	// 			syscall.SetsockoptInt(int(fd), syscall.IPPROTO_TCP, syscall.TCP_MAXSEG, 1300)
+	// 		})
+	// 	},
 	// }
-	tpt := *yamux.DefaultTransport
-	tpt.LogOutput = &GologAdapter{Logger: yamuxLogger}
-	tpt.MaxStreamWindowSize = uint32(160 * 1024 * 1024)
-	tpt.MaxMessageSize = uint32(16 * 1024 * 1024)
 
 	options := []libp2p.Option{
 		libp2p.Identity(privKey),
 		libp2p.ListenAddrs(listenAddrs...),
 		libp2p.DefaultSecurity,
-		// libp2p.DefaultMuxers,
-		libp2p.Muxer(yamux.ID, &tpt),
+		libp2p.DefaultMuxers,
 		libp2p.Transport(tcp.NewTCPTransport),
-		libp2p.ShareTCPListener(),
+		// libp2p.ShareTCPListener(),
 		libp2p.Transport(webrtc.New),
 		libp2p.DefaultResourceManager,
 		libp2p.UserAgent(UnaiverseUserAgent),
