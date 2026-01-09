@@ -46,9 +46,11 @@ import (
 	autorelay "github.com/libp2p/go-libp2p/p2p/host/autorelay"
 
 	// transport protocols for libp2p
+	quic "github.com/libp2p/go-libp2p/p2p/transport/quic"                 // QUIC transport for peer-to-peer connections (e.g., for mobile devices)
 	"github.com/libp2p/go-libp2p/p2p/transport/tcp"                       // TCP transport for peer-to-peer connections (most common)
 	webrtc "github.com/libp2p/go-libp2p/p2p/transport/webrtc"             // WebRTC transport for peer-to-peer connections (e.g., for browsers or mobile devices)
 	ws "github.com/libp2p/go-libp2p/p2p/transport/websocket"              // WebSocket transport for peer-to-peer connections (e.g., for browsers)
+	webtransport "github.com/libp2p/go-libp2p/p2p/transport/webtransport" // WebTransport transport for peer-to-peer connections (e.g., for browsers)
 
 	// --- AutoTLS Imports ---
 	"github.com/caddyserver/certmagic"                // Automatic TLS certificate management (used by p2p-forge)
@@ -368,25 +370,37 @@ func getListenAddrs(ips []string, tcpPort int, tlsMode string) ([]ma.Multiaddr, 
     }
 
 	var listenAddrs []ma.Multiaddr
+	quicPort := 0
+	webtransPort := 0
+	if tcpPort != 0 {
+		quicPort = tcpPort + 1
+		webtransPort = tcpPort + 2
+	}
 
 	// --- Create Multiaddrs for both protocols from the single IP list ---
 	for _, ip := range ips {
 		// TCP
 		tcpMaddr, _ := ma.NewMultiaddr(fmt.Sprintf("/ip4/%s/tcp/%d", ip, tcpPort))
-		listenAddrs = append(listenAddrs, tcpMaddr)
+		// QUIC
+		quicMaddr, _ := ma.NewMultiaddr(fmt.Sprintf("/ip4/%s/udp/%d/quic-v1", ip, quicPort))
+		// WebTransport
+		webtransMaddr, _ := ma.NewMultiaddr(fmt.Sprintf("/ip4/%s/udp/%d/quic-v1/webtransport", ip, webtransPort))
+
+		// listenAddrs = append(listenAddrs, tcpMaddr, quicMaddr, webrtcMaddr, webtransMaddr)
+		listenAddrs = append(listenAddrs, tcpMaddr, quicMaddr, webtransMaddr)
 
 		switch tlsMode {
 		case "autotls":
 			// This is the special multiaddr that triggers AutoTLS
-			wssMaddr, _ := ma.NewMultiaddr(fmt.Sprintf("/ip4/%s/tcp/%d/tls/sni/*.%s/ws", ip, tcpPort+1, p2pforge.DefaultForgeDomain))
+			wssMaddr, _ := ma.NewMultiaddr(fmt.Sprintf("/ip4/%s/tcp/%d/tls/sni/*.%s/ws", ip, tcpPort, p2pforge.DefaultForgeDomain))
 			listenAddrs = append(listenAddrs, wssMaddr)
 		case "domain":
 			// This is the standard secure WebSocket address with provided domain
-			wssMaddr, _ := ma.NewMultiaddr(fmt.Sprintf("/ip4/%s/tcp/%d/tls/ws", ip, tcpPort+1))
+			wssMaddr, _ := ma.NewMultiaddr(fmt.Sprintf("/ip4/%s/tcp/%d/tls/ws", ip, tcpPort))
 			listenAddrs = append(listenAddrs, wssMaddr)
 		default:
 			// Fallback to a standard, non-secure WebSocket address
-			wsMaddr, _ := ma.NewMultiaddr(fmt.Sprintf("/ip4/%s/tcp/%d/ws", ip, tcpPort+1))
+			wsMaddr, _ := ma.NewMultiaddr(fmt.Sprintf("/ip4/%s/tcp/%d/ws", ip, tcpPort))
 			listenAddrs = append(listenAddrs, wsMaddr)
 		}
 	}
@@ -1342,23 +1356,15 @@ func CreateNode(
 		return jsonErrorResponse(fmt.Sprintf("Instance %d: Failed to create multiaddrs", instanceIndex), err)
 	}
 
-	// var clampedDialer = &net.Dialer{
-	// 	Control: func(network, address string, c syscall.RawConn) error {
-	// 		return c.Control(func(fd uintptr) {
-	// 			// Force MSS to 1300 (Safe for 1492 MTU)
-	// 			// Linux/Unix constant. For Windows cross-compile, use golang.org/x/sys/unix
-	// 			syscall.SetsockoptInt(int(fd), syscall.IPPROTO_TCP, syscall.TCP_MAXSEG, 1300)
-	// 		})
-	// 	},
-	// }
-
 	options := []libp2p.Option{
 		libp2p.Identity(privKey),
 		libp2p.ListenAddrs(listenAddrs...),
 		libp2p.DefaultSecurity,
 		libp2p.DefaultMuxers,
 		libp2p.Transport(tcp.NewTCPTransport),
-		// libp2p.ShareTCPListener(),
+		libp2p.ShareTCPListener(),
+		libp2p.Transport(quic.NewTransport),
+		libp2p.Transport(webtransport.New),
 		libp2p.Transport(webrtc.New),
 		libp2p.DefaultResourceManager,
 		libp2p.UserAgent(UnaiverseUserAgent),
