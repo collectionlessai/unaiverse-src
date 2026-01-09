@@ -949,7 +949,7 @@ class Agent(AgentBasics):
                     stream_obj.set_uuid(None, expected=True)
         return True
 
-    async def connected(self, agent: str | None, handshake_completed: bool = False):
+    async def connected(self, agent: str | None = None, handshake_completed: bool = False):
         """Checks if an agent is connected to us or not.
 
         Args:
