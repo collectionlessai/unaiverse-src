@@ -299,12 +299,13 @@ class Agent(AgentBasics):
                 await self._node_purge_fcn(agent)  # This will also call remove_agent, that will call remove_streams
         return True
 
-    async def disconnected(self, agent: str | None = None, delay: float = -1.):
+    async def disconnected(self, agent: str | None = None, handshake_completed: bool = False, delay: float = -1.):
         """Checks if a specific set of agents (by ID or wildcard) are no longer connected to the agent.
         It returns False if any of the specified agents are still connected (async).
 
         Args:
             agent: The ID of the agent or a wildcard to check.
+            handshake_completed: If True, only consider agents that have completed the handshake.
             delay: The time (seconds) to be spent in the current state before actually considering this action.
 
         Returns:
@@ -323,10 +324,14 @@ class Agent(AgentBasics):
         self.out(f"Checking if all these agents are not connected to me anymore: {involved_agents}")
         all_disconnected = True
         for agent in involved_agents:
-            if agent in self.world_agents or agent in self.public_agents or agent in self._node_agents_waiting \
-                    or self._node_conn.is_connected(agent):
-                all_disconnected = False
-                break
+            if handshake_completed:
+                if agent in self.all_agents:
+                    all_disconnected = False
+                    break
+            else:
+                if agent in self.all_agents or self._node_conn.is_connected(agent):
+                    all_disconnected = False
+                    break
         return all_disconnected
 
     async def received_some_asked_data(self, processing_fcn: str | None = None):
@@ -942,6 +947,35 @@ class Agent(AgentBasics):
                 if stream_obj.props.is_public() != self.behaving_in_world():
                     stream_obj.set_uuid(None, expected=False)
                     stream_obj.set_uuid(None, expected=True)
+        return True
+
+    async def connected(self, agent: str | None, handshake_completed: bool = False):
+        """Checks if an agent is connected to us or not.
+
+        Args:
+            agent: The agent to check (or None if there are other already set engaged agents).
+            handshake_completed: If True, only consider agents that have completed the handshake.
+
+        Returns:
+            True if all the requested agents are indeed connected.
+        """
+
+        # - if "agent" is a peer ID, the involved agents will be a list with one element.
+        # - if "agent" is a known wildcard, as "<valid_cmp>", then involved agents will be self._valid_cmp_agents
+        # - if "agent" is None, then the current agent in self._engaged_agents will be returned
+        involved_agents = self.__involved_agents(agent)
+        if len(involved_agents) == 0:
+            return False
+
+        self.out(f"Checking if all these agents are not connected to me anymore: {involved_agents}")
+
+        for agent in involved_agents:
+            if handshake_completed:
+                if agent not in self.all_agents:
+                    return False
+            else:
+                if not self._node_conn.is_connected(agent):
+                    return False
         return True
 
     async def all_asked_finished(self):
