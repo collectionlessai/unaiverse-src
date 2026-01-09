@@ -146,7 +146,8 @@ class Node:
 
         # Interview of newly connected nodes
         self.interview_timeout = 45.  # Seconds
-        self.connect_without_ack_timeout = 45.  # Seconds
+        self.connect_without_ack_retry_timeout = 30.  # Seconds
+        self.connect_without_ack_total_timeout = 60.  # Seconds
         self.reconnected = set()
         
         # Alive messaging
@@ -289,9 +290,9 @@ class Node:
                 # This is the slow, blocking call
                 instance = P2P(**config)
                 results[name] = instance
-            except Exception as e:
+            except Exception as _e:
                 # Store the exception if creation fails
-                results[name] = e
+                results[name] = _e
         
         # 4. Create and start both threads
         thread_u = threading.Thread(target=create_p2p_instance, args=("p2p_u", p2p_u_config))
@@ -306,8 +307,8 @@ class Node:
         thread_w.join()
 
         # 6. Retrieve results and check for errors
-        p2p_u = results["p2p_u"]
-        p2p_w = results["p2p_w"]
+        p2p_u: P2P | None = results["p2p_u"]
+        p2p_w: P2P | None = results["p2p_w"]
 
         if isinstance(p2p_u, Exception):
             # We must re-raise the exception to fail the Node creation
@@ -649,6 +650,10 @@ class Node:
             The peer ID of the connected node if successful, otherwise None.
         """
 
+        # Getting arguments
+        all_args = locals().copy()
+        del all_args['self']
+
         # Checking arguments
         if (node_name is None and addresses is None) or (node_name is not None and addresses is not None):
             raise GenException("Cannot specify both node_name and addresses or none of them, check your code!")
@@ -695,7 +700,12 @@ class Node:
                 before_updating_pools_fcn(peer_id)
             await self.conn.update()
 
-            self.agents_expected_to_send_ack[peer_id] = self.clock.get_time()
+            self.agents_expected_to_send_ack[peer_id] = {
+                "ask_time": self.clock.get_time(),
+                "peer_id": peer_id,
+                "args_of_ask_to_get_in_touch": all_args
+            }
+
             self.out(f"Current set of {len(self.agents_expected_to_send_ack)} connected peer IDs that will get our "
                      f"profile and are expected to send a confirmation: "
                      f"{list(self.agents_expected_to_send_ack.keys())}")
@@ -1840,8 +1850,7 @@ class Node:
                     #     peer_ids=req_peers,
                     #     time_range=time_range,
                     #     value_range=value_range,
-                    #     limit=limit,
-                    #     )
+                    #     limit=limit)
                     response_payload = self.world.stats.plot(since_timestamp=time_range)
                     
                     # Send back as STATS_RESPONSE
@@ -1864,7 +1873,7 @@ class Node:
                     self.err("Receiving stats response is not expected for a world node.")
 
         await self.__interview_clean()
-        await self.__connected_without_ack_clean()
+        await self.__handle_connected_without_ack()
 
     async def __join_world(self, profile: NodeProfile, role: int,
                            agent_actions: str | None, agent_stats_code: str | None,
@@ -2080,7 +2089,7 @@ class Node:
             return False
         self.out(f"Interview list expanded: profile request sent to peer ID {peer_id}")
 
-        # Put the agent in the list of agents to interview
+        # Put the agent in the list of agents to interview (re-adding it if we get multiple requests from the same guy)
         self.agents_to_interview[peer_id] = [self.clock.get_time(), None]  # Peer ID -> [time, profile]; no profile yet
         return True
 
@@ -2181,22 +2190,34 @@ class Node:
         for peer_id in agents_to_remove:
             await self.__purge(peer_id)  # This will also remove the peer from the queue of peers to interview
 
-    async def __connected_without_ack_clean(self):
+    async def __handle_connected_without_ack(self):
         """Removes connected peers from the queue if they haven't sent an acknowledgment within
         the timeout period (async)."""
         cur_time = self.clock.get_time()
         agents_to_remove = []
-        for peer_id, connection_time in self.agents_expected_to_send_ack.items():
+        agents_to_retry = []
+        for peer_id, connection_dict in self.agents_expected_to_send_ack.items():
+
+            # Checking timeout (to resend the request)
+            if (cur_time - connection_dict["ask_time"]) > self.connect_without_ack_retry_timeout:
+                self.out("Timeout in the connected-without-ack queue, I will try again: " + peer_id)
+                agents_to_retry.append(peer_id)
+                continue
 
             # Checking timeout
-            if (cur_time - connection_time) > self.connect_without_ack_timeout:
+            if (cur_time - connection_dict["ask_time"]) > self.connect_without_ack_total_timeout:
                 self.out("Removing (disconnecting) due to timeout in the connected-without-ack queue: " + peer_id)
                 agents_to_remove.append(peer_id)
 
-        # Updating
+        # Updating (disconnected)
         for peer_id in agents_to_remove:
-            await self.__purge(peer_id)  # This will also remove the peer from the queue of
-            # in the connected-without-ack queue
+            await self.__purge(peer_id)  # This will ALSO remove the peer from the connected-without-ack queue
+
+        # Updating (retry)
+        for peer_id in agents_to_retry:
+            connection_dict = self.agents_expected_to_send_ack[peer_id]
+            del self.agents_expected_to_send_ack[peer_id]  # This ONLY removes from the connected-without-ack queue
+            await self.ask_to_get_in_touch(**connection_dict["args_of_ask_to_get_in_touch"])  # Trying again
 
     async def __purge(self, peer_id: str):
         """Removes a peer from all relevant connection lists and queues (async).

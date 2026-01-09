@@ -1785,6 +1785,11 @@ class AgentBasics:
                 if DataStream.is_pubsub_from_net_hash(net_hash):
                     self.deb(f"[send_stream_samples] Sending stream samples of the whole {net_hash} by pubsub")
 
+                    for name in content.keys():
+                        content[name]['data'] = self.callback_before_sending_sample(content_data[name],
+                                                                                    net_hash, name, None)
+                        self.deb(f"[send_stream_samples] - Sending {content[name]['data']}")
+
                     peer_id = DataStream.peer_id_from_net_hash(net_hash)  # Guessing agent peer ID from the net hash
                     ret = await self._node_conn.publish(peer_id, channel=net_hash,
                                                         content_type=Msg.STREAM_SAMPLE,
@@ -2049,14 +2054,14 @@ class AgentBasics:
         self.proc_last_outputs = outputs
         return outputs
 
-    def callback_before_sending_sample(self, data, net_hash: str, stream_name: str, recipient: str):
+    def callback_before_sending_sample(self, data, net_hash: str, stream_name: str, recipient: str | None):
         """A callback method that handles the steam data right before sending it through the network.
 
         Args:
             data: The stream data sample.
             stream_name: The name of the data stream.
             net_hash: The net hash of the whole stream.
-            recipient: The (planned) recipient of this sample.
+            recipient: The (planned) recipient of this sample (or None in case of pubsub).
 
         Returns:
             The same data passed to the function.
