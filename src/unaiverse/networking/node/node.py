@@ -846,6 +846,7 @@ class Node:
         # Asking to join a World or connect to an Agent, if specified
         joined_this_world = None
         got_in_touch_with_this_lone_wolf = None
+        waiting_for_lone_wolves = False
         if join_world is not None:
             if isinstance(join_world, str):
                 ret = await self.ask_to_join_world(node_name=join_world, **kwargs)
@@ -857,7 +858,7 @@ class Node:
                 raise GenException(f"Unable to connect to world: {join_world}")
             else:
                 joined_this_world = ret  # saving peer ID
-        if get_in_touch is not None:
+        elif get_in_touch is not None:
             if isinstance(get_in_touch, str):
                 ret = await self.ask_to_get_in_touch(node_name=get_in_touch, **kwargs)
             elif isinstance(get_in_touch, list):
@@ -868,6 +869,8 @@ class Node:
                 raise GenException(f"Unable to get in touch with agent: {get_in_touch}")
             else:
                 got_in_touch_with_this_lone_wolf = ret  # saving peer ID
+        else:
+            waiting_for_lone_wolves = True
 
         try:
             if self.cursor_hidden:
@@ -900,10 +903,17 @@ class Node:
                 pf = PolicyFilterHuman()
                 self.agent.set_policy_filter(pf, public=True)
                 self.agent.set_policy_filter(pf, public=False)
-                interact_mode_opts = ({"ready_to_interact": False, "set_hsm_debug_state": Agent.get_hsm_debug_state()} |
-                                      ({"lone_wolf_peer_id": got_in_touch_with_this_lone_wolf}
-                                       if got_in_touch_with_this_lone_wolf is not None else
-                                       {"world_peer_id": joined_this_world}))
+                interact_mode_opts = {
+                    "ready_to_interact": False,
+                    "set_hsm_debug_state": Agent.get_hsm_debug_state()
+                }
+                if got_in_touch_with_this_lone_wolf is not None:
+                    interact_mode_opts["lone_wolf_peer_id"] = got_in_touch_with_this_lone_wolf
+                elif joined_this_world is not None:
+                    interact_mode_opts["world_peer_id"] = joined_this_world
+                elif waiting_for_lone_wolves:
+                    interact_mode_opts["lone_wolf_peer_id"] = None
+
                 public_streams = "lone_wolf_peer_id" in interact_mode_opts
                 proc_streams = self.agent.owned_streams[self.agent.get_proc_input_net_hash(public=public_streams)]
                 for stream in proc_streams.values():
@@ -1041,7 +1051,8 @@ class Node:
 
                                 original_stdout = sys.stdout  # Valid screen-related stream
                                 if log_interact_mode:
-                                    sys.stdout = open('interact_stdout.txt', 'w', buffering=1)
+                                    agent_name = self.profile.get_static_profile()['node_name']
+                                    sys.stdout = open(f'interact_stdout_{agent_name}.txt', 'w', buffering=1)
                                 else:
                                     sys.stdout = open(os.devnull, 'w')  # null stream
                                 interact_mode_opts["stdout"] = [original_stdout, sys.stdout]
@@ -1093,7 +1104,8 @@ class Node:
                         self.agent.behav.print_stream = interact_mode_opts["stdout"][0]  # Output on
 
                     # Ordinary behaviour
-                    await self.agent.behave()
+                    if not must_quit:
+                        await self.agent.behave()
 
                     if interact_mode and splash_text_shown:
                         self.agent.behav_lone_wolf.print_stream = interact_mode_opts["stdout"][1]  # Output off
@@ -1558,6 +1570,12 @@ class Node:
                                     # Removing from the queues
                                     del self.agents_to_interview[msg.sender]  # Removing from queue
 
+                                    # Enabling interactive mode, if public
+                                    if (interact_mode and 'lone_wolf_peer_id' in interact_mode_opts and
+                                            interact_mode_opts['lone_wolf_peer_id'] is None):
+                                        interact_mode_opts['lone_wolf_peer_id'] = msg.sender
+                                        interact_mode_opts['ready_to_interact'] = True
+
             # (B) received a world-join-approval
             elif msg.content_type == Msg.WORLD_APPROVAL:
                 self.out("Received a world-join-approval message...")
@@ -1587,7 +1605,7 @@ class Node:
                                                 initial_stats=msg.content['initial_stats'])
 
                         # Enabling interactive mode, if public
-                        if interact_mode and 'lone_wolf_peer_id' not in interact_mode_opts:
+                        if interact_mode and 'world_peer_id' in interact_mode_opts:
                             interact_mode_opts['ready_to_interact'] = True
 
             # (C) received an agent-connect-approval

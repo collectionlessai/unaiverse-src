@@ -1235,36 +1235,36 @@ class AgentBasics:
                             # Found a valid assignment: getting stream sample
                             self.deb(f"[generate] Setting the {i}-th network input to stream with "
                                      f"net_hash: {net_hash}, name: {stream_name}")
+                            stream_sample = stream.get(requested_by="generate")
                             if stream_sample is None:
-                                stream_sample = stream.get(requested_by="generate")
-                                if stream_sample is None:  # If there are no samples in this stream, we cannot generate
-                                    self.err(
-                                        f"Cannot generate: got nothing (None) from what we would provide to the {i}-th "
-                                        f"input position of the processor")
-                                    return None, -1
+                                self.deb(f"[generate] Failed setting the {i}-th input, got a None sample")
+                            else:
+                                self.deb(f"[generate] Going ahead setting the {i}-th input, got a valid sample")
 
-                            # Found a valid assignment: associating it to the i-th input slot
-                            try:
-                                inputs[i] = self.proc_inputs[i].check_and_preprocess(stream_sample,
-                                                                                     device=self.proc.device)
-                            except Exception as e:
-                                self.err(f"Error while checking and preprocessing the {i}-th input [{e}]")
+                                # Found a valid assignment: associating it to the i-th input slot
+                                try:
+                                    inputs[i] = self.proc_inputs[i].check_and_preprocess(stream_sample,
+                                                                                         device=self.proc.device)
+                                except Exception as e:
+                                    self.err(f"Error while checking and preprocessing the {i}-th input [{e}]")
+                                    continue
 
-                            # Found a valid assignment: saving match
-                            matched.add((net_hash, stream_name))
+                                self.deb(f"[generate] Finished setting the {i}-th input, preprocessing complete")
 
-                            # If all the inputs share the same data tag, we will return it,
-                            # otherwise we set it at -1 (meaning no tag)
-                            if data_tag is None:
-                                data_tag = stream.get_tag()
-                            elif data_tag != stream.get_tag():
-                                data_tag = -1
+                                # Found a valid assignment: saving match
+                                matched.add((net_hash, stream_name))
 
-                            if AgentBasics.DEBUG:
-                                if stream.props.is_text():
-                                    self.deb(f"[generate] Input of the network: {stream_sample}")
+                                # If all the inputs share the same data tag, we will return it,
+                                # otherwise we set it at -1 (meaning no tag)
+                                if data_tag is None:
+                                    data_tag = stream.get_tag()
+                                elif data_tag != stream.get_tag():
+                                    data_tag = -1
 
-                            break
+                                if AgentBasics.DEBUG:
+                                    if stream.props.is_text():
+                                        self.deb(f"[generate] Input {i} of the network: {stream_sample}")
+                                break
 
             # Checking if we were able to match some data for each input slot of the network (processor)
             for i in range(len(self.proc_inputs)):

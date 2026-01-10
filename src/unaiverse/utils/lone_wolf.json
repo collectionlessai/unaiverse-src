@@ -11,7 +11,7 @@
     },
     "transitions": {
         "ready": {
-            "generated": [["do_gen", {"timeout": 90.0}, false, 0]],
+            "generated": [["do_gen", {}, false, 0]],
             "self_generated": [["do_gen", {"u_hashes": ["<agent>:processor_in"], "samples": 1}, true, 1]]
         },
         "self_generated": {
