@@ -653,7 +653,7 @@ class AgentBasics:
             # Clearing pending requests in the HSMs
             behaviors = [self.behav_lone_wolf, self.behav]
             for behav in behaviors:
-                if behav is not None:
+                if behav is not None and isinstance(behav, HybridStateMachine):
                     actions = behav.get_all_actions()
                     for action in actions:
                         if action.requests.is_requester_known(peer_id):
