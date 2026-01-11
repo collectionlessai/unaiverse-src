@@ -1366,6 +1366,22 @@ class HybridStateMachine:
         """
         return self.states[self.state] if self.state is not None else None
 
+    def get_all_states(self):
+        """Retrieves the list of all `State` objects.
+
+        Returns:
+            List of `State` objects.
+        """
+        return self.__id_to_state
+
+    def get_all_actions(self):
+        """Retrieves the list of all `Action` objects.
+
+        Returns:
+            List of `Action` objects.
+        """
+        return self.__id_to_action
+
     def get_action(self):
         """Retrieves the `Action` object that is currently being executed.
 
@@ -1430,6 +1446,10 @@ class HybridStateMachine:
                 self.initial_state = state
         else:
             raise ValueError("Unknown state: " + str(state))
+
+    def generate_auto_messages(self):
+        # TODO
+        pass
 
     def add_transit(self, from_state: str, to_state: str,
                     action: str, args: dict | None = None, ready: bool = True,

@@ -649,6 +649,18 @@ class AgentBasics:
             # Updating buffered stream index
             if peer_id in self.last_buffered_peer_id_to_info:
                 del self.last_buffered_peer_id_to_info[peer_id]  # Only if present
+
+            # Clearing pending requests in the HSMs
+            behaviors = [self.behav_lone_wolf, self.behav]
+            for behav in behaviors:
+                if behav is not None:
+                    actions = behav.get_all_actions()
+                    for action in actions:
+                        if action.requests.is_requester_known(peer_id):
+                            requests = action.requests.get_requests(peer_id)
+                            for req in requests:
+                                action.requests.remove(req)
+
             self.out(f"Successfully removed agent with peer ID {peer_id}")
 
     def remove_all_agents(self):

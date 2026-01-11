@@ -401,20 +401,31 @@ class PolicyFilterHuman:
                     request.alter_arg("u_hashes", [proc_input_net_hash])
                     request.set_mark("altered_by_policy_filter")
 
-                # Guessing the data tag of the data (heuristic, using the first u_hash)
-                stream_dict = agent.known_streams[request.get_arg("extra_hashes")[0]]
-                data_tag = -1
-                for stream_obj in stream_dict.values():
-                    data_tag = stream_obj.get_tag()
-                    if data_tag != -1:
-                        break
+                extra_hashes = request.get_arg("extra_hashes")[0]
+                if extra_hashes not in agent.known_streams:
 
-                # Preparing the input stream with the request UUID and the data tag of the original u_hashes
-                stream_dict = agent.owned_streams[proc_input_net_hash]
-                for stream_obj in stream_dict.values():
-                    stream_obj.set_uuid(request.uuid, expected=False)
-                    stream_obj.set_uuid(request.uuid, expected=True)
-                    stream_obj.set_tag(data_tag)
+                    # Fallback: when the other agent disconnects and the stream in extra_hashes is not known anymore
+                    stream_dict = agent.owned_streams[proc_input_net_hash]
+                    for stream_obj in stream_dict.values():
+                        stream_obj.set_uuid(None, expected=False)
+                        stream_obj.set_uuid(None, expected=True)
+                        stream_obj.set_tag(-1)
+                else:
+
+                    # Guessing the data tag of the data (heuristic, using the first u_hash)
+                    stream_dict = agent.known_streams[extra_hashes]
+                    data_tag = -1
+                    for stream_obj in stream_dict.values():
+                        data_tag = stream_obj.get_tag()
+                        if data_tag != -1:
+                            break
+
+                    # Preparing the input stream with the request UUID and the data tag of the original u_hashes
+                    stream_dict = agent.owned_streams[proc_input_net_hash]
+                    for stream_obj in stream_dict.values():
+                        stream_obj.set_uuid(request.uuid, expected=False)
+                        stream_obj.set_uuid(request.uuid, expected=True)
+                        stream_obj.set_tag(data_tag)
 
         # Returning the revised policy decision
         return action_id, request
