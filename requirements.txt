@@ -6,6 +6,7 @@ graphviz
 ntplib
 numpy
 Pillow
+prompt_toolkit
 protobuf
 psutil
 PyJWT

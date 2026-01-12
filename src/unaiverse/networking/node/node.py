@@ -1088,6 +1088,11 @@ class Node:
                                 connected_peer_ids = list(self.agent.all_agents.keys())
                                 for peer_id in connected_peer_ids:
                                     await self.leave(peer_id)
+                            elif msg.lower() == "/debug":
+                                self.agent.behav_lone_wolf.set_debug_messages_active(
+                                    not self.agent.behav_lone_wolf.are_debug_messages_active())
+                                self.agent.behav.set_debug_messages_active(
+                                    not self.agent.behav.are_debug_messages_active())
                             else:
 
                                 # Putting message in the processor input stream

@@ -123,6 +123,8 @@ class ActionRequestList:
             del d[req.by_requester_insertion_order_id]
             if len(d) == 0:
                 del self.by_requester_and_by_insertion_order[req.requester]
+            req.by_insertion_order_id = -1
+            req.by_requester_insertion_order_id = -1
 
     def remove_due_to_timeout(self, timeout_secs: float):
         to_remove = []
@@ -1509,12 +1511,14 @@ class HybridStateMachine:
         if yes:
             self.show_ticks_in_action_messages(True)
             self.show_marks_in_blocking_state_messages(True)
+            self.show_request_info_in_action_messages(True)
 
             # Replace original messages
             self.generate_auto_messages(force=True)
         else:
             self.show_ticks_in_action_messages(False)
             self.show_marks_in_blocking_state_messages(False)
+            self.show_request_info_in_action_messages(False)
 
             # Restore original messages
             if len(self.__id_to_original_state_msg) > 0:
@@ -1524,7 +1528,7 @@ class HybridStateMachine:
                         state.action.set_msg(self.__id_to_original_state_msg[i][1])
             if len(self.__id_to_original_action_msg) > 0:
                 for i, action in enumerate(self.__id_to_action):
-                    action.set_msg(self.__id_to_original_action_msg[i][0])
+                    action.set_msg(self.__id_to_original_action_msg[i])
             self.__id_to_original_state_msg.clear()
             self.__id_to_original_action_msg.clear()
 
