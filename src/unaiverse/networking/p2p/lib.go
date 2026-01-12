@@ -1376,7 +1376,8 @@ func CreateNode(
 		instanceIndex:         instanceIndex,
 		topics:                make(map[string]*pubsub.Topic),
 		subscriptions:         make(map[string]*pubsub.Subscription),
-		friendlyPeers:        make(map[peer.ID]ExtendedPeerInfo),
+		friendlyPeers:         make(map[peer.ID]ExtendedPeerInfo),
+		disconnectionTimers:   make(map[peer.ID]context.CancelFunc),
 		persistentChatStreams: make(map[peer.ID]network.Stream),
 		messageStore:          newMessageStore(),
 	}
