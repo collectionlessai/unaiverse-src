@@ -730,7 +730,7 @@ class LabelStream(BufferedDataStream):
             if idx >= self.__len__() or idx < 0:
                 return None, -1
 
-        label = self.labels[idx].unsqueeze(0).to(self.device)  # Multi-label vector for the image
+        label = self.labels[idx].to(self.device)  # Multi-label vector for the label
         return self.props.adapt_tensor_to_tensor_labels(label), self.clock.get_cycle() - self.first_cycle
 
 

@@ -121,6 +121,8 @@ class ActionRequestList:
             for i in range(req.by_requester_insertion_order_id + 1, len(d)):
                 d[i].by_requester_insertion_order_id -= 1
             del d[req.by_requester_insertion_order_id]
+            if len(d) == 0:
+                del self.by_requester_and_by_insertion_order[req.requester]
 
     def remove_due_to_timeout(self, timeout_secs: float):
         to_remove = []
@@ -322,7 +324,7 @@ class Action:
         actual_args = self.get_actual_params(request_args)  # Getting the actual values of the arguments
 
         if self.msg is not None:
-            Action.out_fcn(self.msg)
+            Action.out_fcn(self.msg, request, self.requests)
 
         if actual_args is not None:
 
@@ -937,10 +939,10 @@ class State:
         """
         if self.waiting_time > 0.:
             if (time.perf_counter() - self.starting_time) >= self.waiting_time:
-                if HybridStateMachine.DEBUG:
-                    print(f"[DEBUG HSM] Time passing: {(time.perf_counter() - self.starting_time)} seconds")
                 return False
             else:
+                if HybridStateMachine.DEBUG:
+                    print(f"[DEBUG HSM] Time passing: {(time.perf_counter() - self.starting_time)} seconds")
                 return True
         else:
             return False
@@ -1021,6 +1023,7 @@ class HybridStateMachine:
     DEBUG = True
     DEFAULT_WILDCARDS = {'<world>': '<world>', '<agent>': '<agent>', '<partner>': '<partner>', '<role>': '<role>'}
     REQUEST_VALIDITY_TIMEOUT = 10.0  # Seconds
+    ACTION_TICKS_PER_STATUS = ["   ✅ ", "   🔄 ", "   ❌ "]  # Keep the final spaces
 
     def __init__(self, actionable: object, wildcards: dict[str, str | float | int] | None = None,
                  request_signature_checker: Callable[[object], bool] | None = None,
@@ -1056,6 +1059,9 @@ class HybridStateMachine:
         self.policy_filter_opts = {}
         self.welcome_msg = None
         self.welcome_msg_with_wildcards = None
+        self.show_blocking_states = False
+        self.show_action_completion = False
+        self.show_action_request_info = False
 
         # Actions can be requested from the "outside": each request if checked by this function, if any
         self.request_signature_checker: Callable[[object], bool] | None = request_signature_checker
@@ -1067,34 +1073,78 @@ class HybridStateMachine:
         self.__id_to_state: list[State] = []  # Map from state ID to State object
         self.__id_to_action: list[Action] = []  # Map from action ID to Action object
         self.__state_changed = False  # Internal flag
+        self.__id_to_original_state_msg: list[tuple[str | None, str | None]] = []
+        self.__id_to_original_action_msg: list[str | None] = []
 
         # Forcing default wildcards
         self.add_wildcards(HybridStateMachine.DEFAULT_WILDCARDS)
 
         # Forcing output function
         self.__last_printed_msg = None
+        self.__last_printed_tick = None
+        self.__debug_messages_active = False
         self.print_stream = sys.stdout
         self.print_start = ""
         self.print_ending = "\n"
         self.print_fcn = print
+        self.print_fcn_supports_html = False
 
-        def wrapped_out_fcn(msg: str):
+        def wrapped_out_fcn(msg: str, is_state: bool,
+                            action_request: ActionRequest | None, action_requests: ActionRequestList | None = None):
             if msg is not None:
-                if msg != self.__last_printed_msg:
+                must_print = False
+                if msg in HybridStateMachine.ACTION_TICKS_PER_STATUS:
+                    if msg != self.__last_printed_tick:
+                        self.__last_printed_tick = msg
+                        must_print = True
+                elif msg != self.__last_printed_msg:
                     self.__last_printed_msg = msg
+                    self.__last_printed_tick = None
+                    must_print = True
 
-                    # Handle a bit of HTML (<br/>, <a href=...>...</a>, <strong>...</strong>)
-                    msg = (msg.replace('<br/>', '\n').replace('<strong>', '')
-                           .replace('</strong>', ''))
-                    pattern = r'<a\s+href=[\'"](.*?)[\'"][^>]*>(.*?)</a>'
-                    msg = re.sub(pattern, r'\2 (\1)', msg)
+                if must_print:
+                    if not self.print_fcn_supports_html:
+
+                        # Handle a bit of HTML (<br/>, <a href=...>...</a>, <strong>...</strong>)
+                        msg = (msg.replace('<br/>', '\n').replace('<strong>', '')
+                               .replace('</strong>', ''))
+                        pattern = r'<a\s+href=[\'"](.*?)[\'"][^>]*>(.*?)</a>'
+                        msg = re.sub(pattern, r'\2 (\1)', msg)
+
+                    if is_state and self.show_blocking_states:
+                        if self.states[self.state].blocking:
+                            msg += " 🔴"
+                        else:
+                            msg += " 🟢"
+
+                    if not is_state and self.show_action_request_info and action_request is not None:
+                        msg += (f" (requester: {action_request.requester}, uuid: {action_request.uuid}, "
+                                f"#requests: {len(action_requests)})")
+
                     self.print_fcn(self.print_start + msg, end=self.print_ending, file=self.print_stream)
 
-        State.out_fcn = wrapped_out_fcn
-        Action.out_fcn = wrapped_out_fcn
+        def wrapped_state_out_fcn(msg: str):
+            wrapped_out_fcn(msg, True, None, None)
 
-    def set_print_fcn(self, print_fcn):
+        def wrapped_action_out_fcn(msg: str,
+                                   request: ActionRequest | None = None, requests: ActionRequestList | None = None):
+            wrapped_out_fcn(msg, False, request, requests)
+
+        State.out_fcn = wrapped_state_out_fcn
+        Action.out_fcn = wrapped_action_out_fcn
+
+    def set_print_fcn(self, print_fcn, supports_html: bool = False):
         self.print_fcn = print_fcn
+        self.print_fcn_supports_html = supports_html
+
+    def show_ticks_in_action_messages(self, do_it: bool = True):
+        self.show_action_completion = do_it
+
+    def show_marks_in_blocking_state_messages(self, do_it: bool = True):
+        self.show_blocking_states = do_it
+
+    def show_request_info_in_action_messages(self, do_it: bool = True):
+        self.show_action_request_info = do_it
 
     def set_welcome_message(self, msg):
         """Sets a message that will be printed only once when the initial state is reached."""
@@ -1123,6 +1173,9 @@ class HybridStateMachine:
             'welcome_msg':
                 self.welcome_msg_with_wildcards.encode("ascii", "xmlcharrefreplace").decode(
                     "ascii") if self.welcome_msg_with_wildcards is not None else None,
+            'highlight_blocking_states_in_messages': self.show_blocking_states,
+            'show_action_ticks_after_messages': self.show_action_completion,
+            'show_action_request_after_messages': self.show_action_request_info,
             'state_actions': {
                 state.name: state.to_list() for state in self.__id_to_state
             },
@@ -1447,9 +1500,64 @@ class HybridStateMachine:
         else:
             raise ValueError("Unknown state: " + str(state))
 
-    def generate_auto_messages(self):
-        # TODO
-        pass
+    def are_debug_messages_active(self):
+        return self.__debug_messages_active
+
+    def set_debug_messages_active(self, yes: bool):
+        self.__debug_messages_active = yes
+
+        if yes:
+            self.show_ticks_in_action_messages(True)
+            self.show_marks_in_blocking_state_messages(True)
+
+            # Replace original messages
+            self.generate_auto_messages(force=True)
+        else:
+            self.show_ticks_in_action_messages(False)
+            self.show_marks_in_blocking_state_messages(False)
+
+            # Restore original messages
+            if len(self.__id_to_original_state_msg) > 0:
+                for i, state in enumerate(self.__id_to_state):
+                    state.set_msg(self.__id_to_original_state_msg[i][0])
+                    if state.action is not None:
+                        state.action.set_msg(self.__id_to_original_state_msg[i][1])
+            if len(self.__id_to_original_action_msg) > 0:
+                for i, action in enumerate(self.__id_to_action):
+                    action.set_msg(self.__id_to_original_action_msg[i][0])
+            self.__id_to_original_state_msg.clear()
+            self.__id_to_original_action_msg.clear()
+
+    def generate_auto_messages(self, states: bool = True, actions: bool = True, force: bool = False):
+        if states is True and len(self.__id_to_original_state_msg) == 0:
+            for state in self.__id_to_state:
+                original1 = state.msg_with_wildcards
+                original2 = state.action.msg_with_wildcards if state.action is not None else None
+
+                if state.msg_with_wildcards is None:
+                    state.set_msg("📍 " + state.name.replace('_', ' ').capitalize())
+                elif force is True:
+                    state.set_msg("📍 " + state.name.replace('_', ' ').capitalize() +
+                                  " [" + state.msg_with_wildcards + "]")
+                if state.action is not None:
+                    if state.action.msg_with_wildcards is None:
+                        state.action.set_msg("📍 " + state.action.name.replace('_', ' ').capitalize())
+                    elif force is True:
+                        state.action.set_msg("📍 " + state.action.name.replace('_', ' ').capitalize() +
+                                             " [" + state.action.msg_with_wildcards + "]")
+
+                self.__id_to_original_state_msg.append((original1, original2))
+        if actions is True and len(self.__id_to_original_action_msg) == 0:
+            for action in self.__id_to_action:
+                original = action.msg_with_wildcards
+
+                if action.msg_with_wildcards is None:
+                    action.set_msg("🚀 " + action.name.replace('_', ' ').capitalize())
+                elif force:
+                    action.set_msg("🚀 " + action.name.replace('_', ' ').capitalize() +
+                                   " [" + action.msg_with_wildcards + "]")
+
+                self.__id_to_original_action_msg.append(original)
 
     def add_transit(self, from_state: str, to_state: str,
                     action: str, args: dict | None = None, ready: bool = True,
@@ -1596,6 +1704,9 @@ class HybridStateMachine:
             self.initial_state = hsm.initial_state
             self.limbo_state = hsm.limbo_state
             self.set_welcome_message(hsm.welcome_msg_with_wildcards)
+            self.show_blocking_states = hsm.show_blocking_states
+            self.show_action_completion = hsm.show_blocking_states
+            self.show_action_request_info = hsm.show_action_request_info
 
     def must_wait(self):
         """Checks if the current state is in a waiting period before any transitions can occur.
@@ -1816,6 +1927,9 @@ class HybridStateMachine:
             if HybridStateMachine.DEBUG:
                 print(f"[DEBUG HSM] Action {self.__action.name}, after being called, leaded to status: {status}")
 
+            if action.msg is not None and self.show_action_completion:
+                Action.out_fcn(HybridStateMachine.ACTION_TICKS_PER_STATUS[status], None, None)
+
             # Post-call operations
             if status == 0:  # Done
 
@@ -1843,10 +1957,14 @@ class HybridStateMachine:
 
                     # Propagating (trying to propagate forward the residual requests)
                     list_of_residual_requests = self.__action.get_list_of_requests()
+                    propagated_requests = []
                     for req in list_of_residual_requests:
-                        self.request_action(req.requester, action_name=self.__action.name, args=req.args,
-                                            from_state=None, to_state=None, timestamp=req.timestamp,
-                                            uuid=req.uuid)
+                        if self.request_action(req.requester, action_name=self.__action.name, args=req.args,
+                                               from_state=None, to_state=None, timestamp=req.timestamp,
+                                               uuid=req.uuid):
+                            propagated_requests.append(req)
+                    for req in propagated_requests:
+                        list_of_residual_requests.remove(req)  # Clearing propagated requests
 
                 if HybridStateMachine.DEBUG:
                     print(f"[DEBUG HSM] Correctly completed action: {self.__action.name}")
@@ -2097,6 +2215,9 @@ class HybridStateMachine:
         self.limbo_state = hsm_data['limbo_state']
         self.set_role(hsm_data.get('role', None))
         self.set_welcome_message(hsm_data.get('welcome_msg', None))
+        self.show_blocking_states = hsm_data.get('highlight_blocking_states_in_messages', False)
+        self.show_action_completion = hsm_data.get('show_action_ticks_after_messages', False)
+        self.show_action_request_info = hsm_data.get('show_action_request_after_messages', False)
 
         # Getting states
         self.states = {}

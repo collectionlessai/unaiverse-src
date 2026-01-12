@@ -24,7 +24,7 @@ from unaiverse.clock import Clock
 from collections.abc import Callable
 from unaiverse.networking.p2p.messages import Msg
 from unaiverse.dataprops import DataProps, Data4Proc
-from unaiverse.hsm import HybridStateMachine, Action, ActionRequest
+from unaiverse.hsm import HybridStateMachine, Action, ActionRequest, State
 from unaiverse.networking.node.profile import NodeProfile
 from unaiverse.utils.misc import GenException, FileTracker
 from unaiverse.streams import BufferedDataStream, DataStream
@@ -1618,18 +1618,40 @@ class AgentBasics:
                 # - the stream name must be known
                 # - if the UUID associated to our local stream is the same of the data, then we check tag order
                 # - if the UUID associated to our local stream is the expected one, we don't check tag order
+                reason = None
                 skip = data is None
+                if data is None:
+                    reason = "Data is None"
                 skip = skip or net_hash not in self.known_streams
+                if net_hash not in self.known_streams:
+                    reason = f"The net hash {net_hash} is not a known stream hash"
                 skip = skip or name not in self.known_streams[net_hash]
+                if name not in self.known_streams[net_hash]:
+                    reason = f"The data stream named {name} is present for net hash {net_hash}"
                 skip = (skip or (self.known_streams[net_hash][name].get_uuid(expected=True) is not None and
                         data_uuid != self.known_streams[net_hash][name].get_uuid(expected=True)))
+                if (self.known_streams[net_hash][name].get_uuid(expected=True) is not None and
+                        data_uuid != self.known_streams[net_hash][name].get_uuid(expected=True)):
+                    reason = (f"The data UUID {data_uuid} is not the expected one "
+                              f"{self.known_streams[net_hash][name].get_uuid(expected=True)}")
                 skip = (skip or (self.known_streams[net_hash][name].get_uuid(expected=True) is None and
-                        self.known_streams[net_hash][name].get_uuid(expected=False) is not None and
+                                 self.known_streams[net_hash][name].get_uuid(expected=False) is not None and
                         data_uuid != self.known_streams[net_hash][name].get_uuid(expected=False)))
+                if (self.known_streams[net_hash][name].get_uuid(expected=True) is None and
+                        self.known_streams[net_hash][name].get_uuid(expected=False) is not None and
+                        data_uuid != self.known_streams[net_hash][name].get_uuid(expected=False)):
+                    reason = (f"The data UUID {data_uuid} is not the one of the stream, which is "
+                              f"{self.known_streams[net_hash][name].get_uuid(expected=False)}")
                 skip = (skip or (self.known_streams[net_hash][name].get_uuid(expected=True) is None and
                         self.known_streams[net_hash][name].get_uuid(expected=False) is not None and
                         data_uuid == self.known_streams[net_hash][name].get_uuid(expected=False) and
                         data_tag <= self.known_streams[net_hash][name].get_tag()))
+                if (self.known_streams[net_hash][name].get_uuid(expected=True) is None and
+                        self.known_streams[net_hash][name].get_uuid(expected=False) is not None and
+                        data_uuid == self.known_streams[net_hash][name].get_uuid(expected=False) and
+                        data_tag <= self.known_streams[net_hash][name].get_tag()):
+                    reason = (f"The data tag {data_tag} is less or equal to the already present one "
+                              f"({self.known_streams[net_hash][name].get_tag()})")
 
                 # If we sample can be accepted...
                 if not skip:
@@ -1735,16 +1757,27 @@ class AgentBasics:
 
                 # If we decided to skip this sample...
                 else:
-                    self.out(f"Skipping sample named {name}: tag={data_tag}, uuid={data_uuid}" +
+                    self.out(f"Skipping sample named {name} in net hash {net_hash}: tag={data_tag}, uuid={data_uuid}" +
                              (", data is None!" if data is None else ""))
+
+                    behav = self.behav if self.behav.is_enabled() else self.behav_lone_wolf
+                    if behav.are_debug_messages_active():
+                        behav.print_fcn(behav.print_start +
+                                        f"Skipping sample named {name} received in net hash {net_hash}, "
+                                        f"tag={data_tag}, uuid={data_uuid}: {reason}", end=behav.print_ending,
+                                        file=behav.print_stream)
+
                     if AgentBasics.DEBUG:
                         if net_hash not in self.known_streams:
-                            self.deb(f"The net hash {net_hash} was not found in the set of known streams")
+                            self.deb(f"[get_stream_sample] "
+                                     f"The net hash {net_hash} was not found in the set of known streams")
                         else:
                             if name not in self.known_streams[net_hash]:
-                                self.deb(f"The net hash was known, but the data stream named {name} is not known")
+                                self.deb(f"[get_stream_sample] The net hash was known, but the data stream "
+                                         f"named {name} is not known")
                             else:
-                                self.deb(f"data={self.known_streams[net_hash][name].props.to_text(data)}")
+                                self.deb(f"[get_stream_sample] "
+                                         f"data={self.known_streams[net_hash][name].props.to_text(data)}")
             return True
 
         # If this stream is not known at all...
@@ -1822,6 +1855,7 @@ class AgentBasics:
                             content[name]['data'] = self.callback_before_sending_sample(content_data[name],
                                                                                         net_hash, name, _recipient)
                             self.deb(f"[send_stream_samples] - Sending {content[name]['data']}")
+
                         ret = await self._node_conn.send(peer_id, channel_trail=name_or_group,
                                                          content_type=Msg.STREAM_SAMPLE,
                                                          content=content)

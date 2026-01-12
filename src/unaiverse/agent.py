@@ -632,14 +632,15 @@ class Agent(AgentBasics):
                     all_hashes = u_hashes_copy + extra_hashes_copy
                     ret = await self.__complete_do(do_what="gen", peer_id_who_asked=_requester,
                                                    all_hashes=all_hashes,
-                                                   send_back_confirmation=False)
+                                                   send_back_confirmation=False, ref_uuid=_request_uuid)
                     if not ret:
                         self.out(f"Completing signal generation failed")
             return ret
         else:
             self.out(f"Completing signal generation")
             all_hashes = u_hashes_copy + extra_hashes_copy
-            ret = await self.__complete_do(do_what="gen", peer_id_who_asked=_requester, all_hashes=all_hashes)
+            ret = await self.__complete_do(do_what="gen", peer_id_who_asked=_requester, all_hashes=all_hashes,
+                                           ref_uuid=_request_uuid)
             if not ret:
                 self.out(f"Completing signal generation failed")
             return ret
@@ -906,7 +907,8 @@ class Agent(AgentBasics):
         else:
             self.out(f"Completing learning to generate signal {yhat_hashes_copy}")
             all_hashes = u_hashes_copy + yhat_hashes_copy + extra_hashes_copy
-            ret = await self.__complete_do(do_what="learn", peer_id_who_asked=_requester, all_hashes=all_hashes)
+            ret = await self.__complete_do(do_what="learn", peer_id_who_asked=_requester, all_hashes=all_hashes,
+                                           ref_uuid=_request_uuid)
             if not ret:
                 self.out(f"Completing learning to generate signal {yhat_hashes} failed")
             return ret
@@ -949,7 +951,7 @@ class Agent(AgentBasics):
                     stream_obj.set_uuid(None, expected=True)
         return True
 
-    async def connected(self, agent: str | None = None, handshake_completed: bool = False):
+    async def connected(self, agent: str | list[str] | None = None, handshake_completed: bool = False):
         """Checks if an agent is connected to us or not.
 
         Args:
@@ -967,7 +969,7 @@ class Agent(AgentBasics):
         if len(involved_agents) == 0:
             return False
 
-        self.out(f"Checking if all these agents are not connected to me anymore: {involved_agents}")
+        self.out(f"Checking if all these agents are connected to me now: {involved_agents}")
 
         for agent in involved_agents:
             if handshake_completed:
@@ -1498,8 +1500,11 @@ class Agent(AgentBasics):
                     self.out(f"Checking if result {eval_result} is the {min_or_max} so far, for agent {agent_peer_id}")
 
             if eval_result < 0.:
-                self.err(f"Invalid evaluation result: {eval_result}")
+                self.print(f"Invalid evaluation result: {eval_result}")
                 return False
+
+            owner_account = self.all_agents[agent_peer_id].get_static_profile()['email']
+            agent_name = self.all_agents[agent_peer_id].get_static_profile()['node_name']
 
             if cmp != "min" and cmp != "max":
                 outcome = False
@@ -1519,19 +1524,16 @@ class Agent(AgentBasics):
 
                 if good_if_true:
                     if outcome:
-                        msgs.append(f"Agent {agent_peer_id} passed with {alias} {eval_result}/{thres}")
+                        msgs.append(f"Agent {owner_account}/{agent_name} passed with {alias} {eval_result}/{thres}")
                         self._valid_cmp_agents.add(agent_peer_id)
                     else:
-                        msgs.append(f"Agent {agent_peer_id} did not pass")
+                        msgs.append(f"Agent {owner_account}/{agent_name} did not pass, {alias} {eval_result}/{thres}")
                 else:
                     if outcome:
-                        msgs.append(f"Agent {agent_peer_id} did not pass")
+                        msgs.append(f"Agent {owner_account}/{agent_name} did not pass, {alias} {eval_result}/{thres}")
                     else:
-                        msgs.append(f"Agent {agent_peer_id} passed with {alias} {eval_result}/{thres}")
+                        msgs.append(f"Agent {owner_account}/{agent_name} passed with {alias} {eval_result}/{thres}")
                         self._valid_cmp_agents.add(agent_peer_id)
-
-                if len(msgs) > 1:
-                    msgs[-1] = str(msgs[-1].lower())[0] + msgs[-1][1:]
             else:
                 if ((cmp == "min" and (thres < 0 or eval_result <= thres) and
                      (eval_result < best_so_far or best_so_far < 0)) or
@@ -1539,9 +1541,12 @@ class Agent(AgentBasics):
                          (eval_result > best_so_far or best_so_far < 0))):
                     best_so_far = eval_result
                     self._valid_cmp_agents = {agent_peer_id}
-                    msgs = [f"The best agent is {agent_peer_id}"]
+                    msgs = [f"The best agent is {owner_account}/{agent_name}"]
                 else:
                     msgs = [f"No best agent found for the considered threshold ({thres})"]
+
+        for msg in msgs:
+            self.print(msg)
 
         if len(self._valid_cmp_agents) == 0:
 
@@ -1549,10 +1554,8 @@ class Agent(AgentBasics):
             # self._valid_cmp_agents.append(agent_peer_id)
             # self.out(", ".join(msgs))
             # return True
-            self.err(f"The evaluation was not passed by any agents")
             return False
         else:
-            self.out(", ".join(msgs))
             return True
 
     def collect_and_store_own_stats(self):
@@ -1842,13 +1845,13 @@ class Agent(AgentBasics):
             loss_values, data_tags_from_targets = self.learn_generate(outputs=outputs, targets_net_hashes=yhat_hashes)
             self.deb(f"[__process_streams] data_tags_from_targets: {data_tags_from_targets}")
 
+            # Fusing data tags
+            data_tags = [data_tag_from_inputs if _data_tag == -1 else _data_tag for _data_tag in data_tags_from_targets]
+
             if loss_values is None:
                 return False
             else:
-                self.out(f"Losses: {loss_values}")
-
-            # Fusing data tags
-            data_tags = [data_tag_from_inputs if _data_tag == -1 else _data_tag for _data_tag in data_tags_from_targets]
+                self.print(f"Losses: {loss_values}, Step: {k}, Tags: {data_tags}")
         else:
             data_tags = [data_tag_from_inputs] * len(outputs)
         self.deb(f"[__process_streams] data_tags (final): {data_tags}")
@@ -1887,7 +1890,7 @@ class Agent(AgentBasics):
         return True
 
     async def __complete_do(self, do_what: str, peer_id_who_asked: str, all_hashes: list[str] | None,
-                            send_back_confirmation: bool = True):
+                            send_back_confirmation: bool = True, ref_uuid: str | None = None):
         """A private helper method to be called at the end of a `do_gen` or `do_learn` action. It performs cleanup
         tasks, such as clearing UUIDs on streams, and sends a confirmation message back to the requesting agent (async).
 
@@ -1925,7 +1928,7 @@ class Agent(AgentBasics):
 
         # Confirming
         if send_back_confirmation:
-            if await self.set_next_action(peer_id_who_asked, action="done_" + do_what, args={}):
+            if await self.set_next_action(peer_id_who_asked, action="done_" + do_what, args={}, ref_uuid=ref_uuid):
                 return True
             else:
                 self.err(f"Unable to confirm '{do_what}' to {peer_id_who_asked}")
@@ -2066,16 +2069,16 @@ class Agent(AgentBasics):
                 if _a.shape != _b.shape:
                     return 1.  # Mismatching
                 if _a.dtype == torch.long and _b.dtype == torch.long:  # Token IDS
-                    return 1. - float((_a == _b).sum().item()) / a.numel()  # Accuracy
+                    return 1. - float((_a == _b).sum().item()) / _a.numel()  # Accuracy
                 elif how == "mse":
                     ret = torch.nn.functional.mse_loss(_a, _b, reduction='mean')
                 elif how == "max":
-                    ret = 1. - float((torch.argmax(_a) == torch.argmax(_b)).sum().item()) / a.numel()
+                    ret = 1. - float((torch.argmax(_a) == torch.argmax(_b)).sum().item())
                 elif how == "same":
-                    ret = 1. - float(torch.eq(_a, _b).sum()) / a.numel()
+                    ret = 1. - float(torch.eq(_a, _b).sum()) / _a.numel()
                 else:
                     thres = float(how[3:])
-                    ret = 1. - float(torch.sum((_a > thres) == (_b > thres)).item()) / a.numel()
+                    ret = 1. - float(torch.sum((_a > thres) == (_b > thres)).item()) / _a.numel()
             else:
                 ret = 1. - float(_a == _b)  # Strings (always handled as 'same')
             return ret
@@ -2133,39 +2136,30 @@ class Agent(AgentBasics):
             # Fixing
             if b is None:
                 o = o + (1. if how != "mse" else (o / steps) * 1.1)
-                self.deb(f"[__compare_streams] The second stream yields None")
+                print(f"Comparing: the second stream yields None")
             else:
                 if b_tag_w_offset == a_tag_w_offset:
                     o += compare(a, b, how)
                     k_b += 1
-                    self.deb(f"[__compare_streams] Comparing tags: {a_tag} vs {b_tag} "
-                             f"(with offsets: {a_tag_w_offset} vs {b_tag_w_offset}), samples: {a} vs {b}")
+                    print(f"Comparing tags: {a_tag} vs {b_tag}, samples: {a} vs {b}")
                 elif b_tag_w_offset > a_tag_w_offset:
                     if not restart_detected:
                         o = o + (1. if how != "mse" else (o / steps) * 1.1)  # Don't change k_b, some samples missing
-                        self.deb(f"[__compare_streams] (b) Comparing tags: {a_tag} vs {b_tag} -> "
-                                 f"expected one was missing "
-                                 f"(with offsets: {a_tag_w_offset} vs {b_tag_w_offset}) "
-                                 f"samples: {a} vs {b}")
+                        print(f"Comparing tags: {a_tag} vs {b_tag} -> expected one was missing, samples: {a} vs {b}")
                     else:
                         o = o + (1. if how != "mse" else (o / steps) * 1.1)
-                        self.deb(f"[__compare_streams] (c) Comparing tags: {a_tag} vs {b_tag} -> "
-                                 f"expected one was missing "
-                                 f"(with offsets: {a_tag_w_offset} vs {b_tag_w_offset}) "
-                                 f"samples: {a} vs {b}")
+                        print(f"Comparing tags: {a_tag} vs {b_tag} -> expected one was missing, samples: {a} vs {b}")
                         k_b += 1  # A restart was detected, it means that "stream_b" is behind, let's move it ahead
                 elif b_tag_w_offset < a_tag_w_offset:
-                    self.deb(f"[__compare_streams] (d) Comparing tags: {a_tag} vs {b_tag} -> too early w.r.t. expected "
-                             f"(with offsets: {a_tag_w_offset} vs {b_tag_w_offset}) "
-                             f"samples: {a} vs {b}")
+                    print(f"Comparing tags: {a_tag} vs {b_tag} -> too early w.r.t. expected, samples: {a} vs {b}")
                     return -1., False
 
-        self.deb(f"[__compare_streams] Error: {o / steps}")
+        print(f"Comparing error: {o / steps}")
 
         # Input("*** press enter to continue ***")
         return o / steps, True
 
-    def __involved_agents(self, agent: str | None):
+    def __involved_agents(self, agent: str | None | list[str]):
         """A private helper method that resolves an agent ID or a wildcard into a list of specific peer IDs.
         It can resolve a single agent, a group of agents that passed a previous comparison (`<valid_cmp>`), or all
         currently engaged agents.
@@ -2176,11 +2170,15 @@ class Agent(AgentBasics):
         Returns:
             A list of peer IDs corresponding to the involved agents.
         """
+        if isinstance(agent, list):
+            return agent
         peer_id = agent
+        engaged_or_found = (
+            self._engaged_agents) if len(self._engaged_agents) > len(self._found_agents) else self._found_agents
         involved_agents = [peer_id] if peer_id is not None and peer_id != "<valid_cmp>" else (
-            self._valid_cmp_agents) if peer_id is not None and peer_id == "<valid_cmp>" else self._engaged_agents
+            self._valid_cmp_agents) if peer_id is not None and peer_id == "<valid_cmp>" else engaged_or_found
         if len(involved_agents) == 0:
-            self.err("Not engaged to any agents or no agent specified")
+            self.err("Not engaged to any agents, no previously searched agent, or no agent specified")
         return involved_agents
 
     def __normalize_user_hash(self, net_hashes: list[str] | None) -> list[str]:

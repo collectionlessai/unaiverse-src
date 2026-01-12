@@ -102,6 +102,9 @@ class Node:
         if not (unaiverse_key is None or isinstance(unaiverse_key, str)):
             raise GenException("Invalid UNaIVERSE key")
 
+        # Killing Go debug messages about HTTP
+        os.environ["GODEBUG"] = "http2debug=0"
+
         # Main attributes
         self.node_id = node_id
         self.run_hook = run_hook
@@ -825,7 +828,10 @@ class Node:
     def run(self, *args, **kwargs):
         """Starts the main execution loop for the node, calling method run_async(...) by means of asyncio.run.
         See documentation of method run_async."""
-        asyncio.run(self.run_async(*args, **kwargs))
+        try:
+            asyncio.run(self.run_async(*args, **kwargs))
+        except KeyboardInterrupt:
+            pass
 
     async def run_async(self, cycles: int | None = None, max_time: float | None = None,
                         interact_mode: bool = False,
@@ -1234,10 +1240,11 @@ class Node:
         except KeyboardInterrupt:
             if self.cursor_hidden:
                 sys.stdout.write("\033[?25h")  # Re-enabling cursor
-            if cycles is not None and cycles == 1:
-                raise KeyboardInterrupt  # Node synch will catch this
-            else:
-                print("\nDetected Ctrl+C! Exiting gracefully...")
+            print("\nDetected Ctrl+C! Exiting gracefully...")
+
+        except asyncio.CancelledError:
+            print("\nDetected process termination! Exiting gracefully...")
+            raise
 
         except Exception as e:
             if self.cursor_hidden:
@@ -1245,14 +1252,23 @@ class Node:
             print(f"An error occurred: {e}")
             traceback.print_exc()
 
-        if self.cursor_hidden:
-            sys.stdout.write("\033[?25h")  # Re-enabling cursor
+        finally:
+            if self.cursor_hidden:
+                sys.stdout.write("\033[?25h")  # Re-enabling cursor
 
-        if self.node_type is Node.AGENT and self.agent.in_world():
-            await self.leave_world()
-        connected_peer_ids = list(self.hosted.all_agents.keys())
-        for peer_id in connected_peer_ids:
-            await self.leave(peer_id)
+            try:
+                if self.node_type is Node.AGENT and self.agent.in_world():
+                    await self.leave_world()
+            except Exception:
+                pass
+
+            finally:
+                try:
+                    connected_peer_ids = list(self.hosted.all_agents.keys())
+                    for peer_id in connected_peer_ids:
+                        await self.leave(peer_id)
+                except Exception:
+                    pass
 
     async def __handle_network_connections(self):
         """Manages new and lost network connections (async)."""
@@ -2658,4 +2674,4 @@ class NodeSynchronizer:
                 if self.synch_cycles is not None and self.synch_cycle == self.synch_cycles:
                     break
         except KeyboardInterrupt:
-            print("\nDetected Ctrl+C! Exiting gracefully...")
+            pass
