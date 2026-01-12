@@ -234,6 +234,7 @@ class Node:
         P2P.setup_library(enable_logging=os.getenv("NODE_LIBP2PLOG", "0") == "1")
 
         # Helper to parse env bools
+        env_is_isolated = os.getenv("NODE_IS_ISOLATED", "0") == "1"
         env_is_public = os.getenv("NODE_IS_PUBLIC", "0") == "1"
         env_is_public_relay = os.getenv("NODE_IS_PUBLIC_RELAY", "0") == "1"
         env_use_tls = os.getenv("NODE_USE_TLS", "0") == "1"
@@ -250,13 +251,14 @@ class Node:
             "ips": None,
             "enable_relay_client": allow_connection_through_relay,
             "enable_relay_service": env_is_public_relay,
-            "knows_is_public": True,
+            "use_broad_limits": False,
+            "is_isolated": env_is_isolated,
+            "knows_is_public": env_is_public,
             "enable_tls": env_use_tls,
             "domain_name": env_domain,
             "tls_cert_path": env_cert_path,
             "tls_key_path": env_key_path,
             "dht_enabled": True,
-            "dht_mode": 'client',
             "dht_keep": True
         }
         
@@ -266,13 +268,14 @@ class Node:
             "ips": None,
             "enable_relay_client": allow_connection_through_relay,
             "enable_relay_service": self.node_type is Node.WORLD,
-            "knows_is_public": True,
+            "use_broad_limits": True,
+            "is_isolated": True,
+            "knows_is_public": env_is_public,
             "enable_tls": env_use_tls,
             "domain_name": env_domain,
             "tls_cert_path": env_cert_path,
             "tls_key_path": env_key_path,
             "dht_enabled": True,
-            "dht_mode": 'client',
             "dht_keep": False  # close it after autonat
         }
 

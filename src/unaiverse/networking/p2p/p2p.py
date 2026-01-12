@@ -145,13 +145,14 @@ class P2P:
                  ips: List[str] = None,
                  enable_relay_client: bool = True,
                  enable_relay_service: bool = False,
+                 use_broad_limits: bool = False,
+                 is_isolated: bool = False,
                  knows_is_public: bool = False,
                  enable_tls: bool = False,
                  domain_name: Optional[str] = None,
                  tls_cert_path: Optional[str] = None,
                  tls_key_path: Optional[str] = None,
                  dht_enabled: bool = False,
-                 dht_mode: str = "client",
                  dht_keep: bool = True
                  ) -> None:
         """
@@ -216,6 +217,7 @@ class P2P:
             "relay": {
                 "enable_client": self._enable_relay_client,
                 "enable_service": enable_relay_service,
+                "with_broad_limits": use_broad_limits,
             },
             "tls": {
                 "auto_tls": use_auto_tls,
@@ -224,12 +226,12 @@ class P2P:
                 "key_path": tls_key_path if tls_key_path else "",
             },
             "network": {
+                "isolated": is_isolated,
                 "force_public": knows_is_public,
             },
             "dht": {
                 "enabled": dht_enabled,
-                "mode": dht_mode if dht_enabled else "",
-                "keep": dht_keep
+                "keep": dht_keep and dht_enabled,
             }
         }
 

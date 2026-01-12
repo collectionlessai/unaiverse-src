@@ -75,6 +75,7 @@ import (
 // const UnaiverseChatProtocol = "/unaiverse-chat-protocol/1.0.0"
 const UnaiverseChatProtocol = "/unaiverse/chat/1.0.0"
 const UnaiverseUserAgent = "go-libp2p/example/autotls"
+const DisconnectionGracePeriod = 10 * time.Second
 
 // ExtendedPeerInfo holds information about a connected peer.
 type ExtendedPeerInfo struct {
@@ -120,6 +121,7 @@ type NodeConfig struct {
     Relay struct {
         EnableClient  bool `json:"enable_client"`
         EnableService bool `json:"enable_service"`
+		WithBroadLimits bool `json:"with_broad_limits"`
     } `json:"relay"`
 
     // Group TLS Logic (Mutually exclusive logic becomes clear here)
@@ -132,13 +134,13 @@ type NodeConfig struct {
 
     // explicit configuration for network environment
     Network struct {
-        ForcePublic bool `json:"force_public"` // Replaces knowsIsPublic
+        Isolated bool `json:"isolated"` // only allows connections with friendly peers
+		ForcePublic bool `json:"force_public"` // Replaces knowsIsPublic
     } `json:"network"`
 
 	// Group DHT logic
 	DHT struct {
 		Enabled bool `json:"enabled"`
-        Mode string `json:"mode"` // "client", "server"
 		Keep bool	`json:"keep"` // to keep it running after init
     } `json:"dht"`
 }
@@ -172,11 +174,15 @@ type NodeInstance struct {
 
 	// Peer State
 	peersMutex     sync.RWMutex
-	connectedPeers map[peer.ID]ExtendedPeerInfo
+	friendlyPeers map[peer.ID]ExtendedPeerInfo
 
 	// Stream State
 	streamsMutex          sync.Mutex
 	persistentChatStreams map[peer.ID]network.Stream
+
+	// Disconnection Grace Period State
+    disconnectionMutex  sync.Mutex
+    disconnectionTimers map[peer.ID]context.CancelFunc
 
 	// Rendezvous State
 	rendezvousMutex sync.RWMutex
@@ -426,12 +432,20 @@ func setupPubSub(ni *NodeInstance) error {
 func setupNotifiers(ni *NodeInstance) {
 	ni.host.Network().Notify(&network.NotifyBundle{
 		ConnectedF: func(_ network.Network, conn network.Conn) {
-			logger.Debugf("[GO] 🔔 Instance %d: Event - Connected to %s (Direction: %s)\n", ni.instanceIndex, conn.RemotePeer(), conn.Stat().Direction)
-			// the old logic to add the peer to the connectedPeers map was moved inside addPeerToTrackedMap
+			remotePeerID := conn.RemotePeer()
+			logger.Debugf("[GO] 🔔 Instance %d: Event - Connected to %s (Direction: %s)\n", ni.instanceIndex, remotePeerID, conn.Stat().Direction)
+			// --- Abort Graceful Disconnect if active ---
+            ni.disconnectionMutex.Lock()
+            if cancelTimer, exists := ni.disconnectionTimers[remotePeerID]; exists {
+                cancelTimer() // Stop the cleanup timer
+                delete(ni.disconnectionTimers, remotePeerID)
+                logger.Debugf("[GO] ♻️ Instance %d: Peer %s reconnected within grace period. Cleanup aborted.\n", ni.instanceIndex, remotePeerID)
+            }
+            ni.disconnectionMutex.Unlock()
 		},
 		DisconnectedF: func(_ network.Network, conn network.Conn) {
-			logger.Debugf("[GO] 🔔 Instance %d: Event - Disconnected from %s\n", ni.instanceIndex, conn.RemotePeer())
 			remotePeerID := conn.RemotePeer()
+			logger.Debugf("[GO] 🔔 Instance %d: Event - Disconnected from %s\n", ni.instanceIndex, remotePeerID)
 
 			// Get the host for this instance to query its network state.
 			if ni.host == nil {
@@ -440,34 +454,130 @@ func setupNotifiers(ni *NodeInstance) {
 				return
 			}
 
-			// --- Check if this is the LAST connection to this peer ---
-			// libp2p can have multiple connections to a single peer (e.g., TCP, QUIC).
-			// We only want to consider the peer fully disconnected when ALL connections are gone.
+			// Check if this is the LAST connection to this peer
 			if len(ni.host.Network().ConnsToPeer(remotePeerID)) == 0 {
-				logger.Debugf("[GO]   Instance %d: Last connection to %s closed. Removing from tracked peers.\n", ni.instanceIndex, remotePeerID)
+				logger.Debugf("[GO] ⏳ Instance %d: Last connection to %s closed. Starting %v grace period timer...\n", ni.instanceIndex, remotePeerID, DisconnectionGracePeriod)
 
-				// Handle disconnection for ConnectedPeers
-				ni.peersMutex.Lock()
-				if _, exists := ni.connectedPeers[remotePeerID]; exists {
-					delete(ni.connectedPeers, remotePeerID)
-					logger.Debugf("[GO]   Instance %d: Removed %s from ConnectedPeers via DisconnectedF notifier.\n", ni.instanceIndex, remotePeerID)
-					//peerRemoved = true
-				}
-				ni.peersMutex.Unlock()
+                // We create a context that we can cancel if they reconnect
+                ctx, cancelTimer := context.WithCancel(context.Background())
+                
+                ni.disconnectionMutex.Lock()
+                // If a timer already exists (rare race condition), cancel the old one first
+                if oldCancel, exists := ni.disconnectionTimers[remotePeerID]; exists {
+                    oldCancel()
+                }
+                ni.disconnectionTimers[remotePeerID] = cancelTimer
+                ni.disconnectionMutex.Unlock()
 
-				// Also clean up persistent stream if one existed for this peer
-				ni.streamsMutex.Lock()
-				if stream, ok := ni.persistentChatStreams[remotePeerID]; ok {
-					logger.Debugf("[GO]   Instance %d: Cleaning up persistent stream for disconnected peer %s via DisconnectedF notifier.\n", ni.instanceIndex, remotePeerID)
-					_ = stream.Close() // Attempt graceful close
-					delete(ni.persistentChatStreams, remotePeerID)
-				}
-				ni.streamsMutex.Unlock()
+                // Run cleanup in a goroutine
+                go func() {
+                    select {
+                    case <-time.After(DisconnectionGracePeriod):
+                        // Timer expired! Proceed to cleanup.
+                    case <-ctx.Done():
+                        // Context cancelled (user reconnected). Stop here.
+                        return
+                    case <-ni.ctx.Done():
+                        // Node is shutting down. Stop here.
+                        return
+                    }
+
+                    // --- Timer Expired: Execute Cleanup ---
+                    
+                    // Remove from timer map
+                    ni.disconnectionMutex.Lock()
+                    // Double-check: did we get cancelled while waiting for lock?
+                    if ctx.Err() != nil {
+                        ni.disconnectionMutex.Unlock()
+                        return
+                    }
+                    delete(ni.disconnectionTimers, remotePeerID)
+                    ni.disconnectionMutex.Unlock()
+
+                    // Final Safety Check: Are they actually connected now?
+                    // (Handles race where they reconnect exactly when timer fires)
+                    if len(ni.host.Network().ConnsToPeer(remotePeerID)) > 0 {
+                         logger.Debugf("[GO] ⚠️ Instance %d: Grace period expired for %s, but peer is connected again. Skipping cleanup.\n", ni.instanceIndex, remotePeerID)
+                         return
+                    }
+
+                    logger.Infof("[GO] 🗑️ Instance %d: Grace period ended for %s. Removing peer data.\n", ni.instanceIndex, remotePeerID)
+
+                    // 3. Clean up friendlyPeers
+                    ni.peersMutex.Lock()
+                    if _, exists := ni.friendlyPeers[remotePeerID]; exists {
+                        delete(ni.friendlyPeers, remotePeerID)
+                        logger.Debugf("[GO]   Instance %d: Removed %s from friendlyPeers.\n", ni.instanceIndex, remotePeerID)
+                    }
+                    ni.peersMutex.Unlock()
+
+                    // 4. Clean up persistent streams
+                    ni.streamsMutex.Lock()
+                    if stream, ok := ni.persistentChatStreams[remotePeerID]; ok {
+                        logger.Debugf("[GO]   Instance %d: Cleaning up persistent stream for %s.\n", ni.instanceIndex, remotePeerID)
+                        _ = stream.Close() 
+                        delete(ni.persistentChatStreams, remotePeerID)
+                    }
+                    ni.streamsMutex.Unlock()
+
+                }()
 			} else {
-				logger.Debugf("[GO]   Instance %d: DisconnectedF: Still have %d active connections to %s, not removing from tracked peers.\n", ni.instanceIndex, len(ni.host.Network().ConnsToPeer(remotePeerID)), remotePeerID)
+				logger.Debugf("[GO]   Instance %d: DisconnectedF: Still have %d active connections to %s, not removing.\n", ni.instanceIndex, len(ni.host.Network().ConnsToPeer(remotePeerID)), remotePeerID)
 			}
 		},
 	})
+}
+
+// enforceProtocolCompliance ensures that any connected peer supports the required chat protocol.
+// If a peer finishes identification but lacks the protocol, they are immediately disconnected.
+func enforceProtocolCompliance(ni *NodeInstance) {
+	// 1. Subscribe to the identification completed event
+	sub, err := ni.host.EventBus().Subscribe(new(event.EvtPeerIdentificationCompleted))
+	if err != nil {
+		logger.Errorf("[GO] ❌ Instance %d: Failed to subscribe to identification events: %v", ni.instanceIndex, err)
+		return
+	}
+
+	logger.Infof("[GO] 🛡️ Instance %d: Strict Isolation ENABLED. Monitoring for non-compliant peers.", ni.instanceIndex)
+
+	go func() {
+		defer sub.Close()
+		for {
+			select {
+			case <-ni.ctx.Done():
+				return
+			case evt, ok := <-sub.Out():
+				if !ok {
+					return
+				}
+				idEvt := evt.(event.EvtPeerIdentificationCompleted)
+
+				// Skip check for self
+				if idEvt.Peer == ni.host.ID() {
+					continue
+				}
+
+				isCompliant := false
+				for _, proto := range idEvt.Protocols {
+					if string(proto) == UnaiverseChatProtocol {
+						isCompliant = true
+						break
+					}
+				}
+
+				// 4. Action: Disconnect if not compliant
+				if !isCompliant {
+					logger.Warnf("[GO] 🚫 Instance %d: Kicking peer %s. (Reason: Protocol Mismatch).", ni.instanceIndex, idEvt.Peer)
+					// Disconnect
+					ni.host.Network().ClosePeer(idEvt.Peer)
+					// Optional: Clean from peerstore to free memory immediately
+					ni.host.Peerstore().RemovePeer(idEvt.Peer)
+				} else {
+					logger.Debugf("[GO] ✅ Instance %d: Peer %s verified compliant.", ni.instanceIndex, idEvt.Peer)
+				}
+			}
+		}
+	}()
 }
 
 // handleAddressUpdateEvents listens for libp2p address changes and updates the local cache.
@@ -804,7 +914,7 @@ func handleStream(ni *NodeInstance, s network.Stream) {
 	senderPeerID := s.Conn().RemotePeer()
 	streamID := s.ID()
 	ni.peersMutex.Lock()
-	existingPeer, peerExists := ni.connectedPeers[senderPeerID]
+	existingPeer, peerExists := ni.friendlyPeers[senderPeerID]
 
 	// 1. Gather fresh info (Addresses & Direction)
 	direction := "incoming"
@@ -818,7 +928,7 @@ func handleStream(ni *NodeInstance, s network.Stream) {
 
 	if !peerExists {
 		// CASE A: New Application Peer
-		ni.connectedPeers[senderPeerID] = ExtendedPeerInfo{
+		ni.friendlyPeers[senderPeerID] = ExtendedPeerInfo{
 			ID:          senderPeerID,
 			Addrs:       knownAddrs,
 			ConnectedAt: time.Now(),
@@ -830,7 +940,7 @@ func handleStream(ni *NodeInstance, s network.Stream) {
 		// CASE B: Existing Peer - Update Addresses
 		// We keep ConnectedAt and Direction from the original session start.
 		existingPeer.Addrs = knownAddrs
-		ni.connectedPeers[senderPeerID] = existingPeer
+		ni.friendlyPeers[senderPeerID] = existingPeer
 		logger.Debugf("[GO] 🔄 Instance %d: Refreshed addresses for Peer %s via Stream %s.", ni.instanceIndex, senderPeerID, streamID)
 	}
 	ni.peersMutex.Unlock()
@@ -1135,7 +1245,7 @@ func (ni *NodeInstance) Close() error {
 
 	// --- Clear Remaining State for this instance ---
 	ni.peersMutex.Lock()
-	ni.connectedPeers = make(map[peer.ID]ExtendedPeerInfo) // Clear the map
+	ni.friendlyPeers = make(map[peer.ID]ExtendedPeerInfo) // Clear the map
 	ni.peersMutex.Unlock()
 
 	// Clear also the addresses
@@ -1156,6 +1266,17 @@ func (ni *NodeInstance) Close() error {
 	ni.rendezvousMutex.Lock()
 	ni.rendezvousState = nil // Clear the state
 	ni.rendezvousMutex.Unlock()
+
+	// Explicitly cancel all running grace period timers so goroutines exit immediately.
+	ni.disconnectionMutex.Lock()
+	if len(ni.disconnectionTimers) > 0 {
+		logger.Debugf("[GO]   - Instance %d: Cancelling %d active disconnection timers...\n", ni.instanceIndex, len(ni.disconnectionTimers))
+		for _, cancelTimer := range ni.disconnectionTimers {
+			cancelTimer()
+		}
+	}
+	ni.disconnectionTimers = nil // Clear the map
+	ni.disconnectionMutex.Unlock()
 
 	// Nil out components to signify the instance is fully closed
 	ni.host = nil
@@ -1255,7 +1376,7 @@ func CreateNode(
 		instanceIndex:         instanceIndex,
 		topics:                make(map[string]*pubsub.Topic),
 		subscriptions:         make(map[string]*pubsub.Subscription),
-		connectedPeers:        make(map[peer.ID]ExtendedPeerInfo),
+		friendlyPeers:        make(map[peer.ID]ExtendedPeerInfo),
 		persistentChatStreams: make(map[peer.ID]network.Stream),
 		messageStore:          newMessageStore(),
 	}
@@ -1304,13 +1425,6 @@ func CreateNode(
 	// If we use AutoTLS we need the DHT on
 	if cfg.TLS.AutoTLS && !cfg.DHT.Enabled {
 		return jsonErrorResponse(fmt.Sprintf("Instance %d: Using TLS requires DHT 'Enabled'.", instanceIndex), nil)
-	}
-
-	// Check the DHT mode
-	if cfg.DHT.Enabled {
-		if cfg.DHT.Mode != "server" && cfg.DHT.Mode != "client" {
-			return jsonErrorResponse(fmt.Sprintf("Instance %d: DHT 'Mode' must be one of 'client' or 'server'.", instanceIndex), nil)
-		}
 	}
 
 	// If we want RelayService we must be public (either forced or via AutoNat)
@@ -1430,12 +1544,13 @@ func CreateNode(
 	if cfg.Relay.EnableService {
 		// limit := rc.DefaultLimit()         // open this to see the default limits
 		resources := rc.DefaultResources() // open this to see the default resource limits
-		// Set the duration for relayed connections. 0 means infinite.
-		ttl := 2 * time.Hour // reduced to 2 hours, it will be the node's duty to refresh the reservation if needed.
-		// limit.Duration = ttl
-		// resources.Limit = limit
-		resources.Limit = nil // same as setting rc.WithInfiniteLimits()
-		resources.ReservationTTL = ttl
+		if cfg.Relay.WithBroadLimits {
+			// Set the duration for relayed connections. 0 means infinite.
+			// limit.Duration = ttl
+			// resources.Limit = limit
+			resources.Limit = nil // same as setting rc.WithInfiniteLimits()
+			resources.ReservationTTL = 2 * time.Hour
+		}
 
 		// This single option enables the node to act as a relay for others, including hopping,
 		// with our custom resource limits.
@@ -1444,21 +1559,14 @@ func CreateNode(
 	}
 
 	// Prepare discovering the bootstrap peers
-	if cfg.DHT.Enabled {
+	if cfg.DHT.Enabled && !cfg.Network.Isolated {
 		// Add any possible option to be publicly reachable
 		discoveryOpts := []libp2p.Option{
 			libp2p.EnableAutoNATv2(),
 			libp2p.Routing(func(h host.Host) (routing.PeerRouting, error) {
 				bootstrapAddrInfos := dht.GetDefaultBootstrapPeerAddrInfos()
-				// Define the DHT options
-				var dhtMode dht.ModeOpt
-				if cfg.DHT.Mode == "server" {
-					dhtMode = dht.ModeAutoServer
-				} else {
-					dhtMode = dht.ModeClient
-				}
 				dhtOptions := []dht.Option{
-					dht.Mode(dhtMode),
+					dht.Mode(dht.ModeClient),
 					dht.BootstrapPeers(bootstrapAddrInfos...),
 				}
 				var err error
@@ -1467,7 +1575,7 @@ func CreateNode(
 			}),
 		}
 
-		if cfg.Relay.EnableClient && !cfg.Relay.EnableService && cfg.DHT.Keep && !cfg.Network.ForcePublic {
+		if cfg.Relay.EnableClient && !cfg.Relay.EnableService && cfg.DHT.Keep {
 			// Enable AutoRelay. This uses the services above (DHT, AutoNAT)
 			// to find relays and bind to one if we are private.
 			discoveryOpts = append(discoveryOpts, libp2p.EnableAutoRelayWithPeerSource(ni.PeerSource, autorelay.WithBootDelay(time.Second*10)))
@@ -1480,7 +1588,6 @@ func CreateNode(
 	if cfg.Network.ForcePublic {
 		// Force public reachability to test local relays
 		options = append(options, libp2p.ForceReachabilityPublic())
-		isPublic = true
 	}
 
 	// Create the libp2p Host instance with the configured options for this instance.
@@ -1490,6 +1597,11 @@ func CreateNode(
 	}
 	ni.host = host
 	logger.Infof("[GO] ✅ Instance %d: Host created with ID: %s\n", instanceIndex, ni.host.ID())
+
+	if cfg.Network.Isolated {
+        // Turn on the "Protocol Police"
+        enforceProtocolCompliance(ni)
+    }
 
 	// --- Link Host to Cert Manager ---
 	if cfg.TLS.AutoTLS {
@@ -1505,42 +1617,42 @@ func CreateNode(
 	go handleAddressUpdateEvents(ni, cacheSub)
 	logger.Debugf("[GO] 🧠 Instance %d: Address cache background listener started.", instanceIndex)
 
-	// --- Wait for Reachability ---
-	// Subscribe to reachability events
-	reachSub, err := ni.host.EventBus().Subscribe(new(event.EvtLocalReachabilityChanged))
-	if err != nil {
-		return jsonErrorResponse("Failed to subscribe to reachability events", err)
-	}
-	defer reachSub.Close()
+	if cfg.Network.ForcePublic {
+		isPublic = true
+	} else {
+		// --- Wait for Reachability Update ---
+		// Subscribe to reachability events
+		reachSub, err := ni.host.EventBus().Subscribe(new(event.EvtLocalReachabilityChanged))
+		if err != nil {
+			return jsonErrorResponse("Failed to subscribe to reachability events", err)
+		}
+		defer reachSub.Close()
 
-	timeoutCtx, timeoutCancel := context.WithTimeout(ni.ctx, 30*time.Second)
-	defer timeoutCancel()
-	logger.Debugf("[GO] ⏳ Instance %d: Waiting for reachability update.", instanceIndex)
-	
-	WAIT_LOOP:
-	for {		
-		select {
-		case evt := <-reachSub.Out():
-			rEvt := evt.(event.EvtLocalReachabilityChanged)
-			if rEvt.Reachability == network.ReachabilityPublic {
-				logger.Debugf("[GO] 📶 Instance %d: Reachability -> PUBLIC", instanceIndex)
-				isPublic = true
-			} else {
-                // If config forced us public, we ignore AutoNAT saying private.
-                // Otherwise, we accept reality.
-                if !cfg.Network.ForcePublic {
-				    isPublic = false
-                }
+		timeoutCtx, timeoutCancel := context.WithTimeout(ni.ctx, 30*time.Second)
+		defer timeoutCancel()
+		logger.Debugf("[GO] ⏳ Instance %d: Waiting for reachability update.", instanceIndex)
+		
+		WAIT_LOOP:
+		for {		
+			select {
+			case evt := <-reachSub.Out():
+				rEvt := evt.(event.EvtLocalReachabilityChanged)
+				if rEvt.Reachability == network.ReachabilityPublic {
+					logger.Debugf("[GO] 📶 Instance %d: Reachability -> PUBLIC", instanceIndex)
+					isPublic = true
+				} else {
+					isPublic = false
+				}
+				break WAIT_LOOP
+		
+			case <-timeoutCtx.Done():
+				logger.Warnf("[GO] ⚠️ Instance %d: Timeout. Proceeding with best effort. (Public: %t)", instanceIndex, isPublic)
+				break WAIT_LOOP
+
+			// 4. Node Shutdown
+			case <-ni.ctx.Done():
+				return jsonErrorResponse("Context cancelled during init", nil)
 			}
-			break WAIT_LOOP
-	
-		case <-timeoutCtx.Done():
-			logger.Warnf("[GO] ⚠️ Instance %d: Timeout. Proceeding with best effort. (Public: %t)", instanceIndex, isPublic)
-			break WAIT_LOOP
-
-		// 4. Node Shutdown
-		case <-ni.ctx.Done():
-			return jsonErrorResponse("Context cancelled during init", nil)
 		}
 	}
 
@@ -1888,7 +2000,7 @@ func DisconnectFrom(
 
 	// --- Remove from Tracking Map for this instance ---
 	ni.peersMutex.Lock()
-	delete(ni.connectedPeers, pid)
+	delete(ni.friendlyPeers, pid)
 	ni.peersMutex.Unlock()
 
 	logMsg := fmt.Sprintf("Instance %d: Disconnected from peer %s", ni.instanceIndex, goPeerID)
@@ -1931,9 +2043,9 @@ func GetConnectedPeers(
 	defer ni.peersMutex.RUnlock() // Ensure lock is released.
 
 	// Create a slice to hold the results directly from the map.
-	peersList := make([]ExtendedPeerInfo, 0, len(ni.connectedPeers))
+	peersList := make([]ExtendedPeerInfo, 0, len(ni.friendlyPeers))
 	
-	for _, peerInfo := range ni.connectedPeers {
+	for _, peerInfo := range ni.friendlyPeers {
 			peersList = append(peersList, peerInfo)
 		}
 
