@@ -1115,7 +1115,7 @@ func goGetNodeAddresses(
 	} else {
 		// --- Remote Peer Addresses ---
 		ni.peersMutex.RLock()
-		if epi, exists := ni.connectedPeers[resolvedPID]; exists {
+		if epi, exists := ni.friendlyPeers[resolvedPID]; exists {
 			candidateAddrs = append(candidateAddrs, epi.Addrs...)
 		}
 		ni.peersMutex.RUnlock()
