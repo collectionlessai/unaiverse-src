@@ -404,9 +404,11 @@ class PolicyFilterHuman:
                     # Fallback: when the other agent disconnects and the stream in extra_hashes is not known anymore
                     stream_dict = agent.owned_streams[proc_input_net_hash]
                     for stream_obj in stream_dict.values():
+                        stream_obj.enable()
                         stream_obj.set_uuid(None, expected=False)
                         stream_obj.set_uuid(None, expected=True)
                         stream_obj.set_tag(-1)
+                        stream_obj.disable()
                 else:
 
                     # Guessing the data tag of the data (heuristic, using the first u_hash)
@@ -420,9 +422,11 @@ class PolicyFilterHuman:
                     # Preparing the input stream with the request UUID and the data tag of the original u_hashes
                     stream_dict = agent.owned_streams[proc_input_net_hash]
                     for stream_obj in stream_dict.values():
+                        stream_obj.enable()
                         stream_obj.set_uuid(request.uuid, expected=False)
                         stream_obj.set_uuid(request.uuid, expected=True)
                         stream_obj.set_tag(data_tag)
+                        stream_obj.disable()
 
         # Returning the revised policy decision
         return action_id, request

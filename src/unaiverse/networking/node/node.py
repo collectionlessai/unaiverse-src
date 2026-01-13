@@ -297,6 +297,7 @@ class Node:
             except Exception as _e:
                 # Store the exception if creation fails
                 results[name] = _e
+            return True
         
         # 4. Create and start both threads
         thread_u = threading.Thread(target=create_p2p_instance, args=("p2p_u", p2p_u_config))

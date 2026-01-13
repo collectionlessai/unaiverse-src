@@ -1308,7 +1308,7 @@ class AgentBasics:
                 outputs = (outputs, )
         except Exception as e:
             self.err(f"Error while calling the processor [{e}]")
-            outputs = None
+            outputs = (None, ) * len(self.proc_outputs)
         outputs = self.proc_callback_outputs(outputs)
 
         # Saving
