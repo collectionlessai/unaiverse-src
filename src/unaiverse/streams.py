@@ -174,18 +174,15 @@ class DataStream:
         Returns:
             torch.Tensor | None: Adapted data sample if available.
         """
-        if self.enabled:
-            if requested_by is not None:
-                if (requested_by not in self.data_timestamp_when_got_by or
-                        self.data_timestamp_when_got_by[requested_by] != self.data_timestamp):
-                    self.data_timestamp_when_got_by[requested_by] = self.data_timestamp
-                    return self.data
-                else:
-                    return None
-            else:
+        if requested_by is not None:
+            if (requested_by not in self.data_timestamp_when_got_by or
+                    self.data_timestamp_when_got_by[requested_by] != self.data_timestamp):
+                self.data_timestamp_when_got_by[requested_by] = self.data_timestamp
                 return self.data
+            else:
+                return None
         else:
-            return None
+            return self.data
 
     def get_(self, requested_by: str | None = None) -> torch.Tensor:
         """Wrapper of 'get'."""

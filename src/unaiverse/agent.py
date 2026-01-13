@@ -35,6 +35,7 @@ class Agent(AgentBasics):
         self._engaged_agents = set()
         self._agents_who_completed_what_they_were_asked = set()
         self._agents_who_were_asked = set()
+        self._agents_who_received_set_next_action = set()
         self._eval_results = {}
 
         # Status variables (assumed to start with "_"): Recordings
@@ -88,6 +89,7 @@ class Agent(AgentBasics):
 
         at_least_one_completed = False
         _, private_peer_id = self.get_peer_ids()
+        self._agents_who_received_set_next_action = set()
         for _peer_id in involved_agents:
             ret = await self._node_conn.send(_peer_id, channel_trail=None,
                                              content={"action_name": action, "args": args,
@@ -96,6 +98,9 @@ class Agent(AgentBasics):
             at_least_one_completed = at_least_one_completed or ret
             self.deb(f"[set_next_action] {self._node_name} sent action: {action}, with args: {args}, "
                      f"and result of sending is {ret}")
+
+            if ret:
+                self._agents_who_received_set_next_action.add(_peer_id)
         return at_least_one_completed
 
     async def set_engaged_partner(self, agent: str | list[str] | set[str] | None):
@@ -1744,17 +1749,6 @@ class Agent(AgentBasics):
                         if y_text is not None and len(y_text) > 0:
                             self.out("Asking to learn: \"" + y_text + "\"")
 
-        # Setting recipient in the case of direct messages
-        # (differently, in case of pubsub, the agent is already sending messages to all)
-        if u_hashes is not None:
-            for u_hash in u_hashes:
-                if not DataProps.is_pubsub_from_net_hash(u_hash):
-                    self.add_recipient(u_hash, agent, samples)
-        if yhat_hashes is not None:
-            for yhat_hash in yhat_hashes:
-                if not DataProps.is_pubsub_from_net_hash(yhat_hash):
-                    self.add_recipient(yhat_hash, agent, samples)
-
         # Triggering
         if for_what == "gen":
             if await self.set_next_action(agent, action="do_gen", args={"u_hashes": u_hashes,
@@ -1764,6 +1758,17 @@ class Agent(AgentBasics):
                                           ref_uuid=ref_uuid):
                 if samples > 1:
                     self._agents_who_were_asked.add(agent)
+
+                # Setting recipient in the case of direct messages
+                # (differently, in case of pubsub, the agent is already sending messages to all)
+                if u_hashes is not None:
+                    for u_hash in u_hashes:
+                        if not DataProps.is_pubsub_from_net_hash(u_hash):
+                            self.add_recipient(u_hash, agent, samples)
+                if yhat_hashes is not None:
+                    for yhat_hash in yhat_hashes:
+                        if not DataProps.is_pubsub_from_net_hash(yhat_hash):
+                            self.add_recipient(yhat_hash, agent, samples)
                 return True
             else:
                 self.err(f"Unable to ask {agent} to generate")
@@ -1777,6 +1782,17 @@ class Agent(AgentBasics):
                                           ref_uuid=ref_uuid):
                 if samples > 1:
                     self._agents_who_were_asked.add(agent)
+
+                # Setting recipient in the case of direct messages
+                # (differently, in case of pubsub, the agent is already sending messages to all)
+                if u_hashes is not None:
+                    for u_hash in u_hashes:
+                        if not DataProps.is_pubsub_from_net_hash(u_hash):
+                            self.add_recipient(u_hash, agent, samples)
+                if yhat_hashes is not None:
+                    for yhat_hash in yhat_hashes:
+                        if not DataProps.is_pubsub_from_net_hash(yhat_hash):
+                            self.add_recipient(yhat_hash, agent, samples)
                 return True
             else:
                 self.err(f"Unable to ask {agent} to learn to generate")
@@ -2174,7 +2190,7 @@ class Agent(AgentBasics):
             return agent
         peer_id = agent
         engaged_or_found = (
-            self._engaged_agents) if len(self._engaged_agents) > len(self._found_agents) else self._found_agents
+            self._engaged_agents) if len(self._engaged_agents) > 0 else self._found_agents
         involved_agents = [peer_id] if peer_id is not None and peer_id != "<valid_cmp>" else (
             self._valid_cmp_agents) if peer_id is not None and peer_id == "<valid_cmp>" else engaged_or_found
         if len(involved_agents) == 0:

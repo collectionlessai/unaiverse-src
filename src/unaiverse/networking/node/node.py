@@ -704,11 +704,12 @@ class Node:
                 before_updating_pools_fcn(peer_id)
             await self.conn.update()
 
-            self.agents_expected_to_send_ack[peer_id] = {
-                "ask_time": self.clock.get_time(),
-                "peer_id": peer_id,
-                "args_of_ask_to_get_in_touch": all_args
-            }
+            if peer_id not in self.agents_expected_to_send_ack:
+                self.agents_expected_to_send_ack[peer_id] = {
+                    "ask_time": self.clock.get_time(),
+                    "peer_id": peer_id,
+                    "args_of_ask_to_get_in_touch": all_args
+                }
 
             self.out(f"Current set of {len(self.agents_expected_to_send_ack)} connected peer IDs that will get our "
                      f"profile and are expected to send a confirmation: "
@@ -926,10 +927,13 @@ class Node:
                 for stream in proc_streams.values():
                     if processor_text_stream is None and stream.props.is_text():
                         processor_text_stream = stream
+                        processor_text_stream.disable()
                     if processor_img_stream is None and stream.props.is_img():
                         processor_img_stream = stream
+                        processor_img_stream.disable()
                     if processor_whatever_stream is None and (not stream.props.is_img() and not stream.props.is_text()):
                         processor_whatever_stream = stream
+                        processor_whatever_stream.disable()
 
                 if processor_text_stream is None:
                     raise GenException("Interactive mode requires a processor that generates a text stream")
@@ -2256,7 +2260,7 @@ class Node:
         # Updating (retry)
         for peer_id in agents_to_retry:
             connection_dict = self.agents_expected_to_send_ack[peer_id]
-            del self.agents_expected_to_send_ack[peer_id]  # This ONLY removes from the connected-without-ack queue
+            self.out(f"Retrying to connect to with args {connection_dict['args_of_ask_to_get_in_touch']}")
             await self.ask_to_get_in_touch(**connection_dict["args_of_ask_to_get_in_touch"])  # Trying again
 
     async def __purge(self, peer_id: str):

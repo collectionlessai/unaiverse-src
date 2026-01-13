@@ -954,6 +954,8 @@ class AgentBasics:
         Returns:
             The corresponding network hash string (peer_id::dm:... or peer_id::ps:name_or_group), or None if not found.
         """
+        if user_stream_hash is None:
+            return None
         if "::" in user_stream_hash:
             return user_stream_hash  # It was already fine
         components = user_stream_hash.split(":")
