@@ -1295,7 +1295,13 @@ class AgentBasics:
 
         if AgentBasics.DEBUG:
             if inputs is not None:
-                self.deb(f"[generate] Input shapes: {[x.shape for x in inputs if isinstance(x, torch.Tensor)]}")
+                input_shapes = []
+                for x in inputs:
+                    if isinstance(x, torch.Tensor):
+                        input_shapes.append(x.shape)
+                    else:
+                        input_shapes.append("<non-tensor>")
+                self.deb(f"[generate] Input shapes: {input_shapes}")
                 self.deb(f"[generate] Input data tag: {data_tag}")
 
         # Calling processor (inference) passing the collected inputs
