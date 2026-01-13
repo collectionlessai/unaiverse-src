@@ -218,14 +218,11 @@ class Action:
     MAX_TIME_REACHED = 1
     MAX_TIMEOUT_DURING_ATTEMPTS_REACHED = 2
 
-    # Output print function
-    out_fcn = print
-
     def __init__(self, name: str, args: dict, actionable: object,
                  idx: int = -1,
                  ready: bool = True,
                  msg: str | None = None,
-                 avoid_changing_ready: bool = False):
+                 avoid_changing_ready: bool = False, out_fcn: Callable = print):
         """Initializes an `Action` object, which encapsulates a method to be executed on a given object (`actionable`)
         with specified arguments. It sets up various properties for managing multistep actions, including
         `total_steps`, `total_time`, and `timeout`. It also handles wildcard argument replacement and checks for the
@@ -241,6 +238,7 @@ class Action:
             msg: An optional human-readable message.
             avoid_changing_ready: A boolean indicating that the selected ready state should not be changed by
                 internal rules.
+            out_fcn: Output print function.
         """
         # Basic properties
         self.name = name  # Name of the action (name of the corresponding method)
@@ -250,6 +248,7 @@ class Action:
         self.requests = ActionRequestList()  # List of requests to make this action ready to be executed (customizable)
         self.id = idx  # Unique ID of the action (-1 if not needed)
         self.msg = msg  # Human-readable message associated to this instance of action
+        self.out_fcn = out_fcn
 
         # Fix UNICODE chars
         if self.msg is not None:
@@ -326,7 +325,7 @@ class Action:
         actual_args = self.get_actual_params(request_args)  # Getting the actual values of the arguments
 
         if self.msg is not None:
-            Action.out_fcn(self.msg, request, self.requests)
+            self.out_fcn(self.msg, request, self.requests)
 
         if actual_args is not None:
 
@@ -851,11 +850,9 @@ class Action:
 
 
 class State:
-    # Output print function
-    out_fcn = print
 
     def __init__(self, name: str, idx: int = -1, action: Action | None = None, waiting_time: float = 0.,
-                 blocking: bool = True, msg: str | None = None):
+                 blocking: bool = True, msg: str | None = None, out_fcn: Callable = print):
         """Initializes a `State` object, which is a fundamental component of a Hybrid State Machine. A state can be
         associated with an optional `Action` to be performed, a unique name, and various properties like waiting time
         and blocking behavior. It also stores a human-readable message.
@@ -867,6 +864,7 @@ class State:
             waiting_time: The number of seconds to wait before the state can transition.
             blocking: A boolean indicating if the state blocks execution until a condition is met.
             msg: An optional message associated with the state.
+            out_fcn: Output print function.
         """
         self.name = name  # Name of the state (must be unique)
         self.action = action  # Inner state action (it can be None)
@@ -875,6 +873,7 @@ class State:
         self.starting_time = 0.
         self.blocking = blocking
         self.msg = msg  # Human-readable message associated to this instance of state
+        self.out_fcn = out_fcn
 
         # Fix UNICODE chars
         if self.msg is not None:
@@ -900,7 +899,7 @@ class State:
             self.starting_time = time.perf_counter()
 
         if self.msg is not None:
-            State.out_fcn(self.msg)
+            self.out_fcn(self.msg)
 
         if self.action is not None:
             if HybridStateMachine.DEBUG:
@@ -1132,10 +1131,10 @@ class HybridStateMachine:
                                    request: ActionRequest | None = None, requests: ActionRequestList | None = None):
             wrapped_out_fcn(msg, False, request, requests)
 
-        State.out_fcn = wrapped_state_out_fcn
-        Action.out_fcn = wrapped_action_out_fcn
+        self.state_out_fcn = wrapped_state_out_fcn
+        self.action_out_fcn = wrapped_action_out_fcn
 
-    def set_print_fcn(self, print_fcn, supports_html: bool = False):
+    def set_print_fcn(self, print_fcn, supports_html):
         self.print_fcn = print_fcn
         self.print_fcn_supports_html = supports_html
 
@@ -1383,7 +1382,7 @@ class HybridStateMachine:
         else:
             act = Action(name=action, args=args, idx=len(self.__id_to_action),
                          actionable=self.actionable, avoid_changing_ready=True,
-                         msg=msg_action)
+                         msg=msg_action, out_fcn=self.action_out_fcn)
             act.set_wildcards(self.wildcards)
             self.__id_to_action.append(act)
         if waiting_time is None:
@@ -1393,7 +1392,8 @@ class HybridStateMachine:
         if msg is None:
             msg = sta_obj.msg_with_wildcards if sta_obj is not None else None
 
-        sta = State(name=state, idx=state_id, action=act, waiting_time=waiting_time, blocking=blocking, msg=msg)
+        sta = State(name=state, idx=state_id, action=act, waiting_time=waiting_time, blocking=blocking, msg=msg,
+                    out_fcn=self.state_out_fcn)
         sta.set_wildcards(self.wildcards)
         if state not in self.states:
             self.__id_to_state.append(sta)
@@ -1664,7 +1664,7 @@ class HybridStateMachine:
 
         # Adding the new action
         new_action = Action(name=action, args=args, idx=act_id, actionable=self.actionable, ready=ready, msg=msg,
-                            avoid_changing_ready=avoid_changing_ready)
+                            avoid_changing_ready=avoid_changing_ready, out_fcn=self.action_out_fcn)
         self.transitions[from_state][to_state].append(new_action)
         self.__id_to_action.append(new_action)
 
@@ -1932,7 +1932,7 @@ class HybridStateMachine:
                 print(f"[DEBUG HSM] Action {self.__action.name}, after being called, leaded to status: {status}")
 
             if action.msg is not None and self.show_action_completion:
-                Action.out_fcn(HybridStateMachine.ACTION_TICKS_PER_STATUS[status], None, None)
+                action.out_fcn(HybridStateMachine.ACTION_TICKS_PER_STATUS[status], None, None)
 
             # Post-call operations
             if status == 0:  # Done
@@ -2031,7 +2031,7 @@ class HybridStateMachine:
         # (also when a step of a multistep action is executed) or a blocking state is reached
         while True:
             if self.welcome_msg is not None and self.state is not None and self.state == self.initial_state:
-                State.out_fcn(self.welcome_msg)
+                self.state_out_fcn(self.welcome_msg)
                 self.set_welcome_message(None)
 
             await self.act_states()

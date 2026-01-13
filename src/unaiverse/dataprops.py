@@ -772,7 +772,7 @@ class DataProps:
 
         if self.is_tensor():
             if not self.has_tensor_labels():
-                str_rep = f"{'x'.join(map(str, data.shape))} tensor ({data.dtype})\n{data.cpu().numpy()}"
+                str_rep = f"{'x'.join(map(str, data.shape))} tensor ({data.dtype})\n{data.detach().cpu().numpy()}"
                 if len(str_rep) > 110:
                     str_rep = str_rep[0:(110-3)] + "..."
                 return str_rep

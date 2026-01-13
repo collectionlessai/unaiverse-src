@@ -1763,11 +1763,9 @@ class AgentBasics:
 
                     behav = self.behav if self.behav.is_enabled() else self.behav_lone_wolf
                     if behav.are_debug_messages_active():
-                        behav.print_fcn(behav.print_start +
-                                        f"Skipping sample named {name} received in net hash {net_hash}, "
-                                        f"tag={data_tag}, uuid={data_uuid}: {reason}",
-                                        end=behav.print_ending,
-                                        file=behav.print_stream)
+                        behav.action_out_fcn(behav.print_start +
+                                             f"Skipping sample named {name} received in net hash {net_hash}, "
+                                             f"tag={data_tag}, uuid={data_uuid}: {reason}")
 
                     if AgentBasics.DEBUG:
                         if net_hash not in self.known_streams:

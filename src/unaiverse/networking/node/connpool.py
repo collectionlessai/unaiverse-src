@@ -184,6 +184,11 @@ class ConnectionPools:
         if ConnectionPools.DEBUG:
             print(f"[DEBUG CONNECTIONS-POOL] Connecting to {addresses}")
 
+        if addresses is None or len(addresses) == 0:
+            if ConnectionPools.DEBUG:
+                print(f"[DEBUG CONNECTIONS-POOL] Connection failed! (not-event tried, invalid addresses: {addresses})")
+            return None, False
+
         try:
             winning_addr_info_dict = p2p.connect_to(addresses)
             peer_id = winning_addr_info_dict.get('ID')
@@ -1240,8 +1245,11 @@ class NodeConn(ConnectionPools):
                           f"{len(rendezvous_peer_infos)} peers)")
 
                 for c in rendezvous_peer_infos:
-                    if c['addrs'] is None or len(c['addrs']) == 0:
-                        print(f"[DEBUG CONNECTIONS-POOL] Skipping a peer with missing addrs: {c}")
+                    if c['addrs'] is None:
+                        print(f"[DEBUG CONNECTIONS-POOL] Skipping a peer with None addrs (unexpected)")
+                        continue
+                    if len(c['addrs']) == 0:
+                        print(f"[DEBUG CONNECTIONS-POOL] Skipping a peer with zero-length addrs-list (unexpected)")
                         continue
                     if (c['misc'] & 1) == 1 and (c['misc'] & 2) == 0:
                         world_agents_peer_infos.append(c)
