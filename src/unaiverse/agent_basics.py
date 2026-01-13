@@ -1618,40 +1618,41 @@ class AgentBasics:
                 # - the stream name must be known
                 # - if the UUID associated to our local stream is the same of the data, then we check tag order
                 # - if the UUID associated to our local stream is the expected one, we don't check tag order
+                skip = False
                 reason = None
-                skip = data is None
-                if data is None:
-                    reason = "Data is None"
-                skip = skip or net_hash not in self.known_streams
-                if net_hash not in self.known_streams:
-                    reason = f"The net hash {net_hash} is not a known stream hash"
-                skip = skip or name not in self.known_streams[net_hash]
-                if name not in self.known_streams[net_hash]:
-                    reason = f"The data stream named {name} is present for net hash {net_hash}"
-                skip = (skip or (self.known_streams[net_hash][name].get_uuid(expected=True) is not None and
-                        data_uuid != self.known_streams[net_hash][name].get_uuid(expected=True)))
-                if (self.known_streams[net_hash][name].get_uuid(expected=True) is not None and
-                        data_uuid != self.known_streams[net_hash][name].get_uuid(expected=True)):
-                    reason = (f"The data UUID {data_uuid} is not the expected one "
-                              f"{self.known_streams[net_hash][name].get_uuid(expected=True)}")
-                skip = (skip or (self.known_streams[net_hash][name].get_uuid(expected=True) is None and
-                                 self.known_streams[net_hash][name].get_uuid(expected=False) is not None and
-                        data_uuid != self.known_streams[net_hash][name].get_uuid(expected=False)))
-                if (self.known_streams[net_hash][name].get_uuid(expected=True) is None and
-                        self.known_streams[net_hash][name].get_uuid(expected=False) is not None and
-                        data_uuid != self.known_streams[net_hash][name].get_uuid(expected=False)):
-                    reason = (f"The data UUID {data_uuid} is not the one of the stream, which is "
-                              f"{self.known_streams[net_hash][name].get_uuid(expected=False)}")
-                skip = (skip or (self.known_streams[net_hash][name].get_uuid(expected=True) is None and
-                        self.known_streams[net_hash][name].get_uuid(expected=False) is not None and
-                        data_uuid == self.known_streams[net_hash][name].get_uuid(expected=False) and
-                        data_tag <= self.known_streams[net_hash][name].get_tag()))
-                if (self.known_streams[net_hash][name].get_uuid(expected=True) is None and
-                        self.known_streams[net_hash][name].get_uuid(expected=False) is not None and
-                        data_uuid == self.known_streams[net_hash][name].get_uuid(expected=False) and
-                        data_tag <= self.known_streams[net_hash][name].get_tag()):
-                    reason = (f"The data tag {data_tag} is less or equal to the already present one "
-                              f"({self.known_streams[net_hash][name].get_tag()})")
+                if not skip:
+                    if data is None:
+                        skip = True
+                        reason = "Data is None"
+                if not skip:
+                    if net_hash not in self.known_streams:
+                        skip = True
+                        reason = f"The net hash {net_hash} is not a known stream hash"
+                if not skip:
+                    if name not in self.known_streams[net_hash]:
+                        skip = True
+                        reason = f"The data stream named {name} is present for net hash {net_hash}"
+                if not skip:
+                    if (self.known_streams[net_hash][name].get_uuid(expected=True) is not None and
+                            data_uuid != self.known_streams[net_hash][name].get_uuid(expected=True)):
+                        skip = True
+                        reason = (f"The data UUID {data_uuid} is not the expected one "
+                                  f"{self.known_streams[net_hash][name].get_uuid(expected=True)}")
+                if not skip:
+                    if (self.known_streams[net_hash][name].get_uuid(expected=True) is None and
+                            self.known_streams[net_hash][name].get_uuid(expected=False) is not None and
+                            data_uuid != self.known_streams[net_hash][name].get_uuid(expected=False)):
+                        skip = True
+                        reason = (f"The data UUID {data_uuid} is not the one of the stream, which is "
+                                  f"{self.known_streams[net_hash][name].get_uuid(expected=False)}")
+                if not skip:
+                    if (self.known_streams[net_hash][name].get_uuid(expected=True) is None and
+                            self.known_streams[net_hash][name].get_uuid(expected=False) is not None and
+                            data_uuid == self.known_streams[net_hash][name].get_uuid(expected=False) and
+                            data_tag <= self.known_streams[net_hash][name].get_tag()):
+                        skip = True
+                        reason = (f"The data tag {data_tag} is less or equal to the already present one "
+                                  f"({self.known_streams[net_hash][name].get_tag()})")
 
                 # If we sample can be accepted...
                 if not skip:
