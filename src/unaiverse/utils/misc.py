@@ -359,6 +359,9 @@ class PolicyFilterHuman:
         agent = policy_filter_opts['agent']
         public = policy_filter_opts['public']
 
+        # Ensuring the input stream is disabled (important)
+        agent.disable_proc_input(public=public)
+
         # If the agent lives in the TuringHotel world...
         action = all_actions[action_id]
         action_name = action.name

@@ -195,16 +195,18 @@ class DataStream:
         return self.data_tag
 
     def set_tag(self, data_tag: int):
-        self.data_tag = data_tag
+        if self.enabled:
+            self.data_tag = data_tag
 
     def get_uuid(self, expected: bool = False) -> str | None:
         return self.data_uuid if not expected else self.data_uuid_expected
 
     def set_uuid(self, ref_uuid: str | None, expected: bool = False):
-        if not expected:
-            self.data_uuid = ref_uuid
-        else:
-            self.data_uuid_expected = ref_uuid
+        if self.enabled:
+            if not expected:
+                self.data_uuid = ref_uuid
+            else:
+                self.data_uuid_expected = ref_uuid
 
     def mark_uuid_as_clearable(self, net_hash):
         self.data_uuid_clearable = True
