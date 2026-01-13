@@ -1237,7 +1237,7 @@ class LLama(ModuleWrapper):
             proc_inputs=[Data4Proc(data_type="text", pubsub=False, private_only=True)],
             proc_outputs=[Data4Proc(data_type="text", pubsub=False, private_only=True)]
         )
-        self.module = pipeline("text-generation", model="meta-llama/Llama-3.2-3B",
+        self.module = pipeline("text-generation", model="meta-llama/Llama-3.2-3B-Instruct",
                                torch_dtype=torch.bfloat16, device=self.device)
 
     def forward(self, msg: str, first: bool = False, last: bool = False):
@@ -1245,7 +1245,7 @@ class LLama(ModuleWrapper):
                       {"role": "user", "content": msg}]
         prompt = self.module.tokenizer.apply_chat_template(msg_struct, tokenize=False, add_generation_prompt=True)
 
-        out = self.module(prompt, max_new_tokens=256, do_sample=True, temperature=0.7, top_k=50, top_p=0.95)
+        out = self.module(prompt, max_new_tokens=256, do_sample=True, return_full_text=False, temperature=0.7, top_k=50, top_p=0.95)
         out = out[0]["generated_text"] if (out is not None and len(out) > 0 and "generated_text" in out[0])\
             else "Error!"
         if "<|assistant|>\n" in out:
