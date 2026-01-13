@@ -1887,7 +1887,7 @@ class AgentBasics:
                 stream_obj.enable()
 
     def set_proc_input(self, data: str | Image | torch.Tensor | None, public: bool = False,
-                       uuid: str | None = None, data_type: str = "auto"):
+                       uuid: str | None = None, data_type: str = "auto", data_tag: int = -1):
         peer_id = self.get_peer_ids()[0] if public else self.get_peer_ids()[1]
         proc_in = self.find_streams(peer_id, "processor_in")
         if proc_in is None or len(proc_in) == 0:
@@ -1901,7 +1901,7 @@ class AgentBasics:
                                 ((data_type == "img" or isinstance(data, Image)) and stream_obj.props.is_img()) or
                                 ((data_type == "tensor" or isinstance(data, torch.Tensor))
                                  and stream_obj.props.is_tensor())):
-                            stream_obj.set(data)
+                            stream_obj.set(data, data_tag)
                             stream_obj.set_uuid(None, expected=True)
                             stream_obj.set_uuid(uuid, expected=False)
                             return True
