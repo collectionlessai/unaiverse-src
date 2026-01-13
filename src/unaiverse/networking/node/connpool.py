@@ -1248,9 +1248,9 @@ class NodeConn(ConnectionPools):
                     if c['addrs'] is None:
                         print(f"[DEBUG CONNECTIONS-POOL] Skipping a peer with None addrs (unexpected)")
                         continue
-                    if len(c['addrs']) == 0:
-                        print(f"[DEBUG CONNECTIONS-POOL] Skipping a peer with zero-length addrs-list (unexpected)")
-                        continue
+                    # if len(c['addrs']) == 0:
+                    #    print(f"[DEBUG CONNECTIONS-POOL] Skipping a peer with zero-length addrs-list (unexpected)")
+                    #    continue
                     if (c['misc'] & 1) == 1 and (c['misc'] & 2) == 0:
                         world_agents_peer_infos.append(c)
                     elif (c['misc'] & 1) == 1 and (c['misc'] & 2) == 2:
