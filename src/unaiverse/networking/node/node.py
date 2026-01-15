@@ -898,6 +898,7 @@ class Node:
             processor_img_stream = None
             processor_text_stream = None
             processor_whatever_stream = None
+            last_tags = {'text': -1, 'img': -1, 'whatever': -1}
             cap = None
             splash_text_shown = False
             interact_mode_opts: dict | None = None
@@ -1102,15 +1103,21 @@ class Node:
 
                                 # Putting message in the processor input stream
                                 processor_text_stream.enable()
-                                processor_text_stream.set(msg)
+                                keep_tag = processor_text_stream.get_tag() != last_tags['text']
+                                processor_text_stream.set(msg, keep_existing_tag=keep_tag)
+                                last_tags['text'] = processor_text_stream.get_tag()
                                 processor_text_stream.disable()
                                 if processor_img_stream is not None:
                                     processor_img_stream.enable()
-                                    processor_img_stream.set(image_pil)
+                                    keep_tag = processor_img_stream.get_tag() != last_tags['img']
+                                    processor_img_stream.set(image_pil, keep_existing_tag=keep_tag)
+                                    last_tags['img'] = processor_img_stream.get_tag()
                                     processor_img_stream.disable()
                                 if processor_whatever_stream is not None:
                                     processor_whatever_stream.enable()
-                                    processor_whatever_stream.set(whatever)
+                                    keep_tag = processor_whatever_stream.get_tag() != last_tags['whatever']
+                                    processor_whatever_stream.set(whatever, keep_existing_tag=keep_tag)
+                                    last_tags['whatever'] = processor_whatever_stream.get_tag()
                                     processor_whatever_stream.disable()
                         except queue.Empty:
                             pass  # If nothing has been typed (+ enter)

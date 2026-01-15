@@ -24,11 +24,11 @@ from unaiverse.clock import Clock
 from collections.abc import Callable
 from unaiverse.networking.p2p.messages import Msg
 from unaiverse.dataprops import DataProps, Data4Proc
-from unaiverse.hsm import HybridStateMachine, Action, ActionRequest, State
 from unaiverse.networking.node.profile import NodeProfile
 from unaiverse.utils.misc import GenException, FileTracker
 from unaiverse.streams import BufferedDataStream, DataStream
 from unaiverse.networking.node.connpool import ConnectionPools
+from unaiverse.hsm import HybridStateMachine, Action, ActionRequest
 from unaiverse.modules.utils import AgentProcessorChecker, ModuleWrapper
 
 
@@ -1233,7 +1233,7 @@ class AgentBasics:
                         continue
 
                     # Matching the currently checked input stream with one of the processor inputs
-                    stream_sample = None
+                    stream_sample = stream.get(requested_by="generate")
                     for i in range(len(self.proc_inputs)):
 
                         # If the current input stream is compatible with the i-th input slot...
@@ -1249,7 +1249,6 @@ class AgentBasics:
                             # Found a valid assignment: getting stream sample
                             self.deb(f"[generate] Setting the {i}-th network input to stream with "
                                      f"net_hash: {net_hash}, name: {stream_name}")
-                            stream_sample = stream.get(requested_by="generate")
                             if stream_sample is None:
                                 self.deb(f"[generate] Failed setting the {i}-th input, got a None sample")
                             else:
@@ -1901,11 +1900,33 @@ class AgentBasics:
                                 ((data_type == "img" or isinstance(data, Image)) and stream_obj.props.is_img()) or
                                 ((data_type == "tensor" or isinstance(data, torch.Tensor))
                                  and stream_obj.props.is_tensor())):
-                            stream_obj.set(data, data_tag)
+                            stream_obj.set(data)  # This might fail if the stream is disabled
                             stream_obj.set_uuid(None, expected=True)
                             stream_obj.set_uuid(uuid, expected=False)
+                            stream_obj.set_tag(data_tag)
                             return True
         return False
+
+    def get_tag(self, net_hash: str):
+        if net_hash in self.known_streams:
+            data_tag = -1
+            stream_dict = self.known_streams[net_hash]
+            for stream_obj in stream_dict.values():
+                data_tag = max(data_tag, stream_obj.get_tag())
+            return data_tag
+        return -1
+
+    def set_tag(self, net_hash: str, data_tag: int):
+        if net_hash in self.known_streams:
+            stream_dict = self.known_streams[net_hash]
+            for stream_obj in stream_dict.values():
+                stream_obj.set_tag(data_tag)
+
+    def set_uuid(self, net_hash: str, uuid: int, expected: bool = False):
+        if net_hash in self.known_streams:
+            stream_dict = self.known_streams[net_hash]
+            for stream_obj in stream_dict.values():
+                stream_obj.set_uuid(uuid, expected=expected)
 
     def force_action_step(self, step: int):
         self.overridden_action_step = step if step >= 0 else None

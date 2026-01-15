@@ -57,8 +57,8 @@ class ActionRequest:
     def has_dummy_requester(self):
         return self.requester is None
 
-    def to_tuple(self):
-        return self.requester, self.args, self.timestamp, self.uuid
+    def to_str(self):
+        return json.dumps([self.requester, self.args, self.timestamp, self.uuid])
 
     def alter_arg(self, arg_name: str, arg_value: object):
         if arg_name in self.args:
@@ -79,7 +79,8 @@ class ActionRequest:
         Returns:
             A string containing a formatted summary of the instance.
         """
-        return f"(action={self.action.name}, requester={self.requester}, timestamp={self.timestamp}, uuid={self.uuid})"
+        return (f"(action={self.action.name}, args={self.args}, "
+                f"requester={self.requester}, timestamp={self.timestamp}, uuid={self.uuid})")
 
 
 class ActionRequestList:
@@ -135,18 +136,25 @@ class ActionRequestList:
             self.remove(req)
 
     def move_request_to_back(self, req: ActionRequest):
-        self.remove(req)
-        self.add(req)
+        if req.is_valid():
+            entering_time = self.by_insertion_order_entering_time[req.by_insertion_order_id]
+            self.remove(req)
+            self.add(req)
+            self.by_insertion_order_entering_time[req.by_insertion_order_id] = entering_time
 
     def move_requester_to_back(self, requester: object):
         requests = self.get_requests(requester)
         if requests is not None and len(requests) > 0:
             requests_copy = []
+            entering_times = []
             for req in requests:
-                requests_copy.append(req)
-                self.remove(req)
-            for req in requests_copy:
+                if req.is_valid():
+                    requests_copy.append(req)
+                    entering_times.append(self.by_insertion_order_entering_time[req.by_insertion_order_id])
+                    self.remove(req)
+            for i, req in enumerate(requests_copy):
                 self.add(req)
+                self.by_insertion_order_entering_time[req.by_insertion_order_id] = entering_times[i]
 
     def get_request(self, req_order_id: int, requester: object | None = None):
         if req_order_id < 0 and req_order_id != -1:
@@ -165,21 +173,24 @@ class ActionRequestList:
     def get_most_recent_request(self, requester: object | None = None):
         return self.get_request(-1, requester)
 
-    def get_requests(self, requester: object | None = None, simplified: bool = False):
+    def get_requests(self, requester: object | None = None, to_str: bool = False):
         if requester is None:
-            if not simplified:
+            if not to_str:
                 return self.by_insertion_order
             else:
-                return [req.to_tuple() for req in self.by_insertion_order]
+                return json.dumps([req.to_str() for req in self.by_insertion_order])
         else:
             if requester in self.by_requester_and_by_insertion_order:
-                if not simplified:
+                if not to_str:
                     return self.by_requester_and_by_insertion_order[requester]
                 else:
                     reqs = self.by_requester_and_by_insertion_order[requester]
-                    return [req.to_tuple() for req in reqs]
+                    return json.dumps([req.to_str() for req in reqs])
             else:
-                return []
+                if not to_str:
+                    return []
+                else:
+                    return json.dumps([])
 
     def is_requester_known(self, requester: object):
         return requester in self.by_requester_and_by_insertion_order
@@ -1023,7 +1034,7 @@ class State:
 class HybridStateMachine:
     DEBUG = True
     DEFAULT_WILDCARDS = {'<world>': '<world>', '<agent>': '<agent>', '<partner>': '<partner>', '<role>': '<role>'}
-    REQUEST_VALIDITY_TIMEOUT = 10.0  # Seconds
+    REQUEST_VALIDITY_TIMEOUT = 5 * 60.0  # Seconds
     ACTION_TICKS_PER_STATUS = ["   ✅ ", "   🔄 ", "   ❌ "]  # Keep the final spaces
 
     def __init__(self, actionable: object, wildcards: dict[str, str | float | int] | None = None,
@@ -1830,7 +1841,7 @@ class HybridStateMachine:
 
                 if _idx < 0:
                     if HybridStateMachine.DEBUG:
-                        print(f"[DEBUG HSM] Policy selected no actions")
+                        print(f"[DEBUG HSM, {self.role}] Policy selected no actions")
 
                     # No actions were applied
                     self.__cur_feasible_actions_status = None
@@ -1838,8 +1849,12 @@ class HybridStateMachine:
                     return -1  # Early stop
                 else:
                     if HybridStateMachine.DEBUG:
-                        print(f"[DEBUG HSM] Policy selected {actions_list[_idx].__str__()} whose requester is "
-                              f"{_request.requester if _request is not None else None}")
+                        if _request is not None:
+                            print(f"[DEBUG HSM, {self.role}] Policy selected {actions_list[_idx].__str__()}"
+                                  f" whose request is {_request.__str__()}")
+                            print(f"[DEBUG HSM, {self.role}] (request in to_str format: {_request.to_str()})")
+                        else:
+                            print(f"[DEBUG HSM, {self.role}] Policy selected {actions_list[_idx].__str__()}")
 
                 # Revisiting decisions due to the policy filter
                 if self.policy_filter is not None:
@@ -1850,7 +1865,13 @@ class HybridStateMachine:
                         _request = _request_f
                         if _idx < 0:
                             if HybridStateMachine.DEBUG:
-                                print(f"[DEBUG HSM] After the policy filter, policy selected no actions")
+                                print(f"[DEBUG HSM, {self.role}] After the policy filter, policy selected no-actions")
+                                if _request is not None:
+                                    print(f"[DEBUG HSM, {self.role}] Request is not None (unexpected) "
+                                          f"{_request.__str__()}")
+                                    print(f"[DEBUG HSM, {self.role}] (request in to_str format: {_request.to_str()})")
+                                else:
+                                    print(f"[DEBUG HSM, {self.role}] Request is None (as expected)")
 
                             # No actions were applied
                             self.__cur_feasible_actions_status = None
@@ -1858,9 +1879,28 @@ class HybridStateMachine:
                             return -1  # Early stop
                         else:
                             if HybridStateMachine.DEBUG:
-                                print(f"[DEBUG HSM] After the policy filter, policy selected "
+                                if _request is not None:
+                                    print(f"[DEBUG HSM, {self.role}] After the policy filter, policy selected "
+                                          f"{actions_list[_idx].__str__()}"
+                                          f" whose request is {_request.__str__()}")
+                                    print(f"[DEBUG HSM, {self.role}] (request in to_str format: {_request.to_str()})")
+                                else:
+                                    print(f"[DEBUG HSM, {self.role}] After the policy filter, policy selected "
+                                          f"{actions_list[_idx].__str__()}")
+                    else:
+                        if HybridStateMachine.DEBUG:
+                            print(f"[DEBUG HSM, {self.role}] After the policy filter, the policy decision was not "
+                                  f"changed")
+                            if _request is not None:
+                                print(f"[DEBUG HSM, {self.role}] In particular, after the policy filter, policy "
+                                      f"selected "
                                       f"{actions_list[_idx].__str__()}"
-                                      f" whose requester is {_request.requester if _request is not None else None}")
+                                      f" whose request is {_request.__str__()}")
+                                print(f"[DEBUG HSM, {self.role}] (request in to_str format: {_request.to_str()})")
+                            else:
+                                print(f"[DEBUG HSM, {self.role}] In particular, after the policy filter, policy "
+                                      f"selected "
+                                      f"{actions_list[_idx].__str__()}")
 
                 # Saving current action
                 self.limbo_state = self.state

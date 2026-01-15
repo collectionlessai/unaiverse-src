@@ -113,6 +113,7 @@ class Agent(AgentBasics):
         Returns:
             True all the times.
         """
+        self._found_agents.clear()
         self._engaged_agents.clear()
         if agent is not None:
             if isinstance(agent, str):
@@ -531,7 +532,7 @@ class Agent(AgentBasics):
                         # There will be no callbacks in the case of 1 sample, so mark the streams to clear UUID when
                         # getting such single sample
                         if samples == 1:
-                            stream.mark_uuid_as_clearable(net_hash)
+                            stream.mark_uuid_as_clearable()
 
         self.deb(f"[ask_gen] Overall, the action ask_gen will return {len(correctly_asked) > 0}")
         return len(correctly_asked) > 0
@@ -828,7 +829,7 @@ class Agent(AgentBasics):
                         # There will be no callbacks in the case of 1 sample, so mark the streams to clear UUID when
                         # getting such single sample
                         if samples == 1:
-                            stream.mark_uuid_as_clearable(net_hash)
+                            stream.mark_uuid_as_clearable()
 
         self.deb(f"[ask_learn] Overall the action ask_learn will return {len(correctly_asked) > 0}")
         return len(correctly_asked) > 0
@@ -1751,9 +1752,10 @@ class Agent(AgentBasics):
 
         # Triggering
         if for_what == "gen":
-            if await self.set_next_action(agent, action="do_gen", args={"u_hashes": u_hashes,
-                                                                        "samples": samples, "time": time,
-                                                                        "timeout": timeout},
+            if await self.set_next_action(agent, action="do_gen",
+                                          args=({"u_hashes": u_hashes} if len(u_hashes) > 0 else {}) |
+                                               {"samples": samples, "time": time,
+                                                "timeout": timeout},
                                           from_state=from_state, to_state=to_state,
                                           ref_uuid=ref_uuid):
                 if samples > 1:
@@ -1765,19 +1767,16 @@ class Agent(AgentBasics):
                     for u_hash in u_hashes:
                         if not DataProps.is_pubsub_from_net_hash(u_hash):
                             self.add_recipient(u_hash, agent, samples)
-                if yhat_hashes is not None:
-                    for yhat_hash in yhat_hashes:
-                        if not DataProps.is_pubsub_from_net_hash(yhat_hash):
-                            self.add_recipient(yhat_hash, agent, samples)
                 return True
             else:
                 self.err(f"Unable to ask {agent} to generate")
                 return False
         elif for_what == "learn":
-            if await self.set_next_action(agent, action="do_learn", args={"u_hashes": u_hashes,
-                                                                          "yhat_hashes": yhat_hashes,
-                                                                          "samples": samples, "time": time,
-                                                                          "timeout": timeout},
+            if await self.set_next_action(agent, action="do_learn",
+                                          args=({"u_hashes": u_hashes} if len(u_hashes) > 0 else {}) |
+                                               ({"yhat_hashes": yhat_hashes} if len(yhat_hashes) > 0 else {}) |
+                                               {"samples": samples, "time": time,
+                                                "timeout": timeout},
                                           from_state=from_state, to_state=to_state,
                                           ref_uuid=ref_uuid):
                 if samples > 1:
@@ -1932,7 +1931,7 @@ class Agent(AgentBasics):
         for net_hash, stream_dict in self.proc_streams.items():
             for stream_obj in stream_dict.values():
                 if stream_obj.props.is_public() != self.behaving_in_world():
-                    stream_obj.mark_uuid_as_clearable(net_hash)
+                    stream_obj.mark_uuid_as_clearable()
                     self.mark_recipient_as_removable(net_hash, peer_id_who_asked)
 
         if all_hashes is not None:
@@ -2152,25 +2151,25 @@ class Agent(AgentBasics):
             # Fixing
             if b is None:
                 o = o + (1. if how != "mse" else (o / steps) * 1.1)
-                print(f"Comparing: the second stream yields None")
+                self.print(f"Comparing: the second stream yields None")
             else:
                 if b_tag_w_offset == a_tag_w_offset:
                     o += compare(a, b, how)
                     k_b += 1
-                    print(f"Comparing tags: {a_tag} vs {b_tag}, samples: {a} vs {b}")
+                    self.print(f"Comparing tags: {a_tag} vs {b_tag}, samples: {a} vs {b}")
                 elif b_tag_w_offset > a_tag_w_offset:
                     if not restart_detected:
                         o = o + (1. if how != "mse" else (o / steps) * 1.1)  # Don't change k_b, some samples missing
-                        print(f"Comparing tags: {a_tag} vs {b_tag} -> expected one was missing, samples: {a} vs {b}")
+                        self.print(f"Comparing tags: {a_tag} vs {b_tag} -> expected one was missing, samples: {a} vs {b}")
                     else:
                         o = o + (1. if how != "mse" else (o / steps) * 1.1)
-                        print(f"Comparing tags: {a_tag} vs {b_tag} -> expected one was missing, samples: {a} vs {b}")
+                        self.print(f"Comparing tags: {a_tag} vs {b_tag} -> expected one was missing, samples: {a} vs {b}")
                         k_b += 1  # A restart was detected, it means that "stream_b" is behind, let's move it ahead
                 elif b_tag_w_offset < a_tag_w_offset:
-                    print(f"Comparing tags: {a_tag} vs {b_tag} -> too early w.r.t. expected, samples: {a} vs {b}")
+                    self.print(f"Comparing tags: {a_tag} vs {b_tag} -> too early w.r.t. expected, samples: {a} vs {b}")
                     return -1., False
 
-        print(f"Comparing error: {o / steps}")
+        self.print(f"Comparing error: {o / steps}")
 
         # Input("*** press enter to continue ***")
         return o / steps, True

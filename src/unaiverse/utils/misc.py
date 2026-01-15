@@ -386,47 +386,49 @@ class PolicyFilterHuman:
 
                 if not already_altered_request:
 
-                    # Original u_hashes
+                    # Getting the original u_hashes of the request
                     u_hashes = request.get_arg("u_hashes")
 
-                    # Moving original u_hashes to extra_hashes
-                    extra_hashes = request.get_arg("extra_hashes")
-                    if extra_hashes is not None:
-                        request.alter_arg("extra_hashes", extra_hashes + u_hashes)
-                    else:
-                        request.set_arg("extra_hashes", u_hashes)
-                    request.alter_arg("u_hashes", [proc_input_net_hash])
-                    request.set_mark("altered_by_policy_filter")
+                    # Moving original u_hashes of the request to extra_hashes
+                    if u_hashes is not None:
+                        extra_hashes = request.get_arg("extra_hashes")
+                        if extra_hashes is not None:
 
-                extra_hashes = request.get_arg("extra_hashes")[0]
-                if extra_hashes not in agent.known_streams:
+                            # Arg 'extra_hashes' could have been already there for some world-specific reasons
+                            request.alter_arg("extra_hashes", extra_hashes + u_hashes)
+                        else:
+
+                            # If arg 'extra_hashes' was not there
+                            request.set_arg("extra_hashes", u_hashes)
+
+                        request.alter_arg("u_hashes", [proc_input_net_hash])
+                        request.set_mark("altered_by_policy_filter")  # Marking to avoid doing this again
+
+                # Out of the blue: checking if 'extra_hashes' is part of the request
+                extra_hashes = request.get_arg("extra_hashes")
+                data_tag_from_extra_hashes = None
+
+                if extra_hashes is not None and extra_hashes[0] not in agent.known_streams:
 
                     # Fallback: when the other agent disconnects and the stream in extra_hashes is not known anymore
-                    stream_dict = agent.owned_streams[proc_input_net_hash]
-                    for stream_obj in stream_dict.values():
-                        stream_obj.enable()
-                        stream_obj.set_uuid(None, expected=False)
-                        stream_obj.set_uuid(None, expected=True)
-                        stream_obj.set_tag(-1)
-                        stream_obj.disable()
+                    agent.set_uuid(proc_input_net_hash, None, expected=False)
+                    agent.set_uuid(proc_input_net_hash, None, expected=True)
+                    agent.set_tag(proc_input_net_hash, -1)
+
                 else:
+                    if extra_hashes is not None:
+                        extra_hashes_0 = extra_hashes[0]  # Assuming the first extra hash dictates the tag
 
-                    # Guessing the data tag of the data (heuristic, using the first u_hash)
-                    stream_dict = agent.known_streams[extra_hashes]
-                    data_tag = -1
-                    for stream_obj in stream_dict.values():
-                        data_tag = stream_obj.get_tag()
-                        if data_tag != -1:
-                            break
+                        # Guessing the (max) data tag of the whole stream (heuristic)
+                        data_tag_from_extra_hashes = agent.get_tag(extra_hashes_0)
 
-                    # Preparing the input stream with the request UUID and the data tag of the original u_hashes
-                    stream_dict = agent.owned_streams[proc_input_net_hash]
-                    for stream_obj in stream_dict.values():
-                        stream_obj.enable()
-                        stream_obj.set_uuid(request.uuid, expected=False)
-                        stream_obj.set_uuid(request.uuid, expected=True)
-                        stream_obj.set_tag(data_tag)
-                        stream_obj.disable()
+                    # Preparing the input stream with the request UUID
+                    agent.set_uuid(proc_input_net_hash, request.uuid, expected=False)
+                    agent.set_uuid(proc_input_net_hash, request.uuid, expected=True)
+
+                    # We also force the data tag that was/is in 'extra_hashes', if 'extra_hashes' is present
+                    if data_tag_from_extra_hashes is not None:
+                        agent.set_tag(proc_input_net_hash, data_tag_from_extra_hashes)
 
         # Returning the revised policy decision
         return action_id, request

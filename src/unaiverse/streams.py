@@ -149,12 +149,13 @@ class DataStream:
         """
         return math.inf
 
-    def set(self, data: torch.Tensor | Image.Image | str, data_tag: int = -1) -> bool:
+    def set(self, data: torch.Tensor | Image.Image | str, data_tag: int = -1, keep_existing_tag: bool = False) -> bool:
         """Set a new data sample into the stream, that will be provided when calling "get()".
 
         Args:
             data (torch.Tensor): Data sample to set.
             data_tag (int): Custom data time tag >= 0 (Default: -1, meaning no tags).
+            keep_existing_tag: Keep the data tag that is already in the stream, if the provided data_tag arg is -1.
 
         Returns:
             bool: True if data was accepted based on time constraints, else False.
@@ -163,7 +164,8 @@ class DataStream:
                 (self.props.delta <= 0. or self.props.delta <= (self.clock.get_time() - self.data_timestamp))):
             self.data = self.props.adapt_tensor_to_tensor_labels(data) if data is not None else None
             self.data_timestamp = self.clock.get_cycle_time()
-            self.data_tag = data_tag if data_tag >= 0 else self.clock.get_cycle()
+            self.data_tag = data_tag if data_tag >= 0 else (
+                self.clock.get_cycle()) if self.data_tag < 0 or not keep_existing_tag else self.data_tag
             return True
         else:
             return False
@@ -195,20 +197,18 @@ class DataStream:
         return self.data_tag
 
     def set_tag(self, data_tag: int):
-        if self.enabled:
-            self.data_tag = data_tag
+        self.data_tag = data_tag
 
     def get_uuid(self, expected: bool = False) -> str | None:
         return self.data_uuid if not expected else self.data_uuid_expected
 
     def set_uuid(self, ref_uuid: str | None, expected: bool = False):
-        if self.enabled:
-            if not expected:
-                self.data_uuid = ref_uuid
-            else:
-                self.data_uuid_expected = ref_uuid
+        if not expected:
+            self.data_uuid = ref_uuid
+        else:
+            self.data_uuid_expected = ref_uuid
 
-    def mark_uuid_as_clearable(self, net_hash):
+    def mark_uuid_as_clearable(self):
         self.data_uuid_clearable = True
 
     def clear_uuid_if_marked_as_clearable(self):
@@ -298,12 +298,13 @@ class BufferedDataStream(DataStream):
             self.data_tag = new_tag
         return super().get(requested_by)
 
-    def set(self, data: torch.Tensor, data_tag: int = -1):
+    def set(self, data: torch.Tensor, data_tag: int = -1, keep_existing_tag: bool = False):
         """Store a new data sample into the buffer.
 
         Args:
             data (torch.Tensor): Data to store.
             data_tag (int): Custom data time tag >= 0 (Default: -1, meaning no tags).
+            keep_existing_tag: Keep the data tag that is already in the stream, if the provided data_tag arg is -1.
 
         Returns:
             bool: True if the data was buffered.
@@ -311,7 +312,7 @@ class BufferedDataStream(DataStream):
         if self.is_queue and data is None:
             return True
 
-        ret = super().set(data, data_tag)
+        ret = super().set(data, data_tag, keep_existing_tag)
 
         if ret:
             if not self.is_static or len(self.data_buffer) == 0:
