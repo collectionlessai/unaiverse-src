@@ -94,23 +94,23 @@ class P2P:
             else:
                 logger.setLevel(logging.INFO)
                 _log_config = {
-                    'net/identify': 'debug',
-                    'unailib': 'debug',
-                    # 'autotls': 'debug',
-                    # 'p2p-forge': 'debug',
-                    'nat': 'debug',
-                    'basichost': 'debug',
+                    'net/identify': 'warn',
+                    'unailib': 'info',
+                    # 'autotls': 'warn',
+                    # 'p2p-forge': 'warn',
+                    'nat': 'warn',
+                    'basichost': 'warn',
                     'p2p-circuit': 'debug',
                     'relay': 'debug',
-                    'p2p-holepunch': 'debug',
-                    'tcp-tpt': 'debug',
-                    'connmgr': 'debug',
-                    'dht': 'debug',
+                    'p2p-holepunch': 'warn',
+                    'tcp-tpt': 'warn',
+                    'connmgr': 'warn',
+                    'dht': 'warn',
                     'autorelay': 'debug',
-                    'autonat': 'debug',
-                    # "rcmgr": "debug",
-                    "swarm2": "debug",
-                    "yamux": "debug"
+                    'autonat': 'warn',
+                    # 'rcmgr': 'warn',
+                    'swarm2': 'warn',
+                    'yamux': 'warn'
                 }
 
             logger.info("🐍 Setting up and initializing P2P library core with user settings...")
