@@ -841,7 +841,7 @@ class NodeConn(ConnectionPools):
                         print("[DEBUG CONNECTIONS-POOL] Inspector peer id: " + str(self.inspector_peer_id))
                         print(f"[DEBUG CONNECTIONS-POOL] Unable to determine the peer type for {peer_id}: "
                               f"cannot say if world agent, master, world node, inspector (disconnecting it)")
-                    await ConnectionPools.disconnect(p2p, peer_id)
+                    # await ConnectionPools.disconnect(p2p, peer_id)
                     continue
 
                 if inbound:
