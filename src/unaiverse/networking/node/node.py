@@ -1929,14 +1929,14 @@ class Node:
 
         if peer_id is not None:
 
-            # # Relay reservation logic for non-public peers
-            # if not self.conn.p2p_world.is_public and self.conn.p2p_world.relay_is_enabled:
-            #     self.out("Node is not publicly reachable. Enabling Static AutoRelay on the world's private network.")
-            #     try:
-            #         self.conn.p2p_world.start_static_relay(peer_id, addresses)
-            #         self.out("Static AutoRelay enabled. Reservation and renewal will be handled automatically.")
-            #     except Exception as e:
-            #         self.err(f"An error occurred enabling Static AutoRelay: {e}.")
+            # Relay reservation logic for non-public peers
+            if not self.conn.p2p_world.is_public and self.conn.p2p_world.relay_is_enabled:
+                self.out("Node is not publicly reachable. Enabling Static AutoRelay on the world's private network.")
+                try:
+                    self.conn.p2p_world.start_static_relay(peer_id, addresses)
+                    self.out("Static AutoRelay enabled. Reservation and renewal will be handled automatically.")
+                except Exception as e:
+                    self.err(f"An error occurred enabling Static AutoRelay: {e}.")
             
             # Load custom stats class if provided
             stats_class = None

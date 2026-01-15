@@ -196,30 +196,6 @@ type NodeInstance struct {
 // --- Create a package-level logger ---
 var logger = golog.Logger("unailib")
 
-// Create a writer to capture logging from yamux
-var yamuxLogger = golog.Logger("yamux")
-// 1. Create the Adapter
-type GologAdapter struct {
-	Logger golog.StandardLogger
-}
-
-func (a *GologAdapter) Write(p []byte) (n int, err error) {
-	// Yamux logs end with a newline, which golog will also add. Trim it.
-	msg := string(bytes.TrimSpace(p))
-
-	// 2. Parse the level (Yamux prefixes logs with [ERR] or [WARN])
-	if strings.Contains(msg, "[ERR]") {
-		a.Logger.Error(msg)
-	} else if strings.Contains(msg, "[WARN]") {
-		a.Logger.Warn(msg)
-	} else {
-		// Default to info or debug for anything else
-		a.Logger.Info(msg)
-	}
-
-	return len(p), nil
-}
-
 // --- Multi-Instance State Management ---
 var (
 	// Set the libp2p configuration parameters.
