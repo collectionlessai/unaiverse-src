@@ -1922,7 +1922,7 @@ class AgentBasics:
             for stream_obj in stream_dict.values():
                 stream_obj.set_tag(data_tag)
 
-    def set_uuid(self, net_hash: str, uuid: int, expected: bool = False):
+    def set_uuid(self, net_hash: str, uuid: int | None, expected: bool = False):
         if net_hash in self.known_streams:
             stream_dict = self.known_streams[net_hash]
             for stream_obj in stream_dict.values():
