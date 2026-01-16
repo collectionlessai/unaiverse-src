@@ -13,10 +13,10 @@
                  Main Developers:    Stefano Melacci (Project Leader), Christian Di Maio, Tommaso Guidi
 """
 import os
-import uuid
 import torch
 import types
 import pickle
+import uuid as _uuid
 import importlib.resources
 from PIL.Image import Image
 from unaiverse.stats import Stats
@@ -351,7 +351,7 @@ class AgentBasics:
 
     @staticmethod
     def generate_uuid():
-        return uuid.uuid4().hex[0:8]
+        return _uuid.uuid4().hex[0:8]
 
     def augment_roles(self):
         """Augment the custom roles (role1, role2, etc.) with the default ones (public, world_master, etc.), generating
@@ -1839,6 +1839,7 @@ class AgentBasics:
 
                     for name in content.keys():
                         content[name]['data'] = self.callback_before_sending_sample(content_data[name],
+                                                                                    content[name]['data_tag'],
                                                                                     net_hash, name, None)
                         self.deb(f"[send_stream_samples] - Sending {content[name]['data']}")
 
@@ -1860,6 +1861,7 @@ class AgentBasics:
                         name_or_group = DataProps.name_or_group_from_net_hash(net_hash)
                         for name in content.keys():
                             content[name]['data'] = self.callback_before_sending_sample(content_data[name],
+                                                                                        content[name]['data_tag'],
                                                                                         net_hash, name, _recipient)
                             self.deb(f"[send_stream_samples] - Sending {content[name]['data']}")
 
@@ -2129,11 +2131,13 @@ class AgentBasics:
         self.proc_last_outputs = outputs
         return outputs
 
-    def callback_before_sending_sample(self, data, net_hash: str, stream_name: str, recipient: str | None):
+    def callback_before_sending_sample(self, data, data_tag: int,
+                                       net_hash: str, stream_name: str, recipient: str | None):
         """A callback method that handles the steam data right before sending it through the network.
 
         Args:
             data: The stream data sample.
+            data_tag: The tag of the sample.
             stream_name: The name of the data stream.
             net_hash: The net hash of the whole stream.
             recipient: The (planned) recipient of this sample (or None in case of pubsub).

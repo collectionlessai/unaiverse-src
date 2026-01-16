@@ -174,7 +174,7 @@ class ConnectionPools:
         """
 
         force: str | None = None
-        # force: str | None = 'udp'
+        # force: str | None = '/tls/ws'
         if force is not None:
             _addresses = [a for a in addresses if force in a]
             addresses.clear()
