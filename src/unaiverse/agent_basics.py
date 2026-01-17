@@ -1607,9 +1607,8 @@ class AgentBasics:
         net_hash = DataProps.normalize_net_hash(net_hash)
 
         self.out(f"Got a stream sample from {net_hash}...")
-
         if sample_dict is None or not isinstance(sample_dict, dict):
-            self.err(f"Invalid sample (expected a dictionary, got {type(sample_dict)}")
+            self.err(f"Invalid sample (expected a dictionary, got {type(sample_dict)})")
             return False
 
         if net_hash in self.known_streams:
