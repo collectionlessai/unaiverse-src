@@ -1608,8 +1608,18 @@ class AgentBasics:
 
         self.out(f"Got a stream sample from {net_hash}...")
 
+        if sample_dict is None or not isinstance(sample_dict, dict):
+            self.err(f"Invalid sample (expected a dictionary, got {type(sample_dict)}")
+            return False
+
         if net_hash in self.known_streams:
             for name, data_and_tag_and_uuid in sample_dict.items():
+                if ('data' not in data_and_tag_and_uuid or
+                        'data_tag' not in data_and_tag_and_uuid or
+                        'data_uuid' not in data_and_tag_and_uuid):
+                    self.err(f"Invalid sample in data stream named {name} (missing one or more keys)")
+                    return False
+
                 if AgentBasics.DEBUG:
                     if net_hash in self.known_streams and name in self.known_streams[net_hash]:
                         self.deb(f"[get_stream_sample] Local data stream {name} status: tag="
