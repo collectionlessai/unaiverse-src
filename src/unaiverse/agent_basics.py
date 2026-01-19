@@ -571,7 +571,7 @@ class AgentBasics:
             return False
 
         # Human or artificial?
-        if profile.get_static_profile()["node_type"] is AgentBasics.HUMAN:
+        if profile.get_static_profile()["node_type"] == AgentBasics.HUMAN:
             self.human_agents[peer_id] = profile
         else:
             self.artificial_agents[peer_id] = profile

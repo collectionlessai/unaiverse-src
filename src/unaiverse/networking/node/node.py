@@ -157,7 +157,7 @@ class Node:
         
         # stats reporting agent -> world
         self.send_stats_every = 30.  # Seconds
-        self.save_stats_every = 5 * 60.  # Seconds
+        self.save_stats_every = 10.  # Seconds
 
         # Alive messaging
         self.run_start_time = 0.
@@ -249,8 +249,8 @@ class Node:
             "identity_dir": p2p_u_identity_dir,
             "port": env_start_port,
             "ips": None,
-            "enable_relay_client": False,
-            "enable_relay_service": False,
+            "enable_relay_client": allow_connection_through_relay,
+            "enable_relay_service": env_is_public_relay,
             "use_broad_limits": False,
             "is_isolated": env_is_isolated,
             "knows_is_public": env_is_public,
@@ -259,7 +259,7 @@ class Node:
             "tls_cert_path": env_cert_path,
             "tls_key_path": env_key_path,
             "dht_enabled": True,
-            "dht_keep": False
+            "dht_keep": True
         }
         
         p2p_w_config = {
@@ -268,7 +268,7 @@ class Node:
             "ips": None,
             "enable_relay_client": allow_connection_through_relay,
             "enable_relay_service": self.node_type is Node.WORLD,
-            "use_broad_limits": False,
+            "use_broad_limits": True,
             "is_isolated": env_is_isolated,
             "knows_is_public": env_is_public,
             "enable_tls": env_use_tls,
@@ -1246,6 +1246,13 @@ class Node:
         finally:
             if self.cursor_hidden:
                 sys.stdout.write("\033[?25h")  # Re-enabling cursor
+            
+            try:
+                if self.node_type is Node.WORLD and self.world is not None:
+                    print("[NODE] Shutting down stats database...")
+                    self.world.stats.shutdown()
+            except Exception as e:
+                self.err(f"Error closing database: {e}")
 
             try:
                 if self.node_type is Node.AGENT and self.agent.in_world():

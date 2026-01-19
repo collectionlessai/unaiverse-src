@@ -658,7 +658,7 @@ class Stats:
             })
     
     # --- AGENT API ---
-    def update_view(self, view_data: Dict[str, Any], overwrite: bool = False):
+    def update_view(self, view_data: Dict[str, Any] = None, overwrite: bool = False):
         """
         (Agent-side) Replaces the local view with data received from World.
         This is 'dumb' storage: we don't parse it, we just store it for plotting.

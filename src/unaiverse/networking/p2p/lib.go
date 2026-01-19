@@ -433,71 +433,88 @@ func setupNotifiers(ni *NodeInstance) {
 
 			// Check if this is the LAST connection to this peer
 			if len(ni.host.Network().ConnsToPeer(remotePeerID)) == 0 {
-				logger.Debugf("[GO] ⏳ Instance %d: Last connection to %s closed. Starting %v grace period timer...\n", ni.instanceIndex, remotePeerID, DisconnectionGracePeriod)
+				// If it's a friendlyPeer, wait for the grace period, otherwise close immediately
+				ni.peersMutex.RLock()
+				_, isFriendly := ni.friendlyPeers[remotePeerID]
+				ni.peersMutex.RUnlock()
 
-                // We create a context that we can cancel if they reconnect
-                ctx, cancelTimer := context.WithCancel(context.Background())
-                
-                ni.disconnectionMutex.Lock()
-                // If a timer already exists (rare race condition), cancel the old one first
-                if oldCancel, exists := ni.disconnectionTimers[remotePeerID]; exists {
-                    oldCancel()
-                }
-                ni.disconnectionTimers[remotePeerID] = cancelTimer
-                ni.disconnectionMutex.Unlock()
+				if isFriendly {
+					logger.Debugf("[GO] ⏳ Instance %d: Last connection to %s closed. Starting %v grace period timer...\n", ni.instanceIndex, remotePeerID, DisconnectionGracePeriod)
 
-                // Run cleanup in a goroutine
-                go func() {
-                    select {
-                    case <-time.After(DisconnectionGracePeriod):
-                        // Timer expired! Proceed to cleanup.
-                    case <-ctx.Done():
-                        // Context cancelled (user reconnected). Stop here.
-                        return
-                    case <-ni.ctx.Done():
-                        // Node is shutting down. Stop here.
-                        return
-                    }
+					// We create a context that we can cancel if they reconnect
+					ctx, cancelTimer := context.WithCancel(context.Background())
+					
+					ni.disconnectionMutex.Lock()
+					// If a timer already exists (rare race condition), cancel the old one first
+					if oldCancel, exists := ni.disconnectionTimers[remotePeerID]; exists {
+						oldCancel()
+					}
+					ni.disconnectionTimers[remotePeerID] = cancelTimer
+					ni.disconnectionMutex.Unlock()
 
-                    // --- Timer Expired: Execute Cleanup ---
-                    
-                    // Remove from timer map
-                    ni.disconnectionMutex.Lock()
-                    // Double-check: did we get cancelled while waiting for lock?
-                    if ctx.Err() != nil {
-                        ni.disconnectionMutex.Unlock()
-                        return
-                    }
-                    delete(ni.disconnectionTimers, remotePeerID)
-                    ni.disconnectionMutex.Unlock()
+					// Run cleanup in a goroutine
+					go func() {
+						select {
+						case <-time.After(DisconnectionGracePeriod):
+							// Timer expired! Proceed to cleanup.
+						case <-ctx.Done():
+							// Context cancelled (user reconnected). Stop here.
+							return
+						case <-ni.ctx.Done():
+							// Node is shutting down. Stop here.
+							return
+						}
 
-                    // Final Safety Check: Are they actually connected now?
-                    // (Handles race where they reconnect exactly when timer fires)
-                    if len(ni.host.Network().ConnsToPeer(remotePeerID)) > 0 {
-                         logger.Debugf("[GO] ⚠️ Instance %d: Grace period expired for %s, but peer is connected again. Skipping cleanup.\n", ni.instanceIndex, remotePeerID)
-                         return
-                    }
+						// --- Timer Expired: Execute Cleanup ---
+						// Remove from timer map
+						ni.disconnectionMutex.Lock()
+						// Double-check: did we get cancelled while waiting for lock?
+						if ctx.Err() != nil {
+							ni.disconnectionMutex.Unlock()
+							return
+						}
+						delete(ni.disconnectionTimers, remotePeerID)
+						ni.disconnectionMutex.Unlock()
 
-                    logger.Infof("[GO] 🗑️ Instance %d: Grace period ended for %s. Removing peer data.\n", ni.instanceIndex, remotePeerID)
+						// Final Safety Check: Are they actually connected now?
+						// (Handles race where they reconnect exactly when timer fires)
+						if len(ni.host.Network().ConnsToPeer(remotePeerID)) > 0 {
+							logger.Debugf("[GO] ⚠️ Instance %d: Grace period expired for %s, but peer is connected again. Skipping cleanup.\n", ni.instanceIndex, remotePeerID)
+							return
+						}
 
-                    // 3. Clean up friendlyPeers
-                    ni.peersMutex.Lock()
-                    if _, exists := ni.friendlyPeers[remotePeerID]; exists {
-                        delete(ni.friendlyPeers, remotePeerID)
-                        logger.Debugf("[GO]   Instance %d: Removed %s from friendlyPeers.\n", ni.instanceIndex, remotePeerID)
-                    }
-                    ni.peersMutex.Unlock()
+						logger.Debugf("[GO] 🗑️ Instance %d: Grace period ended for %s. Removing peer data.\n", ni.instanceIndex, remotePeerID)
 
-                    // 4. Clean up persistent streams
-                    ni.streamsMutex.Lock()
-                    if stream, ok := ni.persistentChatStreams[remotePeerID]; ok {
-                        logger.Debugf("[GO]   Instance %d: Cleaning up persistent stream for %s.\n", ni.instanceIndex, remotePeerID)
-                        _ = stream.Close() 
-                        delete(ni.persistentChatStreams, remotePeerID)
-                    }
-                    ni.streamsMutex.Unlock()
+						// 3. Clean up friendlyPeers
+						ni.peersMutex.Lock()
+						if _, exists := ni.friendlyPeers[remotePeerID]; exists {
+							delete(ni.friendlyPeers, remotePeerID)
+							logger.Debugf("[GO]   Instance %d: Removed %s from friendlyPeers.\n", ni.instanceIndex, remotePeerID)
+						}
+						ni.peersMutex.Unlock()
 
-                }()
+						// 4. Clean up persistent streams
+						ni.streamsMutex.Lock()
+						if stream, ok := ni.persistentChatStreams[remotePeerID]; ok {
+							logger.Debugf("[GO]   Instance %d: Cleaning up persistent stream for %s.\n", ni.instanceIndex, remotePeerID)
+							_ = stream.Close() 
+							delete(ni.persistentChatStreams, remotePeerID)
+						}
+						ni.streamsMutex.Unlock()
+
+					}()
+				} else {
+					logger.Debugf("[GO]   Instance %d: Last connection to %s closed. Removing from tracked peers.\n", ni.instanceIndex, remotePeerID)
+
+					// Also clean up persistent stream if one existed for this peer
+					ni.streamsMutex.Lock()
+					if stream, ok := ni.persistentChatStreams[remotePeerID]; ok {
+						logger.Debugf("[GO]   Instance %d: Cleaning up persistent stream for disconnected peer %s via DisconnectedF notifier.\n", ni.instanceIndex, remotePeerID)
+						_ = stream.Close() // Attempt graceful close
+						delete(ni.persistentChatStreams, remotePeerID)
+					}
+					ni.streamsMutex.Unlock()
+					}
 			} else {
 				logger.Debugf("[GO]   Instance %d: DisconnectedF: Still have %d active connections to %s, not removing.\n", ni.instanceIndex, len(ni.host.Network().ConnsToPeer(remotePeerID)), remotePeerID)
 			}
