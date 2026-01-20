@@ -1820,7 +1820,7 @@ class Node:
                         'ping' in msg.content and msg.content['ping'] == 'pong'):
 
                     public_ping_pong = msg.content.get('public', None)
-                    if public_ping_pong is None or (public_ping_pong and is_private_message):
+                    if public_ping_pong is not None and public_ping_pong and is_private_message:
                         self.err("Invalid format of ping-pong package")
                         await self.__purge(msg.sender)
                     else:
