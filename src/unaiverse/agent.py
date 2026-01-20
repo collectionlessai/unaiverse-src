@@ -103,7 +103,7 @@ class Agent(AgentBasics):
                 self._agents_who_received_set_next_action.add(_peer_id)
         return at_least_one_completed
 
-    async def set_engaged_partner(self, agent: str | list[str] | set[str] | None):
+    async def set_engaged_partner(self, agent: str | list[str] | set[str] | None, clear_found: bool = True):
         """Virtually forces the engagement with a single agent (or a group of agents), clearing all existing
         engagements (async).
 
@@ -113,7 +113,8 @@ class Agent(AgentBasics):
         Returns:
             True all the times.
         """
-        self._found_agents.clear()
+        if clear_found:
+            self._found_agents.clear()
         self._engaged_agents.clear()
         if agent is not None:
             if isinstance(agent, str):
@@ -133,14 +134,14 @@ class Agent(AgentBasics):
 
         if len(self._found_agents) > 0:
             self.out(f"Sending engagement request to {', '.join([x for x in self._found_agents])}")
+            print(f"Sending engagement request to {', '.join([x for x in self._found_agents])}")
         my_role_str = self._node_profile.get_dynamic_profile()['connections']['role']
-        for found_agent in self._found_agents:
+        for found_agent in self._found_agents:  # The list of found agents will be cleared after this function
             if await self.set_next_action(found_agent, action="get_engagement",
                                           args={"sender_role": my_role_str}):
                 at_least_one_sent = True
             else:
                 self.err(f"Unable to send engagement to {found_agent}")
-
         return at_least_one_sent
 
     async def get_engagement(self, acceptable_role: str | None = None, sender_role: str | None = None,
@@ -174,6 +175,7 @@ class Agent(AgentBasics):
 
             if acceptable_role_int == sender_role_int:
                 if await self.set_next_action(_requester, "got_engagement"):
+                    print("SENT GOT ENGAGEMENT")
                     self._engaged_agents.add(_requester)
 
                     # Marking this agent as not available since it engaged with another one
@@ -205,14 +207,15 @@ class Agent(AgentBasics):
             # Marking this agent as not available since it engaged with another one
             self._available = False
 
-            # Removing the engaged agent from the list of found agents, to avoid sending him another engagement request
+            # Removing the agent from the list of asked agents
             self._found_agents.discard(_requester)
             return True
         else:
             self.err(f"Unable to confirm engagement with {_requester}")
             return False
 
-    async def send_disengagement(self, send_disconnection_too: bool = False):
+    async def send_disengagement(self, send_disconnection_too: bool = False,
+                                 from_state: str | None = None, to_state: str | None = None):
         """Ask for disengagement (async).
 
         Args:
@@ -227,11 +230,14 @@ class Agent(AgentBasics):
             self.out(f"Sending disengagement request to {', '.join([x for x in self._engaged_agents])}")
         for agent in self._engaged_agents:
             if await self.set_next_action(agent, action="get_disengagement",
-                                          args={"disconnect_too": send_disconnection_too}):
+                                          args={"disconnect_too": send_disconnection_too}, from_state=from_state,
+                                          to_state=to_state):
                 at_least_one_sent = True
             else:
                 self.err(f"Unable to send disengagement to {agent}")
 
+        if at_least_one_sent:
+            self._engaged_agents.clear()  # There is no "got_disengagement"
         return at_least_one_sent
 
     async def get_disengagement(self, disconnect_too: bool = False, _requester: str | None = None):
@@ -253,10 +259,10 @@ class Agent(AgentBasics):
             self.err(f"Not previously engaged to {_requester}")
             return False
 
+        self._engaged_agents.discard(_requester)  # Remove if present
+
         if disconnect_too:
             await self._node_purge_fcn(_requester)
-
-        self._engaged_agents.discard(_requester)  # Remove if present
 
         # Marking this agent as available if not engaged to any agent
         self._available = len(self._engaged_agents) == 0
@@ -288,7 +294,7 @@ class Agent(AgentBasics):
         await self._node_purge_fcn(agent)  # This will also call remove_agent, that will call remove_streams
         return True
 
-    async def disconnect_by_role(self, role: str | list[str]):
+    async def disconnect_by_role(self, role: str | list[str], disengage_too: bool = False):
         """Disconnects from all agents that match a specified role (async).
         It finds the agents and calls the node's purge function on each.
 
@@ -299,6 +305,8 @@ class Agent(AgentBasics):
             Always True.
         """
         self.out(f"Disconnecting agents with role: {role}")
+        if disengage_too:
+            await self.send_disengagement(send_disconnection_too=True)
         if await self.find_agents(role):
             found_agents = copy.deepcopy(self._found_agents)
             for agent in found_agents:
@@ -1006,15 +1014,17 @@ class Agent(AgentBasics):
         """
         return len(self._found_agents) == 0
 
-    async def agents_are_waiting(self):
+    async def agents_are_waiting(self, timeout: float = -1.):
         """Checks if there are any agents who have connected but have not yet been fully processed or added to the
         agent's known lists. This indicates that new agents are waiting to be managed (async).
 
         Returns:
             True if there are waiting agents, False otherwise.
         """
+        assert timeout is not None, "Missing basic action information"
+
         self.out(f"Current set of {len(self._node_agents_waiting)} connected peer IDs non managed yet: "
-                 f"{self._node_agents_waiting}")
+                 f"{list(self._node_agents_waiting.keys())}")
         for found_agent in self._found_agents:
             if found_agent in self._node_agents_waiting:
                 return True
@@ -1263,7 +1273,7 @@ class Agent(AgentBasics):
 
         if self.get_action_step() == 0:
             role_list = role if isinstance(role, list) else [role]
-            self._found_agents = set()
+            self._found_agents.clear()
             at_least_one_is_valid = False
 
             for role in role_list:
@@ -1317,14 +1327,16 @@ class Agent(AgentBasics):
         self._found_agents = set()
 
         for role_str in role_list:
-            agents = self.all_agents
             role_int = self.ROLE_STR_TO_BITS[role_str]
-            role_clean = (role_int >> 2) << 2
-            for peer_id, profile in agents.items():
-                _role_int = self.ROLE_STR_TO_BITS[profile.get_dynamic_profile()['connections']['role']]
-                _role_clean = (_role_int >> 2) << 2
-                if _role_clean == role_clean:
-                    self._found_agents.add(peer_id)  # Peer IDs here
+
+            _, found_peer_ids1 = self._node_conn.find_addrs_by_role(Agent.ROLE_WORLD_MASTER | role_int,
+                                                                    return_peer_ids_too=True)
+            _, found_peer_ids2 = self._node_conn.find_addrs_by_role(Agent.ROLE_WORLD_AGENT | role_int,
+                                                                    return_peer_ids_too=True)
+            found_peer_ids = found_peer_ids1 + found_peer_ids2
+
+            for peer_id in found_peer_ids:
+                self._found_agents.add(peer_id)  # Peer IDs here
 
         self.deb(f"[find_agents] Found these agents: {self._found_agents}")
         if engage:
@@ -2160,10 +2172,12 @@ class Agent(AgentBasics):
                 elif b_tag_w_offset > a_tag_w_offset:
                     if not restart_detected:
                         o = o + (1. if how != "mse" else (o / steps) * 1.1)  # Don't change k_b, some samples missing
-                        self.print(f"Comparing tags: {a_tag} vs {b_tag} -> expected one was missing, samples: {a} vs {b}")
+                        self.print(f"Comparing tags: {a_tag} vs {b_tag} -> "
+                                   f"expected one was missing, samples: {a} vs {b}")
                     else:
                         o = o + (1. if how != "mse" else (o / steps) * 1.1)
-                        self.print(f"Comparing tags: {a_tag} vs {b_tag} -> expected one was missing, samples: {a} vs {b}")
+                        self.print(f"Comparing tags: {a_tag} vs {b_tag} -> "
+                                   f"expected one was missing, samples: {a} vs {b}")
                         k_b += 1  # A restart was detected, it means that "stream_b" is behind, let's move it ahead
                 elif b_tag_w_offset < a_tag_w_offset:
                     self.print(f"Comparing tags: {a_tag} vs {b_tag} -> too early w.r.t. expected, samples: {a} vs {b}")

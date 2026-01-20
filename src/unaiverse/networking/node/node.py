@@ -191,6 +191,7 @@ class Node:
         # Attributes: handshake-related
         self.agents_to_interview: dict[str, [float, NodeProfile | None]] = {}  # Peer_id -> [time, profile | None]
         self.agents_expected_to_send_ack = {}
+        self.agents_that_provided_ping_pong = set()
         self.last_rejected_agents = deque(maxlen=self.conn)
         self.joining_world_info = None
         self.first = True
@@ -434,6 +435,7 @@ class Node:
         when = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
         if self.print_enabled:
             self.out(f"<ERROR> [{when}] " + msg)
+            print(f"<ERROR> [{when}] " + msg)
         else:
             print(f"<ERROR> [{when}] " + msg)
 
@@ -689,7 +691,8 @@ class Node:
 
             # Ping to test the readiness of the established connection
             self.out(f"Connected, ping-pong...")
-            if not (await self.conn.send(peer_id, channel_trail=None, content_type=Msg.MISC, content={"ping": "pong"},
+            if not (await self.conn.send(peer_id, channel_trail=None, content_type=Msg.MISC,
+                                         content={"ping": "pong", "public": public},
                                          p2p=self.conn.p2p_name_to_p2p[
                                              NodeConn.P2P_PUBLIC if public else NodeConn.P2P_WORLD])):
                 if run_count < 2:
@@ -709,6 +712,7 @@ class Node:
                 self.agents_expected_to_send_ack[peer_id] = {
                     "ask_time": self.clock.get_time(),
                     "peer_id": peer_id,
+                    "retried": False,
                     "args_of_ask_to_get_in_touch": all_args
                 }
 
@@ -1812,17 +1816,29 @@ class Node:
             elif msg.content_type == Msg.MISC:
                 self.out("Received a misc message...")
                 self.out(msg.content)
-                if (not is_private_message and msg.content is not None and isinstance(msg.content, dict) and
+                if (msg.content is not None and isinstance(msg.content, dict) and
                         'ping' in msg.content and msg.content['ping'] == 'pong'):
-                    if (msg.sender in self.hosted.all_agents or
-                            (self.node_type is Node.WORLD and msg.sender in self.world.private_peer_of)):
-                        if self.node_type is Node.WORLD and msg.sender in self.world.private_peer_of:
-                            await self.hosted.remove_agent(self.world.private_peer_of[msg.sender])
-                            await self.__purge(self.world.private_peer_of[msg.sender])
+
+                    public_ping_pong = msg.content.get('public', None)
+                    if public_ping_pong is None or (public_ping_pong and is_private_message):
+                        self.err("Invalid format of ping-pong package")
+                        await self.__purge(msg.sender)
+                    else:
+                        if msg.sender not in self.agents_that_provided_ping_pong:
+
+                            # First, expected, ping-pong
+                            self.agents_that_provided_ping_pong.add(msg.sender)
                         else:
-                            await self.hosted.remove_agent(msg.sender)
-                        self.out(f"Reconnection detected for peer {msg.sender}")
-                        self.reconnected.add(msg.sender)
+
+                            # Not expected ping-pong from an already fully connected (i.e., handshake done) agent
+                            handshake_already_completed = \
+                                ((msg.sender in self.hosted.public_agents) if not is_private_message else
+                                 (msg.sender in self.hosted.world_agents or msg.sender in self.hosted.world_masters))
+
+                            if handshake_already_completed:
+                                await self.hosted.remove_agent(msg.sender)
+                            self.reconnected.add(msg.sender)
+                            self.out(f"Reconnection detected for peer {msg.sender}, will start handshake again")
 
             # (K) got a request to re-download the CV from the root server
             elif msg.content_type == Msg.GET_CV_FROM_ROOT:
@@ -2133,6 +2149,7 @@ class Node:
             return False
 
         # Ask for the profile
+        self.out("Sending profile request...")
         ret = await self.conn.send(peer_id, channel_trail=None,
                                    content_type=Msg.PROFILE_REQUEST, content=None)
         if not ret:
@@ -2251,7 +2268,8 @@ class Node:
         for peer_id, connection_dict in self.agents_expected_to_send_ack.items():
 
             # Checking timeout (to resend the request)
-            if (cur_time - connection_dict["ask_time"]) > self.connect_without_ack_retry_timeout:
+            if ((cur_time - connection_dict["ask_time"]) > self.connect_without_ack_retry_timeout and
+                    not connection_dict['retried']):
                 self.out("Timeout in the connected-without-ack queue, I will try again: " + peer_id)
                 agents_to_retry.append(peer_id)
                 continue
@@ -2268,7 +2286,8 @@ class Node:
         # Updating (retry)
         for peer_id in agents_to_retry:
             connection_dict = self.agents_expected_to_send_ack[peer_id]
-            self.out(f"Retrying to connect to with args {connection_dict['args_of_ask_to_get_in_touch']}")
+            connection_dict['retried'] = True
+            self.out(f"Retrying to connect to {peer_id} with args {connection_dict['args_of_ask_to_get_in_touch']}")
             await self.ask_to_get_in_touch(**connection_dict["args_of_ask_to_get_in_touch"])  # Trying again
 
     async def __purge(self, peer_id: str):
@@ -2287,6 +2306,9 @@ class Node:
         # Clearing the temporary list of connected agents
         if peer_id in self.agents_expected_to_send_ack:
             del self.agents_expected_to_send_ack[peer_id]
+
+        # Clearing this set as well
+        self.agents_that_provided_ping_pong.discard(peer_id)
 
     @staticmethod
     def __sort_messages_by_priority(messages):
@@ -2415,7 +2437,6 @@ class Node:
             arg: The argument for the command.
         """
         self.out(f"Handling inspector message {cmd}, with arg {arg}")
-        print(f"Handling inspector message {cmd}, with arg {arg}")
 
         if arg is not None and not isinstance(arg, str):
             self.err(f"Expecting a string argument from the inspector!")

@@ -192,6 +192,11 @@ class ActionRequestList:
                 else:
                     return json.dumps([])
 
+    def clear(self):
+        self.by_insertion_order.clear()
+        self.by_requester_and_by_insertion_order.clear()
+        self.by_insertion_order_entering_time.clear()
+
     def is_requester_known(self, requester: object):
         return requester in self.by_requester_and_by_insertion_order
 
@@ -2010,10 +2015,11 @@ class HybridStateMachine:
                     for req in propagated_requests:
                         list_of_residual_requests.remove(req)  # Clearing propagated requests
 
+                    self.states[self.prev_state].reset()  # Reset starting time (only if state changed!)
+
                 if HybridStateMachine.DEBUG:
                     print(f"[DEBUG HSM] Correctly completed action: {self.__action.name}")
 
-                self.states[self.prev_state].reset()  # Reset starting time
                 self.__action.reset_step()
                 self.__action = None  # Clearing
                 self.__cur_feasible_actions_status = None
@@ -2120,7 +2126,8 @@ class HybridStateMachine:
 
         # If state is not provided, the current state is assumed
         if from_state is None:
-            from_state = self.state
+            # If the request arrives in the middle of a multistep action, we need to check limbo state)
+            from_state = self.state if self.state is not None else self.limbo_state
         if from_state not in self.transitions:
             if HybridStateMachine.DEBUG:
                 print(f"[DEBUG HSM] Request not accepted: not valid source state ({from_state})")

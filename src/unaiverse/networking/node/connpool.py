@@ -311,10 +311,10 @@ class ConnectionPools:
             del self.pool_name_to_peer_infos[pool_name][peer_id]
             del self.peer_id_to_pool_name[peer_id]
             del self.peer_id_to_p2p[peer_id]
-            if peer_id in self.peer_id_to_misc:
-                del self.peer_id_to_misc[peer_id]
             if peer_id in self.peer_id_to_token:
                 del self.peer_id_to_token[peer_id]
+
+            # Remember to NOT del peer_id_to_misc[peer_id]!
             return disc
         else:
             return False
@@ -1285,8 +1285,8 @@ class NodeConn(ConnectionPools):
             peer_id: The peer ID to remove.
         """
         await super().remove(peer_id)
-        if peer_id in self.peer_id_to_addrs:
-            del self.peer_id_to_addrs[peer_id]
+        #if peer_id in self.peer_id_to_addrs:
+        #    del self.peer_id_to_addrs[peer_id]
 
     async def remove_all_world_agents(self):
         """Removes all connected world agents from the pools and role lists (async)."""
@@ -1294,6 +1294,8 @@ class NodeConn(ConnectionPools):
         for c in peer_infos:
             peer_id = c['id']
             await self.remove(peer_id)
+            if peer_id in self.peer_id_to_addrs:
+                del self.peer_id_to_addrs[peer_id]
             for role, peer_ids in self.role_to_peer_ids.items():
                 if role & 1 == NodeConn.WORLD:
                     peer_ids.remove(peer_id)
