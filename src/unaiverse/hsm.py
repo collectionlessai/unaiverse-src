@@ -173,6 +173,13 @@ class ActionRequestList:
     def get_most_recent_request(self, requester: object | None = None):
         return self.get_request(-1, requester)
 
+    def keep_only_the_most_recent_request(self):
+        req = self.get_most_recent_request()
+        entering_time = self.by_insertion_order_entering_time[req.by_insertion_order_id]
+        self.clear()
+        self.add(req)
+        self.by_insertion_order_entering_time[req.by_insertion_order_id] = entering_time
+
     def get_requests(self, requester: object | None = None, to_str: bool = False):
         if requester is None:
             if not to_str:
