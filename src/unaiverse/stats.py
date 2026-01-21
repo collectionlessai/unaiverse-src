@@ -381,6 +381,7 @@ class Stats:
         self.agent_grouped_keys: Set[str] = set()
         self.agent_ungrouped_keys: Set[str] = set()
         self.stat_types: Dict[str, str] = {}
+        self._stat_defaults: Dict[str, Any] = {}
         self._initialize_key_sets()
 
         if self.is_world:
@@ -418,11 +419,7 @@ class Stats:
     
     def _initialize_key_sets(self):
         """Populates the master key sets and the type for later use."""
-        # This map holds: {'graph': <class 'dict'>, 'state': <class 'str'>}
-        self.stat_types: Dict[str, type] = {}
-        self._stat_defaults: Dict[str, Any] = {}
-        
-        # 1. Combine all schema definitions
+        # Combine all schema definitions
         all_static_schemas = {
             **self.WORLD_STATS_STATIC_SCHEMA,
             **self.AGENT_STATS_STATIC_SCHEMA,
@@ -435,7 +432,7 @@ class Stats:
             **self.OUTER_STATS_DYNAMIC_SCHEMA
         }
 
-        # 2. Build the key sets AND the type map
+        # Build the key sets AND the type map
         self.all_static_keys = set()
         for name, (type_obj, default) in all_static_schemas.items():
             self.all_static_keys.add(name)
@@ -1367,7 +1364,7 @@ class Stats:
             nodes_data = {}
 
         # 2. Calculate Layout (Circular)
-        # We use edges_data keys for positioning, but we might have nodes in nodes_data 
+        # We use edges_data keys for positioning, but we might have nodes in nodes_data
         # that have no edges yet, so we union them.
         all_pids = set(edges_data.keys()).union(*edges_data.values()) | set(nodes_data.keys())
         pids = list(all_pids)

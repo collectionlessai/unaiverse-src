@@ -166,7 +166,7 @@ type NodeInstance struct {
 
 	// Static relay
 	privateRelay *autorelay.AutoRelay
-	privateRelayAddrs []ma.Multiaddr
+	// privateRelayAddrs []ma.Multiaddr
 
 	// PubSub State
 	pubsubMutex   sync.RWMutex
@@ -1104,7 +1104,7 @@ func goGetNodeAddresses(
 	if isThisNode {
 		ni.addrMutex.RLock()
 		candidateAddrs = append(candidateAddrs, ni.localAddrs...)
-		candidateAddrs = append(candidateAddrs, ni.privateRelayAddrs...)
+		// candidateAddrs = append(candidateAddrs, ni.privateRelayAddrs...)
 		ni.addrMutex.RUnlock()
 	} else {
 		// --- Remote Peer Addresses ---
@@ -1254,7 +1254,7 @@ func (ni *NodeInstance) Close() error {
 	// Clear also the addresses
 	ni.addrMutex.Lock()
 	ni.localAddrs = nil
-	ni.privateRelayAddrs = nil
+	// ni.privateRelayAddrs = nil
 	ni.addrMutex.Unlock()
 
 	// Clear the MessageStore for this instance
@@ -1866,10 +1866,10 @@ func StartStaticRelay(
 			logger.Warnf("[GO] ⚠️ Instance %d: Error closing old AutoRelay: %v", ni.instanceIndex, err)
 		}
 		ni.privateRelay = nil
-		// Also clean up any existing relayed addresses
-		ni.addrMutex.Lock()
-		ni.privateRelayAddrs = nil
-		ni.addrMutex.Unlock()
+		// // Also clean up any existing relayed addresses
+		// ni.addrMutex.Lock()
+		// ni.privateRelayAddrs = nil
+		// ni.addrMutex.Unlock()
 		logger.Infof("[GO] 🔄 Instance %d: Previous AutoRelay service closed.", ni.instanceIndex)
 	}
 

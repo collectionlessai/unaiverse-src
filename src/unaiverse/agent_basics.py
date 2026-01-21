@@ -167,6 +167,7 @@ class AgentBasics:
         self._node_ask_to_get_in_touch_fcn = None
         self._node_purge_fcn = None
         self._node_agents_waiting = None
+        self._node_identity_dir = ''
         self._debug_flag = False
         self._basic_print_on = True
 
@@ -221,7 +222,8 @@ class AgentBasics:
                 raise GenException("No world folder was indicated (world_folder argument)")
 
     def set_node_info(self, clock: Clock, conn: ConnectionPools, profile: NodeProfile,
-                      out_fcn, ask_to_get_in_touch_fcn, purge_fcn, agents_waiting, print_level):
+                      out_fcn, ask_to_get_in_touch_fcn, purge_fcn, node_identity_dir: str,
+                      agents_waiting, print_level):
         """Set the required information from the node that hosts this agent.
 
         Args:
@@ -231,18 +233,20 @@ class AgentBasics:
             out_fcn: The function to use for general output messages.
             ask_to_get_in_touch_fcn: The function to call to request getting in touch with another peer.
             purge_fcn: The function to call to purge (kill/disconnect) a connection.
+            node_identity_dir: The folder where the node identity files are stored.
             agents_waiting: Set of agents that connected to this node but have not been evaluated yet to be added.
             print_level: The level of output printing verbosity (0, 1, 2).
         """
 
         # Getting basic references
-        self._node_name = profile.get_static_profile()['node_name']
         self._node_clock = clock
-        self._node_profile = profile
         self._node_conn = conn
+        self._node_profile = profile
+        self._node_name = profile.get_static_profile()['node_name']
         self._node_out_fcn = out_fcn
         self._node_ask_to_get_in_touch_fcn = ask_to_get_in_touch_fcn
         self._node_purge_fcn = purge_fcn
+        self._node_identity_dir = node_identity_dir
         self._node_agents_waiting = agents_waiting
         self._debug_flag = print_level > 1
 
@@ -2156,73 +2160,120 @@ class AgentBasics:
         """
         return data
 
-    def save(self, where: str = "output"):
+    def agent_state_dict(self):
+        """Returns a dictionary containing the agent's saveable state."""
+        save_in_state = ['world_profile',]
+        return {k: getattr(self, k) for k in save_in_state}
+
+    def save(self, where: str = "") -> bool:
         """Save the agent's state, including its processor and other attributes, to a specified location.
 
         Args:
-            where: The directory path where the agent's state should be saved. Defaults to "output".
+            where: The directory path where the agent's state should be saved. Defaults to "".
 
         Returns:
-            The string "<SAVE_OK>" upon successful saving.
+            True upon successful saving.
 
         Raises:
             IOError: If there is an issue with file operations (e.g., directory creation, writing files).
             TypeError, ValueError, RuntimeError: For other potential issues during serialization or saving.
         """
 
+        if where == '':
+            where = os.path.join(self._node_identity_dir, "agent_state")  # Default save path
+        os.makedirs(where, exist_ok=True)
+
         # Saving the processor
         if self.proc is not None:
-            torch.save(self.proc.state_dict(), os.path.join(where, f"{self._node_name}.pt"))
+            pt_final = os.path.join(where, f"{self._node_name}.pt")
+            pt_tmp = pt_final + ".tmp"
+            try:
+                checkpoint = {
+                    'model_state_dict': self.proc.state_dict(),
+                }
 
+                # If your agent has an optimizer, save its state too
+                if self.proc_opts.get('optimizer') is not None:
+                    checkpoint['optimizer_state_dict'] = self.proc_opts['optimizer'].state_dict()
+
+                torch.save(checkpoint, pt_tmp)
+                os.replace(pt_tmp, pt_final) # Atomic move
+            except Exception as e:
+                if os.path.exists(pt_tmp):
+                    os.remove(pt_tmp)
+                self.out(f"Error saving processor: {e}")
+                raise e
+
+        # Save Agent State
+        pkl_final = os.path.join(where, f"{self._node_name}.pkl")
+        pkl_tmp = pkl_final + ".tmp"
         try:
-
-            # Creating output folder
-            if not os.path.exists(where):
-                os.makedirs(where)
-
-            # Saving the whole thing (excluding the processor)
-            proc = self.proc
-            self.proc = None
-            with open(os.path.join(where, f"{self._node_name}.pkl"), "wb") as f:
-                pickle.dump(self, f)
-            self.proc = proc
-        except (TypeError, ValueError, RuntimeError, IOError, FileNotFoundError) as e:
-            self.out("Could not save " + ("agent" if not self.is_world else "world") + f" {self._node_name}: {e}")
+            state = self.agent_state_dict()
+            with open(pkl_tmp, "wb") as f:
+                pickle.dump(state, f)
+            os.replace(pkl_tmp, pkl_final)
+        except Exception as e:
+            self.out(f"Could not save " + ("agent" if not self.is_world else "world") + f": {e}")
+            if os.path.exists(pkl_tmp):
+                os.remove(pkl_tmp)
             raise e
 
-        return "<SAVE_OK>"  # This means OK
+        return True
 
-    def load(self, where: str = "output"):
+    def load(self, where: str = "") -> bool:
         """Load the agent's state from a specified location.
 
         Args:
-            where: The directory path from which the agent's state should be loaded. Defaults to "output".
+            where: The directory path from which the agent's state should be loaded. Defaults to "".
 
         Returns:
-            The loaded AgentBasics object.
-
-        Raises:
-            AssertionError: If the specified load path does not exist.
-            IOError: If there is an issue with file operations (e.g., reading files).
+            True if loading succeeded.
         """
 
-        # Checking output folder
-        if not os.path.exists(where):
-            raise GenException(f"Invalid load path: {where}")
-        load_proc = self.proc is not None
+        if where == '':
+            where = os.path.join(self._node_identity_dir, "agent_state")  # Default save path
 
-        # Loading the whole object (no processor)
-        with open(os.path.join(where, f"{self._node_name}.pkl"), "rb") as f:
-            loaded = pickle.load(f)
+        # Check if directory exists
+        if not os.path.exists(where):
+            self.out("No state folder found for " + ("agent" if not self.is_world else "world") +
+                     f" {self._node_name}.")
+            return False
+
+        # Check if the specific pickle file exists
+        pkl_path = os.path.join(where, f"{self._node_name}.pkl")
+        if not os.path.exists(pkl_path):
+            self.out("No saved state found for " + ("agent" if not self.is_world else "world") +
+                     f" {self._node_name}.")
+            return False
+
+        # Loading the agent state dictionary
+        try:
+            with open(pkl_path, "rb") as f:
+                agent_state_dict = pickle.load(f)
+        except Exception as e:
+            raise Exception(f"Error loading pickle file at {pkl_path}: {e}")
 
         # Update self's attributes with the loaded object's attributes
-        self.__dict__.update(loaded.__dict__)
+        self.__dict__.update(agent_state_dict)
 
-        # Loading the processor
+        # Check if we also need to load the processor state
+        pt_path = os.path.join(where, f"{self._node_name}.pt")
+        load_proc = self.proc is not None and os.path.exists(pt_path)
         if load_proc:
-            self.proc.load_state_dict(torch.load(os.path.join(where, f"{self._node_name}.pt")))
+            try:
+                checkpoint = torch.load(pt_path)
+                if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
+                    self.proc.load_state_dict(checkpoint['model_state_dict'])
 
-        return loaded
+                    # Restore Optimizer to proc_opts
+                    if 'optimizer_state_dict' in checkpoint and self.proc_opts.get('optimizer') is not None:
+                        self.proc_opts['optimizer'].load_state_dict(checkpoint['optimizer_state_dict'])
+                else:
+                    self.proc.load_state_dict(checkpoint)
+            except Exception as e:
+                raise Exception(f"Error loading processor state: {e}")
+
+        return True
 
     def __str__(self):
         """String representation of an agent.

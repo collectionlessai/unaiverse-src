@@ -68,7 +68,9 @@ class Node:
                  world_masters_node_names: list[str] | set[str] = None,  # Optional: it will be converted to node IDs
                  allow_connection_through_relay: bool = True,
                  talk_to_relay_based_nodes: bool = True,
-                 run_hook: callable = None):
+                 run_hook: callable = None,
+                 send_stats_every: float = 30.,
+                 save_checkpoint_every: float = 300.):
         """Initializes a new instance of the Node class.
 
         Args:
@@ -86,6 +88,8 @@ class Node:
             allow_connection_through_relay: A flag to allow connections through a relay.
             talk_to_relay_based_nodes: A flag to allow talking to relay-based nodes.
             run_hook: A function taking the Node instance as argument, called every cycle.
+            send_stats_every: Send the stats update to the world every N seconds.
+            save_checkpoint_every: Time interval in seconds to save the hosted entity's state to disk.
         """
 
         # Checking main arguments
@@ -156,8 +160,11 @@ class Node:
         self.skip_was_alive_check = os.getenv("NODE_IGNORE_ALIVE", "0") == "1"
         
         # stats reporting agent -> world
-        self.send_stats_every = 30.  # Seconds
+        self.send_stats_every = send_stats_every
         self.save_stats_every = 10.  # Seconds
+
+        # Save agent state
+        self.save_checkpoint_every = save_checkpoint_every
 
         # Alive messaging
         self.run_start_time = 0.
@@ -215,9 +222,9 @@ class Node:
         # Automatically create a unique data directory for this specific node
         if base_identity_dir is None:
             base_identity_dir = prepare_app_dir(app_name="unaiverse")
-        node_identity_dir = os.path.join(base_identity_dir, self.node_id)
-        p2p_u_identity_dir = os.path.join(node_identity_dir, "p2p_public")
-        p2p_w_identity_dir = os.path.join(node_identity_dir, "p2p_private")
+        self.node_identity_dir = os.path.join(base_identity_dir, self.node_id)
+        p2p_u_identity_dir = os.path.join(self.node_identity_dir, "p2p_public")
+        p2p_w_identity_dir = os.path.join(self.node_identity_dir, "p2p_private")
 
         # Getting node ID of world masters, if needed
         if world_masters_node_names is not None and len(world_masters_node_names) > 0:
@@ -385,7 +392,7 @@ class Node:
 
         # Sharing node-level info with the hosted entity
         self.hosted.set_node_info(self.clock, self.conn, self.profile, self.out, self.ask_to_get_in_touch,
-                                  self.__purge, self.agents_expected_to_send_ack, print_level)
+                                  self.__purge, self.node_identity_dir, self.agents_expected_to_send_ack, print_level)
 
         # Finally, sending dynamic profile to the root server
         # (send AFTER set_node_info, not before, since set_node_info updates the profile,
@@ -836,9 +843,12 @@ class Node:
         except KeyboardInterrupt:
             pass
 
-    async def run_async(self, cycles: int | None = None, max_time: float | None = None,
+    async def run_async(self, cycles: int | None = None,
+                        max_time: float | None = None,
                         interact_mode: bool = False,
-                        join_world: str | list[str] | None = None, get_in_touch: str | list[str] | None = None,
+                        resume_from_checkpoint: bool =False,
+                        join_world: str | list[str] | None = None,
+                        get_in_touch: str | list[str] | None = None,
                         **kwargs):
         """Starts the main execution loop for the node (async).
 
@@ -846,12 +856,24 @@ class Node:
             cycles: The number of clock cycles to run the loop for. If None, runs indefinitely.
             max_time: The maximum time in seconds to run the loop. If None, runs indefinitely.
             interact_mode: A boolean value that turns interactive mode of (still experimental!).
+            resume_from_checkpoint: If True, we load the checkpoint saved (if present).
             join_world: The name of the World to join or the list of its addresses.
             get_in_touch: The name of Agent to connect to or the list of its addresses.
         """
 
         # Subscribing/creating our own pubsub
         await self.hosted.subscribe_to_pubsub_owned_streams()
+        
+        # Load checkpoint (if exists)
+        if resume_from_checkpoint:
+            try:
+                if not self.hosted.load():
+                    self.out("No saved state found. Starting fresh.")
+                else:
+                    self.out("Successfully loaded previous agent state.")
+            except Exception as e:
+                self.err(f"CRITICAL: Found a save file but failed to load it: {e}")
+                raise e
 
         # Asking to join a World or connect to an Agent, if specified
         joined_this_world = None
@@ -864,6 +886,15 @@ class Node:
                 ret = await self.ask_to_join_world(addresses=join_world, **kwargs)
             else:
                 raise GenException("Invalid value for the 'join_world' argument")
+            if ret is None:
+                raise GenException(f"Unable to connect to world: {join_world}")
+            else:
+                joined_this_world = ret  # saving peer ID
+        elif self.hosted.world_profile is not None:
+            # we resumed from a state in which we were in this world, so we reconnect
+            world_name = self.hosted.world_profile.get_static_profile()['node_name']
+            owner_email = self.hosted.world_profile.get_static_profile()['email']
+            ret = await self.ask_to_join_world(node_name=f'{owner_email}/{world_name}', **kwargs)
             if ret is None:
                 raise GenException(f"Unable to connect to world: {join_world}")
             else:
@@ -890,6 +921,7 @@ class Node:
             last_get_token_time = self.clock.get_time()
             last_stats_send_time = self.clock.get_time()
             last_stats_save_time = self.clock.get_time()
+            last_state_save_time = self.clock.get_time()
             if not (cycles is None or cycles > 0):
                 raise GenException("Invalid number of cycles")
 
@@ -1137,6 +1169,16 @@ class Node:
                         self.agent.behav.print_stream = interact_mode_opts["stdout"][1]  # Output off
                         self.agent.set_hsm_debug_state(interact_mode_opts["set_hsm_debug_state"])
 
+                # Periodic Save
+                if self.save_checkpoint_every > 0.:
+                    if self.clock.get_time() - last_state_save_time >= self.save_checkpoint_every:
+                        try:
+                            self.out("Auto-saving state...")
+                            self.hosted.save()
+                            last_state_save_time = self.clock.get_time()
+                        except Exception as e:
+                            self.err(f"Auto-save failed: {e}")
+
                 # Send dynamic profile every "N" seconds
                 if (self.clock.get_time() - last_dynamic_profile_time >= self.send_dynamic_profile_every
                         and self.profile.connections_changed()):
@@ -1257,7 +1299,14 @@ class Node:
         finally:
             if self.cursor_hidden:
                 sys.stdout.write("\033[?25h")  # Re-enabling cursor
-            
+
+            try:
+                if self.save_checkpoint_every > 0.:
+                    print("[NODE] Saving hosted agent state to disk...")
+                    self.hosted.save()
+            except Exception as e:
+                self.err(f"Error saving hosted agent state: {e}")
+
             try:
                 if self.node_type is Node.WORLD and self.world is not None:
                     print("[NODE] Shutting down stats database...")
