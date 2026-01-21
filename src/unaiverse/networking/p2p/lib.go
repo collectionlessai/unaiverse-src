@@ -41,7 +41,6 @@ import (
 	"github.com/libp2p/go-libp2p/core/peer"                       // Defines Peer ID and AddrInfo types
 	"github.com/libp2p/go-libp2p/core/peerstore"                  // Defines the Peerstore interface for storing peer metadata (addresses, keys)
 	"github.com/libp2p/go-libp2p/core/routing"                    // Defines the Routing interface for peer routing (e.g., DHT)
-	"github.com/libp2p/go-libp2p/p2p/protocol/circuitv2/client"   // For establishing outbound relayed connections (acting as a client)
 	rc "github.com/libp2p/go-libp2p/p2p/protocol/circuitv2/relay" // Import for relay service options
 	autorelay "github.com/libp2p/go-libp2p/p2p/host/autorelay"
 
@@ -67,7 +66,6 @@ import (
 
 	// Multiaddr libraries (libp2p's addressing format)
 	ma "github.com/multiformats/go-multiaddr"        // Core multiaddr parsing and manipulation
-	manet "github.com/multiformats/go-multiaddr/net" // Utilities for working with multiaddrs and net interfaces (checking loopback, etc.)
 )
 
 // ChatProtocol defines the protocol ID string used for direct peer-to-peer messaging streams.
@@ -165,7 +163,10 @@ type NodeInstance struct {
 	// Address Cache
     addrMutex  sync.RWMutex
     localAddrs []ma.Multiaddr
-    relayAddrs []ma.Multiaddr
+
+	// Static relay
+	privateRelay *autorelay.AutoRelay
+	privateRelayAddrs []ma.Multiaddr
 
 	// PubSub State
 	pubsubMutex   sync.RWMutex
@@ -194,30 +195,6 @@ type NodeInstance struct {
 
 // --- Create a package-level logger ---
 var logger = golog.Logger("unailib")
-
-// Create a writer to capture logging from yamux
-var yamuxLogger = golog.Logger("yamux")
-// 1. Create the Adapter
-type GologAdapter struct {
-	Logger golog.StandardLogger
-}
-
-func (a *GologAdapter) Write(p []byte) (n int, err error) {
-	// Yamux logs end with a newline, which golog will also add. Trim it.
-	msg := string(bytes.TrimSpace(p))
-
-	// 2. Parse the level (Yamux prefixes logs with [ERR] or [WARN])
-	if strings.Contains(msg, "[ERR]") {
-		a.Logger.Error(msg)
-	} else if strings.Contains(msg, "[WARN]") {
-		a.Logger.Warn(msg)
-	} else {
-		// Default to info or debug for anything else
-		a.Logger.Info(msg)
-	}
-
-	return len(p), nil
-}
 
 // --- Multi-Instance State Management ---
 var (
@@ -456,71 +433,88 @@ func setupNotifiers(ni *NodeInstance) {
 
 			// Check if this is the LAST connection to this peer
 			if len(ni.host.Network().ConnsToPeer(remotePeerID)) == 0 {
-				logger.Debugf("[GO] ⏳ Instance %d: Last connection to %s closed. Starting %v grace period timer...\n", ni.instanceIndex, remotePeerID, DisconnectionGracePeriod)
+				// If it's a friendlyPeer, wait for the grace period, otherwise close immediately
+				ni.peersMutex.RLock()
+				_, isFriendly := ni.friendlyPeers[remotePeerID]
+				ni.peersMutex.RUnlock()
 
-                // We create a context that we can cancel if they reconnect
-                ctx, cancelTimer := context.WithCancel(context.Background())
-                
-                ni.disconnectionMutex.Lock()
-                // If a timer already exists (rare race condition), cancel the old one first
-                if oldCancel, exists := ni.disconnectionTimers[remotePeerID]; exists {
-                    oldCancel()
-                }
-                ni.disconnectionTimers[remotePeerID] = cancelTimer
-                ni.disconnectionMutex.Unlock()
+				if isFriendly {
+					logger.Debugf("[GO] ⏳ Instance %d: Last connection to %s closed. Starting %v grace period timer...\n", ni.instanceIndex, remotePeerID, DisconnectionGracePeriod)
 
-                // Run cleanup in a goroutine
-                go func() {
-                    select {
-                    case <-time.After(DisconnectionGracePeriod):
-                        // Timer expired! Proceed to cleanup.
-                    case <-ctx.Done():
-                        // Context cancelled (user reconnected). Stop here.
-                        return
-                    case <-ni.ctx.Done():
-                        // Node is shutting down. Stop here.
-                        return
-                    }
+					// We create a context that we can cancel if they reconnect
+					ctx, cancelTimer := context.WithCancel(context.Background())
+					
+					ni.disconnectionMutex.Lock()
+					// If a timer already exists (rare race condition), cancel the old one first
+					if oldCancel, exists := ni.disconnectionTimers[remotePeerID]; exists {
+						oldCancel()
+					}
+					ni.disconnectionTimers[remotePeerID] = cancelTimer
+					ni.disconnectionMutex.Unlock()
 
-                    // --- Timer Expired: Execute Cleanup ---
-                    
-                    // Remove from timer map
-                    ni.disconnectionMutex.Lock()
-                    // Double-check: did we get cancelled while waiting for lock?
-                    if ctx.Err() != nil {
-                        ni.disconnectionMutex.Unlock()
-                        return
-                    }
-                    delete(ni.disconnectionTimers, remotePeerID)
-                    ni.disconnectionMutex.Unlock()
+					// Run cleanup in a goroutine
+					go func() {
+						select {
+						case <-time.After(DisconnectionGracePeriod):
+							// Timer expired! Proceed to cleanup.
+						case <-ctx.Done():
+							// Context cancelled (user reconnected). Stop here.
+							return
+						case <-ni.ctx.Done():
+							// Node is shutting down. Stop here.
+							return
+						}
 
-                    // Final Safety Check: Are they actually connected now?
-                    // (Handles race where they reconnect exactly when timer fires)
-                    if len(ni.host.Network().ConnsToPeer(remotePeerID)) > 0 {
-                         logger.Debugf("[GO] ⚠️ Instance %d: Grace period expired for %s, but peer is connected again. Skipping cleanup.\n", ni.instanceIndex, remotePeerID)
-                         return
-                    }
+						// --- Timer Expired: Execute Cleanup ---
+						// Remove from timer map
+						ni.disconnectionMutex.Lock()
+						// Double-check: did we get cancelled while waiting for lock?
+						if ctx.Err() != nil {
+							ni.disconnectionMutex.Unlock()
+							return
+						}
+						delete(ni.disconnectionTimers, remotePeerID)
+						ni.disconnectionMutex.Unlock()
 
-                    logger.Infof("[GO] 🗑️ Instance %d: Grace period ended for %s. Removing peer data.\n", ni.instanceIndex, remotePeerID)
+						// Final Safety Check: Are they actually connected now?
+						// (Handles race where they reconnect exactly when timer fires)
+						if len(ni.host.Network().ConnsToPeer(remotePeerID)) > 0 {
+							logger.Debugf("[GO] ⚠️ Instance %d: Grace period expired for %s, but peer is connected again. Skipping cleanup.\n", ni.instanceIndex, remotePeerID)
+							return
+						}
 
-                    // 3. Clean up friendlyPeers
-                    ni.peersMutex.Lock()
-                    if _, exists := ni.friendlyPeers[remotePeerID]; exists {
-                        delete(ni.friendlyPeers, remotePeerID)
-                        logger.Debugf("[GO]   Instance %d: Removed %s from friendlyPeers.\n", ni.instanceIndex, remotePeerID)
-                    }
-                    ni.peersMutex.Unlock()
+						logger.Debugf("[GO] 🗑️ Instance %d: Grace period ended for %s. Removing peer data.\n", ni.instanceIndex, remotePeerID)
 
-                    // 4. Clean up persistent streams
-                    ni.streamsMutex.Lock()
-                    if stream, ok := ni.persistentChatStreams[remotePeerID]; ok {
-                        logger.Debugf("[GO]   Instance %d: Cleaning up persistent stream for %s.\n", ni.instanceIndex, remotePeerID)
-                        _ = stream.Close() 
-                        delete(ni.persistentChatStreams, remotePeerID)
-                    }
-                    ni.streamsMutex.Unlock()
+						// 3. Clean up friendlyPeers
+						ni.peersMutex.Lock()
+						if _, exists := ni.friendlyPeers[remotePeerID]; exists {
+							delete(ni.friendlyPeers, remotePeerID)
+							logger.Debugf("[GO]   Instance %d: Removed %s from friendlyPeers.\n", ni.instanceIndex, remotePeerID)
+						}
+						ni.peersMutex.Unlock()
 
-                }()
+						// 4. Clean up persistent streams
+						ni.streamsMutex.Lock()
+						if stream, ok := ni.persistentChatStreams[remotePeerID]; ok {
+							logger.Debugf("[GO]   Instance %d: Cleaning up persistent stream for %s.\n", ni.instanceIndex, remotePeerID)
+							_ = stream.Close() 
+							delete(ni.persistentChatStreams, remotePeerID)
+						}
+						ni.streamsMutex.Unlock()
+
+					}()
+				} else {
+					logger.Debugf("[GO]   Instance %d: Last connection to %s closed. Removing from tracked peers.\n", ni.instanceIndex, remotePeerID)
+
+					// Also clean up persistent stream if one existed for this peer
+					ni.streamsMutex.Lock()
+					if stream, ok := ni.persistentChatStreams[remotePeerID]; ok {
+						logger.Debugf("[GO]   Instance %d: Cleaning up persistent stream for disconnected peer %s via DisconnectedF notifier.\n", ni.instanceIndex, remotePeerID)
+						_ = stream.Close() // Attempt graceful close
+						delete(ni.persistentChatStreams, remotePeerID)
+					}
+					ni.streamsMutex.Unlock()
+					}
 			} else {
 				logger.Debugf("[GO]   Instance %d: DisconnectedF: Still have %d active connections to %s, not removing.\n", ni.instanceIndex, len(ni.host.Network().ConnsToPeer(remotePeerID)), remotePeerID)
 			}
@@ -608,7 +602,7 @@ func handleAddressUpdateEvents(ni *NodeInstance, sub event.Subscription) {
             for i, a := range allAddresses {
                 addrsStr[i] = a.String()
             }
-			logger.Debugf("[GO] 🔄 Instance %d: Updated local addresses (updating cache). Addrs: %v", ni.instanceIndex, addrsStr)
+			logger.Infof("[GO] 🔄 Instance %d: Updated local addresses (updating cache). Addrs: %v", ni.instanceIndex, addrsStr)
 		}
 	}
 }
@@ -1110,7 +1104,7 @@ func goGetNodeAddresses(
 	if isThisNode {
 		ni.addrMutex.RLock()
 		candidateAddrs = append(candidateAddrs, ni.localAddrs...)
-		candidateAddrs = append(candidateAddrs, ni.relayAddrs...)
+		candidateAddrs = append(candidateAddrs, ni.privateRelayAddrs...)
 		ni.addrMutex.RUnlock()
 	} else {
 		// --- Remote Peer Addresses ---
@@ -1206,6 +1200,15 @@ func (ni *NodeInstance) Close() error {
 		ni.dht = nil
 	}
 
+	// --- Close AutoRelay ---
+	if ni.privateRelay != nil {
+		logger.Debugf("[GO]   - Instance %d: Closing AutoRelay service...\n", ni.instanceIndex)
+		if err := ni.privateRelay.Close(); err != nil { //
+			logger.Warnf("[GO] ⚠️ Instance %d: Error closing AutoRelay: %v\n", ni.instanceIndex, err)
+		}
+		ni.privateRelay = nil
+	}
+
 	// --- Close Persistent Outgoing Streams ---
 	ni.streamsMutex.Lock()
 	if len(ni.persistentChatStreams) > 0 {
@@ -1251,7 +1254,7 @@ func (ni *NodeInstance) Close() error {
 	// Clear also the addresses
 	ni.addrMutex.Lock()
 	ni.localAddrs = nil
-	ni.relayAddrs = nil
+	ni.privateRelayAddrs = nil
 	ni.addrMutex.Unlock()
 
 	// Clear the MessageStore for this instance
@@ -1377,8 +1380,8 @@ func CreateNode(
 		topics:                make(map[string]*pubsub.Topic),
 		subscriptions:         make(map[string]*pubsub.Subscription),
 		friendlyPeers:         make(map[peer.ID]ExtendedPeerInfo),
-		disconnectionTimers:   make(map[peer.ID]context.CancelFunc),
 		persistentChatStreams: make(map[peer.ID]network.Stream),
+		disconnectionTimers:   make(map[peer.ID]context.CancelFunc),
 		messageStore:          newMessageStore(),
 	}
 	ni.ctx, ni.cancel = context.WithCancel(context.Background())
@@ -1430,9 +1433,17 @@ func CreateNode(
 
 	// If we want RelayService we must be public (either forced or via AutoNat)
 	if cfg.Relay.EnableService {
+		if !cfg.Relay.EnableClient {
+			return jsonErrorResponse(fmt.Sprintf("Instance %d: Cannot set libp2p.DisableRelay() if we want to offer relay services.", instanceIndex), nil)
+		}
 		if !(cfg.DHT.Enabled || cfg.Network.ForcePublic) {
 			return jsonErrorResponse(fmt.Sprintf("Instance %d: A relay needs to be publicly reachable (forced or discovered).", instanceIndex), nil)
 		}
+	}
+
+	// If we want to keep dht it needs to be enabled
+	if cfg.DHT.Keep && !cfg.DHT.Enabled {
+		return jsonErrorResponse(fmt.Sprintf("Instance %d: Cannot set 'DHT.Keep' if DHT is not 'Enabled'.", instanceIndex), nil)
 	}
 
 	// --- Load or Create Persistent Identity ---
@@ -1535,32 +1546,8 @@ func CreateNode(
 		options = append(options, libp2p.Transport(ws.New))
 	}
 
-	// EnableRelay (the ability to *use* relays) is default, we can explicitly disable it if needed.
-	if !cfg.Relay.EnableClient {
-		options = append(options, libp2p.DisableRelay()) // Explicitly disable using relays.
-		logger.Debugf("[GO]   - Instance %d: Relay client is DISABLED.\n", instanceIndex)
-	}
-
-	// Configure Relay Service (ability to *be* a relay)
-	if cfg.Relay.EnableService {
-		// limit := rc.DefaultLimit()         // open this to see the default limits
-		resources := rc.DefaultResources() // open this to see the default resource limits
-		if cfg.Relay.WithBroadLimits {
-			// Set the duration for relayed connections. 0 means infinite.
-			// limit.Duration = ttl
-			// resources.Limit = limit
-			resources.Limit = nil // same as setting rc.WithInfiniteLimits()
-			resources.ReservationTTL = 2 * time.Hour
-		}
-
-		// This single option enables the node to act as a relay for others, including hopping,
-		// with our custom resource limits.
-		options = append(options, libp2p.EnableRelayService(rc.WithResources(resources)), libp2p.EnableNATService())
-		logger.Debugf("[GO]   - Instance %d: Relay service is ENABLED with custom resource configuration.\n", instanceIndex)
-	}
-
 	// Prepare discovering the bootstrap peers
-	if cfg.DHT.Enabled && !cfg.Network.Isolated {
+	if cfg.DHT.Enabled {
 		// Add any possible option to be publicly reachable
 		discoveryOpts := []libp2p.Option{
 			libp2p.EnableAutoNATv2(),
@@ -1575,15 +1562,39 @@ func CreateNode(
 				return ni.dht, err
 			}),
 		}
-
-		if cfg.Relay.EnableClient && !cfg.Relay.EnableService && cfg.DHT.Keep {
-			// Enable AutoRelay. This uses the services above (DHT, AutoNAT)
-			// to find relays and bind to one if we are private.
-			discoveryOpts = append(discoveryOpts, libp2p.EnableAutoRelayWithPeerSource(ni.PeerSource, autorelay.WithBootDelay(time.Second*10)))
-			logger.Debugf("[GO]   - Instance %d: AutoRelay client ENABLED.\n", instanceIndex)
-		}
 		options = append(options, discoveryOpts...)
 		logger.Debugf("[GO]   - Instance %d: Trying to be publicly reachable.\n", instanceIndex)
+	}
+
+	// EnableRelay (the ability to *use* relays) is default, we can explicitly disable it if needed.
+	if !cfg.Relay.EnableClient {
+		// In this case we don't want to use the circuit-relay protocol.
+		options = append(options, libp2p.DisableRelay()) // Explicitly disable using relays.
+		logger.Debugf("[GO]   - Instance %d: Relay client is DISABLED.\n", instanceIndex)
+	} else {
+		// Configure Relay Service (ability to *be* a relay)
+		if cfg.Relay.EnableService {
+			resources := rc.DefaultResources() // open this to see the default resource limits
+			if cfg.Relay.WithBroadLimits {
+				// Enrich default limits
+				resources.Limit = nil // same as setting rc.WithInfiniteLimits()
+				resources.ReservationTTL = 2 * time.Hour
+				logger.Debugf("[GO]   - Instance %d: Relay service is ENABLED with custom resource configuration (WithBroadLimits).\n", instanceIndex)
+			} else {
+				logger.Debugf("[GO]   - Instance %d: Relay service is ENABLED with default resource configuration.\n", instanceIndex)
+			}
+			// This single option enables the node to act as a relay for others.
+			options = append(options, libp2p.EnableRelayService(rc.WithResources(resources)), libp2p.EnableNATService())
+		} else {
+			// In this case we want to use relays but not offer the service to others.
+			// If we are exploiting the DHT we can start an AutoRelay with PeerSource
+			if cfg.DHT.Keep {
+				// Enable AutoRelay. This uses the services above (DHT, AutoNAT)
+				// to find relays and bind to one if we are private.
+				options = append(options, libp2p.EnableAutoRelayWithPeerSource(ni.PeerSource, autorelay.WithBootDelay(time.Second*10)))
+				logger.Debugf("[GO]   - Instance %d: AutoRelay client ENABLED.\n", instanceIndex)
+			}
+		}
 	}
 
 	if cfg.Network.ForcePublic {
@@ -1620,6 +1631,27 @@ func CreateNode(
 
 	if cfg.Network.ForcePublic {
 		isPublic = true
+		logger.Debugf("[GO] ⏳ Instance %d: ForcePublic is ON. Waiting for addresses to settle...", instanceIndex)
+		waitCtx, waitCancel := context.WithTimeout(ni.ctx, 5*time.Second)
+		defer waitCancel()
+
+		ticker := time.NewTicker(100 * time.Millisecond)
+		defer ticker.Stop()
+
+		AddressWaitLoop:
+		for {
+			select {
+			case <-waitCtx.Done():
+				logger.Warnf("[GO] ⚠️ Instance %d: Timed out waiting for addresses (proceeding anyway).", instanceIndex)
+				break AddressWaitLoop
+			case <-ticker.C:
+				// Check if the host has reported addresses yet
+				if len(ni.host.Addrs()) > 0 {
+					logger.Debugf("[GO] ✅ Instance %d: Addresses populated.", instanceIndex)
+					break AddressWaitLoop
+				}
+			}
+		}
 	} else {
 		// --- Wait for Reachability Update ---
 		// Subscribe to reachability events
@@ -1808,24 +1840,17 @@ func ConnectTo(
 	return jsonSuccessResponse(winningAddrInfo) // Caller frees.
 }
 
-// ReserveOnRelay attempts to reserve a slot on a specified relay node for a specific instance.
-// This allows the local node to be reachable via that relay, even if behind NAT/firewall.
-// The first connection with the relay node should be done in advance using ConnectTo.
+// StartStaticRelay configures and starts the AutoRelay service using a specific
+// static relay (e.g., the subnetwork owner). This replaces manual reservation logic.
+//
 // Parameters:
-//   - instanceIndexC (C.int): The index of the node instance.
-//   - relayPeerIDC (*C.char): The peerID of the relay node.
+//   - instanceIndexC: The node instance.
+//   - relayAddrInfoJSONC: JSON string of the relay's AddrInfo (id + addrs).
 //
-// Returns:
-//   - *C.char: A JSON string indicating success or failure.
-//     On success, the `message` contains the expiration date of the reservation (ISO 8601).
-//     Structure (Success): `{"state":"Success", "message": "2024-12-31T23:59:59Z"}`
-//     Structure (Error): `{"state":"Error", "message":"..."}`
-//   - IMPORTANT: The caller MUST free the returned C string using `FreeString`.
-//
-//export ReserveOnRelay
-func ReserveOnRelay(
+//export StartStaticRelay
+func StartStaticRelay(
 	instanceIndexC C.int,
-	relayPeerIDC *C.char,
+	relayAddrInfoJSONC *C.char,
 ) *C.char {
 
 	ni, err := getInstance(int(instanceIndexC))
@@ -1833,107 +1858,55 @@ func ReserveOnRelay(
 		return jsonErrorResponse("Invalid instance", err)
 	}
 
-	// Convert C string input to Go string.
-	goRelayPeerID := C.GoString(relayPeerIDC)
-	logger.Debugf("[GO] 🅿️ Instance %d: Attempting to reserve slot on relay with Peer ID: %s\n", ni.instanceIndex, goRelayPeerID)
+	// --- 1. Handle Switching Subnetworks ---
+	// If an AutoRelay service is already running, close it first.
+	if ni.privateRelay != nil {
+		logger.Debugf("[GO] 🔄 Instance %d: Switching Relay. Closing existing AutoRelay service...", ni.instanceIndex)
+		if err := ni.privateRelay.Close(); err != nil { //
+			logger.Warnf("[GO] ⚠️ Instance %d: Error closing old AutoRelay: %v", ni.instanceIndex, err)
+		}
+		ni.privateRelay = nil
+		// Also clean up any existing relayed addresses
+		ni.addrMutex.Lock()
+		ni.privateRelayAddrs = nil
+		ni.addrMutex.Unlock()
+		logger.Infof("[GO] 🔄 Instance %d: Previous AutoRelay service closed.", ni.instanceIndex)
+	}
 
-	// --- Decode Peer ID and build AddrInfo from Peerstore ---
-	relayPID, err := peer.Decode(goRelayPeerID)
+	// --- 2. Parse the New Relay's AddrInfo ---
+	relayInfoJSON := C.GoString(relayAddrInfoJSONC)
+	var relayInfo peer.AddrInfo
+	if err := json.Unmarshal([]byte(relayInfoJSON), &relayInfo); err != nil {
+		return jsonErrorResponse("Failed to parse relay AddrInfo JSON", err)
+	}
+
+	logger.Debugf("[GO] 🔗 Instance %d: Configuring Static AutoRelay with peer %s", ni.instanceIndex, relayInfo.ID)
+
+	// --- 3. Configure AutoRelay Options ---
+	opts := []autorelay.Option{
+		autorelay.WithStaticRelays([]peer.AddrInfo{relayInfo}),
+		autorelay.WithNumRelays(1), 
+		autorelay.WithBootDelay(0), 
+	}
+
+	// --- 4. Create the AutoRelay Service ---
+	// This initializes the service but might not start the background workers yet.
+	ar, err := autorelay.NewAutoRelay(ni.host, opts...) //
 	if err != nil {
-		return jsonErrorResponse("Failed to decode relay Peer ID string", err)
+		return jsonErrorResponse("Failed to create AutoRelay service", err)
 	}
 
-	// Construct the AddrInfo using the ID and the addresses we know from the peerstore.
-	relayInfo := peer.AddrInfo{
-		ID:    relayPID,
-		Addrs: ni.host.Peerstore().Addrs(relayPID),
-	}
+	// --- 5. Start the Service ---
+	// This kicks off the background goroutines to connect and reserve slots.
+    // It returns immediately.
+	ar.Start() 
 
-	// Ensure the node is not trying to reserve a slot on itself.
-	if relayInfo.ID == ni.host.ID() {
-		return jsonErrorResponse(
-			fmt.Sprintf("Instance %d: Cannot reserve slot on self", ni.instanceIndex), nil,
-		) // Caller frees.
-	}
+	// Store the reference so we can close it later.
+	ni.privateRelay = ar
 
-	// --- VERIFY CONNECTION TO RELAY ---
-	if len(ni.host.Network().ConnsToPeer(relayInfo.ID)) == 0 {
-		errMsg := fmt.Sprintf("Instance %d: Not connected to relay %s. Must connect before reserving.", ni.instanceIndex, relayInfo.ID)
-		return jsonErrorResponse(errMsg, nil)
-	}
-	logger.Debugf("[GO]   - Instance %d: Verified connection to relay: %s\n", ni.instanceIndex, relayInfo.ID)
+	logger.Infof("[GO] ✅ Instance %d: Static AutoRelay service started. Target: %s", ni.instanceIndex, relayInfo.ID)
 
-	// --- Attempt Reservation ---
-	// Use a separate context with potentially longer timeout for the reservation itself.
-	resCtx, resCancel := context.WithTimeout(ni.ctx, 60*time.Second) // 60-second timeout for reservation.
-	defer resCancel()
-	// Call the circuitv2 client function to request a reservation.
-	// This performs the RPC communication with the relay.
-	reservation, err := client.Reserve(resCtx, ni.host, relayInfo)
-	if err != nil {
-		errMsg := fmt.Sprintf("Instance %d: Failed to reserve slot on relay %s", ni.instanceIndex, relayInfo.ID)
-		// Handle reservation timeout specifically.
-		if resCtx.Err() == context.DeadlineExceeded {
-			errMsg = fmt.Sprintf("Instance %d: Reservation attempt on relay %s timed out", ni.instanceIndex, relayInfo.ID)
-			return jsonErrorResponse(errMsg, nil) // Caller frees.
-		}
-		return jsonErrorResponse(errMsg, err) // Caller frees.
-	}
-
-	// Although Reserve usually errors out if it fails, double-check if the reservation object is nil.
-	if reservation == nil {
-		errMsg := fmt.Sprintf("Instance %d: Reservation on relay %s returned nil voucher, but no error", ni.instanceIndex, relayInfo.ID)
-		return jsonErrorResponse(errMsg, nil) // Caller frees.
-	}
-
-	// --- Construct Relayed Addresses and Update Local Peerstore ---
-	// We construct a relayed address for each public address of the relay to maximize reachability.
-	var constructedAddrs []ma.Multiaddr
-	for _, relayAddr := range reservation.Addrs {
-		// We only want to use public, usable addresses for the circuit
-		if manet.IsIPLoopback(relayAddr) || manet.IsIPUnspecified(relayAddr) {
-			continue
-		}
-
-		// Ensure the relay's address in the peerstore includes its own Peer ID
-		baseRelayAddrStr := relayAddr.String()
-		if _, idInAddr := peer.SplitAddr(relayAddr); idInAddr == "" {
-			baseRelayAddrStr = fmt.Sprintf("%s/p2p/%s", relayAddr.String(), relayInfo.ID.String())
-		}
-		
-		constructedAddr, err := ma.NewMultiaddr(fmt.Sprintf("%s/p2p-circuit", baseRelayAddrStr))
-		if err == nil {
-			constructedAddrs = append(constructedAddrs, constructedAddr)
-		}
-	}
-
-	if len(constructedAddrs) == 0 {
-		return jsonErrorResponse("Reservation succeeded but failed to construct any valid relayed multiaddr", nil)
-	}
-
-	logger.Debugf("[GO] 🔗 Instance %d: Constructed %d Relayed Addresses:", ni.instanceIndex, len(constructedAddrs))
-	for _, addr := range constructedAddrs {
-		logger.Debugf("[GO]      -> %s", addr.String())
-	}
-	// Tell the Network to start listening on these addresses.
-    // This activates the circuit transport for this specific relay, updates host.Addrs(),
-    // and triggers the EvtLocalAddressesUpdated event automatically.
-    if err := ni.host.Network().Listen(constructedAddrs...); err != nil {
-		// If listening fails, it's not fatal for the reservation (we still have the slot),
-		// but it implies we might not be reachable via those specific paths.
-		logger.Warnf("[GO] ⚠️ Instance %d: Failed to start listener on some relayed addresses: %v", ni.instanceIndex, err)
-	} else {
-		logger.Debugf("[GO] ✅ Instance %d: Successfully started listening on relayed addresses.", ni.instanceIndex)
-	}
-	// Also add them directly to the istance
-	ni.addrMutex.Lock()
-    ni.relayAddrs = constructedAddrs 
-    ni.addrMutex.Unlock()
-
-	logger.Infof("[GO] ✅ Instance %d: Reservation successful on relay: %s.\n", ni.instanceIndex, relayInfo.ID)
-
-	// Return the expiration time of the reservation as confirmation.
-	return jsonSuccessResponse(reservation.Expiration)
+	return jsonSuccessResponse("Static AutoRelay enabled")
 }
 
 // DisconnectFrom attempts to close any active connections to a specified peer

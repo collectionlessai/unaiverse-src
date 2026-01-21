@@ -108,9 +108,9 @@ class P2P:
                     'dht': 'debug',
                     'autorelay': 'debug',
                     'autonat': 'debug',
-                    # "rcmgr": "debug",
-                    "swarm2": "debug",
-                    "yamux": "debug"
+                    # 'rcmgr': 'debug',
+                    'swarm2': 'debug',
+                    'yamux': 'debug'
                 }
 
             logger.info("🐍 Setting up and initializing P2P library core with user settings...")
@@ -258,11 +258,13 @@ class P2P:
             initial_addresses = message_data.get("addresses", [])
             self._is_public = message_data.get("isPublic", False)
 
-            # Check teh returned data
-            if not isinstance(initial_addresses, list) or not initial_addresses:
-                err_msg = "Received empty or invalid addresses list from Go CreateNode."
+             # Check the returned data
+            if not isinstance(initial_addresses, list):
+                err_msg = "Received invalid addresses list from Go CreateNode."
                 logger.error(f"[Instance {self._instance}] {err_msg}")
                 raise P2PError(f"[Instance {self._instance}] {err_msg}")
+            elif not initial_addresses:
+                err_msg = "Received empty addresses list from Go CreateNode."
 
             self._peer_id = initial_addresses[0].split("/")[-1]
 
@@ -591,49 +593,56 @@ class P2P:
             raise P2PError(f"Unsubscription from {channel} failed") from e
 
     # --- Relay Operations ---
-
-    def reserve_on_relay(self, relay_peer_id: str) -> str:
+    def start_static_relay(self, relay_peer_id: str, relay_addrs: List[str]) -> None:
         """
-        Attempts to reserve a slot on a specified relay node.
+        Enables (or switches to) a static AutoRelay service pointing to a specific relay node.
+        This handles connection, reservation, and automatic renewal in the background.
 
         Args:
-            relay_peer_id: The peerID of the relay node
-
-        Returns:
-            The UTC expiration timestamp of the reservation as an ISO 8601 string.
+            relay_peer_id: The Peer ID of the relay node (subnetwork owner).
+            relay_addrs: A list of multiaddresses for the relay node.
 
         Raises:
-            P2PError: If the reservation fails.
-            ValueError: If the relay_multiaddr is invalid.
+            P2PError: If the operation fails.
+            ValueError: If inputs are invalid.
         """
         if not relay_peer_id or not isinstance(relay_peer_id, str):
-            logger.error("Invalid relay multiaddr provided.")
-            raise ValueError("Invalid relay multiaddr provided.")
-        logger.info(f"🅿️ Attempting to reserve slot on relay: {relay_peer_id}...")
+            logger.error("Invalid relay Peer ID provided.")
+            raise ValueError("Invalid relay Peer ID provided.")
+        
+        if not relay_addrs or not isinstance(relay_addrs, list):
+            logger.error("Invalid relay addresses provided.")
+            raise ValueError("Invalid relay addresses provided.")
+
+        logger.info(f"🔗 Enabling Static AutoRelay via {relay_peer_id}...")
+
+        # Construct the AddrInfo structure expected by Go's json.Unmarshal
+        relay_info = {
+            "ID": relay_peer_id,
+            "Addrs": relay_addrs
+        }
+
         try:
-            result_ptr = P2P.libp2p.ReserveOnRelay(
+            result_ptr = P2P.libp2p.StartStaticRelay(
                 P2P._type_interface.to_go_int(self._instance),
-                P2P._type_interface.to_go_string(relay_peer_id)
-                )
+                P2P._type_interface.to_go_json(relay_info)
+            )
             result = P2P._type_interface.from_go_ptr_to_json(result_ptr)
 
             if result is None:
-                logger.error("Failed to reserve on relay, received null result.")
-                raise P2PError("Failed to reserve on relay, received null result.")
+                logger.error("Failed to enable static relay, received null result.")
+                raise P2PError("Failed to enable static relay, received null result.")
+            
             if result.get('state') == "Error":
-                logger.error(f"Failed to reserve on relay '{relay_peer_id}': {result.get('message', 'Unknown Go error')}")
-                raise P2PError(f"Failed to reserve on relay '{relay_peer_id}': {result.get('message', 'Unknown Go error')}")
+                err_msg = result.get('message', 'Unknown Go error')
+                logger.error(f"Failed to enable static relay: {err_msg}")
+                raise P2PError(f"Failed to enable static relay: {err_msg}")
 
-            expiration_utc = result.get('message', {})
-            if not isinstance(expiration_utc, str):
-                raise P2PError(f"Expected expiration timestamp string, but got {type(expiration_utc)}")
-
-            logger.info(f"✅ Reservation successful. Expires at: {expiration_utc}")
-            return expiration_utc
+            logger.info(f"✅ Static AutoRelay enabled successfully for {relay_peer_id}.")
 
         except Exception as e:
-            logger.error(f"❌ Reservation on {relay_peer_id} failed: {e}")
-            raise P2PError(f"Reservation on {relay_peer_id} failed") from e
+            logger.error(f"❌ Failed to enable static relay: {e}")
+            raise P2PError(f"Failed to enable static relay: {e}") from e
 
     # --- Node Information ---
 

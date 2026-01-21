@@ -144,9 +144,6 @@ class Node:
         self.publish_rendezvous_every = 10.
         self.last_rendezvous_time = 0.
 
-        # Automatic address update and relay refresh (if needed)
-        self.relay_reservation_expiry: Optional[datetime] = None
-
         # Interview of newly connected nodes
         self.interview_timeout = 45.  # Seconds
         self.connect_without_ack_retry_timeout = 30.  # Seconds
@@ -160,7 +157,7 @@ class Node:
         
         # stats reporting agent -> world
         self.send_stats_every = 30.  # Seconds
-        self.save_stats_every = 5 * 60.  # Seconds
+        self.save_stats_every = 10.  # Seconds
 
         # Alive messaging
         self.run_start_time = 0.
@@ -273,7 +270,7 @@ class Node:
             "enable_relay_client": allow_connection_through_relay,
             "enable_relay_service": self.node_type is Node.WORLD,
             "use_broad_limits": True,
-            "is_isolated": True,
+            "is_isolated": env_is_isolated,
             "knows_is_public": env_is_public,
             "enable_tls": env_use_tls,
             "domain_name": env_domain,
@@ -1200,22 +1197,6 @@ class Node:
                         self.out("No address changes detected.")
                 except Exception as e:
                     self.err(f"Failed to check for address updates: {e}")
-
-                # Refresh relay reservation if nearing expiration
-                if self.relay_reservation_expiry is not None:
-                    time_to_expiry = self.relay_reservation_expiry - datetime.now(timezone.utc)
-                    if time_to_expiry < timedelta(minutes=15):
-                        self.out("Relay reservation nearing expiration. Attempting to renew...")
-                        try:
-                            world_private_peer_id = self.profile.get_dynamic_profile()['connections']['world_peer_id']
-                            new_expiry_utc = self.conn.p2p_world.reserve_on_relay(world_private_peer_id)
-                            self.relay_reservation_expiry = datetime.fromisoformat(
-                                new_expiry_utc.replace('Z', '+00:00'))
-                            self.out(f"Relay reservation renewed. New expiration: "
-                                     f"{self.relay_reservation_expiry.strftime('%Y-%m-%d %H:%M:%S')} UTC")
-                        except Exception as e:
-                            self.err(f"Failed to renew relay reservation: {e}. Node may become unreachable.")
-                            self.relay_reservation_expiry = None  # Stop trying if it fails
                 
                 # Send stats to the world
                 if self.node_type is Node.AGENT and self.agent.in_world():
@@ -1276,6 +1257,13 @@ class Node:
         finally:
             if self.cursor_hidden:
                 sys.stdout.write("\033[?25h")  # Re-enabling cursor
+            
+            try:
+                if self.node_type is Node.WORLD and self.world is not None:
+                    print("[NODE] Shutting down stats database...")
+                    self.world.stats.shutdown()
+            except Exception as e:
+                self.err(f"Error closing database: {e}")
 
             try:
                 if self.node_type is Node.AGENT and self.agent.in_world():
@@ -1973,15 +1961,12 @@ class Node:
 
             # Relay reservation logic for non-public peers
             if not self.conn.p2p_world.is_public and self.conn.p2p_world.relay_is_enabled:
-                self.out("Node is not publicly reachable. Attempting to reserve a slot on the world's private network.")
+                self.out("Node is not publicly reachable. Enabling Static AutoRelay on the world's private network.")
                 try:
-                    expiry_utc = self.conn.p2p_world.reserve_on_relay(peer_id)
-                    self.relay_reservation_expiry = (
-                        datetime.fromisoformat(expiry_utc.replace('Z', '+00:00')))
-                    self.out(f"Reserved relay slot. Expires at "
-                             f"{self.relay_reservation_expiry.strftime('%Y-%m-%d %H:%M:%S')} UTC")
+                    self.conn.p2p_world.start_static_relay(peer_id, addresses)
+                    self.out("Static AutoRelay enabled. Reservation and renewal will be handled automatically.")
                 except Exception as e:
-                    self.err(f"An error occurred during relay reservation: {e}.")
+                    self.err(f"An error occurred enabling Static AutoRelay: {e}.")
             
             # Load custom stats class if provided
             stats_class = None

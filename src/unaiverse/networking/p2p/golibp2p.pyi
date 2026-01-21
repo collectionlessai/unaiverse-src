@@ -26,11 +26,12 @@ class GoLibP2P:
         """
         ...
 
-    def ReserveOnRelay(self, instance: int, relay_peer_id: bytes) -> int:
+    def StartStaticRelay(self, instance: int, relay_info_json: bytes) -> int:
         """
-        ReserveOnRelay(instance: int, relay_peer_id: bytes) -> bytes
+        EnableStaticRelay(instance: int, relay_info_json: bytes) -> bytes
 
-        Reserves a relay port on the network. Returns a JSON result.
+        Enables (or switches to) a static AutoRelay service for the given relay info.
+        Returns a JSON result.
         """
         ...
 

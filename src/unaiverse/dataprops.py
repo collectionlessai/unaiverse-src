@@ -162,7 +162,7 @@ class DataProps:
     Attributes:
         VALID_DATA_TYPES (tuple): Tuple of valid data types ('tensor', 'tensor_token_id', 'img', 'text').
     """
-    VALID_DATA_TYPES = ('tensor', 'img', 'text', 'all')
+    VALID_DATA_TYPES = ('tensor', 'img', 'text', 'file', 'all')
 
     def __init__(self,
                  name: str = "unk",
@@ -341,6 +341,18 @@ class DataProps:
                     self.proc_to_stream_transforms = (
                         AutoTokenizer.from_pretrained(self.proc_to_stream_transforms.split(":")[1]))
 
+        elif self.is_file():
+            # Ensuring other type-related tools are not set
+            assert tensor_shape is None and tensor_labels is None and tensor_dtype is None, \
+                f"Tensor-related arguments must be None when using a DataProps of type {data_type}"
+            
+            # Files usually don't use standard transforms, but we allow custom callables if needed.
+            # We strictly forbid PreTrainedTokenizerBase as it makes no sense for binary files.
+            assert (self.stream_to_proc_transforms is None or 
+                    (not isinstance(self.stream_to_proc_transforms, PreTrainedTokenizerBase) and 
+                     not isinstance(self.stream_to_proc_transforms, str))), \
+                "Tokenizers cannot be used as transforms for file streams"
+
         # Checking name and group
         assert "~" not in name, "Invalid chars in stream name"
         assert "~" not in group, "Invalid chars in group name"
@@ -516,6 +528,14 @@ class DataProps:
             True if the type is 'text', False otherwise.
         """
         return self.data_type == "text"
+    
+    def is_file(self):
+        """Checks if the data type is 'file'.
+
+        Returns:
+            True if the type is 'file', False otherwise.
+        """
+        return self.data_type == "file"
 
     def is_tensor_long(self):
         """Checks if the tensor's data type is `torch.long`.
@@ -915,6 +935,22 @@ class DataProps:
                     return data
             else:
                 raise ValueError(f"Expecting image (PIL.Image) data, got {type(data)}")
+        elif self.is_file():
+            if isinstance(data, FileContainer):
+                return data
+
+            elif isinstance(data, str):
+                return FileContainer.from_path(data)
+
+            elif isinstance(data, bytes):
+                return FileContainer(content=data, filename="raw_bytes", mime_type="application/octet-stream")
+            
+            # Fallback if FileContainer is not imported but the object looks like one (duck typing)
+            elif hasattr(data, 'content') and hasattr(data, 'filename') and hasattr(data, 'mime_type'):
+                return data
+                
+            else:
+                raise ValueError(f"Expecting FileContainer, str (path), or bytes for file stream, got {type(data)}")
         elif self.is_all():
             return data
         else:
@@ -1004,6 +1040,12 @@ class DataProps:
                     raise ValueError(f"Cannot convert a tensor to PIL.Image, since img_to_tensor_inv_transform is None")
             else:
                 raise ValueError(f"Expecting image (PIL.Image) data or torch.Tensor, got {type(data)}")
+        elif self.is_file():
+            if isinstance(data, FileContainer) or \
+               (hasattr(data, 'content') and hasattr(data, 'filename') and hasattr(data, 'mime_type')):
+                return data
+            else:
+                raise ValueError(f"Expecting FileContainer for file stream output, got {type(data)}")
         elif self.is_all():
             return data
         else:
