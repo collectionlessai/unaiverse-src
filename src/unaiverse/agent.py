@@ -1311,12 +1311,13 @@ class Agent(AgentBasics):
         else:
             return True
 
-    async def find_agents(self, role: str | list[str], engage: bool = False):
+    async def find_agents(self, role: str | list[str], engage: bool = False, handshake_completed: bool = False):
         """Locally searches through the agent's known peers (world and public agents) to find agents with a specific
         role. It populates the `_found_agents` set with the peer IDs of matching agents (async).
 
         Args:
             role: The role or list of roles to search for.
+            handshake_completed: If True, only consider agents that have completed the handshake.
             engage: If you want to force the found agents to be the ones that you are engaged with.
 
         Returns:
@@ -1336,7 +1337,8 @@ class Agent(AgentBasics):
             found_peer_ids = found_peer_ids1 + found_peer_ids2
 
             for peer_id in found_peer_ids:
-                self._found_agents.add(peer_id)  # Peer IDs here
+                if not handshake_completed or peer_id in self.all_agents:
+                    self._found_agents.add(peer_id)  # Peer IDs here
 
         self.deb(f"[find_agents] Found these agents: {self._found_agents}")
         if engage:
