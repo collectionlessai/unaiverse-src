@@ -1049,10 +1049,10 @@ class Stats:
         params_static = []
 
         if stat_names:
-            query_static.append(f'AND stat_name IN ({",".join(["?"]*len(stat_names))})')
+            query_static.append(f"AND stat_name IN ({','.join(['?']*len(stat_names))})")
             params_static.extend(stat_names)
         if peer_ids:
-            query_static.append(f'AND peer_id IN ({",".join(["?"]*len(peer_ids))})')
+            query_static.append(f"AND peer_id IN ({','.join(['?']*len(peer_ids))})")
             params_static.extend(peer_ids)
 
         try:
@@ -1088,33 +1088,33 @@ class Stats:
 
         # 1. Stat Names
         if stat_names:
-            query_dyn.append(f'AND stat_name IN ({','.join(['?']*len(stat_names))})')
+            query_dyn.append(f"AND stat_name IN ({','.join(['?']*len(stat_names))})")
             params_dyn.extend(stat_names)
         
         # 2. Peer IDs
         if peer_ids:
-            query_dyn.append(f'AND peer_id IN ({','.join(['?']*len(peer_ids))})')
+            query_dyn.append(f"AND peer_id IN ({','.join(['?']*len(peer_ids))})")
             params_dyn.extend(peer_ids)
             
         if time_range is not None:
             if isinstance(time_range, int):
                 # Treated as "Since X"
-                query_dyn.append('AND timestamp >= ?')
+                query_dyn.append("AND timestamp >= ?")
                 params_dyn.append(time_range)
             elif isinstance(time_range, (tuple, list)) and len(time_range) == 2:
                 # Treated as "Between X and Y"
-                query_dyn.append('AND timestamp >= ? AND timestamp <= ?')
+                query_dyn.append("AND timestamp >= ? AND timestamp <= ?")
                 params_dyn.extend([time_range[0], time_range[1]])
 
         # 4. Value Range (The logic requested by user)
         if value_range:
-            query_dyn.append('AND val_num IS NOT NULL AND val_num >= ? AND val_num <= ?')
+            query_dyn.append("AND val_num IS NOT NULL AND val_num >= ? AND val_num <= ?")
             params_dyn.extend([value_range[0], value_range[1]])
             
-        query_dyn.append('ORDER BY timestamp ASC')
+        query_dyn.append("ORDER BY timestamp ASC")
         
         # add the limit
-        query_dyn.append('LIMIT 5000' if limit is None else f'LIMIT {limit}')
+        query_dyn.append("LIMIT 5000" if limit is None else f"LIMIT {limit}")
 
         try:
             cursor = self._db_conn.execute(' '.join(query_dyn), params_dyn)
