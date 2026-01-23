@@ -128,7 +128,7 @@ def check_json_start(file: str, msg: str, delete_existing: bool = False):
         while True:
             if os.path.exists(file_path):
                 try:
-                    with open(file_path, "r") as f:
+                    with open(file_path, "r", encoding='utf-8') as f:
                         json_dict = json.load(f)
                         if json_dict != prev_dict:
                             now = datetime.now()
@@ -222,11 +222,14 @@ class FileTracker:
 
     def something_changed(self):
         new_state = self.__scan_files()
+
         created = [f for f in new_state if f not in self.last_state]
-        modified = [f for f in new_state
-                    if f in self.last_state and new_state[f] != self.last_state[f]]
+        modified = [f for f in new_state if f in self.last_state and new_state[f] != self.last_state[f]]
+        deleted = [f for f in self.last_state if f not in new_state]  # Track deletions
+
+        has_changed = bool(created or modified or deleted)
         self.last_state = new_state
-        return created or modified
+        return has_changed
 
 
 def prepare_app_dir(app_name: str = "unaiverse"):

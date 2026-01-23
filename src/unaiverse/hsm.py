@@ -2225,10 +2225,9 @@ class HybridStateMachine:
                 existing = HybridStateMachine(actionable=only_if_changed).load(filename)
                 if str(existing) == str(self):
                     return False
-            except Exception as e:
+            except Exception:   # If load fails, we assume it changed
                 if HybridStateMachine.DEBUG:
-                    print(f"[DEBUG HSM] Error while saving the machines {e}")
-                return False
+                    print(f"[DEBUG HSM] Error while reloading the exising machine from {filename}, assuming it changed")
 
         with (open(filename, 'w') as file):
             file.write(str(self))
@@ -2256,11 +2255,11 @@ class HybridStateMachine:
 
             # Ordinary case
             if os.path.exists(filename_or_hsm_as_string) and os.path.isfile(filename_or_hsm_as_string):
-                with open(filename_or_hsm_as_string, 'r') as file:
+                with open(filename_or_hsm_as_string, 'r', encoding="utf-8") as file:
                     hsm_data = json.load(file)
             else:
-                assert not filename_or_hsm_as_string.endswith(".json"), \
-                    f"File {filename_or_hsm_as_string} does not exist"
+
+                # Assuming it is a string
                 hsm_data = json.loads(filename_or_hsm_as_string)
 
         # Getting state info
