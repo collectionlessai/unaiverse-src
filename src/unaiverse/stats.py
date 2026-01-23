@@ -1052,7 +1052,7 @@ class Stats:
         query_static = ['SELECT peer_id, stat_name, val_json FROM static_stats']
         params_static = []
 
-        where_added = True
+        where_added = False
         if stat_names:
             query_static.append("WHERE")
             where_added = True
@@ -1062,7 +1062,8 @@ class Stats:
             if not where_added:
                 query_static.append("WHERE")
             else:
-                query_static.append(f"AND peer_id IN ({','.join(['?']*len(peer_ids))})")
+                query_static.append(f"AND")
+            query_static.append(f"peer_id IN ({','.join(['?']*len(peer_ids))})")
             params_static.extend(peer_ids)
 
         try:
