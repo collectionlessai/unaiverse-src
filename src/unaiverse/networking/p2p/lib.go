@@ -355,9 +355,11 @@ func getListenAddrs(ips []string, tcpPort int, tlsMode string) ([]ma.Multiaddr, 
 	var listenAddrs []ma.Multiaddr
 	quicPort := 0
 	webtransPort := 0
+	webrtcPort := 0
 	if tcpPort != 0 {
 		quicPort = tcpPort + 1
 		webtransPort = tcpPort + 2
+		webrtcPort = tcpPort +3
 	}
 
 	// --- Create Multiaddrs for both protocols from the single IP list ---
@@ -368,9 +370,10 @@ func getListenAddrs(ips []string, tcpPort int, tlsMode string) ([]ma.Multiaddr, 
 		quicMaddr, _ := ma.NewMultiaddr(fmt.Sprintf("/ip4/%s/udp/%d/quic-v1", ip, quicPort))
 		// WebTransport
 		webtransMaddr, _ := ma.NewMultiaddr(fmt.Sprintf("/ip4/%s/udp/%d/quic-v1/webtransport", ip, webtransPort))
+		// WebRTC Direct
+		webrtcMaddr, _ := ma.NewMultiaddr(fmt.Sprintf("/ip4/%s/udp/%d/webrtc-direct", ip, webrtcPort))
 
-		// listenAddrs = append(listenAddrs, tcpMaddr, quicMaddr, webrtcMaddr, webtransMaddr)
-		listenAddrs = append(listenAddrs, tcpMaddr, quicMaddr, webtransMaddr)
+		listenAddrs = append(listenAddrs, tcpMaddr, quicMaddr, webtransMaddr, webrtcMaddr)
 
 		switch tlsMode {
 		case "autotls":
@@ -627,26 +630,18 @@ func (ni *NodeInstance) isSuitableForPeerSource(pid peer.ID) bool {
 		return false
 	}
 
-	// 2. By now we only check for WebRTC-Direct Address (Transport Layer)
-	// We iterate addresses to find one that contains the webrtc-direct component.
+	// Only accept wss-enabled nodes as relay
 	addrs := ps.Addrs(pid)
-	isSuitableWRTC := false
-	isSuitableWSS := false
 	isSuitable := false
 	for _, addr := range addrs {
-		_, err := addr.ValueForProtocol(ma.P_WEBRTC_DIRECT) 
-		if err == nil {
-			isSuitableWRTC = true
-		}
 		_, err = addr.ValueForProtocol(ma.P_WS) 
 		if err == nil {
 			_, err := addr.ValueForProtocol(ma.P_TLS) 
 			if err == nil {
-				isSuitableWSS = true
+				isSuitable = true
 			}
 		}
 	}
-	isSuitable = isSuitableWRTC && isSuitableWSS
 
 	return isSuitable
 }
