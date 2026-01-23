@@ -1094,32 +1094,51 @@ class Stats:
             self._err(f'Query history (static) failed: {e}')
         
         # B. Query the dynamic stats
-        query_dyn = ['SELECT timestamp, peer_id, stat_name, val_num, val_str, val_json FROM dynamic_stats WHERE 1=1']
+        query_dyn = ['SELECT timestamp, peer_id, stat_name, val_num, val_str, val_json FROM dynamic_stats']
         params_dyn = []
 
         # 1. Stat Names
+        where_added = False
         if stat_names:
-            query_dyn.append(f"AND stat_name IN ({','.join(['?']*len(stat_names))})")
+            query_static.append("WHERE")
+            where_added = True
+            query_dyn.append(f"stat_name IN ({','.join(['?']*len(stat_names))})")
             params_dyn.extend(stat_names)
         
         # 2. Peer IDs
         if peer_ids:
-            query_dyn.append(f"AND peer_id IN ({','.join(['?']*len(peer_ids))})")
+            if not where_added:
+                query_static.append("WHERE")
+            else:
+                query_static.append(f"AND")
+            query_dyn.append(f"peer_id IN ({','.join(['?']*len(peer_ids))})")
             params_dyn.extend(peer_ids)
             
         if time_range is not None:
             if isinstance(time_range, int):
                 # Treated as "Since X"
-                query_dyn.append("AND timestamp >= ?")
+                if not where_added:
+                    query_static.append("WHERE")
+                else:
+                    query_static.append(f"AND")
+                query_dyn.append("timestamp >= ?")
                 params_dyn.append(time_range)
             elif isinstance(time_range, (tuple, list)) and len(time_range) == 2:
                 # Treated as "Between X and Y"
-                query_dyn.append("AND timestamp >= ? AND timestamp <= ?")
+                if not where_added:
+                    query_static.append("WHERE")
+                else:
+                    query_static.append(f"AND")
+                query_dyn.append("timestamp >= ? AND timestamp <= ?")
                 params_dyn.extend([time_range[0], time_range[1]])
 
         # 4. Value Range (The logic requested by user)
         if value_range:
-            query_dyn.append("AND val_num IS NOT NULL AND val_num >= ? AND val_num <= ?")
+            if not where_added:
+                query_static.append("WHERE")
+            else:
+                query_static.append(f"AND")
+            query_dyn.append("val_num IS NOT NULL AND val_num >= ? AND val_num <= ?")
             params_dyn.extend([value_range[0], value_range[1]])
             
         query_dyn.append("ORDER BY timestamp ASC")
