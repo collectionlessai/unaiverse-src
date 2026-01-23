@@ -1049,14 +1049,20 @@ class Stats:
         snapshot = {'world': {}, 'peers': {}}
         
         # A. Query the static stats
-        query_static = ['SELECT peer_id, stat_name, val_json FROM static_stats WHERE 1=1']
+        query_static = ['SELECT peer_id, stat_name, val_json FROM static_stats']
         params_static = []
 
+        where_added = True
         if stat_names:
-            query_static.append(f"AND stat_name IN ({','.join(['?']*len(stat_names))})")
+            query_static.append("WHERE")
+            where_added = True
+            query_static.append(f"stat_name IN ({','.join(['?']*len(stat_names))})")
             params_static.extend(stat_names)
         if peer_ids:
-            query_static.append(f"AND peer_id IN ({','.join(['?']*len(peer_ids))})")
+            if not where_added:
+                query_static.append("WHERE")
+            else:
+                query_static.append(f"AND peer_id IN ({','.join(['?']*len(peer_ids))})")
             params_static.extend(peer_ids)
 
         try:
