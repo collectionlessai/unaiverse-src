@@ -622,7 +622,7 @@ class AgentBasics:
             if peer_id in self.artificial_agents:
                 del self.artificial_agents[peer_id]
             elif peer_id in self.human_agents:
-                del self.artificial_agents[peer_id]
+                del self.human_agents[peer_id]
 
             # Clearing from the list of processor-input-compatible-streams
             if self.compat_in_streams is not None:
