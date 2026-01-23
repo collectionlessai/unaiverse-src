@@ -1055,7 +1055,7 @@ class Stats:
         try:
             cursor = self._db_conn.execute(' '.join(query_static), params_static)
             for pid, sname, vjson in cursor:
-                val = self._validate_type(json.loads(vjson))
+                val = self._validate_type(sname, json.loads(vjson))
                 # Handle special Graph reconstruction if needed (legacy format support)
                 if sname == 'graph':
                     # Handle both legacy format (just edges) and new format (nodes+edges) safely
