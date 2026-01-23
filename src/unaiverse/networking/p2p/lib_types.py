@@ -16,7 +16,7 @@ import json
 import ctypes
 import logging
 from threading import Lock
-from typing import Optional, List, Any, TYPE_CHECKING
+from typing import List, Any
 
 from .golibp2p import GoLibP2P  # Assuming this class loads the library
 
@@ -186,8 +186,6 @@ class TypeInterface:
             TypeError: When go_lib is not a valid ctypes library object.
         """
 
-        json_string: Optional[str] = None  # To store the string for error reporting
-
         if not c_void_ptr_val:  # Check if the address is NULL (0)
             raise print("Received a NULL pointer from Go function")
 
@@ -202,10 +200,8 @@ class TypeInterface:
                 logger.warning(f"🔥🔥🔥 ATTEMPT TO PROCESS ALREADY FREED POINTER {hex(c_void_ptr_val)}! 🔥🔥🔥")
 
                 # Raising an error is safer than trying to read potentially invalid memory.
-                logger.error(f"Attempt to process pointer {hex(c_void_ptr_val)} which was already freed",
-                             pointer_val=c_void_ptr_val)
-                raise Exception(f"Attempt to process pointer {hex(c_void_ptr_val)} which was already freed",
-                                pointer_val=c_void_ptr_val)
+                logger.error(f"Attempt to process pointer {hex(c_void_ptr_val)} which was already freed")
+                raise Exception(f"Attempt to process pointer {hex(c_void_ptr_val)} which was already freed")
             self.__freed_pointers_lock.release()  # Release lock if using threading
 
             # --- Cast void* to c_char_p and Read String ---
@@ -216,18 +212,20 @@ class TypeInterface:
                 raw_bytes = ctypes.string_at(c_char_ptr_for_read)
                 json_string = raw_bytes.decode('utf-8')
 
-                # Logger.debug(f"Read string (len={len(json_string)}) from pointer {hex(c_void_ptr_val)}: %.100s...", json_string)
+                # Logger.debug(f"Read string (len={len(json_string)})
+                # from pointer {hex(c_void_ptr_val)}: %.100s...", json_string)
             except (ctypes.ArgumentError, ValueError, UnicodeDecodeError) as read_err:
-                logger.error(f"Failed to read/decode string from pointer {hex(c_void_ptr_val)}: {read_err}", exc_info=False)
+                logger.error(f"Failed to read/decode string from pointer {hex(c_void_ptr_val)}: "
+                             f"{read_err}", exc_info=False)
 
                 # Even if reading fails, the pointer itself *might* still be valid C memory
                 # that Go expects us to free. We will proceed to free it in finally.
-                raise Exception(f"Failed to read string from pointer {hex(c_void_ptr_val)}: {read_err}",
-                                pointer_val=c_void_ptr_val) from read_err
+                raise Exception(f"Failed to read string from pointer {hex(c_void_ptr_val)}: {read_err}") from read_err
             except Exception as unexpected_read_err:  # Catch other potential ctypes issues
-                logger.error(f"Unexpected error reading C string from pointer {hex(c_void_ptr_val)}: {unexpected_read_err}", exc_info=True)
-                raise Exception(f"Unexpected error reading C string from pointer {hex(c_void_ptr_val)}: {unexpected_read_err}",
-                                pointer_val=c_void_ptr_val) from unexpected_read_err
+                logger.error(f"Unexpected error reading C string from pointer {hex(c_void_ptr_val)}: "
+                             f"{unexpected_read_err}", exc_info=True)
+                raise Exception(f"Unexpected error reading C string from pointer {hex(c_void_ptr_val)}: "
+                                f"{unexpected_read_err}") from unexpected_read_err
 
             # --- Check for Empty String ---
 
@@ -247,8 +245,7 @@ class TypeInterface:
 
                 # Again, the pointer is likely valid C memory, but the content is bad.
                 # Let the block handle freeing.
-                raise Exception(f"Failed to decode JSON from pointer {hex(c_void_ptr_val)}: {json_err}",
-                                pointer_val=c_void_ptr_val) from json_err
+                raise Exception(f"Failed to decode JSON from pointer {hex(c_void_ptr_val)}: {json_err}") from json_err
 
         finally:
 
@@ -263,7 +260,8 @@ class TypeInterface:
                         # This check is technically redundant if the initial check worked,
                         # but provides an extra safety layer in case of concurrency issues
                         # (if freed_pointers is shared without locks - which it shouldn't be).
-                        logger.warning(f"🔥🔥🔥 DOUBLE FREE DETECTED in finally block for {hex(c_void_ptr_val)}! Skipping FreeString call again. 🔥🔥🔥")
+                        logger.warning(f"🔥🔥🔥 DOUBLE FREE DETECTED in finally block for "
+                                       f"{hex(c_void_ptr_val)}! Skipping FreeString call again. 🔥🔥🔥")
                     else:
 
                         # Add before calling free
@@ -274,7 +272,8 @@ class TypeInterface:
 
                             # Log if FreeString fails, but don't raise from finally
                             # as it might hide the original error.
-                            logger.critical(f"🚨 FAILED TO FREE C MEMORY for pointer {hex(c_void_ptr_val)} via FreeString: {free_err}", exc_info=True)
+                            logger.critical(f"🚨 FAILED TO FREE C MEMORY for pointer "
+                                            f"{hex(c_void_ptr_val)} via FreeString: {free_err}", exc_info=True)
 
                             # Consider removing from freed_pointers if free failed?
                             # freed_pointers.discard(c_void_ptr_val) # Maybe, to allow retry? Risky.

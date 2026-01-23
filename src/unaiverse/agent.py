@@ -105,10 +105,11 @@ class Agent(AgentBasics):
 
     async def set_engaged_partner(self, agent: str | list[str] | set[str] | None, clear_found: bool = True):
         """Virtually forces the engagement with a single agent (or a group of agents), clearing all existing
-        engagements (async).
+        engagements and results of previous find operations (async).
 
         Args:
             agent: The agent or the list of agents to engage (it None, we only clear the list of engaged partners).
+            clear_found: Clears results of previously run find operations (True by default).
 
         Returns:
             True all the times.
@@ -134,7 +135,6 @@ class Agent(AgentBasics):
 
         if len(self._found_agents) > 0:
             self.out(f"Sending engagement request to {', '.join([x for x in self._found_agents])}")
-            print(f"Sending engagement request to {', '.join([x for x in self._found_agents])}")
         my_role_str = self._node_profile.get_dynamic_profile()['connections']['role']
         for found_agent in self._found_agents:  # The list of found agents will be cleared after this function
             if await self.set_next_action(found_agent, action="get_engagement",
@@ -175,7 +175,6 @@ class Agent(AgentBasics):
 
             if acceptable_role_int == sender_role_int:
                 if await self.set_next_action(_requester, "got_engagement"):
-                    print("SENT GOT ENGAGEMENT")
                     self._engaged_agents.add(_requester)
 
                     # Marking this agent as not available since it engaged with another one
@@ -214,8 +213,7 @@ class Agent(AgentBasics):
             self.err(f"Unable to confirm engagement with {_requester}")
             return False
 
-    async def send_disengagement(self, send_disconnection_too: bool = False,
-                                 from_state: str | None = None, to_state: str | None = None):
+    async def send_disengagement(self, send_disconnection_too: bool = False):
         """Ask for disengagement (async).
 
         Args:
@@ -230,8 +228,7 @@ class Agent(AgentBasics):
             self.out(f"Sending disengagement request to {', '.join([x for x in self._engaged_agents])}")
         for agent in self._engaged_agents:
             if await self.set_next_action(agent, action="get_disengagement",
-                                          args={"disconnect_too": send_disconnection_too}, from_state=from_state,
-                                          to_state=to_state):
+                                          args={"disconnect_too": send_disconnection_too}):
                 at_least_one_sent = True
             else:
                 self.err(f"Unable to send disengagement to {agent}")
@@ -300,6 +297,7 @@ class Agent(AgentBasics):
 
         Args:
             role: A string or list of strings representing the role(s) of agents to disconnect from.
+            disengage_too: Also forces the sending of a disengagement (before disconnecting - default False).
 
         Returns:
             Always True.
@@ -1589,8 +1587,9 @@ class Agent(AgentBasics):
             info = self._node_conn['p2p_world'].get_connected_peers_info()
             peers_list = [i['id'] for i in info]
             self.stats.store_stat('connected_peers', peers_list, own_private_pid, t)
-        except Exception:
+        except Exception as e:
             self.stats.store_stat('connected_peers', [], own_private_pid, t)
+            self.err(f"[Stats] Error collecting and storing own stats, clearing: {e}")
 
         try:
             behav = self.behav
@@ -1767,9 +1766,8 @@ class Agent(AgentBasics):
         # Triggering
         if for_what == "gen":
             if await self.set_next_action(agent, action="do_gen",
-                                          args=({"u_hashes": u_hashes} if len(u_hashes) > 0 else {}) |
-                                               {"samples": samples, "time": time,
-                                                "timeout": timeout},
+                                          args=({"u_hashes": u_hashes} if len(u_hashes) > 0 else {}) | {
+                                              "samples": samples, "time": time, "timeout": timeout},
                                           from_state=from_state, to_state=to_state,
                                           ref_uuid=ref_uuid):
                 if samples > 1:
@@ -1786,13 +1784,12 @@ class Agent(AgentBasics):
                 self.err(f"Unable to ask {agent} to generate")
                 return False
         elif for_what == "learn":
-            if await self.set_next_action(agent, action="do_learn",
-                                          args=({"u_hashes": u_hashes} if len(u_hashes) > 0 else {}) |
-                                               ({"yhat_hashes": yhat_hashes} if len(yhat_hashes) > 0 else {}) |
-                                               {"samples": samples, "time": time,
-                                                "timeout": timeout},
-                                          from_state=from_state, to_state=to_state,
-                                          ref_uuid=ref_uuid):
+            if await self.set_next_action(
+                    agent, action="do_learn", args=({"u_hashes": u_hashes} if len(u_hashes) > 0 else {}) | (
+                    {"yhat_hashes": yhat_hashes} if len(yhat_hashes) > 0 else {}) | {"samples": samples, "time": time,
+                                                                                     "timeout": timeout},
+                    from_state=from_state, to_state=to_state,
+                    ref_uuid=ref_uuid):
                 if samples > 1:
                     self._agents_who_were_asked.add(agent)
 

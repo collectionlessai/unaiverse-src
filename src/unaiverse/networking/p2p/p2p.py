@@ -13,10 +13,8 @@
                  Main Developers:    Stefano Melacci (Project Leader), Christian Di Maio, Tommaso Guidi
 """
 import os
-import time
 import logging
 import threading
-from .messages import Msg
 from .lib_types import TypeInterface
 from typing import Optional, List, Dict, Any, TYPE_CHECKING
 
@@ -50,7 +48,8 @@ class P2P:
         peer_id (str): The Peer ID of the initialized local node.
         addresses (Optional[List[str]]): List of multiaddresses the local node is listening on.
         is_public (bool): Whether the node is publicly reachable.
-        peer_map (Dict[str, Any]): A dictionary to potentially store information about connected peers (managed manually or by polling thread).
+        peer_map (Dict[str, Any]): A dictionary to potentially store information about connected peers
+            (managed manually or by polling thread).
     """
 
     # --- Class-level state ---
@@ -164,7 +163,9 @@ class P2P:
             ips: A list of specific IP addresses to listen on. Defaults to ["0.0.0.0"].
             enable_relay_client: Enable listening to relayed connections for this node.
             enable_relay_service: Enable relay service capabilities for this node.
-            knows_is_public: If you already know that the node is public this forces its public reachability. Otherwise it tries every possible attempt to make the node publicly reachable (UPnP, HolePunching, AutoNat via DHT...).
+            knows_is_public: If you already know that the node is public this forces its public reachability.
+                Otherwise, it tries every possible attempt to make the node publicly reachable (UPnP, HolePunching,
+                AutoNat via DHT...).
             enable_tls: Whether to enable AutoTLS certificate management (requires internet access).
             domain_name: Optional domain name for TLS certificate (required if enable_tls is True).
             tls_cert_path: Optional path to a custom TLS certificate file (PEM format).
@@ -200,13 +201,13 @@ class P2P:
 
         self._enable_relay_client = enable_relay_client or enable_relay_service
         self._peer_id: Optional[str] = None
-        
+
         # TLS Validation Logic
         has_custom_tls_args = (tls_cert_path is not None) or (tls_key_path is not None) or (domain_name is not None)
         if has_custom_tls_args:
-             if domain_name is None or tls_cert_path is None or tls_key_path is None:
-                 raise ValueError("Custom TLS requires 'domain_name', 'tls_cert_path' and 'tls_key_path'.")
-        
+            if domain_name is None or tls_cert_path is None or tls_key_path is None:
+                raise ValueError("Custom TLS requires 'domain_name', 'tls_cert_path' and 'tls_key_path'.")
+
         use_auto_tls = enable_tls and not has_custom_tls_args
         
         # --- Build Configuration JSON ---
@@ -258,13 +259,14 @@ class P2P:
             initial_addresses = message_data.get("addresses", [])
             self._is_public = message_data.get("isPublic", False)
 
-             # Check the returned data
+            # Check the returned data
             if not isinstance(initial_addresses, list):
                 err_msg = "Received invalid addresses list from Go CreateNode."
                 logger.error(f"[Instance {self._instance}] {err_msg}")
                 raise P2PError(f"[Instance {self._instance}] {err_msg}")
             elif not initial_addresses:
                 err_msg = "Received empty addresses list from Go CreateNode."
+                logger.error(f"[Instance {self._instance}] {err_msg}")
 
             self._peer_id = initial_addresses[0].split("/")[-1]
 
@@ -281,7 +283,8 @@ class P2P:
             if self._instance != -1:  # Check if an ID was actually assigned
                 with P2P._instance_lock:
                     P2P._instance_ids[self._instance] = False
-                    logger.info(f"[Instance {self._instance}] Reclaimed instance ID {self._instance} due to creation failure.")
+                    logger.info(f"[Instance {self._instance}] "
+                                f"Reclaimed instance ID {self._instance} due to creation failure.")
             raise  # Re-raise the exception that caused the failure
 
         logger.info("🎉 Node created successfully and background polling started.")
@@ -319,7 +322,8 @@ class P2P:
                 raise P2PError("Failed to connect to peer, received null result.")
             if result.get('state') == "Error":
                 logger.error(f"Failed to connect to peer '{dest_peer_id}': {result.get('message', 'Unknown Go error')}")
-                raise P2PError(f"Failed to connect to peer '{dest_peer_id}': {result.get('message', 'Unknown Go error')}")
+                raise P2PError(f"Failed to connect to peer '{dest_peer_id}': "
+                               f"{result.get('message', 'Unknown Go error')}")
 
             peer_info = result.get('message', {})
             logger.info(f"✅ Connection initiated to peer: {peer_info.get('ID', dest_peer_id)}")  # Use ID if available
@@ -363,7 +367,8 @@ class P2P:
 
             if result.get('state') == "Error":
                 logger.error(f"Failed to disconnect from peer '{peer_id}': {result.get('message', 'Unknown Go error')}")
-                raise P2PError(f"Failed to disconnect from peer '{peer_id}': {result.get('message', 'Unknown Go error')}")
+                raise P2PError(f"Failed to disconnect from peer '{peer_id}': "
+                               f"{result.get('message', 'Unknown Go error')}")
 
             logger.info(f"✅ Successfully disconnected from {peer_id}")
 
@@ -407,8 +412,10 @@ class P2P:
                 raise P2PError(f"Failed to send direct message to {peer_id}, received null result.")
 
             if result.get('state') == "Error":
-                logger.error(f"Failed to send direct message to '{peer_id}': {result.get('message', 'Unknown Go error')}")
-                raise P2PError(f"Failed to send direct message to '{peer_id}': {result.get('message', 'Unknown Go error')}")
+                logger.error(f"Failed to send direct message to '{peer_id}': "
+                             f"{result.get('message', 'Unknown Go error')}")
+                raise P2PError(f"Failed to send direct message to '{peer_id}': "
+                               f"{result.get('message', 'Unknown Go error')}")
 
             logger.info(f"✅ Successfully sent direct message to {peer_id[-5:]}.")
 
@@ -452,8 +459,10 @@ class P2P:
                 raise P2PError(f"Failed to broadcast message on channel {channel}, received null result.")
 
             if result.get('state') == "Error":
-                logger.error(f"Failed to broadcast message on channel '{channel}': {result.get('message', 'Unknown Go error')}")
-                raise P2PError(f"Failed to broadcast message on channel '{channel}': {result.get('message', 'Unknown Go error')}")
+                logger.error(f"Failed to broadcast message on channel '{channel}': "
+                             f"{result.get('message', 'Unknown Go error')}")
+                raise P2PError(f"Failed to broadcast message on channel '{channel}': "
+                               f"{result.get('message', 'Unknown Go error')}")
 
         except Exception as e:
             logger.error(f"❌ Broadcasting to {channel} failed: {e}")
@@ -484,7 +493,8 @@ class P2P:
             if raw_result is None:
 
                 # This indicates an issue with the C call or JSON conversion in TypeInterface
-                logger.error(f"[Instance {self._instance}] PopMessages: Received null/invalid result from TypeInterface.")
+                logger.error(f"[Instance {self._instance}] PopMessages: "
+                             f"Received null/invalid result from TypeInterface.")
                 raise P2PError(f"[Instance {self._instance}] PopMessages: Failed to get valid JSON response.")
 
             # Check for Go-side error or empty states first
@@ -583,8 +593,10 @@ class P2P:
                 logger.error("Failed to unsubscribe from topic, received null result.")
                 raise P2PError("Failed to unsubscribe from topic, received null result.")
             if result.get('state') == "Error":
-                logger.error(f"Failed to unsubscribe from topic '{channel}': {result.get('message', 'Unknown Go error')}")
-                raise P2PError(f"Failed to unsubscribe from topic '{channel}': {result.get('message', 'Unknown Go error')}")
+                logger.error(f"Failed to unsubscribe from topic '{channel}': "
+                             f"{result.get('message', 'Unknown Go error')}")
+                raise P2PError(f"Failed to unsubscribe from topic '{channel}': "
+                               f"{result.get('message', 'Unknown Go error')}")
 
             logger.info(f"✅ Successfully unsubscribed from {channel}")
 
@@ -751,7 +763,7 @@ class P2P:
             # Optionally raise P2PError(f"Failed to get connected peers info") from e if called directly
             return []  # Return empty list on error during polling
 
-    def get_rendezvous_peers_info(self) -> Dict[str, Any] | None:
+    def get_rendezvous_peers_info(self) -> Dict[str, Any] | List | None:
         """
         Gets the full rendezvous state from the Go library, including peers and metadata.
 
@@ -822,7 +834,7 @@ class P2P:
 
     # --- Lifecycle Management ---
 
-    def close(self, close_all: bool = False) -> None:
+    def close(self, close_all: bool = False) -> None | str:
         """
         Gracefully shuts down the libp2p node and stops background threads.
 
@@ -854,7 +866,8 @@ class P2P:
                 logger.error(f"Node closure failed: {result.get('message', 'Unknown Go error')}")
                 raise P2PError(f"Node closure failed: {result.get('message', 'Unknown Go error')}")
 
-            close_msg = f"Node closed successfully ({'all instances' if close_all else f'instance {str(self._instance)}'})."
+            close_msg = (f"Node closed successfully "
+                         f"({'all instances' if close_all else f'instance {str(self._instance)}'}).")
             logger.info(f"✅ {close_msg}")
 
         except Exception as e:

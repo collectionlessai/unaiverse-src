@@ -40,6 +40,7 @@ def _get_file_hash(filepath):
             sha256_hash.update(byte_block)
     return sha256_hash.hexdigest()
 
+
 def _developer_source_check():
     """
     If source files are present (i.e., in a dev environment), check if the
@@ -52,8 +53,7 @@ def _developer_source_check():
     # installed from a wheel, these files won't exist, and this is skipped.
     if os.path.exists(go_source_file) and os.path.exists(hash_file):
         current_source_hash = _get_file_hash(go_source_file)
-        
-        stored_build_hash = None
+
         with open(hash_file, 'r') as f:
             stored_build_hash = f.read().strip()
             
@@ -67,6 +67,7 @@ def _developer_source_check():
                 "="*80 + "\033[0m",
                 UserWarning
             )
+
 
 # --- Main Library Loading ---
 # The shared library is guaranteed by the build process to be in this directory.
@@ -146,7 +147,7 @@ _shared_lib.UnsubscribeFromTopic.restype = ctypes.c_void_p  # Treat returned *C.
 
 # Static AutoRelay
 _shared_lib.StartStaticRelay.argtypes = [ctypes.c_int, ctypes.c_char_p]
-_shared_lib.StartStaticRelay.restype = ctypes.c_void_p # Treat returned *C.char as opaque pointer
+_shared_lib.StartStaticRelay.restype = ctypes.c_void_p  # Treat returned *C.char as opaque pointer
 
 # Memory Management
 # FreeString now accepts the opaque pointer directly

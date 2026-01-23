@@ -13,7 +13,6 @@
                  Main Developers:    Stefano Melacci (Project Leader), Christian Di Maio, Tommaso Guidi
 """
 import io
-import os
 import gzip
 import json
 import torch
@@ -160,7 +159,6 @@ class Msg:
     @timestamp_net.setter
     def timestamp_net(self, value: str):
         self._proto_msg.timestamp_net = value if value is not None else ""
-
 
     @property
     def content(self) -> any:
@@ -323,7 +321,7 @@ class Msg:
             update_pb = batch_pb.updates.add()
             update_pb.peer_id = update_dict['peer_id']
             update_pb.stat_name = update_dict['stat_name']
-            update_pb.timestamp = int(update_dict['timestamp']) # Ensure int
+            update_pb.timestamp = int(update_dict['timestamp'])  # Ensure int
             
             # Convert the Python 'value' to a Protobuf 'Value'
             py_value = update_dict['value']

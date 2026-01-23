@@ -260,6 +260,7 @@ class HumanModule(torch.nn.Module):
     def forward(self, text: str | None = None, img: Image.Image | None = None, whatever: object | None = None):
         return text, img
 
+
 class LoggerModule(torch.nn.Module):
     def __init__(self, log_file="app_log.txt"):
         super().__init__()

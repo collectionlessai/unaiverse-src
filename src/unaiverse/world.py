@@ -12,13 +12,10 @@
                  Code Repositories:  https://github.com/collectionlessai/
                  Main Developers:    Stefano Melacci (Project Leader), Christian Di Maio, Tommaso Guidi
 """
-import json
-import math
-import bisect
 from unaiverse.stats import Stats
+from typing import List, Dict, Any
 from unaiverse.agent import AgentBasics
 from unaiverse.hsm import HybridStateMachine
-from typing import List, Dict, Any
 from unaiverse.networking.p2p.messages import Msg
 from unaiverse.networking.node.profile import NodeProfile
 
@@ -239,7 +236,7 @@ class World(AgentBasics):
     
     def _extract_graph_node_info(self, peer_id: str) -> Dict[str, Any]:
         """Helper to extract lightweight visualization data from NodeProfile."""
-        profile = None
+
         if peer_id == self.get_peer_ids()[1]:
             # this is the world itself
             profile = self._node_profile
@@ -266,7 +263,7 @@ class World(AgentBasics):
         """Updates both graph connectivity (edges) and node metadata."""
         
         # 1. initialize structure if missing (e.g. first run or after DB load)
-        graph_stat = self.stats._stats.setdefault("graph", {'nodes': {}, 'edges': {}})
+        graph_stat = self.stats.get_stats().setdefault("graph", {'nodes': {}, 'edges': {}})
             
         nodes = graph_stat.setdefault('nodes', {})
         edges = graph_stat.setdefault('edges', {})
@@ -274,14 +271,14 @@ class World(AgentBasics):
         # 2. Update Node Metadata
         # We update the sender's info
         node_data = self._extract_graph_node_info(peer_id)
-        node_data['last_seen'] = timestamp 
+        node_data['last_seen'] = timestamp
         nodes[peer_id] = node_data
-        
+
         # We also ensure connected peers exist in 'nodes', even if we don't have their full profile yet
         connected_peers = set(connected_peers_list)
         for target_id in connected_peers:
             if target_id not in nodes:
-                 # Try to fetch profile if we have it, otherwise placeholder
+                # Try to fetch profile if we have it, otherwise placeholder
                 nodes[target_id] = self._extract_graph_node_info(target_id)
 
         # 3. Update Edges (Logic adapted from your previous code)
@@ -306,7 +303,7 @@ class World(AgentBasics):
     
     def _prune_graph(self):
         """Removes nodes that are no longer connected to the World."""
-        graph_stat = self.stats._stats.get("graph")
+        graph_stat = self.stats.get_stats().get("graph")
         if not graph_stat:
             return
 
@@ -352,12 +349,12 @@ class World(AgentBasics):
                 
                 # Call the hook (which also lives in the World now)
                 if self._process_custom_stat(stat_name, v, p_id, t):
-                    continue # The custom processor handled it
+                    continue  # The custom processor handled it
                 
-                # Generate the graph and sicard the connected_peers stat
+                # Generate the graph and handle the connected_peers stat
                 if stat_name == 'connected_peers':
                     # We need to wait for all the info to arrive before updating the graph.
-                    # Otherwise _extract_graph_node_info may not find data yet.
+                    # Otherwise, _extract_graph_node_info may not find data yet.
                     connected_peers.append((p_id, v, t))
                     continue
 

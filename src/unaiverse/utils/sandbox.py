@@ -18,7 +18,6 @@ import uuid
 import argparse
 import subprocess
 from pathlib import Path
-from unaiverse.networking.p2p import P2P
 
 # Configuration
 DOCKER_IMAGE_NAME = "unaiverse-sandbox"

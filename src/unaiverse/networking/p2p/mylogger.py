@@ -18,6 +18,7 @@ from logging.handlers import TimedRotatingFileHandler
 
 LOG_FOLDER = "unaiverse/networking/p2p/logs"
 
+
 def setup_logger(module_name: str, when: str = 'midnight', backup_count: int = 7) -> logging.Logger:
     """
     Sets up a logger for a specific module with a timed rotating file handler.

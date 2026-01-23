@@ -55,9 +55,9 @@ class TokenVerifier:
         # Decoding token using the public key
         try:
             payload = jwt.decode(token, self.public_key, algorithms=["RS256"])
-        except jwt.DecodeError as e:
+        except jwt.DecodeError:
             return None, None
-        except jwt.ExpiredSignatureError as e:  # This checks expiration time (required)
+        except jwt.ExpiredSignatureError:  # This checks expiration time (required)
             return None, None
 
         # Checking optional information

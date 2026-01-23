@@ -2161,7 +2161,7 @@ class AgentBasics:
         return data
 
     def agent_state_dict(self):
-        """Returns a dictionary containing the agent's saveable state."""
+        """Returns a dictionary containing an instance of the agent's state that can be saved."""
         save_in_state = ['world_profile',]
         return {k: getattr(self, k) for k in save_in_state}
 
@@ -2197,7 +2197,7 @@ class AgentBasics:
                     checkpoint['optimizer_state_dict'] = self.proc_opts['optimizer'].state_dict()
 
                 torch.save(checkpoint, pt_tmp)
-                os.replace(pt_tmp, pt_final) # Atomic move
+                os.replace(pt_tmp, pt_final)  # Atomic move
             except Exception as e:
                 if os.path.exists(pt_tmp):
                     os.remove(pt_tmp)

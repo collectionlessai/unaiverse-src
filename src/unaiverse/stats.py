@@ -74,7 +74,7 @@ class UIPlot:
             'mirror': True,             # Mirror it on top/right (creates the box)
             'linewidth': 2,             # Width of the box border
             'linecolor': THEME['grid'],  # Color of the box border
-            'zeroline': False,          # Prevents double-thick border lines at 0
+            'zeroline': False,          # Prevents double-thick borderlines at 0
             'layer': 'below traces'     # Key fix: puts grid BEHIND the box border
         }
         
@@ -121,9 +121,9 @@ class UIPlot:
             'value': value,
             'title': {'text': title}
         })
-        self._layout['height'] = 300 # Indicators usually need less height
+        self._layout['height'] = 300  # Indicators usually need less height
 
-    def add_table(self, headers: List[str]| None, columns: List[List[Any]]):
+    def add_table(self, headers: List[str] | None, columns: List[List[Any]]):
         """Adds a data table."""
         num_columns = len(columns) if columns else 0
         if headers:
@@ -136,9 +136,9 @@ class UIPlot:
         else:
             header_cfg = {
                 'values': [''] * num_columns,
-                'height': 0, # Hide it
-                'fill': {'color': 'rgba(0,0,0,0)'}, # Transparent just in case
-                'line': {'width': 0} # No border
+                'height': 0,  # Hide it
+                'fill': {'color': 'rgba(0,0,0,0)'},  # Transparent just in case
+                'line': {'width': 0}  # No border
             }
         
         trace = {
@@ -182,7 +182,8 @@ class UIPlot:
         else:
             self._layout[key] = value
     
-    def set_legend(self, orientation: str = 'v', x: float = 1.0, y: float = 1.0, xanchor: str = 'left', yanchor: str = 'top'):
+    def set_legend(self, orientation: str = 'v', x: float = 1.0, y: float = 1.0,
+                   xanchor: str = 'left', yanchor: str = 'top'):
         """
         Configures the legend position and orientation.
         orientation: 'v' (vertical) or 'h' (horizontal)
@@ -202,6 +203,7 @@ class UIPlot:
     def to_json(self) -> str:
         """Serializes the panel to the format the Frontend expects."""
         return json.dumps({'data': self._data, 'layout': self._layout})
+
 
 class DefaultBaseDash:
     """
@@ -277,8 +279,10 @@ class DefaultBaseDash:
         src_l = ui_plot._layout
         dest_x = self.layout.setdefault(xa, {})
         dest_y = self.layout.setdefault(ya, {})
-        if "xaxis" in src_l: dest_x.update({k:v for k,v in src_l["xaxis"].items() if k != "domain"})
-        if "yaxis" in src_l: dest_y.update({k:v for k,v in src_l["yaxis"].items() if k != "domain"})
+        if "xaxis" in src_l:
+            dest_x.update({k: v for k, v in src_l["xaxis"].items() if k != "domain"})
+        if "yaxis" in src_l:
+            dest_y.update({k: v for k, v in src_l["yaxis"].items() if k != "domain"})
 
         # Add Title via Annotation
         if src_l.get("title"):
@@ -355,7 +359,7 @@ class Stats:
     CUSTOM_OUTER_STATS_DYNAMIC_SCHEMA: Dict[str, Tuple[type, Any]] = {}
     
     # Key for grouping stats in the _stats dictionary (both world and agent)
-    GROUP_KEY = 'peer_stats' # _BY_PEER stats are grouped under this key
+    GROUP_KEY = 'peer_stats'  # _BY_PEER stats are grouped under this key
 
     def __init__(self, is_world: bool,
                  db_path: str | None = None,  # only needed by the world
@@ -449,7 +453,7 @@ class Stats:
         # World perspective
         self.world_ungrouped_keys = {name for name in self.WORLD_STATS_STATIC_SCHEMA | self.WORLD_STATS_DYNAMIC_SCHEMA}
         self.world_grouped_keys = {name for name in (self.AGENT_STATS_STATIC_SCHEMA | self.AGENT_STATS_DYNAMIC_SCHEMA |
-                                                      self.OUTER_STATS_STATIC_SCHEMA | self.OUTER_STATS_DYNAMIC_SCHEMA)}
+                                                     self.OUTER_STATS_STATIC_SCHEMA | self.OUTER_STATS_DYNAMIC_SCHEMA)}
         self.agent_ungrouped_keys = {name for name in self.AGENT_STATS_STATIC_SCHEMA | self.AGENT_STATS_DYNAMIC_SCHEMA}
         self.agent_grouped_keys = {name for name in self.OUTER_STATS_STATIC_SCHEMA | self.OUTER_STATS_DYNAMIC_SCHEMA}
     
@@ -505,7 +509,7 @@ class Stats:
             if key in self.all_dynamic_keys:
                 self._stats.setdefault(key, SortedDict())
             else:
-                self._stats.setdefault(key, self._stat_defaults[key]) # e.g., 'graph'
+                self._stats.setdefault(key, self._stat_defaults[key])  # e.g., 'graph'
 
         # Grouped keys are initialized on-demand by _get_peer_stat_cache
         # But we must ensure existing loaded peers have their structures
@@ -557,10 +561,10 @@ class Stats:
                 return schema_type(value)
             except (ValueError, TypeError, AttributeError):
                 self._err(f'Type mismatch for {stat_name}: '
-                                f'Expected {schema_type} but got {type(value)}. '
-                                f'Value: "{value}". Storing as string.')
-                return str(value) # Fallback
-    
+                          f'Expected {schema_type} but got {type(value)}. '
+                          f'Value: "{value}". Storing as string.')
+                return str(value)  # Fallback
+
     def _make_json_serializable(self, value: Any) -> Any:
         """Recursively converts non-serializable types (like sets) to lists."""
         if isinstance(value, set):
@@ -623,7 +627,7 @@ class Stats:
             # --- WORLD LOGIC ---
             if timestamp > self.max_seen_timestamp:
                 self.max_seen_timestamp = timestamp
-            cache = None
+
             # 1. Update hot cache
             if stat_name in self.world_ungrouped_keys:
                 cache = self._stats.get(stat_name)
@@ -638,7 +642,7 @@ class Stats:
                 while cache and cache.peekitem(0)[0] < cutoff:
                     cache.popitem(0)
             
-            # 2. Add to DB buffer depending on the type (value was already casted to the type defined in the schema)
+            # 2. Add to DB buffer depending on the type (value was already cast to the type defined in the schema)
             val_num = value if isinstance(value, (int, float)) and not isinstance(value, bool) else None
             val_str = value if isinstance(value, str) else None
             # always create the json-serialized as fallback
@@ -733,7 +737,10 @@ class Stats:
         if isinstance(val, float):
             return f"{val:.3f}"
         return str(val) if val is not None else "-"
-    
+
+    def get_stats(self):
+        return self._stats
+
     def get_payload_for_world(self) -> List[Dict[str, Any]]:
         """(Agent-only) Gathers, returns, and clears all stats to be sent to the world."""
         if self.is_world:
@@ -817,7 +824,7 @@ class Stats:
         Returns None if the stat is not found or has no entries.
         """
         if not self.is_world:
-            return None # Agents don't have this cache
+            return None  # Agents don't have this cache
             
         cache: Optional[SortedDict] = None
         
@@ -834,9 +841,9 @@ class Stats:
         
         # Check if we found a valid SortedDict cache and it's not empty
         if isinstance(cache, SortedDict) and cache:
-            return cache.peekitem(-1)[1] # Return the last value
+            return cache.peekitem(-1)[1]  # Return the last value
         
-        return None # Stat not found or no values
+        return None  # Stat not found or no values
     
     def _get_last_static_value(self, stat_name: str, peer_id: str | None = None) -> Any | None:
         """
@@ -846,7 +853,7 @@ class Stats:
         Returns None if the stat is not found.
         """
         if not self.is_world:
-            return None # Agents don't have this cache
+            return None  # Agents don't have this cache
         
         value: Any | None = None
         if peer_id is None:
@@ -891,7 +898,7 @@ class Stats:
             SET val_json = excluded.val_json, timestamp = excluded.timestamp
         """, self._static_db_buffer)
         
-        self._static_db_buffer = [] # Clear buffer
+        self._static_db_buffer = []  # Clear buffer
     
     def _save_dynamic_to_db(self):
         """(World-only) Writes the in-memory dynamic buffer to SQLite."""
@@ -905,7 +912,7 @@ class Stats:
         """, self._dynamic_db_buffer)
         
         self._deb(f'Wrote {len(self._dynamic_db_buffer)} dynamic stats to SQLite.')
-        self._dynamic_db_buffer = [] # Clear buffer
+        self._dynamic_db_buffer = []  # Clear buffer
 
     def _prune_db(self):
         """(World-only) Add here the logic to prune the db (e.g., when a peer leaves the world)."""
@@ -985,7 +992,7 @@ class Stats:
             
             if max_ts_result is None or max_ts_result[0] is None:
                 self._deb('No dynamic stats found in DB. Hydration skipped.')
-                return # No data in DB, nothing to load
+                return  # No data in DB, nothing to load
             self.max_seen_timestamp = int(max_ts_result[0])
             cutoff_t_ms = self.max_seen_timestamp - int(self.min_window_duration.total_seconds() * 1000)
 
@@ -999,7 +1006,7 @@ class Stats:
             count = 0
             for ts, peer_id, stat_name, _, _, val_json in cursor:
                 ts = int(ts)
-                # we just need the val_json that will be casted to the exact type by _validate_type
+                # we just need the val_json that will be cast to the exact type by _validate_type
                 value = json.loads(val_json)
                 self._store_dynamic(stat_name, value, peer_id, ts)
                 count += 1
@@ -1016,8 +1023,8 @@ class Stats:
             self._err(f'Failed to hydrate dynamic caches from DB: {e}')
 
     # --- WORLD API (QUERYING) ---
-    def query_history(self, 
-                      stat_names: List[str] = [], 
+    def query_history(self,
+                      stat_names: List[str] = [],
                       peer_ids: List[str] = [],
                       time_range: Union[Tuple[int, int], int, None] = None,
                       value_range: Tuple[float, float] | None = None,
@@ -1121,9 +1128,9 @@ class Stats:
                 val = self._validate_type(sname, val)
                 
                 # Structure construction
-                if pid in (None, 'None', ''): # Handling world stats
+                if pid in (None, 'None', ''):  # Handling world stats
                     target_ts = snapshot['world'].setdefault(sname, [])
-                else: # Handling peer stats
+                else:  # Handling peer stats
                     target_ts = snapshot['peers'].setdefault(pid, {}).setdefault(sname, [])
                 target_ts.append([ts, val])
                     
@@ -1212,7 +1219,7 @@ class Stats:
                 # Final save on exit, if any buffer
                 self.save_to_disk()
             except Exception:
-                pass # Don't raise in destructor
+                pass  # Don't raise in destructor
             self._db_conn.close()
             self._deb('SQLite connection closed.')
     
@@ -1320,10 +1327,10 @@ class Stats:
             # Just grab the first available peer's value if not specified
             targets = peer_ids if peer_ids else list(view['peers'].keys())
             if targets:
-                 val = view['peers'][targets[0]].get(stat_name)
-        
+                val = view['peers'][targets[0]].get(stat_name)
+
         panel.add_indicator(val, title=stat_name)
-    
+
     def _populate_table(self, panel: UIPlot, view: Dict, stat_name: str, peer_ids: List[str] | None = None):
         """Extracts data for a table."""
         headers = ['Entity', 'Value']
@@ -1342,7 +1349,7 @@ class Stats:
             val = peers_dict.get(pid, {}).get(stat_name)
             if val is not None:
                 col_ent.append(pid[-6:])
-                col_val.append(str(val)) # Simple stringification
+                col_val.append(str(val))  # Simple stringification
         
         panel.add_table(headers, [col_ent, col_val])
     
@@ -1365,7 +1372,7 @@ class Stats:
 
         # 2. Calculate Layout (Circular)
         # We use edges_data keys for positioning, but we might have nodes in nodes_data
-        # that have no edges yet, so we union them.
+        # that have no edges yet, so we merge them.
         all_pids = set(edges_data.keys()).union(*edges_data.values()) | set(nodes_data.keys())
         pids = list(all_pids)
         pos = {}
@@ -1400,7 +1407,7 @@ class Stats:
         })
 
         # 4. Create Node Trace
-        node_x, node_y, node_text, node_color, node_labels= [], [], [], [], []
+        node_x, node_y, node_text, node_color, node_labels = [], [], [], [], []
         for pid in pids:
             if pid not in pos:
                 continue

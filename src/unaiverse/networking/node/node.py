@@ -32,10 +32,10 @@ from collections import deque
 from unaiverse.clock import Clock
 from unaiverse.world import World
 from unaiverse.agent import Agent
-from typing import Optional, Dict, Any
+from typing import Dict, Any
 from unaiverse.networking.p2p import P2P, P2PError
 from unaiverse.networking.p2p.messages import Msg
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from unaiverse.networking.node.connpool import NodeConn
 from unaiverse.networking.node.profile import NodeProfile
 from unaiverse.streams import DataProps, BufferedDataStream
@@ -846,7 +846,7 @@ class Node:
     async def run_async(self, cycles: int | None = None,
                         max_time: float | None = None,
                         interact_mode: bool = False,
-                        resume_from_checkpoint: bool =False,
+                        resume_from_checkpoint: bool = False,
                         join_world: str | list[str] | None = None,
                         get_in_touch: str | list[str] | None = None,
                         **kwargs):

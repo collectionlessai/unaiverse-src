@@ -1200,15 +1200,10 @@ class HybridStateMachine:
             'highlight_blocking_states_in_messages': self.show_blocking_states,
             'show_action_ticks_after_messages': self.show_action_completion,
             'show_action_request_after_messages': self.show_action_request_info,
-            'state_actions': {
-                state.name: state.to_list() for state in self.__id_to_state
-            },
-            'transitions': {
-                from_state: {
-                    to_state: [act.to_list() for act in action_list] for to_state, action_list in to_states.items()
-                }
-                for from_state, to_states in self.transitions.items() if len(to_states) > 0
-            },
+            'state_actions': {state.name: state.to_list() for state in self.__id_to_state},
+            'transitions': {from_state: {to_state: [act.to_list() for act in action_list] for to_state, action_list in
+                                         to_states.items()} for from_state, to_states in self.transitions.items() if
+                            len(to_states) > 0},
             'cur_action': self.__action.to_list() if self.__action is not None else None
         }
 
@@ -2133,7 +2128,7 @@ class HybridStateMachine:
 
         # If state is not provided, the current state is assumed
         if from_state is None:
-            # If the request arrives in the middle of a multistep action, we need to check limbo state)
+            # If the request arrives in the middle of a multistep action, we need to check limbo state
             from_state = self.state if self.state is not None else self.limbo_state
         if from_state not in self.transitions:
             if HybridStateMachine.DEBUG:
@@ -2230,7 +2225,9 @@ class HybridStateMachine:
                 existing = HybridStateMachine(actionable=only_if_changed).load(filename)
                 if str(existing) == str(self):
                     return False
-            except Exception:
+            except Exception as e:
+                if HybridStateMachine.DEBUG:
+                    print(f"[DEBUG HSM] Error while saving the machines {e}")
                 return False
 
         with (open(filename, 'w') as file):
@@ -2409,7 +2406,9 @@ class HybridStateMachine:
         try:
             self.to_graphviz().render(filename, format='pdf', cleanup=True)
             return True
-        except Exception:
+        except Exception as e:
+            if HybridStateMachine.DEBUG:
+                print(f"[DEBUG HSM] Error while saving to PDF {e}")
             return False
 
     def print_actions(self, state: str | None = None):
