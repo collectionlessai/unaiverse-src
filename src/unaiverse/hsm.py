@@ -2229,7 +2229,7 @@ class HybridStateMachine:
                 if HybridStateMachine.DEBUG:
                     print(f"[DEBUG HSM] Error while reloading the exising machine from {filename}, assuming it changed")
 
-        with (open(filename, 'w') as file):
+        with open(filename, 'w', encoding='utf-8') as file:
             file.write(str(self))
         return True
 
