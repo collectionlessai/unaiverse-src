@@ -28,14 +28,14 @@ import requests
 import threading
 import traceback
 from PIL import Image
+from typing import Dict, Any
 from collections import deque
 from unaiverse.clock import Clock
 from unaiverse.world import World
 from unaiverse.agent import Agent
-from typing import Dict, Any
-from unaiverse.networking.p2p import P2P, P2PError
-from unaiverse.networking.p2p.messages import Msg
 from datetime import datetime, timezone
+from unaiverse.networking.p2p.messages import Msg
+from unaiverse.networking.p2p import P2P, P2PError
 from unaiverse.networking.node.connpool import NodeConn
 from unaiverse.networking.node.profile import NodeProfile
 from unaiverse.streams import DataProps, BufferedDataStream
@@ -149,7 +149,7 @@ class Node:
         self.last_rendezvous_time = 0.
 
         # Interview of newly connected nodes
-        self.interview_timeout = 45.  # Seconds
+        self.interview_timeout = 60.  # Seconds
         self.connect_without_ack_retry_timeout = 30.  # Seconds
         self.connect_without_ack_total_timeout = 60.  # Seconds
         self.reconnected = set()

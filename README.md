@@ -292,10 +292,10 @@ We prepared a repository with examples of many worlds and different lone wolves,
 
 ## 📄 License
 
-This project is licensed under the Polyform Strict License 1.0.0.
+This project is licensed under the Apache 2.0 License.
 Commercial licenses can be provided.
 See the [LICENSE](./LICENSE) file for details (research, etc.).
-
+See the Contributor License Agreement [CLA.md](./CLA.md) if you want to contribute.
 This project includes third-party libraries. See [THIRD_PARTY_LICENSES.md](./THIRD_PARTY_LICENSES.md) for details.
 
 ---
