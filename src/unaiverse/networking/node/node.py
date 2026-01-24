@@ -70,7 +70,7 @@ class Node:
                  talk_to_relay_based_nodes: bool = True,
                  run_hook: callable = None,
                  send_stats_every: float = 30.,
-                 save_checkpoint_every: float = 300.):
+                 save_checkpoint_every: float = -1.):
         """Initializes a new instance of the Node class.
 
         Args:
@@ -89,7 +89,7 @@ class Node:
             talk_to_relay_based_nodes: A flag to allow talking to relay-based nodes.
             run_hook: A function taking the Node instance as argument, called every cycle.
             send_stats_every: Send the stats update to the world every N seconds.
-            save_checkpoint_every: Time interval in seconds to save the hosted entity's state to disk.
+            save_checkpoint_every: Time interval in seconds to save the hosted entity's state to disk (< 0. not to save).
         """
 
         # Checking main arguments

@@ -102,6 +102,7 @@ class AgentBasics:
         self.behav_lone_wolf = behav_lone_wolf  # HSM that describes the agent behavior in the public net
         self.behav_wildcards = {}
         self.proc = proc
+        self.proc_updated_since_last_save = False
         self.proc_inputs = proc_inputs
         self.proc_outputs = proc_outputs
         self.proc_opts = proc_opts
@@ -1460,6 +1461,9 @@ class AgentBasics:
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
+        # This is where parameters are actually updated, but the flag is set
+        # upon success in do_learn which is the outer method calling this one
+        # self.proc_updated_since_last_save = True
 
         # Teaching (for autoregressive models, expected to have attribute "y")
         if hasattr(self.proc, 'y'):
@@ -2184,7 +2188,7 @@ class AgentBasics:
         os.makedirs(where, exist_ok=True)
 
         # Saving the processor
-        if self.proc is not None:
+        if self.proc is not None and self.proc_updated_since_last_save:
             pt_final = os.path.join(where, f"{self._node_name}.pt")
             pt_tmp = pt_final + ".tmp"
             try:
@@ -2198,6 +2202,7 @@ class AgentBasics:
 
                 torch.save(checkpoint, pt_tmp)
                 os.replace(pt_tmp, pt_final)  # Atomic move
+                self.proc_updated_since_last_save = False
             except Exception as e:
                 if os.path.exists(pt_tmp):
                     os.remove(pt_tmp)

@@ -915,6 +915,7 @@ class Agent(AgentBasics):
                                          recipient_info=(_requester, samples), ref_uuid=_request_uuid)
             if not ret:
                 self.out(f"Learning to generate signal {yhat_hashes_copy} failed")
+            self.proc_updated_since_last_save = True  # Set it after complete?
             return ret
         else:
             self.out(f"Completing learning to generate signal {yhat_hashes_copy}")
