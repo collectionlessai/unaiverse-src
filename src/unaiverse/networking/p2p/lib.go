@@ -42,7 +42,8 @@ import (
 	"github.com/libp2p/go-libp2p/core/peerstore"                  // Defines the Peerstore interface for storing peer metadata (addresses, keys)
 	"github.com/libp2p/go-libp2p/core/routing"                    // Defines the Routing interface for peer routing (e.g., DHT)
 	rc "github.com/libp2p/go-libp2p/p2p/protocol/circuitv2/relay" // Import for relay service options
-	autorelay "github.com/libp2p/go-libp2p/p2p/host/autorelay"
+	autorelay "github.com/libp2p/go-libp2p/p2p/host/autorelay"	   // AutoRelay for automatic relay selection and usage
+	rcmgr "github.com/libp2p/go-libp2p/p2p/host/resource-manager"			  // Resource manager for controlling resource usage (connections, streams)
 
 	// transport protocols for libp2p
 	quic "github.com/libp2p/go-libp2p/p2p/transport/quic"                 // QUIC transport for peer-to-peer connections (e.g., for mobile devices)
@@ -1477,6 +1478,47 @@ func CreateNode(
 		return jsonErrorResponse(fmt.Sprintf("Instance %d: Failed to create multiaddrs", instanceIndex), err)
 	}
 
+    // --- Configure Custom Resource Manager ---
+    scalingLimits := rcmgr.DefaultLimits
+    libp2p.SetDefaultServiceLimits(&scalingLimits)
+
+    // These apply per unique Peer ID.
+    scalingLimits.PeerBaseLimit.Conns = 64
+    scalingLimits.PeerBaseLimit.ConnsInbound = 64
+    scalingLimits.PeerBaseLimit.ConnsOutbound = 64
+
+    // Tweak System Limits
+    scalingLimits.SystemBaseLimit.Conns = 256
+    scalingLimits.SystemBaseLimit.ConnsInbound = 128
+    scalingLimits.SystemBaseLimit.ConnsOutbound = 128
+
+    // Compute the concrete limits
+    scaledLimits := scalingLimits.AutoScale()
+
+	// Raise the per-IP limits
+	customIP4Limits := []rcmgr.ConnLimitPerSubnet{
+        {
+            PrefixLength: 32,   // /32 means "one specific IP address"
+            ConnCount:    1024, // Allow 1024 conns from the same IP
+        },
+    }
+	customIP6Limits := []rcmgr.ConnLimitPerSubnet{
+        {
+            PrefixLength: 56,
+            ConnCount:    1024,
+        },
+    }
+
+    // Create the limiter and manager
+    limiter := rcmgr.NewFixedLimiter(scaledLimits)
+    rm, err := rcmgr.NewResourceManager(
+		limiter,
+		rcmgr.WithLimitPerSubnet(customIP4Limits, customIP6Limits),
+	)
+    if err != nil {
+        return jsonErrorResponse(fmt.Sprintf("Instance %d: Failed to create resource manager", instanceIndex), err)
+    }
+
 	options := []libp2p.Option{
 		libp2p.Identity(privKey),
 		libp2p.ListenAddrs(listenAddrs...),
@@ -1487,7 +1529,7 @@ func CreateNode(
 		libp2p.Transport(quic.NewTransport),
 		libp2p.Transport(webtransport.New),
 		libp2p.Transport(webrtc.New),
-		libp2p.DefaultResourceManager,
+		libp2p.ResourceManager(rm),
 		libp2p.UserAgent(UnaiverseUserAgent),
 		libp2p.NATPortMap(),
 		libp2p.EnableHolePunching(),
