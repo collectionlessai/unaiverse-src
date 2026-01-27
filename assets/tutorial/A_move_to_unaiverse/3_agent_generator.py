@@ -4,7 +4,7 @@ from unaiverse.dataprops import Data4Proc
 from unaiverse.networking.node.node import Node
 
 
-# Custom generator network: a module that simpy generates an image with
+# Custom generator network: a module that simply generates an image with
 # "random" pixel intensities; we will use this as processor of our new agent.
 class Net(torch.nn.Module):
     def __init__(self):
@@ -18,23 +18,22 @@ class Net(torch.nn.Module):
 
 
 # Agent: we use the generator as processor.
-# This agent will still be a "lone wolf", but we will force a different behavior, that is
-# the one of "asking" another agent to handle the generated data, getting back a response.
 agent = Agent(proc=Net(),
               proc_inputs=[Data4Proc(data_type="all")],  # Able to get every type of data (since it won't use it :))
               proc_outputs=[Data4Proc(data_type="tensor", tensor_shape=(1, 3, 224, 224),
                                       tensor_dtype="torch.float32")],  # These are the properties of generator output
-              behav_lone_wolf="ask")  # Setting this behavior: "ask the partner to respond to your generated data"
+              )
+
+# To retrieve the result we got from the ResNet agent, we define a hook
+# that will be called at the end of every run cycle
+def hook(_node: Node):
+    # Printing the last received data from the ResNet agent
+    _out = _node.agent.get_last_streamed_data('Test0')[0]
+    if _out is not None:
+        _node.agent.print(f"Received data shape: {tuple(_out.shape)}, dtype: {_out.dtype}")
 
 # Node hosting agent
-node = Node(node_name="Test1", hosted=agent, hidden=True, clock_delta=1. / 30.)
-
-# Telling this agent to connect to the ResNet one
-node.ask_to_get_in_touch(node_name="Test0")
+node = Node(node_name="Test1", hosted=agent, hidden=True, clock_delta=1. / 5., run_hook=hook)
 
 # Running node for 10 seconds
-node.run(max_time=10.0)
-
-# Printing the last received data from the ResNet agent
-out = agent.get_last_streamed_data('Test0')[0]
-print(f"Received data shape: {tuple(out.shape)}, dtype: {out.dtype}")
+node.run(get_in_touch="Test0", max_time=10.0)

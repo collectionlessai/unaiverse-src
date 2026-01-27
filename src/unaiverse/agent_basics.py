@@ -902,7 +902,7 @@ class AgentBasics:
         data_list = []
         for peer_id, profile in self.all_agents.items():
             if profile.get_static_profile()['node_name'] == agent_name:
-                net_hash_to_stream_dict = self.find_streams(peer_id)
+                net_hash_to_stream_dict = self.find_streams(peer_id, name_or_group="processor")
                 for net_hash, streams_dict in net_hash_to_stream_dict.items():
                     for stream_name, stream_obj in streams_dict.items():
                         data_list.append(stream_obj.get())

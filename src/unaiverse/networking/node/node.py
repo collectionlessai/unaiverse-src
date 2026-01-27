@@ -2161,6 +2161,9 @@ class Node:
         if not (await self.agent.add_agent(peer_id=peer_id, profile=profile)):
             await self.__purge(peer_id)
             return False
+        
+        if self.conn.is_public(peer_id):
+            self.agent.behav_lone_wolf.update_wildcard("<partner>", peer_id)
 
         del self.agents_expected_to_send_ack[peer_id]
         return True

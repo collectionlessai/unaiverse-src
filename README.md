@@ -37,7 +37,7 @@ Remarks:
 ## ⚡ Status
 
 - Very first version: we think it will always stay alpha/beta/whatever 😎, but right now there are many features we plan to add and several parts to improve, **thanks to your feedback!**
-- Missing features (work-in-progress): browser-to-browser communication; agents running on mobile; actual social network features (right now it is very preliminary, not really showcasing where we want to go)
+- Missing features (work-in-progress): mobile agents running on dedicated Web App; build customizable UIs for human agents in the browser; fully decentralized discovery of new Peers; actual social network features (right now it is very preliminary, not really showcasing where we want to go)
 
 ---
 
@@ -45,11 +45,11 @@ Remarks:
 
 Jump to [https://unaiverse.io](https://unaiverse.io), create a new account (free!) or log in with an existing one. If you did not already do it, click on the top-right icon with "a person" on it:
 
-<img src="./assets/top_right_icons.png" alt="UNaIVERSE Logo" style="width:80px;"> 
+<img src="./assets/unaiverse8443-me.png" alt="UNaIVERSE Logo" style="width:150px;"> 
 
 Then click on "Generate a Token":
 
-<img src="./assets/generate_token.png" alt="UNaIVERSE Logo" style="width:320px;">
+<img src="./assets/unaiverse8443-token.png" alt="UNaIVERSE Logo" style="width:500px;">
 
 **COPY THE TOKEN**, you won't be able to see it twice! Now, let's focus on Python:
 
@@ -128,7 +128,7 @@ agent = Agent(proc=net,
 # existing; it is "hidden" meaning that only you can see it in UNaIVERSE (since it is
 # just a test!); the clock speed can be tuned accordingly to your needed and computing
 # power.
-node = Node(node_name="Test0", hosted=agent, hidden=True, clock_delta=1. / 30.)
+node = Node(node_name="Test0", hosted=agent, hidden=True, clock_delta=1. / 5.)
 
 # Running node (forever)
 node.run()
@@ -143,7 +143,7 @@ from unaiverse.dataprops import Data4Proc
 from unaiverse.networking.node.node import Node
 
 
-# Custom generator network: a module that simpy generates an image with
+# Custom generator network: a module that simply generates an image with
 # "random" pixel intensities; we will use this as processor of our new agent.
 class Net(torch.nn.Module):
     def __init__(self):
@@ -157,26 +157,25 @@ class Net(torch.nn.Module):
 
 
 # Agent: we use the generator as processor.
-# This agent will still be a "lone wolf", but we will force a different behavior, that is
-# the one of "asking" another agent to handle the generated data, getting back a response.
 agent = Agent(proc=Net(),
               proc_inputs=[Data4Proc(data_type="all")],  # Able to get every type of data (since it won't use it :))
               proc_outputs=[Data4Proc(data_type="tensor", tensor_shape=(1, 3, 224, 224),
                                       tensor_dtype="torch.float32")],  # These are the properties of generator output
-              behav_lone_wolf="ask")  # Setting this behavior: "ask the partner to respond to your generated data"
+              )
+
+# To retrieve the result we got from the ResNet agent, we define a hook
+# that will be called at the end of every run cycle
+def hook(_node: Node):
+    # Printing the last received data from the ResNet agent
+    _out = _node.agent.get_last_streamed_data('Test0')[0]
+    if _out is not None:
+        _node.agent.print(f"Received data shape: {tuple(_out.shape)}, dtype: {_out.dtype}")
 
 # Node hosting agent
-node = Node(node_name="Test1", hosted=agent, hidden=True, clock_delta=1. / 30.)
-
-# Telling this agent to connect to the ResNet one
-node.ask_to_get_in_touch(node_name="Test0")
+node = Node(node_name="Test1", hosted=agent, hidden=True, clock_delta=1. / 5., run_hook=hook)
 
 # Running node for 10 seconds
-node.run(max_time=10.0)
-
-# Printing the last received data from the ResNet agent
-out = agent.get_last_streamed_data('Test0')[0]
-print(f"Received data shape: {tuple(out.shape)}, dtype: {out.dtype}")
+node.run(get_in_touch="Test0", max_time=10.0)
 ```
 
 Run this script as well, and what will happen is that the generator will send its picture through the peer-to-peer network, reaching the resnet agent, and getting back a prediction.
@@ -216,7 +215,7 @@ agent = Agent(proc=net,
               proc_outputs=[Data4Proc(data_type="text", proc_to_stream_transforms=lambda p: c_names[p.argmax(1)[0]])])
 
 # Node hosting agent
-node = Node(node_name="Test0", hosted=agent, hidden=True, clock_delta=1. / 30.)
+node = Node(node_name="Test0", hosted=agent, hidden=True, clock_delta=1. / 5.)
 
 # Running node
 node.run()
@@ -242,7 +241,7 @@ class Net(torch.nn.Module):
     def forward(self, x: torch.Tensor | None = None):
         with urllib.request.urlopen("https://cataas.com/cat") as response:
             inp = Image.open(BytesIO(response.read()))
-            inp.show()  # Let's see the pic (watch out: random pic with a cat somewhere)
+            # inp.show()  # Let's see the pic (watch out: random pic with a cat somewhere)
             print(f"Downloaded image shape {inp.size}, type: {type(inp)}, expected-content: cat")
         return inp
 
@@ -253,22 +252,22 @@ agent = Agent(proc=Net(),
               proc_outputs=[Data4Proc(data_type="img")],  # A PIL image is being "generated" here
               behav_lone_wolf="ask")
 
+# To retrieve the result we got from the ResNet agent, we define a hook
+# that will be called at the end of every run cycle
+def hook(_node: Node):
+    # Printing the last received data from the ResNet agent
+    out = _node.agent.get_last_streamed_data('Test0')[0]
+    _node.agent.print(f"Received response: {out}")  # Now we expect a textual response
+    _node.agent.print("")
+    _node.agent.print(f"Notice: instead of using this agent, you can also: search for the ResNet node (ResNetAgent) "
+                      f"in the UNaIVERSE portal, connect to it using our in-browser agent, select a picture from "
+                      f"your disk, send it to the agent, get back the text response!")
+
 # Node hosting agent
-node = Node(node_name="Test1", hosted=agent, hidden=True, clock_delta=1. / 30.)
+node = Node(node_name="Test1", hosted=agent, hidden=True, clock_delta=1. / 5., run_hook=hook)
 
-# Telling this agent to connect to the ResNet one
-node.ask_to_get_in_touch(node_name="Test0")
-
-# Running node for 10 seconds
-node.run(max_time=10.0)
-
-# Printing the last received data from the ResNet agent
-out = agent.get_last_streamed_data('Test0')[0]
-print(f"Received response: {out}")  # Now we expect a textual response
-print("")
-print(f"Notice: instead of using this agent, you can also: search for the ResNet node (Test0) "
-      f"in the UNaIVERSE portal, connect to it using our in-browser agent, select a picture from "
-      f"your disk, send it to the agent, get back the text response!")
+# Running node for 45 seconds
+node.run(max_time=45.0, get_in_touch="Test0")
 ```
 
 ### Step B2. Connect to your ResNet agent by means of a browser running agent!
