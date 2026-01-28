@@ -1612,10 +1612,14 @@ func CreateNode(
 		// Configure Relay Service (ability to *be* a relay)
 		if cfg.Relay.EnableService {
 			resources := rc.DefaultResources() // open this to see the default resource limits
+			resources.MaxReservations = 1024			// default is 128
+			resources.MaxCircuits = 32					// default is 16
+			resources.BufferSize = 4096					// default is 2048
+			resources.MaxReservationsPerIP = 1024		// default is 8
+			resources.MaxReservationsPerASN = 1024		// default is 32
 			if cfg.Relay.WithBroadLimits {
 				// Enrich default limits
 				resources.Limit = nil // same as setting rc.WithInfiniteLimits()
-				resources.ReservationTTL = 2 * time.Hour
 				logger.Debugf("[GO]   - Instance %d: Relay service is ENABLED with custom resource configuration (WithBroadLimits).\n", instanceIndex)
 			} else {
 				logger.Debugf("[GO]   - Instance %d: Relay service is ENABLED with default resource configuration.\n", instanceIndex)
