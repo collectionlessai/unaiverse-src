@@ -216,7 +216,6 @@ class AgentBasics:
                 self.behav_lone_wolf.load(file)
                 file.close()
                 self.set_policy_filter(self.policy_filter_lone_wolf, public=True)
-                self.behav_lone_wolf.add_wildcards({"<ask_uuid>": AgentBasics.generate_uuid()})
         else:
             self.is_world = True
             if self.world_folder is None:
@@ -2184,7 +2183,10 @@ class AgentBasics:
         """
 
         if where == '':
+            if self._node_identity_dir is None or len(self._node_identity_dir) == 0:
+                return False
             where = os.path.join(self._node_identity_dir, "agent_state")  # Default save path
+
         os.makedirs(where, exist_ok=True)
 
         # Saving the processor
@@ -2236,6 +2238,8 @@ class AgentBasics:
         """
 
         if where == '':
+            if self._node_identity_dir is None or len(self._node_identity_dir) == 0:
+                return False
             where = os.path.join(self._node_identity_dir, "agent_state")  # Default save path
 
         # Check if directory exists

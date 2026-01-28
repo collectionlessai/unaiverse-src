@@ -95,6 +95,13 @@ class ActionRequestList:
         # Updating by-requester index
         if req.requester not in self.by_requester_and_by_insertion_order:
             self.by_requester_and_by_insertion_order[req.requester] = []
+
+        # Searching for UUID = None, if already there - do not accumulate multiple requests with UUID None
+        if req.uuid is None:
+            existing_request_same_uuid = self.get_request_by_uuid(req.requester, req.uuid)
+            if existing_request_same_uuid:
+                return
+
         if 0 < self.max_per_requester <= len(self.by_requester_and_by_insertion_order[req.requester]):
             self.remove(self.get_oldest_request(req.requester))
         by_requester_insertion_order_id = len(self.by_requester_and_by_insertion_order[req.requester])
@@ -172,6 +179,15 @@ class ActionRequestList:
 
     def get_most_recent_request(self, requester: object | None = None):
         return self.get_request(-1, requester)
+
+    def get_request_by_uuid(self, requester: object, uuid: str | None) -> None | ActionRequest:
+        requests = self.get_requests(requester)
+        if requests is None or len(requests) == 0:
+            return None
+
+        for req in requests:
+            if req.uuid == uuid:
+                return req
 
     def keep_only_the_most_recent_request(self):
         req = self.get_most_recent_request()
