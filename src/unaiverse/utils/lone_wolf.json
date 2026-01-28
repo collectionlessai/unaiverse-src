@@ -15,7 +15,8 @@
             "self_generated": [["do_gen", {"u_hashes": ["<agent>:processor_in"], "samples": 1}, true, 1]]
         },
         "self_generated": {
-            "asked": [["ask_gen", {"agent": "<partner>", "u_hashes": ["<agent>:processor"], "samples": 1, "ignore_uuid": true}, true, 2]]
+            "asked": [["ask_gen", {"agent": "<partner>", "u_hashes": ["<agent>:processor"], "samples": 1, "ignore_uuid": true}, true, 2]],
+            "ready": [["nop", {}, true, 5]]
         },
         "asked": {
             "ready": [["nop", {}, true, 3]]

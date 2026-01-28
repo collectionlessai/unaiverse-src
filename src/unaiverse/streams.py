@@ -160,17 +160,14 @@ class DataStream:
         Returns:
             bool: True if data was accepted based on time constraints, else False.
         """
-        print(f">>>>> [stream set, clock={self.clock.get_cycle()}] Trying to set sample to stream. Sample={data}")
         if (self.enabled and
                 (self.props.delta <= 0. or self.props.delta <= (self.clock.get_time() - self.data_timestamp))):
             self.data = self.props.adapt_tensor_to_tensor_labels(data) if data is not None else None
-            print(f">>>>> [stream set, clock={self.clock.get_cycle()}] Setting sample to stream. Sample={self.data}")
             self.data_timestamp = self.clock.get_cycle_time()
             self.data_tag = data_tag if data_tag >= 0 else (
                 self.clock.get_cycle()) if self.data_tag < 0 or not keep_existing_tag else self.data_tag
             return True
         else:
-            print(f">>>>> [stream set, clock={self.clock.get_cycle()}] Cannot set. Sample={data}")
             return False
 
     def get(self, requested_by: str | None = None) -> torch.Tensor | None:
