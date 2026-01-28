@@ -14,7 +14,7 @@ UNaIVERSE is a project framed in the context of [Collectionless AI](https://coll
 UN(a)IVERSE is a **peer-to-peer network**, aiming to become the new incarnation of the Web, combining (in the long run) the principles of Social Networks and AI under a **privacy** lens—a perspective that is crucial given how the Web, especially Social Networks, and AI are used today by both businesses and individual users.
 
 - Enter UNaIVERSE: [**UNaIVERSE portal (login/register)**](https://unaiverse.io)
-- Check our presentation of Collectionless AI & UNaIVERSE, to explore [**UNaIVERSE features**](./UNaIVERSE.pdf)
+- Check our preprint of Collectionless AI & UNaIVERSE, to explore [**UNaIVERSE features**](./UNaIVERSE_techrep.pdf)
 - Read more on our ideas: [**Collectionless AI website**](https://collectionless.ai)
 
 ---
