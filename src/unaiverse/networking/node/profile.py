@@ -57,8 +57,8 @@ class NodeProfile:
                     'world_masters_node_ids': None,
                     'certified': None,
                     'inspector_node_id': None,
-                    'location': None,
-                    'location_method': None
+                    'location_method': None,
+                    'location': None
                 },
                 'dynamic': {
                     'os': None,
@@ -345,6 +345,8 @@ class NodeProfile:
         cpu_info = self._get_cpu_info()
         memory_info = self._get_memory_info()
 
+        location = self._profile_data['static'].get('location', {})
+        location_method = self._profile_data['static'].get('location_method', "manual")
         return {
             'timestamp': datetime.datetime.now(timezone.utc).isoformat(),
             'os': self._get_os_spec(),
