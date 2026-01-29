@@ -56,7 +56,9 @@ class NodeProfile:
                     'allowed_node_ids': None,
                     'world_masters_node_ids': None,
                     'certified': None,
-                    'inspector_node_id': None
+                    'inspector_node_id': None,
+                    'location': None,
+                    'location_method': None
                 },
                 'dynamic': {
                     'os': None,
@@ -338,6 +340,8 @@ class NodeProfile:
     def _get_current_specs(self) -> dict:
         """Gathers current system specifications.
         """
+        location = self._profile_data['static'].get('location', {})
+        location_method = self._profile_data['static'].get('location_method', "manual")
         cpu_info = self._get_cpu_info()
         memory_info = self._get_memory_info()
 
@@ -350,7 +354,7 @@ class NodeProfile:
             'memory_avail': memory_info.get('available'),
             'memory_used': memory_info.get('used'),
             'public_ip_address': self._get_public_ip_address(),
-            'guessed_location': self._get_geolocation_from_ip(self._get_public_ip_address()),
+            'guessed_location': self._get_geolocation_from_ip(self._get_public_ip_address()) if location_method != "manual" else location
         }
 
     def _fill_missing_specs(self):
