@@ -103,6 +103,13 @@ class NodeProfile:
 
         # Checking the presence of basic static profile info
         for k in self._profile_data['static'].keys():
+
+            # Backward compatibility
+            if k not in static and k == "location":
+                static['location'] = {}
+            if k not in static and k == "location_method":
+                static['location_method'] = "manual"
+
             if (k not in static and k != "certified" and
                     k != "allowed_node_ids" and k != "world_masters_node_ids" and k != "inspector_node_id"):  # Patch
                 raise ValueError("Missing required static profile info: " + str(k))
@@ -340,8 +347,6 @@ class NodeProfile:
     def _get_current_specs(self) -> dict:
         """Gathers current system specifications.
         """
-        location = self._profile_data['static'].get('location', {})
-        location_method = self._profile_data['static'].get('location_method', "manual")
         cpu_info = self._get_cpu_info()
         memory_info = self._get_memory_info()
 
@@ -356,7 +361,8 @@ class NodeProfile:
             'memory_avail': memory_info.get('available'),
             'memory_used': memory_info.get('used'),
             'public_ip_address': self._get_public_ip_address(),
-            'guessed_location': self._get_geolocation_from_ip(self._get_public_ip_address()) if location_method != "manual" else location
+            'guessed_location': self._get_geolocation_from_ip(self._get_public_ip_address())
+            if location_method != "manual" else location
         }
 
     def _fill_missing_specs(self):

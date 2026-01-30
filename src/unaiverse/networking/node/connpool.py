@@ -174,12 +174,35 @@ class ConnectionPools:
         """
 
         force: str | None = None
-        # force: str | None = '/tls/ws'
+        #force: str | None = '/tcp'
         if force is not None:
             _addresses = [a for a in addresses if force in a]
             addresses.clear()
             for a in _addresses:
                 addresses.append(a)
+
+        def sort_priority(s):
+            if "/udp/" in s:
+                return 0  # Highest priority
+            elif "/ws/" in s:
+                return 1  # Middle priority
+            else:
+                return 2  # Lowest priority
+
+        # Sort in place (sorting does not seem to have an effect, but it makes things more readable)
+        kept_addresses = sorted(
+            [s for s in addresses if "127.0.0.1" not in s and ("/tcp/" not in s or "/ws/" in s)],
+            key=sort_priority
+        )
+        discarded_addresses = sorted(
+            [s for s in addresses if "127.0.0.1" not in s and ("/tcp/" in s and "/ws/" not in s)],
+            key=sort_priority
+        )
+        if len(kept_addresses) > 0:
+            addresses = kept_addresses
+        else:
+            addresses = discarded_addresses
+            discarded_addresses = []
 
         if ConnectionPools.DEBUG:
             print(f"[DEBUG CONNECTIONS-POOL] Connecting to {addresses}")
@@ -202,7 +225,10 @@ class ConnectionPools:
         except P2PError:
             if ConnectionPools.DEBUG:
                 print(f"[DEBUG CONNECTIONS-POOL] Connection failed!")
-            return None, False
+            if len(discarded_addresses) > 0:
+                return ConnectionPools.__connect(p2p, discarded_addresses)
+            else:
+                return None, False
 
     @staticmethod
     async def disconnect(p2p: P2P, peer_id: str):
