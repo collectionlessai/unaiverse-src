@@ -1871,13 +1871,13 @@ class HybridStateMachine:
                     self.__state_changed = False
                     return -1  # Early stop
                 else:
-                    # if HybridStateMachine.DEBUG:  # TODO re-move the following prints inside this IF
-                    if _request is not None:
-                        print(f"[DEBUG HSM, {self.role}] Policy selected {actions_list[_idx].__str__()}"
-                              f" whose request is {_request.__str__()}")
-                        print(f"[DEBUG HSM, {self.role}] (request in to_str format: {_request.to_str()})")
-                    else:
-                        print(f"[DEBUG HSM, {self.role}] Policy selected {actions_list[_idx].__str__()}")
+                    if HybridStateMachine.DEBUG:
+                        if _request is not None:
+                            print(f"[DEBUG HSM, {self.role}] Policy selected {actions_list[_idx].__str__()}"
+                                  f" whose request is {_request.__str__()}")
+                            print(f"[DEBUG HSM, {self.role}] (request in to_str format: {_request.to_str()})")
+                        else:
+                            print(f"[DEBUG HSM, {self.role}] Policy selected {actions_list[_idx].__str__()}")
 
                 # Revisiting decisions due to the policy filter
                 if self.policy_filter is not None:

@@ -226,7 +226,7 @@ class ConnectionPools:
             if ConnectionPools.DEBUG:
                 print(f"[DEBUG CONNECTIONS-POOL] Connection failed!")
             if len(discarded_addresses) > 0:
-                return ConnectionPools.__connect(p2p, discarded_addresses)
+                return await ConnectionPools.__connect(p2p, discarded_addresses)
             else:
                 return None, False
 

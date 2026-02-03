@@ -279,6 +279,7 @@ class LoggerModule(torch.nn.Module):
         random.shuffle(self._objects)
 
     def __setup_logger(self):
+        os.makedirs(os.path.abspath(os.path.dirname(self.log_file)), exist_ok=True)
         self.__handler = logging.FileHandler(self.log_file, mode='w')  # 'w' mode overwrites the file
         formatter = logging.Formatter('%(message)s')
         self.__handler.setFormatter(formatter)
