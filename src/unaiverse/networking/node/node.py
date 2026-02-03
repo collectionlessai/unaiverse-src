@@ -647,12 +647,14 @@ class Node:
         return self.conn[NodeConn.P2P_WORLD].peer_id
 
     async def ask_to_get_in_touch(self, node_name: str | None = None, addresses: list[str] | None = None,
+                                  node_id: str | None = None,
                                   public: bool = True, before_updating_pools_fcn=None, run_count: int = 0):
         """Tries to connect to another agent or world node (async).
 
         Args:
             node_name: Name of the node to join (alternative to addresses below)
             addresses: A list of network addresses to connect to (alternative to node_name).
+            node_id: The ID of the node to connect to (alternative to node_name and addresses).
             public: A boolean flag indicating whether to use the public or world P2P network.
             before_updating_pools_fcn: A function to call before updating the connection pools.
             run_count: The number of connection attempts made.
@@ -666,15 +668,20 @@ class Node:
         del all_args['self']
 
         # Checking arguments
-        if (node_name is None and addresses is None) or (node_name is not None and addresses is not None):
-            raise GenException("Cannot specify both node_name and addresses or none of them, check your code!")
+        if (node_name is None and addresses is None and node_id is None) or \
+           (sum(x is not None for x in [node_name, addresses, node_id]) > 1):
+            raise GenException("Cannot specify more than one of node_name, addresses, or node_id, check your code!")
 
         # Getting addresses, if needed
         if addresses is None:
             try:
+                payload = {"account_token": self.unaiverse_key}
+                if node_name is not None:
+                    payload["node_name"] = node_name
+                if node_id is not None:
+                    payload["node_id"] = node_id
                 addresses = self.__root(api="account/node/get/addresses",
-                                        payload={"node_name": node_name,
-                                                 "account_token": self.unaiverse_key})["addresses"]
+                                        payload=payload)["addresses"]
             except Exception as e:
                 GenException(f"Error while retrieving addresses of node named {node_name} [{e}]")
 
@@ -728,12 +735,13 @@ class Node:
             self.err("Connection failed!")
             return None
 
-    async def ask_to_join_world(self, node_name: str | None = None, addresses: list[str] | None = None, **kwargs):
+    async def ask_to_join_world(self, node_name: str | None = None, addresses: list[str] | None = None, node_id: str | None = None, **kwargs):
         """Initiates a request to join a world (async).
 
         Args:
             node_name: The name of the node hosting the world to join (alternative to addresses below).
             addresses: A list of network addresses of the world node (alternative to world_name).
+            node_id: The ID of the node to join (alternative to node_name and addresses).
             **kwargs: Additional options for joining the world.
 
         Returns:
@@ -747,7 +755,7 @@ class Node:
             await self.leave(world_peer_id)
 
         # Connecting to the world (public)
-        peer_id = await self.ask_to_get_in_touch(node_name=node_name, addresses=addresses, public=True)
+        peer_id = await self.ask_to_get_in_touch(node_name=node_name, addresses=addresses, node_id=node_id, public=True)
 
         # Saving info
         if peer_id is not None:
