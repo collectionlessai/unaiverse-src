@@ -1,0 +1,249 @@
+/* ============================================================
+   UNaIVERSE Docs — "Elegant" Theme
+   Minimalist, typographic, professional styling
+   ============================================================ */
+
+/* ---------- Root Variables (The Palette) ---------- */
+:root {
+  /* Core Colors - Desaturated & Professional */
+  --doc-accent: #334155;        /* Slate 700 - Main Heading Color */
+  --doc-accent-light: #475569;  /* Slate 600 */
+  
+  /* Signature Blocks */
+  --doc-signature-bg: #f8fafc;  /* Very subtle cool gray */
+  --doc-signature-border: #e2e8f0; /* Soft border */
+  
+  /* Syntax Highlighting overrides for signatures */
+  --doc-param-name: #0f172a;    /* Slate 900 (High contrast text) */
+  --doc-param-type: #64748b;    /* Slate 500 (Subtle for types) */
+  --doc-param-default: #059669; /* Emerald 600 (Natural green for values) */
+  
+  /* Badges - Ghost Style (Outline + Soft BG) */
+  --doc-badge-text: #475569;
+  --doc-badge-bg: #f1f5f9;
+  --doc-badge-border: #cbd5e1;
+
+  /* Alerts */
+  --doc-deprecated-bg: #fff7ed;
+  --doc-deprecated-text: #9a3412;
+}
+
+/* Dark Mode Overrides (Deep Charcoal, not pitch black) */
+[data-md-color-scheme="slate"] {
+  --doc-accent: #e2e8f0;
+  --doc-accent-light: #94a3b8;
+  --doc-signature-bg: #1e293b;  /* Slate 800 */
+  --doc-signature-border: #334155;
+  
+  --doc-param-name: #f1f5f9;
+  --doc-param-type: #94a3b8;
+  --doc-param-default: #34d399;
+
+  --doc-badge-text: #cbd5e1;
+  --doc-badge-bg: #334155;
+  --doc-badge-border: #475569;
+}
+
+/* ---------- Module Docstring cleanup ---------- */
+.doc-module > .doc-contents > .doc-md-description {
+  display: none;
+}
+
+/* ---------- Headings (Typographic Hierarchy) ---------- */
+.doc h2, .doc h3, .doc h4 {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  color: var(--doc-accent);
+  font-weight: 600 !important;
+  border-bottom: 1px solid var(--doc-signature-border); /* Thinner, lighter line */
+  padding-bottom: 0.5em;
+  margin-top: 2.5em; /* More breathing room */
+  letter-spacing: -0.02em; /* Tighter, modern tracking */
+}
+
+/* ---------- Symbol Type Badges (Refined) ---------- */
+/* Instead of rainbow colors, we use a uniform "Tag" style */
+.doc-label {
+  font-size: 0.65em !important;
+  font-weight: 600 !important;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  padding: 0.3em 0.8em !important;
+  border-radius: 20px !important; /* Fully rounded pill shape */
+  vertical-align: middle;
+  margin-right: 0.8em;
+  
+  /* Elegant "Ghost" Styling */
+  background: var(--doc-badge-bg) !important;
+  color: var(--doc-badge-text) !important;
+  border: 1px solid var(--doc-badge-border) !important;
+  box-shadow: none !important;
+}
+
+/* Optional: Subtle tint distinctions if you really need them, otherwise keep uniform */
+/* .doc-label-class { color: #d97706 !important; border-color: #fcd34d !important; } */
+
+/* ---------- Signatures (Clean & Airy) ---------- */
+.doc-signature {
+  background: var(--doc-signature-bg) !important;
+  border: 1px solid var(--doc-signature-border) !important;
+  border-left: none !important; /* Removing the aggressive left bar */
+  border-radius: 8px !important; /* Softer corners */
+  padding: 1.2em 1.5em !important; /* More internal whitespace */
+  margin: 1em 0 2em 0 !important;
+  font-size: 0.9em !important;
+  line-height: 1.8 !important;
+  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace !important;
+  box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05); /* Very subtle lift */
+}
+
+/* Function Names */
+.doc-signature .n {
+  font-weight: 700 !important;
+  color: var(--doc-accent) !important;
+}
+
+/* Parameters - Darker for readability */
+.doc-signature .nv,
+.doc-signature .nb {
+  color: var(--doc-param-name) !important;
+  font-weight: 500 !important;
+}
+
+/* Types - Muted */
+.doc-signature .p + .n,
+.doc-signature .nd {
+  color: var(--doc-param-type) !important;
+  font-style: italic;
+}
+
+/* Defaults */
+.doc-signature .mi,
+.doc-signature .mf,
+.doc-signature .s1,
+.doc-signature .s2,
+.doc-signature .kc {
+  color: var(--doc-param-default) !important;
+}
+
+/* Keywords (async, etc) */
+.doc-signature .k {
+  color: var(--doc-accent-light) !important;
+  font-weight: 600;
+}
+
+/* ---------- Docstring Sections (Args/Returns) ---------- */
+.doc .doc-section-title {
+  font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+  font-weight: 600 !important;
+  font-size: 0.85em !important;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--doc-accent-light);
+  margin-top: 1.5em;
+  margin-bottom: 0.8em;
+  border-bottom: none; /* Removed underline for cleaner look */
+}
+
+/* The List/Table Items */
+.doc .doc-section-item {
+  padding: 0.6em 0; /* Vertical spacing only */
+  margin: 0;
+  border-radius: 0;
+  background: transparent; /* Remove zebra striping/boxes */
+  border-left: none; /* Remove left border */
+  border-bottom: 1px solid var(--doc-signature-border); /* Subtle divider */
+}
+
+.doc .doc-section-item:last-child {
+  border-bottom: none;
+}
+
+/* Parameter Name */
+.doc .doc-section-item .doc-section-item-name {
+  font-weight: 600;
+  color: var(--doc-param-name);
+  font-size: 0.95em;
+}
+
+/* Parameter Type */
+.doc .doc-section-item .doc-section-item-annotation {
+  color: var(--doc-param-type);
+  font-weight: 400;
+  font-size: 0.9em;
+  margin-left: 0.5em;
+}
+
+/* Description Text */
+.doc .doc-section-item .doc-section-item-description {
+  margin-top: 0.3em;
+  color: var(--md-typeset-color);
+  font-size: 0.95em;
+  line-height: 1.6;
+  opacity: 0.9;
+}
+
+/* ---------- Source Code Toggle (Minimalist) ---------- */
+details.quote {
+  border: none;
+  background: transparent;
+  margin: 1.5em 0;
+  padding: 0;
+}
+
+details.quote summary {
+  font-weight: 500;
+  font-size: 0.8em;
+  color: var(--doc-accent-light);
+  background: transparent;
+  padding: 0;
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-color: var(--doc-signature-border);
+  text-underline-offset: 4px;
+}
+
+details.quote summary:hover {
+  background: transparent;
+  color: var(--doc-accent);
+}
+
+/* ---------- Child/Method Indentation ---------- */
+.doc-children {
+  border-left: 1px solid var(--doc-signature-border); /* Thin guide line */
+  padding-left: 1.5em;
+  margin-left: 0.5em;
+}
+
+.doc-children .doc {
+  margin-bottom: 2.5em;
+  padding-bottom: 0;
+  border-bottom: none;
+}
+
+/* ---------- Tables (If used elsewhere) ---------- */
+.doc table th {
+  background: transparent;
+  color: var(--doc-accent);
+  border-bottom: 2px solid var(--doc-accent); /* Strong header line */
+  text-transform: none; /* Normal case looks more elegant */
+  font-weight: 600;
+}
+
+.doc table td {
+  border-bottom: 1px solid var(--doc-signature-border);
+}
+
+/* ---------- Links ---------- */
+.autorefs-internal,
+.autorefs-external {
+  font-family: inherit; /* Blend with text, don't force monospace */
+  color: var(--doc-accent) !important;
+  border-bottom: 1px solid var(--doc-signature-border);
+  transition: all 0.2s ease;
+}
+
+.autorefs-internal:hover,
+.autorefs-external:hover {
+  background-color: var(--doc-signature-bg);
+  border-bottom-color: var(--doc-accent);
+}
