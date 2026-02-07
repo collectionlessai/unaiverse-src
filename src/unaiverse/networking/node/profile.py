@@ -27,8 +27,6 @@ from functools import lru_cache
 from math import radians, cos, sin, sqrt, atan2
 from ....unaiverse.dataprops import DatapropsData
 from .connpool import ExtendedPeerInfosData
-from ....unaiverse.world import WorldBadgeData
-
 from pydantic import BaseModel, Field, model_validator, EmailStr, UUID4, IPvAnyAddress
 
 # ---- STATIC INFOS ---
@@ -116,6 +114,15 @@ class ConnectionsData(TypedDict):
     world_masters: list[ExtendedPeerInfosData] # A list of ExtendedPeerInfosData instances representing the current world master connections of the node in the p2p network.
     world_peer_id: str # The peer ID of the world node, which is a unique identifier used in the p2p network to identify the world node during interactions with other nodes.
     role: str # The role of the node in the p2p network 
+
+class WorldBadgeData(TypedDict):
+    """ Represents badge information assigned to an agent by the world. """
+    agent_node_id: str  # The unique identifier of the agent node.
+    agent_token: str  # The token associated with the agent.
+    badge_type: str  # The type of badge awarded.
+    score: float  # The score associated with the badge.
+    badge_description: str  # A textual description of the badge.
+    last_edit_utc: str  # The UTC timestamp of the last edit to the badge.
 
 class WorldSummaryData(TypedDict):
     """ World summary data dictionary type, containing all the information about the world node's summary. 
