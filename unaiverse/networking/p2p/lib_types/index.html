@@ -2650,11 +2650,14 @@
         <p>Converts a Go-compatible integer (ctypes.c_int) to a Python boolean.</p>
 
 
-<table>
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">PARAMETER</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
         </tr>
       </thead>
       <tbody>
@@ -2662,37 +2665,36 @@
             <td>
                 <code>val</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="ctypes.c_int">c_int</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The ctypes.c_int value.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="ctypes.c_int">c_int</span></code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
       </tbody>
     </table>
 
 
-<table>
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RETURNS</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
-                <span class="doc-returns-annotation">
-                    <code><span title="bool">bool</span></code>
-                </span>
+                  <code><span title="bool">bool</span></code>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>True if the value equals 1, False otherwise.</p>
               </div>
@@ -2747,11 +2749,14 @@
         <p>Converts a Go pointer representing a byte array to a Python bytes object.</p>
 
 
-<table>
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">PARAMETER</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
         </tr>
       </thead>
       <tbody>
@@ -2759,53 +2764,52 @@
             <td>
                 <code>cptr</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="ctypes.c_char_p">c_char_p</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The C pointer to the byte array.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="ctypes.c_char_p">c_char_p</span></code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>length</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="int">int</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The number of bytes to read.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="int">int</span></code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
       </tbody>
     </table>
 
 
-<table>
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RETURNS</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
-                <span class="doc-returns-annotation">
-                    <code><span title="bytes">bytes</span></code>
-                </span>
+                  <code><span title="bytes">bytes</span></code>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>A Python bytes object containing the read data.</p>
               </div>
@@ -2866,11 +2870,14 @@
         <p>Converts a ctypes.c_float from Go to a Python float.</p>
 
 
-<table>
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">PARAMETER</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
         </tr>
       </thead>
       <tbody>
@@ -2878,37 +2885,36 @@
             <td>
                 <code>val</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="ctypes.c_float">c_float</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The ctypes.c_float value.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="ctypes.c_float">c_float</span></code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
       </tbody>
     </table>
 
 
-<table>
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RETURNS</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
-                <span class="doc-returns-annotation">
-                    <code><span title="float">float</span></code>
-                </span>
+                  <code><span title="float">float</span></code>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>The corresponding Python float.</p>
               </div>
@@ -2963,11 +2969,14 @@
         <p>Converts a ctypes.c_int from Go to a Python integer.</p>
 
 
-<table>
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">PARAMETER</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
         </tr>
       </thead>
       <tbody>
@@ -2975,37 +2984,36 @@
             <td>
                 <code>val</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="ctypes.c_int">c_int</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The ctypes.c_int value.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="ctypes.c_int">c_int</span></code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
       </tbody>
     </table>
 
 
-<table>
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RETURNS</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
-                <span class="doc-returns-annotation">
-                    <code><span title="int">int</span></code>
-                </span>
+                  <code><span title="int">int</span></code>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>The corresponding Python integer.</p>
               </div>
@@ -3063,11 +3071,14 @@ null-terminated C string containing JSON into a Python object.</p>
 using the provided FreeString function from the Go library.</p>
 
 
-<table>
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">PARAMETER</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
         </tr>
       </thead>
       <tbody>
@@ -3075,37 +3086,36 @@ using the provided FreeString function from the Go library.</p>
             <td>
                 <code>c_void_ptr_val</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="int">int</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The integer value representing the C pointer address.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="int">int</span></code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
       </tbody>
     </table>
 
 
-<table>
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RETURNS</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
-                <span class="doc-returns-annotation">
-                    <code><span title="typing.Any">Any</span></code>
-                </span>
+                  <code><span title="typing.Any">Any</span></code>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>The parsed Python object from the JSON string.</p>
               </div>
@@ -3115,21 +3125,20 @@ using the provided FreeString function from the Go library.</p>
     </table>
 
 
-<table>
+<p><span class="doc-section-title">Raises:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RAISES</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
-              <span class="doc-raises-annotation">
                   <code><span title="GoLibError">GoLibError</span></code>
-              </span>
             </td>
-            <td class="doc-raises-details">
+            <td>
               <div class="doc-md-description">
                 <p>If the pointer is NULL, reading/decoding fails, or
         JSON parsing fails.</p>
@@ -3138,11 +3147,9 @@ using the provided FreeString function from the Go library.</p>
           </tr>
           <tr class="doc-section-item">
             <td>
-              <span class="doc-raises-annotation">
                   <code><span title="TypeError">TypeError</span></code>
-              </span>
             </td>
-            <td class="doc-raises-details">
+            <td>
               <div class="doc-md-description">
                 <p>When go_lib is not a valid ctypes library object.</p>
               </div>
@@ -3391,11 +3398,14 @@ using the provided FreeString function from the Go library.</p>
         <p>Converts a C char pointer (Go string) to a Python string.</p>
 
 
-<table>
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">PARAMETER</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
         </tr>
       </thead>
       <tbody>
@@ -3403,37 +3413,36 @@ using the provided FreeString function from the Go library.</p>
             <td>
                 <code>cstr</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="bytes">bytes</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The C char pointer.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="bytes">bytes</span></code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
       </tbody>
     </table>
 
 
-<table>
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RETURNS</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
-                <span class="doc-returns-annotation">
-                    <code><span title="str">str</span></code>
-                </span>
+                  <code><span title="str">str</span></code>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>The decoded Python string.</p>
               </div>
@@ -3492,11 +3501,14 @@ using the provided FreeString function from the Go library.</p>
         <p>Decodes a JSON-encoded list from a Go C char pointer into a Python list.</p>
 
 
-<table>
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">PARAMETER</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
         </tr>
       </thead>
       <tbody>
@@ -3504,37 +3516,36 @@ using the provided FreeString function from the Go library.</p>
             <td>
                 <code>cstr</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="ctypes.c_char_p">c_char_p</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The Go string (C char pointer) containing a JSON list.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="ctypes.c_char_p">c_char_p</span></code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
       </tbody>
     </table>
 
 
-<table>
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RETURNS</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
-                <span class="doc-returns-annotation">
-                    <code><span title="typing.List">List</span>[<span title="typing.Any">Any</span>]</code>
-                </span>
+                  <code><span title="typing.List">List</span>[<span title="typing.Any">Any</span>]</code>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>A Python list representing the JSON data.</p>
               </div>
@@ -3593,11 +3604,14 @@ using the provided FreeString function from the Go library.</p>
         <p>Converts a Python boolean to a Go-compatible integer (1 if True, 0 if False).</p>
 
 
-<table>
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">PARAMETER</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
         </tr>
       </thead>
       <tbody>
@@ -3605,37 +3619,36 @@ using the provided FreeString function from the Go library.</p>
             <td>
                 <code>b</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="bool">bool</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The Python boolean.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="bool">bool</span></code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
       </tbody>
     </table>
 
 
-<table>
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RETURNS</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
-                <span class="doc-returns-annotation">
-                    <code><span title="ctypes.c_int">c_int</span></code>
-                </span>
+                  <code><span title="ctypes.c_int">c_int</span></code>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>A ctypes.c_int (1 or 0).</p>
               </div>
@@ -3690,11 +3703,14 @@ using the provided FreeString function from the Go library.</p>
         <p>Converts a Python bytes object to a Go-compatible C char pointer.</p>
 
 
-<table>
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">PARAMETER</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
         </tr>
       </thead>
       <tbody>
@@ -3702,37 +3718,36 @@ using the provided FreeString function from the Go library.</p>
             <td>
                 <code>b</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="bytes">bytes</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The Python bytes.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="bytes">bytes</span></code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
       </tbody>
     </table>
 
 
-<table>
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RETURNS</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
-                <span class="doc-returns-annotation">
-                    <code><span title="ctypes.c_char_p">c_char_p</span></code>
-                </span>
+                  <code><span title="ctypes.c_char_p">c_char_p</span></code>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>A ctypes.c_char_p pointing to the byte data.</p>
               </div>
@@ -3793,11 +3808,14 @@ using the provided FreeString function from the Go library.</p>
         <p>Converts a Python float to a Go-compatible ctypes float.</p>
 
 
-<table>
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">PARAMETER</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
         </tr>
       </thead>
       <tbody>
@@ -3805,37 +3823,36 @@ using the provided FreeString function from the Go library.</p>
             <td>
                 <code>f</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="float">float</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The Python float.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="float">float</span></code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
       </tbody>
     </table>
 
 
-<table>
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RETURNS</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
-                <span class="doc-returns-annotation">
-                    <code><span title="ctypes.c_float">c_float</span></code>
-                </span>
+                  <code><span title="ctypes.c_float">c_float</span></code>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>A ctypes.c_float equivalent.</p>
               </div>
@@ -3890,11 +3907,14 @@ using the provided FreeString function from the Go library.</p>
         <p>Converts a Python integer to a Go-compatible ctypes integer.</p>
 
 
-<table>
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">PARAMETER</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
         </tr>
       </thead>
       <tbody>
@@ -3902,37 +3922,36 @@ using the provided FreeString function from the Go library.</p>
             <td>
                 <code>i</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="int">int</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The Python integer.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="int">int</span></code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
       </tbody>
     </table>
 
 
-<table>
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RETURNS</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
-                <span class="doc-returns-annotation">
-                    <code><span title="ctypes.c_int">c_int</span></code>
-                </span>
+                  <code><span title="ctypes.c_int">c_int</span></code>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>A ctypes.c_int equivalent.</p>
               </div>
@@ -3990,11 +4009,14 @@ Python 'bytes' object.</p>
 to a C function expecting a 'char*' (ctypes.c_char_p).</p>
 
 
-<table>
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">PARAMETER</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
         </tr>
       </thead>
       <tbody>
@@ -4002,37 +4024,36 @@ to a C function expecting a 'char*' (ctypes.c_char_p).</p>
             <td>
                 <code>data</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="typing.Any">Any</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The Python object (e.g., dict, list) to encode.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="typing.Any">Any</span></code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
       </tbody>
     </table>
 
 
-<table>
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RETURNS</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
-                <span class="doc-returns-annotation">
-                    <code><span title="bytes">bytes</span></code>
-                </span>
+                  <code><span title="bytes">bytes</span></code>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>A Python 'bytes' object containing the JSON string, UTF-8 encoded.</p>
               </div>
@@ -4100,11 +4121,14 @@ to a C function expecting a 'char*' (ctypes.c_char_p), as ctypes
 will automatically pass a pointer to the byte string's data.</p>
 
 
-<table>
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">PARAMETER</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
         </tr>
       </thead>
       <tbody>
@@ -4112,37 +4136,36 @@ will automatically pass a pointer to the byte string's data.</p>
             <td>
                 <code>s</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="str">str</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The Python string.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="str">str</span></code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
       </tbody>
     </table>
 
 
-<table>
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RETURNS</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
-                <span class="doc-returns-annotation">
-                    <code><span title="bytes">bytes</span></code>
-                </span>
+                  <code><span title="bytes">bytes</span></code>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>A Python 'bytes' object containing the UTF-8 encoded string.</p>
               </div>

@@ -9862,11 +9862,14 @@
 <p>Implements structured antisymmetric dynamics through learnable rotational frequencies.</p>
 
 
-<table>
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">PARAMETER</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
         </tr>
       </thead>
       <tbody>
@@ -9874,104 +9877,96 @@
             <td>
                 <code>u_shape</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="tuple">tuple</span>[<span title="int">int</span>]</code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>Input shape (tuple of integers)</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="tuple">tuple</span>[<span title="int">int</span>]</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>d_dim</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="int">int</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>Input descriptor dimension</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="int">int</span></code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>y_dim</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="int">int</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>Output dimension</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="int">int</span></code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>h_dim</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="int">int</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>Hidden state dimension</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="int">int</span></code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>delta</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="float">float</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>Time step for discrete approximation</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="float">float</span></code>
-                  </span>
-                  <span class="doc-param-default">
-                    <b>DEFAULT:</b>
-                      <code>None</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                  <code>None</code>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>alpha</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="float">float</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>Dissipation added on the diagonal (also controls the eigenvalue projections method)</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="float">float</span></code>
-                  </span>
-                  <span class="doc-param-default">
-                    <b>DEFAULT:</b>
-                      <code>0.0</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                  <code>0.0</code>
             </td>
           </tr>
       </tbody>
@@ -10755,11 +10750,14 @@
 <p>Implements precise rotational dynamics using trigonometric parameterization.</p>
 
 
-<table>
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">PARAMETER</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
         </tr>
       </thead>
       <tbody>
@@ -10767,80 +10765,80 @@
             <td>
                 <code>u_shape</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="tuple">tuple</span>[<span title="int">int</span>]</code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>Input shape (tuple of integers)</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="tuple">tuple</span>[<span title="int">int</span>]</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>d_dim</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="int">int</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>Input descriptor dimension</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="int">int</span></code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>y_dim</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="int">int</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>Output dimension</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="int">int</span></code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>h_dim</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="int">int</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>Hidden state dimension</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="int">int</span></code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>delta</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="float">float</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>Time step for discrete approximation</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="float">float</span></code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
       </tbody>
@@ -11720,11 +11718,14 @@
 <p>Uses antisymmetric weight matrix with matrix exponential for stable hidden state evolution.</p>
 
 
-<table>
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">PARAMETER</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
         </tr>
       </thead>
       <tbody>
@@ -11732,120 +11733,112 @@
             <td>
                 <code>u_shape</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="tuple">tuple</span>[<span title="int">int</span>]</code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>Input shape (tuple of integers)</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="tuple">tuple</span>[<span title="int">int</span>]</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>d_dim</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="int">int</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>Input descriptor dimension</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="int">int</span></code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>y_dim</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="int">int</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>Output dimension</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="int">int</span></code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>h_dim</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="int">int</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>Hidden state dimension</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="int">int</span></code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>delta</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="float">float</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>Time step for discrete approximation</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="float">float</span></code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>local</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="bool">bool</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>Local computations (bool)</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="bool">bool</span></code>
-                  </span>
-                  <span class="doc-param-default">
-                    <b>DEFAULT:</b>
-                      <code>False</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                  <code>False</code>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>seed</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="int">int</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>Random seed (positive int)</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="int">int</span></code>
-                  </span>
-                  <span class="doc-param-default">
-                    <b>DEFAULT:</b>
-                      <code>-1</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                  <code>-1</code>
             </td>
           </tr>
       </tbody>
@@ -12313,11 +12306,14 @@
         <p>Forward pass through the system dynamics.</p>
 
 
-<table>
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">PARAMETER</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
         </tr>
       </thead>
       <tbody>
@@ -12325,100 +12321,87 @@
             <td>
                 <code>u</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="torch.Tensor">Tensor</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>Input tensor of shape (batch_size, u_dim)</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="torch.Tensor">Tensor</span></code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>du</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="torch.Tensor">Tensor</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>Input descriptor tensor of shape (batch_size, du_dim)</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="torch.Tensor">Tensor</span></code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>first</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="bool">bool</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>Flag indicating first step (resets hidden state)</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="bool">bool</span></code>
-                  </span>
-                  <span class="doc-param-default">
-                    <b>DEFAULT:</b>
-                      <code>True</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                  <code>True</code>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>last</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="bool">bool</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>Flag indicating last step (does nothing)</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="bool">bool</span></code>
-                  </span>
-                  <span class="doc-param-default">
-                    <b>DEFAULT:</b>
-                      <code>False</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                  <code>False</code>
             </td>
           </tr>
       </tbody>
     </table>
 
 
-<table>
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RETURNS</span></th>
-          <th><span>DESCRIPTION</span></th>
+<th>Name</th>          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
-            <td>
-                <code>y</code>
+<td><code>y</code></td>            <td>
+                  <code><span title="torch.Tensor">Tensor</span></code>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>Output tensor of shape (batch_size, y_dim)</p>
               </div>
-                <p>
-                  <span class="doc-returns-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="torch.Tensor">Tensor</span></code>
-                  </span>
-                </p>
             </td>
           </tr>
       </tbody>

@@ -5022,11 +5022,14 @@ known streams, etc., and no actions at all (see the class "Agent" for actions).<
         <p>Create a new agent.</p>
 
 
-<table>
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">PARAMETER</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
         </tr>
       </thead>
       <tbody>
@@ -5034,239 +5037,195 @@ known streams, etc., and no actions at all (see the class "Agent" for actions).<
             <td>
                 <code>proc</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><a class="autorefs autorefs-internal" title="&lt;span class=&quot;doc doc-object-name doc-class-name&quot;&gt;ModuleWrapper&lt;/span&gt; (&lt;code&gt;unaiverse.modules.utils.ModuleWrapper&lt;/code&gt;)" href="../modules/utils/#unaiverse.modules.utils.ModuleWrapper">ModuleWrapper</a> | <span title="torch.nn.Module">Module</span> | None</code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The processing module (e.g., a neural network) for the agent. Can be None or "default".</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><a class="autorefs autorefs-internal" title="&lt;span class=&quot;doc doc-object-name doc-class-name&quot;&gt;ModuleWrapper&lt;/span&gt; (&lt;code&gt;unaiverse.modules.utils.ModuleWrapper&lt;/code&gt;)" href="../modules/utils/#unaiverse.modules.utils.ModuleWrapper">ModuleWrapper</a> | <span title="torch.nn.Module">Module</span> | None</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>proc_inputs</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="list">list</span>[<a class="autorefs autorefs-internal" title="&lt;span class=&quot;doc doc-object-name doc-class-name&quot;&gt;Data4Proc&lt;/span&gt; (&lt;code&gt;unaiverse.dataprops.Data4Proc&lt;/code&gt;)" href="../dataprops/#unaiverse.dataprops.Data4Proc">Data4Proc</a>] | None</code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>list of DataProps defining the expected inputs for processor (if None it will be guessed).</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="list">list</span>[<a class="autorefs autorefs-internal" title="&lt;span class=&quot;doc doc-object-name doc-class-name&quot;&gt;Data4Proc&lt;/span&gt; (&lt;code&gt;unaiverse.dataprops.Data4Proc&lt;/code&gt;)" href="../dataprops/#unaiverse.dataprops.Data4Proc">Data4Proc</a>] | None</code>
-                  </span>
-                  <span class="doc-param-default">
-                    <b>DEFAULT:</b>
-                      <code>None</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                  <code>None</code>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>proc_outputs</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="list">list</span>[<a class="autorefs autorefs-internal" title="&lt;span class=&quot;doc doc-object-name doc-class-name&quot;&gt;Data4Proc&lt;/span&gt; (&lt;code&gt;unaiverse.dataprops.Data4Proc&lt;/code&gt;)" href="../dataprops/#unaiverse.dataprops.Data4Proc">Data4Proc</a>] | None</code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>list of DataProps defining the expected outputs from processor (if None it will be guessed).</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="list">list</span>[<a class="autorefs autorefs-internal" title="&lt;span class=&quot;doc doc-object-name doc-class-name&quot;&gt;Data4Proc&lt;/span&gt; (&lt;code&gt;unaiverse.dataprops.Data4Proc&lt;/code&gt;)" href="../dataprops/#unaiverse.dataprops.Data4Proc">Data4Proc</a>] | None</code>
-                  </span>
-                  <span class="doc-param-default">
-                    <b>DEFAULT:</b>
-                      <code>None</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                  <code>None</code>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>proc_opts</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="dict">dict</span> | None</code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>A dictionary of options for the processor.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="dict">dict</span> | None</code>
-                  </span>
-                  <span class="doc-param-default">
-                    <b>DEFAULT:</b>
-                      <code>None</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                  <code>None</code>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>behav</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><a class="autorefs autorefs-internal" title="&lt;span class=&quot;doc doc-object-name doc-class-name&quot;&gt;HybridStateMachine&lt;/span&gt; (&lt;code&gt;unaiverse.hsm.HybridStateMachine&lt;/code&gt;)" href="../hsm/#unaiverse.hsm.HybridStateMachine">HybridStateMachine</a> | None</code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The HybridStateMachine that describes the agent's behavior when joining a world.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><a class="autorefs autorefs-internal" title="&lt;span class=&quot;doc doc-object-name doc-class-name&quot;&gt;HybridStateMachine&lt;/span&gt; (&lt;code&gt;unaiverse.hsm.HybridStateMachine&lt;/code&gt;)" href="../hsm/#unaiverse.hsm.HybridStateMachine">HybridStateMachine</a> | None</code>
-                  </span>
-                  <span class="doc-param-default">
-                    <b>DEFAULT:</b>
-                      <code>None</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                  <code>None</code>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>behav_lone_wolf</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><a class="autorefs autorefs-internal" title="&lt;span class=&quot;doc doc-object-name doc-class-name&quot;&gt;HybridStateMachine&lt;/span&gt; (&lt;code&gt;unaiverse.hsm.HybridStateMachine&lt;/code&gt;)" href="../hsm/#unaiverse.hsm.HybridStateMachine">HybridStateMachine</a> | <span title="str">str</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The HybridStateMachine that describes the agent's behavior when in the public net
 (it can also be a string "serve" or "ask", that will load pre-designed HSMs).</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><a class="autorefs autorefs-internal" title="&lt;span class=&quot;doc doc-object-name doc-class-name&quot;&gt;HybridStateMachine&lt;/span&gt; (&lt;code&gt;unaiverse.hsm.HybridStateMachine&lt;/code&gt;)" href="../hsm/#unaiverse.hsm.HybridStateMachine">HybridStateMachine</a> | <span title="str">str</span></code>
-                  </span>
-                  <span class="doc-param-default">
-                    <b>DEFAULT:</b>
-                      <code>&#39;serve&#39;</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                  <code>&#39;serve&#39;</code>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>merge_flat_stream_labels</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="bool">bool</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>If True, merges flat stream labels across all owned streams.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="bool">bool</span></code>
-                  </span>
-                  <span class="doc-param-default">
-                    <b>DEFAULT:</b>
-                      <code>False</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                  <code>False</code>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>buffer_generated</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="bool">bool</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>If True, generated streams will be buffered.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="bool">bool</span></code>
-                  </span>
-                  <span class="doc-param-default">
-                    <b>DEFAULT:</b>
-                      <code>False</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                  <code>False</code>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>buffer_generated_by_others</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="str">str</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>If set to "one" or "aòò", streams generated by other agents will be buffered
 ("one" per peer or "all"). If set to "none", no buffering will happen (default).</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="str">str</span></code>
-                  </span>
-                  <span class="doc-param-default">
-                    <b>DEFAULT:</b>
-                      <code>&#39;none&#39;</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                  <code>&#39;none&#39;</code>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>world_folder</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="str">str</span> | None</code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>World only. Folder where the world data is (role files, represented by *.json behavior files).</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="str">str</span> | None</code>
-                  </span>
-                  <span class="doc-param-default">
-                    <b>DEFAULT:</b>
-                      <code>None</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                  <code>None</code>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>policy_filter</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="callable">callable</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The name of a method of the Agent class or a function that implements a
 policy filtering function, overriding what the action-selection-policy decided (when in a world).</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="callable">callable</span></code>
-                  </span>
-                  <span class="doc-param-default">
-                    <b>DEFAULT:</b>
-                      <code>None</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                  <code>None</code>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>policy_filter_lone_wolf</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="callable">callable</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>Same as policy_filter, but for the public network.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="callable">callable</span></code>
-                  </span>
-                  <span class="doc-param-default">
-                    <b>DEFAULT:</b>
-                      <code>None</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                  <code>None</code>
             </td>
           </tr>
       </tbody>
@@ -6922,11 +6881,14 @@ policy filtering function, overriding what the action-selection-policy decided (
         <p>Set the agent's role and optionally load a default behavior (private/world behaviour).</p>
 
 
-<table>
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">PARAMETER</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
         </tr>
       </thead>
       <tbody>
@@ -6934,16 +6896,16 @@ policy filtering function, overriding what the action-selection-policy decided (
             <td>
                 <code>role</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="int">int</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The integer role to assign to the agent (e.g., ROLE_PUBLIC, ROLE_WORLD_MASTER).</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="int">int</span></code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
       </tbody>
@@ -7025,11 +6987,14 @@ policy filtering function, overriding what the action-selection-policy decided (
         <p>Add a new known agent (async).</p>
 
 
-<table>
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">PARAMETER</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
         </tr>
       </thead>
       <tbody>
@@ -7037,53 +7002,52 @@ policy filtering function, overriding what the action-selection-policy decided (
             <td>
                 <code>peer_id</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="str">str</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The unique identifier of the peer.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="str">str</span></code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>profile</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><a class="autorefs autorefs-internal" title="&lt;span class=&quot;doc doc-object-name doc-class-name&quot;&gt;NodeProfile&lt;/span&gt; (&lt;code&gt;unaiverse.networking.node.profile.NodeProfile&lt;/code&gt;)" href="../networking/node/profile/#unaiverse.networking.node.profile.NodeProfile">NodeProfile</a></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The NodeProfile object containing the peer's/agent's information.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><a class="autorefs autorefs-internal" title="&lt;span class=&quot;doc doc-object-name doc-class-name&quot;&gt;NodeProfile&lt;/span&gt; (&lt;code&gt;unaiverse.networking.node.profile.NodeProfile&lt;/code&gt;)" href="../networking/node/profile/#unaiverse.networking.node.profile.NodeProfile">NodeProfile</a></code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
       </tbody>
     </table>
 
 
-<table>
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RETURNS</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
-                <span class="doc-returns-annotation">
-                    <code><span title="bool">bool</span></code>
-                </span>
+                  <code><span title="bool">bool</span></code>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>True if the agent was successfully added, False otherwise.</p>
               </div>
@@ -7230,11 +7194,14 @@ policy filtering function, overriding what the action-selection-policy decided (
         <p>Adds a wildcard mapping for the agent's behavior state machine.</p>
 
 
-<table>
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">PARAMETER</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
         </tr>
       </thead>
       <tbody>
@@ -7242,32 +7209,32 @@ policy filtering function, overriding what the action-selection-policy decided (
             <td>
                 <code>wildcard_from</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="str">str</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The string to be used as a wildcard.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="str">str</span></code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>wildcard_to</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="object">object</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The object to replace the wildcard.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="object">object</span></code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
       </tbody>
@@ -7324,11 +7291,14 @@ policy filtering function, overriding what the action-selection-policy decided (
 found to be compatible with the processor (if they are pubsub, it also subscribes to them) (async).</p>
 
 
-<table>
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">PARAMETER</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
         </tr>
       </thead>
       <tbody>
@@ -7336,113 +7306,100 @@ found to be compatible with the processor (if they are pubsub, it also subscribe
             <td>
                 <code>peer_id</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="str">str</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The peer ID of the agent providing the streams.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="str">str</span></code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>streams_in_profile</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="list">list</span>[<a class="autorefs autorefs-internal" title="&lt;span class=&quot;doc doc-object-name doc-class-name&quot;&gt;DataProps&lt;/span&gt; (&lt;code&gt;unaiverse.dataprops.DataProps&lt;/code&gt;)" href="../dataprops/#unaiverse.dataprops.DataProps">DataProps</a>]</code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>A list of DataProps objects representing the streams from the peer's profile.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="list">list</span>[<a class="autorefs autorefs-internal" title="&lt;span class=&quot;doc doc-object-name doc-class-name&quot;&gt;DataProps&lt;/span&gt; (&lt;code&gt;unaiverse.dataprops.DataProps&lt;/code&gt;)" href="../dataprops/#unaiverse.dataprops.DataProps">DataProps</a>]</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>buffered</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="bool">bool</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>If True, the added streams will be of type BufferedDataStream.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="bool">bool</span></code>
-                  </span>
-                  <span class="doc-param-default">
-                    <b>DEFAULT:</b>
-                      <code>False</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                  <code>False</code>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>add_all</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="bool">bool</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>If True, all streams from the profile are added, regardless of processor compatibility.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="bool">bool</span></code>
-                  </span>
-                  <span class="doc-param-default">
-                    <b>DEFAULT:</b>
-                      <code>False</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                  <code>False</code>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>public</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="bool">bool</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>Consider public streams only (or private streams only).</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="bool">bool</span></code>
-                  </span>
-                  <span class="doc-param-default">
-                    <b>DEFAULT:</b>
-                      <code>True</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                  <code>True</code>
             </td>
           </tr>
       </tbody>
     </table>
 
 
-<table>
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RETURNS</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
-                <span class="doc-returns-annotation">
-                    <code><span title="bool">bool</span></code>
-                </span>
+                  <code><span title="bool">bool</span></code>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>True if compatible streams were successfully added and subscribed to, False otherwise.</p>
               </div>
@@ -7738,11 +7695,14 @@ found to be compatible with the processor (if they are pubsub, it also subscribe
         <p>Add a new stream to the set of known streams.</p>
 
 
-<table>
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">PARAMETER</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
         </tr>
       </thead>
       <tbody>
@@ -7750,77 +7710,68 @@ found to be compatible with the processor (if they are pubsub, it also subscribe
             <td>
                 <code>stream</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><a class="autorefs autorefs-internal" title="&lt;span class=&quot;doc doc-object-name doc-class-name&quot;&gt;DataStream&lt;/span&gt; (&lt;code&gt;unaiverse.streams.DataStream&lt;/code&gt;)" href="../streams/#unaiverse.streams.DataStream">DataStream</a></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The DataStream object to add.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><a class="autorefs autorefs-internal" title="&lt;span class=&quot;doc doc-object-name doc-class-name&quot;&gt;DataStream&lt;/span&gt; (&lt;code&gt;unaiverse.streams.DataStream&lt;/code&gt;)" href="../streams/#unaiverse.streams.DataStream">DataStream</a></code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>owned</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="bool">bool</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>If True, the streams are considered owned by this agent.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="bool">bool</span></code>
-                  </span>
-                  <span class="doc-param-default">
-                    <b>DEFAULT:</b>
-                      <code>True</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                  <code>True</code>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>net_hash</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="str">str</span> | None</code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>Optional network hash for the streams. If None, it will be generated.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="str">str</span> | None</code>
-                  </span>
-                  <span class="doc-param-default">
-                    <b>DEFAULT:</b>
-                      <code>None</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                  <code>None</code>
             </td>
           </tr>
       </tbody>
     </table>
 
 
-<table>
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RETURNS</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
-                <span class="doc-returns-annotation">
-                    <code><span title="dict">dict</span>[<span title="str">str</span>, <a class="autorefs autorefs-internal" title="&lt;span class=&quot;doc doc-object-name doc-class-name&quot;&gt;DataStream&lt;/span&gt; (&lt;code&gt;unaiverse.streams.DataStream&lt;/code&gt;)" href="../streams/#unaiverse.streams.DataStream">DataStream</a>]</code>
-                </span>
+                  <code><span title="dict">dict</span>[<span title="str">str</span>, <a class="autorefs autorefs-internal" title="&lt;span class=&quot;doc doc-object-name doc-class-name&quot;&gt;DataStream&lt;/span&gt; (&lt;code&gt;unaiverse.streams.DataStream&lt;/code&gt;)" href="../streams/#unaiverse.streams.DataStream">DataStream</a>]</code>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>A dictionary containing the added stream and the possibly already present streams belonging to the same</p>
               </div>
@@ -7828,11 +7779,9 @@ found to be compatible with the processor (if they are pubsub, it also subscribe
           </tr>
           <tr class="doc-section-item">
             <td>
-                <span class="doc-returns-annotation">
-                    <code><span title="dict">dict</span>[<span title="str">str</span>, <a class="autorefs autorefs-internal" title="&lt;span class=&quot;doc doc-object-name doc-class-name&quot;&gt;DataStream&lt;/span&gt; (&lt;code&gt;unaiverse.streams.DataStream&lt;/code&gt;)" href="../streams/#unaiverse.streams.DataStream">DataStream</a>]</code>
-                </span>
+                  <code><span title="dict">dict</span>[<span title="str">str</span>, <a class="autorefs autorefs-internal" title="&lt;span class=&quot;doc doc-object-name doc-class-name&quot;&gt;DataStream&lt;/span&gt; (&lt;code&gt;unaiverse.streams.DataStream&lt;/code&gt;)" href="../streams/#unaiverse.streams.DataStream">DataStream</a>]</code>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>group (stream name -&gt; stream object).</p>
               </div>
@@ -8017,11 +7966,14 @@ found to be compatible with the processor (if they are pubsub, it also subscribe
         <p>Add a list of new streams to this environment.</p>
 
 
-<table>
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">PARAMETER</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
         </tr>
       </thead>
       <tbody>
@@ -8029,77 +7981,68 @@ found to be compatible with the processor (if they are pubsub, it also subscribe
             <td>
                 <code>streams</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="list">list</span>[<a class="autorefs autorefs-internal" title="&lt;span class=&quot;doc doc-object-name doc-class-name&quot;&gt;DataStream&lt;/span&gt; (&lt;code&gt;unaiverse.streams.DataStream&lt;/code&gt;)" href="../streams/#unaiverse.streams.DataStream">DataStream</a>]</code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>A list of DataStream objects to add.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="list">list</span>[<a class="autorefs autorefs-internal" title="&lt;span class=&quot;doc doc-object-name doc-class-name&quot;&gt;DataStream&lt;/span&gt; (&lt;code&gt;unaiverse.streams.DataStream&lt;/code&gt;)" href="../streams/#unaiverse.streams.DataStream">DataStream</a>]</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>owned</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="bool">bool</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>If True, the streams are considered owned by this agent.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="bool">bool</span></code>
-                  </span>
-                  <span class="doc-param-default">
-                    <b>DEFAULT:</b>
-                      <code>True</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                  <code>True</code>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>net_hash</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="str">str</span> | None</code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>Optional network hash for the streams. If None, it will be generated for each.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="str">str</span> | None</code>
-                  </span>
-                  <span class="doc-param-default">
-                    <b>DEFAULT:</b>
-                      <code>None</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                  <code>None</code>
             </td>
           </tr>
       </tbody>
     </table>
 
 
-<table>
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RETURNS</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
-                <span class="doc-returns-annotation">
-                    <code><span title="list">list</span>[<span title="dict">dict</span>[<span title="str">str</span>, <a class="autorefs autorefs-internal" title="&lt;span class=&quot;doc doc-object-name doc-class-name&quot;&gt;DataStream&lt;/span&gt; (&lt;code&gt;unaiverse.streams.DataStream&lt;/code&gt;)" href="../streams/#unaiverse.streams.DataStream">DataStream</a>]]</code>
-                </span>
+                  <code><span title="list">list</span>[<span title="dict">dict</span>[<span title="str">str</span>, <a class="autorefs autorefs-internal" title="&lt;span class=&quot;doc doc-object-name doc-class-name&quot;&gt;DataStream&lt;/span&gt; (&lt;code&gt;unaiverse.streams.DataStream&lt;/code&gt;)" href="../streams/#unaiverse.streams.DataStream">DataStream</a>]]</code>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>A list of dictionaries (it could be empty in case of issues), where each dictionary is what</p>
               </div>
@@ -8107,11 +8050,9 @@ found to be compatible with the processor (if they are pubsub, it also subscribe
           </tr>
           <tr class="doc-section-item">
             <td>
-                <span class="doc-returns-annotation">
-                    <code><span title="list">list</span>[<span title="dict">dict</span>[<span title="str">str</span>, <a class="autorefs autorefs-internal" title="&lt;span class=&quot;doc doc-object-name doc-class-name&quot;&gt;DataStream&lt;/span&gt; (&lt;code&gt;unaiverse.streams.DataStream&lt;/code&gt;)" href="../streams/#unaiverse.streams.DataStream">DataStream</a>]]</code>
-                </span>
+                  <code><span title="list">list</span>[<span title="dict">dict</span>[<span title="str">str</span>, <a class="autorefs autorefs-internal" title="&lt;span class=&quot;doc doc-object-name doc-class-name&quot;&gt;DataStream&lt;/span&gt; (&lt;code&gt;unaiverse.streams.DataStream&lt;/code&gt;)" href="../streams/#unaiverse.streams.DataStream">DataStream</a>]]</code>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>is returned by add_stream().</p>
               </div>
@@ -8360,18 +8301,19 @@ all the mixed roles (world_master~role1, world_master~role2, ...)</p>
         <p>Checks if the agent's world-specific behavior state machine is currently active.</p>
 
 
-<table>
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RETURNS</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>True if the world behavior is active, False otherwise.</p>
               </div>
@@ -8424,11 +8366,14 @@ all the mixed roles (world_master~role1, world_master~role2, ...)</p>
         <p>A callback method that handles the steam data right before sending it through the network.</p>
 
 
-<table>
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">PARAMETER</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
         </tr>
       </thead>
       <tbody>
@@ -8436,94 +8381,98 @@ all the mixed roles (world_master~role1, world_master~role2, ...)</p>
             <td>
                 <code>data</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The stream data sample.</p>
               </div>
-              <p>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>data_tag</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="int">int</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The tag of the sample.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="int">int</span></code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>stream_name</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="str">str</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The name of the data stream.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="str">str</span></code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>net_hash</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="str">str</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The net hash of the whole stream.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="str">str</span></code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>recipient</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="str">str</span> | None</code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The (planned) recipient of this sample (or None in case of pubsub).</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="str">str</span> | None</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
       </tbody>
     </table>
 
 
-<table>
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RETURNS</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>The same data passed to the function.</p>
               </div>
@@ -8695,11 +8644,14 @@ mandatory at all: you can just manually create the JSON  files, and this method 
         <p>Creates the processor input streams based on the <code>proc_inputs</code> defined for the agent.</p>
 
 
-<table>
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">PARAMETER</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
         </tr>
       </thead>
       <tbody>
@@ -8707,20 +8659,16 @@ mandatory at all: you can just manually create the JSON  files, and this method 
             <td>
                 <code>buffered</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="bool">bool</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>If True, the created streams will be of type BufferedDataStream.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="bool">bool</span></code>
-                  </span>
-                  <span class="doc-param-default">
-                    <b>DEFAULT:</b>
-                      <code>False</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                  <code>False</code>
             </td>
           </tr>
       </tbody>
@@ -8812,11 +8760,14 @@ mandatory at all: you can just manually create the JSON  files, and this method 
         <p>Creates the processor output streams based on the <code>proc_outputs</code> defined for the agent.</p>
 
 
-<table>
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">PARAMETER</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
         </tr>
       </thead>
       <tbody>
@@ -8824,20 +8775,16 @@ mandatory at all: you can just manually create the JSON  files, and this method 
             <td>
                 <code>buffered</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="bool">bool</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>If True, the created streams will be of type BufferedDataStream.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="bool">bool</span></code>
-                  </span>
-                  <span class="doc-param-default">
-                    <b>DEFAULT:</b>
-                      <code>False</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                  <code>False</code>
             </td>
           </tr>
       </tbody>
@@ -8923,11 +8870,14 @@ mandatory at all: you can just manually create the JSON  files, and this method 
         <p>Print an error message to the console, if debug is enabled for this agent (it reuses the agent-out-function).</p>
 
 
-<table>
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">PARAMETER</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
         </tr>
       </thead>
       <tbody>
@@ -8935,16 +8885,16 @@ mandatory at all: you can just manually create the JSON  files, and this method 
             <td>
                 <code>msg</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="str">str</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The error message string to print.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="str">str</span></code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
       </tbody>
@@ -9089,11 +9039,14 @@ mandatory at all: you can just manually create the JSON  files, and this method 
         <p>Print an error message to the console, if enabled at node level (it reuses the node-err-function).</p>
 
 
-<table>
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">PARAMETER</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
         </tr>
       </thead>
       <tbody>
@@ -9101,16 +9054,16 @@ mandatory at all: you can just manually create the JSON  files, and this method 
             <td>
                 <code>msg</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="str">str</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The error message string to print.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="str">str</span></code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
       </tbody>
@@ -9155,11 +9108,14 @@ mandatory at all: you can just manually create the JSON  files, and this method 
  out invalid or 'cheating' profiles.</p>
 
 
-<table>
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">PARAMETER</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
         </tr>
       </thead>
       <tbody>
@@ -9167,53 +9123,52 @@ mandatory at all: you can just manually create the JSON  files, and this method 
             <td>
                 <code>role</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="int">int</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The expected integer role (e.g., ROLE_PUBLIC, ROLE_WORLD_MASTER) for the profile.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="int">int</span></code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>profile</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><a class="autorefs autorefs-internal" title="&lt;span class=&quot;doc doc-object-name doc-class-name&quot;&gt;NodeProfile&lt;/span&gt; (&lt;code&gt;unaiverse.networking.node.profile.NodeProfile&lt;/code&gt;)" href="../networking/node/profile/#unaiverse.networking.node.profile.NodeProfile">NodeProfile</a></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The NodeProfile object to be evaluated.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><a class="autorefs autorefs-internal" title="&lt;span class=&quot;doc doc-object-name doc-class-name&quot;&gt;NodeProfile&lt;/span&gt; (&lt;code&gt;unaiverse.networking.node.profile.NodeProfile&lt;/code&gt;)" href="../networking/node/profile/#unaiverse.networking.node.profile.NodeProfile">NodeProfile</a></code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
       </tbody>
     </table>
 
 
-<table>
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RETURNS</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
-                <span class="doc-returns-annotation">
-                    <code><span title="bool">bool</span></code>
-                </span>
+                  <code><span title="bool">bool</span></code>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>True if the profile is considered valid for the specified role, False otherwise.</p>
               </div>
@@ -9304,11 +9259,14 @@ mandatory at all: you can just manually create the JSON  files, and this method 
         <p>Find streams associated with a given peer ID and optionally by name or group.</p>
 
 
-<table>
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">PARAMETER</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
         </tr>
       </thead>
       <tbody>
@@ -9316,57 +9274,52 @@ mandatory at all: you can just manually create the JSON  files, and this method 
             <td>
                 <code>peer_id</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="str">str</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The peer ID of the (owner of the) streams to find.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="str">str</span></code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>name_or_group</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="str">str</span> | None</code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>Optional name or group of the streams to find.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="str">str</span> | None</code>
-                  </span>
-                  <span class="doc-param-default">
-                    <b>DEFAULT:</b>
-                      <code>None</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                  <code>None</code>
             </td>
           </tr>
       </tbody>
     </table>
 
 
-<table>
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RETURNS</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
-                <span class="doc-returns-annotation">
-                    <code><span title="dict">dict</span>[<span title="str">str</span>, <span title="dict">dict</span>[<span title="str">str</span>, <a class="autorefs autorefs-internal" title="&lt;span class=&quot;doc doc-object-name doc-class-name&quot;&gt;DataStream&lt;/span&gt; (&lt;code&gt;unaiverse.streams.DataStream&lt;/code&gt;)" href="../streams/#unaiverse.streams.DataStream">DataStream</a>]]</code>
-                </span>
+                  <code><span title="dict">dict</span>[<span title="str">str</span>, <span title="dict">dict</span>[<span title="str">str</span>, <a class="autorefs autorefs-internal" title="&lt;span class=&quot;doc doc-object-name doc-class-name&quot;&gt;DataStream&lt;/span&gt; (&lt;code&gt;unaiverse.streams.DataStream&lt;/code&gt;)" href="../streams/#unaiverse.streams.DataStream">DataStream</a>]]</code>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>A dictionary where keys are network hashes and values are dictionaries of streams</p>
               </div>
@@ -9374,11 +9327,9 @@ mandatory at all: you can just manually create the JSON  files, and this method 
           </tr>
           <tr class="doc-section-item">
             <td>
-                <span class="doc-returns-annotation">
-                    <code><span title="dict">dict</span>[<span title="str">str</span>, <span title="dict">dict</span>[<span title="str">str</span>, <a class="autorefs autorefs-internal" title="&lt;span class=&quot;doc doc-object-name doc-class-name&quot;&gt;DataStream&lt;/span&gt; (&lt;code&gt;unaiverse.streams.DataStream&lt;/code&gt;)" href="../streams/#unaiverse.streams.DataStream">DataStream</a>]]</code>
-                </span>
+                  <code><span title="dict">dict</span>[<span title="str">str</span>, <span title="dict">dict</span>[<span title="str">str</span>, <a class="autorefs autorefs-internal" title="&lt;span class=&quot;doc doc-object-name doc-class-name&quot;&gt;DataStream&lt;/span&gt; (&lt;code&gt;unaiverse.streams.DataStream&lt;/code&gt;)" href="../streams/#unaiverse.streams.DataStream">DataStream</a>]]</code>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>(stream name to DataStream object) matching the criteria.</p>
               </div>
@@ -9492,11 +9443,14 @@ mandatory at all: you can just manually create the JSON  files, and this method 
         <p>Generate new signals.</p>
 
 
-<table>
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">PARAMETER</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
         </tr>
       </thead>
       <tbody>
@@ -9504,122 +9458,101 @@ mandatory at all: you can just manually create the JSON  files, and this method 
             <td>
                 <code>input_net_hashes</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="list">list</span>[<span title="str">str</span>] | None</code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>A list of network hashes to be considered as input streams (they will be sub-selected).</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="list">list</span>[<span title="str">str</span>] | None</code>
-                  </span>
-                  <span class="doc-param-default">
-                    <b>DEFAULT:</b>
-                      <code>None</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                  <code>None</code>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>inputs</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="list">list</span>[<span title="str">str</span> | <span title="torch.Tensor">Tensor</span> | <span title="PIL.Image.Image">Image</span>] | None</code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>A list of data to be directly provided as input to the processor (if not None, input_net_hashes is
 ignored).</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="list">list</span>[<span title="str">str</span> | <span title="torch.Tensor">Tensor</span> | <span title="PIL.Image.Image">Image</span>] | None</code>
-                  </span>
-                  <span class="doc-param-default">
-                    <b>DEFAULT:</b>
-                      <code>None</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                  <code>None</code>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>first</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="bool">bool</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>If True, indicates this is the first generation call in a sequence.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="bool">bool</span></code>
-                  </span>
-                  <span class="doc-param-default">
-                    <b>DEFAULT:</b>
-                      <code>False</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                  <code>False</code>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>last</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="bool">bool</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>If True, indicates this is the last generation call in a sequence.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="bool">bool</span></code>
-                  </span>
-                  <span class="doc-param-default">
-                    <b>DEFAULT:</b>
-                      <code>False</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                  <code>False</code>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>ref_uuid</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="str">str</span> | None</code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>An optional UUID to match against input stream UUIDs (it can be None).</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="str">str</span> | None</code>
-                  </span>
-                  <span class="doc-param-default">
-                    <b>DEFAULT:</b>
-                      <code>None</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                  <code>None</code>
             </td>
           </tr>
       </tbody>
     </table>
 
 
-<table>
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RETURNS</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
-                <span class="doc-returns-annotation">
-                    <code><span title="tuple">tuple</span>[<span title="tuple">tuple</span>[<span title="torch.Tensor">Tensor</span>] | None, <span title="int">int</span>]</code>
-                </span>
+                  <code><span title="tuple">tuple</span>[<span title="tuple">tuple</span>[<span title="torch.Tensor">Tensor</span>] | None, <span title="int">int</span>]</code>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>A tuple containing:
 - A tuple of torch.Tensor objects representing the generated output, or None if generation failed.
@@ -9977,18 +9910,19 @@ ignored).</p>
         <p>Retrieve the current action step from the agent's private/world behavior.</p>
 
 
-<table>
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RETURNS</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>The current action step object from the HybridStateMachine's active action, or None if no action.</p>
               </div>
@@ -10039,11 +9973,14 @@ ignored).</p>
         <p>Returns the current role of the agent.</p>
 
 
-<table>
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">PARAMETER</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
         </tr>
       </thead>
       <tbody>
@@ -10051,61 +9988,52 @@ ignored).</p>
             <td>
                 <code>return_int</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="bool">bool</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>If True, returns the integer representation of the role.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="bool">bool</span></code>
-                  </span>
-                  <span class="doc-param-default">
-                    <b>DEFAULT:</b>
-                      <code>False</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                  <code>False</code>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>ignore_base_role</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="bool">bool</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>If True, returns only the specific role part, not the base.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="bool">bool</span></code>
-                  </span>
-                  <span class="doc-param-default">
-                    <b>DEFAULT:</b>
-                      <code>True</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                  <code>True</code>
             </td>
           </tr>
       </tbody>
     </table>
 
 
-<table>
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RETURNS</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
-                <span class="doc-returns-annotation">
-                    <code><span title="str">str</span> | <span title="int">int</span> | None</code>
-                </span>
+                  <code><span title="str">str</span> | <span title="int">int</span> | None</code>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>The role as a string or integer, or None if the agent is not living in any worlds.</p>
               </div>
@@ -10209,11 +10137,14 @@ ignored).</p>
         <p>Find streams associated with a given peer ID and optionally by name or group.</p>
 
 
-<table>
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">PARAMETER</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
         </tr>
       </thead>
       <tbody>
@@ -10221,34 +10152,35 @@ ignored).</p>
             <td>
                 <code>agent_name</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="str">str</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The name of the agent.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="str">str</span></code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
       </tbody>
     </table>
 
 
-<table>
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RETURNS</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>A list of data samples taken from all the known streams associated to the provided agent.</p>
               </div>
@@ -10315,21 +10247,20 @@ ignored).</p>
         <p>Returns the name of the agent or world from the node's profile.</p>
 
 
-<table>
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RETURNS</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
-                <span class="doc-returns-annotation">
-                    <code><span title="str">str</span></code>
-                </span>
+                  <code><span title="str">str</span></code>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>The name of the agent or world.</p>
               </div>
@@ -10382,18 +10313,19 @@ ignored).</p>
         <p>Retrieve the public and private peer IDs of the agent, from the underlying node's dynamic profile.</p>
 
 
-<table>
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RETURNS</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>A tuple containing the public peer ID and the private peer ID.</p>
               </div>
@@ -10402,7 +10334,7 @@ ignored).</p>
           <tr class="doc-section-item">
             <td>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>If either ID is not available, a placeholder string is returned <public_peer_id>, <private_peer_id>.</p>
               </div>
@@ -10517,21 +10449,20 @@ ignored).</p>
         <p>Returns the profile of the node hosting this agent/world.</p>
 
 
-<table>
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RETURNS</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
-                <span class="doc-returns-annotation">
-                    <code><a class="autorefs autorefs-internal" title="&lt;span class=&quot;doc doc-object-name doc-class-name&quot;&gt;NodeProfile&lt;/span&gt; (&lt;code&gt;unaiverse.networking.node.profile.NodeProfile&lt;/code&gt;)" href="../networking/node/profile/#unaiverse.networking.node.profile.NodeProfile">NodeProfile</a></code>
-                </span>
+                  <code><a class="autorefs autorefs-internal" title="&lt;span class=&quot;doc doc-object-name doc-class-name&quot;&gt;NodeProfile&lt;/span&gt; (&lt;code&gt;unaiverse.networking.node.profile.NodeProfile&lt;/code&gt;)" href="../networking/node/profile/#unaiverse.networking.node.profile.NodeProfile">NodeProfile</a></code>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>The NodeProfile of this node.</p>
               </div>
@@ -10583,11 +10514,14 @@ ignored).</p>
         <p>Receive and process stream samples that were provided by another agent.</p>
 
 
-<table>
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">PARAMETER</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
         </tr>
       </thead>
       <tbody>
@@ -10595,51 +10529,52 @@ ignored).</p>
             <td>
                 <code>net_hash</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="str">str</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The network hash identifying the source of the stream samples.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="str">str</span></code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>sample_dict</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="dict">dict</span>[<span title="str">str</span>, <span title="dict">dict</span>[<span title="str">str</span>, <span title="torch.Tensor">Tensor</span> | None | <span title="int">int</span> | <span title="str">str</span>]]</code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>A dictionary where keys are stream names and values are dictionaries
          containing 'data', 'data_tag', and 'data_uuid' for each sample.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="dict">dict</span>[<span title="str">str</span>, <span title="dict">dict</span>[<span title="str">str</span>, <span title="torch.Tensor">Tensor</span> | None | <span title="int">int</span> | <span title="str">str</span>]]</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
       </tbody>
     </table>
 
 
-<table>
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RETURNS</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>True if the stream samples were successfully processed and stored, False otherwise</p>
               </div>
@@ -10648,7 +10583,7 @@ ignored).</p>
           <tr class="doc-section-item">
             <td>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>(e.g., if the stream is unknown, not compatible, or data is None/stale).</p>
               </div>
@@ -11138,18 +11073,19 @@ ignored).</p>
         <p>Check if the agent is currently operating within a 'world'.</p>
 
 
-<table>
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RETURNS</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>True if the agent is in a world, False otherwise.</p>
               </div>
@@ -11202,18 +11138,19 @@ ignored).</p>
         <p>Check if the agent's current action (private/world behaviour) is on its last step.</p>
 
 
-<table>
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RETURNS</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>True if the current action was its last step, False otherwise. Returns None if there is no active action.</p>
               </div>
@@ -11270,18 +11207,19 @@ ignored).</p>
         <p>Determines if the current action is a multistep action.</p>
 
 
-<table>
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RETURNS</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>True if the action is multistep, False otherwise.</p>
               </div>
@@ -11333,11 +11271,14 @@ ignored).</p>
 It receives state and action information to update a behavioral model.</p>
 
 
-<table>
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">PARAMETER</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
         </tr>
       </thead>
       <tbody>
@@ -11345,66 +11286,67 @@ It receives state and action information to update a behavioral model.</p>
             <td>
                 <code>state</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="int">int</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The current state of the agent.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="int">int</span></code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>last_action</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="int">int</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The last action taken.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="int">int</span></code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>prev_state</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="int">int</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The previous state of the agent.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="int">int</span></code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
       </tbody>
     </table>
 
 
-<table>
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RETURNS</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>An integer representing a new state, or similar feedback.</p>
               </div>
@@ -11466,11 +11408,14 @@ It receives state and action information to update a behavioral model.</p>
         <p>Learn (i.e., update model params) by matching the given processor outputs with a set of targets (if any).</p>
 
 
-<table>
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">PARAMETER</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
         </tr>
       </thead>
       <tbody>
@@ -11478,55 +11423,54 @@ It receives state and action information to update a behavioral model.</p>
             <td>
                 <code>outputs</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="tuple">tuple</span>[<span title="torch.Tensor">Tensor</span>]</code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>A tuple of torch.Tensor representing the outputs generated by the agent's processor.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="tuple">tuple</span>[<span title="torch.Tensor">Tensor</span>]</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>targets_net_hashes</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="list">list</span>[<span title="str">str</span>] | None</code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>An optional list of network hashes identifying the streams
                 from which target data should be retrieved for learning.
                 If None, losses are evaluated without explicit targets.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="list">list</span>[<span title="str">str</span>] | None</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
       </tbody>
     </table>
 
 
-<table>
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RETURNS</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
-                <span class="doc-returns-annotation">
-                    <code><span title="list">list</span>[<span title="float">float</span>] | None</code>
-                </span>
+                  <code><span title="list">list</span>[<span title="float">float</span>] | None</code>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>A tuple containing:</p>
               </div>
@@ -11534,11 +11478,9 @@ It receives state and action information to update a behavioral model.</p>
           </tr>
           <tr class="doc-section-item">
             <td>
-                <span class="doc-returns-annotation">
-                    <code><span title="list">list</span>[<span title="float">float</span>] | None</code>
-                </span>
+                  <code><span title="list">list</span>[<span title="float">float</span>] | None</code>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <ul>
 <li>A list of float values representing the individual loss values for each output.
@@ -11549,11 +11491,9 @@ Returns None if targets are specified but cannot be found.</li>
           </tr>
           <tr class="doc-section-item">
             <td>
-                <span class="doc-returns-annotation">
-                    <code><span title="tuple">tuple</span>[<span title="list">list</span>[<span title="float">float</span>] | None, <span title="list">list</span>[<span title="float">float</span>] | None]</code>
-                </span>
+                  <code><span title="tuple">tuple</span>[<span title="list">list</span>[<span title="float">float</span>] | None, <span title="list">list</span>[<span title="float">float</span>] | None]</code>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <ul>
 <li>A list of integers representing the data tags of the given target streams (None if no targets were given).</li>
@@ -11846,11 +11786,14 @@ Returns None if targets are specified but cannot be found.</li>
         <p>Load the agent's state from a specified location.</p>
 
 
-<table>
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">PARAMETER</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
         </tr>
       </thead>
       <tbody>
@@ -11858,41 +11801,36 @@ Returns None if targets are specified but cannot be found.</li>
             <td>
                 <code>where</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="str">str</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The directory path from which the agent's state should be loaded. Defaults to "".</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="str">str</span></code>
-                  </span>
-                  <span class="doc-param-default">
-                    <b>DEFAULT:</b>
-                      <code>&#39;&#39;</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                  <code>&#39;&#39;</code>
             </td>
           </tr>
       </tbody>
     </table>
 
 
-<table>
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RETURNS</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
-                <span class="doc-returns-annotation">
-                    <code><span title="bool">bool</span></code>
-                </span>
+                  <code><span title="bool">bool</span></code>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>True if loading succeeded.</p>
               </div>
@@ -12356,11 +12294,14 @@ in the behavior files.</p>
         <p>Print a message to the console, if enabled at node level (it reuses the node-out-function).</p>
 
 
-<table>
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">PARAMETER</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
         </tr>
       </thead>
       <tbody>
@@ -12368,16 +12309,16 @@ in the behavior files.</p>
             <td>
                 <code>msg</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="str">str</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The message string to print.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="str">str</span></code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
       </tbody>
@@ -12426,11 +12367,14 @@ first-served basis. If no requested actions are found, it then selects the first
 marked as <code>ready</code>.</p>
 
 
-<table>
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">PARAMETER</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
         </tr>
       </thead>
       <tbody>
@@ -12438,37 +12382,36 @@ marked as <code>ready</code>.</p>
             <td>
                 <code>actions_list</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="list">list</span>[<a class="autorefs autorefs-internal" title="&lt;span class=&quot;doc doc-object-name doc-class-name&quot;&gt;Action&lt;/span&gt; (&lt;code&gt;unaiverse.hsm.Action&lt;/code&gt;)" href="../hsm/#unaiverse.hsm.Action">Action</a>]</code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>A list of <code>Action</code> objects that are candidates for execution.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="list">list</span>[<a class="autorefs autorefs-internal" title="&lt;span class=&quot;doc doc-object-name doc-class-name&quot;&gt;Action&lt;/span&gt; (&lt;code&gt;unaiverse.hsm.Action&lt;/code&gt;)" href="../hsm/#unaiverse.hsm.Action">Action</a>]</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
       </tbody>
     </table>
 
 
-<table>
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RETURNS</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
-                <span class="doc-returns-annotation">
-                    <code><span title="tuple">tuple</span>[<span title="int">int</span>, <a class="autorefs autorefs-internal" title="&lt;span class=&quot;doc doc-object-name doc-class-name&quot;&gt;ActionRequest&lt;/span&gt; (&lt;code&gt;unaiverse.hsm.ActionRequest&lt;/code&gt;)" href="../hsm/#unaiverse.hsm.ActionRequest">ActionRequest</a> | None]</code>
-                </span>
+                  <code><span title="tuple">tuple</span>[<span title="int">int</span>, <a class="autorefs autorefs-internal" title="&lt;span class=&quot;doc doc-object-name doc-class-name&quot;&gt;ActionRequest&lt;/span&gt; (&lt;code&gt;unaiverse.hsm.ActionRequest&lt;/code&gt;)" href="../hsm/#unaiverse.hsm.ActionRequest">ActionRequest</a> | None]</code>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>The index of the selected action and an ActionRequest object with the requester details (requester,
 arguments, time, and UUID), or -1 and None if no action is selected.</p>
@@ -12556,11 +12499,14 @@ arguments, time, and UUID), or -1 and None if no action is selected.</p>
         <p>Print a message to the console, no matter what.</p>
 
 
-<table>
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">PARAMETER</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
         </tr>
       </thead>
       <tbody>
@@ -12568,16 +12514,16 @@ arguments, time, and UUID), or -1 and None if no action is selected.</p>
             <td>
                 <code>msg</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="str">str</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The message string to print.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="str">str</span></code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
       </tbody>
@@ -12623,11 +12569,14 @@ arguments, time, and UUID), or -1 and None if no action is selected.</p>
         <p>A callback method that saves the inputs to the processor right before execution.</p>
 
 
-<table>
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">PARAMETER</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
         </tr>
       </thead>
       <tbody>
@@ -12635,30 +12584,34 @@ arguments, time, and UUID), or -1 and None if no action is selected.</p>
             <td>
                 <code>inputs</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The data inputs for the processor.</p>
               </div>
-              <p>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
       </tbody>
     </table>
 
 
-<table>
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RETURNS</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>The same inputs passed to the function.</p>
               </div>
@@ -12713,11 +12666,14 @@ arguments, time, and UUID), or -1 and None if no action is selected.</p>
         <p>A callback method that saves the outputs from the processor right after execution.</p>
 
 
-<table>
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">PARAMETER</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
         </tr>
       </thead>
       <tbody>
@@ -12725,30 +12681,34 @@ arguments, time, and UUID), or -1 and None if no action is selected.</p>
             <td>
                 <code>outputs</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The data outputs from the processor.</p>
               </div>
-              <p>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
       </tbody>
     </table>
 
 
-<table>
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RETURNS</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>The same outputs passed to the function.</p>
               </div>
@@ -12838,11 +12798,14 @@ arguments, time, and UUID), or -1 and None if no action is selected.</p>
         <p>Remove an agent (async).</p>
 
 
-<table>
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">PARAMETER</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
         </tr>
       </thead>
       <tbody>
@@ -12850,16 +12813,16 @@ arguments, time, and UUID), or -1 and None if no action is selected.</p>
             <td>
                 <code>peer_id</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="str">str</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The unique identifier of the peer to remove.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="str">str</span></code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
       </tbody>
@@ -13080,11 +13043,14 @@ arguments, time, and UUID), or -1 and None if no action is selected.</p>
         <p>Remove all not-owned streams.</p>
 
 
-<table>
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">PARAMETER</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
         </tr>
       </thead>
       <tbody>
@@ -13092,20 +13058,16 @@ arguments, time, and UUID), or -1 and None if no action is selected.</p>
             <td>
                 <code>owned_too</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="bool">bool</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>If True, also removes the owned streams of this agent (so also environmental and processor ones).</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="bool">bool</span></code>
-                  </span>
-                  <span class="doc-param-default">
-                    <b>DEFAULT:</b>
-                      <code>False</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                  <code>False</code>
             </td>
           </tr>
       </tbody>
@@ -13262,11 +13224,14 @@ with '_'.</p>
         <p>Remove a known stream (async).</p>
 
 
-<table>
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">PARAMETER</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
         </tr>
       </thead>
       <tbody>
@@ -13274,57 +13239,49 @@ with '_'.</p>
             <td>
                 <code>peer_id</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="str">str</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The hash of each stream included the peer ID of the owner, so this is the peer ID associated with
 the stream(s) to remove.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="str">str</span></code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>name</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="str">str</span> | None</code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The optional name of the stream to remove. If None, all streams with this peer_id are removed.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="str">str</span> | None</code>
-                  </span>
-                  <span class="doc-param-default">
-                    <b>DEFAULT:</b>
-                      <code>None</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                  <code>None</code>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>owned_too</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="bool">bool</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>If True, also removes streams from the owned stream dict (so also environmental and processor).</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="bool">bool</span></code>
-                  </span>
-                  <span class="doc-param-default">
-                    <b>DEFAULT:</b>
-                      <code>False</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                  <code>False</code>
             </td>
           </tr>
       </tbody>
@@ -13523,11 +13480,14 @@ the stream(s) to remove.</p>
         <p>Save the agent's state, including its processor and other attributes, to a specified location.</p>
 
 
-<table>
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">PARAMETER</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
         </tr>
       </thead>
       <tbody>
@@ -13535,41 +13495,36 @@ the stream(s) to remove.</p>
             <td>
                 <code>where</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="str">str</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The directory path where the agent's state should be saved. Defaults to "".</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="str">str</span></code>
-                  </span>
-                  <span class="doc-param-default">
-                    <b>DEFAULT:</b>
-                      <code>&#39;&#39;</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                  <code>&#39;&#39;</code>
             </td>
           </tr>
       </tbody>
     </table>
 
 
-<table>
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RETURNS</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
-                <span class="doc-returns-annotation">
-                    <code><span title="bool">bool</span></code>
-                </span>
+                  <code><span title="bool">bool</span></code>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>True upon successful saving.</p>
               </div>
@@ -13579,21 +13534,20 @@ the stream(s) to remove.</p>
     </table>
 
 
-<table>
+<p><span class="doc-section-title">Raises:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RAISES</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
-              <span class="doc-raises-annotation">
                   <code><span title="IOError">IOError</span></code>
-              </span>
             </td>
-            <td class="doc-raises-details">
+            <td>
               <div class="doc-md-description">
                 <p>If there is an issue with file operations (e.g., directory creation, writing files).</p>
               </div>
@@ -13601,11 +13555,9 @@ the stream(s) to remove.</p>
           </tr>
           <tr class="doc-section-item">
             <td>
-              <span class="doc-raises-annotation">
                   <code>(<span title="TypeError">TypeError</span>, <span title="ValueError">ValueError</span>, <span title="RuntimeError">RuntimeError</span>)</code>
-              </span>
             </td>
-            <td class="doc-raises-details">
+            <td>
               <div class="doc-md-description">
                 <p>For other potential issues during serialization or saving.</p>
               </div>
@@ -14033,11 +13985,14 @@ the stream(s) to remove.</p>
         <p>Set the required information from the node that hosts this agent.</p>
 
 
-<table>
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">PARAMETER</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
         </tr>
       </thead>
       <tbody>
@@ -14045,124 +14000,139 @@ the stream(s) to remove.</p>
             <td>
                 <code>clock</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><a class="autorefs autorefs-internal" title="&lt;span class=&quot;doc doc-object-name doc-class-name&quot;&gt;Clock&lt;/span&gt; (&lt;code&gt;unaiverse.clock.Clock&lt;/code&gt;)" href="../clock/#unaiverse.clock.Clock">Clock</a></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The global clock instance from the node.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><a class="autorefs autorefs-internal" title="&lt;span class=&quot;doc doc-object-name doc-class-name&quot;&gt;Clock&lt;/span&gt; (&lt;code&gt;unaiverse.clock.Clock&lt;/code&gt;)" href="../clock/#unaiverse.clock.Clock">Clock</a></code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>conn</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><a class="autorefs autorefs-internal" title="&lt;span class=&quot;doc doc-object-name doc-class-name&quot;&gt;ConnectionPools&lt;/span&gt; (&lt;code&gt;unaiverse.networking.node.connpool.ConnectionPools&lt;/code&gt;)" href="../networking/node/connpool/#unaiverse.networking.node.connpool.ConnectionPools">ConnectionPools</a></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The connection pool manager from the node.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><a class="autorefs autorefs-internal" title="&lt;span class=&quot;doc doc-object-name doc-class-name&quot;&gt;ConnectionPools&lt;/span&gt; (&lt;code&gt;unaiverse.networking.node.connpool.ConnectionPools&lt;/code&gt;)" href="../networking/node/connpool/#unaiverse.networking.node.connpool.ConnectionPools">ConnectionPools</a></code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>profile</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><a class="autorefs autorefs-internal" title="&lt;span class=&quot;doc doc-object-name doc-class-name&quot;&gt;NodeProfile&lt;/span&gt; (&lt;code&gt;unaiverse.networking.node.profile.NodeProfile&lt;/code&gt;)" href="../networking/node/profile/#unaiverse.networking.node.profile.NodeProfile">NodeProfile</a></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The profile of the hosting node.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><a class="autorefs autorefs-internal" title="&lt;span class=&quot;doc doc-object-name doc-class-name&quot;&gt;NodeProfile&lt;/span&gt; (&lt;code&gt;unaiverse.networking.node.profile.NodeProfile&lt;/code&gt;)" href="../networking/node/profile/#unaiverse.networking.node.profile.NodeProfile">NodeProfile</a></code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>out_fcn</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The function to use for general output messages.</p>
               </div>
-              <p>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>ask_to_get_in_touch_fcn</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The function to call to request getting in touch with another peer.</p>
               </div>
-              <p>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>purge_fcn</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The function to call to purge (kill/disconnect) a connection.</p>
               </div>
-              <p>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>node_identity_dir</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="str">str</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The folder where the node identity files are stored.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="str">str</span></code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>agents_waiting</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>Set of agents that connected to this node but have not been evaluated yet to be added.</p>
               </div>
-              <p>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>print_level</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The level of output printing verbosity (0, 1, 2).</p>
               </div>
-              <p>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
       </tbody>
@@ -14424,11 +14394,14 @@ the stream(s) to remove.</p>
         <p>Sets the policy to be used in selecting what action to perform in the current state (async).</p>
 
 
-<table>
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">PARAMETER</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
         </tr>
       </thead>
       <tbody>
@@ -14436,7 +14409,10 @@ the stream(s) to remove.</p>
             <td>
                 <code>policy_method_name_or_policy_fcn</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="str">str</span> | <span title="collections.abc.Callable">Callable</span>[[<span title="list">list</span>[<a class="autorefs autorefs-internal" title="&lt;span class=&quot;doc doc-object-name doc-class-name&quot;&gt;Action&lt;/span&gt; (&lt;code&gt;unaiverse.hsm.Action&lt;/code&gt;)" href="../hsm/#unaiverse.hsm.Action">Action</a>]], [<span title="int">int</span>, <a class="autorefs autorefs-internal" title="&lt;span class=&quot;doc doc-object-name doc-class-name&quot;&gt;ActionRequest&lt;/span&gt; (&lt;code&gt;unaiverse.hsm.ActionRequest&lt;/code&gt;)" href="../hsm/#unaiverse.hsm.ActionRequest">ActionRequest</a> | None]]</code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The name of a method of the Agent class that implements a policy function.
 It is a function that takes a list of <code>Action</code> objects that are candidates for execution, and returns
@@ -14444,32 +14420,25 @@ the index of the selected action and an ActionRequest object with the action-req
 (requester, arguments, time, and UUID), or -1 and None if no action is selected.
 By design, every agent implements a basic policy function named "policy_default".</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="str">str</span> | <span title="collections.abc.Callable">Callable</span>[[<span title="list">list</span>[<a class="autorefs autorefs-internal" title="&lt;span class=&quot;doc doc-object-name doc-class-name&quot;&gt;Action&lt;/span&gt; (&lt;code&gt;unaiverse.hsm.Action&lt;/code&gt;)" href="../hsm/#unaiverse.hsm.Action">Action</a>]], [<span title="int">int</span>, <a class="autorefs autorefs-internal" title="&lt;span class=&quot;doc doc-object-name doc-class-name&quot;&gt;ActionRequest&lt;/span&gt; (&lt;code&gt;unaiverse.hsm.ActionRequest&lt;/code&gt;)" href="../hsm/#unaiverse.hsm.ActionRequest">ActionRequest</a> | None]]</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>public</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="bool">bool</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>If True, the policy will be applied to the public HSM, otherwise to the private/world one.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="bool">bool</span></code>
-                  </span>
-                  <span class="doc-param-default">
-                    <b>DEFAULT:</b>
-                      <code>False</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                  <code>False</code>
             </td>
           </tr>
       </tbody>
@@ -14560,11 +14529,14 @@ By design, every agent implements a basic policy function named "policy_default"
         <p>Sets the policy to be used in selecting what action to perform in the current state (async).</p>
 
 
-<table>
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">PARAMETER</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
         </tr>
       </thead>
       <tbody>
@@ -14572,7 +14544,10 @@ By design, every agent implements a basic policy function named "policy_default"
             <td>
                 <code>filter_method_name_or_policy_fcn</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="str">str</span> | <span title="collections.abc.Callable">Callable</span>[[<span title="int">int</span>, <a class="autorefs autorefs-internal" title="&lt;span class=&quot;doc doc-object-name doc-class-name&quot;&gt;ActionRequest&lt;/span&gt; (&lt;code&gt;unaiverse.hsm.ActionRequest&lt;/code&gt;)" href="../hsm/#unaiverse.hsm.ActionRequest">ActionRequest</a> | None, <span title="list">list</span>[<a class="autorefs autorefs-internal" title="&lt;span class=&quot;doc doc-object-name doc-class-name&quot;&gt;Action&lt;/span&gt; (&lt;code&gt;unaiverse.hsm.Action&lt;/code&gt;)" href="../hsm/#unaiverse.hsm.Action">Action</a>], <span title="dict">dict</span>], [<span title="int">int</span>, <a class="autorefs autorefs-internal" title="&lt;span class=&quot;doc doc-object-name doc-class-name&quot;&gt;ActionRequest&lt;/span&gt; (&lt;code&gt;unaiverse.hsm.ActionRequest&lt;/code&gt;)" href="../hsm/#unaiverse.hsm.ActionRequest">ActionRequest</a> | None]]</code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The name of a method of the Agent class or a function that implements a
 policy filtering function, overriding what the policy decided.
@@ -14583,32 +14558,25 @@ action-requester details (requester, arguments, time, and UUID), or -1 and None
 if no action is selected.
 By design, every agent comes with no filtering active.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="str">str</span> | <span title="collections.abc.Callable">Callable</span>[[<span title="int">int</span>, <a class="autorefs autorefs-internal" title="&lt;span class=&quot;doc doc-object-name doc-class-name&quot;&gt;ActionRequest&lt;/span&gt; (&lt;code&gt;unaiverse.hsm.ActionRequest&lt;/code&gt;)" href="../hsm/#unaiverse.hsm.ActionRequest">ActionRequest</a> | None, <span title="list">list</span>[<a class="autorefs autorefs-internal" title="&lt;span class=&quot;doc doc-object-name doc-class-name&quot;&gt;Action&lt;/span&gt; (&lt;code&gt;unaiverse.hsm.Action&lt;/code&gt;)" href="../hsm/#unaiverse.hsm.Action">Action</a>], <span title="dict">dict</span>], [<span title="int">int</span>, <a class="autorefs autorefs-internal" title="&lt;span class=&quot;doc doc-object-name doc-class-name&quot;&gt;ActionRequest&lt;/span&gt; (&lt;code&gt;unaiverse.hsm.ActionRequest&lt;/code&gt;)" href="../hsm/#unaiverse.hsm.ActionRequest">ActionRequest</a> | None]]</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>public</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="bool">bool</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>If True, the filter will be applied to the public HSM, otherwise to the private/world one.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="bool">bool</span></code>
-                  </span>
-                  <span class="doc-param-default">
-                    <b>DEFAULT:</b>
-                      <code>False</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                  <code>False</code>
             </td>
           </tr>
       </tbody>
@@ -14865,21 +14833,20 @@ By design, every agent comes with no filtering active.</p>
         <p>Subscribes to all owned streams that are marked as PubSub (async).</p>
 
 
-<table>
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RETURNS</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
-                <span class="doc-returns-annotation">
-                    <code><span title="bool">bool</span></code>
-                </span>
+                  <code><span title="bool">bool</span></code>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>True if all subscriptions were successful, False otherwise.</p>
               </div>
@@ -15020,11 +14987,14 @@ By design, every agent comes with no filtering active.</p>
 (peer_id:<img alt="🇩🇲" class="twemoji" src="https://cdn.jsdelivr.net/gh/jdecked/twemoji@16.0.1/assets/svg/1f1e9-1f1f2.svg" title=":dm:" />... or peer_id:<img alt="🇵🇸" class="twemoji" src="https://cdn.jsdelivr.net/gh/jdecked/twemoji@16.0.1/assets/svg/1f1f5-1f1f8.svg" title=":ps:" />name_or_group) by searching the known hashes in the known streams.</p>
 
 
-<table>
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">PARAMETER</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
         </tr>
       </thead>
       <tbody>
@@ -15032,37 +15002,36 @@ By design, every agent comes with no filtering active.</p>
             <td>
                 <code>user_stream_hash</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="str">str</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The user-defined stream hash string (peer_id:name_or_group).</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="str">str</span></code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
       </tbody>
     </table>
 
 
-<table>
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RETURNS</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
-                <span class="doc-returns-annotation">
-                    <code><span title="str">str</span> | None</code>
-                </span>
+                  <code><span title="str">str</span> | None</code>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>The corresponding network hash string (peer_id:<img alt="🇩🇲" class="twemoji" src="https://cdn.jsdelivr.net/gh/jdecked/twemoji@16.0.1/assets/svg/1f1e9-1f1f2.svg" title=":dm:" />... or peer_id:<img alt="🇵🇸" class="twemoji" src="https://cdn.jsdelivr.net/gh/jdecked/twemoji@16.0.1/assets/svg/1f1f5-1f1f8.svg" title=":ps:" />name_or_group), or None if not found.</p>
               </div>

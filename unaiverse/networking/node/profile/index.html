@@ -2903,11 +2903,14 @@
 containing combined profile data (static, specs, and CV list of dicts).</p>
 
 
-<table>
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">PARAMETER</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
         </tr>
       </thead>
       <tbody>
@@ -2915,7 +2918,10 @@ containing combined profile data (static, specs, and CV list of dicts).</p>
             <td>
                 <code>combined_data</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="dict">dict</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>A dictionary representing the node profile,
                   typically loaded from JSON or received over the network.
@@ -2923,61 +2929,52 @@ containing combined profile data (static, specs, and CV list of dicts).</p>
                   'node_specification' (dict), 'peer_id', 'peer_addresses'
                   and other profile keys.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="dict">dict</span></code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
       </tbody>
     </table>
 
 
-<table>
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RETURNS</span></th>
-          <th><span>DESCRIPTION</span></th>
+<th>Name</th>          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
-            <td>
-                <code>NodeProfile</code>
+<td><code>NodeProfile</code></td>            <td>
+                  <code><a class="autorefs autorefs-internal" title="&lt;span class=&quot;doc doc-object-name doc-class-name&quot;&gt;NodeProfile&lt;/span&gt; (&lt;code&gt;unaiverse.networking.node.profile.NodeProfile&lt;/code&gt;)" href="#unaiverse.networking.node.profile.NodeProfile">NodeProfile</a></code>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>A new instance of NodeProfile populated from the dictionary.</p>
               </div>
-                <p>
-                  <span class="doc-returns-annotation">
-                    <b>TYPE:</b>
-                      <code><a class="autorefs autorefs-internal" title="&lt;span class=&quot;doc doc-object-name doc-class-name&quot;&gt;NodeProfile&lt;/span&gt; (&lt;code&gt;unaiverse.networking.node.profile.NodeProfile&lt;/code&gt;)" href="#unaiverse.networking.node.profile.NodeProfile">NodeProfile</a></code>
-                  </span>
-                </p>
             </td>
           </tr>
       </tbody>
     </table>
 
 
-<table>
+<p><span class="doc-section-title">Raises:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RAISES</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
-              <span class="doc-raises-annotation">
                   <code><span title="ValueError">ValueError</span></code>
-              </span>
             </td>
-            <td class="doc-raises-details">
+            <td>
               <div class="doc-md-description">
                 <p>If 'node_id' is missing in the input dictionary.</p>
               </div>
@@ -2985,11 +2982,9 @@ containing combined profile data (static, specs, and CV list of dicts).</p>
           </tr>
           <tr class="doc-section-item">
             <td>
-              <span class="doc-raises-annotation">
                   <code><span title="TypeError">TypeError</span></code>
-              </span>
             </td>
-            <td class="doc-raises-details">
+            <td>
               <div class="doc-md-description">
                 <p>If the 'cv' data is present but not a list.</p>
               </div>

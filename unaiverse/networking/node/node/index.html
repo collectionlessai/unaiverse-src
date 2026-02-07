@@ -4282,11 +4282,14 @@
         <p>Initializes a new instance of the Node class.</p>
 
 
-<table>
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">PARAMETER</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
         </tr>
       </thead>
       <tbody>
@@ -4294,297 +4297,241 @@
             <td>
                 <code>hosted</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><a class="autorefs autorefs-internal" title="&lt;span class=&quot;doc doc-object-name doc-class-name&quot;&gt;Agent&lt;/span&gt; (&lt;code&gt;unaiverse.agent.Agent&lt;/code&gt;)" href="../../../agent/#unaiverse.agent.Agent">Agent</a> | <a class="autorefs autorefs-internal" title="&lt;span class=&quot;doc doc-object-name doc-class-name&quot;&gt;World&lt;/span&gt; (&lt;code&gt;unaiverse.world.World&lt;/code&gt;)" href="../../../world/#unaiverse.world.World">World</a></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The Agent or World entity hosted by this node.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><a class="autorefs autorefs-internal" title="&lt;span class=&quot;doc doc-object-name doc-class-name&quot;&gt;Agent&lt;/span&gt; (&lt;code&gt;unaiverse.agent.Agent&lt;/code&gt;)" href="../../../agent/#unaiverse.agent.Agent">Agent</a> | <a class="autorefs autorefs-internal" title="&lt;span class=&quot;doc doc-object-name doc-class-name&quot;&gt;World&lt;/span&gt; (&lt;code&gt;unaiverse.world.World&lt;/code&gt;)" href="../../../world/#unaiverse.world.World">World</a></code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>unaiverse_key</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="str">str</span> | None</code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The UNaIVERSE key for authentication (if None, it will be loaded from env var or cache file,
 or you will be asked for it).</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="str">str</span> | None</code>
-                  </span>
-                  <span class="doc-param-default">
-                    <b>DEFAULT:</b>
-                      <code>None</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                  <code>None</code>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>node_name</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="str">str</span> | None</code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>A human-readable name for the node (using node ID is preferable; use this or node ID, not both).</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="str">str</span> | None</code>
-                  </span>
-                  <span class="doc-param-default">
-                    <b>DEFAULT:</b>
-                      <code>None</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                  <code>None</code>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>node_id</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="str">str</span> | None</code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>A unique identifier for the node (use this or the node name, not both).</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="str">str</span> | None</code>
-                  </span>
-                  <span class="doc-param-default">
-                    <b>DEFAULT:</b>
-                      <code>None</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                  <code>None</code>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>hidden</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="bool">bool</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>A flag to determine if the node is hidden (i.e., only the owner of the account can see it).</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="bool">bool</span></code>
-                  </span>
-                  <span class="doc-param-default">
-                    <b>DEFAULT:</b>
-                      <code>False</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                  <code>False</code>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>clock_delta</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="float">float</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The minimum time delta for the node's clock.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="float">float</span></code>
-                  </span>
-                  <span class="doc-param-default">
-                    <b>DEFAULT:</b>
-                      <code>1.0 / 25.0</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                  <code>1.0 / 25.0</code>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>only_certified_agents</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="bool">bool</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>A flag to allow only certified agents to connect.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="bool">bool</span></code>
-                  </span>
-                  <span class="doc-param-default">
-                    <b>DEFAULT:</b>
-                      <code>False</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                  <code>False</code>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>allowed_node_ids</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="list">list</span>[<span title="str">str</span>] | <span title="set">set</span>[<span title="str">str</span>]</code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>A list or set of allowed node IDs to connect (t is loaded from the online profile).</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="list">list</span>[<span title="str">str</span>] | <span title="set">set</span>[<span title="str">str</span>]</code>
-                  </span>
-                  <span class="doc-param-default">
-                    <b>DEFAULT:</b>
-                      <code>None</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                  <code>None</code>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>world_masters_node_ids</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="list">list</span>[<span title="str">str</span>] | <span title="set">set</span>[<span title="str">str</span>]</code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>A list or set of world masters' node IDs (it is also loaded from online profile).</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="list">list</span>[<span title="str">str</span>] | <span title="set">set</span>[<span title="str">str</span>]</code>
-                  </span>
-                  <span class="doc-param-default">
-                    <b>DEFAULT:</b>
-                      <code>None</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                  <code>None</code>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>world_masters_node_names</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="list">list</span>[<span title="str">str</span>] | <span title="set">set</span>[<span title="str">str</span>]</code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>A list or set of world masters' node names (using IDs is preferable).</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="list">list</span>[<span title="str">str</span>] | <span title="set">set</span>[<span title="str">str</span>]</code>
-                  </span>
-                  <span class="doc-param-default">
-                    <b>DEFAULT:</b>
-                      <code>None</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                  <code>None</code>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>allow_connection_through_relay</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="bool">bool</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>A flag to allow connections through a relay.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="bool">bool</span></code>
-                  </span>
-                  <span class="doc-param-default">
-                    <b>DEFAULT:</b>
-                      <code>True</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                  <code>True</code>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>talk_to_relay_based_nodes</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="bool">bool</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>A flag to allow talking to relay-based nodes.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="bool">bool</span></code>
-                  </span>
-                  <span class="doc-param-default">
-                    <b>DEFAULT:</b>
-                      <code>True</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                  <code>True</code>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>run_hook</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="callable">callable</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>A function taking the Node instance as argument, called every cycle.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="callable">callable</span></code>
-                  </span>
-                  <span class="doc-param-default">
-                    <b>DEFAULT:</b>
-                      <code>None</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                  <code>None</code>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>send_stats_every</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="float">float</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>Send the stats update to the world every N seconds.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="float">float</span></code>
-                  </span>
-                  <span class="doc-param-default">
-                    <b>DEFAULT:</b>
-                      <code>30.0</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                  <code>30.0</code>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>save_checkpoint_every</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="float">float</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>Time interval in seconds to save the hosted entity's state to disk (&lt; 0. not to save).</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="float">float</span></code>
-                  </span>
-                  <span class="doc-param-default">
-                    <b>DEFAULT:</b>
-                      <code>-1.0</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                  <code>-1.0</code>
             </td>
           </tr>
       </tbody>
@@ -6589,11 +6536,14 @@ or you will be asked for it).</p>
         <p>Tries to connect to another agent or world node (async).</p>
 
 
-<table>
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">PARAMETER</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
         </tr>
       </thead>
       <tbody>
@@ -6601,134 +6551,114 @@ or you will be asked for it).</p>
             <td>
                 <code>node_name</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="str">str</span> | None</code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>Name of the node to join (alternative to addresses below)</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="str">str</span> | None</code>
-                  </span>
-                  <span class="doc-param-default">
-                    <b>DEFAULT:</b>
-                      <code>None</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                  <code>None</code>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>addresses</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="list">list</span>[<span title="str">str</span>] | None</code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>A list of network addresses to connect to (alternative to node_name).</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="list">list</span>[<span title="str">str</span>] | None</code>
-                  </span>
-                  <span class="doc-param-default">
-                    <b>DEFAULT:</b>
-                      <code>None</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                  <code>None</code>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>node_id</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="str">str</span> | None</code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The ID of the node to connect to (alternative to node_name and addresses).</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="str">str</span> | None</code>
-                  </span>
-                  <span class="doc-param-default">
-                    <b>DEFAULT:</b>
-                      <code>None</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                  <code>None</code>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>public</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="bool">bool</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>A boolean flag indicating whether to use the public or world P2P network.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="bool">bool</span></code>
-                  </span>
-                  <span class="doc-param-default">
-                    <b>DEFAULT:</b>
-                      <code>True</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                  <code>True</code>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>before_updating_pools_fcn</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>A function to call before updating the connection pools.</p>
               </div>
-              <p>
-                  <span class="doc-param-default">
-                    <b>DEFAULT:</b>
-                      <code>None</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                  <code>None</code>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>run_count</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="int">int</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The number of connection attempts made.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="int">int</span></code>
-                  </span>
-                  <span class="doc-param-default">
-                    <b>DEFAULT:</b>
-                      <code>0</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                  <code>0</code>
             </td>
           </tr>
       </tbody>
     </table>
 
 
-<table>
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RETURNS</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>The peer ID of the connected node if successful, otherwise None.</p>
               </div>
@@ -6946,11 +6876,14 @@ or you will be asked for it).</p>
         <p>Initiates a request to join a world (async).</p>
 
 
-<table>
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">PARAMETER</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
         </tr>
       </thead>
       <tbody>
@@ -6958,94 +6891,82 @@ or you will be asked for it).</p>
             <td>
                 <code>node_name</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="str">str</span> | None</code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The name of the node hosting the world to join (alternative to addresses below).</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="str">str</span> | None</code>
-                  </span>
-                  <span class="doc-param-default">
-                    <b>DEFAULT:</b>
-                      <code>None</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                  <code>None</code>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>addresses</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="list">list</span>[<span title="str">str</span>] | None</code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>A list of network addresses of the world node (alternative to world_name).</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="list">list</span>[<span title="str">str</span>] | None</code>
-                  </span>
-                  <span class="doc-param-default">
-                    <b>DEFAULT:</b>
-                      <code>None</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                  <code>None</code>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>node_id</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="str">str</span> | None</code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The ID of the node to join (alternative to node_name and addresses).</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="str">str</span> | None</code>
-                  </span>
-                  <span class="doc-param-default">
-                    <b>DEFAULT:</b>
-                      <code>None</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                  <code>None</code>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>**kwargs</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>Additional options for joining the world.</p>
               </div>
-              <p>
-                  <span class="doc-param-default">
-                    <b>DEFAULT:</b>
-                      <code>{}</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                  <code>{}</code>
             </td>
           </tr>
       </tbody>
     </table>
 
 
-<table>
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RETURNS</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>The public peer ID of the world node if the connection request is successful, otherwise None.</p>
               </div>
@@ -7136,11 +7057,14 @@ or you will be asked for it).</p>
         <p>Prints a formatted error message to the console.</p>
 
 
-<table>
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">PARAMETER</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
         </tr>
       </thead>
       <tbody>
@@ -7148,16 +7072,16 @@ or you will be asked for it).</p>
             <td>
                 <code>msg</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="str">str</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The error message to be printed.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="str">str</span></code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
       </tbody>
@@ -7211,18 +7135,19 @@ or you will be asked for it).</p>
         <p>Retrieves the node's CV (Curriculum Vitae) from the root server</p>
 
 
-<table>
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RETURNS</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>The node's CV as a dictionary.</p>
               </div>
@@ -7291,11 +7216,14 @@ or you will be asked for it).</p>
         <p>Retrieves the node ID by its name from the root server, creating a new node if it's missing and specified.</p>
 
 
-<table>
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">PARAMETER</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
         </tr>
       </thead>
       <tbody>
@@ -7303,78 +7231,69 @@ or you will be asked for it).</p>
             <td>
                 <code>node_names</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="list">list</span>[<span title="str">str</span>]</code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The list with the names of the nodes to retrieve.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="list">list</span>[<span title="str">str</span>]</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>create_if_missing</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="bool">bool</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>A flag to create the node if it doesn't exist (only valid for your own nodes).</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="bool">bool</span></code>
-                  </span>
-                  <span class="doc-param-default">
-                    <b>DEFAULT:</b>
-                      <code>False</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                  <code>False</code>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>node_type</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="str">str</span> | None</code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The type of the node to create if missing (when create_if_missing is True) - default: the type of
 the current node.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="str">str</span> | None</code>
-                  </span>
-                  <span class="doc-param-default">
-                    <b>DEFAULT:</b>
-                      <code>None</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                  <code>None</code>
             </td>
           </tr>
       </tbody>
     </table>
 
 
-<table>
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RETURNS</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
-                <span class="doc-returns-annotation">
-                    <code><span title="list">list</span>[<span title="str">str</span>]</code>
-                </span>
+                  <code><span title="list">list</span>[<span title="str">str</span>]</code>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>The list of node IDs and the list of boolean flags telling if a node was already alive,</p>
               </div>
@@ -7382,11 +7301,9 @@ the current node.</p>
           </tr>
           <tr class="doc-section-item">
             <td>
-                <span class="doc-returns-annotation">
-                    <code><span title="list">list</span>[<span title="bool">bool</span>]</code>
-                </span>
+                  <code><span title="list">list</span>[<span title="bool">bool</span>]</code>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>or an exception if an error occurs.</p>
               </div>
@@ -7513,11 +7430,14 @@ the current node.</p>
         <p>Generates and retrieves a node token from the root server.</p>
 
 
-<table>
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">PARAMETER</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
         </tr>
       </thead>
       <tbody>
@@ -7525,12 +7445,15 @@ the current node.</p>
             <td>
                 <code>peer_ids</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>A list of public and private peer IDs.</p>
               </div>
-              <p>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
       </tbody>
@@ -7618,21 +7541,20 @@ the current node.</p>
         <p>Returns the public addresses of the P2P node</p>
 
 
-<table>
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RETURNS</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
-                <span class="doc-returns-annotation">
-                    <code><span title="list">list</span>[<span title="str">str</span>]</code>
-                </span>
+                  <code><span title="list">list</span>[<span title="str">str</span>]</code>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>The list of public addresses.</p>
               </div>
@@ -7679,21 +7601,20 @@ the current node.</p>
         <p>Returns the public peer ID of the P2P node</p>
 
 
-<table>
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RETURNS</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
-                <span class="doc-returns-annotation">
-                    <code><span title="str">str</span></code>
-                </span>
+                  <code><span title="str">str</span></code>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>The public peer ID.</p>
               </div>
@@ -7740,21 +7661,20 @@ the current node.</p>
         <p>Returns the world addresses of the P2P node</p>
 
 
-<table>
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RETURNS</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
-                <span class="doc-returns-annotation">
-                    <code><span title="list">list</span>[<span title="str">str</span>]</code>
-                </span>
+                  <code><span title="list">list</span>[<span title="str">str</span>]</code>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>The list of world addresses.</p>
               </div>
@@ -7801,21 +7721,20 @@ the current node.</p>
         <p>Returns the world peer ID of the P2P node</p>
 
 
-<table>
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RETURNS</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
-                <span class="doc-returns-annotation">
-                    <code><span title="str">str</span></code>
-                </span>
+                  <code><span title="str">str</span></code>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>The world peer ID.</p>
               </div>
@@ -7866,11 +7785,14 @@ the current node.</p>
         <p>Disconnects the node from a specific peer, typically a world (async).</p>
 
 
-<table>
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">PARAMETER</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
         </tr>
       </thead>
       <tbody>
@@ -7878,16 +7800,16 @@ the current node.</p>
             <td>
                 <code>peer_id</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="str">str</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The peer ID of the node to leave.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="str">str</span></code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
       </tbody>
@@ -8011,18 +7933,19 @@ the current node.</p>
         <p>Initiates the process of leaving a world (async).</p>
 
 
-<table>
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RETURNS</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>None.</p>
               </div>
@@ -8075,11 +7998,14 @@ the current node.</p>
         <p>Prints a formatted message to the console if printing is enabled.</p>
 
 
-<table>
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">PARAMETER</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
         </tr>
       </thead>
       <tbody>
@@ -8087,16 +8013,16 @@ the current node.</p>
             <td>
                 <code>msg</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="str">str</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The message to be printed.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="str">str</span></code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
       </tbody>
@@ -8214,11 +8140,14 @@ See documentation of method run_async.</p>
         <p>Starts the main execution loop for the node (async).</p>
 
 
-<table>
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">PARAMETER</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
         </tr>
       </thead>
       <tbody>
@@ -8226,120 +8155,96 @@ See documentation of method run_async.</p>
             <td>
                 <code>cycles</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="int">int</span> | None</code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The number of clock cycles to run the loop for. If None, runs indefinitely.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="int">int</span> | None</code>
-                  </span>
-                  <span class="doc-param-default">
-                    <b>DEFAULT:</b>
-                      <code>None</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                  <code>None</code>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>max_time</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="float">float</span> | None</code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The maximum time in seconds to run the loop. If None, runs indefinitely.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="float">float</span> | None</code>
-                  </span>
-                  <span class="doc-param-default">
-                    <b>DEFAULT:</b>
-                      <code>None</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                  <code>None</code>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>interact_mode</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="bool">bool</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>A boolean value that turns interactive mode of (still experimental!).</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="bool">bool</span></code>
-                  </span>
-                  <span class="doc-param-default">
-                    <b>DEFAULT:</b>
-                      <code>False</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                  <code>False</code>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>resume_from_checkpoint</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="bool">bool</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>If True, we load the checkpoint saved (if present).</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="bool">bool</span></code>
-                  </span>
-                  <span class="doc-param-default">
-                    <b>DEFAULT:</b>
-                      <code>False</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                  <code>False</code>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>join_world</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="str">str</span> | <span title="list">list</span>[<span title="str">str</span>] | None</code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The name of the World to join or the list of its addresses.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="str">str</span> | <span title="list">list</span>[<span title="str">str</span>] | None</code>
-                  </span>
-                  <span class="doc-param-default">
-                    <b>DEFAULT:</b>
-                      <code>None</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                  <code>None</code>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>get_in_touch</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="str">str</span> | <span title="list">list</span>[<span title="str">str</span>] | None</code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The name of Agent to connect to or the list of its addresses.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="str">str</span> | <span title="list">list</span>[<span title="str">str</span>] | None</code>
-                  </span>
-                  <span class="doc-param-default">
-                    <b>DEFAULT:</b>
-                      <code>None</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                  <code>None</code>
             </td>
           </tr>
       </tbody>
@@ -9400,21 +9305,20 @@ See documentation of method run_async.</p>
         <p>Send an alive message to the root server.</p>
 
 
-<table>
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RETURNS</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
-                <span class="doc-returns-annotation">
-                    <code><span title="bool">bool</span></code>
-                </span>
+                  <code><span title="bool">bool</span></code>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>A boolean flag indicating whether the node was already live before sending this.</p>
               </div>
@@ -10158,11 +10062,14 @@ See documentation of method run_async.</p>
         <p>Adds a new node to the synchronizer.</p>
 
 
-<table>
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">PARAMETER</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
         </tr>
       </thead>
       <tbody>
@@ -10170,16 +10077,16 @@ See documentation of method run_async.</p>
             <td>
                 <code>node</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><a class="autorefs autorefs-internal" title="&lt;span class=&quot;doc doc-object-name doc-class-name&quot;&gt;Node&lt;/span&gt; (&lt;code&gt;unaiverse.networking.node.node.Node&lt;/code&gt;)" href="#unaiverse.networking.node.node.Node">Node</a></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The node to add.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><a class="autorefs autorefs-internal" title="&lt;span class=&quot;doc doc-object-name doc-class-name&quot;&gt;Node&lt;/span&gt; (&lt;code&gt;unaiverse.networking.node.node.Node&lt;/code&gt;)" href="#unaiverse.networking.node.node.Node">Node</a></code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
       </tbody>
@@ -10264,11 +10171,14 @@ See documentation of method run_async.</p>
         <p>Starts the main execution loop for the node (async).</p>
 
 
-<table>
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">PARAMETER</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
         </tr>
       </thead>
       <tbody>
@@ -10276,36 +10186,32 @@ See documentation of method run_async.</p>
             <td>
                 <code>addresses</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="list">list</span>[<span title="str">str</span>] | None</code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>Addresses of the world to connect to.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="list">list</span>[<span title="str">str</span>] | None</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>synch_cycles</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="int">int</span> | None</code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The number of clock cycles to run the loop for. If None, runs indefinitely.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="int">int</span> | None</code>
-                  </span>
-                  <span class="doc-param-default">
-                    <b>DEFAULT:</b>
-                      <code>None</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                  <code>None</code>
             </td>
           </tr>
       </tbody>

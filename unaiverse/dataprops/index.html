@@ -3926,11 +3926,14 @@
  <code>DataProps</code> object for a private stream and, optionally, a public stream.</p>
 
 
-<table>
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">PARAMETER</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
         </tr>
       </thead>
       <tbody>
@@ -3938,93 +3941,82 @@
             <td>
                 <code>*args</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>Variable length argument list to be passed to the <code>DataProps</code> constructor.</p>
               </div>
-              <p>
-                  <span class="doc-param-default">
-                    <b>DEFAULT:</b>
-                      <code>()</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                  <code>()</code>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>private_only</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="bool">bool</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>If True, only a private stream's <code>DataProps</code> is created.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="bool">bool</span></code>
-                  </span>
-                  <span class="doc-param-default">
-                    <b>DEFAULT:</b>
-                      <code>False</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                  <code>False</code>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>public_only</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="bool">bool</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>If True, only a public stream's <code>DataProps</code> is created.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="bool">bool</span></code>
-                  </span>
-                  <span class="doc-param-default">
-                    <b>DEFAULT:</b>
-                      <code>False</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                  <code>False</code>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>**kwargs</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>Arbitrary keyword arguments passed to the <code>DataProps</code> constructor.</p>
               </div>
-              <p>
-                  <span class="doc-param-default">
-                    <b>DEFAULT:</b>
-                      <code>{}</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                  <code>{}</code>
             </td>
           </tr>
       </tbody>
     </table>
 
 
-<table>
+<p><span class="doc-section-title">Raises:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RAISES</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
-              <span class="doc-raises-annotation">
                   <code><span title="ValueError">ValueError</span></code>
-              </span>
             </td>
-            <td class="doc-raises-details">
+            <td>
               <div class="doc-md-description">
                 <p>If both <code>private_only</code> and <code>public_only</code> are set to True, or if the 'public' argument is passed
 directly.</p>
@@ -4144,18 +4136,19 @@ directly.</p>
         <p>Creates and returns a deep copy of the <code>Data4Proc</code> object.</p>
 
 
-<table>
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RETURNS</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>A new <code>Data4Proc</code> object that is a clone of the original.</p>
               </div>
@@ -4211,21 +4204,20 @@ directly.</p>
 container class <code>Data4Proc</code> which can hold multiple properties.</p>
 
 
-<table>
+<p><span class="doc-section-title">Raises:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RAISES</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
-              <span class="doc-raises-annotation">
                   <code><span title="RuntimeError">RuntimeError</span></code>
-              </span>
             </td>
-            <td class="doc-raises-details">
+            <td>
               <div class="doc-md-description">
                 <p>Always, as this method is not supported.</p>
               </div>
@@ -4275,21 +4267,20 @@ container class <code>Data4Proc</code> which can hold multiple properties.</p>
 container class <code>Data4Proc</code> which can hold multiple properties.</p>
 
 
-<table>
+<p><span class="doc-section-title">Raises:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RAISES</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
-              <span class="doc-raises-annotation">
                   <code><span title="RuntimeError">RuntimeError</span></code>
-              </span>
             </td>
-            <td class="doc-raises-details">
+            <td>
               <div class="doc-md-description">
                 <p>Always, as this method is not supported.</p>
               </div>
@@ -4339,21 +4330,20 @@ container class <code>Data4Proc</code> which can hold multiple properties.</p>
 container class <code>Data4Proc</code> which can hold multiple properties.</p>
 
 
-<table>
+<p><span class="doc-section-title">Raises:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RAISES</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
-              <span class="doc-raises-annotation">
                   <code><span title="RuntimeError">RuntimeError</span></code>
-              </span>
             </td>
-            <td class="doc-raises-details">
+            <td>
               <div class="doc-md-description">
                 <p>Always, as this method is not supported.</p>
               </div>
@@ -4403,18 +4393,19 @@ container class <code>Data4Proc</code> which can hold multiple properties.</p>
 properties of a single data stream.</p>
 
 
-<table>
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RETURNS</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>A list of dictionaries, where each dictionary holds the properties of a <code>DataProps</code> object.</p>
               </div>
@@ -4513,11 +4504,13 @@ properties of a single data stream.</p>
 It supports different data types: 'tensor', 'tensor_token_id', 'img', and 'text'.</p>
 
 
-<table>
+<p><span class="doc-section-title">Attributes:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">ATTRIBUTE</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
@@ -4529,16 +4522,13 @@ It supports different data types: 'tensor', 'tensor_token_id', 'img', and 'text'
       &lt;small class=&quot;doc doc-label doc-label-class-attribute&quot;&gt;&lt;code&gt;class-attribute&lt;/code&gt;&lt;/small&gt;
       &lt;small class=&quot;doc doc-label doc-label-instance-attribute&quot;&gt;&lt;code&gt;instance-attribute&lt;/code&gt;&lt;/small&gt;
   &lt;/span&gt; (&lt;code&gt;unaiverse.dataprops.DataProps.VALID_DATA_TYPES&lt;/code&gt;)" href="#unaiverse.dataprops.DataProps.VALID_DATA_TYPES">VALID_DATA_TYPES</a></code></td>
-            <td class="doc-attribute-details">
+            <td>
+                  <code><span title="tuple">tuple</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>Tuple of valid data types ('tensor', 'tensor_token_id', 'img', 'text').</p>
               </div>
-              <p>
-                  <span class="doc-attribute-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="tuple">tuple</span></code>
-                  </span>
-              </p>
             </td>
           </tr>
       </tbody>
@@ -4547,11 +4537,14 @@ It supports different data types: 'tensor', 'tensor_token_id', 'img', and 'text'
         <p>Initializes a DataProps instance.</p>
 
 
-<table>
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">PARAMETER</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
         </tr>
       </thead>
       <tbody>
@@ -4559,162 +4552,140 @@ It supports different data types: 'tensor', 'tensor_token_id', 'img', and 'text'
             <td>
                 <code>name</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="str">str</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>Name of the data (default is "unk").</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="str">str</span></code>
-                  </span>
-                  <span class="doc-param-default">
-                    <b>DEFAULT:</b>
-                      <code>&#39;unk&#39;</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                  <code>&#39;unk&#39;</code>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>group</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="str">str</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>Name of the group to which this DataProps belong (default: "none").</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="str">str</span></code>
-                  </span>
-                  <span class="doc-param-default">
-                    <b>DEFAULT:</b>
-                      <code>&#39;none&#39;</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                  <code>&#39;none&#39;</code>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>data_type</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="str">str</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The type of data ('tensor', 'img', or 'text').</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="str">str</span></code>
-                  </span>
-                  <span class="doc-param-default">
-                    <b>DEFAULT:</b>
-                      <code>&#39;text&#39;</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                  <code>&#39;text&#39;</code>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>data_desc</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="str">str</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>Description of the data (default is "unk").</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="str">str</span></code>
-                  </span>
-                  <span class="doc-param-default">
-                    <b>DEFAULT:</b>
-                      <code>&#39;unk&#39;</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                  <code>&#39;unk&#39;</code>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>tensor_shape</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="tuple">tuple</span>[<span title="int">int</span> | None] or None</code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>Shape of the tensor data (e.g., (3, 224, 224) or (3, None, None)
 for tensors that are variable size images). It is None for non-tensor data.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="tuple">tuple</span>[<span title="int">int</span> | None] or None</code>
-                  </span>
-                  <span class="doc-param-default">
-                    <b>DEFAULT:</b>
-                      <code>None</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                  <code>None</code>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>tensor_labels (list[str] or &#34;AutoTokenizer</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p><tokenizer_model_id>" or None):
 List of labels for the components (features) of tensor data. It can be a string representing the ID of a
 tokenizer which is valid in AutoTokenizer (with prefix "AutoTokenizer:").</p>
               </div>
-              <p>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>tensor_dtype</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="torch.dtype">dtype</span> or <span title="str">str</span> or None</code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The string representing the Pytorch dtype of the tensor data.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="torch.dtype">dtype</span> or <span title="str">str</span> or None</code>
-                  </span>
-                  <span class="doc-param-default">
-                    <b>DEFAULT:</b>
-                      <code>None</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                  <code>None</code>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>tensor_labeling_rule</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="str">str</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The labeling rule for tensor data ('max' or 'geqX' where X is a number).</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="str">str</span></code>
-                  </span>
-                  <span class="doc-param-default">
-                    <b>DEFAULT:</b>
-                      <code>&#39;max&#39;</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                  <code>&#39;max&#39;</code>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>stream_to_proc_transforms</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code>callable or PreTrainedTokenizerBase or str or dict or a list* or None</code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>A callable stream format to tensor format conversion fcn (any callable thing, torchvision transforms, a
 pretrained tokenizer, or the model ID from which it can be downloaded (it must have prefix
@@ -4722,117 +4693,95 @@ pretrained tokenizer, or the model ID from which it can be downloaded (it must h
 *If you need to distinguish the transform applied to the inputs and to targets, you can pass a list of
 two elements like the just described ones - one for input, one for targets, respectively.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code>callable or PreTrainedTokenizerBase or str or dict or a list* or None</code>
-                  </span>
-                  <span class="doc-param-default">
-                    <b>DEFAULT:</b>
-                      <code>None</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                  <code>None</code>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>proc_to_stream_transforms</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="callable">callable</span> or <span title="transformers.PreTrainedTokenizerBase">PreTrainedTokenizerBase</span> or <span title="str">str</span> or <span title="list">list</span> or None</code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>A callable tensor
 to stream format function (any callable thing, torchvision transforms, a Pretrained tokenizer (HF),
 or the model ID from which it can be downloaded, (it must have prefix "AutoTokenizer:"), or a
 vocabulary int-&gt;str). It is None for non text data.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="callable">callable</span> or <span title="transformers.PreTrainedTokenizerBase">PreTrainedTokenizerBase</span> or <span title="str">str</span> or <span title="list">list</span> or None</code>
-                  </span>
-                  <span class="doc-param-default">
-                    <b>DEFAULT:</b>
-                      <code>None</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                  <code>None</code>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>delta</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="float">float</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>Time interval between consecutive data samples (&lt;= 0 for real-time data).</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="float">float</span></code>
-                  </span>
-                  <span class="doc-param-default">
-                    <b>DEFAULT:</b>
-                      <code>-1</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                  <code>-1</code>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>pubsub</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="bool">bool</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>If the stream is supposed to be sent to/received from a Pub/Sub topic.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="bool">bool</span></code>
-                  </span>
-                  <span class="doc-param-default">
-                    <b>DEFAULT:</b>
-                      <code>False</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                  <code>False</code>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>public</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="bool">bool</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>If the stream is supposed to be accessed through the public net or through the private one.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="bool">bool</span></code>
-                  </span>
-                  <span class="doc-param-default">
-                    <b>DEFAULT:</b>
-                      <code>False</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                  <code>False</code>
             </td>
           </tr>
       </tbody>
     </table>
 
 
-<table>
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RETURNS</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>None</p>
               </div>
@@ -5569,11 +5518,14 @@ vocabulary int-&gt;str). It is None for non text data.</p>
         <p>Interleaves data in function of its corresponding labels and the current super-set labels.</p>
 
 
-<table>
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">PARAMETER</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
         </tr>
       </thead>
       <tbody>
@@ -5581,37 +5533,36 @@ vocabulary int-&gt;str). It is None for non text data.</p>
             <td>
                 <code>data</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="torch.Tensor">Tensor</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The data tensor to interleave.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="torch.Tensor">Tensor</span></code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
       </tbody>
     </table>
 
 
-<table>
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RETURNS</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
-                <span class="doc-returns-annotation">
-                    <code><span title="torch.Tensor">Tensor</span></code>
-                </span>
+                  <code><span title="torch.Tensor">Tensor</span></code>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>torch.Tensor: The interleaved data tensor.</p>
               </div>
@@ -5688,11 +5639,14 @@ vocabulary int-&gt;str). It is None for non text data.</p>
         <p>A static method to construct a complete network hash from a prefix, Pub/Sub status, and name/group.</p>
 
 
-<table>
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">PARAMETER</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
         </tr>
       </thead>
       <tbody>
@@ -5700,66 +5654,67 @@ vocabulary int-&gt;str). It is None for non text data.</p>
             <td>
                 <code>prefix</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="str">str</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The peer ID prefix.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="str">str</span></code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>pubsub</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="bool">bool</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The Pub/Sub status.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="bool">bool</span></code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>name_or_group</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="str">str</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The name or group of the stream.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="str">str</span></code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
       </tbody>
     </table>
 
 
-<table>
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RETURNS</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>The constructed network hash string.</p>
               </div>
@@ -5827,11 +5782,14 @@ into an appropriate format for the stream, such as a string for text or a PIL <c
 a final check on the data's format (shape, dtype, etc.) to ensure consistency with the stream's properties.</p>
 
 
-<table>
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">PARAMETER</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
         </tr>
       </thead>
       <tbody>
@@ -5839,34 +5797,35 @@ a final check on the data's format (shape, dtype, etc.) to ensure consistency wi
             <td>
                 <code>data</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="str">str</span> | <span title="PIL.Image.Image">Image</span> | <span title="torch.Tensor">Tensor</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The output from the processor, typically a tensor.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="str">str</span> | <span title="PIL.Image.Image">Image</span> | <span title="torch.Tensor">Tensor</span></code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
       </tbody>
     </table>
 
 
-<table>
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RETURNS</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>The post-processed data, in a stream-compatible format (e.g., a string, image, or CPU tensor).</p>
               </div>
@@ -6096,11 +6055,14 @@ pre-configured transformation (like a tokenizer or a standard image transform) t
 tensor format suitable for processing. For tensors, it performs validation on shape and data type.</p>
 
 
-<table>
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">PARAMETER</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
         </tr>
       </thead>
       <tbody>
@@ -6108,95 +6070,84 @@ tensor format suitable for processing. For tensors, it performs validation on sh
             <td>
                 <code>data</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="str">str</span> | <span title="PIL.Image.Image">Image</span> | <span title="torch.Tensor">Tensor</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The data sample to check and preprocess.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="str">str</span> | <span title="PIL.Image.Image">Image</span> | <span title="torch.Tensor">Tensor</span></code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>allow_class_ids</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="bool">bool</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>A boolean to allow single-element long tensors, typically for class IDs.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="bool">bool</span></code>
-                  </span>
-                  <span class="doc-param-default">
-                    <b>DEFAULT:</b>
-                      <code>False</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                  <code>False</code>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>targets</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="bool">bool</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>A boolean to indicate if the data is a target (used to select the correct transformation in a
 dual-transform setup).</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="bool">bool</span></code>
-                  </span>
-                  <span class="doc-param-default">
-                    <b>DEFAULT:</b>
-                      <code>False</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                  <code>False</code>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>device</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="torch.device">device</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The PyTorch device (e.g., 'cpu' or 'cuda') to which the tensor should be moved.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="torch.device">device</span></code>
-                  </span>
-                  <span class="doc-param-default">
-                    <b>DEFAULT:</b>
-                      <code><span title="torch.device">device</span>(&#39;cpu&#39;)</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                  <code><span title="torch.device">device</span>(&#39;cpu&#39;)</code>
             </td>
           </tr>
       </tbody>
     </table>
 
 
-<table>
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RETURNS</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>The preprocessed data, typically a tensor on the specified device.</p>
               </div>
@@ -6435,11 +6386,14 @@ dual-transform setup).</p>
         <p>Removes the padding and returns the original data from an adapted tensor.</p>
 
 
-<table>
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">PARAMETER</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
         </tr>
       </thead>
       <tbody>
@@ -6447,34 +6401,35 @@ dual-transform setup).</p>
             <td>
                 <code>data</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="torch.Tensor">Tensor</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The adapted tensor.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="torch.Tensor">Tensor</span></code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
       </tbody>
     </table>
 
 
-<table>
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RETURNS</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>The original, un-padded tensor.</p>
               </div>
@@ -6528,18 +6483,19 @@ dual-transform setup).</p>
 It preserves the original transformation objects rather than re-evaluating them.</p>
 
 
-<table>
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RETURNS</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>A new <code>DataProps</code> object that is a clone of the original.</p>
               </div>
@@ -6618,11 +6574,14 @@ It preserves the original transformation objects rather than re-evaluating them.
         <p>A static method that deserializes a dictionary into a <code>DataProps</code> object.</p>
 
 
-<table>
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">PARAMETER</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
         </tr>
       </thead>
       <tbody>
@@ -6630,30 +6589,34 @@ It preserves the original transformation objects rather than re-evaluating them.
             <td>
                 <code>d_props</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The dictionary containing the object's properties.</p>
               </div>
-              <p>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
       </tbody>
     </table>
 
 
-<table>
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RETURNS</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>A new <code>DataProps</code> object.</p>
               </div>
@@ -6730,18 +6693,19 @@ It preserves the original transformation objects rather than re-evaluating them.
         <p>Retrieves the description of the data.</p>
 
 
-<table>
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RETURNS</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>A string with the data description.</p>
               </div>
@@ -6788,18 +6752,19 @@ It preserves the original transformation objects rather than re-evaluating them.
         <p>Retrieves the name of the group to which the data stream belongs.</p>
 
 
-<table>
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RETURNS</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>A string representing the group name.</p>
               </div>
@@ -6848,18 +6813,19 @@ It preserves the original transformation objects rather than re-evaluating them.
         <p>Retrieves the name of the data stream.</p>
 
 
-<table>
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RETURNS</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>A string representing the stream's name.</p>
               </div>
@@ -6908,18 +6874,19 @@ It preserves the original transformation objects rather than re-evaluating them.
         <p>Retrieves the list of tensor labels, if they exist.</p>
 
 
-<table>
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RETURNS</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>A list of strings or None.</p>
               </div>
@@ -6966,18 +6933,19 @@ It preserves the original transformation objects rather than re-evaluating them.
         <p>Checks if any tensor labels are associated with the stream.</p>
 
 
-<table>
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RETURNS</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>True if labels exist, False otherwise.</p>
               </div>
@@ -7024,18 +6992,19 @@ It preserves the original transformation objects rather than re-evaluating them.
         <p>Checks if the data type is 'all', which is a wildcard type.</p>
 
 
-<table>
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RETURNS</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>True if the type is 'all', False otherwise.</p>
               </div>
@@ -7083,11 +7052,14 @@ It preserves the original transformation objects rather than re-evaluating them.
 Checks include data type, shape, and labels.</p>
 
 
-<table>
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">PARAMETER</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
         </tr>
       </thead>
       <tbody>
@@ -7095,44 +7067,39 @@ Checks include data type, shape, and labels.</p>
             <td>
                 <code>props_to_compare</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><a class="autorefs autorefs-internal" title="&lt;span class=&quot;doc doc-object-name doc-class-name&quot;&gt;DataProps&lt;/span&gt; (&lt;code&gt;unaiverse.dataprops.DataProps&lt;/code&gt;)" href="#unaiverse.dataprops.DataProps">DataProps</a></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The DataProps instance to check compatibility with.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><a class="autorefs autorefs-internal" title="&lt;span class=&quot;doc doc-object-name doc-class-name&quot;&gt;DataProps&lt;/span&gt; (&lt;code&gt;unaiverse.dataprops.DataProps&lt;/code&gt;)" href="#unaiverse.dataprops.DataProps">DataProps</a></code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
       </tbody>
     </table>
 
 
-<table>
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RETURNS</span></th>
-          <th><span>DESCRIPTION</span></th>
+<th>Name</th>          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
-            <td>
-                <code>bool</code>
+<td><code>bool</code></td>            <td>
+                  <code><span title="bool">bool</span></code>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>True if compatible, False otherwise.</p>
               </div>
-                <p>
-                  <span class="doc-returns-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="bool">bool</span></code>
-                  </span>
-                </p>
             </td>
           </tr>
       </tbody>
@@ -7228,18 +7195,19 @@ Checks include data type, shape, and labels.</p>
         <p>Checks if the data type is 'file'.</p>
 
 
-<table>
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RETURNS</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>True if the type is 'file', False otherwise.</p>
               </div>
@@ -7286,18 +7254,19 @@ Checks include data type, shape, and labels.</p>
         <p>Checks if the tensor is a 2D array and has labels, which is a common structure for general feature data.</p>
 
 
-<table>
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RETURNS</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>True if it is, False otherwise.</p>
               </div>
@@ -7344,18 +7313,19 @@ Checks include data type, shape, and labels.</p>
         <p>Checks if the data type is 'img'.</p>
 
 
-<table>
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RETURNS</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>True if the type is 'img', False otherwise.</p>
               </div>
@@ -7402,18 +7372,19 @@ Checks include data type, shape, and labels.</p>
         <p>Checks if the stream is set to be public.</p>
 
 
-<table>
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RETURNS</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>True if it's a public stream, False otherwise.</p>
               </div>
@@ -7460,18 +7431,19 @@ Checks include data type, shape, and labels.</p>
         <p>Checks if the stream is set to use Pub/Sub.</p>
 
 
-<table>
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RETURNS</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>True if it's a Pub/Sub stream, False otherwise.</p>
               </div>
@@ -7522,11 +7494,14 @@ Checks include data type, shape, and labels.</p>
         <p>A static method to check if a network hash belongs to a Pub/Sub stream.</p>
 
 
-<table>
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">PARAMETER</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
         </tr>
       </thead>
       <tbody>
@@ -7534,30 +7509,34 @@ Checks include data type, shape, and labels.</p>
             <td>
                 <code>net_hash</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The network hash string.</p>
               </div>
-              <p>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
       </tbody>
     </table>
 
 
-<table>
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RETURNS</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>True if the hash is for a Pub/Sub stream, False otherwise.</p>
               </div>
@@ -7612,18 +7591,19 @@ Checks include data type, shape, and labels.</p>
         <p>Checks if the data type is 'tensor'.</p>
 
 
-<table>
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RETURNS</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>True if the type is 'tensor', False otherwise.</p>
               </div>
@@ -7670,18 +7650,19 @@ Checks include data type, shape, and labels.</p>
         <p>Checks if the tensor's data type is a float type (e.g., <code>torch.float32</code>).</p>
 
 
-<table>
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RETURNS</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>True if the dtype is a float type, False otherwise.</p>
               </div>
@@ -7728,18 +7709,19 @@ Checks include data type, shape, and labels.</p>
         <p>Checks if the tensor's shape corresponds to a typical image format (4D, with 1 or 3 channels).</p>
 
 
-<table>
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RETURNS</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>True if the shape matches, False otherwise.</p>
               </div>
@@ -7788,18 +7770,19 @@ Checks include data type, shape, and labels.</p>
         <p>Checks if the tensor's data type is <code>torch.long</code>.</p>
 
 
-<table>
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RETURNS</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>True if the dtype is <code>torch.long</code>, False otherwise.</p>
               </div>
@@ -7846,18 +7829,19 @@ Checks include data type, shape, and labels.</p>
         <p>Checks if the tensor represents a single target ID, indicated by <code>torch.long</code> data type and a 1D shape.</p>
 
 
-<table>
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RETURNS</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>True if it matches, False otherwise.</p>
               </div>
@@ -7909,18 +7893,19 @@ Checks include data type, shape, and labels.</p>
 suitable for sequences.</p>
 
 
-<table>
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RETURNS</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>True if it matches, False otherwise.</p>
               </div>
@@ -7973,18 +7958,19 @@ suitable for sequences.</p>
         <p>Checks if the data type is 'text'.</p>
 
 
-<table>
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RETURNS</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>True if the type is 'text', False otherwise.</p>
               </div>
@@ -8031,18 +8017,19 @@ suitable for sequences.</p>
         <p>Retrieves the group name if it's set, otherwise defaults to the stream name.</p>
 
 
-<table>
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RETURNS</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>A string representing the name or group.</p>
               </div>
@@ -8095,11 +8082,14 @@ suitable for sequences.</p>
         <p>A static method to extract the name or group from a network hash.</p>
 
 
-<table>
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">PARAMETER</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
         </tr>
       </thead>
       <tbody>
@@ -8107,30 +8097,34 @@ suitable for sequences.</p>
             <td>
                 <code>net_hash</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The network hash string.</p>
               </div>
-              <p>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
       </tbody>
     </table>
 
 
-<table>
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RETURNS</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>A string representing the name or group.</p>
               </div>
@@ -8185,11 +8179,14 @@ suitable for sequences.</p>
         <p>Generates a unique network hash for the stream using a provided prefix, Pub/Sub status, and name/group.</p>
 
 
-<table>
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">PARAMETER</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
         </tr>
       </thead>
       <tbody>
@@ -8197,34 +8194,35 @@ suitable for sequences.</p>
             <td>
                 <code>prefix</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="str">str</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The prefix, typically the peer ID.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="str">str</span></code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
       </tbody>
     </table>
 
 
-<table>
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RETURNS</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>A string representing the network hash.</p>
               </div>
@@ -8282,11 +8280,14 @@ suitable for sequences.</p>
 for direct messages.</p>
 
 
-<table>
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">PARAMETER</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
         </tr>
       </thead>
       <tbody>
@@ -8294,34 +8295,35 @@ for direct messages.</p>
             <td>
                 <code>not_normalized_net_hash</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="str">str</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The network hash to normalize.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="str">str</span></code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
       </tbody>
     </table>
 
 
-<table>
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RETURNS</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>The normalized network hash string.</p>
               </div>
@@ -8396,11 +8398,14 @@ for direct messages.</p>
         <p>A static method to extract the peer ID from a network hash.</p>
 
 
-<table>
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">PARAMETER</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
         </tr>
       </thead>
       <tbody>
@@ -8408,30 +8413,34 @@ for direct messages.</p>
             <td>
                 <code>net_hash</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The network hash string.</p>
               </div>
-              <p>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
       </tbody>
     </table>
 
 
-<table>
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RETURNS</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>A string representing the peer ID.</p>
               </div>
@@ -8486,11 +8495,14 @@ for direct messages.</p>
         <p>Sets a new description for the data.</p>
 
 
-<table>
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">PARAMETER</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
         </tr>
       </thead>
       <tbody>
@@ -8498,16 +8510,16 @@ for direct messages.</p>
             <td>
                 <code>desc</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="str">str</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The new description as a string.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="str">str</span></code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
       </tbody>
@@ -8551,11 +8563,14 @@ for direct messages.</p>
         <p>Sets a new group name for the stream, with a check for invalid characters.</p>
 
 
-<table>
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">PARAMETER</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
         </tr>
       </thead>
       <tbody>
@@ -8563,16 +8578,16 @@ for direct messages.</p>
             <td>
                 <code>group</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="str">str</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The new group name as a string.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="str">str</span></code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
       </tbody>
@@ -8618,11 +8633,14 @@ for direct messages.</p>
         <p>Sets a new name for the stream, with a check for invalid characters.</p>
 
 
-<table>
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">PARAMETER</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
         </tr>
       </thead>
       <tbody>
@@ -8630,16 +8648,16 @@ for direct messages.</p>
             <td>
                 <code>name</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="str">str</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The new name as a string.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="str">str</span></code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
       </tbody>
@@ -8685,11 +8703,14 @@ for direct messages.</p>
         <p>Sets whether the stream is public or not.</p>
 
 
-<table>
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">PARAMETER</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
         </tr>
       </thead>
       <tbody>
@@ -8697,16 +8718,16 @@ for direct messages.</p>
             <td>
                 <code>public</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="bool">bool</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>A boolean value.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="bool">bool</span></code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
       </tbody>
@@ -8750,11 +8771,14 @@ for direct messages.</p>
         <p>Sets whether the stream uses Pub/Sub or direct messaging.</p>
 
 
-<table>
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">PARAMETER</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
         </tr>
       </thead>
       <tbody>
@@ -8762,16 +8786,16 @@ for direct messages.</p>
             <td>
                 <code>pubsub</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="bool">bool</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>A boolean value.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="bool">bool</span></code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
       </tbody>
@@ -8817,11 +8841,14 @@ for direct messages.</p>
         <p>Sets the labels for the data.</p>
 
 
-<table>
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">PARAMETER</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
         </tr>
       </thead>
       <tbody>
@@ -8829,54 +8856,51 @@ for direct messages.</p>
             <td>
                 <code>labels</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="list">list</span>[<span title="str">str</span>] or None</code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>List of labels to associate with the data.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="list">list</span>[<span title="str">str</span>] or None</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>labeling_rule</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="str">str</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The labeling rule for the labels.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="str">str</span></code>
-                  </span>
-                  <span class="doc-param-default">
-                    <b>DEFAULT:</b>
-                      <code>&#39;max&#39;</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                  <code>&#39;max&#39;</code>
             </td>
           </tr>
       </tbody>
     </table>
 
 
-<table>
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RETURNS</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>None</p>
               </div>
@@ -8932,11 +8956,14 @@ for direct messages.</p>
 model ID.</p>
 
 
-<table>
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">PARAMETER</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
         </tr>
       </thead>
       <tbody>
@@ -8944,12 +8971,15 @@ model ID.</p>
             <td>
                 <code>model_id</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The ID of the tokenizer model.</p>
               </div>
-              <p>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
       </tbody>
@@ -9006,18 +9036,19 @@ model ID.</p>
 It converts complex types like <code>torch.dtype</code> and <code>TensorLabels</code> into simple, serializable formats.</p>
 
 
-<table>
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RETURNS</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>A dictionary representation of the object's properties.</p>
               </div>
@@ -9088,11 +9119,14 @@ It converts complex types like <code>torch.dtype</code> and <code>TensorLabels</
         <p>Converts the tensor data into a text-based representation exploiting the given labels and the labeling rule.</p>
 
 
-<table>
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">PARAMETER</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
         </tr>
       </thead>
       <tbody>
@@ -9100,34 +9134,35 @@ It converts complex types like <code>torch.dtype</code> and <code>TensorLabels</
             <td>
                 <code>data</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="torch.Tensor">Tensor</span> or <span title="str">str</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The data tensor to convert into text (if a string, then pass-through only).</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="torch.Tensor">Tensor</span> or <span title="str">str</span></code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
       </tbody>
     </table>
 
 
-<table>
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RETURNS</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>str or None: The corresponding text representation of the data.</p>
               </div>
@@ -9137,21 +9172,20 @@ It converts complex types like <code>torch.dtype</code> and <code>TensorLabels</
     </table>
 
 
-<table>
+<p><span class="doc-section-title">Raises:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RAISES</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
-              <span class="doc-raises-annotation">
                   <code><span title="ValueError">ValueError</span></code>
-              </span>
             </td>
-            <td class="doc-raises-details">
+            <td>
               <div class="doc-md-description">
                 <p>If the data type is not supported for conversion.</p>
               </div>
@@ -9529,11 +9563,13 @@ It converts complex types like <code>torch.dtype</code> and <code>TensorLabels</
         <p>A class to manage labels associated with data and perform operations on them.</p>
 
 
-<table>
+<p><span class="doc-section-title">Attributes:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">ATTRIBUTE</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
@@ -9545,16 +9581,13 @@ It converts complex types like <code>torch.dtype</code> and <code>TensorLabels</
       &lt;small class=&quot;doc doc-label doc-label-class-attribute&quot;&gt;&lt;code&gt;class-attribute&lt;/code&gt;&lt;/small&gt;
       &lt;small class=&quot;doc doc-label doc-label-instance-attribute&quot;&gt;&lt;code&gt;instance-attribute&lt;/code&gt;&lt;/small&gt;
   &lt;/span&gt; (&lt;code&gt;unaiverse.dataprops.TensorLabels.VALID_LABELING_RULES&lt;/code&gt;)" href="#unaiverse.dataprops.TensorLabels.VALID_LABELING_RULES">VALID_LABELING_RULES</a></code></td>
-            <td class="doc-attribute-details">
+            <td>
+                  <code><span title="tuple">tuple</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>Tuple of valid labeling rules ('max', 'geq').</p>
               </div>
-              <p>
-                  <span class="doc-attribute-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="tuple">tuple</span></code>
-                  </span>
-              </p>
             </td>
           </tr>
       </tbody>
@@ -9563,11 +9596,14 @@ It converts complex types like <code>torch.dtype</code> and <code>TensorLabels</
         <p>Initializes the TensorLabels instance.</p>
 
 
-<table>
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">PARAMETER</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
         </tr>
       </thead>
       <tbody>
@@ -9575,70 +9611,67 @@ It converts complex types like <code>torch.dtype</code> and <code>TensorLabels</
             <td>
                 <code>data_props</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><a class="autorefs autorefs-internal" title="&lt;span class=&quot;doc doc-object-name doc-class-name&quot;&gt;DataProps&lt;/span&gt; (&lt;code&gt;unaiverse.dataprops.DataProps&lt;/code&gt;)" href="#unaiverse.dataprops.DataProps">DataProps</a></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The DataProps instance that owns these labels.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><a class="autorefs autorefs-internal" title="&lt;span class=&quot;doc doc-object-name doc-class-name&quot;&gt;DataProps&lt;/span&gt; (&lt;code&gt;unaiverse.dataprops.DataProps&lt;/code&gt;)" href="#unaiverse.dataprops.DataProps">DataProps</a></code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>labels</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="list">list</span>[<span title="str">str</span>] or None</code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>List of labels.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="list">list</span>[<span title="str">str</span>] or None</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>labeling_rule</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="str">str</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The rule for labeling (either 'max' or 'geqX', where X is a number).</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="str">str</span></code>
-                  </span>
-                  <span class="doc-param-default">
-                    <b>DEFAULT:</b>
-                      <code>&#39;max&#39;</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                  <code>&#39;max&#39;</code>
             </td>
           </tr>
       </tbody>
     </table>
 
 
-<table>
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RETURNS</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>None</p>
               </div>
@@ -9648,21 +9681,20 @@ It converts complex types like <code>torch.dtype</code> and <code>TensorLabels</
     </table>
 
 
-<table>
+<p><span class="doc-section-title">Raises:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RAISES</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
-              <span class="doc-raises-annotation">
                   <code><span title="AssertionError">AssertionError</span></code>
-              </span>
             </td>
-            <td class="doc-raises-details">
+            <td>
               <div class="doc-md-description">
                 <p>If the labels or labeling_rule are invalid.</p>
               </div>
@@ -10002,11 +10034,14 @@ that was performed and allows the object to revert to its original, non-interlea
         <p>Interleaves the current labels with a super-set of labels, determining how to index them.</p>
 
 
-<table>
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">PARAMETER</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
         </tr>
       </thead>
       <tbody>
@@ -10014,34 +10049,35 @@ that was performed and allows the object to revert to its original, non-interlea
             <td>
                 <code>superset_labels</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="list">list</span>[<span title="str">str</span>]</code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The super-set of labels to interleave with.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="list">list</span>[<span title="str">str</span>]</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
       </tbody>
     </table>
 
 
-<table>
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RETURNS</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>None</p>
               </div>
@@ -10051,21 +10087,20 @@ that was performed and allows the object to revert to its original, non-interlea
     </table>
 
 
-<table>
+<p><span class="doc-section-title">Raises:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RAISES</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
-              <span class="doc-raises-annotation">
                   <code><span title="AssertionError">AssertionError</span></code>
-              </span>
             </td>
-            <td class="doc-raises-details">
+            <td>
               <div class="doc-md-description">
                 <p>If the super-set of labels is not compatible.</p>
               </div>
@@ -10197,18 +10232,19 @@ that was performed and allows the object to revert to its original, non-interlea
 labeling rule.</p>
 
 
-<table>
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RETURNS</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>A dictionary containing the labels and the original labeling rule.</p>
               </div>

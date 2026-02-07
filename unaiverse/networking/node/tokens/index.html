@@ -2275,11 +2275,14 @@
 private key. The public key can be provided as either a string or a bytes object.</p>
 
 
-<table>
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">PARAMETER</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
         </tr>
       </thead>
       <tbody>
@@ -2287,16 +2290,16 @@ private key. The public key can be provided as either a string or a bytes object
             <td>
                 <code>public_key</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="str">str</span> | <span title="bytes">bytes</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The public key used for decoding and verification.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="str">str</span> | <span title="bytes">bytes</span></code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
       </tbody>
@@ -2395,11 +2398,14 @@ the token's payload matches specific network identifiers, such as <code>node_id<
 It can also verify if a specific peer is present in the token's list of <code>p2p_peers</code>.</p>
 
 
-<table>
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">PARAMETER</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
         </tr>
       </thead>
       <tbody>
@@ -2407,134 +2413,115 @@ It can also verify if a specific peer is present in the token's list of <code>p2
             <td>
                 <code>token</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="str">str</span> | <span title="bytes">bytes</span></code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>The JWT to verify, as a string or bytes object.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="str">str</span> | <span title="bytes">bytes</span></code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>node_id</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="str">str</span> | None</code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>Optional <code>node_id</code> to check against the token's payload.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="str">str</span> | None</code>
-                  </span>
-                  <span class="doc-param-default">
-                    <b>DEFAULT:</b>
-                      <code>None</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                  <code>None</code>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>ip</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="str">str</span> | None</code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>Optional IP address to check.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="str">str</span> | None</code>
-                  </span>
-                  <span class="doc-param-default">
-                    <b>DEFAULT:</b>
-                      <code>None</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                  <code>None</code>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>hostname</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="str">str</span> | None</code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>Optional hostname to check.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="str">str</span> | None</code>
-                  </span>
-                  <span class="doc-param-default">
-                    <b>DEFAULT:</b>
-                      <code>None</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                  <code>None</code>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>port</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="int">int</span> | None</code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>Optional port number to check.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="int">int</span> | None</code>
-                  </span>
-                  <span class="doc-param-default">
-                    <b>DEFAULT:</b>
-                      <code>None</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                  <code>None</code>
             </td>
           </tr>
           <tr class="doc-section-item">
             <td>
                 <code>p2p_peer</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code><span title="str">str</span> | None</code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>Optional peer identifier to check within the <code>p2p_peers</code> list.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code><span title="str">str</span> | None</code>
-                  </span>
-                  <span class="doc-param-default">
-                    <b>DEFAULT:</b>
-                      <code>None</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                  <code>None</code>
             </td>
           </tr>
       </tbody>
     </table>
 
 
-<table>
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">RETURNS</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Type</th>
+          <th>Description</th>
         </tr>
       </thead>
       <tbody>
           <tr class="doc-section-item">
             <td>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>A tuple containing the <code>node_id</code> and <code>cv_hash</code> from the token's payload if all checks pass. Otherwise,</p>
               </div>
@@ -2543,7 +2530,7 @@ It can also verify if a specific peer is present in the token's list of <code>p2
           <tr class="doc-section-item">
             <td>
             </td>
-            <td class="doc-returns-details">
+            <td>
               <div class="doc-md-description">
                 <p>it returns a tuple of <code>(None, None)</code>.</p>
               </div>

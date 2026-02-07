@@ -2348,11 +2348,14 @@
 
 
 
-<table>
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
       <thead>
         <tr>
-          <th><span class="doc-section-title">PARAMETER</span></th>
-          <th><span>DESCRIPTION</span></th>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
         </tr>
       </thead>
       <tbody>
@@ -2360,18 +2363,18 @@
             <td>
                 <code>models</code>
             </td>
-            <td class="doc-param-details">
+            <td>
+                  <code>list of dict</code>
+            </td>
+            <td>
               <div class="doc-md-description">
                 <p>List of parameter groups, each containing:
 - 'params': the Model or list of parameters
 - 'gamma', 'beta', 'theta', etc.: Hyperparameters for the group.</p>
               </div>
-              <p>
-                  <span class="doc-param-annotation">
-                    <b>TYPE:</b>
-                      <code>list of dict</code>
-                  </span>
-              </p>
+            </td>
+            <td>
+                <em>required</em>
             </td>
           </tr>
       </tbody>

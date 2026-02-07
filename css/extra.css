@@ -1,249 +1,764 @@
-/* ============================================================
-   UNaIVERSE Docs — "Elegant" Theme
-   Minimalist, typographic, professional styling
-   ============================================================ */
+/* ==========================================================================
+   UNAIVERSE DOCS — PROFESSIONAL DOCUMENTATION THEME
+   Inspired by Stripe, Tailwind CSS, FastAPI & Vercel docs.
+   Organized: Variables → Layout → Navigation → Content → API Docs → Tables
+              → Code → Admonitions → Search → Footer → Responsive
+   ========================================================================== */
 
-/* ---------- Root Variables (The Palette) ---------- */
+
+/* ==========================================================================
+   §1  CUSTOM PROPERTIES (Design Tokens)
+   Central place for every tunable value. Dark/light handled by Material.
+   ========================================================================== */
+
 :root {
-  /* Core Colors - Desaturated & Professional */
-  --doc-accent: #334155;        /* Slate 700 - Main Heading Color */
-  --doc-accent-light: #475569;  /* Slate 600 */
-  
-  /* Signature Blocks */
-  --doc-signature-bg: #f8fafc;  /* Very subtle cool gray */
-  --doc-signature-border: #e2e8f0; /* Soft border */
-  
-  /* Syntax Highlighting overrides for signatures */
-  --doc-param-name: #0f172a;    /* Slate 900 (High contrast text) */
-  --doc-param-type: #64748b;    /* Slate 500 (Subtle for types) */
-  --doc-param-default: #059669; /* Emerald 600 (Natural green for values) */
-  
-  /* Badges - Ghost Style (Outline + Soft BG) */
-  --doc-badge-text: #475569;
-  --doc-badge-bg: #f1f5f9;
-  --doc-badge-border: #cbd5e1;
+    /* Spacing scale */
+    --doc-space-xs:   0.25rem;
+    --doc-space-sm:   0.5rem;
+    --doc-space-md:   1rem;
+    --doc-space-lg:   1.5rem;
+    --doc-space-xl:   2rem;
+    --doc-space-2xl:  3rem;
+    --doc-space-3xl:  4rem;
 
-  /* Alerts */
-  --doc-deprecated-bg: #fff7ed;
-  --doc-deprecated-text: #9a3412;
+    /* Border radius */
+    --doc-radius-sm:  4px;
+    --doc-radius-md:  8px;
+    --doc-radius-lg:  12px;
+
+    /* Shadows (light mode) */
+    --doc-shadow-sm:  0 1px 2px rgba(0, 0, 0, 0.04);
+    --doc-shadow-md:  0 2px 8px rgba(0, 0, 0, 0.06);
+    --doc-shadow-lg:  0 4px 16px rgba(0, 0, 0, 0.08);
+
+    /* Transitions */
+    --doc-transition: 180ms ease;
+
+    /* Accent tint for badges & highlights */
+    --doc-accent-subtle: rgba(94, 53, 177, 0.08);
+    --doc-accent-text:   #5e35b1;
+
+    /* Borders */
+    --doc-border: 1px solid var(--md-default-fg-color--lightest);
 }
 
-/* Dark Mode Overrides (Deep Charcoal, not pitch black) */
+/* Dark-mode overrides */
 [data-md-color-scheme="slate"] {
-  --doc-accent: #e2e8f0;
-  --doc-accent-light: #94a3b8;
-  --doc-signature-bg: #1e293b;  /* Slate 800 */
-  --doc-signature-border: #334155;
-  
-  --doc-param-name: #f1f5f9;
-  --doc-param-type: #94a3b8;
-  --doc-param-default: #34d399;
-
-  --doc-badge-text: #cbd5e1;
-  --doc-badge-bg: #334155;
-  --doc-badge-border: #475569;
+    --doc-shadow-sm:  0 1px 3px rgba(0, 0, 0, 0.25);
+    --doc-shadow-md:  0 2px 10px rgba(0, 0, 0, 0.30);
+    --doc-shadow-lg:  0 4px 20px rgba(0, 0, 0, 0.35);
+    --doc-accent-subtle: rgba(0, 188, 212, 0.10);
+    --doc-accent-text:   #4dd0e1;
 }
 
-/* ---------- Module Docstring cleanup ---------- */
-.doc-module > .doc-contents > .doc-md-description {
-  display: none;
+
+/* ==========================================================================
+   §2  GLOBAL LAYOUT & TYPOGRAPHY
+   Wider content area, refined spacing, smoother reading.
+   ========================================================================== */
+
+/* Slightly wider content for better readability on large screens */
+.md-grid {
+    max-width: 1440px;
 }
 
-/* ---------- Headings (Typographic Hierarchy) ---------- */
-.doc h2, .doc h3, .doc h4 {
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-  color: var(--doc-accent);
-  font-weight: 600 !important;
-  border-bottom: 1px solid var(--doc-signature-border); /* Thinner, lighter line */
-  padding-bottom: 0.5em;
-  margin-top: 2.5em; /* More breathing room */
-  letter-spacing: -0.02em; /* Tighter, modern tracking */
+/* Main content area */
+.md-content {
+    padding-bottom: var(--doc-space-3xl);
 }
 
-/* ---------- Symbol Type Badges (Refined) ---------- */
-/* Instead of rainbow colors, we use a uniform "Tag" style */
-.doc-label {
-  font-size: 0.65em !important;
-  font-weight: 600 !important;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  padding: 0.3em 0.8em !important;
-  border-radius: 20px !important; /* Fully rounded pill shape */
-  vertical-align: middle;
-  margin-right: 0.8em;
-  
-  /* Elegant "Ghost" Styling */
-  background: var(--doc-badge-bg) !important;
-  color: var(--doc-badge-text) !important;
-  border: 1px solid var(--doc-badge-border) !important;
-  box-shadow: none !important;
+/* Refined line-height for body text */
+.md-typeset {
+    font-size: 0.92rem;
+    line-height: 1.7;
 }
 
-/* Optional: Subtle tint distinctions if you really need them, otherwise keep uniform */
-/* .doc-label-class { color: #d97706 !important; border-color: #fcd34d !important; } */
+/* Links: subtle underline on hover only */
+.md-typeset a:not(.md-button):not(.md-nav__link):not(.md-source):not(.headerlink) {
+    text-decoration: none;
+    border-bottom: 1px solid transparent;
+    transition: border-color var(--doc-transition), color var(--doc-transition);
+}
 
-/* ---------- Signatures (Clean & Airy) ---------- */
+.md-typeset a:not(.md-button):not(.md-nav__link):not(.md-source):not(.headerlink):hover {
+    border-bottom-color: currentColor;
+}
+
+/* Headings: tighter tracking, stronger weight */
+.md-typeset h1 {
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    margin-bottom: var(--doc-space-lg);
+}
+
+.md-typeset h2 {
+    font-weight: 650;
+    letter-spacing: -0.015em;
+    margin-top: var(--doc-space-2xl);
+    padding-bottom: var(--doc-space-sm);
+    border-bottom: var(--doc-border);
+}
+
+.md-typeset h3 {
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    margin-top: var(--doc-space-xl);
+}
+
+.md-typeset h4 {
+    font-weight: 600;
+    font-size: 0.95rem;
+    margin-top: var(--doc-space-lg);
+}
+
+/* Permalinks: subdued until hovered */
+.md-typeset .headerlink {
+    opacity: 0;
+    transition: opacity var(--doc-transition);
+}
+
+.md-typeset h1:hover .headerlink,
+.md-typeset h2:hover .headerlink,
+.md-typeset h3:hover .headerlink,
+.md-typeset h4:hover .headerlink {
+    opacity: 0.4;
+}
+
+
+/* ==========================================================================
+   §3  NAVIGATION & SIDEBAR
+   Cleaner left nav, softer hover states, category badges.
+   ========================================================================== */
+
+/* Sidebar link refinements */
+.md-nav__link {
+    font-size: 0.82rem;
+    border-radius: var(--doc-radius-sm);
+    transition: background var(--doc-transition), color var(--doc-transition);
+}
+
+.md-nav__link:hover {
+    background-color: var(--doc-accent-subtle);
+}
+
+/* Active page indicator */
+.md-nav__link--active {
+    font-weight: 600;
+}
+
+/* Tab bar refinement */
+.md-tabs {
+    border-bottom: var(--doc-border);
+}
+
+.md-tabs__link {
+    font-size: 0.82rem;
+    font-weight: 500;
+    letter-spacing: 0.01em;
+    opacity: 0.7;
+    transition: opacity var(--doc-transition);
+}
+
+.md-tabs__link--active,
+.md-tabs__link:hover {
+    opacity: 1;
+}
+
+
+/* ==========================================================================
+   §4  HEADER
+   Subtle backdrop blur for a modern feel.
+   ========================================================================== */
+
+.md-header {
+    backdrop-filter: blur(12px) saturate(150%);
+    -webkit-backdrop-filter: blur(12px) saturate(150%);
+}
+
+[data-md-color-scheme="slate"] .md-header {
+    background-color: rgba(18, 18, 18, 0.85);
+}
+
+[data-md-color-scheme="default"] .md-header {
+    background-color: rgba(255, 255, 255, 0.88);
+}
+
+
+/* ==========================================================================
+   §5  API DOCUMENTATION — DOC OBJECTS
+   Card-like separation, clean hierarchy, readable signatures.
+   ========================================================================== */
+
+/* --- 5a. Module-level object (top-level) -------------------------------- */
+.doc.doc-object.doc-module {
+    margin-top: 0;
+}
+
+/* --- 5b. Object cards (classes, functions, attributes) ------------------- */
+.doc-object {
+    margin-top: var(--doc-space-2xl);
+    margin-bottom: var(--doc-space-2xl);
+    padding-bottom: var(--doc-space-xl);
+    border-bottom: var(--doc-border);
+    position: relative;
+}
+
+.doc-object:last-child {
+    border-bottom: none;
+    padding-bottom: 0;
+}
+
+/* Nested doc objects (methods inside a class) get less margin */
+.doc-object .doc-object {
+    margin-top: var(--doc-space-lg);
+    margin-bottom: var(--doc-space-lg);
+    padding-bottom: var(--doc-space-md);
+    padding-left: var(--doc-space-md);
+    border-bottom: none;
+    border-left: 2px solid var(--md-default-fg-color--lightest);
+}
+
+/* --- 5c. Headings -------------------------------------------------------- */
+.doc-heading {
+    margin-bottom: var(--doc-space-sm);
+}
+
+.doc-object > .doc-heading {
+    margin-top: 0;
+}
+
+/* --- 5d. Signature box ("code pill") ------------------------------------- */
 .doc-signature {
-  background: var(--doc-signature-bg) !important;
-  border: 1px solid var(--doc-signature-border) !important;
-  border-left: none !important; /* Removing the aggressive left bar */
-  border-radius: 8px !important; /* Softer corners */
-  padding: 1.2em 1.5em !important; /* More internal whitespace */
-  margin: 1em 0 2em 0 !important;
-  font-size: 0.9em !important;
-  line-height: 1.8 !important;
-  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace !important;
-  box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05); /* Very subtle lift */
+    background-color: var(--md-code-bg-color);
+    border: var(--doc-border);
+    border-radius: var(--doc-radius-md);
+    padding: var(--doc-space-md) var(--doc-space-lg);
+    margin-bottom: var(--doc-space-lg);
+    font-family: var(--md-code-font-family);
+    font-size: 0.85em;
+    line-height: 1.65;
+    overflow-x: auto;
+    box-shadow: var(--doc-shadow-sm);
+    transition: box-shadow var(--doc-transition);
 }
 
-/* Function Names */
+.doc-signature:hover {
+    box-shadow: var(--doc-shadow-md);
+}
+
+/* Function/class name inside signature */
 .doc-signature .n {
-  font-weight: 700 !important;
-  color: var(--doc-accent) !important;
+    font-weight: 700;
+    color: var(--doc-accent-text);
 }
 
-/* Parameters - Darker for readability */
-.doc-signature .nv,
-.doc-signature .nb {
-  color: var(--doc-param-name) !important;
-  font-weight: 500 !important;
+/* --- 5e. Doc contents (description, params, etc.) ----------------------- */
+.doc-contents {
+    padding-top: var(--doc-space-sm);
 }
 
-/* Types - Muted */
-.doc-signature .p + .n,
-.doc-signature .nd {
-  color: var(--doc-param-type) !important;
-  font-style: italic;
+.doc-contents.first {
+    padding-top: var(--doc-space-md);
 }
 
-/* Defaults */
-.doc-signature .mi,
-.doc-signature .mf,
-.doc-signature .s1,
-.doc-signature .s2,
-.doc-signature .kc {
-  color: var(--doc-param-default) !important;
+/* Description paragraphs */
+.doc-md-description p {
+    margin-bottom: var(--doc-space-md);
 }
 
-/* Keywords (async, etc) */
-.doc-signature .k {
-  color: var(--doc-accent-light) !important;
-  font-weight: 600;
+/* --- 5f. Class bases ------------------------------------------------------ */
+.doc-class-bases {
+    font-size: 0.82rem;
+    opacity: 0.65;
+    margin-bottom: var(--doc-space-md);
+    font-family: var(--md-code-font-family);
 }
 
-/* ---------- Docstring Sections (Args/Returns) ---------- */
-.doc .doc-section-title {
-  font-family: -apple-system, BlinkMacSystemFont, sans-serif;
-  font-weight: 600 !important;
-  font-size: 0.85em !important;
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
-  color: var(--doc-accent-light);
-  margin-top: 1.5em;
-  margin-bottom: 0.8em;
-  border-bottom: none; /* Removed underline for cleaner look */
+/* --- 5g. Labels & badges ------------------------------------------------- */
+.doc-labels {
+    margin-bottom: var(--doc-space-sm);
 }
 
-/* The List/Table Items */
-.doc .doc-section-item {
-  padding: 0.6em 0; /* Vertical spacing only */
-  margin: 0;
-  border-radius: 0;
-  background: transparent; /* Remove zebra striping/boxes */
-  border-left: none; /* Remove left border */
-  border-bottom: 1px solid var(--doc-signature-border); /* Subtle divider */
+.doc-label {
+    display: inline-block;
+    font-size: 0.68rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    padding: 2px 8px;
+    border-radius: 999px;
+    margin-right: var(--doc-space-xs);
+    vertical-align: middle;
 }
 
-.doc .doc-section-item:last-child {
-  border-bottom: none;
+.doc-label-async {
+    background: rgba(0, 188, 212, 0.12);
+    color: #00acc1;
 }
 
-/* Parameter Name */
-.doc .doc-section-item .doc-section-item-name {
-  font-weight: 600;
-  color: var(--doc-param-name);
-  font-size: 0.95em;
+.doc-label-instance-attribute {
+    background: rgba(255, 167, 38, 0.12);
+    color: #f57c00;
 }
 
-/* Parameter Type */
-.doc .doc-section-item .doc-section-item-annotation {
-  color: var(--doc-param-type);
-  font-weight: 400;
-  font-size: 0.9em;
-  margin-left: 0.5em;
+/* --- 5h. Section titles (PARAMETERS, RETURNS, etc.) ---------------------- */
+.doc-section-title {
+    font-size: 0.72rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--md-default-fg-color--light);
+    padding-bottom: var(--doc-space-xs);
+    margin-top: var(--doc-space-lg);
+    margin-bottom: var(--doc-space-sm);
+    border-bottom: 2px solid var(--md-primary-fg-color);
+    display: inline-block;
 }
 
-/* Description Text */
-.doc .doc-section-item .doc-section-item-description {
-  margin-top: 0.3em;
-  color: var(--md-typeset-color);
-  font-size: 0.95em;
-  line-height: 1.6;
-  opacity: 0.9;
+/* --- 5i. Section items --------------------------------------------------- */
+.doc-section-item {
+    padding: var(--doc-space-sm) 0;
 }
 
-/* ---------- Source Code Toggle (Minimalist) ---------- */
-details.quote {
-  border: none;
-  background: transparent;
-  margin: 1.5em 0;
-  padding: 0;
+/* --- 5j. TOC symbol badges ----------------------------------------------- */
+.doc-symbol {
+    font-size: 0.62rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    vertical-align: middle;
+    margin-right: var(--doc-space-sm);
+    padding: 1px 6px;
+    border-radius: var(--doc-radius-sm);
+    line-height: 1.6;
 }
 
-details.quote summary {
-  font-weight: 500;
-  font-size: 0.8em;
-  color: var(--doc-accent-light);
-  background: transparent;
-  padding: 0;
-  cursor: pointer;
-  text-decoration: underline;
-  text-decoration-color: var(--doc-signature-border);
-  text-underline-offset: 4px;
+.doc-symbol-module {
+    background: rgba(103, 58, 183, 0.10);
+    color: #7c4dff;
 }
 
-details.quote summary:hover {
-  background: transparent;
-  color: var(--doc-accent);
+.doc-symbol-class {
+    background: rgba(33, 150, 243, 0.10);
+    color: #2196f3;
 }
 
-/* ---------- Child/Method Indentation ---------- */
-.doc-children {
-  border-left: 1px solid var(--doc-signature-border); /* Thin guide line */
-  padding-left: 1.5em;
-  margin-left: 0.5em;
+.doc-symbol-method {
+    background: rgba(76, 175, 80, 0.10);
+    color: #43a047;
 }
 
-.doc-children .doc {
-  margin-bottom: 2.5em;
-  padding-bottom: 0;
-  border-bottom: none;
+.doc-symbol-attribute {
+    background: rgba(255, 152, 0, 0.10);
+    color: #fb8c00;
 }
 
-/* ---------- Tables (If used elsewhere) ---------- */
-.doc table th {
-  background: transparent;
-  color: var(--doc-accent);
-  border-bottom: 2px solid var(--doc-accent); /* Strong header line */
-  text-transform: none; /* Normal case looks more elegant */
-  font-weight: 600;
+/* --- 5k. Source code toggle ----------------------------------------------- */
+.mkdocstrings-source details {
+    margin-top: var(--doc-space-lg);
+    border: var(--doc-border);
+    border-radius: var(--doc-radius-md);
+    overflow: hidden;
 }
 
-.doc table td {
-  border-bottom: 1px solid var(--doc-signature-border);
+.mkdocstrings-source details summary {
+    font-size: 0.78rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    padding: var(--doc-space-sm) var(--doc-space-md);
+    cursor: pointer;
+    background: var(--md-code-bg-color);
+    transition: background var(--doc-transition);
 }
 
-/* ---------- Links ---------- */
-.autorefs-internal,
-.autorefs-external {
-  font-family: inherit; /* Blend with text, don't force monospace */
-  color: var(--doc-accent) !important;
-  border-bottom: 1px solid var(--doc-signature-border);
-  transition: all 0.2s ease;
+.mkdocstrings-source details summary:hover {
+    background: var(--doc-accent-subtle);
 }
 
-.autorefs-internal:hover,
-.autorefs-external:hover {
-  background-color: var(--doc-signature-bg);
-  border-bottom-color: var(--doc-accent);
+
+/* ==========================================================================
+   §6  TABLES
+   Clean, bordered, no shadow — Stripe-style parameter tables.
+   ========================================================================== */
+
+/* General tables */
+.md-typeset table:not([class]) {
+    display: table;
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+    border: var(--doc-border);
+    border-radius: var(--doc-radius-md);
+    box-shadow: var(--doc-shadow-sm);
+    overflow: hidden;
+    font-size: 0.85rem;
+}
+
+/* Table header */
+.md-typeset table:not([class]) th {
+    background-color: var(--md-default-fg-color--lightest);
+    color: var(--md-default-fg-color);
+    font-weight: 700;
+    text-transform: uppercase;
+    font-size: 0.7rem;
+    letter-spacing: 0.06em;
+    padding: var(--doc-space-md) var(--doc-space-lg);
+    border-bottom: var(--doc-border);
+    text-align: left;
+}
+
+/* Table cells */
+.md-typeset table:not([class]) td {
+    padding: var(--doc-space-md) var(--doc-space-lg);
+    border-bottom: 1px solid var(--md-default-fg-color--lightest);
+    vertical-align: top;
+}
+
+.md-typeset table:not([class]) tr:last-child td {
+    border-bottom: none;
+}
+
+/* Zebra striping — very subtle */
+.md-typeset table:not([class]) tbody tr:nth-child(even) {
+    background-color: var(--doc-accent-subtle);
+}
+
+/* Hover row highlight */
+.md-typeset table:not([class]) tbody tr {
+    transition: background var(--doc-transition);
+}
+
+.md-typeset table:not([class]) tbody tr:hover {
+    background-color: var(--doc-accent-subtle);
+}
+
+/* Doc-specific parameter tables */
+.doc-contents table {
+    width: 100%;
+    display: table;
+    border-collapse: separate;
+    border-spacing: 0;
+    margin-top: var(--doc-space-lg);
+    border: var(--doc-border);
+    border-radius: var(--doc-radius-md);
+    box-shadow: var(--doc-shadow-sm);
+    overflow: hidden;
+}
+
+.doc-contents table th {
+    background-color: var(--md-default-fg-color--lightest);
+    color: var(--md-default-fg-color);
+    font-weight: 700;
+    text-transform: uppercase;
+    font-size: 0.7rem;
+    letter-spacing: 0.06em;
+    padding: var(--doc-space-md) var(--doc-space-lg);
+    border-bottom: var(--doc-border);
+}
+
+.doc-contents table td {
+    padding: var(--doc-space-md) var(--doc-space-lg);
+    border-bottom: 1px solid var(--md-default-fg-color--lightest);
+    font-size: 0.85rem;
+    vertical-align: top;
+}
+
+.doc-contents table tr:last-child td {
+    border-bottom: none;
+}
+
+
+/* ==========================================================================
+   §7  CODE BLOCKS
+   Elevated cards, refined copy button, softer background.
+   ========================================================================== */
+
+/* Code block container */
+.md-typeset pre {
+    border-radius: var(--doc-radius-md);
+    box-shadow: var(--doc-shadow-sm);
+    border: var(--doc-border);
+    overflow: hidden;
+}
+
+/* Inline code */
+.md-typeset code {
+    font-size: 0.84em;
+    padding: 0.15em 0.4em;
+    border-radius: var(--doc-radius-sm);
+    background-color: var(--md-code-bg-color);
+    border: 1px solid var(--md-default-fg-color--lightest);
+    word-break: break-word;
+}
+
+/* Remove double border: inline code inside pre */
+.md-typeset pre code {
+    border: none;
+    padding: 0;
+    background: transparent;
+}
+
+/* Copy button refinement */
+.md-clipboard {
+    opacity: 0;
+    transition: opacity var(--doc-transition);
+}
+
+.md-typeset pre:hover .md-clipboard {
+    opacity: 0.6;
+}
+
+.md-clipboard:hover {
+    opacity: 1 !important;
+}
+
+/* Code annotations */
+.md-annotation__index {
+    font-size: 0.7rem;
+    font-weight: 700;
+    box-shadow: var(--doc-shadow-sm);
+}
+
+
+/* ==========================================================================
+   §8  ADMONITIONS
+   Rounded, subtle, with refined borders.
+   ========================================================================== */
+
+.md-typeset .admonition,
+.md-typeset details {
+    border-radius: var(--doc-radius-md);
+    box-shadow: var(--doc-shadow-sm);
+    border: none;
+    border-left: 4px solid;
+    overflow: hidden;
+    margin-top: var(--doc-space-lg);
+    margin-bottom: var(--doc-space-lg);
+}
+
+.md-typeset .admonition-title,
+.md-typeset summary {
+    font-weight: 600;
+    font-size: 0.85rem;
+    letter-spacing: 0.01em;
+}
+
+
+/* ==========================================================================
+   §9  SEARCH
+   Elevated results panel, cleaner hit styling.
+   ========================================================================== */
+
+.md-search__inner {
+    border-radius: var(--doc-radius-lg);
+    overflow: hidden;
+}
+
+.md-search-result__meta {
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    font-weight: 600;
+    padding: var(--doc-space-sm) var(--doc-space-md);
+}
+
+.md-search-result__item {
+    border-bottom: var(--doc-border);
+    padding: var(--doc-space-sm) 0;
+}
+
+.md-search-result mark {
+    background: rgba(255, 235, 59, 0.35);
+    border-radius: 2px;
+    padding: 0 2px;
+}
+
+
+/* ==========================================================================
+   §10  FOOTER
+   Subtle, thin, non-intrusive.
+   ========================================================================== */
+
+.md-footer {
+    border-top: var(--doc-border);
+}
+
+.md-footer-meta {
+    font-size: 0.75rem;
+    opacity: 0.7;
+}
+
+/* Previous / Next navigation */
+.md-footer__link {
+    transition: opacity var(--doc-transition);
+    opacity: 0.8;
+}
+
+.md-footer__link:hover {
+    opacity: 1;
+}
+
+
+/* ==========================================================================
+   §11  CONTENT TABS
+   Clean underlined style inspired by Vercel / Stripe.
+   ========================================================================== */
+
+.md-typeset .tabbed-labels {
+    border-bottom: var(--doc-border);
+}
+
+.md-typeset .tabbed-labels > label {
+    font-size: 0.82rem;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    opacity: 0.6;
+    padding: var(--doc-space-sm) var(--doc-space-md);
+    transition: opacity var(--doc-transition), border-color var(--doc-transition);
+}
+
+.md-typeset .tabbed-labels > label:hover {
+    opacity: 0.85;
+}
+
+.md-typeset .tabbed-labels > label.tabbed-labels--active,
+.md-typeset .tabbed-labels > input:checked + label {
+    opacity: 1;
+}
+
+
+/* ==========================================================================
+   §12  TASK LISTS & DEFINITION LISTS
+   ========================================================================== */
+
+/* Checkbox task list refinement */
+.md-typeset .task-list-indicator::before {
+    border-radius: var(--doc-radius-sm);
+}
+
+/* Definition list */
+.md-typeset dd {
+    margin-left: var(--doc-space-lg);
+    margin-bottom: var(--doc-space-md);
+}
+
+
+/* ==========================================================================
+   §13  HOME PAGE — HERO REFINEMENTS
+   Polished look for the landing page.
+   ========================================================================== */
+
+/* Tip admonition on home page as feature card */
+.md-typeset .admonition.tip {
+    border-left-color: var(--doc-accent-text);
+}
+
+[data-md-color-scheme="slate"] .md-typeset .admonition.tip {
+    border-left-color: var(--doc-accent-text);
+}
+
+
+/* ==========================================================================
+   §14  SCROLLBAR
+   Thin, custom scrollbar for webkit browsers.
+   ========================================================================== */
+
+::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+}
+
+::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+    background: var(--md-default-fg-color--lighter);
+    border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: var(--md-default-fg-color--light);
+}
+
+
+/* ==========================================================================
+   §15  PRINT STYLES
+   Clean output when printing.
+   ========================================================================== */
+
+@media print {
+    .md-header,
+    .md-tabs,
+    .md-sidebar,
+    .md-footer,
+    .md-clipboard,
+    .headerlink {
+        display: none !important;
+    }
+
+    .md-content {
+        max-width: 100%;
+        margin: 0;
+        padding: 0;
+    }
+
+    .doc-signature {
+        box-shadow: none;
+        border: 1px solid #ccc;
+    }
+}
+
+
+/* ==========================================================================
+   §16  RESPONSIVE REFINEMENTS
+   Polish for smaller screens.
+   ========================================================================== */
+
+@media screen and (max-width: 76.25em) {
+    .md-typeset {
+        font-size: 0.88rem;
+    }
+
+    .doc-object .doc-object {
+        padding-left: var(--doc-space-sm);
+    }
+}
+
+@media screen and (max-width: 44.9375em) {
+    .md-typeset h1 {
+        font-size: 1.4rem;
+    }
+
+    .doc-signature {
+        font-size: 0.78em;
+        padding: var(--doc-space-sm) var(--doc-space-md);
+    }
+
+    .md-typeset table:not([class]) th,
+    .md-typeset table:not([class]) td,
+    .doc-contents table th,
+    .doc-contents table td {
+        padding: var(--doc-space-sm) var(--doc-space-md);
+    }
+}
+
+
+/* ==========================================================================
+   §17  SMOOTH TRANSITIONS & MICRO-INTERACTIONS
+   ========================================================================== */
+
+/* Smooth color scheme transition */
+body,
+.md-header,
+.md-sidebar,
+.md-footer,
+.md-tabs {
+    transition: background-color 250ms ease, color 250ms ease;
+}
+
+/* Anchor scroll offset (accounts for sticky header + tabs) */
+:target {
+    scroll-margin-top: 5rem;
 }
