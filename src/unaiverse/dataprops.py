@@ -16,10 +16,27 @@ import os
 import torch
 import mimetypes
 from PIL import Image
-from typing import Callable, Any
+from typing import Callable, Any, TypedDict
 from dataclasses import dataclass
 from transformers import AutoTokenizer, PreTrainedTokenizerBase
 
+
+# --- Enum and Data Classes ---
+
+class TensorLabelsData(TypedDict):
+    labels: list[str] # List of labels for tensor components
+    labeling_rule: str # Rule used for labeling ('max', 'geqX', etc.)
+class DatapropsData(TypedDict):
+    name: str # Name of the data property
+    group: str # Group to which the data property belongs
+    data_type: str # Type of data ('tensor', 'img', 'text', 'file', 'all')
+    data_desc: str # Description of the data
+    tensor_shape: tuple[int | None, ...] | None # Shape of the tensor data
+    tensor_dtype: str | None # Data type of the tensor data as a string
+    tensor_labels: TensorLabelsData | None # Labels for the tensor data
+    delta: float # Time interval between data samples
+    pubsub: bool # Whether the data uses Pub/Sub messaging
+    public: bool # Whether the data is public or private
 
 @dataclass
 class FileContainer:

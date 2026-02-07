@@ -12,6 +12,7 @@
                  Code Repositories:  https://github.com/collectionlessai/
                  Main Developers:    Stefano Melacci (Project Leader), Christian Di Maio, Tommaso Guidi
 """
+import re
 import json
 import psutil
 import hashlib
@@ -20,439 +21,430 @@ import datetime
 import requests
 import ipaddress
 from datetime import timezone
+from enum import Enum
+from typing import TypedDict
+from functools import lru_cache
+from math import radians, cos, sin, sqrt, atan2
+from ....unaiverse.dataprops import DatapropsData
+from .connpool import ExtendedPeerInfosData
+from ....unaiverse.world import WorldBadgeData
 
+from pydantic import BaseModel, Field, model_validator, EmailStr, UUID4, IPvAnyAddress
 
-class NodeProfile:
+# ---- STATIC INFOS ---
+IP_SERVICES: list[str] = [
+    "https://api.ipify.org",
+    "https://icanhazip.com",
+    "https://ident.me",
+    "https://checkip.amazonaws.com",
+]
+CREATED_UTC_PATTERN = r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$'
+EMAIL_PATTERN = r'^[\w\.-]+@[\w\.-]+\.\w+$'
+# ---
+
+# ---- ENUMS AND DATA CLASSES ----
+class NodeType(Enum):
+    """Defines constants for different node types in the network."""
+    HUMAN = "human"
+    AGENT = "agent"
+    WORLD = "world"
+
+class GeoLocationMethod(Enum):
+    """Defines constants for different methods of determining a node's location."""
+    IP = "ip"
+    MANUAL = "manual"
+    
+class GeoLocationData(TypedDict):
+    """ Location data dictionary type, containing all the information about the node's location. 
+        This information can be determined using different methods: actually in python using the "ip" or "manual" method.
     """
-    Profile information for a node.
+    country: str # The country where the node is located.
+    city: str # The city where the node is located.
+    road: str # The road or street of the node's location.
+    latitude: float # The latitude coordinate of the node's location.
+    longitude: float # The longitude coordinate of the node's location.
+
+class AccountData(TypedDict):
+    """ Account data dictionary type, containing all the information about the node's owner. 
+        This information comes from the registration form on the platform, therefore they are static.
     """
+    name: str # The name of the node's owner.
+    surname: str # The surname of the node's owner.
+    title: str # The title of the node's owner.
+    organization: str # The organization the node's owner is affiliated with.
+    email: str # The email address of the node's owner.
+    inspector_node_id: str # The inspector node ID is the human agent associated to the node's owner, which is responsible for inspecting the node's behavior
+    
+class StaticProfileData(TypedDict):
+    """ Static data dictionary type, containing all the information about the node that does not change over time. 
+        This information is set during the node registration and remains constant throughout the node's lifecycle.
+    """
+    node_id: str # Unique identifier for the node.
+    node_type: str # The type of the node (human, agent, world).
+    node_name: str # A human-readable name for the node.
+    node_description: str # A description of the node's purpose or functionality.
+    created_utc: str # The UTC timestamp when the node was created.
+    max_nr_connections: int # The maximum number of connections this node can handle.
+    allowed_node_ids: list[str] # A list of node IDs that are allowed to connect to this node. An empty list means no restrictions.
+    world_masters_node_ids: list[str] # A list of World master node IDs. An empty list means no world masters.
+    certified: bool # Indicates whether the node is certified by the platform.
+    location_method: str # The method used to determine the node's location (e.g., "ip", "manual").
+    name: str # The name of the node's owner.
+    surname: str # The surname of the node's owner.
+    title: str # The title of the node's owner.
+    organization: str # The organization the node's owner is affiliated with.
+    email: str # The email address of the node's owner.
+    inspector_node_id: str # The inspector node ID is the human agent associated to the node
 
-    def __init__(self,
-                 static: dict,
-                 dynamic: dict,
-                 cv: dict):
+class CVData(TypedDict):
+    """ CV data dictionary type, containing all the information about the node's curriculum vitae. 
+        This information is not currently supported by the platform, but it is defined here for future implementation.
+    """
+    badge_id: str # The unique identifier of the badge.
+    badge_type: str # The type of badge awarded.
+    description: str # A textual description of the badge.
+    last_edit_utc: str # The UTC timestamp of the last edit to the badge.
+    score: float # The score associated with the badge.
+    world_node_id: str # The unique identifier of the world node that awarded the badge.
+    world_node_name: str # The human-readable name of the world node that awarded the badge
 
-        # Checking provided data
-        if not static:
-            raise ValueError("Missing static profile data")
+class ConnectionsData(TypedDict):
+    """ Connections data dictionary type, containing all the information about the node's connections in the p2p network. 
+    """
+    public_agents: list[ExtendedPeerInfosData] # A list of ExtendedPeerInfosData instances representing the current public agent connections of the node in the p2p network.
+    world_agents: list[ExtendedPeerInfosData] # A list of ExtendedPeerInfosData instances representing the current private agent connections of the node in the p2p network.
+    world_masters: list[ExtendedPeerInfosData] # A list of ExtendedPeerInfosData instances representing the current world master connections of the node in the p2p network.
+    world_peer_id: str # The peer ID of the world node, which is a unique identifier used in the p2p network to identify the world node during interactions with other nodes.
+    role: str # The role of the node in the p2p network 
 
-        # Forcing key order (important! otherwise the hash operation will not be consistent with the one on the server)
-        cv = [{k: _cv[k] for k in sorted(_cv)} for _cv in sorted(cv, key=lambda x: x['last_edit_utc'])]
+class WorldSummaryData(TypedDict):
+    """ World summary data dictionary type, containing all the information about the world node's summary. 
+        This information is not currently supported by the platform, but it is defined here for future implementation.
+    """
+    world_title: str # The title of the world.
+    world_agents: list[ExtendedPeerInfosData] # A list of ExtendedPeerInfosData instances representing the agents currently present in the world.
+    world_agents_count: int # The total number of world agents currently present in the world.
+    world_masters: list[ExtendedPeerInfosData] # A list of ExtendedPeerInfosData instances representing the world masters currently managing the world.
+    world_masters_count: int # The total number of world masters currently managing the world.
+    total_agents: int # The total number of agents (agents+masters) that is currently in the world.
+    agent_badges: list[WorldBadgeData] # A list of badges given to agents in the world.
+    agent_badges_count: int # The total number of badges given to agents in the world.
+    streams_count: int # The total number of streams currently active in the world.
+    
+class DynamicProfileData(TypedDict):
+    """ Dynamic data dictionary type, containing all the information about the node that can change over time. 
+        This information is not currently supported by the platform, but it is defined here for future implementation.
+    """
+    os: str # The operating system of the node.
+    cpu_cores: int # The number of CPU cores available on the node.
+    logical_cpus: int # The number of logical CPUs available on the node.
+    memory_gb: float # The total memory available on the node in gigabytes.
+    memory_avail: float # The available memory on the node in gigabytes.
+    memory_used: float # The used memory on the node in gigabytes.
+    timestamp: str # The UTC timestamp when the dynamic data was last updated.
+    public_ip_address: str # The public IP address of the node.
+    guessed_location: GeoLocationData # The guessed location of the node based on its public IP address.
+    peer_id: str # The peer ID of the node, which is a unique identifier used in the p2p network to identify the node during interactions with other nodes.
+    peer_addresses: list[str] # A list of peer multi-addresses that the node is listening on the p2p network.
+    private_peer_id: str # The private peer ID of the node, which is used for internal communications within the node itself.
+    private_peer_addresses: list[str] # A list of private peer multi-addresses that the node is listening on for private communications.
+    proc_inputs: list[DatapropsData] # A list of DatapropsData instances representing the input data properties that the agent processor is capable of processing.
+    proc_outputs: list[DatapropsData] # A list of DatapropsData instances representing the output data properties that the agent processor is capable of producing.
+    streams: list[DatapropsData] # A list of DatapropsData instances representing the data properties that the agent processor can stream in real-time.
+    connections: ConnectionsData # The connections data of the node in the p2p network.
+    world_summary: WorldSummaryData # The world summary data of the node, if the node is a world.
+    world_roles_fsm: dict[str, str] # A dictionary representing the finite state machine (FSM) of world roles, where keys are role names and values are their current states.
+    hidden: bool # Indicates whether the node is hidden in the network (hidden means not visible in the map for other users).
+# ------
 
-        self._profile_data = \
-            {
-                'static': {
-                    'node_id': None,
-                    'node_type': None,
-                    'node_name': None,
-                    'node_description': None,
-                    'created_utc': None,
-                    'name': None,
-                    'surname': None,
-                    'title': None,
-                    'organization': None,
-                    'email': None,
-                    'max_nr_connections': None,
-                    'allowed_node_ids': None,
-                    'world_masters_node_ids': None,
-                    'certified': None,
-                    'inspector_node_id': None,
-                    'location_method': None,
-                    'location': None
-                },
-                'dynamic': {
-                    'os': None,
-                    'cpu_cores': None,
-                    'logical_cpus': None,
-                    'memory_gb': None,
-                    'memory_avail': None,
-                    'memory_used': None,
-                    'timestamp': None,
-                    'public_ip_address': None,
-                    'guessed_location': None,
-                    'peer_id': None,
-                    'peer_addresses': None,
-                    'private_peer_id': None,
-                    'private_peer_addresses': None,
-                    'proc_inputs': None,
-                    'proc_outputs': None,
-                    'streams': None,
-                    'connections': {
-                        'public_agents': None,  # List of dict
-                        'world_agents': None,  # List of dict
-                        'world_masters': None,  # List of dict
-                        'world_peer_id': None,  # Str
-                        'role': None  # Str
-                    },
-                    'world_summary': {
-                        "world_title": None,
-                        "world_agents": None,
-                        "world_masters": None,
-                        "world_agents_count": None,
-                        "world_masters_count": None,
-                        "total_agents": None,
-                        "agent_badges_count": None,
-                        "agent_badges": None,
-                        "streams_count": None
-                    },
-                    "world_roles_fsm": None,  # Dict of FSMs for world roles
-                    "hidden": None
-                },
-                'cv': cv
+
+# --- UTILS ---
+@lru_cache(maxsize=1) # Never heard about this, credit to Gemini for the idea.
+def get_public_ip() -> str:
+    """Fetches the public IP address of the current machine using predefined external services.
+
+    The function iterates through a list of known IP services, attempting to retrieve the public IP address.
+    If a service fails (due to network issues or service unavailability), it moves on to the next one.
+    If all services fail, it returns a string indicating the failure.
+
+    Args:
+        None
+        
+    Returns:
+        The public IP address as a string.
+    """
+    
+    for service in IP_SERVICES:
+        try:
+            response = requests.get(service, timeout=5)
+            response.raise_for_status()
+            
+            # Validate the IP address format
+            ip = response.text.strip()
+            ipaddress.ip_address(ip)
+
+            return ip
+        except (requests.RequestException, ValueError):
+            continue
+    return "N/A: Unable to fetch public IP from all services."
+
+@lru_cache(maxsize=1)
+def get_location_by_ip() -> GeoLocationData | None:
+    """Fetches the geographical location of the current machine based on its public IP address.
+
+    The function uses the 'ip-api.com' service to retrieve location data such as country, city, latitude, and longitude.
+    If the request is successful and the data is valid, it returns a dictionary containing the location information.
+    If the request fails or the data is invalid, it returns None.
+
+    Args:
+        None
+            
+    Returns:
+        A dictionary containing location data if successful, otherwise None.
+    """
+    
+    current_ip = get_public_ip()
+    
+    try:
+        response = requests.get(f"http://ip-api.com/json/{current_ip}", timeout=5)
+        response.raise_for_status()
+        data = response.json()
+        if data["status"] == "success":
+            location_data: GeoLocationData = {
+                "country": data.get("country", ""),
+                "city": data.get("city", ""),
+                "road": data.get("road", ""),
+                "latitude": data.get("lat", 0.0),
+                "longitude": data.get("lon", 0.0),
             }
+            return location_data
+        else:
+            return None
+    except (requests.RequestException, ValueError):
+        return None
+    
+def get_location_by_os() -> GeoLocationData | None:
+    """Fetches the geographical location of the current machine based on its operating system settings.
+    This function is a placeholder for future implementation. Currently, it returns None.
+    Args:
+    Raises:
+        NotImplementedError: This function is not yet implemented.
+    """
+    return None
 
-        # Checking the presence of basic static profile info
-        for k in self._profile_data['static'].keys():
+# ----
+    
+class GeoLocation(BaseModel):
+    """Represents the location of a node, which can be determined using different methods.
+    
+    Args:
+        method (GeoLocationMethod | None): The method used to determine the node's location (e.g., IP-based or manual).
+        country (str): The country where the node is located.
+        city (str): The city where the node is located.
+        latitude (float): The latitude coordinate of the node's location.
+        longitude (float): The longitude coordinate of the node's location.
+        road (str): The road or street of the node's location.
 
-            # Backward compatibility
-            if k not in static and k == "location":
-                static['location'] = {}
-            if k not in static and k == "location_method":
-                static['location_method'] = "manual"
-
-            if (k not in static and k != "certified" and
-                    k != "allowed_node_ids" and k != "world_masters_node_ids" and k != "inspector_node_id"):  # Patch
-                raise ValueError("Missing required static profile info: " + str(k))
-
-        # Filling static profile info (there might be more information that the one shown above)
-        for k, v in static.items():
-            self._profile_data['static'][k] = v
-
-        # Including the provided dynamic info, only considering the expected keys
-        # (the provided "dynamic" argument will contain all or just a sub-portion of the expected keys)
-        for k, v in dynamic.items():
-            if k == 'connections' and v is not None and isinstance(v, dict):
-                for kk, vv in v.items():
-                    if (kk in self._profile_data['dynamic']['connections'] and
-                            self._profile_data['dynamic']['connections'][kk] is None):
-                        self._profile_data['dynamic']['connections'][kk] = vv
-            elif k == 'world_summary' and v is not None and isinstance(v, dict):
-                for kk, vv in v.items():
-                    if (kk in self._profile_data['dynamic']['world_summary'] and
-                            self._profile_data['dynamic']['world_summary'][kk] is None):
-                        self._profile_data['dynamic']['world_summary'][kk] = vv
-            elif k in self._profile_data['dynamic'] and self._profile_data['dynamic'][k] is None:
-                self._profile_data['dynamic'][k] = v
-            elif k.startswith('tmp_'):
-                self._profile_data['dynamic'][k] = v
-
-        # Internally required attributes
-        self._profile_last_updated = None  # Will be set by calling _fill_missing_specs or check_and_update_specs
-        self._geolocation_cache = {}  # Will be needed to avoid too many IP-related lookups
-
-        # Filling the missing information (machine-level information, specs) that can be automatically extracted
-        self._fill_missing_specs()
-
-        # Flag
-        self._connections_updated = False
-
-    def update_cv(self, new_cv):
-        self._profile_data['cv'] = new_cv
-
-    @classmethod
-    def from_dict(cls, combined_data: dict) -> 'NodeProfile':
-        """Factory method to create a NodeProfile instance from a dictionary
-        containing combined profile data (static, specs, and CV list of dicts).
+    Raises:        
+        ValueError: If the method is not an instance of GeoLocationMethod Enum.
+        ValueError: If pre_fetched_data is provided but is missing required keys.
+    """
+    
+    method: GeoLocationMethod | None = Field(default=None, description="The method used to determine the node's location (e.g., IP-based or manual).")
+    country: str = Field(..., description="The country where the node is located.")
+    city: str = Field(..., description="The city where the node is located.")
+    latitude: float = Field(..., description="The latitude coordinate of the node's location.")
+    longitude: float = Field(..., description="The longitude coordinate of the node's location.")
+    road: str = Field(default="", description="The road or street of the node's location.")
+    
+    
+    @model_validator(mode="before")
+    def fetch_location_data(cls, data: GeoLocationData | str) -> GeoLocationData | None:
+        """ Validates and fetches location data if the method is IP-based.
 
         Args:
-            combined_data (dict): A dictionary representing the node profile,
-                                  typically loaded from JSON or received over the network.
-                                  Expected to contain 'node_id', 'cv' (list of dicts),
-                                  'node_specification' (dict), 'peer_id', 'peer_addresses'
-                                  and other profile keys.
-
+            data (GeoLocationData | str): A dictionary containing the method and pre_fetched_data fields.
         Returns:
-            NodeProfile: A new instance of NodeProfile populated from the dictionary.
-
+            GeoLocationData | None: A dictionary with the method and location data fields populated. If the method is IP-based, the location data is fetched using the get_location_by_ip function.
         Raises:
-            ValueError: If 'node_id' is missing in the input dictionary.
-            TypeError: If the 'cv' data is present but not a list.
+            ValueError: If the method is not an instance of GeoLocationMethod Enum.
+            ValueError: If pre_fetched_data is provided but is missing required keys.
         """
-
-        # Ensure essential 'node_id' is present
-        node_id = combined_data.get('static').get('node_id')
-        if not node_id:
-            raise ValueError("Input dictionary must contain a 'node_id'.")
-
-        profile_instance = cls(
-            static=combined_data['static'],
-            dynamic=combined_data['dynamic'],
-            cv=combined_data['cv']
-        )
-
-        return profile_instance
-
-    # Get operating system information
-    @staticmethod
-    def _get_os_spec():
-        """Extracts operating system information."""
-        return platform.platform()
-
-    # Get cpu information
-    @staticmethod
-    def _get_cpu_info():
-        """Extracts CPU core information."""
-        try:
-            return {
-                'physical_cores': psutil.cpu_count(logical=False),
-                'logical_cores': psutil.cpu_count(logical=True)
-            }
-        except Exception as e:
-            print(f"Error getting CPU info: {e}")
-            return {'physical_cores': None, 'logical_cores': None}
-
-    # Get memory information
-    @staticmethod
-    def _get_memory_info():
-        """Extracts memory information in GB."""
-        try:
-            mem = psutil.virtual_memory()
-            total_gb = mem.total / (1024 ** 3)
-            available_gb = mem.available / (1024 ** 3)
-            used_gb = mem.used / (1024 ** 3)
-            return {
-                'total': float(total_gb),
-                'available': float(available_gb),
-                'used': float(used_gb)
-            }
-        except Exception as e:
-            print(f"Error getting memory info: {e}")
-            return {'total': 0.0, 'available': 0.0, 'used': 0.0}
-
-    # Get public ip address
-    @staticmethod
-    def _get_public_ip_address() -> str | None:
-        """Attempts to retrieve the public IP address using an external web service.
-        Uses multiple services as fallbacks.
-        Returns the public IP address string or None if retrieval fails.
-        """
-
-        # List of reliable services that return the public IP as plain text
-        services = [
-            "https://api.ipify.org",
-            "https://icanhazip.com",
-            "https://ident.me",
-            "https://checkip.amazonaws.com",
-        ]
-
-        # Print("Attempting to retrieve public IP address...")
-        for url in services:
+        if isinstance(data, str): # Case in which we got a dumped string
             try:
+                data = json.loads(data)
+            except json.JSONDecodeError:
+                raise ValueError(f"[NodeProfile][GeoLocation] Input data string is not valid JSON.")
+        
+        if not isinstance(data, dict):
+            raise ValueError(f"[NodeProfile][GeoLocation] Input data must be a dictionary, got: {type(data)}")
+        
+        method = data.get("location_method", None)
+        
+        if method == GeoLocationMethod.IP or method == GeoLocationMethod.IP.value:
+            location_data: GeoLocationData | None = get_location_by_ip()
+            if location_data is None:
+                raise ValueError(f"[NodeProfile][GeoLocation] Unable to fetch location data using IP method.")
+            data = location_data
+        
+        return data
+    
+    def __eq__(self, value: object) -> bool:
+        """ Compares two GeoLocationData instances for equality.
 
-                # Make a GET request to the service URL with a timeout
-                response = requests.get(url, timeout=5)
-
-                # Raise an HTTPError for bad responses (4xx or 5xx status codes)
-                response.raise_for_status()
-
-                # Get the response text, which should be the IP address, and strip any whitespace
-                public_ip = response.text.strip()
-
-                # Basic validation - check if the result looks like a valid IP address
-                try:
-                    ipaddress.ip_address(public_ip)  # This checks if it's a valid IPv4 or IPv6 address
-
-                    return public_ip  # Return the first valid IP found
-
-                except ValueError:
-
-                    # If ipaddress.ip_address raises ValueError, it's not a valid format
-                    continue  # Try the next service if validation fails
-
-            except requests.exceptions.RequestException:
-
-                # Catch any request-related errors (e.g., network issues, timeout, bad status)
-                continue  # Try the next service on error
-
-            except Exception:
-
-                # Catch any other unexpected errors
-                continue  # Try the next service on error
-
-        return 'Public IP not available.'  # Return None if all services fail
-
-    # Get guessed location based on IP address
-    def _get_geolocation_from_ip(self, ip_address):
-        """Retrieves geolocation data (same as before)."""
-
-        # Added a check for local/private IPs to avoid unnecessary API calls
-        try:
-            ip_obj = ipaddress.ip_address(ip_address)
-            if ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_unspecified:
-                return {"message": "Private, loopback, or unspecified IP address. Geolocation not applicable."}
-        except ValueError:
-            return {"error": f"Invalid IP address format: {ip_address}"}
-
-        # Added a simple cache to avoid repeated API calls for the same IP
-        if hasattr(self, '_geolocation_cache') and ip_address in self._geolocation_cache:
-
-            # Print(f"Using cached geolocation for {ip_address}") # Optional: for debugging
-            return self._geolocation_cache[ip_address]
-
-        try:
-            url = f"http://ip-api.com/json/{ip_address}"
-            response = requests.get(url)
-            response.raise_for_status()
-            data = response.json()
-            if data.get("status") == "success":
-                geo_data = {
-                    "country": data.get("country"),
-                    "countryCode": data.get("countryCode"),
-                    "region": data.get("region"),
-                    "regionName": data.get("regionName"),
-                    "city": data.get("city"),
-                    "zip": data.get("zip"),
-                    "latitude": data.get("lat"),
-                    "longitude": data.get("lon"),
-                    "timezone": data.get("timezone"),
-                    "isp": data.get("isp")
-                }
-
-                # Cache the result
-                if not hasattr(self, '_geolocation_cache'):
-                    self._geolocation_cache = {}
-                self._geolocation_cache[ip_address] = geo_data
-                return geo_data
-            else:
-                error_data = {"error": data.get("message", "Geolocation lookup failed.")}
-
-                # Cache the error result too
-                if not hasattr(self, '_geolocation_cache'):
-                    self._geolocation_cache = {}
-                self._geolocation_cache[ip_address] = error_data
-                return error_data
-
-        except requests.exceptions.RequestException as e:
-            error_data = {"error": f"Request failed: {e}"}
-            if not hasattr(self, '_geolocation_cache'):
-                self._geolocation_cache = {}
-            self._geolocation_cache[ip_address] = error_data
-            return error_data
-
-        except json.JSONDecodeError:
-            error_data = {"error": "Failed to decode JSON response from geolocation API"}
-            if not hasattr(self, '_geolocation_cache'):
-                self._geolocation_cache = {}
-            self._geolocation_cache[ip_address] = error_data
-            return error_data
-
-        except Exception as e:
-            error_data = {"error": f"An unexpected error occurred during geolocation lookup: {e}"}
-            if not hasattr(self, '_geolocation_cache'):
-                self._geolocation_cache = {}
-            self._geolocation_cache[ip_address] = error_data
-            return error_data
-
-    # This is the function that collects all the information for the 'node_specification'
-    def _get_current_specs(self) -> dict:
-        """Gathers current system specifications.
+        Args:
+            value (object): The other object to compare with.
+        
+        Returns:
+            bool: True if both instances share the same country/city, False otherwise.
         """
-        cpu_info = self._get_cpu_info()
-        memory_info = self._get_memory_info()
+        if not isinstance(value, GeoLocation):
+            return False
+        return (self.country == value.country) and (self.city == value.city)
+    
+    def same_country(self, value: 'GeoLocation') -> bool:
+        """ Checks if two GeoLocationData instances are located in the same country.
 
-        location = self._profile_data['static'].get('location', {})
-        location_method = self._profile_data['static'].get('location_method', "manual")
-        return {
-            'timestamp': datetime.datetime.now(timezone.utc).isoformat(),
-            'os': self._get_os_spec(),
-            'cpu_cores': cpu_info.get('physical_cores'),
-            'logical_cpus': cpu_info.get('logical_cores'),
-            'memory_gb': memory_info.get('total'),
-            'memory_avail': memory_info.get('available'),
-            'memory_used': memory_info.get('used'),
-            'public_ip_address': self._get_public_ip_address(),
-            'guessed_location': self._get_geolocation_from_ip(self._get_public_ip_address())
-            if location_method != "manual" else location
-        }
+        Args:
+            value (GeoLocation): The other object to compare with.
+        Returns:
+            bool: True if both instances are in the same country, False otherwise.
+        """
+        if not isinstance(value, GeoLocation):
+            return False
+        return self.country == value.country
+    
+    def same_road(self, value: 'GeoLocation') -> bool:
+        """ Checks if two GeoLocationData instances are located in the same city.
 
-    def _fill_missing_specs(self):
-        dynamic_profile = self.get_dynamic_profile()
-        current_specs = None
-        for k in dynamic_profile.keys():
-            if dynamic_profile[k] is None:
-                if current_specs is None:
-                    current_specs = self._get_current_specs()
-                if k in current_specs:
-                    dynamic_profile[k] = current_specs[k]
+        Args:
+            value (GeoLocation): The other object to compare with.
+        
+        Returns:
+            bool: True if both instances are in the same city, False otherwise.
+        """
+        if not isinstance(value, GeoLocation):
+            return False
+        if self.road and value.road:
+            return self.road == value.road and self.city == value.city and self.country == value.country
+        return False
+    
+    def same_by_radius(self, value: 'GeoLocation', max_radius_km: float = 10.0) -> bool:
+        """ Checks if two GeoLocationData instances are located in the same radius, centered on obj1 latitude and longitude.
 
-        self._profile_last_updated = datetime.datetime.now(timezone.utc)  # Mark profile as checked/updated
+        Args:
+            value (GeoLocation): The other object to compare with.
+            max_radius_km (float): The maximum radius in kilometers to consider as "same region". Default is 10 km.
+        
+        Returns:
+            bool: True if both instances are in the same region, False otherwise.
+        """
+        if not isinstance(value, GeoLocation):
+            return False
+        # Radius check
+        R = 6371.0  # Earth radius in kilometers (roughly)
+        lat1 = radians(self.latitude) # Convert latitude to radians
+        lon1 = radians(self.longitude) # Convert longitude to radians
+        lat2 = radians(value.latitude) # same for obj2
+        lon2 = radians(value.longitude) # same for obj2
+        dlon = lon2 - lon1 # Difference in longitude
+        dlat = lat2 - lat1 # Difference in latitude
+        a = sin(dlat / 2)**2 + cos(lat1) * cos(lat2) * sin(dlon / 2)**2 # Haversine formula
+        c = 2 * atan2(sqrt(a), sqrt(1 - a)) # Angular distance in radians
+        distance = R * c # Distance in kilometers
+        return distance <= max_radius_km # If we do math correctly, distance should be positive
 
-    def check_and_update_specs(self, update_only: bool = True) -> bool:
-        """Checks current specs against saved specs. Updates profile data."""
 
-        current_specs = self._get_current_specs()
-        specs_changed = False
+class Account(BaseModel):
+    """ Account data class, containing all the information about the node's owner. 
+        This information comes from the registration form on the platform, therefore they are static.
+    
+    Raises:
+        ValueError: If the email format is invalid.
+        ValueError: If input data is missing required keys.
+    """
+    
+    name: str = Field(..., description="The name of the node's owner.", gt=1)
+    surname: str = Field(..., description="The surname of the node's owner.", gt=1)
+    title: str = Field(..., description="The title of the node's owner.")
+    organization: str = Field(..., description="The organization the node's owner is affiliated with.")
+    email: EmailStr = Field(..., description="The email address of the node's owner.")
+    inspector_node_id: UUID4 = Field(..., description="The inspector node ID is the human agent associated to the node's owner, which is responsible for inspecting the node's behavior.")
+    
+    def __eq__(self, value: object) -> bool:
+        """ Compares two Account instances for equality.
 
-        if update_only:
-            self._profile_data['dynamic'] |= current_specs
-        else:
-            saved_specs = self._profile_data['dynamic'].copy()
-            change_details = []
+        Args:
+            value (object): The other object to compare with.
+        Returns:
+            bool: True if both instances share the same email, False otherwise.
+        """
+        if not isinstance(value, Account):
+            return False
+        return self.email == value.email
+    
+class Badge(BaseModel):
+    """ Represents a badge awarded to an agent in a world.
 
-            if saved_specs is None:
+    Raises:
+        ValueError: If any of the input parameters are of the wrong type.
+    """
+    
+    badge_id: str = Field(..., description="The unique identifier of the badge.")
+    badge_type: str = Field(..., description="The type of badge awarded.")
+    description: str = Field(..., description="A textual description of the badge.")
+    last_edit_utc: str = Field(..., description="The UTC timestamp of the last edit to the badge.")
+    score: float = Field(..., description="The score associated with the badge.")
+    world_node_id: str = Field(..., description="The unique identifier of the world node that awarded the badge.")
+    world_node_name: str = Field(..., description="The human-readable name of the world node that awarded the badge.")
+    
+class WorldSummary(BaseModel):
+    """ Represents the world summary data of a world node.
+        This class is currently a placeholder for future implementation, as the current version of the platform does not support world summary data.
+    """
+    
+    world_title: str = Field(description="The title of the world.", default="")
+    world_agents: list[ExtendedPeerInfosData] = Field(..., description="A list of ExtendedPeerInfosData instances representing the agents currently present in the world.")
+    world_agents_count: int = Field(..., description="The total number of world agents currently present in the world.", ge=0)
+    world_masters: list[ExtendedPeerInfosData] = Field(..., description="A list of ExtendedPeerInfosData instances representing the world masters currently managing the world.")
+    world_masters_count: int = Field(..., description="The total number of world masters currently managing the world.", ge=0)
+    total_agents: int = Field(..., description="The total number of agents (agents+masters) that is currently in the world.", ge=0)
+    agent_badges: list[Badge] = Field(..., description="A list of badges given to agents in the world.")
+    agent_badges_count: int = Field(..., description="The total number of badges given to agents in the world.", ge=0)
+    streams_count: int = Field(..., description="The total number of streams currently active in the world.", ge=0)
+    
 
-                # No previous specification exists, capture the current one
-                self._profile_data['dynamic'] |= current_specs
-                specs_changed = True
-                change_details.append("Initial specification captured")
+class StaticProfile(BaseModel):
+    """ Represents the static profile data of a node, which includes all the information that does not change over time.
 
-            else:
+    Raises:
+        ValueError: If any of the input parameters are of the wrong type or if created_utc is not in the correct format.
+        ValueError: If input data is missing required keys.
+    """
+    
+    node_id: UUID4 = Field(..., description="Unique identifier for the node.")
+    node_type: NodeType = Field(..., description="The type of the node (human, agent, world).")
+    node_name: str = Field(..., description="A human-readable name for the node.", gt=1)
+    node_description: str = Field(..., description="A description of the node's purpose or functionality.", gt=1)
+    created_utc: str = Field(..., description="The UTC timestamp when the node was created.", pattern=CREATED_UTC_PATTERN)
+    max_nr_connections: int = Field(..., description="The maximum number of connections this node can handle.", gt=0)
+    allowed_node_ids: list[UUID4] = Field(..., description="A list of node IDs that are allowed to connect to this node. An empty list means no restrictions.")
+    world_masters_node_ids : list[UUID4] = Field(..., description="A list of World master node IDs. An empty list means no world masters.")
+    certified: bool = Field(..., description="Indicates whether the node is certified by the platform.")
+    geo_location_method: GeoLocationMethod = Field(..., description="The method used to determine the node's location (e.g., 'ip', 'manual').")
+    account: Account = Field(..., description="An instance of the Account class containing information about the node's owner.")
 
-                # Compare current specs with saved specs (ignore timestamp for comparison)
-                keys_to_compare = current_specs.keys()
-
-                for key in keys_to_compare:
-                    if key == 'timestamp':
-                        continue
-
-                    saved_value = saved_specs.get(key)
-                    current_value = current_specs.get(key)
-
-                    # Handle float comparison with tolerance
-                    if isinstance(saved_value, float) and isinstance(current_value, float):
-                        if abs(current_value - saved_value) > 1e-6:  # Tolerance for float changes
-                            change_details.append(f"{key}: from {saved_value:.2f} to {current_value:.2f}")
-                            specs_changed = True
-
-                    elif saved_value != current_value:
-                        change_details.append(f"{key}: from {saved_value} to {current_value}")
-                        specs_changed = True
-
-                # Comparing total resources (OS, CPU, total RAM/Disk) is more typical for 'specification' changes.
-                if specs_changed:
-
-                    # Update the specification in the profile data with the new current specs
-                    self._profile_data['dynamic'] |= current_specs
-                    change_summary = ", ".join(change_details)
-                    print(f"Specs changed for '{self._profile_data['static']['node_id']}': {change_summary}")
-
-        self._profile_last_updated = datetime.datetime.now(timezone.utc)  # Mark profile as checked/updated
-
-        return specs_changed
-
-    # Get profile data as dict: cv, dynamic_profile, static_profile
-    def get_static_profile(self) -> dict:
-        return self._profile_data['static']
-
-    def get_dynamic_profile(self) -> dict:
-        return self._profile_data['dynamic']
-
-    def get_cv(self):
-        return self._profile_data['cv']
-
-    def get_all_profile(self):
-        return self._profile_data
-
-    def mark_change_in_connections(self):
-        self._connections_updated = True
-
-    def unmark_change_in_connections(self):
-        self._connections_updated = False
-
-    def connections_changed(self):
-        return self._connections_updated
-
-    def verify_cv_hash(self, cv_hash: str):
-        computed_hash = hashlib.blake2b(json.dumps(self._profile_data['cv']).encode("utf-8"),
-                                        digest_size=16).hexdigest()
-        return cv_hash == computed_hash, (cv_hash, computed_hash)
+class DynamicProfile(BaseModel):
+    """ Represents the dynamic profile data of a node, which includes all the information that can change over time.
+        This class is currently a placeholder for future implementation, as the current version of the platform does not support dynamic profile data.
+    """
+    os: str = Field(..., description="The operating system of the node.")
+    cpu_cores: int = Field(..., description="The number of CPU cores available on the node.", ge=0)
+    logical_cpus: int = Field(..., description="The number of logical CPUs available on the node.", ge=0)
+    memory_gb: float = Field(..., description="The total memory available on the node in gigabytes.", ge=0)
+    memory_avail: float = Field(..., description="The available memory on the node in gigabytes.", ge=0)
+    memory_used: float = Field(..., description="The used memory on the node in gigabytes.", ge=0)
+    timestamp: str = Field(..., description="The UTC timestamp when the dynamic data was last updated.", pattern=CREATED_UTC_PATTERN)
+    public_ip_address: IPvAnyAddress = Field(..., description="The public IP address of the node.")
+    guessed_location: GeoLocation = Field(..., description="The guessed location of the node based on its public IP address or manual input (depending on the geolocation method).")
+    peer_id: str = Field(..., description="The peer ID of the node, which is a unique identifier used in the p2p network to identify the node during interactions with other nodes.", )

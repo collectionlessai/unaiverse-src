@@ -42,7 +42,7 @@ class Clock:
         self.cycle = -1  # Internal index, not shared outside (the value -1 is only used at creation/reset time)
         self.__servers = [
             'pool.ntp.org',
-            'north-america.pool.ntp.org'
+            'north-america.pool.ntp.org',
             'asia.pool.ntp.org',
             'europe.pool.ntp.org',
         ]

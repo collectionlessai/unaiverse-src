@@ -15,10 +15,19 @@
 import math
 import base64
 import binascii
+from typing import TypedDict
 from unaiverse.networking.p2p.messages import Msg
 from unaiverse.networking.p2p.p2p import P2P, P2PError
 from unaiverse.networking.node.tokens import TokenVerifier
 
+# --- Enum and Data Classes
+class ExtendedPeerInfosData(TypedDict):
+    """ Represents extended information about a peer in the P2P network. """
+    id: str  # The unique identifier of the peer.
+    addrs: list[str]  # A list of multi-addresses associated with the peer.
+    connected_at: str  # The timestamp when the peer connected.
+    direction: str  # The direction of the connection ('inbound' or 'outbound').
+    misc: int  # Miscellaneous information about the peer.
 
 class ConnectionPools:
     DEBUG = True
@@ -303,7 +312,6 @@ class ConnectionPools:
 
             # "hoping" peer IDs are unique, and stopping duplicate cases
             if peer_id in self.peer_id_to_pool_name and self.peer_id_to_pool_name[peer_id] != pool_name:
-                print("VAFFANCULO")
                 return False
 
             self.peer_id_to_pool_name[peer_id] = pool_name
@@ -317,7 +325,6 @@ class ConnectionPools:
             self.pool_name_to_peer_infos[pool_name][peer_id] = peer_info
             return True
         else:
-            print(f"VAFFANCULO pool_name={pool_name}, len(pool)={len(pool)}, max_size={max_size}")
             return False
 
     async def remove(self, peer_id: str):
