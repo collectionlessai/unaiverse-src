@@ -1,0 +1,862 @@
+/* ============================================================================
+   UNaIVERSE Documentation
+   This css is generated automatically using an LLM.
+   ============================================================================ */
+
+:root {
+    --doc-space-xs: 0.25rem;
+    --doc-space-sm: 0.5rem;
+    --doc-space-md: 1rem;
+    --doc-space-lg: 1.5rem;
+    --doc-space-xl: 2rem;
+    --doc-space-2xl: 3rem;
+    --doc-space-3xl: 4rem;
+
+    --doc-radius-sm: 6px;
+    --doc-radius-md: 10px;
+    --doc-radius-lg: 14px;
+
+    --doc-shadow-sm: 0 2px 4px rgba(0, 0, 0, 0.06);
+    --doc-shadow-md: 0 4px 12px rgba(0, 0, 0, 0.08);
+    --doc-shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.12);
+
+    --doc-transition: 200ms cubic-bezier(0.4, 0, 0.2, 1);
+
+    /* Light Mode Colors */
+    --doc-accent-primary: #5e35b1;
+    --doc-accent-secondary: #00acc1;
+    --doc-accent-subtle: rgba(94, 53, 177, 0.08);
+    --doc-accent-text: #5e35b1;
+
+    --doc-module-bg: #f3e5f5;
+    --doc-module-border: #9c27b0;
+    --doc-class-bg: #e3f2fd;
+    --doc-class-border: #2196f3;
+    --doc-method-bg: #e8f5e9;
+    --doc-method-border: #4caf50;
+    --doc-attr-bg: #fff3e0;
+    --doc-attr-border: #ff9800;
+
+    --doc-separator: rgba(0, 0, 0, 0.08);
+    --doc-separator-strong: rgba(0, 0, 0, 0.12);
+    --doc-border: 1px solid rgba(0, 0, 0, 0.08);
+}
+
+[data-md-color-scheme="slate"] {
+    --doc-shadow-sm: 0 2px 6px rgba(0, 0, 0, 0.3);
+    --doc-shadow-md: 0 4px 16px rgba(0, 0, 0, 0.4);
+    --doc-shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.5);
+
+    --doc-accent-primary: #7c4dff;
+    --doc-accent-secondary: #4dd0e1;
+    --doc-accent-subtle: rgba(124, 77, 255, 0.12);
+    --doc-accent-text: #b39ddb;
+
+    --doc-module-bg: rgba(103, 58, 183, 0.12);
+    --doc-module-border: #9575cd;
+    --doc-class-bg: rgba(33, 150, 243, 0.12);
+    --doc-class-border: #64b5f6;
+    --doc-method-bg: rgba(76, 175, 80, 0.12);
+    --doc-method-border: #81c784;
+    --doc-attr-bg: rgba(255, 152, 0, 0.12);
+    --doc-attr-border: #ffb74d;
+
+    --doc-separator: rgba(255, 255, 255, 0.08);
+    --doc-separator-strong: rgba(255, 255, 255, 0.12);
+    --doc-border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+
+/* ============================================================================
+   LAYOUT & TYPOGRAPHY
+   ============================================================================ */
+
+.md-grid {
+    max-width: 1440px;
+}
+
+.md-content {
+    padding-bottom: var(--doc-space-3xl);
+}
+
+.md-typeset {
+    font-size: 0.94rem;
+    line-height: 1.75;
+}
+
+.md-typeset a:not(.md-button):not(.md-nav__link):not(.md-source):not(.headerlink) {
+    text-decoration: none;
+    border-bottom: 1px solid transparent;
+    transition: border-color var(--doc-transition), color var(--doc-transition);
+}
+
+.md-typeset a:not(.md-button):not(.md-nav__link):not(.md-source):not(.headerlink):hover {
+    border-bottom-color: currentColor;
+}
+
+.md-typeset h1 {
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    margin-bottom: var(--doc-space-lg);
+    padding-bottom: var(--doc-space-md);
+    border-bottom: 3px solid var(--doc-accent-primary);
+}
+
+.md-typeset h2 {
+    font-weight: 650;
+    letter-spacing: -0.015em;
+    margin-top: var(--doc-space-2xl);
+    margin-bottom: var(--doc-space-lg);
+    padding-bottom: var(--doc-space-md);
+    border-bottom: 2px solid var(--doc-separator-strong);
+}
+
+.md-typeset h3 {
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    margin-top: var(--doc-space-xl);
+    color: var(--doc-accent-primary);
+}
+
+.md-typeset h4 {
+    font-weight: 600;
+    font-size: 0.95rem;
+    margin-top: var(--doc-space-lg);
+}
+
+.md-typeset .headerlink {
+    opacity: 0;
+    transition: opacity var(--doc-transition);
+}
+
+.md-typeset h1:hover .headerlink,
+.md-typeset h2:hover .headerlink,
+.md-typeset h3:hover .headerlink,
+.md-typeset h4:hover .headerlink {
+    opacity: 0.4;
+}
+
+
+/* ============================================================================
+   NAVIGATION
+   ============================================================================ */
+
+/* Force left sidebar to always be visible */
+.md-sidebar--primary {
+    display: block !important;
+}
+
+/* Ensure sidebar is visible on all screen sizes */
+@media screen and (max-width: 76.1875em) {
+    .md-sidebar--primary {
+        position: fixed !important;
+        transform: translateX(0) !important;
+    }
+}
+
+.md-nav__link {
+    font-size: 0.84rem;
+    border-radius: var(--doc-radius-sm);
+    transition: background var(--doc-transition), color var(--doc-transition);
+    padding: 0.4rem 0.6rem;
+}
+
+.md-nav__link:hover {
+    background-color: var(--doc-accent-subtle);
+}
+
+.md-nav__link--active {
+    font-weight: 600;
+    background-color: var(--doc-accent-subtle);
+}
+
+.md-tabs {
+    border-bottom: var(--doc-border);
+    backdrop-filter: blur(8px);
+}
+
+.md-tabs__link {
+    font-size: 0.84rem;
+    font-weight: 500;
+    letter-spacing: 0.01em;
+    opacity: 0.7;
+    transition: opacity var(--doc-transition);
+}
+
+.md-tabs__link--active,
+.md-tabs__link:hover {
+    opacity: 1;
+}
+
+
+/* ============================================================================
+   HEADER
+   ============================================================================ */
+
+.md-header {
+    backdrop-filter: blur(12px) saturate(150%);
+    -webkit-backdrop-filter: blur(12px) saturate(150%);
+}
+
+[data-md-color-scheme="slate"] .md-header {
+    background-color: rgba(18, 18, 18, 0.85);
+}
+
+[data-md-color-scheme="default"] .md-header {
+    background-color: rgba(255, 255, 255, 0.88);
+}
+
+
+/* ============================================================================
+   DOCUMENTATION OBJECTS — ENHANCED SEPARATORS
+   ============================================================================ */
+
+.doc.doc-object.doc-module {
+    margin-top: 0;
+}
+
+.doc-object {
+    margin-top: var(--doc-space-2xl);
+    margin-bottom: var(--doc-space-2xl);
+    padding: var(--doc-space-xl);
+    border: 2px solid var(--doc-separator);
+    border-radius: var(--doc-radius-lg);
+    background: linear-gradient(135deg, var(--doc-accent-subtle) 0%, transparent 100%);
+    box-shadow: var(--doc-shadow-sm);
+    position: relative;
+    transition: box-shadow var(--doc-transition), border-color var(--doc-transition);
+}
+
+.doc-object:hover {
+    box-shadow: var(--doc-shadow-md);
+    border-color: var(--doc-separator-strong);
+}
+
+.doc-object:last-child {
+    margin-bottom: 0;
+}
+
+/* Nested objects styling */
+.doc-object .doc-object {
+    margin-top: var(--doc-space-lg);
+    margin-bottom: var(--doc-space-lg);
+    padding: var(--doc-space-md);
+    padding-left: var(--doc-space-lg);
+    border-left: 4px solid var(--doc-accent-primary);
+    border-top: none;
+    border-right: none;
+    border-bottom: none;
+    border-radius: 0;
+    background: rgba(0, 0, 0, 0.02);
+    box-shadow: none;
+}
+
+[data-md-color-scheme="slate"] .doc-object .doc-object {
+    background: rgba(255, 255, 255, 0.03);
+}
+
+/* Type-specific borders for objects */
+.doc-object.doc-module {
+    border-left: 5px solid var(--doc-module-border);
+    background: linear-gradient(135deg, var(--doc-module-bg) 0%, transparent 80%);
+}
+
+.doc-object.doc-class {
+    border-left: 5px solid var(--doc-class-border);
+    background: linear-gradient(135deg, var(--doc-class-bg) 0%, transparent 80%);
+}
+
+.doc-object.doc-method,
+.doc-object.doc-function {
+    border-left: 5px solid var(--doc-method-border);
+    background: linear-gradient(135deg, var(--doc-method-bg) 0%, transparent 80%);
+}
+
+.doc-object.doc-attribute,
+.doc-object.doc-property {
+    border-left: 5px solid var(--doc-attr-border);
+    background: linear-gradient(135deg, var(--doc-attr-bg) 0%, transparent 80%);
+}
+
+.doc-heading {
+    margin-bottom: var(--doc-space-md);
+    font-weight: 700;
+}
+
+.doc-object>.doc-heading {
+    margin-top: 0;
+    display: flex;
+    align-items: center;
+    gap: var(--doc-space-sm);
+}
+
+
+/* ============================================================================
+   SIGNATURES — ENHANCED STYLING
+   ============================================================================ */
+
+.doc-signature {
+    background: var(--md-code-bg-color);
+    border: 2px solid var(--doc-separator-strong);
+    border-radius: var(--doc-radius-md);
+    padding: var(--doc-space-md) var(--doc-space-lg);
+    margin-bottom: var(--doc-space-lg);
+    font-family: var(--md-code-font-family);
+    font-size: 0.88em;
+    line-height: 1.7;
+    overflow-x: auto;
+    box-shadow: var(--doc-shadow-md);
+    transition: box-shadow var(--doc-transition), border-color var(--doc-transition);
+    position: relative;
+}
+
+.doc-signature::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 4px;
+    height: 100%;
+    background: linear-gradient(180deg, var(--doc-accent-primary), var(--doc-accent-secondary));
+    border-radius: var(--doc-radius-sm) 0 0 var(--doc-radius-sm);
+}
+
+.doc-signature:hover {
+    box-shadow: var(--doc-shadow-lg);
+    border-color: var(--doc-accent-primary);
+}
+
+.doc-signature .n {
+    font-weight: 700;
+    color: var(--doc-accent-text);
+}
+
+.doc-contents {
+    padding-top: var(--doc-space-sm);
+}
+
+.doc-contents.first {
+    padding-top: var(--doc-space-md);
+}
+
+.doc-md-description p {
+    margin-bottom: var(--doc-space-md);
+    line-height: 1.75;
+}
+
+.doc-class-bases {
+    font-size: 0.82rem;
+    opacity: 0.7;
+    margin-bottom: var(--doc-space-md);
+    font-family: var(--md-code-font-family);
+    padding: var(--doc-space-sm) var(--doc-space-md);
+    background: var(--doc-accent-subtle);
+    border-radius: var(--doc-radius-sm);
+    border-left: 3px solid var(--doc-accent-primary);
+}
+
+
+/* ============================================================================
+   LABELS & BADGES — ENHANCED
+   ============================================================================ */
+
+.doc-labels {
+    margin-bottom: var(--doc-space-md);
+    display: flex;
+    gap: var(--doc-space-xs);
+    flex-wrap: wrap;
+}
+
+.doc-label {
+    display: inline-block;
+    font-size: 0.68rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    padding: 4px 10px;
+    border-radius: 999px;
+    vertical-align: middle;
+    box-shadow: var(--doc-shadow-sm);
+}
+
+.doc-label-async {
+    background: rgba(0, 188, 212, 0.15);
+    color: #00acc1;
+    border: 1px solid rgba(0, 188, 212, 0.3);
+}
+
+.doc-label-instance-attribute {
+    background: rgba(255, 167, 38, 0.15);
+    color: #f57c00;
+    border: 1px solid rgba(255, 167, 38, 0.3);
+}
+
+
+/* ============================================================================
+   SECTION TITLES — CLEAR SEPARATORS
+   ============================================================================ */
+
+.doc-section-title {
+    font-size: 0.76rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--doc-accent-primary);
+    padding: var(--doc-space-sm) var(--doc-space-md);
+    margin-top: var(--doc-space-xl);
+    margin-bottom: var(--doc-space-md);
+    background: var(--doc-accent-subtle);
+    border-left: 4px solid var(--doc-accent-primary);
+    border-radius: var(--doc-radius-sm);
+    display: block;
+    box-shadow: var(--doc-shadow-sm);
+}
+
+.doc-section-item {
+    padding: var(--doc-space-md) 0;
+    border-bottom: 1px solid var(--doc-separator);
+}
+
+.doc-section-item:last-child {
+    border-bottom: none;
+}
+
+
+/* ============================================================================
+   TYPE SYMBOLS — ENHANCED VISUAL CLARITY
+   ============================================================================ */
+
+.doc-symbol {
+    font-size: 0.64rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    vertical-align: middle;
+    margin-right: var(--doc-space-sm);
+    padding: 3px 8px;
+    border-radius: var(--doc-radius-sm);
+    line-height: 1.6;
+    box-shadow: var(--doc-shadow-sm);
+    border: 1px solid;
+}
+
+.doc-symbol-module {
+    background: var(--doc-module-bg);
+    color: var(--doc-module-border);
+    border-color: var(--doc-module-border);
+}
+
+.doc-symbol-class {
+    background: var(--doc-class-bg);
+    color: var(--doc-class-border);
+    border-color: var(--doc-class-border);
+}
+
+.doc-symbol-method,
+.doc-symbol-function {
+    background: var(--doc-method-bg);
+    color: var(--doc-method-border);
+    border-color: var(--doc-method-border);
+}
+
+.doc-symbol-attribute,
+.doc-symbol-property {
+    background: var(--doc-attr-bg);
+    color: var(--doc-attr-border);
+    border-color: var(--doc-attr-border);
+}
+
+
+/* ============================================================================
+   SOURCE CODE LINKS
+   ============================================================================ */
+
+.mkdocstrings-source details {
+    margin-top: var(--doc-space-lg);
+    border: 2px solid var(--doc-separator);
+    border-radius: var(--doc-radius-md);
+    overflow: hidden;
+    box-shadow: var(--doc-shadow-sm);
+}
+
+.mkdocstrings-source details summary {
+    font-size: 0.78rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    padding: var(--doc-space-sm) var(--doc-space-md);
+    cursor: pointer;
+    background: var(--doc-accent-subtle);
+    transition: background var(--doc-transition);
+    border-left: 4px solid var(--doc-accent-primary);
+}
+
+.mkdocstrings-source details summary:hover {
+    background: var(--doc-accent-subtle);
+    filter: brightness(1.1);
+}
+
+
+/* ============================================================================
+   TABLES — ENHANCED STYLING
+   ============================================================================ */
+
+.md-typeset table:not([class]) {
+    display: table;
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+    border: 2px solid var(--doc-separator-strong);
+    border-radius: var(--doc-radius-md);
+    box-shadow: var(--doc-shadow-md);
+    overflow: hidden;
+    font-size: 0.86rem;
+    margin: var(--doc-space-lg) 0;
+}
+
+.md-typeset table:not([class]) th {
+    background: linear-gradient(135deg, var(--doc-accent-subtle), transparent);
+    color: var(--doc-accent-primary);
+    font-weight: 700;
+    text-transform: uppercase;
+    font-size: 0.72rem;
+    letter-spacing: 0.08em;
+    padding: var(--doc-space-md) var(--doc-space-lg);
+    border-bottom: 2px solid var(--doc-separator-strong);
+    text-align: left;
+}
+
+.md-typeset table:not([class]) td {
+    padding: var(--doc-space-md) var(--doc-space-lg);
+    border-bottom: 1px solid var(--doc-separator);
+    vertical-align: top;
+}
+
+.md-typeset table:not([class]) tr:last-child td {
+    border-bottom: none;
+}
+
+.md-typeset table:not([class]) tbody tr:nth-child(even) {
+    background-color: var(--doc-accent-subtle);
+}
+
+.md-typeset table:not([class]) tbody tr {
+    transition: background var(--doc-transition);
+}
+
+.md-typeset table:not([class]) tbody tr:hover {
+    background-color: var(--doc-accent-subtle);
+    filter: brightness(1.05);
+}
+
+.doc-contents table {
+    width: 100%;
+    display: table;
+    border-collapse: separate;
+    border-spacing: 0;
+    margin-top: var(--doc-space-lg);
+    border: 2px solid var(--doc-separator-strong);
+    border-radius: var(--doc-radius-md);
+    box-shadow: var(--doc-shadow-md);
+    overflow: hidden;
+}
+
+.doc-contents table th {
+    background: linear-gradient(135deg, var(--doc-accent-subtle), transparent);
+    color: var(--doc-accent-primary);
+    font-weight: 700;
+    text-transform: uppercase;
+    font-size: 0.72rem;
+    letter-spacing: 0.08em;
+    padding: var(--doc-space-md) var(--doc-space-lg);
+    border-bottom: 2px solid var(--doc-separator-strong);
+}
+
+.doc-contents table td {
+    padding: var(--doc-space-md) var(--doc-space-lg);
+    border-bottom: 1px solid var(--doc-separator);
+    font-size: 0.86rem;
+    vertical-align: top;
+}
+
+.doc-contents table tr:last-child td {
+    border-bottom: none;
+}
+
+.doc-contents table tbody tr:hover {
+    background-color: var(--doc-accent-subtle);
+}
+
+
+/* ============================================================================
+   CODE BLOCKS
+   ============================================================================ */
+
+.md-typeset pre {
+    border-radius: var(--doc-radius-md);
+    box-shadow: var(--doc-shadow-md);
+    border: 2px solid var(--doc-separator);
+    overflow: hidden;
+}
+
+.md-typeset code {
+    font-size: 0.86em;
+    padding: 0.2em 0.45em;
+    border-radius: var(--doc-radius-sm);
+    background-color: var(--md-code-bg-color);
+    border: 1px solid var(--doc-separator);
+    word-break: break-word;
+}
+
+.md-typeset pre code {
+    border: none;
+    padding: 0;
+    background: transparent;
+}
+
+.md-clipboard {
+    opacity: 0;
+    transition: opacity var(--doc-transition);
+}
+
+.md-typeset pre:hover .md-clipboard {
+    opacity: 0.6;
+}
+
+.md-clipboard:hover {
+    opacity: 1 !important;
+}
+
+.md-annotation__index {
+    font-size: 0.7rem;
+    font-weight: 700;
+    box-shadow: var(--doc-shadow-sm);
+}
+
+
+/* ============================================================================
+   ADMONITIONS
+   ============================================================================ */
+
+.md-typeset .admonition,
+.md-typeset details {
+    border-radius: var(--doc-radius-md);
+    box-shadow: var(--doc-shadow-md);
+    border: none;
+    border-left: 5px solid;
+    overflow: hidden;
+    margin-top: var(--doc-space-lg);
+    margin-bottom: var(--doc-space-lg);
+}
+
+.md-typeset .admonition-title,
+.md-typeset summary {
+    font-weight: 600;
+    font-size: 0.86rem;
+    letter-spacing: 0.02em;
+}
+
+
+/* ============================================================================
+   SEARCH
+   ============================================================================ */
+
+.md-search__inner {
+    border-radius: var(--doc-radius-lg);
+    overflow: hidden;
+}
+
+.md-search-result__meta {
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    font-weight: 600;
+    padding: var(--doc-space-sm) var(--doc-space-md);
+}
+
+.md-search-result__item {
+    border-bottom: var(--doc-border);
+    padding: var(--doc-space-sm) 0;
+}
+
+.md-search-result mark {
+    background: rgba(255, 235, 59, 0.35);
+    border-radius: 2px;
+    padding: 0 2px;
+}
+
+
+/* ============================================================================
+   FOOTER
+   ============================================================================ */
+
+.md-footer {
+    border-top: 2px solid var(--doc-separator);
+}
+
+.md-footer-meta {
+    font-size: 0.75rem;
+    opacity: 0.7;
+}
+
+.md-footer__link {
+    transition: opacity var(--doc-transition);
+    opacity: 0.8;
+}
+
+.md-footer__link:hover {
+    opacity: 1;
+}
+
+
+/* ============================================================================
+   TABS
+   ============================================================================ */
+
+.md-typeset .tabbed-labels {
+    border-bottom: 2px solid var(--doc-separator-strong);
+}
+
+.md-typeset .tabbed-labels>label {
+    font-size: 0.84rem;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    opacity: 0.6;
+    padding: var(--doc-space-sm) var(--doc-space-md);
+    transition: opacity var(--doc-transition), border-color var(--doc-transition);
+}
+
+.md-typeset .tabbed-labels>label:hover {
+    opacity: 0.85;
+}
+
+.md-typeset .tabbed-labels>label.tabbed-labels--active,
+.md-typeset .tabbed-labels>input:checked+label {
+    opacity: 1;
+}
+
+.md-typeset .task-list-indicator::before {
+    border-radius: var(--doc-radius-sm);
+}
+
+.md-typeset dd {
+    margin-left: var(--doc-space-lg);
+    margin-bottom: var(--doc-space-md);
+}
+
+
+/* ============================================================================
+   SCROLLBARS
+   ============================================================================ */
+
+::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+
+::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+    background: var(--md-default-fg-color--lighter);
+    border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: var(--md-default-fg-color--light);
+}
+
+
+/* ============================================================================
+   RESPONSIVE DESIGN
+   ============================================================================ */
+
+@media screen and (max-width: 76.25em) {
+    .md-typeset {
+        font-size: 0.9rem;
+    }
+
+    .doc-object .doc-object {
+        padding-left: var(--doc-space-sm);
+    }
+}
+
+@media screen and (max-width: 44.9375em) {
+    .md-typeset h1 {
+        font-size: 1.5rem;
+    }
+
+    .doc-signature {
+        font-size: 0.8em;
+        padding: var(--doc-space-sm) var(--doc-space-md);
+    }
+
+    .md-typeset table:not([class]) th,
+    .md-typeset table:not([class]) td,
+    .doc-contents table th,
+    .doc-contents table td {
+        padding: var(--doc-space-sm) var(--doc-space-md);
+    }
+}
+
+
+/* ============================================================================
+   TRANSITIONS & ANIMATIONS
+   ============================================================================ */
+
+body,
+.md-header,
+.md-sidebar,
+.md-footer,
+.md-tabs {
+    transition: background-color 250ms ease, color 250ms ease;
+}
+
+:target {
+    scroll-margin-top: 5rem;
+}
+
+.doc-object {
+    animation: fadeInUp 0.4s ease-out;
+}
+
+@keyframes fadeInUp {
+    from {
+        opacity: 0;
+        transform: translateY(10px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+
+/* ============================================================================
+   PRINT STYLES
+   ============================================================================ */
+
+@media print {
+
+    .md-header,
+    .md-tabs,
+    .md-sidebar,
+    .md-footer,
+    .md-clipboard,
+    .headerlink {
+        display: none !important;
+    }
+
+    .md-content {
+        max-width: 100%;
+        margin: 0;
+        padding: 0;
+    }
+
+    .doc-signature {
+        box-shadow: none;
+        border: 1px solid #ccc;
+    }
+}

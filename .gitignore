@@ -79,3 +79,4 @@ lib.h
 mnist_data
 extracted_info.json
 stats.json
+site/
