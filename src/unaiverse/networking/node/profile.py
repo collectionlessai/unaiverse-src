@@ -22,12 +22,13 @@ import requests
 import ipaddress
 from datetime import timezone
 from enum import Enum
-from typing import TypedDict
+from typing import Dict, TypedDict, Union
 from functools import lru_cache
 from math import radians, cos, sin, sqrt, atan2
 from ....unaiverse.dataprops import DatapropsData
 from .connpool import ExtendedPeerInfosData
 from pydantic import BaseModel, Field, model_validator, EmailStr, UUID4, IPvAnyAddress
+from datetime import datetime
 
 # ---- STATIC INFOS ---
 IP_SERVICES: list[str] = [
@@ -257,7 +258,7 @@ class GeoLocation(BaseModel):
         ValueError: If pre_fetched_data is provided but is missing required keys.
     """
     
-    method: GeoLocationMethod | None = Field(default=None, description="The method used to determine the node's location (e.g., IP-based or manual).")
+    method: Union[GeoLocationMethod, None] = Field(default=None, description="The method used to determine the node's location (e.g., IP-based or manual).")
     country: str = Field(..., description="The country where the node is located.")
     city: str = Field(..., description="The city where the node is located.")
     latitude: float = Field(..., description="The latitude coordinate of the node's location.")
@@ -266,13 +267,13 @@ class GeoLocation(BaseModel):
     
     
     @model_validator(mode="before")
-    def fetch_location_data(cls, data: GeoLocationData | str) -> GeoLocationData | None:
+    def fetch_location_data(cls, data: Union[GeoLocationData, str]) -> Union[GeoLocationData, None]:
         """ Validates and fetches location data if the method is IP-based.
 
         Args:
-            data (GeoLocationData | str): A dictionary containing the method and pre_fetched_data fields.
+            data: A dictionary containing the method and pre_fetched_data fields.
         Returns:
-            GeoLocationData | None: A dictionary with the method and location data fields populated. If the method is IP-based, the location data is fetched using the get_location_by_ip function.
+            A dictionary with the method and location data fields populated. If the method is IP-based, the location data is fetched using the get_location_by_ip function.
         Raises:
             ValueError: If the method is not an instance of GeoLocationMethod Enum.
             ValueError: If pre_fetched_data is provided but is missing required keys.
@@ -366,6 +367,14 @@ class Account(BaseModel):
     """ Account data class, containing all the information about the node's owner. 
         This information comes from the registration form on the platform, therefore they are static.
     
+    Args:
+        name (str): The name of the node's owner.
+        surname (str): The surname of the node's owner.
+        title (str): The title of the node's owner.
+        organization (str): The organization the node's owner is affiliated with.
+        email (EmailStr): The email address of the node's owner. Must be a valid email format.
+        inspector_node_id (UUID4): The inspector node ID is the human agent associated to the node's owner, which is responsible for inspecting the node's behavior. Must be a valid UUID4 format.
+    
     Raises:
         ValueError: If the email format is invalid.
         ValueError: If input data is missing required keys.
@@ -393,6 +402,15 @@ class Account(BaseModel):
 class Badge(BaseModel):
     """ Represents a badge awarded to an agent in a world.
 
+    Args:
+        badge_id (str): The unique identifier of the badge.
+        badge_type (str): The type of badge awarded.
+        description (str): A textual description of the badge.
+        last_edit_utc (str): The UTC timestamp of the last edit to the badge.
+        score (float): The score associated with the badge.
+        world_node_id (str): The unique identifier of the world node that awarded the badge.
+        world_node_name (str): The human-readable name of the world node that awarded the badge.
+        
     Raises:
         ValueError: If any of the input parameters are of the wrong type.
     """
@@ -407,7 +425,20 @@ class Badge(BaseModel):
     
 class WorldSummary(BaseModel):
     """ Represents the world summary data of a world node.
-        This class is currently a placeholder for future implementation, as the current version of the platform does not support world summary data.
+        
+    Args:
+        world_title (str): The title of the world.
+        world_agents (list[ExtendedPeerInfosData]): A list of ExtendedPeerInfosData instances representing the agents currently present in the world.
+        world_agents_count (int): The total number of world agents currently present in the world.
+        world_masters (list[ExtendedPeerInfosData]): A list of ExtendedPeerInfosData instances representing the world masters currently managing the world.
+        world_masters_count (int): The total number of world masters currently managing the world.
+        total_agents (int): The total number of agents (agents+masters) that is currently in the world.
+        agent_badges (list[Badge]): A list of badges given to agents in the world.
+        agent_badges_count (int): The total number of badges given to agents in the world.
+        streams_count (int): The total number of streams currently active in the world.
+    
+    Raises:
+        ValueError: If any of the input parameters are of the wrong type.
     """
     
     world_title: str = Field(description="The title of the world.", default="")
@@ -455,3 +486,145 @@ class DynamicProfile(BaseModel):
     public_ip_address: IPvAnyAddress = Field(..., description="The public IP address of the node.")
     guessed_location: GeoLocation = Field(..., description="The guessed location of the node based on its public IP address or manual input (depending on the geolocation method).")
     peer_id: str = Field(..., description="The peer ID of the node, which is a unique identifier used in the p2p network to identify the node during interactions with other nodes.", )
+    peer_addresses: list[str] = Field(..., description="A list of peer multi-addresses that the node is listening on the p2p network.")
+    private_peer_id: str = Field(..., description="The private peer ID of the node, which is used for internal communications within the node itself.")
+    private_peer_addresses: list[str] = Field(..., description="A list of private peer multi-addresses that the node is listening on for private communications.")
+    proc_inputs: list[DatapropsData] = Field(..., description="A list of DatapropsData instances representing the input data properties that the agent processor is capable of processing.") # TODO change it after DataProps will be a BaseModel
+    proc_outputs: list[DatapropsData] = Field(..., description="A list of DatapropsData instances representing the output data properties that the agent processor is capable of producing.") # TODO change it after DataProps will be a BaseModel
+    streams: list[DatapropsData] = Field(..., description="A list of DatapropsData instances representing the data properties that the agent processor can stream in real-time.") # TODO change it after DataProps will be a BaseModel
+    connections: ConnectionsData = Field(..., description="The connections data of the node in the p2p network.")
+    world_summary: WorldSummary = Field(..., description="The world summary data of the node, if the node is a world.")
+    world_roles_fsm: dict[str, str] = Field(..., description="A dictionary representing the finite state machine of world roles for the node.")
+    hidden: bool = Field(..., description="Indicates whether the node is hidden in the network (hidden means not visible in the map for other users).")
+    
+    @model_validator(mode="before")
+    def filling_missing_specs(cls, data: DynamicProfileData | str) -> DynamicProfileData:
+        """ Validates and fills missing specifications in the dynamic profile data.
+
+        Args:
+            data (DynamicProfileData | str): A dictionary containing the dynamic profile data of the node or a JSON string representation of it. 
+            A ghost field named "filling_missing_specs" is expected in the input data, which is used to trigger the filling of missing specifications. Defaults to False if not provided.
+        
+        Returns:
+            DynamicProfileData: A dictionary with missing specifications filled in. For example, if the public IP address or guessed location is missing, they will be filled in.
+        """
+        if isinstance(data, str): # Case in which we got a dumped string
+            try:
+                data = json.loads(data)
+            except json.JSONDecodeError:
+                raise ValueError(f"[NodeProfile][DynamicProfile] Input data string is not valid JSON.")
+        
+        if not isinstance(data, dict):
+            raise ValueError(f"[NodeProfile][DynamicProfile] Input data must be a dictionary, got: {type(data)}")
+        
+        do_i_need_to_fill: bool = data.get("filling_missing_specs", False)
+        
+        system_specs: Dict | None = None
+        if "os" not in data and do_i_need_to_fill: # System specs missing
+            system_specs = DynamicProfile._get_current_specs()
+        
+        public_ip: str | None = None
+        if ("public_ip_address" not in data or data["public_ip_address"] == "" or data["public_ip_address"] is None) and do_i_need_to_fill: # Public IP missing
+            public_ip = get_public_ip()
+        
+        guessed_location: GeoLocationData | None = None
+        if ("guessed_location" not in data or  \
+            data["guessed_location"] == {} or  \
+            data["guessed_location"] is None or \
+            data["guessed_location"]["country"] is None or \
+            data["guessed_location"]["country"] == "") and do_i_need_to_fill: # Guessed location missing
+            guessed_location = get_location_by_ip()
+        
+        if system_specs:
+            data.update(system_specs)
+            
+        if public_ip:
+            data["public_ip_address"] = public_ip
+            
+        if guessed_location:
+            data["guessed_location"] = guessed_location
+        
+        return data
+    
+    @staticmethod
+    def _get_current_specs() -> dict:
+        """Gathers current system specifications.
+        
+           Returns:
+                A dictionary containing the current system specifications, including operating system, CPU cores, memory information
+        """
+        cpu_info: Dict[str, int | None] = DynamicProfile._get_cpu_info()
+        memory_info: Dict[str, float] = DynamicProfile._get_memory_info()
+
+        return {
+            'timestamp': datetime.datetime.now(timezone.utc).isoformat(),
+            'os': DynamicProfile._get_os_spec(),
+            'cpu_cores': cpu_info.get('physical_cores'),
+            'logical_cpus': cpu_info.get('logical_cores'),
+            'memory_gb': memory_info.get('total'),
+            'memory_avail': memory_info.get('available'),
+            'memory_used': memory_info.get('used'),
+        }
+    
+    @staticmethod
+    def _get_os_spec() -> str:
+        """Extracts operating system information.
+        
+            Returns:
+                str: A string representing the operating system specifications, including OS name and version.
+        """
+        return platform.platform()
+
+    # Get cpu information
+    @staticmethod
+    def _get_cpu_info() -> dict[str, int | None]:
+        """Extracts CPU core information.
+        
+            Returns:
+                A dictionary containing the number of physical and logical CPU cores. If an error occurs while fetching the CPU information, both values will be set to None.
+        """
+        try:
+            return {
+                'physical_cores': psutil.cpu_count(logical=False),
+                'logical_cores': psutil.cpu_count(logical=True)
+            }
+        except Exception as e:
+            print(f"Error getting CPU info: {e}")
+            return {'physical_cores': None, 'logical_cores': None}
+
+    # Get memory information
+    @staticmethod
+    def _get_memory_info() -> dict[str, float]:
+        """Extracts memory information in GB.
+        
+            Returns:
+                A dictionary containing the total, available, and used memory in gigabytes. If an error occurs while fetching the memory information, all values will be set to 0.0.
+        """
+        try:
+            mem = psutil.virtual_memory()
+            total_gb = mem.total / (1024 ** 3)
+            available_gb = mem.available / (1024 ** 3)
+            used_gb = mem.used / (1024 ** 3)
+            return {
+                'total': float(total_gb),
+                'available': float(available_gb),
+                'used': float(used_gb)
+            }
+        except Exception as e:
+            print(f"Error getting memory info: {e}")
+            return {'total': 0.0, 'available': 0.0, 'used': 0.0}
+        
+
+class NodeProfile(BaseModel):
+    """ Represents the complete profile of a node, including both static and dynamic data.
+
+    Raises:
+        ValueError: If any of the input parameters are of the wrong type or if created_utc is not in the correct format.
+        ValueError: If input data is missing required keys.
+    """
+    
+    static: StaticProfile = Field(..., description="An instance of the StaticProfile class containing all the static information about the node.")
+    dynamic: DynamicProfile = Field(..., description="An instance of the DynamicProfile class containing all the dynamic information about the node.")
+    cv: list[Badge] = Field(..., description="A list of badges representing the node's curriculum vitae (CV). This information is not currently supported by the platform, but it is defined here for future implementation.")
+    
+    _last_updated_utc: datetime = Field(description="The UTC timestamp when the node profile was last updated.", default=datetime.now(timezone.utc))
