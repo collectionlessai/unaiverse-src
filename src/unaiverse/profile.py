@@ -39,8 +39,8 @@ from pydantic import (
 from typing_extensions import Self
 
 # 1st party imports
-from ....unaiverse.dataprops import DatapropsData
-from .connpool import ExtendedPeerInfosData
+from .dataprops import DatapropsData
+from .networking.node.connpool import ExtendedPeerInfosData
 
 
 # ---- STATIC INFOS ---

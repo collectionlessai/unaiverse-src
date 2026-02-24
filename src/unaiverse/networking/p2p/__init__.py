@@ -12,10 +12,11 @@
                  Code Repositories:  https://github.com/collectionlessai/
                  Main Developers:    Stefano Melacci (Project Leader), Christian Di Maio, Tommaso Guidi
 """
-from . import messages
+from .. import messages
 from . import p2p
 from . import golibp2p
 from . import lib_types
+from .. import channel
 import os
 import sys
 import glob
@@ -24,10 +25,11 @@ import hashlib
 import warnings
 import itertools
 from typing import cast
-from .messages import Msg
+from ..messages import Msg
 from .p2p import P2P, P2PError
 from .golibp2p import GoLibP2P  # Your stub interface definition
 from .lib_types import TypeInterface  # Assuming TypeInterface handles the void* results
+from ..channel import P2PChannel, ChannelType, CommonChannels  # Channel management
 
 
 def _get_file_hash(filepath):
@@ -184,5 +186,8 @@ TypeInterface.libp2p = _shared_lib_typed  # Attach to TypeInterface if needed
 __all__ = [
     "P2P",
     "P2PError",
-    "TypeInterface"  # Expose TypeInterface if users need its conversion helpers directly
+    "TypeInterface",  # Expose TypeInterface if users need its conversion helpers directly
+    "P2PChannel",  # Channel management class
+    "ChannelType",  # Channel type enum
+    "CommonChannels",  # Common channel patterns
 ]

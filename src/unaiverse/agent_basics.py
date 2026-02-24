@@ -22,9 +22,9 @@ from PIL.Image import Image
 from unaiverse.stats import Stats
 from unaiverse.clock import Clock
 from collections.abc import Callable
-from unaiverse.networking.p2p.messages import Msg
+from unaiverse.networking.messages import Msg
 from unaiverse.dataprops import DataProps, Data4Proc
-from unaiverse.networking.node.profile import NodeProfile
+from unaiverse.profile import NodeProfile
 from unaiverse.utils.misc import GenException, FileTracker
 from unaiverse.streams import BufferedDataStream, DataStream
 from unaiverse.networking.node.connpool import ConnectionPools

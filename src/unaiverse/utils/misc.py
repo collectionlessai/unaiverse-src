@@ -12,6 +12,7 @@
                  Code Repositories:  https://github.com/collectionlessai/
                  Main Developers:    Stefano Melacci (Project Leader), Christian Di Maio, Tommaso Guidi
 """
+
 import os
 import ast
 import sys
@@ -22,7 +23,9 @@ import random
 import threading
 from tqdm import tqdm
 from pathlib import Path
+from functools import wraps
 from datetime import datetime
+
 from unaiverse.modules.utils import HumanModule
 
 
@@ -435,6 +438,37 @@ class PolicyFilterHuman:
 
         # Returning the revised policy decision
         return action_id, request
+
+
+
+def ttl_cache(seconds: int):
+    """A decorator that caches the result of a function for a specific number of seconds."""
+    def decorator(func):
+        # We store the cache in a mutable container (list) within the closure
+        # Structure: [result, timestamp]
+        cache = []
+
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            current_time = time.time()
+            
+            # Check if we have a valid cached result
+            if cache:
+                result, timestamp = cache[0]
+                if current_time - timestamp < seconds:
+                    return result
+            
+            result = func(*args, **kwargs)
+            
+            if cache:
+                cache[0] = (result, current_time)
+            else:
+                cache.append((result, current_time))
+                
+            return result
+        return wrapper
+    return decorator
+
 
 
 def has_human_processor(agent):

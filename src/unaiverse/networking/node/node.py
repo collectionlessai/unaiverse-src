@@ -34,10 +34,10 @@ from unaiverse.clock import Clock
 from unaiverse.world import World
 from unaiverse.agent import Agent
 from datetime import datetime, timezone
-from unaiverse.networking.p2p.messages import Msg
+from unaiverse.networking.messages import Msg
 from unaiverse.networking.p2p import P2P, P2PError
 from unaiverse.networking.node.connpool import NodeConn
-from unaiverse.networking.node.profile import NodeProfile
+from unaiverse.profile import NodeProfile
 from unaiverse.streams import DataProps, BufferedDataStream
 from unaiverse.utils.misc import (GenException, get_key_considering_multiple_sources, save_node_addresses_to_file,
                                   PolicyFilterHuman, prepare_app_dir)

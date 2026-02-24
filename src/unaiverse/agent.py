@@ -19,7 +19,7 @@ from unaiverse.stats import Stats
 from unaiverse.dataprops import DataProps
 from unaiverse.agent_basics import AgentBasics
 from unaiverse.streams import BufferedDataStream
-from unaiverse.networking.p2p.messages import Msg
+from unaiverse.networking.messages import Msg
 
 
 class Agent(AgentBasics):

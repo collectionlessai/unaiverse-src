@@ -16,7 +16,7 @@ import math
 import base64
 import binascii
 from typing import TypedDict
-from unaiverse.networking.p2p.messages import Msg
+from unaiverse.networking.messages import Msg
 from unaiverse.networking.p2p.p2p import P2P, P2PError
 from unaiverse.networking.node.tokens import TokenVerifier
 
@@ -32,13 +32,13 @@ class ExtendedPeerInfosData(TypedDict):
 class ConnectionPools:
     DEBUG = True
 
-    def __init__(self, max_connections: int, pool_name_to_p2p_name_and_ratio: dict[str, [str, float]],
+    def __init__(self, max_connections: int, pool_name_to_p2p_name_and_ratio: dict[str, tuple[str, float]],
                  p2p_name_to_p2p: dict[str, P2P], public_key: str | None = None, token: str | None = None):
         """Initializes a new instance of the ConnectionPools class.
 
         Args:
             max_connections: The maximum total number of connections allowed across all pools.
-            pool_name_to_p2p_name_and_ratio: A dictionary mapping pool names to a list containing the associated P2P
+            pool_name_to_p2p_name_and_ratio: A dictionary mapping pool names to a tuple containing the associated P2P
                 network name and its connection ratio.
             p2p_name_to_p2p: A dictionary mapping P2P network names to their corresponding P2P objects.
             public_key: An optional public key for token verification.

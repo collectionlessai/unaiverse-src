@@ -16,8 +16,8 @@ from unaiverse.stats import Stats
 from typing import List, Dict, Any
 from unaiverse.agent import AgentBasics
 from unaiverse.hsm import HybridStateMachine
-from unaiverse.networking.p2p.messages import Msg
-from unaiverse.networking.node.profile import NodeProfile
+from unaiverse.networking.messages import Msg
+from unaiverse.profile import NodeProfile
 
 
 class World(AgentBasics):

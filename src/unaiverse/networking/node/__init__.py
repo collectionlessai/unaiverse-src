@@ -14,5 +14,5 @@
 """
 from . import connpool
 from . import node
-from . import profile
+from ... import profile
 from . import tokens
