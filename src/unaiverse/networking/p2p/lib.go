@@ -41,6 +41,7 @@ import (
 	"github.com/libp2p/go-libp2p/core/peer"                       // Defines Peer ID and AddrInfo types
 	"github.com/libp2p/go-libp2p/core/peerstore"                  // Defines the Peerstore interface for storing peer metadata (addresses, keys)
 	"github.com/libp2p/go-libp2p/core/routing"                    // Defines the Routing interface for peer routing (e.g., DHT)
+	"github.com/libp2p/go-libp2p/p2p/protocol/circuitv2/client"   // For establishing outbound relayed connections (acting as a client)
 	rc "github.com/libp2p/go-libp2p/p2p/protocol/circuitv2/relay" // Import for relay service options
 	autorelay "github.com/libp2p/go-libp2p/p2p/host/autorelay"	   // AutoRelay for automatic relay selection and usage
 	rcmgr "github.com/libp2p/go-libp2p/p2p/host/resource-manager"			  // Resource manager for controlling resource usage (connections, streams)
@@ -67,6 +68,7 @@ import (
 
 	// Multiaddr libraries (libp2p's addressing format)
 	ma "github.com/multiformats/go-multiaddr"        // Core multiaddr parsing and manipulation
+	manet "github.com/multiformats/go-multiaddr/net" // Utilities for working with multiaddrs and net interfaces (checking loopback, etc.)
 )
 
 // ChatProtocol defines the protocol ID string used for direct peer-to-peer messaging streams.
@@ -166,8 +168,7 @@ type NodeInstance struct {
     localAddrs []ma.Multiaddr
 
 	// Static relay
-	privateRelay *autorelay.AutoRelay
-	// privateRelayAddrs []ma.Multiaddr
+	privateRelayAddrs []ma.Multiaddr
 
 	// PubSub State
 	pubsubMutex   sync.RWMutex
@@ -1076,11 +1077,11 @@ func writeDirectMessageFrame(w io.Writer, channel string, payload []byte) error 
 // of fetching and formatting node addresses.
 // It takes a pointer to a NodeInstance and a targetPID. If targetPID is empty (peer.ID("")),
 // it fetches addresses for the local node of the given instance.
-// It returns a slice of fully formatted multiaddress strings and an error if one occurs.
+// It returns a slice of fully ma.Multiaddr.
 func goGetNodeAddresses(
-	ni *NodeInstance,
-	targetPID peer.ID,
-) ([]string, error) {
+    ni *NodeInstance,
+    targetPID peer.ID,
+) ([]ma.Multiaddr, error) {
 	if ni.host == nil {
 		errMsg := fmt.Sprintf("Instance %d: Host not initialized", ni.instanceIndex)
 		logger.Errorf("[GO] ❌ goGetNodeAddresses: %s\n", errMsg)
@@ -1100,7 +1101,7 @@ func goGetNodeAddresses(
 	if isThisNode {
 		ni.addrMutex.RLock()
 		candidateAddrs = append(candidateAddrs, ni.localAddrs...)
-		// candidateAddrs = append(candidateAddrs, ni.privateRelayAddrs...)
+		candidateAddrs = append(candidateAddrs, ni.privateRelayAddrs...)
 		ni.addrMutex.RUnlock()
 	} else {
 		// --- Remote Peer Addresses ---
@@ -1113,7 +1114,7 @@ func goGetNodeAddresses(
 	}
 
 	// --- 2. Process and filter candidate addresses ---
-	addrSet := make(map[string]struct{})
+	addrSet := make(map[string]ma.Multiaddr)
 	for _, addr := range candidateAddrs {
 		// if addr == nil || manet.IsIPLoopback(addr) || manet.IsIPUnspecified(addr) {
 		// 	continue
@@ -1135,30 +1136,23 @@ func goGetNodeAddresses(
 		}
 
 		// handle cases based on presence and correctness of Peer ID in the address
-		switch {
-		case idInAddr == resolvedPID:
-			// Case A: The address is already perfect and has the correct Peer ID. Use it as is.
-			finalAddr = addr
-
-		case idInAddr == "":
-			// Case B: The address is missing a Peer ID. This is common for addresses from the
-			// peerstore and for relayed addresses like `/p2p/RELAY_ID/p2p-circuit`. We must append ours.
-			p2pComponent, _ := ma.NewMultiaddr(fmt.Sprintf("/p2p/%s", resolvedPID.String()))
-			finalAddr = addr.Encapsulate(p2pComponent)
-
-		case idInAddr != resolvedPID:
-			// Case C: The address has the WRONG Peer ID. This is stale or incorrect data. Discard it.
-			logger.Warnf("[GO] ⚠️ Instance %d: Discarding stale address for peer %s: %s\n", ni.instanceIndex, resolvedPID, addr)
-			continue
-		}
-		addrSet[finalAddr.String()] = struct{}{}
+        if idInAddr == resolvedPID {
+            finalAddr = addr
+        } else if idInAddr == "" {
+            p2pComponent, _ := ma.NewMultiaddr(fmt.Sprintf("/p2p/%s", resolvedPID.String()))
+            finalAddr = addr.Encapsulate(p2pComponent)
+        } else {
+            logger.Warnf("[GO] ⚠️ Instance %d: Discarding stale address for peer %s: %s\n", ni.instanceIndex, resolvedPID, addr)
+            continue
+        }
+		addrSet[finalAddr.String()] = finalAddr
 	}
 
 	// --- 4. Convert the final set of unique addresses to a slice for returning. ---
-	result := make([]string, 0, len(addrSet))
-	for addr := range addrSet {
-		result = append(result, addr)
-	}
+	result := make([]ma.Multiaddr, 0, len(addrSet))
+	for _, addr := range addrSet {
+        result = append(result, addr)
+    }
 
 	if len(result) == 0 {
 		logger.Warnf("[GO] ⚠️ goGetNodeAddresses: No suitable addresses found for peer %s.", resolvedPID)
@@ -1194,15 +1188,6 @@ func (ni *NodeInstance) Close() error {
 			logger.Warnf("[GO] ⚠️ Instance %d: Error closing DHT: %v\n", ni.instanceIndex, err)
 		}
 		ni.dht = nil
-	}
-
-	// --- Close AutoRelay ---
-	if ni.privateRelay != nil {
-		logger.Debugf("[GO]   - Instance %d: Closing AutoRelay service...\n", ni.instanceIndex)
-		if err := ni.privateRelay.Close(); err != nil { //
-			logger.Warnf("[GO] ⚠️ Instance %d: Error closing AutoRelay: %v\n", ni.instanceIndex, err)
-		}
-		ni.privateRelay = nil
 	}
 
 	// --- Close Persistent Outgoing Streams ---
@@ -1250,7 +1235,7 @@ func (ni *NodeInstance) Close() error {
 	// Clear also the addresses
 	ni.addrMutex.Lock()
 	ni.localAddrs = nil
-	// ni.privateRelayAddrs = nil
+	ni.privateRelayAddrs = nil
 	ni.addrMutex.Unlock()
 
 	// Clear the MessageStore for this instance
@@ -1612,6 +1597,7 @@ func CreateNode(
 		// Configure Relay Service (ability to *be* a relay)
 		if cfg.Relay.EnableService {
 			resources := rc.DefaultResources() // open this to see the default resource limits
+			// resources.ReservationTTL = time.Hour		// default is 1h
 			resources.MaxReservations = 1024			// default is 128
 			resources.MaxCircuits = 32					// default is 16
 			resources.BufferSize = 4096					// default is 2048
@@ -1755,12 +1741,18 @@ func CreateNode(
 	}
 
 	// --- Get Final Addresses ---
-	nodeAddresses, err := goGetNodeAddresses(ni, "")
+	multiaddrs, err := goGetNodeAddresses(ni, "")
 	if err != nil {
 		return jsonErrorResponse(
 			fmt.Sprintf("Instance %d: Failed to obtain node addresses after waiting for reachability", instanceIndex),
 			err,
 		)
+	}
+
+	// We must translate the multiaddrs to strings for the Python boundary
+	var nodeAddresses []string
+	for _, addr := range multiaddrs {
+		nodeAddresses = append(nodeAddresses, addr.String())
 	}
 
 	// --- Build and return the new structured response ---
@@ -1881,17 +1873,24 @@ func ConnectTo(
 	return jsonSuccessResponse(winningAddrInfo) // Caller frees.
 }
 
-// StartStaticRelay configures and starts the AutoRelay service using a specific
-// static relay (e.g., the subnetwork owner). This replaces manual reservation logic.
-//
+// ReserveOnRelay attempts to reserve a slot on a specified relay node for a specific instance.
+// This allows the local node to be reachable via that relay, even if behind NAT/firewall.
+// The first connection with the relay node should be done in advance using ConnectTo.
 // Parameters:
-//   - instanceIndexC: The node instance.
-//   - relayAddrInfoJSONC: JSON string of the relay's AddrInfo (id + addrs).
+//   - instanceIndexC (C.int): The index of the node instance.
+//   - relayPeerIDC (*C.char): The peerID of the relay node.
 //
-//export StartStaticRelay
-func StartStaticRelay(
+// Returns:
+//   - *C.char: A JSON string indicating success or failure.
+//     On success, the `message` contains the expiration date of the reservation (ISO 8601).
+//     Structure (Success): `{"state":"Success", "message": "2024-12-31T23:59:59Z"}`
+//     Structure (Error): `{"state":"Error", "message":"..."}`
+//   - IMPORTANT: The caller MUST free the returned C string using `FreeString`.
+//
+//export ReserveOnRelay
+func ReserveOnRelay(
 	instanceIndexC C.int,
-	relayAddrInfoJSONC *C.char,
+	relayPeerIDC *C.char,
 ) *C.char {
 
 	ni, err := getInstance(int(instanceIndexC))
@@ -1899,55 +1898,115 @@ func StartStaticRelay(
 		return jsonErrorResponse("Invalid instance", err)
 	}
 
-	// --- 1. Handle Switching Subnetworks ---
-	// If an AutoRelay service is already running, close it first.
-	if ni.privateRelay != nil {
-		logger.Debugf("[GO] 🔄 Instance %d: Switching Relay. Closing existing AutoRelay service...", ni.instanceIndex)
-		if err := ni.privateRelay.Close(); err != nil { //
-			logger.Warnf("[GO] ⚠️ Instance %d: Error closing old AutoRelay: %v", ni.instanceIndex, err)
-		}
-		ni.privateRelay = nil
-		// // Also clean up any existing relayed addresses
-		// ni.addrMutex.Lock()
-		// ni.privateRelayAddrs = nil
-		// ni.addrMutex.Unlock()
-		logger.Infof("[GO] 🔄 Instance %d: Previous AutoRelay service closed.", ni.instanceIndex)
-	}
+	// Convert C string input to Go string.
+	goRelayPeerID := C.GoString(relayPeerIDC)
+	logger.Debugf("[GO] 🅿️ Instance %d: Attempting to reserve slot on relay with Peer ID: %s\n", ni.instanceIndex, goRelayPeerID)
 
-	// --- 2. Parse the New Relay's AddrInfo ---
-	relayInfoJSON := C.GoString(relayAddrInfoJSONC)
-	var relayInfo peer.AddrInfo
-	if err := json.Unmarshal([]byte(relayInfoJSON), &relayInfo); err != nil {
-		return jsonErrorResponse("Failed to parse relay AddrInfo JSON", err)
-	}
-
-	logger.Debugf("[GO] 🔗 Instance %d: Configuring Static AutoRelay with peer %s", ni.instanceIndex, relayInfo.ID)
-
-	// --- 3. Configure AutoRelay Options ---
-	opts := []autorelay.Option{
-		autorelay.WithStaticRelays([]peer.AddrInfo{relayInfo}),
-		autorelay.WithNumRelays(1), 
-		autorelay.WithBootDelay(0), 
-	}
-
-	// --- 4. Create the AutoRelay Service ---
-	// This initializes the service but might not start the background workers yet.
-	ar, err := autorelay.NewAutoRelay(ni.host, opts...) //
+	// --- Decode Peer ID and build AddrInfo from Peerstore ---
+	relayPID, err := peer.Decode(goRelayPeerID)
 	if err != nil {
-		return jsonErrorResponse("Failed to create AutoRelay service", err)
+		return jsonErrorResponse("Failed to decode relay Peer ID string", err)
 	}
 
-	// --- 5. Start the Service ---
-	// This kicks off the background goroutines to connect and reserve slots.
-    // It returns immediately.
-	ar.Start() 
+	// Retrieve the relay's addresses from the peerstore to construct the AddrInfo.
+	relayAddrs, err := goGetNodeAddresses(ni, relayPID)
+	if err != nil {
+		return jsonErrorResponse("Failed to retrieve relay addresses", err)
+	}
 
-	// Store the reference so we can close it later.
-	ni.privateRelay = ar
+	// Construct the AddrInfo using the ID and the addresses we know from the peerstore.
+	relayInfo := peer.AddrInfo{
+		ID:    relayPID,
+		Addrs: relayAddrs,
+	}
 
-	logger.Infof("[GO] ✅ Instance %d: Static AutoRelay service started. Target: %s", ni.instanceIndex, relayInfo.ID)
+	// Ensure the node is not trying to reserve a slot on itself.
+	if relayInfo.ID == ni.host.ID() {
+		return jsonErrorResponse(
+			fmt.Sprintf("Instance %d: Cannot reserve slot on self", ni.instanceIndex), nil,
+		) // Caller frees.
+	}
 
-	return jsonSuccessResponse("Static AutoRelay enabled")
+	// --- VERIFY CONNECTION TO RELAY ---
+	if len(ni.host.Network().ConnsToPeer(relayInfo.ID)) == 0 {
+		errMsg := fmt.Sprintf("Instance %d: Not connected to relay %s. Must connect before reserving.", ni.instanceIndex, relayInfo.ID)
+		return jsonErrorResponse(errMsg, nil)
+	}
+	logger.Debugf("[GO]   - Instance %d: Verified connection to relay: %s\n", ni.instanceIndex, relayInfo.ID)
+
+	// --- Attempt Reservation ---
+	// Use a separate context with potentially longer timeout for the reservation itself.
+	resCtx, resCancel := context.WithTimeout(ni.ctx, 60*time.Second) // 60-second timeout for reservation.
+	defer resCancel()
+	// Call the circuitv2 client function to request a reservation.
+	// This performs the RPC communication with the relay.
+	reservation, err := client.Reserve(resCtx, ni.host, relayInfo)
+	if err != nil {
+		errMsg := fmt.Sprintf("Instance %d: Failed to reserve slot on relay %s", ni.instanceIndex, relayInfo.ID)
+		// Handle reservation timeout specifically.
+		if resCtx.Err() == context.DeadlineExceeded {
+			errMsg = fmt.Sprintf("Instance %d: Reservation attempt on relay %s timed out", ni.instanceIndex, relayInfo.ID)
+			return jsonErrorResponse(errMsg, nil) // Caller frees.
+		}
+		return jsonErrorResponse(errMsg, err) // Caller frees.
+	}
+
+	// Although Reserve usually errors out if it fails, double-check if the reservation object is nil.
+	if reservation == nil {
+		errMsg := fmt.Sprintf("Instance %d: Reservation on relay %s returned nil voucher, but no error", ni.instanceIndex, relayInfo.ID)
+		return jsonErrorResponse(errMsg, nil) // Caller frees.
+	} else {
+		logger.Debugf("[GO] ✅ Instance %d: Successfully reserved slot on relay %s. Reservation expires at: %s\nRelay addresses: %v", ni.instanceIndex, relayInfo.ID, reservation.Expiration.Format(time.RFC3339), reservation.Addrs)
+	}
+
+	// --- Construct Relayed Addresses and Update Local Peerstore ---
+	// We construct a relayed address for each public address of the relay to maximize reachability.
+	var constructedAddrs []ma.Multiaddr
+	for _, relayAddr := range relayAddrs {
+		// We only want to use public, usable addresses for the circuit
+		if manet.IsIPLoopback(relayAddr) || manet.IsIPUnspecified(relayAddr) {
+			continue
+		}
+
+		// Ensure the relay's address in the peerstore includes its own Peer ID
+		baseRelayAddrStr := relayAddr.String()
+		if _, idInAddr := peer.SplitAddr(relayAddr); idInAddr == "" {
+			baseRelayAddrStr = fmt.Sprintf("%s/p2p/%s", relayAddr.String(), relayInfo.ID.String())
+		}
+		
+		constructedAddr, err := ma.NewMultiaddr(fmt.Sprintf("%s/p2p-circuit", baseRelayAddrStr))
+		if err == nil {
+			constructedAddrs = append(constructedAddrs, constructedAddr)
+		}
+	}
+
+	if len(constructedAddrs) == 0 {
+		return jsonErrorResponse("Reservation succeeded but failed to construct any valid relayed multiaddr", nil)
+	}
+
+	logger.Debugf("[GO] 🔗 Instance %d: Constructed %d Relayed Addresses:", ni.instanceIndex, len(constructedAddrs))
+	for _, addr := range constructedAddrs {
+		logger.Debugf("[GO]      -> %s", addr.String())
+	}
+	// Tell the Network to start listening on these addresses.
+    // This activates the circuit transport for this specific relay, updates host.Addrs(),
+    // and triggers the EvtLocalAddressesUpdated event automatically.
+    if err := ni.host.Network().Listen(constructedAddrs...); err != nil {
+		// If listening fails, it's not fatal for the reservation (we still have the slot),
+		// but it implies we might not be reachable via those specific paths.
+		logger.Warnf("[GO] ⚠️ Instance %d: Failed to start listener on some relayed addresses: %v", ni.instanceIndex, err)
+	} else {
+		logger.Debugf("[GO] ✅ Instance %d: Successfully started listening on relayed addresses.", ni.instanceIndex)
+	}
+	// Also add them directly to the istance
+	ni.addrMutex.Lock()
+    ni.privateRelayAddrs = constructedAddrs 
+    ni.addrMutex.Unlock()
+
+	logger.Infof("[GO] ✅ Instance %d: Reservation successful on relay: %s.\n", ni.instanceIndex, relayInfo.ID)
+
+	// Return the expiration time of the reservation as confirmation.
+	return jsonSuccessResponse(reservation.Expiration)
 }
 
 // DisconnectFrom attempts to close any active connections to a specified peer
@@ -2150,9 +2209,15 @@ func GetNodeAddresses(
 	}
 
 	// Call the internal Go function with the resolved peer.ID or empty peer.ID for local
-	addresses, err := goGetNodeAddresses(ni, pidForInternalCall)
+	multiaddrs, err := goGetNodeAddresses(ni, pidForInternalCall)
 	if err != nil {
 		return jsonErrorResponse(err.Error(), nil)
+	}
+
+	// We must translate the multiaddrs to strings for the Python boundary
+	var addresses []string
+	for _, addr := range multiaddrs {
+		addresses = append(addresses, addr.String())
 	}
 
 	return jsonSuccessResponse(addresses)

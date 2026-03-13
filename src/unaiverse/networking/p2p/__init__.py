@@ -145,9 +145,9 @@ _shared_lib.SubscribeToTopic.restype = ctypes.c_void_p  # Treat returned *C.char
 _shared_lib.UnsubscribeFromTopic.argtypes = [ctypes.c_int, ctypes.c_char_p]
 _shared_lib.UnsubscribeFromTopic.restype = ctypes.c_void_p  # Treat returned *C.char as opaque pointer
 
-# Static AutoRelay
-_shared_lib.StartStaticRelay.argtypes = [ctypes.c_int, ctypes.c_char_p]
-_shared_lib.StartStaticRelay.restype = ctypes.c_void_p  # Treat returned *C.char as opaque pointer
+# Relay Client
+_shared_lib.ReserveOnRelay.argtypes = [ctypes.c_int, ctypes.c_char_p]
+_shared_lib.ReserveOnRelay.restype = ctypes.c_void_p  # Treat returned *C.char as opaque pointer
 
 # Memory Management
 # FreeString now accepts the opaque pointer directly

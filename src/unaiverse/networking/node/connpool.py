@@ -286,6 +286,22 @@ class ConnectionPools:
         # Connecting
         peer_id, through_relay = await ConnectionPools.__connect(p2p, addresses)
         return peer_id, through_relay
+    
+    async def reserve(self, peer_id: str, p2p_name: str) -> str | None:
+        """Attempts to reserve a slot on a specified relay node via a P2P network (async).
+
+        Args:
+            peer_id: The peer ID of the relay node.
+            p2p_name: The name of the P2P network to use.
+
+        Returns:
+            The UTC expiration timestamp of the reservation, or None if it fails.
+        """
+        p2p = self.p2p_name_to_p2p[p2p_name]
+        try:
+            return p2p.reserve_on_relay(peer_id)
+        except P2PError:
+            return None
 
     def add(self, peer_info: dict, pool_name: str):
         """Adds a connected peer to a specified connection pool.

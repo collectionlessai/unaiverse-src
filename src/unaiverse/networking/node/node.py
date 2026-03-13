@@ -28,12 +28,12 @@ import requests
 import threading
 import traceback
 from PIL import Image
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from collections import deque
 from unaiverse.clock import Clock
 from unaiverse.world import World
 from unaiverse.agent import Agent
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unaiverse.networking.p2p.messages import Msg
 from unaiverse.networking.p2p import P2P, P2PError
 from unaiverse.networking.node.connpool import NodeConn
@@ -147,6 +147,9 @@ class Node:
         # Rendezvous
         self.publish_rendezvous_every = 10.
         self.last_rendezvous_time = 0.
+        
+        # Automatic address update and relay refresh (if needed)
+        self.relay_reservation_expiry: Optional[datetime] = None
 
         # Interview of newly connected nodes
         self.interview_timeout = 60.  # Seconds
@@ -523,7 +526,7 @@ class Node:
                 break
             except Exception as e:
                 if i < 2:
-                    self.err(f"Error while getting token from server, retrying...")
+                    self.err("Error while getting token from server, retrying...")
                     time.sleep(1)  # Wait a little bit
                 else:
                     raise GenException(f"Error while getting token from server [{e}]")  # Raise the exception
@@ -612,7 +615,7 @@ class Node:
                             self.out("Retrying...")
                             time.sleep(1)  # Wait a little bit
                         else:
-                            self.err(f"Couldn't complete badge sending or notification procedure (stop trying)")
+                            self.err("Couldn't complete badge sending or notification procedure (stop trying)")
 
     def get_public_addresses(self) -> list[str]:
         """Returns the public addresses of the P2P node
@@ -701,7 +704,7 @@ class Node:
         if peer_id is not None and (not through_relay or self.talk_to_relay_based_nodes):
 
             # Ping to test the readiness of the established connection
-            self.out(f"Connected, ping-pong...")
+            self.out("Connected, ping-pong...")
             if not (await self.conn.send(peer_id, channel_trail=None, content_type=Msg.MISC,
                                          content={"ping": "pong", "public": public},
                                          p2p=self.conn.p2p_name_to_p2p[
@@ -876,9 +879,9 @@ class Node:
         if resume_from_checkpoint:
             try:
                 if not self.hosted.load():
-                    self.out("No saved state found. Starting fresh.")
+                    print("No saved state found. Starting fresh.")
                 else:
-                    self.out("Successfully loaded previous agent state.")
+                    print("Successfully loaded previous agent state.")
             except Exception as e:
                 self.err(f"CRITICAL: Found a save file but failed to load it: {e}")
                 raise e
@@ -1026,8 +1029,8 @@ class Node:
 
                     # Checking only at the first run
                     if self.last_alive_time == 0 and was_alive and not self.skip_was_alive_check:
-                        print(f"The node is already alive, maybe running in a different machine? "
-                              f"(set env variable NODE_IGNORE_ALIVE=1 to ignore this control)")
+                        print("The node is already alive, maybe running in a different machine? "
+                              "(set env variable NODE_IGNORE_ALIVE=1 to ignore this control)")
                         break  # Stopping the running cycle
                     self.last_alive_time = self.clock.get_time()
 
@@ -1099,7 +1102,7 @@ class Node:
                                 else:
                                     print(f"\n*** Connected to world {interact_mode_opts['world_peer_id']} ***")
                                 cap = cv2.VideoCapture(0) if processor_img_stream is not None else None
-                                print(f"*** Entering interactive mode ***\n")
+                                print("*** Entering interactive mode ***\n")
                                 keyboard_listener.start()
                                 time.sleep(1)
 
@@ -1248,11 +1251,27 @@ class Node:
                 except Exception as e:
                     self.err(f"Failed to check for address updates: {e}")
                 
+                # Refresh relay reservation if nearing expiration
+                if self.relay_reservation_expiry is not None:
+                    time_to_expiry = self.relay_reservation_expiry - datetime.now(timezone.utc)
+                    if time_to_expiry < timedelta(minutes=15):
+                        self.out("Relay reservation nearing expiration. Attempting to renew...")
+                        world_private_peer_id = self.profile.get_dynamic_profile()['connections']['world_peer_id']
+                        new_expiry_utc = await self.conn.reserve(world_private_peer_id, NodeConn.P2P_WORLD)
+                        if new_expiry_utc is not None:
+                            self.relay_reservation_expiry = datetime.fromisoformat(
+                                new_expiry_utc.replace('Z', '+00:00'))
+                            self.out(f"Relay reservation renewed. New expiration: "
+                                    f"{self.relay_reservation_expiry.strftime('%Y-%m-%d %H:%M:%S')} UTC")
+                        else:
+                            self.err("Failed to renew relay reservation. Node may become unreachable.")
+                            self.relay_reservation_expiry = None
+                
                 # Send stats to the world
                 if self.node_type is Node.AGENT and self.agent.in_world():
                     if self.clock.get_time() - last_stats_send_time >= self.send_stats_every:
                         try:
-                            self.out(f"[NODE] Sending stats update to the world...")
+                            self.out("[NODE] Sending stats update to the world...")
                             last_stats_send_time = self.clock.get_time()
                             await self.agent.send_stats_to_world()
                         except Exception as e:
@@ -1262,7 +1281,7 @@ class Node:
                 if self.node_type is Node.WORLD:
                     if self.clock.get_time() - last_stats_save_time >= self.save_stats_every:
                         try:
-                            self.out(f"[NODE] Saving stats to disk (world)...")
+                            self.out("[NODE] Saving stats to disk (world)...")
                             last_stats_save_time = self.clock.get_time()
                             self.world.stats.save_to_disk()
                         except Exception as e:
@@ -1932,7 +1951,7 @@ class Node:
             
             # (O) world got stats update from an agent
             elif msg.content_type == Msg.STATS_UPDATE:
-                self.out(f"[NODE] Received a stats update from " + msg.sender)
+                self.out("[NODE] Received a stats update from " + msg.sender)
                 if self.node_type is Node.WORLD:
                     if msg.sender in self.world.all_agents:
                         # This calls the world.add_stats_from_peer method
@@ -1945,7 +1964,7 @@ class Node:
             
             # (P) got a request for stats from an agent
             elif msg.content_type == Msg.STATS_REQUEST:
-                self.out(f"[NODE] Received a stats request from " + msg.sender)
+                self.out("[NODE] Received a stats request from " + msg.sender)
                 if self.node_type is Node.WORLD:
                     # 1. Extract filters from content
                     filters = msg.content or {}
@@ -1975,7 +1994,7 @@ class Node:
             
             # (Q) agent got stats response from a world
             elif msg.content_type == Msg.STATS_RESPONSE:
-                self.out(f"[NODE] Received a stats response from " + msg.sender)
+                self.out("[NODE] Received a stats response from " + msg.sender)
                 if self.node_type is Node.AGENT:
                     if msg.sender == self.conn.get_world_peer_id():
                         # self.agent.update_stats_view(msg.content, self.agent.overwrite_stats)
@@ -2018,12 +2037,14 @@ class Node:
 
             # Relay reservation logic for non-public peers
             if not self.conn.p2p_world.is_public and self.conn.p2p_world.relay_is_enabled:
-                self.out("Node is not publicly reachable. Enabling Static AutoRelay on the world's private network.")
-                try:
-                    self.conn.p2p_world.start_static_relay(peer_id, addresses)
-                    self.out("Static AutoRelay enabled. Reservation and renewal will be handled automatically.")
-                except Exception as e:
-                    self.err(f"An error occurred enabling Static AutoRelay: {e}.")
+                self.out("Node is not publicly reachable. Attempting to reserve a slot on the world's private network.")
+                expiry_utc = await self.conn.reserve(peer_id, NodeConn.P2P_WORLD)
+                
+                if expiry_utc is not None:
+                    self.relay_reservation_expiry = (datetime.fromisoformat(expiry_utc.replace('Z', '+00:00')))
+                    self.out(f"Reserved relay slot. Expires at {self.relay_reservation_expiry.strftime('%Y-%m-%d %H:%M:%S')} UTC")
+                else:
+                    self.err("An error occurred during relay reservation.")
             
             # Load custom stats class if provided
             stats_class = None
@@ -2484,7 +2505,7 @@ class Node:
         self.out(f"Handling inspector message {cmd}, with arg {arg}")
 
         if arg is not None and not isinstance(arg, str):
-            self.err(f"Expecting a string argument from the inspector!")
+            self.err("Expecting a string argument from the inspector!")
         else:
             if cmd == "ask_to_join_world":
                 print(f"Inspector asked to join world: {arg}")
@@ -2496,7 +2517,7 @@ class Node:
                 print(f"Inspector asked to leave an agent: {arg}")
                 await self.leave(arg)
             elif cmd == "leave_world":
-                print(f"Inspector asked to leave the current world")
+                print("Inspector asked to leave the current world")
                 await self.leave_world()
             elif cmd == "pause":
                 print("Inspector asked to pause")

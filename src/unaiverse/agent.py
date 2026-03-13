@@ -1871,14 +1871,12 @@ class Agent(AgentBasics):
             self.deb(f"[__process_streams] learning, step {k}")
             loss_values, data_tags_from_targets = self.learn_generate(outputs=outputs, targets_net_hashes=yhat_hashes)
             self.deb(f"[__process_streams] data_tags_from_targets: {data_tags_from_targets}")
+            if loss_values is None or data_tags_from_targets is None:
+                return False
 
             # Fusing data tags
             data_tags = [data_tag_from_inputs if _data_tag == -1 else _data_tag for _data_tag in data_tags_from_targets]
-
-            if loss_values is None:
-                return False
-            else:
-                self.print(f"Losses: {loss_values}, Step: {k}, Tags: {data_tags}")
+            self.print(f"Losses: {loss_values}, Step: {k}, Tags: {data_tags}")
         else:
             data_tags = [data_tag_from_inputs] * len(outputs)
         self.deb(f"[__process_streams] data_tags (final): {data_tags}")
