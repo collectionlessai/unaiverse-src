@@ -9,7 +9,7 @@ from setuptools import setup, Extension
 from setuptools.command.build_ext import build_ext
 
 
-GO_SOURCE_NAME = 'lib.go'
+GO_SOURCE_DIR = '.'
 HASH_FILE_SUFFIX = '.sha256'
 BUILD_PURE_WHEEL = os.environ.get("UNAI_BUILD_PURE", "0") == "1"
 
@@ -23,13 +23,14 @@ def get_ext_filename_with_path():
         lib_name = 'unailib.dll'
     else:
         raise RuntimeError(f"Unsupported OS: {system}")
-    return os.path.join('src', 'unaiverse', 'networking', 'p2p', lib_name)
+    return os.path.join('src', 'unaiverse', 'networking', 'p2p', 'unailib', lib_name)
 
-def get_file_hash(filepath):
+def get_dir_hash(dirpath):
     sha256_hash = hashlib.sha256()
-    with open(filepath, "rb") as f:
-        for byte_block in iter(lambda: f.read(4096), b""):
-            sha256_hash.update(byte_block)
+    for filepath in sorted(glob.glob(os.path.join(dirpath, "*.go"))):
+        with open(filepath, "rb") as f:
+            for byte_block in iter(lambda: f.read(4096), b""):
+                sha256_hash.update(byte_block)
     return sha256_hash.hexdigest()
 
 class GoBuildExtCommand(build_ext):
@@ -56,15 +57,13 @@ class GoBuildExtCommand(build_ext):
                     print(f"Could not remove {path}: {e}")
 
     def run(self):
-        go_dir = os.path.join('src', 'unaiverse', 'networking', 'p2p')
-        go_path = os.path.join(go_dir, GO_SOURCE_NAME)
+        go_dir = os.path.join('src', 'unaiverse', 'networking', 'p2p', 'unailib')
         out_path = get_ext_filename_with_path()
-        hash_path = go_path + HASH_FILE_SUFFIX
+        hash_path = os.path.join(go_dir, "unailib" + HASH_FILE_SUFFIX)
         os.makedirs(os.path.dirname(out_path), exist_ok=True)
         
         self._cleanup_old_artifacts(go_dir)
-
-        current_hash = get_file_hash(go_path)
+        current_hash = get_dir_hash(go_dir)
         stored_hash = None
         if os.path.exists(hash_path):
             with open(hash_path, 'r') as f:
@@ -75,7 +74,7 @@ class GoBuildExtCommand(build_ext):
             print(f"--- Go source changed, building {out_path} ---")
             subprocess.run(
                 ['go', 'build', '-buildmode=c-shared', '-ldflags', '-s -w',
-                 '-o', os.path.basename(out_path), GO_SOURCE_NAME],
+                 '-o', os.path.basename(out_path), GO_SOURCE_DIR],
                 check=True, cwd=go_dir
             )
             with open(hash_path, 'w') as f:
@@ -95,7 +94,7 @@ class GoBuildExtCommand(build_ext):
             print(f"--- Copying {hash_path} to {dest_dir} ---")
             shutil.copy(hash_path, dest_dir)
         else:
-            print(f"--- Hash file is already in the source directory (editable install); skipping copy. ---")
+            print("--- Hash file is already in the source directory (editable install); skipping copy. ---")
         
         subprocess.run(['go', 'clean', '-cache', '-modcache', '-testcache', '-fuzzcache'],
                        cwd=go_dir, check=False)

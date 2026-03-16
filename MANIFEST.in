@@ -1,10 +1,4 @@
 # MANIFEST.in
 
-# Include the Go source and module files in the source distribution (sdist)
-# so that users on unsupported platforms can compile it themselves.
-include src/unaiverse/networking/p2p/lib.go
-include src/unaiverse/networking/p2p/go.mod
-include src/unaiverse/networking/p2p/go.sum
-
-# Recursively include all files from the proto-go directory
-recursive-include src/unaiverse/networking/p2p/proto-go *
+# Recursively include all files from the go package
+recursive-include src/unaiverse/networking/p2p/unailib/ *
