@@ -149,6 +149,16 @@ _shared_lib.UnsubscribeFromTopic.restype = ctypes.c_void_p  # Treat returned *C.
 _shared_lib.ReserveOnRelay.argtypes = [ctypes.c_int, ctypes.c_char_p]
 _shared_lib.ReserveOnRelay.restype = ctypes.c_void_p  # Treat returned *C.char as opaque pointer
 
+# WebRTC Signaling
+_shared_lib.InitiateWebRTCConnection.argtypes = [ctypes.c_int, ctypes.c_char_p]
+_shared_lib.InitiateWebRTCConnection.restype = ctypes.c_void_p  # Treat returned *C.char as opaque pointer
+
+_shared_lib.GetWebRTCConnections.argtypes = [ctypes.c_int]
+_shared_lib.GetWebRTCConnections.restype = ctypes.c_void_p  # Treat returned *C.char as opaque pointer
+
+_shared_lib.CloseWebRTCConnection.argtypes = [ctypes.c_int, ctypes.c_char_p]
+_shared_lib.CloseWebRTCConnection.restype = ctypes.c_void_p  # Treat returned *C.char as opaque pointer
+
 # Memory Management
 # FreeString now accepts the opaque pointer directly
 _shared_lib.FreeString.argtypes = [ctypes.c_void_p]

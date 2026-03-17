@@ -37,6 +37,7 @@ import (
 	libp2p "github.com/libp2p/go-libp2p"                         
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
 	webrtc "github.com/libp2p/go-libp2p/p2p/transport/webrtc"
+	pwebrtc "github.com/pion/webrtc/v4"
 	p2pforge "github.com/ipshipyard/p2p-forge/client"
 	autorelay "github.com/libp2p/go-libp2p/p2p/host/autorelay"
 	webtransport "github.com/libp2p/go-libp2p/p2p/transport/webtransport"
@@ -125,6 +126,7 @@ func CreateNode(
 		persistentChatStreams: make(map[peer.ID]network.Stream),
 		disconnectionTimers:   make(map[peer.ID]context.CancelFunc),
 		messageStore:          newMessageStore(),
+		webrtcConnections:     make(map[peer.ID]*WebRTCConn),
 	}
 	ni.ctx, ni.cancel = context.WithCancel(context.Background())
 	isPublic := false
@@ -489,6 +491,15 @@ func CreateNode(
 
 	setupDirectMessageHandler(ni)
 	logger.Debugf("[GO] ✅ Instance %d: Direct message handler set up.\n", instanceIndex)
+
+	// --- WebRTC Signaling Handler ---
+	if cfg.WebRTC.Enabled {
+		if cfg.WebRTC.ICEConfig != nil {
+			ni.iceConfig = cfg.WebRTC.ICEConfig
+		}
+		setupWebRTCSignalHandler(ni)
+		logger.Debugf("[GO] ✅ Instance %d: WebRTC signaling handler registered.\n", instanceIndex)
+	}
 
 	// --- Close DHT if needed ---
 	if !cfg.DHT.Keep {
@@ -1060,6 +1071,18 @@ func SendMessageToPeer(
 			return C.CString(jsonErrorResponse("Attempt to send direct message to self is invalid", nil))
 		}
 
+		// --- WebRTC DataChannel path (preferred: direct, NAT-traversed) ---
+		ni.webrtcMutex.RLock()
+		wconn, hasWebRTC := ni.webrtcConnections[pid]
+		ni.webrtcMutex.RUnlock()
+		if hasWebRTC && wconn.dc != nil && wconn.dc.ReadyState() == pwebrtc.DataChannelStateOpen {
+			if err = writeToWebRTCDataChannel(wconn, goChannel, goData); err == nil {
+				logger.Infof("[GO] 📤 Instance %d: Sent to %s via WebRTC DataChannel\n", ni.instanceIndex, pid)
+				return C.CString(jsonSuccessResponse(fmt.Sprintf("Direct message sent to %s (WebRTC).", pid)))
+			}
+			logger.Warnf("[GO] ⚠️ Instance %d: WebRTC send to %s failed (%v), falling back to stream\n", ni.instanceIndex, pid, err)
+		}
+
 		ni.streamsMutex.Lock()
 		stream, streamExists := ni.persistentChatStreams[pid]
 		ni.streamsMutex.Unlock()
@@ -1581,6 +1604,109 @@ func FreeInt(
 		logger.Warnf("[GO] ⚠️ FreeInt called - Ensure a *C.int pointer was actually allocated and returned from Go (this is unusual).")
 		C.free(unsafe.Pointer(i)) // Free the memory if it was indeed allocated.
 	}
+}
+
+// InitiateWebRTCConnection opens a /unaiverse/webrtc-signal/1.0.0 stream to
+// remotePeer (which must already be reachable, e.g. via relay) and performs
+// the SDP offer/answer + ICE handshake to establish a direct WebRTC DataChannel.
+//
+// Returns JSON {"state":"Success",...} or {"state":"Error",...}.
+// The caller MUST free the returned string with FreeString.
+//
+//export InitiateWebRTCConnection
+func InitiateWebRTCConnection(
+	instanceIndexC C.int,
+	peerIDC *C.char,
+) *C.char {
+	ni, err := getInstance(int(instanceIndexC))
+	if err != nil {
+		return C.CString(jsonErrorResponse("Invalid instance", err))
+	}
+
+	peerIDStr := C.GoString(peerIDC)
+	pid, err := peer.Decode(peerIDStr)
+	if err != nil {
+		return C.CString(jsonErrorResponse("Invalid peer ID", err))
+	}
+
+	if err := initiateWebRTCConnection(ni, pid); err != nil {
+		return C.CString(jsonErrorResponse(fmt.Sprintf("WebRTC connection to %s failed", pid), err))
+	}
+	return C.CString(jsonSuccessResponse(fmt.Sprintf("WebRTC DataChannel established with %s", pid)))
+}
+
+// GetWebRTCConnections returns a JSON array of all peers that currently have
+// an active WebRTC DataChannel with this node instance.
+//
+// Each element: {"peer_id": "...", "state": "open"|"other"}
+// The caller MUST free the returned string with FreeString.
+//
+//export GetWebRTCConnections
+func GetWebRTCConnections(instanceIndexC C.int) *C.char {
+	ni, err := getInstance(int(instanceIndexC))
+	if err != nil {
+		return C.CString(jsonErrorResponse("Invalid instance", err))
+	}
+
+	type entry struct {
+		PeerID string `json:"peer_id"`
+		State  string `json:"state"`
+	}
+
+	ni.webrtcMutex.RLock()
+	result := make([]entry, 0, len(ni.webrtcConnections))
+	for pid, conn := range ni.webrtcConnections {
+		stateStr := "other"
+		if conn.dc != nil && conn.dc.ReadyState() == pwebrtc.DataChannelStateOpen {
+			stateStr = "open"
+		}
+		result = append(result, entry{PeerID: pid.String(), State: stateStr})
+	}
+	ni.webrtcMutex.RUnlock()
+
+	return C.CString(jsonSuccessResponse(result))
+}
+
+// CloseWebRTCConnection tears down the WebRTC PeerConnection with a specific peer.
+//
+// Returns JSON {"state":"Success",...} or {"state":"Error",...}.
+// The caller MUST free the returned string with FreeString.
+//
+//export CloseWebRTCConnection
+func CloseWebRTCConnection(
+	instanceIndexC C.int,
+	peerIDC *C.char,
+) *C.char {
+	ni, err := getInstance(int(instanceIndexC))
+	if err != nil {
+		return C.CString(jsonErrorResponse("Invalid instance", err))
+	}
+
+	peerIDStr := C.GoString(peerIDC)
+	pid, err := peer.Decode(peerIDStr)
+	if err != nil {
+		return C.CString(jsonErrorResponse("Invalid peer ID", err))
+	}
+
+	ni.webrtcMutex.Lock()
+	conn, exists := ni.webrtcConnections[pid]
+	if exists {
+		delete(ni.webrtcConnections, pid)
+	}
+	ni.webrtcMutex.Unlock()
+
+	if !exists {
+		return C.CString(jsonErrorResponse(fmt.Sprintf("No WebRTC connection to %s", pid), nil))
+	}
+
+	if conn.dc != nil {
+		conn.dc.Close()
+	}
+	if conn.pc != nil {
+		conn.pc.Close()
+	}
+	logger.Infof("[GO] 🗑️ Instance %d: WebRTC connection to %s closed by request.", ni.instanceIndex, pid)
+	return C.CString(jsonSuccessResponse(fmt.Sprintf("WebRTC connection to %s closed.", pid)))
 }
 
 // main is the entry point for a Go executable.

@@ -568,6 +568,23 @@ func (ni *NodeInstance) Close() error {
 		ni.dht = nil
 	}
 
+	// --- Close WebRTC DataChannel Connections ---
+	ni.webrtcMutex.Lock()
+	if len(ni.webrtcConnections) > 0 {
+		logger.Debugf("[GO]   - Instance %d: Closing %d WebRTC connections...\n", ni.instanceIndex, len(ni.webrtcConnections))
+		for pid, conn := range ni.webrtcConnections {
+			logger.Debugf("[GO]     - Instance %d: Closing WebRTC connection to %s\n", ni.instanceIndex, pid)
+			if conn.dc != nil {
+				conn.dc.Close()
+			}
+			if conn.pc != nil {
+				conn.pc.Close()
+			}
+		}
+	}
+	ni.webrtcConnections = make(map[peer.ID]*WebRTCConn)
+	ni.webrtcMutex.Unlock()
+
 	// --- Close Persistent Outgoing Streams ---
 	ni.streamsMutex.Lock()
 	if len(ni.persistentChatStreams) > 0 {

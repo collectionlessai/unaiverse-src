@@ -13,6 +13,7 @@ import (
 	dht "github.com/libp2p/go-libp2p-kad-dht"
 	golog "github.com/ipfs/go-log/v2"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
+	pwebrtc "github.com/pion/webrtc/v4"
 	p2pforge "github.com/ipshipyard/p2p-forge/client"
 )
 
@@ -22,6 +23,29 @@ import (
 const UnaiverseChatProtocol = "/unaiverse/chat/1.0.0"
 const UnaiverseUserAgent = "go-libp2p/example/autotls"
 const DisconnectionGracePeriod = 10 * time.Second
+
+// WebRTC signaling constants
+const UnaiverseWebRTCSignalProtocol = "/unaiverse/webrtc-signal/1.0.0"
+const WebRTCDataChannelLabel = "unaiverse-data"
+// Total budget for the entire signaling handshake (offer → answer → DC open).
+const webrtcSignalingTimeout = 45 * time.Second
+
+// --- Create a package-level logger ---
+var logger = golog.Logger("unailib")
+
+// --- Multi-Instance State Management ---
+var (
+	// Set the libp2p configuration parameters.
+	maxInstances       int
+	maxChannelQueueLen int
+	maxUniqueChannels  int
+	MaxMessageSize     uint32
+
+	// A single slice to hold all our instances.
+	allInstances []*NodeInstance
+	// A SINGLE mutex to protect the allInstances slice itself (during create/close).
+	globalInstanceMutex sync.RWMutex
+)
 
 // ExtendedPeerInfo holds information about a connected peer.
 type ExtendedPeerInfo struct {
@@ -89,6 +113,15 @@ type NodeConfig struct {
 		Enabled bool `json:"enabled"`
 		Keep bool	`json:"keep"` // to keep it running after init
     } `json:"dht"`
+
+	// WebRTC signaling (application-level, not a libp2p transport)
+	WebRTC struct {
+		// Enabled activates the /unaiverse/webrtc-signal/1.0.0 protocol handler.
+		Enabled bool `json:"enabled"`
+		// ICEConfig overrides the default STUN/TURN server list. If nil, Google
+		// public STUN servers are used.
+		ICEConfig *ICEConfig `json:"ice_config,omitempty"`
+	} `json:"webrtc"`
 }
 
 // CreateNodeResponse defines the structure of our success message.
@@ -136,23 +169,44 @@ type NodeInstance struct {
 	rendezvousMutex sync.RWMutex
 	rendezvousState *RendezvousState
 
+	// WebRTC DataChannel connections (application-level, keyed by remote peer ID)
+	webrtcMutex       sync.RWMutex
+	webrtcConnections map[peer.ID]*WebRTCConn
+	iceConfig         *ICEConfig // nil → use defaults (Google STUN)
+
 	// a copy of its own index for logging
 	instanceIndex int
 }
 
-// --- Create a package-level logger ---
-var logger = golog.Logger("unailib")
+// ICEConfig holds STUN/TURN server configuration for WebRTC.
+type ICEConfig struct {
+	STUNServers []string     `json:"stun_servers"`
+	TURNServers []TURNServer `json:"turn_servers"`
+}
 
-// --- Multi-Instance State Management ---
-var (
-	// Set the libp2p configuration parameters.
-	maxInstances       int
-	maxChannelQueueLen int
-	maxUniqueChannels  int
-	MaxMessageSize     uint32
+// TURNServer holds credentials for a TURN relay server.
+type TURNServer struct {
+	URLs       []string `json:"urls"`
+	Username   string   `json:"username"`
+	Credential string   `json:"credential"`
+}
 
-	// A single slice to hold all our instances.
-	allInstances []*NodeInstance
-	// A SINGLE mutex to protect the allInstances slice itself (during create/close).
-	globalInstanceMutex sync.RWMutex
-)
+// SignalMessage is a single JSON-encoded signaling message carried over the
+// "/unaiverse/webrtc-signal/1.0.0" stream.
+//
+// Wire format (per message):
+//
+//	[4-byte big-endian uint32: JSON length][JSON payload]
+type SignalMessage struct {
+	Type    string `json:"type"`              // "offer" | "answer" | "error"
+	SDP     string `json:"sdp,omitempty"`     // full SDP (offer/answer; includes all ICE candidates)
+	Message string `json:"message,omitempty"` // human-readable error detail
+}
+
+// WebRTCConn holds the live state of an established WebRTC DataChannel connection
+// to a single remote peer.
+type WebRTCConn struct {
+	pc         *pwebrtc.PeerConnection
+	dc         *pwebrtc.DataChannel
+	remotePeer peer.ID
+}

@@ -152,7 +152,10 @@ class P2P:
                  tls_cert_path: Optional[str] = None,
                  tls_key_path: Optional[str] = None,
                  dht_enabled: bool = False,
-                 dht_keep: bool = True
+                 dht_keep: bool = True,
+                 webrtc_enabled: bool = True,
+                 ice_stun_servers: Optional[List[str]] = None,
+                 ice_turn_servers: Optional[List[Dict[str, Any]]] = None,
                  ) -> None:
         """
         Initializes and starts a new libp2p node.
@@ -170,6 +173,12 @@ class P2P:
             domain_name: Optional domain name for TLS certificate (required if enable_tls is True).
             tls_cert_path: Optional path to a custom TLS certificate file (PEM format).
             tls_key_path: Optional path to a custom TLS private key file (PEM format).
+            webrtc_enabled: Enable the /unaiverse/webrtc-signal/1.0.0 protocol for
+                Go-to-browser NAT traversal via WebRTC DataChannels. Defaults to True.
+            ice_stun_servers: List of STUN server URIs (e.g. ["stun:stun.example.com:3478"]).
+                Defaults to Google public STUN when None.
+            ice_turn_servers: List of TURN server dicts, each with keys "urls", "username",
+                "credential". Optional; leave None if no TURN servers are needed.
 
         Raises:
             P2PError: If the node creation fails in the Go library.
@@ -233,7 +242,14 @@ class P2P:
             "dht": {
                 "enabled": dht_enabled,
                 "keep": dht_keep and dht_enabled,
-            }
+            },
+            "webrtc": {
+                "enabled": webrtc_enabled,
+                "ice_config": {
+                    "stun_servers": ice_stun_servers or [],
+                    "turn_servers": ice_turn_servers or [],
+                } if webrtc_enabled else None,
+            },
         }
 
         logger.info(f"🐍 Creating Node (Instance ID: {self._instance})...")
@@ -290,7 +306,6 @@ class P2P:
         logger.info("🎉 Node created successfully and background polling started.")
 
     # --- Core P2P Operations ---
-
     def connect_to(self, multiaddrs: list[str]) -> Dict[str, Any]:
         """
         Establishes a connection with a remote peer.
@@ -531,7 +546,6 @@ class P2P:
             raise P2PError(f"[Instance {self._instance}] Unexpected error during pop_message: {e}") from e
 
     # --- PubSub Operations ---
-
     def subscribe_to_topic(self, channel: str) -> None:
         """
         Subscribes to a PubSub topic to receive messages.
@@ -649,8 +663,106 @@ class P2P:
             print(e)
             raise P2PError(f"Reservation on {relay_peer_id} failed") from e
 
-    # --- Node Information ---
+    # --- WebRTC Signaling Operations ---
+    def initiate_webrtc_connection(self, peer_id: str) -> Dict[str, Any]:
+        """
+        Initiates a WebRTC DataChannel connection to a remote peer.
 
+        The peer must already be reachable (e.g. via relay). This opens a
+        /unaiverse/webrtc-signal/1.0.0 stream, performs the SDP offer/answer +
+        ICE handshake (batch ICE), and establishes a direct WebRTC DataChannel.
+
+        Once the DataChannel is open, ``send_message_to_peer`` will prefer it
+        over the relayed libp2p stream, and incoming messages from the peer
+        will appear in ``pop_messages`` transparently.
+
+        Args:
+            peer_id: The Peer ID string of the remote peer.
+
+        Returns:
+            A dict with the success message from Go.
+
+        Raises:
+            P2PError: If signaling or ICE negotiation fails.
+            ValueError: If peer_id is invalid.
+        """
+        if not peer_id or not isinstance(peer_id, str):
+            raise ValueError("Invalid peer_id provided.")
+        logger.info(f"🌐 Initiating WebRTC connection to {peer_id}...")
+        try:
+            result_ptr = P2P.libp2p.InitiateWebRTCConnection(
+                P2P._type_interface.to_go_int(self._instance),
+                P2P._type_interface.to_go_string(peer_id),
+            )
+            result = P2P._type_interface.from_go_ptr_to_json(result_ptr)
+            if result is None:
+                raise P2PError(f"Null result from InitiateWebRTCConnection to {peer_id}.")
+            if result.get('state') == "Error":
+                raise P2PError(f"WebRTC connection to '{peer_id}' failed: "
+                               f"{result.get('message', 'Unknown Go error')}")
+            logger.info(f"✅ WebRTC DataChannel established with {peer_id}.")
+            return result.get('message', {})
+        except Exception as e:
+            logger.error(f"❌ WebRTC connection to {peer_id} failed: {e}")
+            raise P2PError(f"WebRTC connection to {peer_id} failed") from e
+
+    def get_webrtc_connections(self) -> List[Dict[str, Any]]:
+        """
+        Returns the list of peers that currently have an active WebRTC
+        DataChannel connection with this node.
+
+        Each entry is a dict with keys ``peer_id`` (str) and ``state`` (str,
+        ``"open"`` or ``"other"``).
+
+        Raises:
+            P2PError: If the Go call fails.
+        """
+        try:
+            result_ptr = P2P.libp2p.GetWebRTCConnections(
+                P2P._type_interface.to_go_int(self._instance),
+            )
+            result = P2P._type_interface.from_go_ptr_to_json(result_ptr)
+            if result is None:
+                raise P2PError("Null result from GetWebRTCConnections.")
+            if result.get('state') == "Error":
+                raise P2PError(f"GetWebRTCConnections failed: "
+                               f"{result.get('message', 'Unknown Go error')}")
+            return result.get('message', [])
+        except Exception as e:
+            logger.error(f"❌ GetWebRTCConnections failed: {e}")
+            raise P2PError("GetWebRTCConnections failed") from e
+
+    def close_webrtc_connection(self, peer_id: str) -> None:
+        """
+        Tears down the WebRTC PeerConnection (and DataChannel) to a specific peer.
+
+        Args:
+            peer_id: The Peer ID string of the peer whose WebRTC connection to close.
+
+        Raises:
+            P2PError: If the close call fails.
+            ValueError: If peer_id is invalid.
+        """
+        if not peer_id or not isinstance(peer_id, str):
+            raise ValueError("Invalid peer_id provided.")
+        logger.info(f"🔌 Closing WebRTC connection to {peer_id}...")
+        try:
+            result_ptr = P2P.libp2p.CloseWebRTCConnection(
+                P2P._type_interface.to_go_int(self._instance),
+                P2P._type_interface.to_go_string(peer_id),
+            )
+            result = P2P._type_interface.from_go_ptr_to_json(result_ptr)
+            if result is None:
+                raise P2PError(f"Null result from CloseWebRTCConnection to {peer_id}.")
+            if result.get('state') == "Error":
+                raise P2PError(f"CloseWebRTCConnection to '{peer_id}' failed: "
+                               f"{result.get('message', 'Unknown Go error')}")
+            logger.info(f"✅ WebRTC connection to {peer_id} closed.")
+        except Exception as e:
+            logger.error(f"❌ CloseWebRTCConnection to {peer_id} failed: {e}")
+            raise P2PError(f"CloseWebRTCConnection to {peer_id} failed") from e
+
+    # --- Node Information ---
     @property
     def peer_id(self) -> Optional[str]:
         """Returns the Peer ID of the local node."""
