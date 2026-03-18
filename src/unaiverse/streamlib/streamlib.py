@@ -14,10 +14,11 @@
 """
 import math
 import torch
-from unaiverse.streams import BufferedDataStream, DataProps
+from unaiverse.clock import clock
+from unaiverse.streams import BufferedStream, DataProps
 
 
-class AllHotLabelStream(BufferedDataStream):
+class AllHotLabelStream(BufferedStream):
     """
     A buffered stream that simply repeat a single-element tensor valued "ones" (float), associated to some text labels
     """
@@ -37,7 +38,7 @@ class AllHotLabelStream(BufferedDataStream):
         self.restart()
 
 
-class Random(BufferedDataStream):
+class Random(BufferedStream):
 
     def __init__(self, std: float, shape: tuple[int] | None = (1,),
                  device: torch.device = torch.device('cpu')):
@@ -52,10 +53,10 @@ class Random(BufferedDataStream):
 
     def __getitem__(self, idx: int) -> torch.Tensor | None:
         y = self.std * torch.rand(self.props.tensor_shape, device=self.device)
-        return self.props.adapt_tensor_to_tensor_labels(y), self.clock.get_cycle() - self.first_cycle
+        return self.props.adapt_tensor_to_tensor_labels(y), clock.get_cycle() - self.first_cycle_by_uuid[None]
 
 
-class Sin(BufferedDataStream):
+class Sin(BufferedStream):
 
     def __init__(self, freq: float, phase: float, delta: float,
                  device: torch.device = torch.device('cpu')):
@@ -74,10 +75,10 @@ class Sin(BufferedDataStream):
     def __getitem__(self, idx: int) -> torch.Tensor | None:
         t = idx * self.delta + self.phase * self.period
         y = torch.sin(torch.tensor([[2. * math.pi * self.freq * t]], device=self.device))
-        return self.props.adapt_tensor_to_tensor_labels(y), self.clock.get_cycle() - self.first_cycle
+        return self.props.adapt_tensor_to_tensor_labels(y), clock.get_cycle() - self.first_cycle_by_uuid[None]
 
 
-class Square(BufferedDataStream):
+class Square(BufferedStream):
 
     def __init__(self, freq: float, ampl: float, phase: float, delta: float,
                  device: torch.device = torch.device('cpu')):
@@ -97,10 +98,10 @@ class Square(BufferedDataStream):
     def __getitem__(self, idx: int) -> torch.Tensor | None:
         t = idx * self.delta + self.phase * self.period
         y = self.ampl * torch.tensor([[(-1.) ** (math.floor(2. * self.freq * t))]], device=self.device)
-        return self.props.adapt_tensor_to_tensor_labels(y), self.clock.get_cycle() - self.first_cycle
+        return self.props.adapt_tensor_to_tensor_labels(y), clock.get_cycle() - self.first_cycle_by_uuid[None]
 
 
-class CombSin(BufferedDataStream):
+class CombSin(BufferedStream):
 
     def __init__(self, f_cap: float | list, c_cap: float | list, order: int, delta: float,
                  device: torch.device = torch.device('cpu')):
@@ -135,7 +136,7 @@ class CombSin(BufferedDataStream):
     def __getitem__(self, idx: int) -> torch.Tensor | None:
         t = idx * self.delta
         y = torch.sum(self.coeffs * torch.sin(2 * math.pi * self.freqs * t + self.phases)).view(1, 1)
-        return self.props.adapt_tensor_to_tensor_labels(y), self.clock.get_cycle() - self.first_cycle
+        return self.props.adapt_tensor_to_tensor_labels(y), clock.get_cycle() - self.first_cycle_by_uuid[None]
 
 
 class SmoothHFHA(CombSin):

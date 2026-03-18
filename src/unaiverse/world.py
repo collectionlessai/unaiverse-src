@@ -13,7 +13,9 @@
                  Main Developers:    Stefano Melacci (Project Leader), Christian Di Maio, Tommaso Guidi
 """
 from unaiverse.stats import Stats
+from unaiverse.clock import clock
 from typing import List, Dict, Any
+from unaiverse.utils.logger import log
 from unaiverse.agent import AgentBasics
 from unaiverse.hsm import HybridStateMachine
 from unaiverse.networking.p2p.messages import Msg
@@ -43,7 +45,7 @@ class World(AgentBasics):
 
         # Map from public peer IDs to private peer IDs
         self.private_peer_of = {}
-        
+
         # Stats
         if stats is not None:
             self.stats = stats
@@ -98,7 +100,7 @@ class World(AgentBasics):
 
         if new_role != role:
             self._node_conn.set_role(peer_id, new_role)
-            self.out("Telling an agent that his role changed")
+            log("Telling an agent that his role changed")
             if not (await self._node_conn.send(peer_id, channel_trail=None,
                                                content={'peer_id': peer_id, 'role': new_role,
                                                         'default_behav':
@@ -107,7 +109,7 @@ class World(AgentBasics):
                                                             if self.role_to_behav is not None else
                                                             str(HybridStateMachine(None))},
                                                content_type=Msg.ROLE_SUGGESTION)):
-                self.err("Failed to send role change, removing (disconnecting) " + peer_id)
+                log.error("Failed to send role change, removing (disconnecting) " + peer_id)
                 await self._node_purge_fcn(peer_id)
             else:
                 self.role_changed_by_world = True
@@ -127,7 +129,7 @@ class World(AgentBasics):
                 addrs.append(_addrs)
             self.received_address_update = True
         else:
-            self.err(f"Cannot set addresses in profile, unknown peer_id {peer_id}")
+            log.error(f"Cannot set addresses in profile, unknown peer_id {peer_id}")
 
     def add_badge(self, peer_id: str, score: float, badge_type: str, agent_token: str,
                   badge_description: str | None = None):
@@ -160,7 +162,7 @@ class World(AgentBasics):
             'badge_type': badge_type,
             'score': score,
             'badge_description': badge_description,
-            'last_edit_utc': self._node_clock.get_time_as_string(),
+            'last_edit_utc': clock.get_time_as_string(),
         }
 
         if peer_id not in self.agent_badges:
@@ -211,29 +213,29 @@ class World(AgentBasics):
         """Collects this world's own stats and pushes them to the stats recorder."""
         if self.stats is None:
             return
-        
-        t = self._node_clock.get_time_ms()
+
+        t = clock.get_time_ms()
         _, own_private_pid = self.get_peer_ids()
-        
+
         # Helper to add if value changed
         def store_if_changed(stat_name, new_value):
             last_value = self.stats.get_last_value(stat_name)
             if last_value != new_value:
                 # Note: We pass the world's *own* peer_id for its *own* stats
                 self.stats.store_stat(stat_name, new_value, peer_id=own_private_pid, timestamp=t)
-        
+
         try:
             store_if_changed("world_masters", len(self.world_masters))
             store_if_changed("world_agents", len(self.world_agents))
             store_if_changed("human_agents", len(self.human_agents))
             store_if_changed("artificial_agents", len(self.artificial_agents))
         except Exception as e:
-            self.err(f"[Stats] Error updating own world stats: {e}")
-    
+            log.error(f"[Stats] Error updating own world stats: {e}")
+
     def _process_custom_stat(self, stat_name, value, peer_id, timestamp) -> bool:
         """Hook for subclasses to intercept a stat. Return True if handled."""
         return False
-    
+
     def _extract_graph_node_info(self, peer_id: str) -> Dict[str, Any]:
         """Helper to extract lightweight visualization data from NodeProfile."""
 
@@ -244,11 +246,11 @@ class World(AgentBasics):
             profile = self.all_agents.get(peer_id)
         if profile is None:
             return {}
-        
+
         # Accessing the inner private dict of NodeProfile based on your class structure
         static_profile = profile.get_static_profile()
         dynamic_profile = profile.get_dynamic_profile()
-        
+
         return {
             'Name': static_profile.get('node_name', '~'),
             'Owner': static_profile.get('email', '~'),
@@ -258,16 +260,16 @@ class World(AgentBasics):
             'Current Action': self.stats.get_last_value('action', peer_id=peer_id) or '~',
             'Current State': self.stats.get_last_value('state', peer_id=peer_id) or '~',
         }
-    
+
     def _update_graph(self, peer_id: str, connected_peers_list: List[str], timestamp: int):
         """Updates both graph connectivity (edges) and node metadata."""
-        
+
         # 1. initialize structure if missing (e.g. first run or after DB load)
         graph_stat = self.stats.get_stats().setdefault("graph", {'nodes': {}, 'edges': {}})
-            
+
         nodes = graph_stat.setdefault('nodes', {})
         edges = graph_stat.setdefault('edges', {})
-        
+
         # 2. Update Node Metadata
         # We update the sender's info
         node_data = self._extract_graph_node_info(peer_id)
@@ -287,20 +289,20 @@ class World(AgentBasics):
         # Add reverse connections (Undirected/Bidirectional logic)
         for _peer_id in connected_peers:
             edges.setdefault(_peer_id, set()).add(peer_id)
-        
+
         # Remove dropped reverse connections
         to_remove = prev_connected_peers - connected_peers
         for _peer_id in to_remove:
             if _peer_id in edges and peer_id in edges[_peer_id]:
                 edges[_peer_id].remove(peer_id)
-        
+
         # Update peer's own forward connections
         edges[peer_id] = connected_peers
-        
+
         # 4. Store
         world_peer_id = self.get_peer_ids()[1]
         self.stats.store_stat('graph', graph_stat, peer_id=world_peer_id, timestamp=timestamp)
-    
+
     def _prune_graph(self):
         """Removes nodes that are no longer connected to the World."""
         graph_stat = self.stats.get_stats().get("graph")
@@ -328,10 +330,10 @@ class World(AgentBasics):
             # Remove incoming edges
             for other_pid in edges:
                 edges[other_pid].discard(pid)
-    
+
     def add_peer_stats(self, peer_stats_batch: List[Dict[str, Any]], sender_peer_id: str | None = None):
         """(World-only) Processes a batch of stats received from a peer."""
-        
+
         # 1. Update own stats (this logic is now in the World)
         self.collect_and_store_own_stats()
 
@@ -346,11 +348,11 @@ class World(AgentBasics):
                 stat_name = update['stat_name']
                 t = int(update['timestamp'])
                 v = update['value']
-                
+
                 # Call the hook (which also lives in the World now)
                 if self._process_custom_stat(stat_name, v, p_id, t):
                     continue  # The custom processor handled it
-                
+
                 # Generate the graph and handle the connected_peers stat
                 if stat_name == 'connected_peers':
                     # We need to wait for all the info to arrive before updating the graph.
@@ -362,23 +364,23 @@ class World(AgentBasics):
                 if stat_name in self.stats.all_keys:
                     self.stats.store_stat(stat_name, v, peer_id=p_id, timestamp=t)
                 else:
-                    self.err(f"[World] Unknown stat received: {stat_name}")
+                    log.error(f"[World] Unknown stat received: {stat_name}")
 
             except Exception as e:
-                self.err(f"[World] Error processing stats update {update}: {e}")
-        
+                log.error(f"[World] Error processing stats update {update}: {e}")
+
         # Now update the graph for all collected connected_peers stats
         for p_id, v, t in connected_peers:
             self._update_graph(p_id, v, t)
-        
+
         # Clean the graph from potentially stale peers
         self._prune_graph()
-    
+
     def debug_stats_dashboard(self):
         """Helper to verify the dashboard looks correct during development."""
         import plotly.io as pio
-        
-        print("[DEBUG] Rendering Dashboard...")
+
+        log.debug("Rendering Dashboard...")
         json_str = self.stats.plot()
         if json_str:
             pio.from_json(json_str).show()

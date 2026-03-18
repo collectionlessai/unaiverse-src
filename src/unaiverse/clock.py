@@ -22,7 +22,7 @@ from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 
 
-class Clock:
+class _Clock:
     """
     A class for managing time cycles and converting between timestamp and cycle indices.
 
@@ -232,3 +232,21 @@ class Clock:
                 return ret
             else:
                 return -1
+
+
+class Clock:
+    def __init__(self):
+        self.__instance = None
+
+    def create(self, *args, **kwargs):
+        self.__instance = _Clock(*args, **kwargs)
+
+    def __getattr__(self, name):
+        if self.__instance is None:
+            raise RuntimeError(f"Clock: Attempted to call '{name}' before initialization.")
+        return getattr(self.__instance, name)
+
+
+# This is what you are expected to import in other classes: a single shared clock
+# Lazy initialization (calling "create") in the first class that uses it
+clock = Clock()

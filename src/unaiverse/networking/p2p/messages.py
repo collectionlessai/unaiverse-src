@@ -42,6 +42,8 @@ class Msg:
     STREAM_SAMPLE = "stream_sample"
     ACTION_REQUEST = "action_request"
     ROLE_SUGGESTION = "role_suggestion"
+    INTERACTION = "interaction"
+    INTERACTION_STATUS = "interaction_status"
     HSM = "hsm"
     MISC = "misc"
     GET_CV_FROM_ROOT = "get_cv_from_root"
@@ -58,7 +60,7 @@ class Msg:
     CONTENT_TYPES = {PROFILE, WORLD_APPROVAL, AGENT_APPROVAL, PROFILE_REQUEST, ADDRESS_UPDATE,
                      STREAM_SAMPLE, ACTION_REQUEST, ROLE_SUGGESTION, HSM, MISC, GET_CV_FROM_ROOT,
                      BADGE_SUGGESTIONS, INSPECT_ON, INSPECT_CMD, WORLD_AGENTS_LIST, CONSOLE_AND_BEHAV_STATUS,
-                     STATS_UPDATE, STATS_REQUEST, STATS_RESPONSE}
+                     STATS_UPDATE, STATS_REQUEST, STATS_RESPONSE, INTERACTION, INTERACTION_STATUS}
 
     def __init__(self,
                  sender: str | None = None,

@@ -18,6 +18,7 @@ import math
 import zlib
 import sqlite3
 from datetime import timedelta
+from unaiverse.utils.logger import log
 from sortedcontainers import SortedDict
 from typing import Any, Set, List, Dict, Tuple, Optional, Union
 
@@ -324,8 +325,6 @@ class Stats:
             - Dynamic Stats: Stored in a sortedcontainers.SortedDict
               keyed by timestamp.
     """
-    DEBUG = True  # Turns on/off extra logging
-    
     # These are all the keys in the local _stats dictionary collected by the world
     CORE_WORLD_STATS_STATIC_SCHEMA: Dict[str, Tuple[type, Any]] = {
         'graph': (dict, {'nodes': {}, 'edges': {}})
@@ -360,6 +359,9 @@ class Stats:
     
     # Key for grouping stats in the _stats dictionary (both world and agent)
     GROUP_KEY = 'peer_stats'  # _BY_PEER stats are grouped under this key
+
+    # Deprecated
+    DEBUG = False
 
     def __init__(self, is_world: bool,
                  db_path: str | None = None,  # only needed by the world
@@ -406,21 +408,19 @@ class Stats:
             self._world_view: Dict[str, Any] = {}
             self.min_window_duration = timedelta(hours=3.0)  # cache for the _world_view
             self._update_batch: List[Dict[str, Any]] = []
-    
+
     def _out(self, msg: str):
-        """Prints a message using the node's out function."""
-        print(msg)
+        """DEPRECATED Prints a message using the node's out function."""
+        log.stats(msg)
 
     def _err(self, msg: str):
-        """Prints an error message."""
-        self._out('<ERROR> [Stats] ' + msg) 
+        """DEPRECATED Prints an error message."""
+        log.error(msg)
 
     def _deb(self, msg: str):
-        """Prints a debug message if enabled."""
-        if self.DEBUG:
-            prefix = '[DEBUG ' + ('WORLD' if self.is_world else 'AGENT') + ']'
-            self._out(f'{prefix} [Stats] {msg}')
-    
+        """DEPRECATED Prints a debug message if enabled."""
+        log.debug(msg)
+
     def _initialize_key_sets(self):
         """Populates the master key sets and the type for later use."""
         # Combine all schema definitions

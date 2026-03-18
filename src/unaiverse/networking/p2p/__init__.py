@@ -95,7 +95,7 @@ except (IndexError, OSError) as e:
 # Run the check after successfully loading the library.
 if _shared_lib is not None:
     _developer_source_check()
-    print(f"UNaIVERSE: Successfully loaded p2p library from {_lib_path}")
+    # print(f"UNaIVERSE: Successfully loaded p2p library from {_lib_path}")
 
 # --- Function Prototypes (argtypes and restype) ---
 # Using void* for returned C strings, requiring TypeInterface for conversion/freeing.

@@ -1,7 +1,7 @@
 import torchvision
 import urllib.request
 from unaiverse.agent import Agent
-from unaiverse.dataprops import Data4Proc
+from unaiverse.dataprops import Stream
 from unaiverse.networking.node.node import Node
 
 # Downloading PyTorch module (ResNet)
@@ -24,8 +24,8 @@ with urllib.request.urlopen("https://raw.githubusercontent.com/pytorch/hub/maste
 # the actual output of the processor and what will be streamed (here we go from class
 # probabilities to winning class name).
 agent = Agent(proc=net,
-              proc_inputs=[Data4Proc(data_type="img", stream_to_proc_transforms=transforms)],
-              proc_outputs=[Data4Proc(data_type="text", proc_to_stream_transforms=lambda p: c_names[p.argmax(1)[0]])])
+              proc_inputs=[Stream(data_type="img", stream_to_proc_transforms=transforms)],
+              proc_outputs=[Stream(data_type="text", proc_to_stream_transforms=lambda p: c_names[p.argmax(1)[0]])])
 
 # Node hosting agent
 node = Node(node_name="Test0", hosted=agent, hidden=True, clock_delta=1. / 5.)

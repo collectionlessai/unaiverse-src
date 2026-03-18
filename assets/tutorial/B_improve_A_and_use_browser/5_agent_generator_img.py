@@ -3,7 +3,7 @@ import urllib.request
 from PIL import Image
 from io import BytesIO
 from unaiverse.agent import Agent
-from unaiverse.dataprops import Data4Proc
+from unaiverse.dataprops import Stream
 from unaiverse.networking.node.node import Node
 
 
@@ -22,8 +22,8 @@ class Net(torch.nn.Module):
 
 # Agent
 agent = Agent(proc=Net(),
-              proc_inputs=[Data4Proc(data_type="all")],
-              proc_outputs=[Data4Proc(data_type="img")],  # A PIL image is being "generated" here
+              proc_inputs=[Stream(data_type="all")],
+              proc_outputs=[Stream(data_type="img")],  # A PIL image is being "generated" here
               behav_lone_wolf="ask")
 
 # To retrieve the result we got from the ResNet agent, we define a hook

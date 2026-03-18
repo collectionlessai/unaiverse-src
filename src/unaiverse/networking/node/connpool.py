@@ -15,16 +15,17 @@
 import math
 import base64
 import binascii
+from unaiverse.utils.logger import log
 from unaiverse.networking.p2p.messages import Msg
 from unaiverse.networking.p2p.p2p import P2P, P2PError
 from unaiverse.networking.node.tokens import TokenVerifier
 
 
 class ConnectionPools:
-    DEBUG = True
 
     def __init__(self, max_connections: int, pool_name_to_p2p_name_and_ratio: dict[str, [str, float]],
-                 p2p_name_to_p2p: dict[str, P2P], public_key: str | None = None, token: str | None = None):
+                 p2p_name_to_p2p: dict[str, P2P],
+                 public_key: str | None = None, token: str | None = None):
         """Initializes a new instance of the ConnectionPools class.
 
         Args:
@@ -90,7 +91,7 @@ class ConnectionPools:
         for i, (k, v) in enumerate(pools_max_sizes.items()):
             assert v > 0 or self.pool_ratios[i] < 0, "Cannot create pools given the provided max connection count"
 
-        # Edit: to solve the teacher not engaging with more than two students.
+            # Edit: to solve the teacher not engaging with more than two students.
             tot += v
         assert tot <= self.max_con, \
             "Cannot create pools given the provided max connection count"
@@ -161,8 +162,7 @@ class ConnectionPools:
         """
         raise NotImplementedError("You must implement conn_routing_fcn!")
 
-    @staticmethod
-    async def __connect(p2p: P2P, addresses: list[str]):
+    async def __connect(self, p2p: P2P, addresses: list[str]):
         """Establishes a connection to a peer via a P2P network (async).
 
         Args:
@@ -174,7 +174,7 @@ class ConnectionPools:
         """
 
         force: str | None = None
-        #force: str | None = '/tcp'
+        # force: str | None = '/tcp'
         if force is not None:
             _addresses = [a for a in addresses if force in a]
             addresses.clear()
@@ -204,12 +204,11 @@ class ConnectionPools:
             addresses = discarded_addresses
             discarded_addresses = []
 
-        if ConnectionPools.DEBUG:
-            print(f"[DEBUG CONNECTIONS-POOL] Connecting to {addresses}")
+        log.cpool(f"Connecting to {addresses}", sub=p2p.log_sub)
 
         if addresses is None or len(addresses) == 0:
-            if ConnectionPools.DEBUG:
-                print(f"[DEBUG CONNECTIONS-POOL] Connection failed! (not-event tried, invalid addresses: {addresses})")
+            log.error(f"Connection failed! (not-event tried, invalid addresses: {addresses})",
+                      sub=p2p.log_sub)
             return None, False
 
         try:
@@ -217,16 +216,14 @@ class ConnectionPools:
             peer_id = winning_addr_info_dict.get('ID')
             connected_addr_str = winning_addr_info_dict.get('Addrs')[0]
             through_relay = '/p2p-circuit/' in connected_addr_str
-            if ConnectionPools.DEBUG:
-                print(f"[DEBUG CONNECTIONS-POOL] Connected to peer {peer_id} via {connected_addr_str} "
-                      f"(through relay: {through_relay})")
+            log.cpool(f"Connected to peer {peer_id} via {connected_addr_str} "
+                      f"(through relay: {through_relay})", sub=p2p.log_sub)
 
             return peer_id, through_relay
         except P2PError:
-            if ConnectionPools.DEBUG:
-                print(f"[DEBUG CONNECTIONS-POOL] Connection failed!")
+            log.error(f"Connection failed!", sub=p2p.log_sub)
             if len(discarded_addresses) > 0:
-                return await ConnectionPools.__connect(p2p, discarded_addresses)
+                return await self.__connect(p2p, discarded_addresses)
             else:
                 return None, False
 
@@ -284,7 +281,7 @@ class ConnectionPools:
         p2p = self.p2p_name_to_p2p[p2p_name]
 
         # Connecting
-        peer_id, through_relay = await ConnectionPools.__connect(p2p, addresses)
+        peer_id, through_relay = await self.__connect(p2p, addresses)
         return peer_id, through_relay
     
     async def reserve(self, peer_id: str, p2p_name: str) -> str | None:
@@ -448,7 +445,8 @@ class ConnectionPools:
             A list of verified and processed message objects.
         """
         # Pop all messages
-        byte_messages: list[bytes] = self[p2p_name].pop_messages()  # Pop all messages
+        p2p = self[p2p_name]
+        byte_messages: list[bytes] = p2p.pop_messages()  # Pop all messages
         # Process the list of message dictionaries
         processed_messages: list[Msg] = []
         for i, msg_dict in enumerate(byte_messages):
@@ -466,17 +464,20 @@ class ConnectionPools:
                 # and that Msg objects store sender, type, channel intrinsically or can be set.
                 msg_obj = Msg.from_bytes(decoded_data)
 
+                log.network(f"<<< RECEIVED {msg_obj.content_type} from {msg_obj.channel}", sub=p2p.log_sub)
+
                 # --- CRITICAL SECURITY CHECK ---
                 # Verify that the sender claimed inside the message payload
                 # matches the cryptographically verified sender from the network layer.
                 if msg_obj.sender != verified_sender_id:
-                    print(f"[DEBUG CONNECTIONS-POOL] SENDER MISMATCH! Network sender '{verified_sender_id}' "
-                          f"does not match payload sender '{msg_obj.sender}'. Discarding message.")
+                    log.error(f"SENDER MISMATCH! Network sender '{verified_sender_id}' "
+                              f"does not match payload sender '{msg_obj.sender}'. Discarding message.",
+                              sub=p2p.log_sub)
 
                     # In a real-world scenario, you might also want to penalize or disconnect
                     # from a peer that sends such malformed/spoofed messages.
                     continue  # Discard this message
-                
+
                 # filter only valid messages to return
                 if (msg_obj.sender in self.peer_id_to_pool_name or  # Check if expected sender
                         (allowed_not_connected_peers is not None and msg_obj.sender in allowed_not_connected_peers)):
@@ -493,22 +494,24 @@ class ConnectionPools:
                             if msg_obj.sender in self.peer_id_to_pool_name:
                                 self.peer_id_to_token[msg_obj.sender] = token
                         else:
-                            print("Received a message missing expected info in the token payload (discarding it)")
+                            log.error("Received a message missing expected info in the token payload "
+                                      "(discarding it)", sub=p2p.log_sub)
                     except Exception as e:
-                        print(f"Received a message with an invalid piggyback token! (discarding it) [{e}]")
-            
+                        log.error(f"Received a message with an invalid piggyback token! (discarding it) [{e}]",
+                                  sub=p2p.log_sub)
+
             except ValueError as ve:
-                print(f"[DEBUG CONNECTIONS-POOL]Invalid message created, stopping. Error: {ve}")
+                log.error(f"Invalid message created, stopping. Error: {ve}", sub=p2p.log_sub)
                 continue  # Skip problematic message
             except (TypeError, binascii.Error) as decode_err:
-                print(f"[DEBUG CONNECTIONS-POOL] Failed to decode Base64 data for a message in batch: {decode_err}. "
-                      f"Message dict: {msg_dict}")
+                log.error(f"Failed to decode Base64 data for a message in batch: {decode_err}. "
+                          f"Message dict: {msg_dict}", sub=p2p.log_sub)
                 continue  # Skip problematic message
             except Exception as msg_proc_err:  # Catch errors from Msg.from_bytes or attribute setting
-                print(f"[DEBUG CONNECTIONS-POOL] Error processing popped message item {i}: {msg_proc_err}. "
-                      f"Message dict: {msg_dict}")
+                log.error(f"Error processing popped message item {i}: {msg_proc_err}. "
+                          f"Message dict: {msg_dict}", sub=p2p.log_sub)
                 continue  # Skip problematic message
-        
+
         return processed_messages
 
     def get_added_after_updating(self, pool_name: str | None = None):
@@ -614,8 +617,7 @@ class ConnectionPools:
         if p2p is None:
             p2p = self.peer_id_to_p2p[peer_id] if peer_id in self.peer_id_to_p2p else None
             if p2p is None:
-                if ConnectionPools.DEBUG:
-                    print("[DEBUG CONNECTIONS-POOL] P2P non found for peer id: " + str(peer_id))
+                log.error("P2P non found for peer id: " + str(peer_id))
                 return False
 
         # Defining channel
@@ -624,14 +626,14 @@ class ConnectionPools:
         else:
             channel = f"{p2p.peer_id}::dm:{peer_id}-{content_type}"
 
+        log.network(f">>> SENDING {content_type} to {peer_id}", sub=p2p.log_sub)
+
         # Adding sender info here
         msg = Msg(sender=p2p.peer_id,
                   content_type=content_type,
                   content=content,
                   channel=channel,
                   piggyback=self.__token + "0")  # Adding inspector-mode bit (dummy bit here)
-        if ConnectionPools.DEBUG:
-            print("[DEBUG CONNECTIONS-POOL] Sending message: " + str(msg))
 
         # Sending direct message
         try:
@@ -642,8 +644,7 @@ class ConnectionPools:
         except P2PError as e:
 
             # If send_message_to_peer fails, it will raise a P2PError. We catch it here.
-            if ConnectionPools.DEBUG:
-                print("[DEBUG CONNECTIONS-POOL] Sending error is: " + str(e))
+            log.error("Sending error is: " + str(e), sub=p2p.log_sub)
             return False
 
     async def subscribe(self, peer_id: str, channel: str, default_p2p_name: str | None = None):
@@ -735,14 +736,14 @@ class ConnectionPools:
         if p2p is None:
             return False
 
+        log.network(f">>> PUBLISHING {content_type} to {p2p.peer_id}", sub=p2p.log_sub)
+
         # Adding sender info here
         msg = Msg(sender=p2p.peer_id,
                   content_type=content_type,
                   content=content,
                   channel=channel,
                   piggyback=self.__token + "0")  # Adding inspector-mode bit (dummy bit here)
-        if ConnectionPools.DEBUG:
-            print("[DEBUG CONNECTIONS-POOL] Sending (publish) message: " + str(msg))
 
         # Sending message via GossipSub
         try:
@@ -757,7 +758,6 @@ class ConnectionPools:
 
 
 class NodeConn(ConnectionPools):
-
     # Basic name
     __ALL_UNIVERSE = "all_universe"
     __WORLD_AGENTS_ONLY = "world_agents"
@@ -797,7 +797,7 @@ class NodeConn(ConnectionPools):
     INCOMING = {IN_PUBLIC, IN_WORLD_NODE, IN_WORLD_AGENTS, IN_WORLD_MASTERS}
 
     def __init__(self, max_connections: int, p2p_u: P2P, p2p_w: P2P,
-                 is_world_node: bool, public_key: str, token: str):
+                 is_world_node: bool, public_key: str, token: str) -> None:
         """Initializes a new instance of the NodeConn class.
 
         Args:
@@ -869,33 +869,33 @@ class NodeConn(ConnectionPools):
                 elif outbound:
                     pool_name_and_peer_id_to_peer_info[NodeConn.OUT_PUBLIC][peer_id] = c
                 else:
-                    raise ValueError(f"Connection direction is undefined: {c['direction']}")
+                    log.critical(f"Connection direction is undefined: {c['direction']}", sub=p2p.log_sub)
             else:
                 is_world_agent = peer_id in self.world_agents_list
                 is_world_master = peer_id in self.world_masters_list
                 is_world_node = self.world_node_peer_id is not None and peer_id == self.world_node_peer_id
                 is_inspector = self.inspector_peer_id is not None and peer_id == self.inspector_peer_id
                 if not is_world_node and not is_world_master and not is_world_agent and not is_inspector:
-                    if ConnectionPools.DEBUG:
-                        print("[DEBUG CONNECTIONS-POOL] World agents list:  " + str(self.world_agents_list))
-                        print("[DEBUG CONNECTIONS-POOL] World masters list: " + str(self.world_masters_list))
-                        print("[DEBUG CONNECTIONS-POOL] World node peer id: " + str(self.world_node_peer_id))
-                        print("[DEBUG CONNECTIONS-POOL] Inspector peer id: " + str(self.inspector_peer_id))
-                        print(f"[DEBUG CONNECTIONS-POOL] Unable to determine the peer type for {peer_id}: "
-                              f"cannot say if world agent, master, world node, inspector (disconnecting it)")
+                    log.cpool("World agents list:  " + str(self.world_agents_list), sub=p2p.log_sub)
+                    log.cpool("World masters list: " + str(self.world_masters_list), sub=p2p.log_sub)
+                    log.cpool("World node peer id: " + str(self.world_node_peer_id), sub=p2p.log_sub)
+                    log.cpool("Inspector peer id: " + str(self.inspector_peer_id), sub=p2p.log_sub)
+                    log.cpool(f"Unable to determine the peer type for {peer_id}: "
+                              f"cannot say if world agent, master, world node, inspector (disconnecting it)",
+                              sub=p2p.log_sub)
                     await ConnectionPools.disconnect(p2p, peer_id)
                     continue
 
                 if inbound:
                     pool_name_and_peer_id_to_peer_info[NodeConn.IN_WORLD_AGENTS if is_world_agent else (
-                            NodeConn.IN_WORLD_NODE if is_world_node else
-                            NodeConn.IN_WORLD_MASTERS)][peer_id] = c
+                        NodeConn.IN_WORLD_NODE if is_world_node else
+                        NodeConn.IN_WORLD_MASTERS)][peer_id] = c
                 elif outbound:
                     pool_name_and_peer_id_to_peer_info[NodeConn.OUT_WORLD_AGENTS if is_world_agent else (
-                            NodeConn.OUT_WORLD_NODE if is_world_node else
-                            NodeConn.OUT_WORLD_MASTERS)][peer_id] = c
+                        NodeConn.OUT_WORLD_NODE if is_world_node else
+                        NodeConn.OUT_WORLD_MASTERS)][peer_id] = c
                 else:
-                    raise ValueError(f"Connection direction is undefined: {c}")
+                    log.critical(f"Connection direction is undefined: {c}", sub=p2p.log_sub)
 
         return pool_name_and_peer_id_to_peer_info
 
@@ -1282,23 +1282,22 @@ class NodeConn(ConnectionPools):
                 world_agents_peer_infos = []
                 world_masters_peer_infos = []
 
-                if ConnectionPools.DEBUG:
-                    print(f"[DEBUG CONNECTIONS-POOL] Rendezvous peer infos (tag: {tag}, peers: "
-                          f"{len(rendezvous_peer_infos)} peers)")
+                log.cpool(f"Rendezvous peer infos (tag: {tag}, peers: "
+                          f"{len(rendezvous_peer_infos)} peers)", sub=self.p2p_world.log_sub)
 
                 for c in rendezvous_peer_infos:
                     if c['addrs'] is None:
-                        print(f"[DEBUG CONNECTIONS-POOL] Skipping a peer with None addrs (unexpected)")
+                        log.cpool(f"Skipping a peer with None addrs (unexpected)", sub=self.p2p_world.log_sub)
                         continue
                     # if len(c['addrs']) == 0:
-                    #    print(f"[DEBUG CONNECTIONS-POOL] Skipping a peer with zero-length addrs-list (unexpected)")
+                    #    log.cpool(f"Skipping a peer with zero-length addrs-list (unexpected)")
                     #    continue
                     if (c['misc'] & 1) == 1 and (c['misc'] & 2) == 0:
                         world_agents_peer_infos.append(c)
                     elif (c['misc'] & 1) == 1 and (c['misc'] & 2) == 2:
                         world_masters_peer_infos.append(c)
                     else:
-                        raise ValueError("Unexpected value of the 'misc' field: " + str(c))
+                        log.critical("Unexpected value of the 'misc' field: " + str(c), sub=self.p2p_world.log_sub)
 
                 # Updating lists
                 self.set_world_agents_list(world_agents_peer_infos)
@@ -1327,7 +1326,7 @@ class NodeConn(ConnectionPools):
             peer_id: The peer ID to remove.
         """
         await super().remove(peer_id)
-        #if peer_id in self.peer_id_to_addrs:
+        # if peer_id in self.peer_id_to_addrs:
         #    del self.peer_id_to_addrs[peer_id]
 
     async def remove_all_world_agents(self):
@@ -1369,4 +1368,5 @@ class NodeConn(ConnectionPools):
             A list of verified and processed message objects.
         """
         assert allowed_not_connected_peers is None, "This param (allowed_not_connected_peers is ignored in NodeConn"
-        return await super().get_messages(p2p_name, allowed_not_connected_peers=self.world_agents_and_world_masters_list)
+        return await super().get_messages(p2p_name,
+                                          allowed_not_connected_peers=self.world_agents_and_world_masters_list)

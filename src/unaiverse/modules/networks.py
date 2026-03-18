@@ -21,7 +21,7 @@ from PIL import Image
 import urllib.request
 from typing import Callable
 import torch.nn.functional as F
-from unaiverse.dataprops import Data4Proc
+from unaiverse.dataprops import Stream
 from unaiverse.modules.cnu.cnus import CNUs
 from unaiverse.modules.cnu.layers import LinearCNU
 from transformers import pipeline, AutoProcessor, AutoModelForCausalLM, AutoTokenizer
@@ -38,12 +38,12 @@ class RNNTokenLM(ModuleWrapper):
         self.embeddings = torch.nn.Embedding(num_emb, emb_dim)
 
         self.proc_inputs = [
-            Data4Proc(data_type="tensor", tensor_shape=(u_dim, ), tensor_dtype=torch.float32,
-                      pubsub=False, private_only=True)
+            Stream(data_type="tensor", tensor_shape=(u_dim,), tensor_dtype=torch.float32,
+                   pubsub=False, private_only=True)
         ]
         self.proc_outputs = [
-            Data4Proc(data_type="tensor", tensor_shape=(y_dim, ), tensor_dtype=torch.float32,
-                      pubsub=False, private_only=True)
+            Stream(data_type="tensor", tensor_shape=(y_dim,), tensor_dtype=torch.float32,
+                   pubsub=False, private_only=True)
         ]
 
         self.A = torch.nn.Linear(h_dim, h_dim, bias=False, device=device)
@@ -887,7 +887,7 @@ class CNN(ModuleWrapper):
         self.proc_inputs, self.proc_outputs = get_proc_inputs_and_proc_outputs_for_image_classification(d_dim)
         self.return_input = return_input
         if self.return_input:
-            self.proc_outputs.insert(0, Data4Proc(data_type="img", pubsub=False, private_only=True))
+            self.proc_outputs.insert(0, Stream(data_type="img", pubsub=False, private_only=True))
         self.transforms = transforms_factory("rgb" + str(in_res) if in_channels == 3 else "gray" + str(in_res))
 
         self.module = torch.nn.Sequential(
@@ -923,7 +923,7 @@ class CNNCNU(ModuleWrapper):
         self.proc_inputs, self.proc_outputs = get_proc_inputs_and_proc_outputs_for_image_classification(d_dim)
         self.return_input = return_input
         if self.return_input:
-            self.proc_outputs.insert(0, Data4Proc(data_type="img", pubsub=False, private_only=True))
+            self.proc_outputs.insert(0, Stream(data_type="img", pubsub=False, private_only=True))
         self.transforms = transforms_factory("rgb" + str(in_res) if in_channels == 3 else "gray" + str(in_res))
 
         self.module = torch.nn.Sequential(
@@ -959,7 +959,7 @@ class SingleLayerCNU(ModuleWrapper):
         self.proc_inputs, self.proc_outputs = get_proc_inputs_and_proc_outputs_for_image_classification(d_dim)
         self.return_input = return_input
         if self.return_input:
-            self.proc_outputs.insert(0, Data4Proc(data_type="img", pubsub=False, private_only=True))
+            self.proc_outputs.insert(0, Stream(data_type="img", pubsub=False, private_only=True))
         self.transforms = transforms_factory("rgb" + str(in_res) if in_channels == 3 else "gray" + str(in_res))
 
         self.module = torch.nn.Sequential(
@@ -1008,7 +1008,7 @@ class ResNet(ModuleWrapper):
         super(ResNet, self).__init__(seed=seed)
         self.return_input = return_input
         if self.return_input:
-            self.proc_outputs.insert(0, Data4Proc(data_type="img", pubsub=False, private_only=True))
+            self.proc_outputs.insert(0, Stream(data_type="img", pubsub=False, private_only=True))
         self.transforms = transforms_factory("rgb224")
         self.proc_inputs, self.proc_outputs = get_proc_inputs_and_proc_outputs_for_image_classification(d_dim)
         resnet = torchvision.models.resnet50(weights="IMAGENET1K_V1")
@@ -1040,7 +1040,7 @@ class ResNetCNU(ModuleWrapper):
         super(ResNetCNU, self).__init__(seed=seed)
         self.return_input = return_input
         if self.return_input:
-            self.proc_outputs.insert(0, Data4Proc(data_type="img", pubsub=False, private_only=True))
+            self.proc_outputs.insert(0, Stream(data_type="img", pubsub=False, private_only=True))
         self.transforms = transforms_factory("rgb224")
         self.proc_inputs, self.proc_outputs = get_proc_inputs_and_proc_outputs_for_image_classification(d_dim)
         resnet = torchvision.models.resnet50(weights="IMAGENET1K_V1")
@@ -1065,7 +1065,7 @@ class ViT(ModuleWrapper):
         super(ViT, self).__init__(seed=seed)
         self.return_input = return_input
         if self.return_input:
-            self.proc_outputs.insert(0, Data4Proc(data_type="img", pubsub=False, private_only=True))
+            self.proc_outputs.insert(0, Stream(data_type="img", pubsub=False, private_only=True))
         weights = torchvision.models.ViT_B_16_Weights.IMAGENET1K_V1
         self.transforms = torchvision.transforms.Compose([
             weights.transforms(),
@@ -1103,7 +1103,7 @@ class DenseNet(ModuleWrapper):
         super(DenseNet, self).__init__(seed=seed)
         self.return_input = return_input
         if self.return_input:
-            self.proc_outputs.insert(0, Data4Proc(data_type="img", pubsub=False, private_only=True))
+            self.proc_outputs.insert(0, Stream(data_type="img", pubsub=False, private_only=True))
         self.transforms = transforms_factory("rgb224")
         self.proc_inputs, self.proc_outputs = get_proc_inputs_and_proc_outputs_for_image_classification(d_dim)
         densenet = torchvision.models.densenet121(weights=None)
@@ -1131,7 +1131,7 @@ class EfficientNet(ModuleWrapper):
         super(EfficientNet, self).__init__(seed=seed)
         self.return_input = return_input
         if self.return_input:
-            self.proc_outputs.insert(0, Data4Proc(data_type="img", pubsub=False, private_only=True))
+            self.proc_outputs.insert(0, Stream(data_type="img", pubsub=False, private_only=True))
         weights = torchvision.models.EfficientNet_B0_Weights.IMAGENET1K_V1
         self.transforms = weights.transforms
         self.proc_inputs, self.proc_outputs = get_proc_inputs_and_proc_outputs_for_image_classification(d_dim)
@@ -1182,15 +1182,15 @@ class FasterRCNN(ModuleWrapper):
 
         super(FasterRCNN, self).__init__(
             module=faster_rcnn,
-            proc_inputs=[Data4Proc(data_type="img", pubsub=False, private_only=True)],
-            proc_outputs=[Data4Proc(data_type="tensor", tensor_dtype=torch.long, tensor_shape=(None,),
-                                    pubsub=False, private_only=True),
-                          Data4Proc(data_type="tensor", tensor_dtype=torch.float32, tensor_shape=(None,),
-                                    pubsub=False, private_only=True),
-                          Data4Proc(data_type="tensor", tensor_dtype=torch.float32, tensor_shape=(None, 4),
-                                    pubsub=False, private_only=True),
-                          Data4Proc(data_type="text",
-                                    pubsub=False, private_only=True)],
+            proc_inputs=[Stream(data_type="img", pubsub=False, private_only=True)],
+            proc_outputs=[Stream(data_type="tensor", tensor_dtype=torch.long, tensor_shape=(None,),
+                                 pubsub=False, private_only=True),
+                          Stream(data_type="tensor", tensor_dtype=torch.float32, tensor_shape=(None,),
+                                 pubsub=False, private_only=True),
+                          Stream(data_type="tensor", tensor_dtype=torch.float32, tensor_shape=(None, 4),
+                                 pubsub=False, private_only=True),
+                          Stream(data_type="text",
+                                 pubsub=False, private_only=True)],
             seed=seed)
 
     def forward(self, y: Image.Image, first: bool = True, last: bool = False):
@@ -1212,8 +1212,8 @@ class FasterRCNN(ModuleWrapper):
 class TinyLLama(ModuleWrapper):
     def __init__(self):
         super(TinyLLama, self).__init__(
-            proc_inputs=[Data4Proc(data_type="text", pubsub=False, private_only=True)],
-            proc_outputs=[Data4Proc(data_type="text", pubsub=False, private_only=True)]
+            proc_inputs=[Stream(data_type="text", pubsub=False, private_only=True)],
+            proc_outputs=[Stream(data_type="text", pubsub=False, private_only=True)]
         )
         self.module = pipeline("text-generation", model="TinyLlama/TinyLlama-1.1B-Chat-v1.0",
                                torch_dtype=torch.bfloat16, device=self.device)
@@ -1234,8 +1234,8 @@ class TinyLLama(ModuleWrapper):
 class LLama(ModuleWrapper):
     def __init__(self):
         super(LLama, self).__init__(
-            proc_inputs=[Data4Proc(data_type="text", pubsub=False, private_only=True)],
-            proc_outputs=[Data4Proc(data_type="text", pubsub=False, private_only=True)]
+            proc_inputs=[Stream(data_type="text", pubsub=False, private_only=True)],
+            proc_outputs=[Stream(data_type="text", pubsub=False, private_only=True)]
         )
         self.module = pipeline("text-generation", model="meta-llama/Llama-3.2-3B-Instruct",
                                torch_dtype=torch.bfloat16, device=self.device)
@@ -1245,7 +1245,8 @@ class LLama(ModuleWrapper):
                       {"role": "user", "content": msg}]
         prompt = self.module.tokenizer.apply_chat_template(msg_struct, tokenize=False, add_generation_prompt=True)
 
-        out = self.module(prompt, max_new_tokens=256, do_sample=True, return_full_text=False, temperature=0.7, top_k=50, top_p=0.95)
+        out = self.module(prompt, max_new_tokens=256, do_sample=True, return_full_text=False, temperature=0.7,
+                          top_k=50, top_p=0.95)
         out = out[0]["generated_text"] if (out is not None and len(out) > 0 and "generated_text" in out[0])\
             else "Error!"
         if "<|assistant|>\n" in out:
@@ -1256,8 +1257,8 @@ class LLama(ModuleWrapper):
 class Phi(ModuleWrapper):
     def __init__(self):
         super(Phi, self).__init__(
-            proc_inputs=[Data4Proc(data_type="text", pubsub=False, private_only=True)],
-            proc_outputs=[Data4Proc(data_type="text", pubsub=False, private_only=True)]
+            proc_inputs=[Stream(data_type="text", pubsub=False, private_only=True)],
+            proc_outputs=[Stream(data_type="text", pubsub=False, private_only=True)]
         )
         self.module = pipeline("text-generation", model="microsoft/Phi-3.5-mini-instruct",
                                torch_dtype="auto", device=self.device)
@@ -1278,9 +1279,9 @@ class Phi(ModuleWrapper):
 class LangSegmentAnything(ModuleWrapper):
     def __init__(self):
         super(LangSegmentAnything, self).__init__(
-            proc_inputs=[Data4Proc(data_type="img", pubsub=False, private_only=True),
-                         Data4Proc(data_type="text", pubsub=False, private_only=True)],
-            proc_outputs=[Data4Proc(data_type="img", pubsub=False, private_only=True)]
+            proc_inputs=[Stream(data_type="img", pubsub=False, private_only=True),
+                         Stream(data_type="text", pubsub=False, private_only=True)],
+            proc_outputs=[Stream(data_type="img", pubsub=False, private_only=True)]
         )
         from lang_sam import LangSAM
         self.module = LangSAM(device=self.device)
@@ -1349,9 +1350,9 @@ class LangSegmentAnything(ModuleWrapper):
 class SmolVLM(ModuleWrapper):
     def __init__(self):
         super(SmolVLM, self).__init__(
-            proc_inputs=[Data4Proc(data_type="img", pubsub=False, private_only=True),
-                         Data4Proc(data_type="text", pubsub=False, private_only=True)],
-            proc_outputs=[Data4Proc(data_type="text", pubsub=False, private_only=True)]
+            proc_inputs=[Stream(data_type="img", pubsub=False, private_only=True),
+                         Stream(data_type="text", pubsub=False, private_only=True)],
+            proc_outputs=[Stream(data_type="text", pubsub=False, private_only=True)]
         )
         model_id = "HuggingFaceTB/SmolVLM2-500M-Video-Instruct"
         self.pre_post_processor = AutoProcessor.from_pretrained(model_id, device_map=self.device)
@@ -1387,8 +1388,8 @@ class SiteRAG(ModuleWrapper):
                  site_folder: str = os.path.join("rag", "downloaded_site"),
                  db_folder: str = os.path.join("rag", "chroma_db")):
         super(SiteRAG, self).__init__(
-            proc_inputs=[Data4Proc(data_type="text", pubsub=False, private_only=True)],
-            proc_outputs=[Data4Proc(data_type="text", pubsub=False, private_only=True)],
+            proc_inputs=[Stream(data_type="text", pubsub=False, private_only=True)],
+            proc_outputs=[Stream(data_type="text", pubsub=False, private_only=True)],
         )
 
         # Saving options
