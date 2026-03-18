@@ -18,6 +18,14 @@ import threading
 from .lib_types import TypeInterface
 from typing import Optional, List, Dict, Any, TYPE_CHECKING
 
+# FdCapture and Logger are optional — gracefully degrade if not present
+try:
+    from unaiverse.utils.os_fd_capture import FdCapture
+    from unaiverse.utils.logger import Logger as _UnaLogger, Ch as _Ch
+    _CAPTURE_AVAILABLE = True
+except ImportError:
+    _CAPTURE_AVAILABLE = False
+
 # Conditional import for type hinting to avoid circular dependencies
 if TYPE_CHECKING:
     try:
@@ -68,15 +76,31 @@ class P2P:
     _instance_ids = [False, ] * _MAX_INSTANCES
     _instance_lock = threading.Lock()
 
+    # --- Go output capture (set by setup_library when logger is provided) ---
+    _cap_stdout: object = None   # FdCapture instance for fd 1
+    _cap_stderr: object = None   # FdCapture instance for fd 2
+
     @classmethod
     def setup_library(cls,
                       max_instances: Optional[int] = None,
                       max_channels: Optional[int] = None,
                       max_queue_per_channel: Optional[int] = None,
                       max_message_size: Optional[int] = None,
-                      enable_logging: bool = False) -> None:
+                      enable_logging: bool = False,
+                      unai_logger=None) -> None:
         """
         Initializes the underlying Go library. Must be called once. This is called automatically.
+                Initializes the underlying Go library. Must be called once. This is called automatically.
+
+        Args:
+            enable_logging: Enable Go-level log output.  When True and ``unai_logger``
+                            is supplied, all Go stdout/stderr lines are captured and
+                            routed to the ``P2P`` channel of the provided logger
+                            instead of being printed raw to the terminal.
+            unai_logger:    An instance of ``unaiverse.utils.logger.Logger``.
+                            When provided (and ``enable_logging=True``), Go output is
+                            intercepted at the OS file-descriptor level and emitted
+                            via ``logger.p2p()``.  Ignored when ``enable_logging=False``.
         """
         with cls._initialize_lock:
             if cls._library_initialized:
@@ -111,6 +135,19 @@ class P2P:
                     'swarm2': 'debug',
                     'yamux': 'debug'
                 }
+
+            # --- Start OS-level fd capture BEFORE InitializeLibrary, so we
+            #     catch every line the Go runtime emits from the very start ---
+            if enable_logging and unai_logger is not None and _CAPTURE_AVAILABLE:
+                def _make_cb(src_label: str):
+                    def _cb(line: str):
+                        unai_logger.p2p(line, src=src_label)
+                    return _cb
+                cls._cap_stdout = FdCapture(1, _make_cb("stdout"))
+                cls._cap_stderr = FdCapture(2, _make_cb("stderr"))
+                cls._cap_stdout.start()
+                cls._cap_stderr.start()
+                logger.info("🐍 Go stdout/stderr redirected to P2P log channel.")
 
             logger.info("🐍 Setting up and initializing P2P library core with user settings...")
             cls._type_interface = TypeInterface(cls.libp2p)
@@ -152,7 +189,8 @@ class P2P:
                  tls_cert_path: Optional[str] = None,
                  tls_key_path: Optional[str] = None,
                  dht_enabled: bool = False,
-                 dht_keep: bool = True
+                 dht_keep: bool = True,
+                 log_sub: str = "pub",
                  ) -> None:
         """
         Initializes and starts a new libp2p node.
@@ -201,6 +239,7 @@ class P2P:
 
         self._enable_relay_client = enable_relay_client or enable_relay_service
         self._peer_id: Optional[str] = None
+        self.log_sub = log_sub
 
         # TLS Validation Logic
         has_custom_tls_args = (tls_cert_path is not None) or (tls_key_path is not None) or (domain_name is not None)

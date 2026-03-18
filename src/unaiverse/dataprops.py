@@ -45,9 +45,9 @@ class FileContainer:
         return cls(content=file_bytes, filename=filename, mime_type=mime_type)
 
 
-class Data4Proc:
+class Stream:
     def __init__(self, *args, private_only: bool = False, public_only: bool = False, **kwargs):
-        """Initializes a `Data4Proc` object, which is a container for one or two `DataProps` instances. It creates a
+        """Initializes a `Stream` object, which is a container for one or two `DataProps` instances. It creates a
          `DataProps` object for a private stream and, optionally, a public stream.
 
         Args:
@@ -61,10 +61,17 @@ class Data4Proc:
                 directly.
         """
         self.props = []
+
         if public_only and private_only:
             raise ValueError("Cannot set both private_only and public_only to True (it does not make any sense)")
         if 'public' in kwargs:
-            raise ValueError("Invalid argument was provided to Data4Proc: 'public' (it is an argument of DataProps)")
+            raise ValueError("Invalid argument was provided to Stream: 'public' (it is an argument of DataProps)")
+
+        # Shorthand creation: Stream("text")
+        if len(args) == 1 and len(kwargs) == 0:
+            kwargs['data_type'] = args[0]
+            args = []
+
         kwargs['public'] = False
         self.props.append(DataProps(*args, **kwargs))
         if not private_only:
@@ -82,29 +89,29 @@ class Data4Proc:
 
     def to_dict(self):
         """Raises a `RuntimeError` because this method is intended for a single `DataProps` object, not for the
-        container class `Data4Proc` which can hold multiple properties.
+        container class `Stream` which can hold multiple properties.
 
         Raises:
             RuntimeError: Always, as this method is not supported.
         """
-        raise RuntimeError("This method can only be called on a DataProps object and not on Data4Proc")
+        raise RuntimeError("This method can only be called on a DataProps object and not on Stream")
 
     def from_dict(self):
         """Raises a `RuntimeError` because this method is intended for a single `DataProps` object, not for the
-        container class `Data4Proc` which can hold multiple properties.
+        container class `Stream` which can hold multiple properties.
 
         Raises:
             RuntimeError: Always, as this method is not supported.
         """
-        raise RuntimeError("This method can only be called on a DataProps object and not on Data4Proc")
+        raise RuntimeError("This method can only be called on a DataProps object and not on Stream")
 
     def clone(self):
-        """Creates and returns a deep copy of the `Data4Proc` object.
+        """Creates and returns a deep copy of the `Stream` object.
 
         Returns:
-            A new `Data4Proc` object that is a clone of the original.
+            A new `Stream` object that is a clone of the original.
         """
-        ret = Data4Proc()
+        ret = Stream()
         ret.props = []
         for p in self.props:
             ret.props.append(p.clone())
@@ -112,28 +119,28 @@ class Data4Proc:
 
     def is_public(self):
         """Raises a `RuntimeError` because this method is intended for a single `DataProps` object, not for the
-        container class `Data4Proc` which can hold multiple properties.
+        container class `Stream` which can hold multiple properties.
 
         Raises:
             RuntimeError: Always, as this method is not supported.
         """
-        raise RuntimeError("This method can only be called on a DataProps object and not on Data4Proc")
+        raise RuntimeError("This method can only be called on a DataProps object and not on Stream")
 
     def __str__(self):
-        """Provides a formatted string representation of the `Data4Proc` object. It lists the number of `DataProps`
+        """Provides a formatted string representation of the `Stream` object. It lists the number of `DataProps`
         objects it contains and includes the string representation of each of them.
 
         Returns:
-            A string detailing the contents of the `Data4Proc` object.
+            A string detailing the contents of the `Stream` object.
         """
-        s = f"[Data4Proc] Number of DataProps: {len(self.props)}"
+        s = f"[Stream] Number of DataProps: {len(self.props)}"
         for p in self.props:
             z = str(p).replace("\n", "\n\t")
             s += "\t" + z
         return s
 
     def __getattr__(self, method_or_attribute_name):
-        """Handles dynamic attribute and method access for the `Data4Proc` class. If the requested method name starts
+        """Handles dynamic attribute and method access for the `Stream` class. If the requested method name starts
         with 'set_', it creates a new function that applies the corresponding setter method to all contained
         `DataProps` objects. For any other attribute, it returns the attribute from the first `DataProps` object
         in the list.
@@ -602,6 +609,17 @@ class DataProps:
         """
         return DataProps.build_net_hash(prefix, self.pubsub, self.name_or_group())
 
+    def user_hash(self, prefix: str):
+        """Generates a unique user hash for the stream using a provided prefix and name.
+
+        Args:
+            prefix: The prefix, typically the peer ID.
+
+        Returns:
+            A string representing the user hash.
+        """
+        return DataProps.build_user_hash(prefix, self.name)
+
     @staticmethod
     def peer_id_from_net_hash(net_hash):
         """A static method to extract the peer ID from a network hash.
@@ -615,6 +633,18 @@ class DataProps:
         return net_hash.split("::")[0]
 
     @staticmethod
+    def peer_id_from_user_hash(user_hash):
+        """A static method to extract the peer ID from a user hash.
+
+        Args:
+            user_hash: The user hash string.
+
+        Returns:
+            A string representing the peer ID.
+        """
+        return user_hash.split(":")[0]
+
+    @staticmethod
     def name_or_group_from_net_hash(net_hash):
         """A static method to extract the name or group from a network hash.
 
@@ -625,6 +655,18 @@ class DataProps:
             A string representing the name or group.
         """
         return net_hash.split("::ps:")[1] if DataProps.is_pubsub_from_net_hash(net_hash) else net_hash.split("::dm:")[1]
+
+    @staticmethod
+    def name_from_user_hash(user_hash):
+        """A static method to extract the name from a user hash.
+
+        Args:
+            user_hash: The user hash string.
+
+        Returns:
+            A string representing the name or group.
+        """
+        return user_hash.split(":")[1]
 
     @staticmethod
     def is_pubsub_from_net_hash(net_hash):
@@ -663,6 +705,33 @@ class DataProps:
             return f"{prefix}::ps:{name_or_group}"
         else:
             return f"{prefix}::dm:{name_or_group}"
+
+    @staticmethod
+    def build_user_hash(prefix: str, name: str):
+        """A static method to construct a complete user hash from a prefix and name.
+
+        Args:
+            prefix: The peer ID prefix.
+            name: The name of the stream.
+
+        Returns:
+            The constructed network hash string.
+        """
+        return f"{prefix}:{name}"
+
+    @staticmethod
+    def user_hash_from_net_hash(net_hash: str, name: str):
+        """Generates a unique user hash for the stream using a provided network hash
+
+        Args:
+            net_hash: The network hash.
+            name: Stream name.
+
+        Returns:
+            A string representing the user hash.
+        """
+        prefix = DataProps.peer_id_from_net_hash(net_hash)
+        return DataProps.build_user_hash(prefix, name)
 
     @staticmethod
     def normalize_net_hash(not_normalized_net_hash: str):
@@ -788,7 +857,7 @@ class DataProps:
         if isinstance(data, str):
             return data
         elif not isinstance(data, torch.Tensor):
-            return None
+            return '<non-tensor and non-text>' if data is not None else None
 
         if self.is_tensor():
             if not self.has_tensor_labels():
@@ -1091,7 +1160,7 @@ class DataProps:
         Returns:
             str: The string representation of the instance.
         """
-        return f"[DataProps]\n{self.to_dict()}"
+        return f"{self.to_dict()}"
 
 
 class TensorLabels:
@@ -1280,3 +1349,7 @@ class TensorLabels:
             self.data_props.tensor_shape = (self.data_props.tensor_shape[0], self.num_labels)
         else:
             self.indices = None
+
+
+# Backward compatibility alias (Deprecated)
+Data4Proc = Stream

@@ -1,6 +1,6 @@
 import torch
 from unaiverse.agent import Agent
-from unaiverse.dataprops import Data4Proc
+from unaiverse.dataprops import Stream
 from unaiverse.networking.node.node import Node
 
 
@@ -19,9 +19,9 @@ class Net(torch.nn.Module):
 
 # Agent: we use the generator as processor.
 agent = Agent(proc=Net(),
-              proc_inputs=[Data4Proc(data_type="all")],  # Able to get every type of data (since it won't use it :))
-              proc_outputs=[Data4Proc(data_type="tensor", tensor_shape=(1, 3, 224, 224),
-                                      tensor_dtype="torch.float32")],  # These are the properties of generator output
+              proc_inputs=[Stream(data_type="all")],  # Able to get every type of data (since it won't use it :))
+              proc_outputs=[Stream(data_type="tensor", tensor_shape=(1, 3, 224, 224),
+                                   tensor_dtype="torch.float32")],  # These are the properties of generator output
               )
 
 # To retrieve the result we got from the ResNet agent, we define a hook

@@ -1,7 +1,7 @@
 import torch
 import torchvision
 from unaiverse.agent import Agent
-from unaiverse.dataprops import Data4Proc
+from unaiverse.dataprops import Stream
 from unaiverse.networking.node.node import Node
 
 # Downloading PyTorch module (ResNet)
@@ -13,10 +13,10 @@ net = torchvision.models.resnet50(weights="IMAGENET1K_V1").eval()
 # there!". By default, this agent will act as a serving "lone wolf", serving whoever asks for
 # a prediction.
 agent = Agent(proc=net,
-              proc_inputs=[Data4Proc(data_type="tensor", tensor_shape=(None, 3, None, None),
-                                     tensor_dtype=torch.float32)],
-              proc_outputs=[Data4Proc(data_type="tensor", tensor_shape=(None, 1000),
-                                      tensor_dtype=torch.float32)])
+              proc_inputs=[Stream(data_type="tensor", tensor_shape=(None, 3, None, None),
+                                  tensor_dtype=torch.float32)],
+              proc_outputs=[Stream(data_type="tensor", tensor_shape=(None, 1000),
+                                   tensor_dtype=torch.float32)])
 
 # Node hosting agent: a node will be created in your account with this name, if not
 # existing; it is "hidden" meaning that only you can see it in UNaIVERSE (since it is

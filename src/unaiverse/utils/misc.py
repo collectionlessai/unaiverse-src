@@ -23,7 +23,13 @@ import threading
 from tqdm import tqdm
 from pathlib import Path
 from datetime import datetime
-from unaiverse.modules.utils import HumanModule
+from collections import deque
+from unaiverse.modules.utils import has_human_processor as _has_human_processor
+
+
+# Backward compatibility
+def has_human_processor(*args, **kwargs):
+    return _has_human_processor(*args, **kwargs)
 
 
 class GenException(Exception):
@@ -293,15 +299,16 @@ def get_key_considering_multiple_sources(key_variable: str | None) -> str:
                 first_source = _source_name
 
     if len(source_names) > 0:
-        msg = ""
         if multiple_source and not mismatching:
             msg = "UNaIVERSE key (the exact same key) present in multiple locations: " + ", ".join(source_names)
+            print(msg)
         if multiple_source and mismatching:
             msg = "UNaIVERSE keys (different keys) present in multiple locations: " + ", ".join(source_names)
             msg += "\nLoaded the one stored in " + first_source
-        if not multiple_source:
-            msg = f"UNaIVERSE key loaded from {first_source}"
-        print(msg)
+            print(msg)
+        # if not multiple_source:
+        #    msg = f"UNaIVERSE key loaded from {first_source}"
+        #    print(msg)
         return first_key
     else:
 
@@ -437,5 +444,37 @@ class PolicyFilterHuman:
         return action_id, request
 
 
-def has_human_processor(agent):
-    return agent.proc is not None and isinstance(agent.proc.module, HumanModule)
+class MultiPartLimitedDict(dict):
+    def __init__(self, part_name_to_limit):
+        super().__init__()
+        self._limits = part_name_to_limit
+        self._trackers = {k: deque() for k in part_name_to_limit}
+        self._current_part = next(iter(part_name_to_limit.keys()))  # Default part
+
+    def set_part(self, part_label):
+        """Switch which 'bucket' new keys are attributed to."""
+        if part_label in self._limits:
+            self._current_part = part_label
+
+    def __setitem__(self, key, value):
+        part = self._current_part
+        limit = self._limits[part]
+        tracker = self._trackers[part]
+
+        # 1. If key is already in this specific tracker, move it to the end (most recent)
+        if key in tracker:
+            tracker.remove(key)
+
+        # 2. Add to the tracker
+        tracker.append(key)
+
+        # 3. If we exceeded the limit for this part, remove the oldest key
+        if len(tracker) > limit:
+            oldest_key = tracker.popleft()
+            # Only delete from the actual dict if it's not tracked by the OTHER part
+            # (Optional logic: prevents Part A from deleting Part B's keys)
+            if oldest_key in self:
+                super().__delitem__(oldest_key)
+
+        # 4. Set the actual value
+        super().__setitem__(key, value)

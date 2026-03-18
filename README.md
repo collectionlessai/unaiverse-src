@@ -107,7 +107,7 @@ Here is the **resnet classifier** agent, running forever and waiting for somebod
 import torch
 import torchvision
 from unaiverse.agent import Agent
-from unaiverse.dataprops import Data4Proc
+from unaiverse.dataprops import Stream
 from unaiverse.networking.node.node import Node
 
 # Downloading PyTorch module (ResNet)
@@ -119,10 +119,10 @@ net = torchvision.models.resnet50(weights="IMAGENET1K_V1").eval()
 # there!". By default, this agent will act as a serving "lone wolf", serving whoever asks for
 # a prediction.
 agent = Agent(proc=net,
-              proc_inputs=[Data4Proc(data_type="tensor", tensor_shape=(None, 3, None, None),
-                                     tensor_dtype=torch.float32)],
-              proc_outputs=[Data4Proc(data_type="tensor", tensor_shape=(None, 1000),
-                                      tensor_dtype=torch.float32)])
+              proc_inputs=[Stream(data_type="tensor", tensor_shape=(None, 3, None, None),
+                                  tensor_dtype=torch.float32)],
+              proc_outputs=[Stream(data_type="tensor", tensor_shape=(None, 1000),
+                                   tensor_dtype=torch.float32)])
 
 # Node hosting agent: a node will be created in your account with this name, if not
 # existing; it is "hidden" meaning that only you can see it in UNaIVERSE (since it is
@@ -139,7 +139,7 @@ Run it. Now, here is the agent capable of **generating tensors** (let's say imag
 ```python
 import torch
 from unaiverse.agent import Agent
-from unaiverse.dataprops import Data4Proc
+from unaiverse.dataprops import Stream
 from unaiverse.networking.node.node import Node
 
 
@@ -158,10 +158,11 @@ class Net(torch.nn.Module):
 
 # Agent: we use the generator as processor.
 agent = Agent(proc=Net(),
-              proc_inputs=[Data4Proc(data_type="all")],  # Able to get every type of data (since it won't use it :))
-              proc_outputs=[Data4Proc(data_type="tensor", tensor_shape=(1, 3, 224, 224),
-                                      tensor_dtype="torch.float32")],  # These are the properties of generator output
+              proc_inputs=[Stream(data_type="all")],  # Able to get every type of data (since it won't use it :))
+              proc_outputs=[Stream(data_type="tensor", tensor_shape=(1, 3, 224, 224),
+                                   tensor_dtype="torch.float32")],  # These are the properties of generator output
               )
+
 
 # To retrieve the result we got from the ResNet agent, we define a hook
 # that will be called at the end of every run cycle
@@ -170,6 +171,7 @@ def hook(_node: Node):
     _out = _node.agent.get_last_streamed_data('Test0')[0]
     if _out is not None:
         _node.agent.print(f"Received data shape: {tuple(_out.shape)}, dtype: {_out.dtype}")
+
 
 # Node hosting agent
 node = Node(node_name="Test1", hosted=agent, hidden=True, clock_delta=1. / 5., run_hook=hook)
@@ -182,13 +184,13 @@ Run this script as well, and what will happen is that the generator will send it
 
 ### Step B1. Embellishment
 
-We can upgrade the **resnet agent** to take real-world images as input, instead of random tensors, and to output class names (text) instead of a probability distribution. All we need to do is to re-define the properties of the inputs/outputs of the agent processor, and add transformations. Dive into [script 4](./assets/tutorial/B_improve_A_and_use_browser/4_agent_resnet_img_text.py): 
+We can upgrade the **resnet agent** to take real-world images as input, instead of random tensors, and to output class names (text) instead of a probability distribution. All we need to do is to re-define the properties of the inputs/outputs of the agent processor, and add transformations. Dive into [script 4](./assets/tutorial/B_improve_A_and_use_browser/4_agent_resnet_img_text.py):
 
 ```python
 import torchvision
 import urllib.request
 from unaiverse.agent import Agent
-from unaiverse.dataprops import Data4Proc
+from unaiverse.dataprops import Stream
 from unaiverse.networking.node.node import Node
 
 # Downloading PyTorch module (ResNet)
@@ -211,8 +213,8 @@ with urllib.request.urlopen("https://raw.githubusercontent.com/pytorch/hub/maste
 # the actual output of the processor and what will be streamed (here we go from class
 # probabilities to winning class name).
 agent = Agent(proc=net,
-              proc_inputs=[Data4Proc(data_type="img", stream_to_proc_transforms=transforms)],
-              proc_outputs=[Data4Proc(data_type="text", proc_to_stream_transforms=lambda p: c_names[p.argmax(1)[0]])])
+              proc_inputs=[Stream(data_type="img", stream_to_proc_transforms=transforms)],
+              proc_outputs=[Stream(data_type="text", proc_to_stream_transforms=lambda p: c_names[p.argmax(1)[0]])])
 
 # Node hosting agent
 node = Node(node_name="Test0", hosted=agent, hidden=True, clock_delta=1. / 5.)
@@ -229,7 +231,7 @@ import urllib.request
 from PIL import Image
 from io import BytesIO
 from unaiverse.agent import Agent
-from unaiverse.dataprops import Data4Proc
+from unaiverse.dataprops import Stream
 from unaiverse.networking.node.node import Node
 
 
@@ -248,9 +250,10 @@ class Net(torch.nn.Module):
 
 # Agent
 agent = Agent(proc=Net(),
-              proc_inputs=[Data4Proc(data_type="all")],
-              proc_outputs=[Data4Proc(data_type="img")],  # A PIL image is being "generated" here
+              proc_inputs=[Stream(data_type="all")],
+              proc_outputs=[Stream(data_type="img")],  # A PIL image is being "generated" here
               behav_lone_wolf="ask")
+
 
 # To retrieve the result we got from the ResNet agent, we define a hook
 # that will be called at the end of every run cycle
@@ -262,6 +265,7 @@ def hook(_node: Node):
     _node.agent.print(f"Notice: instead of using this agent, you can also: search for the ResNet node (ResNetAgent) "
                       f"in the UNaIVERSE portal, connect to it using our in-browser agent, select a picture from "
                       f"your disk, send it to the agent, get back the text response!")
+
 
 # Node hosting agent
 node = Node(node_name="Test1", hosted=agent, hidden=True, clock_delta=1. / 5., run_hook=hook)
