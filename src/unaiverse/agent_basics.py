@@ -19,13 +19,12 @@ import pickle
 import uuid as _uuid
 import importlib.resources
 from PIL.Image import Image
-from typing_extensions import deprecated
-
 from unaiverse.clock import clock
-from unaiverse.custom import Custom
 from unaiverse.stats import Stats
+from unaiverse.custom import Custom
 from collections.abc import Callable
 from unaiverse.utils.logger import log
+from typing_extensions import deprecated
 from unaiverse.networking.p2p.messages import Msg
 from unaiverse.streams import Stream, BufferedStream
 from unaiverse.hsm import HybridStateMachine, Action
@@ -44,7 +43,7 @@ class AgentBasics:
     # Role bits (a.k.a. role int): default roles, shared by every possible agent
     ROLE_PUBLIC = 0 << 0  # 00000000 = 0 means "public"
     ROLE_WORLD_MASTER = (1 << 0) | (1 << 1)  # 00000011 = 3 means "world master" (the first bit means "about world")
-    ROLE_WORLD_AGENT = (1 << 0) | (0 << 1)  # 00000001 = 2 means "world agent" (the first bit means "about world")
+    ROLE_WORLD_AGENT = (1 << 0) | (0 << 1)  # 00000001 = 1 means "world agent" (the first bit means "about world")
     CUSTOM_ROLES = []
 
     # From role bits (int) to string
@@ -932,7 +931,8 @@ class AgentBasics:
             owned_too: If True, also removes the owned streams of this agent (so also environmental and processor ones).
         """
         if not owned_too:
-            self.known_streams = {k: v for k, v in self.owned_streams}
+            self.known_streams = {k: v for k, v in self.owned_streams.items()}
+            self.known_streams_by_user_hash = {k: v for k, v in self.known_streams_by_user_hash.items()}
         else:
             self.known_streams = {}
             self.owned_streams = {}
@@ -1280,7 +1280,8 @@ class AgentBasics:
     async def send_profile_to_all(self):
         """Sends the agent's profile to all known agents (async)."""
 
-        for peer_id in self.all_agents.keys():
+        agents = list(self.all_agents.keys())
+        for peer_id in agents:
             log.misc(f"Sending profile to {peer_id}")
             if not (await self._node_conn.send(peer_id, channel_trail=None,
                                                content=self._node_profile.get_all_profile(),
@@ -1297,7 +1298,8 @@ class AgentBasics:
             if self.behav is None:
                 log.error("No behaviour specified")
             else:
-                self.behav_lone_wolf.enable(False)
+                if self.behav_lone_wolf is not None:
+                    self.behav_lone_wolf.enable(False)
                 self.behav.enable(True)
                 await self.behav.act()
                 self.behav.enable(False)
@@ -1307,7 +1309,8 @@ class AgentBasics:
         if self.behav_lone_wolf is None:
             log.error("No behaviour specified")
         else:
-            self.behav.enable(False)
+            if self.behav is not None:
+                self.behav.enable(False)
             self.behav_lone_wolf.enable(True)
             await self.behav_lone_wolf.act()
             self.behav_lone_wolf.enable(False)
