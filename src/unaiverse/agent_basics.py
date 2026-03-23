@@ -24,16 +24,18 @@ from unaiverse.stats import Stats
 from unaiverse.custom import Custom
 from collections.abc import Callable
 from unaiverse.utils.logger import log
+from unaiverse.hsm.action import Action
 from typing_extensions import deprecated
+from unaiverse.hsm.hsm import HybridStateMachine
 from unaiverse.networking.p2p.messages import Msg
-from unaiverse.streams import Stream, BufferedStream
-from unaiverse.hsm import HybridStateMachine, Action
+from unaiverse.streams.streamproxy import StreamProxy
 from unaiverse.networking.node.profile import NodeProfile
 from unaiverse.utils.misc import GenException, FileTracker
+from unaiverse.streams.streams import Stream, BufferedStream
 from unaiverse.networking.node.connpool import ConnectionPools
 from unaiverse.dataprops import DataProps, Stream as StreamSpecs
+from unaiverse.interaction import Interaction, InteractionManager
 from unaiverse.modules.utils import AgentProcessorChecker, ModuleWrapper
-from unaiverse.interaction import Interaction, InteractionManager, StreamIO
 
 
 class AgentBasics:
@@ -165,10 +167,10 @@ class AgentBasics:
 
         # Interaction Manager, stdin/stdout
         self.im = InteractionManager(self, max_interactions=Custom.MAX_INTERACTIONS)
-        self.stdin = StreamIO()  # Variable binding
-        self.stdtar = StreamIO()  # Variable binding
-        self.stdext = StreamIO()  # Variable binding
-        self.stdout = StreamIO()  # Fixed binding
+        self.stdin = StreamProxy()  # Variable binding
+        self.stdtar = StreamProxy()  # Variable binding
+        self.stdext = StreamProxy()  # Variable binding
+        self.stdout = StreamProxy()  # Fixed binding
         self.stdin.bind(self.proc_in_streams_by_user_hash)
         self.stdout.bind(self.proc_streams_by_user_hash)
         self.stdext.bind(self.env_streams_by_user_hash)

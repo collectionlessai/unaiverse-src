@@ -17,32 +17,14 @@ import time
 import json
 import uuid as _uuid
 from enum import Enum
-from itertools import islice
 from unaiverse.clock import clock
-from collections.abc import Callable
-
 from unaiverse.custom import Custom
+from collections.abc import Callable
 from unaiverse.utils.logger import log
 from unaiverse.dataprops import DataProps
 from unaiverse.utils.misc import GenException
-from unaiverse.streams import Stream, BufferedStream, serialize_payload, deserialize_payload
-
-
-class InteractionStatus(Enum):
-    CREATED = "created"
-    REQUESTED = "requested"
-    LAZY = "lazy"
-    RECEIVED = "received"
-    RUNNING = "running"
-    COMPLETED = "completed"
-
-
-class CompletionReason(Enum):
-    OK = "ok"  # Correctly completed: triggered a transition
-    TIMEOUT = "timeout"  # The interaction was waiting in the queue for too long, it's time to remove it
-    REJECTED = "rejected"  # The interaction was not accepted since the very beginning
-    DISCONNECTED = "disconnected"
-    ERROR = "error"  # An error occurred
+from unaiverse.streams.streamproxy import StreamProxy
+from unaiverse.streams.streams import Stream, BufferedStream, serialize_payload, deserialize_payload
 
 
 class Interaction:
@@ -52,7 +34,6 @@ class Interaction:
     the requested action, its arguments, sample specifications, timing, status,
     and the data access interface (get/set).
     """
-    DEFAULT_MULTI_STEP_TIMEOUT = 10.0
 
     def __init__(self,
                  action_name: str | None = None,
@@ -152,7 +133,7 @@ class Interaction:
         self.stdext_streams = {}  # User hash to stream object
         self.owned_streams = {}  # User hash to stream object
         self.lazy_streams = {}  # User hash to stream object
-        self.iostreams = StreamIO()  # Virtual stream IO associated to all streams above (not the lazy ones)
+        self.iostreams = StreamProxy()  # Virtual stream IO associated to all streams above (not the lazy ones)
 
         # Back-reference to the InteractionManager (set when registered)
         self.__im: 'InteractionManager | None' = None
@@ -514,7 +495,7 @@ class Interaction:
         self.timestamp_started = clock.get_time()
         self.cycle_started = clock.get_cycle()
 
-    def mark_completed(self, reason: CompletionReason = CompletionReason.OK, dest_state: str | None = None):
+    def mark_completed(self, reason: 'CompletionReason', dest_state: str | None = None):
         """Mark this interaction as completed.
 
         Args:
@@ -658,215 +639,6 @@ class Interaction:
         }
 
 
-class StreamIO:
-    """Proxy that wraps a set of streams for unified stdin/stdout access.
-
-    Provides a consistent interface for getting/setting data on streams
-    by name, index, or implicitly (when there is only one stream).
-    """
-
-    def __init__(self, streams: dict[str, Stream | object] | None = None):
-        """Create a StreamIO proxy.
-
-        Args:
-            streams: Optional dict mapping stream name to stream object.
-        """
-        self._streams: dict[str, Stream | object] = streams if streams is not None else {}
-        self._stream_list: list = list(self._streams.values())
-
-    def bind(self, streams: dict[str, Stream | object]):
-        """Rebind this proxy to a different set of streams (different from the ones used when building it).
-
-        Args:
-            streams: Dict mapping stream name to stream object.
-        """
-        self._streams = streams.copy()  # Shallow copy
-        self._stream_list = list(streams.values())
-
-    def add_new_bind(self, stream_hash: str, stream: Stream):
-        if stream_hash not in self._streams:
-            self._streams[stream_hash] = stream
-            self._stream_list.append(stream)
-
-    def get(self, key: str | int | None = None, requested_by: str | None = None, uuid: str | None = None):
-        """Get data from a stream.
-
-        Args:
-            key: Stream name (str), index (int), or None for single-stream case.
-            requested_by (str | None): The identifier of "who" requests access to the stream data (default: None).
-
-        Returns:
-            The data from the requested stream.
-        """
-        if len(self._stream_list) == 0:
-            raise GenException("No streams bound to this StreamIO")
-
-        if key is None:
-            found_at_least_one = False
-            ret = []
-            for s in self._stream_list:
-                if isinstance(s, Stream):
-                    data = s.get(requested_by, uuid)  # This might will be None if requested multiple times
-                    if data is not None:
-                        found_at_least_one = True
-                    ret.append(data)
-                else:
-                    ret.append(s)  # This will always be not-None (well, unless None is the actual value)
-            return ret if found_at_least_one else None
-        elif isinstance(key, int):
-            if isinstance(self._stream_list[key], Stream):
-                return self._stream_list[key].get(requested_by, uuid)
-            else:
-                return self._stream_list[key]  # Default value
-        elif key in self._streams:
-            if self._streams[key] is not None:
-                return self._streams[key].get(requested_by, uuid)
-            else:
-                return self._streams[key]  # Default value
-        else:
-            raise GenException(f"Unknown stream: {key}")
-
-    def add_interaction(self, interaction: Interaction):
-        for s in self._stream_list:
-            s.add_interacton(interaction)
-
-    def has_interaction(self, uuid: str | None):
-        for s in self._stream_list:
-            if not isinstance(s, Stream):
-                continue
-            if not s.has_interaction(uuid):
-                return False
-        return True
-
-    def get_interaction(self, uuid: str | None):
-        if not self.has_interaction(uuid):
-            return None
-
-        for s in self._stream_list:
-            if not isinstance(s, Stream):
-                continue
-            interaction = s.get_interaction(uuid)
-            if interaction is not None:
-                return interaction  # This will happen at the 1st iteration for the way "has_interaction" is implemented
-        return None  # This will never happen, since we already ensured that it "has_interaction"
-
-    def set(self, key_or_data, data=None, data_tag: int = -1, uuid: str | None = None, target: str | None = None):
-        """Set data on a stream.
-
-        Usage (example for stdin - it could be other StreamIO):
-            - ``self.stdin.set(data)`` — when there is only one stream
-            - ``self.stdin.set(stream_name, data)`` — by name
-            - ``self.stdin.set(stream_index, data)`` — by index
-
-        Args:
-            key_or_data: Stream name/index if data is also provided, or the data itself
-                         for the single-stream case.
-            data: The data to set (when key_or_data is a name/index).
-        """
-        if len(self._stream_list) == 0:
-            raise GenException("No streams bound to this StreamIO")
-
-        if target is not None:
-            interaction = Interaction(uuid=uuid, target=target)  # Empty interaction
-
-            # It happens that data arrive before the interaction, hence we add this auto-built interaction object.
-            # When the actual interaction will arrive, the "add_interaction" will be called by the Interaction Manager,
-            # that will update the auto-built interaction with the actual one, keeping the data.
-            self.add_interaction(interaction)
-
-        if isinstance(key_or_data, list):
-            if len(key_or_data) != len(self._stream_list):
-                raise GenException(f"The list of stream values to set must have the same length of the stream list "
-                                   f"({len(key_or_data)} != {len(self._stream_list)})")
-            for i, data in enumerate(key_or_data):
-                s = self._stream_list[i]
-                if isinstance(s, Stream):
-                    s.set(data, data_tag, uuid=uuid)
-                else:
-                    self._stream_list[i] = data
-                    key_at_index = next(islice(self._streams, i, None))
-                    self._streams[key_at_index] = data
-        elif isinstance(key_or_data, int):
-            s = self._stream_list[key_or_data]
-            if isinstance(s, Stream):
-                s.set(data, uuid=uuid)
-            else:
-                self._stream_list[key_or_data] = data
-        elif key_or_data in self._streams:
-            s = self._streams[key_or_data]
-            if isinstance(s, Stream):
-                s.set(data, data_tag, uuid=uuid)
-            else:
-                self._streams[key_or_data] = data
-        else:
-            raise GenException(f"Unknown stream: {key_or_data}")
-
-    def get_tag(self, key: str | int | None = None, uuid: str | None = None):
-        if len(self._stream_list) == 0:
-            raise GenException("No streams bound to this StreamIO")
-
-        if key is None:
-            ret = []
-            for s in self._stream_list:
-                if isinstance(s, Stream):
-                    data_tag = s.get_tag(uuid)
-                    ret.append(data_tag)
-                else:
-                    ret.append(-1)
-            return max(ret)
-        elif isinstance(key, int):
-            if isinstance(self._stream_list[key], Stream):
-                return self._stream_list[key].get_tag(uuid)
-            else:
-                return -1  # Default value
-        elif key in self._streams:
-            if self._streams[key] is not None:
-                return self._streams[key].get_tag(uuid)
-            else:
-                return -1  # Default value
-        else:
-            raise GenException(f"Unknown stream: {key}")
-
-    def clear(self):
-        self.set([None] * len(self))
-
-    def __getitem__(self, key):
-        self.get(key)
-
-    def __len__(self):
-        return len(self._stream_list)
-
-    def __iter__(self):
-        return iter(self._stream_list)
-
-    def __contains__(self, key):
-        if isinstance(key, str):
-            return key in self._streams
-        return False
-
-    def items(self):
-        for key, value in self._streams.items():
-            yield key, value
-
-    @property
-    def names(self) -> list[str]:
-        """Return the names (user hashes) of all bound streams."""
-        return list(self._streams.keys())
-
-    def __str__(self):
-        grouped_by_user = {}
-        for user_hash in self._streams.keys():
-            user = DataProps.peer_id_from_user_hash(user_hash)
-            if user not in grouped_by_user:
-                grouped_by_user[user] = []
-            grouped_by_user[user].append(DataProps.name_from_user_hash(user_hash))
-        if len(grouped_by_user) > 0:
-            return str(", ".join([(user + ":" + ",".join(stream_names))
-                                  for user, stream_names in grouped_by_user.items()]))
-        else:
-            return "no-streams"
-
-
 class InteractionManager:
     """Manages all interactions for an agent.
 
@@ -878,8 +650,6 @@ class InteractionManager:
     - Sends back interaction status
     - Waits for all involved streams to have sent data before marking action ready
     """
-    DEFAULT_TIMEOUT = 60. * 5.  # Seconds
-    DRAIN_TIMEOUT = 0.
 
     def __init__(self, agent: object, max_interactions: int = Custom.MAX_INTERACTIONS):
         """Create an InteractionManager.
@@ -1270,8 +1040,7 @@ class InteractionManager:
             recipients = interaction.target  # This is always a list, even when with 1 element only
         return [x for x in recipients if x is not None]
 
-    def complete(self, interaction: 'Interaction', dest_state: str | None = None,
-                 reason: CompletionReason = CompletionReason.OK):
+    def complete(self, interaction: 'Interaction', reason: 'CompletionReason', dest_state: str | None = None):
         if interaction is not None:
             interaction.mark_completed(reason, dest_state=dest_state)
             if (interaction.uuid in self.sent and
@@ -1287,7 +1056,7 @@ class InteractionManager:
                 self.lazy_recently_completed.add(interaction)
                 del self.lazy[interaction.uuid]
 
-    def complete_current(self, dest_state: str, reason: CompletionReason = CompletionReason.OK):
+    def complete_current(self, dest_state: str, reason: 'CompletionReason'):
         """Mark the current interaction as completed.
 
         Args:
@@ -1319,7 +1088,7 @@ class InteractionManager:
                 # Of course, "disconnected"-agent-related interactions are immediately drained
                 if (interaction.completion_reason == CompletionReason.DISCONNECTED or
                         (interaction.cycle_completed < cur_clock_cycle and
-                        (cur_time - interaction.timestamp_completed) > InteractionManager.DRAIN_TIMEOUT)):
+                         (cur_time - interaction.timestamp_completed) > Custom.DRAIN_TIMEOUT)):
                     log.inter(
                         f"Draining {interaction.to_code_str(True)} "
                         f"(cycle_completed={interaction.cycle_completed})")
@@ -1350,7 +1119,7 @@ class InteractionManager:
         for interaction in list(self.sent.values()) + list(self.received.values()) + list(self.lazy.values()):
             if interaction.status == InteractionStatus.COMPLETED:
                 continue
-            if interaction.is_expired(InteractionManager.DEFAULT_TIMEOUT):
+            if interaction.is_expired(Custom.DEFAULT_INTER_TIMEOUT):
                 self.complete(interaction, reason=CompletionReason.TIMEOUT)
             else:
                 if self.is_received(interaction) and interaction.requester not in self.agent.all_agents:
@@ -1375,7 +1144,7 @@ class InteractionManager:
                         or stream.get_interaction(interaction.uuid).created):
 
                     # This will also clear the associated (completed) interaction, if still there
-                    stream.clear_expired_data(InteractionManager.DEFAULT_TIMEOUT)
+                    stream.clear_expired_data(Custom.DEFAULT_INTER_TIMEOUT)
 
     @staticmethod
     def check_stream_readiness(interaction: Interaction) -> bool:
@@ -1475,7 +1244,7 @@ class InteractionManager:
             stream_obj = self.agent.known_streams_by_user_hash[user_hash]
             stream_obj.add_interaction(interaction)
             interaction.add_lazy_stream(user_hash, stream_obj,
-                                            is_owned=user_hash in self.agent.owned_streams_by_user_hash)
+                                        is_owned=user_hash in self.agent.owned_streams_by_user_hash)
 
     def remove_interactions_of_agent(self, agent):
         interaction_dicts = [self.sent, self.received, self.lazy]
@@ -1509,3 +1278,20 @@ class InteractionManager:
             s3 += "\n".join(([("   " + inter.to_code_str(True)) for inter in self.lazy.values()] +
                             [("   *" + inter.to_code_str(True)) for inter in self.lazy_recently_completed]))
         return "\n".join([z for z in [s1, s2, s3] if len(z) > 0])
+
+
+class InteractionStatus(Enum):
+    CREATED = "created"
+    REQUESTED = "requested"
+    LAZY = "lazy"
+    RECEIVED = "received"
+    RUNNING = "running"
+    COMPLETED = "completed"
+
+
+class CompletionReason(Enum):
+    OK = "ok"  # Correctly completed: triggered a transition
+    TIMEOUT = "timeout"  # The interaction was waiting in the queue for too long, it's time to remove it
+    REJECTED = "rejected"  # The interaction was not accepted since the very beginning
+    DISCONNECTED = "disconnected"
+    ERROR = "error"  # An error occurred

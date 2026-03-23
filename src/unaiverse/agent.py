@@ -27,7 +27,7 @@ from unaiverse.dataprops import DataProps
 from unaiverse.interaction import Interaction
 from unaiverse.agent_basics import AgentBasics
 from unaiverse.networking.p2p.messages import Msg
-from unaiverse.streams import BufferedDataStream, Stream
+from unaiverse.streams.streams import BufferedDataStream, Stream
 
 
 def action(func: Callable) -> Callable:

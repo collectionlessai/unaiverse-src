@@ -55,3 +55,7 @@ class Custom:
     # Deprecated Action argument-related things
     SPECIAL_DEPRECATED_CASES_PREFIXES = {'ask_', 'do_', 'done_'}
     NOT_READY_PREFIXES = {'get_', 'got_', 'do_', 'done_'}
+
+    # Interactions
+    DEFAULT_INTER_TIMEOUT = 60. * 5.  # Seconds
+    DRAIN_TIMEOUT = 0.
