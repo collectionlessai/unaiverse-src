@@ -18,6 +18,7 @@ coverage/
 
 # IDEs & Editors
 .idea
+.claude
 .idea/           # PyCharm and IntelliJ
 .vscode
 .vscode/         # VS Code
