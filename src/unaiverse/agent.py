@@ -23,7 +23,7 @@ from unaiverse.clock import clock
 from unaiverse.custom import Custom
 from unaiverse.utils.logger import log
 from typing_extensions import deprecated
-from unaiverse.dataprops import DataProps
+from unaiverse.streams.dataprops import DataProps
 from unaiverse.interaction import Interaction
 from unaiverse.agent_basics import AgentBasics
 from unaiverse.networking.p2p.messages import Msg

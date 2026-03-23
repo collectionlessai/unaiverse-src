@@ -21,7 +21,7 @@ from PIL import Image
 import urllib.request
 from typing import Callable
 import torch.nn.functional as F
-from unaiverse.dataprops import Stream
+from unaiverse.streams.dataprops import Stream
 from unaiverse.modules.cnu.cnus import CNUs
 from unaiverse.modules.cnu.layers import LinearCNU
 from transformers import pipeline, AutoProcessor, AutoModelForCausalLM, AutoTokenizer

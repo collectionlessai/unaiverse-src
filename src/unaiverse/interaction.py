@@ -21,7 +21,7 @@ from unaiverse.clock import clock
 from unaiverse.custom import Custom
 from collections.abc import Callable
 from unaiverse.utils.logger import log
-from unaiverse.dataprops import DataProps
+from unaiverse.streams.dataprops import DataProps
 from unaiverse.utils.misc import GenException
 from unaiverse.streams.streamproxy import StreamProxy
 from unaiverse.streams.streams import Stream, BufferedStream, serialize_payload, deserialize_payload

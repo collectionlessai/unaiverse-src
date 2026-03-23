@@ -19,7 +19,7 @@ import torch
 from PIL import Image
 from typing import Any
 from datetime import datetime, timezone
-from unaiverse.dataprops import FileContainer
+from unaiverse.streams.dataprops import FileContainer
 from google.protobuf.json_format import MessageToDict, ParseDict
 from google.protobuf.struct_pb2 import Value, ListValue, NULL_VALUE
 

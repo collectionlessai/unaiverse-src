@@ -13,7 +13,7 @@
                  Main Developers:    Stefano Melacci (Project Leader), Christian Di Maio, Tommaso Guidi
 """
 from itertools import islice
-from unaiverse.dataprops import DataProps
+from unaiverse.streams.dataprops import DataProps
 from unaiverse.streams.streams import Stream
 from unaiverse.interaction import Interaction
 from unaiverse.utils.misc import GenException

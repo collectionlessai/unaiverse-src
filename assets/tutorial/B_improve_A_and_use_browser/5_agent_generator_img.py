@@ -3,7 +3,7 @@ import urllib.request
 from PIL import Image
 from io import BytesIO
 from unaiverse.agent import Agent
-from unaiverse.dataprops import Stream
+from unaiverse.streams.dataprops import Stream
 from unaiverse.networking.node.node import Node
 
 

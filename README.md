@@ -107,7 +107,7 @@ Here is the **resnet classifier** agent, running forever and waiting for somebod
 import torch
 import torchvision
 from unaiverse.agent import Agent
-from unaiverse.dataprops import Stream
+from unaiverse.streams.dataprops import Stream
 from unaiverse.networking.node.node import Node
 
 # Downloading PyTorch module (ResNet)
@@ -139,7 +139,7 @@ Run it. Now, here is the agent capable of **generating tensors** (let's say imag
 ```python
 import torch
 from unaiverse.agent import Agent
-from unaiverse.dataprops import Stream
+from unaiverse.streams.dataprops import Stream
 from unaiverse.networking.node.node import Node
 
 
@@ -190,7 +190,7 @@ We can upgrade the **resnet agent** to take real-world images as input, instead 
 import torchvision
 import urllib.request
 from unaiverse.agent import Agent
-from unaiverse.dataprops import Stream
+from unaiverse.streams.dataprops import Stream
 from unaiverse.networking.node.node import Node
 
 # Downloading PyTorch module (ResNet)
@@ -231,7 +231,7 @@ import urllib.request
 from PIL import Image
 from io import BytesIO
 from unaiverse.agent import Agent
-from unaiverse.dataprops import Stream
+from unaiverse.streams.dataprops import Stream
 from unaiverse.networking.node.node import Node
 
 

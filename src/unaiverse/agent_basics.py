@@ -33,7 +33,7 @@ from unaiverse.networking.node.profile import NodeProfile
 from unaiverse.utils.misc import GenException, FileTracker
 from unaiverse.streams.streams import Stream, BufferedStream
 from unaiverse.networking.node.connpool import ConnectionPools
-from unaiverse.dataprops import DataProps, Stream as StreamSpecs
+from unaiverse.streams.dataprops import DataProps, Stream as StreamSpecs
 from unaiverse.interaction import Interaction, InteractionManager
 from unaiverse.modules.utils import AgentProcessorChecker, ModuleWrapper
 
