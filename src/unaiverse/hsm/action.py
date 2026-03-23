@@ -17,23 +17,14 @@ import copy
 import html
 import time
 import inspect
-from collections.abc import Callable, Iterator
+from typing import Any
+from unaiverse.custom import Custom
+from collections.abc import Iterator
 from unaiverse.utils.logger import log
 from unaiverse.interaction import Interaction
 
 
 class Action:
-    # Candidate argument names (when calling an action) that tells that such an action is multi-steps
-    SECONDS_ARG_NAMES = {'time'}
-    TIMEOUT_ARG_NAMES = {'timeout'}
-    DELAY_ARG_NAMES = {'delay'}
-    NOT_ALLOWED_IN_ACTION_SIGNATURE = SECONDS_ARG_NAMES | TIMEOUT_ARG_NAMES | DELAY_ARG_NAMES
-    INTERACTION_ARG_NAMES = {'interaction', '_requester'}
-    DEFAULT_TIMEOUT = 10.0
-
-    # Deprecated
-    SPECIAL_DEPRECATED_CASES_PREFIXES = {'ask_', 'do_', 'done_'}
-    NOT_READY_PREFIXES = {'get_', 'got_', 'do_', 'done_'}
 
     def __init__(self, name: str, args: dict, actionable: object,
                  idx: int = -1,
@@ -50,7 +41,7 @@ class Action:
             name: The name of the method to call.
             args: A dictionary of arguments for the method.
             actionable: The object on which the method will be executed.
-            idx: A unique ID for the action.
+            idx: A unique ID for the Custom.
             ready: A boolean indicating if the action is ready to be executed.
             msg: An optional human-readable message.
             avoid_changing_ready: A boolean indicating that the selected ready state should not be changed by
@@ -63,7 +54,7 @@ class Action:
         self.interactions = ActionInteractionList()  # List of interactions to make this action ready to be executed
         self.id = idx  # Unique ID of the action (-1 if not needed)
         self.msg = msg  # Human-readable message associated to this instance of action
-        self.deprecated = any([self.name.startswith(p) for p in Action.SPECIAL_DEPRECATED_CASES_PREFIXES])
+        self.deprecated = any([self.name.startswith(p) for p in Custom.SPECIAL_DEPRECATED_CASES_PREFIXES])
         self.deprecated_has_completion = False
         self.inner = ready
         self.outer = True
@@ -110,12 +101,12 @@ class Action:
 
         # Fixing (forcing NOT-ready on some actions)
         if not avoid_changing_ready:
-            for prefix in Action.NOT_READY_PREFIXES:
+            for prefix in Custom.NOT_READY_PREFIXES:
                 if self.name.startswith(prefix):
                     self.inner = False
                     break
             for p in self.param_list:
-                if p in Action.INTERACTION_ARG_NAMES:
+                if p in Custom.INTERACTION_ARG_NAMES:
                     self.outer = True
                     break
 
@@ -127,7 +118,7 @@ class Action:
 
     @property
     def ready(self) -> bool:
-        """Returns the inner readiness flag of the action."""
+        """Returns the inner readiness flag of the Custom."""
         return self.inner
 
     @property
@@ -136,11 +127,11 @@ class Action:
         return self.deprecated_has_completion
 
     def set_state_machine(self, hsm: object) -> None:
-        """Registers the parent state machine that owns this action."""
+        """Registers the parent state machine that owns this Custom."""
         self.state_machine = hsm
 
     async def __call__(self, interaction: Interaction | None = None) -> int:
-        """Executes the action's associated method. This is the main entry point for running an action. It handles
+        """Executes the action's associated method. This is the main entry point for running an Action. It handles
         multistep logic by updating the step counter and checking for completion based on steps, time, or timeout.
         It also injects dynamic arguments like the `requester`, `request_time`, and `request_uuid` into the method's
         arguments before execution. If the action is a multistep action and has a completion step, it handles that
@@ -216,7 +207,7 @@ class Action:
                     return 1
 
             for p in self.param_list:
-                if p in Action.INTERACTION_ARG_NAMES:
+                if p in Custom.INTERACTION_ARG_NAMES:
                     actual_args[p] = interaction
 
             # If the action continues (multistep), increasing the step index
@@ -297,7 +288,7 @@ class Action:
         self.inner = False
 
     def set_msg(self, msg: str | None) -> None:
-        """Sets the message associated to this action."""
+        """Sets the message associated to this Custom."""
 
         if msg is not None:
             self.msg = html.unescape(msg)
@@ -331,11 +322,11 @@ class Action:
         return self.inner
 
     def set_default_timeout(self) -> None:
-        """Sets the timeout to the class-level default value (``Action.DEFAULT_TIMEOUT``)."""
-        self.__timeout = Action.DEFAULT_TIMEOUT
+        """Sets the timeout to the class-level default value (``Custom.DEFAULT_TIMEOUT``)."""
+        self.__timeout = Custom.DEFAULT_TIMEOUT
 
     def is_pedantic(self) -> bool:
-        """Checks if a timeout has been configured for the action.
+        """Checks if a timeout has been configured for the Custom.
 
         Returns:
             A boolean indicating if a timeout is set.
@@ -366,11 +357,11 @@ class Action:
         """
         special_args = {}
         if isinstance(self.__total_time, str) or self.__total_time > 0:
-            special_args[next(iter(Action.SECONDS_ARG_NAMES))] = self.__total_time
+            special_args[next(iter(Custom.SECONDS_ARG_NAMES))] = self.__total_time
         if isinstance(self.__timeout, str) or self.__timeout > 0.:
-            special_args[next(iter(Action.TIMEOUT_ARG_NAMES))] = self.__timeout
+            special_args[next(iter(Custom.TIMEOUT_ARG_NAMES))] = self.__timeout
         if isinstance(self.__delay, str) or self.__delay > 0.:
-            special_args[next(iter(Action.DELAY_ARG_NAMES))] = self.__delay
+            special_args[next(iter(Custom.DELAY_ARG_NAMES))] = self.__delay
         if not minimal:
             if self.msg is not None:
                 msg = self.msg.encode("ascii", "xmlcharrefreplace").decode("ascii")
@@ -385,8 +376,8 @@ class Action:
         considered the same, ignoring specific arguments like time or timeout.
 
         Args:
-            name: The name of the target action.
-            args: The arguments of the target action.
+            name: The name of the target Custom.
+            args: The arguments of the target Custom.
 
         Returns:
             A boolean indicating if the actions are a match.
@@ -402,7 +393,7 @@ class Action:
         # action, so:
         # - if the current action is act(a=3, b=4), then it is the same_as(name='act', args={'a': 3})
         # - if the current action is act(a=3, b=4), then it is the same_as(name='act', args={'a': 3, 'b': 4, 'c': 5})
-        args_to_exclude = Action.NOT_ALLOWED_IN_ACTION_SIGNATURE  # Some deprecated actions might still have them
+        args_to_exclude = Custom.NOT_ALLOWED_IN_ACTION_SIGNATURE  # Some deprecated actions might still have them
         return (name == self.name and
                 self.check_provided_args(args) and
                 all(k in args_to_exclude or k not in self.args or self.args[k] == v for k, v in args.items()))
@@ -423,12 +414,12 @@ class Action:
         if args is not None:
             args_to_remove = []
             deprecated_format = False
-            for p in Action.SPECIAL_DEPRECATED_CASES_PREFIXES:
+            for p in Custom.SPECIAL_DEPRECATED_CASES_PREFIXES:
                 if self.name.startswith(p):
                     deprecated_format = True
                     break
             for arg_name in args.keys():
-                if arg_name in Action.NOT_ALLOWED_IN_ACTION_SIGNATURE:
+                if arg_name in Custom.NOT_ALLOWED_IN_ACTION_SIGNATURE:
                     if deprecated_format:
                         continue
                     if remove_special_arguments:
@@ -539,7 +530,7 @@ class Action:
 
     get_list_of_requests = get_list_of_interactions  # Backward compatibility
 
-    def __action_name_to_callable(self, action_name: str) -> Callable | None:
+    def __action_name_to_callable(self, action_name: str) -> Any | None:
         """A private helper method that resolves a string action name into a callable method on the `actionable`
         object. It raises a `ValueError` if the method is not found.
 
@@ -568,7 +559,7 @@ class Action:
         # Ensuring those *specially handled* arguments are not present in the method signature (they can only be
         # present in the kwargs used to call the function)
         for p in self.param_list:
-            if p in Action.NOT_ALLOWED_IN_ACTION_SIGNATURE and not self.deprecated:
+            if p in Custom.NOT_ALLOWED_IN_ACTION_SIGNATURE and not self.deprecated:
                 log.user(f"Action {self.name} includes argument {p} in its signature: "
                          f"this is a special argument that is automatically handled, and cannot be "
                          f"included in the function signature (change its name).")
@@ -626,7 +617,7 @@ class Action:
         Args:
             args: The dictionary of arguments to inspect.
         """
-        for arg_name in Action.SECONDS_ARG_NAMES:
+        for arg_name in Custom.SECONDS_ARG_NAMES:
             if arg_name in args:
                 try:
                     self.__total_time = max(float(args[arg_name]), 0.)
@@ -647,7 +638,7 @@ class Action:
         Args:
             args: The dictionary of arguments to inspect.
         """
-        for arg_name in Action.TIMEOUT_ARG_NAMES:
+        for arg_name in Custom.TIMEOUT_ARG_NAMES:
             if arg_name in args:
                 try:
                     self.__timeout = max(float(args[arg_name]), 0.)
@@ -667,7 +658,7 @@ class Action:
         Args:
             args: The dictionary of arguments to inspect.
         """
-        for arg_name in Action.DELAY_ARG_NAMES:
+        for arg_name in Custom.DELAY_ARG_NAMES:
             if arg_name in args:
                 try:
                     self.__delay = max(float(args[arg_name]), 0.)
@@ -813,7 +804,7 @@ class ActionInteractionList:
 
         Args:
             req_order_id: The insertion-order index of the interaction to retrieve.
-            requester: If provided, scopes the lookup to this requester's sub-list.
+            requester: If provided, scopes the lookup to the sub-list of this requester.
 
         Returns:
             The matching Interaction, or None if not found.
@@ -832,7 +823,7 @@ class ActionInteractionList:
         """Returns the oldest (first-added) interaction, optionally scoped to a specific requester.
 
         Args:
-            requester: If provided, scopes the lookup to this requester's sub-list.
+            requester: If provided, scopes the lookup to the sub-list of this requester.
 
         Returns:
             The oldest Interaction, or None if the list is empty.
@@ -843,7 +834,7 @@ class ActionInteractionList:
         """Returns the most recently added interaction, optionally scoped to a specific requester.
 
         Args:
-            requester: If provided, scopes the lookup to this requester's sub-list.
+            requester: If provided, scopes the lookup to the sub-list of this requester.
 
         Returns:
             The most recent Interaction, or None if the list is empty.
@@ -855,7 +846,7 @@ class ActionInteractionList:
 
         Args:
             requester: The peer ID of the requester.
-            uuid: The UUID to search for (may be None).
+            uuid: The UUID to search for (None is a valid UUID).
 
         Returns:
             The matching Interaction, or None if not found.
@@ -878,7 +869,7 @@ class ActionInteractionList:
 
     def get_interactions(self, requester: str | None = None, to_str: bool = False,
                          doable_only: bool = False) -> list[Interaction] | str:
-        """Returns interactions, optionally filtered by requester or doability, or as a JSON string.
+        """Returns interactions, optionally filtered by requester or "do-ability", or as a JSON string.
 
         Args:
             requester: If provided, returns only interactions from this requester.

@@ -701,11 +701,11 @@ class HybridStateMachine:
                 for _action in _action_list:
                     special_args = {}
                     if isinstance(_action.get_total_time(), str) or _action.get_total_time() > 0:
-                        special_args[next(iter(Action.SECONDS_ARG_NAMES))] = _action.get_total_time()
+                        special_args[next(iter(Custom.SECONDS_ARG_NAMES))] = _action.get_total_time()
                     if isinstance(_action.get_timeout(), str) or _action.get_timeout() > 0.:
-                        special_args[next(iter(Action.TIMEOUT_ARG_NAMES))] = _action.get_timeout()
+                        special_args[next(iter(Custom.TIMEOUT_ARG_NAMES))] = _action.get_timeout()
                     if isinstance(_action.get_delay(), str) or _action.get_delay() > 0.:
-                        special_args[next(iter(Action.DELAY_ARG_NAMES))] = _action.get_delay()
+                        special_args[next(iter(Custom.DELAY_ARG_NAMES))] = _action.get_delay()
                     self.add_transit(from_state=_from_state, to_state=_to_state, action=_action.name,
                                      args=_action.args | special_args, ready=_action.ready,
                                      act_id=None, msg=_action.msg_with_wildcards, avoid_changing_ready=True)
@@ -1301,11 +1301,11 @@ class HybridStateMachine:
                 for action in action_list:
                     special_args = {}
                     if action.get_total_time() > 0:
-                        special_args[next(iter(Action.SECONDS_ARG_NAMES))] = action.get_total_time()
+                        special_args[next(iter(Custom.SECONDS_ARG_NAMES))] = action.get_total_time()
                     if action.get_timeout() > 0:
-                        special_args[next(iter(Action.TIMEOUT_ARG_NAMES))] = action.get_timeout()
+                        special_args[next(iter(Custom.TIMEOUT_ARG_NAMES))] = action.get_timeout()
                     if action.get_delay() > 0:
-                        special_args[next(iter(Action.DELAY_ARG_NAMES))] = action.get_delay()
+                        special_args[next(iter(Custom.DELAY_ARG_NAMES))] = action.get_delay()
                     args = action.args | special_args
                     s = "("
                     for i, (k, v) in enumerate(args.items()):
