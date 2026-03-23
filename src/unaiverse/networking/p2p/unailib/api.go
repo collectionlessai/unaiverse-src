@@ -895,7 +895,7 @@ func GetConnectedPeers(
 			peersList = append(peersList, peerInfo)
 		}
 
-	logger.Debugf("[GO] ℹ️ Instance %d: Reporting %d currently tracked and active peers.\n", ni.instanceIndex, len(peersList))
+	// logger.Debugf("[GO] ℹ️ Instance %d: Reporting %d currently tracked and active peers.\n", ni.instanceIndex, len(peersList))
 
 	// Return the list of active peers as a JSON success response.
 	return C.CString(jsonSuccessResponse(peersList)) // Caller frees.
