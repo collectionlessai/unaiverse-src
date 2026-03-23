@@ -18,6 +18,9 @@ import torch
 import functools
 from PIL.Image import Image
 from typing import Callable
+
+from typing_extensions import deprecated
+
 from unaiverse.stats import Stats
 from unaiverse.clock import clock
 from unaiverse.custom import Custom
@@ -277,32 +280,6 @@ class Agent(AgentBasics):
             return True
         else:
             return False
-
-    async def set_next_action(self, agent: str | None, action: str, args: dict | None = None,
-                              from_state: str | None = None, to_state: str | None = None, ref_uuid: str | None = None):
-        """Try to tell another agent what is the next action it should run (async).
-
-        Args:
-            agent: The ID of the agent to send the action to or a valid wildcard like "<valid_cmp>" for a set of agents
-                (if None the agents in self._engaged_agents will be considered).
-            action: The name of the action to be executed by the agent.
-            args: A dictionary of arguments for the action. Defaults to None.
-            from_state: The optional starting state from which the action should be executed.
-            to_state: The optional destination state where the action should lead if correctly executed.
-            ref_uuid: An optional UUID for referencing the action. Defaults to None.
-
-        Returns:
-            True if the action was successfully sent to the target agent or to at least one of the
-            involved agents (wildcard case).
-        """
-
-        # Backward compatibility
-        return (await self.send(action_name=action,
-                                target=agent,
-                                action_kwargs=args,
-                                from_state=from_state,
-                                to_state=to_state,
-                                uuid=ref_uuid)) is not None
 
     async def set_engaged_partner(self, agent: str | list[str] | set[str] | None, clear_found: bool = True):
         """Virtually forces the engagement with a single agent (or a group of agents), clearing all existing
@@ -637,475 +614,6 @@ class Agent(AgentBasics):
             at_least_one_completed = at_least_one_completed or ret
         return at_least_one_completed
 
-    async def ask_gen(self, agent: str | None = None, u_hashes: list[str] | None = None,
-                      samples: int = 100, time: float = -1., timeout: float = -1.,
-                      from_state: str | None = None, to_state: str | None = None,
-                      ask_uuid: str | None = None,
-                      ignore_uuid: bool = False):
-        """Asking for generation.
-
-        .. deprecated::
-            Use :meth:`send` with ``action_name="process"`` instead.
-
-        Args:
-            agent: The ID of the agent to ask for generation, or a valid wildcard like "<valid_cmp>"
-                for a set of agents (if None the agents in self._engaged_agents will be considered).
-            u_hashes: A list of input stream hashes for generation. Defaults to None.
-            samples: The number of samples to generate. Defaults to 100.
-            from_state: The optional starting state from which the generation should be executed.
-            to_state: The optional destination state where the generation should lead if correctly executed.
-            ask_uuid: Specify the UUID of the action (if None - default -, it is randomly generated).
-            ignore_uuid: Force a None UUID instead of generating a random one.
-
-        Returns:
-            True if the generation request was successfully sent to at least one involved agent, False otherwise.
-        """
-        assert samples is not None, "Missing basic action information"
-
-        # - if "agent" is a peer ID, the involved agents will be a list with one element.
-        # - if "agent" is a known wildcard, as "<valid_cmp>", then involved agents will be self._valid_cmp_agents
-        # - if "agent" is None, then the current agent in self._engaged_agents will be returned
-        involved_agents = self.__involved_agents(agent)
-        log.debug(f"[ask_gen] Involved_agents: {involved_agents}")
-
-        if len(involved_agents) == 0:
-            log.debug(f"[ask_gen] No involved agents, action ask_gen returns False")
-            return False
-
-        # Create a copy of the input hashes, normalizing them in the appropriate way
-        u_hashes_copy = self.__normalize_user_hash(u_hashes)
-
-        # Generate a new UUID for this request
-        ref_uuid = AgentBasics.generate_uuid() if ask_uuid is None else ask_uuid
-        if ignore_uuid:
-            ref_uuid = None
-
-        # If the input streams are all owned by this agent, discard UUID
-        all_owned = True
-        for i in range(len(u_hashes_copy)):
-            if u_hashes_copy[i] not in self.owned_streams:
-                all_owned = False
-                break
-        if not all_owned:
-            ref_uuid = None
-
-        log.debug(f"[ask_gen] Input streams u_hashes: {u_hashes_copy}")
-
-        log.misc(f"Asking {', '.join(involved_agents)} to generate signal given {u_hashes_copy} "
-                 f"(ref_uuid: {ref_uuid})")
-        self._agents_who_completed_what_they_were_asked = set()
-        self._agents_who_were_asked = set()
-        interaction = await self.__ask_gen_or_learn(for_what="gen", agent=involved_agents,
-                                                    u_hashes=u_hashes_copy,
-                                                    yhat_hashes=None,
-                                                    from_state=from_state, to_state=to_state,
-                                                    samples=samples, ref_uuid=ref_uuid)
-        log.debug(f"[ask_gen] Asking {involved_agents} returned {interaction}")
-        correctly_asked = interaction.target
-
-        # Preparing the buffered stream where to store data, if needed
-        if interaction is not None and len(correctly_asked) > 0:
-            for i in range(len(u_hashes_copy)):
-
-                # If there are our own streams involved, and they are buffered, let's plan to restart them when we will
-                # start sending them through the net: moreover, let's set the local stream UUID appropriately to
-                # the generated UUID
-                if u_hashes_copy[i] in self.owned_streams:
-
-                    stream_dict = self.known_streams[u_hashes_copy[i]]
-                    for stream_name, stream_obj in stream_dict.items():
-
-                        # Plan to restart buffered streams
-                        if isinstance(stream_obj, BufferedDataStream):
-                            stream_obj.plan_restart_before_next_get(requested_by="send_stream_samples", uuid=ref_uuid)
-
-                        # Activate the stream (if it was off)
-                        stream_obj.enable()
-
-                        # If ask_uuid is given, then there could be something that was previously generated by the
-                        # processor, hence we must edit the UUID of such data
-                        if ask_uuid is not None or ignore_uuid:
-                            data = stream_obj.get_last_added_uuid_in_data()
-                            if data is not None:
-                                stream_obj.edit_uuid_in_data(current_uuid=data.uuid, new_uuid=ref_uuid)
-
-            # Saving
-            self.last_ref_uuid = ref_uuid
-
-        log.debug(f"[ask_gen] Overall, the action ask_gen will return {len(correctly_asked) > 0}")
-        return len(correctly_asked) > 0
-
-    async def do_gen(self, u_hashes: list[str] | None = None, extra_hashes: list[str] | None = None,
-                     samples: int = 100, time: float = -1., timeout: float = -1.,
-                     _requester: str | list | None = None, _request_time: float = -1., _request_uuid: str | None = None,
-                     _completed: bool = False) -> bool:
-        """Generate a signal (async).
-
-        .. deprecated::
-            Use ``process(interaction)`` instead, with data access via ``interaction.get()``/``interaction.set()``.
-
-        Args:
-            u_hashes: A list of input stream hashes for generation. Defaults to None.
-            extra_hashes: A list of streams that might be used in a custom manner when overloading this function
-                (warning: they are not passed to the processor).
-            samples: The number of samples to generate. Defaults to 100.
-            seconds, it is declared as complete. Defaults to -1.
-            _requester: The ID of the agent who requested generation (automatically set by the action calling routine).
-            _request_time: The time the generation was requested (automatically set by the action calling routine).
-            _request_uuid: The UUID of the generation request (automatically set by the action calling routine).
-            _completed: A boolean indicating if the generation is already completed (automatically set by the action
-                calling routine). This will tell that it is time to run a final procedure.
-
-        Returns:
-            True if the signal generation was successful, False otherwise.
-        """
-        assert samples is not None, "Missing basic action information"
-
-        log.debug(f"[do_gen] u_hashes: {u_hashes}, extra_hashes: {extra_hashes}, "
-                  f"samples: {samples}, "
-                  f"requester: {_requester}, request_time: {_request_time}, request_uuid: {_request_uuid}, "
-                  f"completed: {_completed}")
-
-        if _requester is not None:
-            if isinstance(_requester, list):
-                for _r in _requester:
-                    if self.behaving_in_world():
-                        if _r not in self.world_agents and _r not in self.world_masters and _r != "system":
-                            log.error(f"Unknown agent: {_r} in list {_requester} (fully skipping generation)")
-                            return False
-                    else:
-                        if _r not in self.public_agents and _r != "system":
-                            log.error(f"Unknown agent: {_r} in list {_requester} (fully skipping generation)")
-                            return False
-            else:
-                if self.behaving_in_world():
-                    if (_requester not in self.world_agents and _requester not in self.world_masters
-                            and _requester != "system"):
-                        log.error(f"Unknown agent: {_requester} (fully skipping generation)")
-                        return False
-                else:
-                    if _requester not in self.public_agents and _requester != "system":
-                        log.error(f"Unknown agent: {_requester} (fully skipping generation)")
-                        return False
-
-        # Create a copy of the input hashes, normalizing them in the appropriate way
-        u_hashes_copy = self.__normalize_user_hash(u_hashes)
-
-        # Create a copy of the input hashes, normalizing them in the appropriate way
-        extra_hashes_copy = self.__normalize_user_hash(extra_hashes)
-
-        # Check what is the step ID of the multistep action
-        k = self.get_action_step()
-
-        # In the first step of this action, we change the UUID of the local stream associated to the input data we will
-        # use to handle this action, setting expectations to avoid handling tags of old data
-        if k == 0:
-            for net_hash in extra_hashes_copy:
-                if net_hash in self.known_streams:
-
-                    # If the data arrived before this action, then the UUID is already set, and here there is
-                    # no need to do anything; if the data has not yet arrived (common case) ...
-                    self.im.add_lazy_stream_to_interaction(net_hash, self.im.get_current())
-                else:
-                    log.misc(f"Unknown stream mentioned in extra_hashes: {net_hash}")
-                    return False
-
-        if not _completed:
-            log.misc(f"Generating signal")
-            ret = self.__process_streams(u_hashes=u_hashes_copy, yhat_hashes=None, learn=False,
-                                         ref_uuid=_request_uuid)
-            if not ret:
-                log.misc(f"Generating signal failed")
-            else:
-                if not self.is_multi_steps_action():
-                    log.misc(f"Completing signal generation (degenerate single-step case of a multi-step action)")
-                    all_hashes = u_hashes_copy + extra_hashes_copy
-                    ret = await self.__complete_do(do_what="gen", peer_id_who_asked=_requester,
-                                                   all_hashes=all_hashes,
-                                                   send_back_confirmation=False, ref_uuid=_request_uuid)
-                    if not ret:
-                        log.misc(f"Completing signal generation failed")
-            return ret
-        else:
-            log.misc(f"Completing signal generation")
-            all_hashes = u_hashes_copy + extra_hashes_copy
-            ret = await self.__complete_do(do_what="gen", peer_id_who_asked=_requester, all_hashes=all_hashes,
-                                           ref_uuid=_request_uuid)
-            if not ret:
-                log.misc(f"Completing signal generation failed")
-            return ret
-
-    async def done_gen(self, _requester: str | None = None):
-        """This is a way to get back the confirmation of a completed generation (async).
-
-        .. deprecated::
-            Completion is handled automatically through Interaction status updates.
-
-        Args:
-            _requester: The ID of the agent who completed the generation. Defaults to None.
-
-        Returns:
-            True if the generation confirmation was successfully handled by this agent, False is something went wrong.
-        """
-        log.misc(f"Agent {_requester} finished generation")
-
-        # Searching for the processor-streams of the agent who generated data
-        processor_streams = self.find_streams(_requester, name_or_group="processor")
-        if processor_streams is None or len(processor_streams) == 0:
-            log.error("Unexpected confirmation of finished generation")
-            return False
-
-        # Remembering that the agent that invoked this action is the one who generated the data, and what he generated
-        # could be used in future action (for example, in evaluation processes)
-        self._agents_who_completed_what_they_were_asked.add(_requester)
-
-        return True
-
-    async def ask_learn(self, agent: str | None = None,
-                        u_hashes: list[str] | None = None, yhat_hashes: list[str] | None = None,
-                        samples: int = 100, time: float = -1., timeout: float = -1.,
-                        from_state: str | None = None, to_state: str | None = None,
-                        ask_uuid: str | None = None,
-                        ignore_uuid: bool = False):
-        """Asking for learning to generate (async).
-
-        .. deprecated::
-            Use :meth:`send` with ``action_name="learn"`` instead.
-
-        Args:
-            agent: The ID of the agent to ask for generation, or a valid wildcard like "<valid_cmp>"
-                for a set of agents (if None the agents in self._engaged_agents will be considered).
-            u_hashes: A list of input stream hashes for inference. Defaults to None.
-            yhat_hashes: A list of target stream hashes to be used for loss computation. Defaults to None.
-            samples: The number of samples to learn from. Defaults to 100.
-            from_state: The optional starting state from which learning should be executed.
-            to_state: The optional destination state where learning should lead if correctly executed.
-            ask_uuid: Specify the action UUID (default = None, i.e., it is automatically generated).
-            ignore_uuid: If True, the UUID is fully ignored (i.e, forced to None).
-
-        Returns:
-            True if the learning request was successfully sent to at least one involved agent, False otherwise.
-        """
-        assert samples is not None, "Missing basic action information"
-
-        # - if "agent" is a peer ID, the involved agents will be a list with one element.
-        # - if "agent" is a known wildcard, as "<valid_cmp>", then involved agents will be self._valid_cmp_agents
-        # - if "agent" is None, then the current agent in self._engaged_agents will be returned
-        involved_agents = self.__involved_agents(agent)
-        log.debug(f"[ask_learn] Involved agents: {involved_agents}")
-
-        if len(involved_agents) == 0:
-            log.debug(f"[ask_learn] No involved agents, action will return False")
-            return False
-
-        # Create a copy of the input hashes, normalizing them in the appropriate way
-        u_hashes_copy = self.__normalize_user_hash(u_hashes)
-
-        # Create a copy of the target hashes, normalizing them in the appropriate way
-        yhat_hashes_copy = self.__normalize_user_hash(yhat_hashes)
-
-        # Generate a new UUID for this request
-        ref_uuid = AgentBasics.generate_uuid() if ask_uuid is None else ask_uuid
-        if ignore_uuid:
-            ref_uuid = None
-
-        # If the input streams are all owned by this agent, discard UUID
-        all_owned = True
-        for i in range(len(u_hashes_copy)):
-            if u_hashes_copy[i] not in self.owned_streams:
-                all_owned = False
-                break
-        if all_owned:
-            for i in range(len(yhat_hashes_copy)):
-                if yhat_hashes_copy[i] not in self.owned_streams:
-                    all_owned = False
-                    break
-        # if not all_owned:
-        #    ref_uuid = None
-
-        log.misc(f"Asking {', '.join(involved_agents)} to learn to generate signal {yhat_hashes_copy}, "
-                 f"given {u_hashes_copy} (ref_uuid: {ref_uuid})")
-        self._agents_who_completed_what_they_were_asked = set()
-        self._agents_who_were_asked = set()
-        interaction = await self.__ask_gen_or_learn(for_what="learn", agent=involved_agents,
-                                                    u_hashes=u_hashes_copy,
-                                                    yhat_hashes=yhat_hashes_copy,
-                                                    from_state=from_state, to_state=to_state,
-                                                    samples=samples, ref_uuid=ref_uuid)
-        log.debug(f"[ask_gen] Asking {involved_agents} returned {interaction}")
-        correctly_asked = interaction.target
-
-        # Preparing the buffered stream where to store data, if needed
-        if interaction is not None and len(correctly_asked) > 0:
-            for i in range(len(u_hashes_copy)):
-
-                # If there are our own streams involved, and they are buffered, let's plan to restart them when we will
-                # start sending them through the net: moreover, let's set the local stream UUID appropriately to
-                # the generated UUID
-                if u_hashes_copy[i] in self.owned_streams:
-
-                    stream_dict = self.known_streams[u_hashes_copy[i]]
-                    for stream_name, stream_obj in stream_dict.items():
-
-                        # Plan to restart buffered streams
-                        if isinstance(stream_obj, BufferedDataStream):
-                            stream_obj.plan_restart_before_next_get(requested_by="send_stream_samples", uuid=ref_uuid)
-
-                        # Activate the stream (if it was off)
-                        stream_obj.enable()
-
-                        # If ask_uuid is given, then there could be something that was previously generated by the
-                        # processor, hence we must edit the UUID of such data
-                        if ask_uuid is not None:
-                            data = stream_obj.get_last_added_uuid_in_data()
-                            if data is not None:
-                                stream_obj.edit_uuid_in_data(current_uuid=data.uuid, new_uuid=ref_uuid)
-
-            for i in range(len(yhat_hashes_copy)):
-
-                # If there are our own streams involved, and they are buffered, let's plan to restart them when we will
-                # start sending them through the net: moreover, let's set the local stream UUID appropriately to
-                # the generated UUID
-                if yhat_hashes_copy[i] in self.owned_streams:
-
-                    stream_dict = self.known_streams[yhat_hashes_copy[i]]
-                    for stream_name, stream_obj in stream_dict.items():
-
-                        # Plan to restart buffered streams
-                        if isinstance(stream_obj, BufferedDataStream):
-                            stream_obj.plan_restart_before_next_get(requested_by="send_stream_samples", uuid=ref_uuid)
-
-                        # Activate the stream (if it was off)
-                        stream_obj.enable()
-
-                        # If ask_uuid is given, then there could be something that was previously generated by the
-                        # processor, hence we must edit the UUID of such data
-                        if ask_uuid is not None:
-                            data = stream_obj.get_last_added_uuid_in_data()
-                            if data is not None:
-                                stream_obj.edit_uuid_in_data(current_uuid=data.uuid, new_uuid=ref_uuid)
-
-            # Saving
-            self.last_ref_uuid = ref_uuid
-
-        log.debug(f"[ask_learn] Overall the action ask_learn will return {len(correctly_asked) > 0}")
-        return len(correctly_asked) > 0
-
-    async def do_learn(self, yhat_hashes: list[str] | None = None, u_hashes: list[str] | None = None,
-                       extra_hashes: list[str] | None = None,
-                       samples: int = 100, time: float = -1., timeout: float = -1.,
-                       _requester: str | None = None, _request_time: float = -1., _request_uuid: str | None = None,
-                       _completed: bool = False) -> bool:
-        """Learn to generate a signal (async).
-
-        .. deprecated::
-            Use ``learn(interaction)`` instead, with data access via ``interaction.get()``/``interaction.set()``.
-
-        Args:
-            yhat_hashes: A list of target stream hashes to be used for loss computation. Defaults to None.
-            u_hashes: A list of input stream hashes for inference. Defaults to None.
-            extra_hashes: A list of streams that might be used in a custom manner when overloading this function
-                (warning: they are not passed to the processor).
-            samples: The number of samples to learn from. Defaults to 100.
-            time: The max time duration of the learning procedure. Defaults to -1.
-            timeout: The timeout for learning attempts: if calling the learning action fails for more than "timeout"
-            seconds, it is declared as complete. Defaults to -1.
-            _requester: The ID of the agent who requested learning (automatically set by the action calling routine).
-            _request_time: The time learning was requested (automatically set by the action calling routine).
-            _request_uuid: The UUID of the learning request (automatically set by the action calling routine).
-            _completed: A boolean indicating if the learning is already completed (automatically set by the action
-                calling routine). This will tell that it is time to run a final procedure.
-
-        Returns:
-            True if the signal generation was successful, False otherwise.
-        """
-        assert samples is not None and time is not None and timeout is not None, "Missing basic action information"
-
-        log.debug(f"[do_learn] samples: {samples}, time: {time}, timeout: {timeout}, "
-                  f"requester: {_requester}, request_time: {_request_time}, request_uuid: {_request_uuid} "
-                  f"completed: {_completed}")
-
-        if _requester not in self.world_agents and _requester not in self.world_masters:
-            log.error(f"Unknown agent: {_requester}")
-            return False
-
-        # Check what is the step ID of the multistep action
-        k = self.get_action_step()
-
-        # Create a copy of the input hashes, normalizing them in the appropriate way
-        u_hashes_copy = self.__normalize_user_hash(u_hashes)
-
-        # Create a copy of the input hashes, normalizing them in the appropriate way
-        yhat_hashes_copy = self.__normalize_user_hash(yhat_hashes)
-
-        # Create a copy of the input hashes, normalizing them in the appropriate way
-        extra_hashes_copy = self.__normalize_user_hash(extra_hashes)
-
-        # In the first step of this action, we change the UUID of the local stream associated to the input data we will
-        # use to handle this action, setting expectations to avoid handling tags of old data
-        if k == 0:
-            if u_hashes_copy is not None:
-                for net_hash in u_hashes_copy:
-                    if net_hash in self.known_streams:
-                        # If the data arrived before this action, then the UUID is already set, and here there is
-                        # no need to do anything; if the data has not yet arrived (common case) ...
-                        interaction = Interaction(uuid=_request_uuid, requester=_requester,
-                                                  target=self.get_peer_id())
-                        self.im.register_lazy(interaction)
-                        self.im.add_lazy_stream_to_interaction(net_hash, interaction)
-                        # stream_obj.add_interaction(Interaction(uuid=_request_uuid,
-                        #                                       requester=_requester, target=self.get_peer_id()))
-
-            if yhat_hashes_copy is not None:
-                for net_hash in yhat_hashes_copy:
-                    if net_hash in self.known_streams:
-                        # for stream_name, stream_obj in self.known_streams[net_hash].values():
-                        interaction = Interaction(uuid=_request_uuid, requester=_requester, target=self.get_peer_id())
-                        self.im.register_lazy(interaction)
-                        self.im.add_lazy_stream_to_interaction(net_hash, interaction)
-                        # stream_obj.add_interaction(Interaction(uuid=_request_uuid,
-                        #                                       requester=_requester, target=self.get_peer_id()))
-
-        if not _completed:
-            log.misc(f"Learning to generate signal {yhat_hashes_copy}")
-            ret = self.__process_streams(u_hashes=u_hashes_copy, yhat_hashes=yhat_hashes_copy, learn=True,
-                                         ref_uuid=_request_uuid)
-            if not ret:
-                log.misc(f"Learning to generate signal {yhat_hashes_copy} failed")
-            self.proc_updated_since_last_save = True  # Set it after complete?
-            return ret
-        else:
-            log.misc(f"Completing learning to generate signal {yhat_hashes_copy}")
-            all_hashes = u_hashes_copy + yhat_hashes_copy + extra_hashes_copy
-            ret = await self.__complete_do(do_what="learn", peer_id_who_asked=_requester, all_hashes=all_hashes,
-                                           ref_uuid=_request_uuid)
-            if not ret:
-                log.misc(f"Completing learning to generate signal {yhat_hashes} failed")
-            return ret
-
-    async def done_learn(self, _requester: str | None = None):
-        """This is a way to get back the confirmation of a completed learning procedure (async).
-
-        .. deprecated::
-            Completion is handled automatically through Interaction status updates.
-
-        Args:
-            _requester: The ID of the agent who completed the learning procedure. Defaults to None.
-
-        Returns:
-            True if the learning-complete confirmation was successfully handled by this agent, False otherwise.
-        """
-        log.misc(f"Agent {_requester} finished learning")
-        self._agents_who_completed_what_they_were_asked.add(_requester)
-
-        # Searching for the processor-streams of the agent who generated the (inference) data
-        processor_streams = self.find_streams(_requester, name_or_group="processor")
-        if processor_streams is None or len(processor_streams) == 0:
-            log.error("Unexpected confirmation of finished learning")
-            return False
-
-        return True
-
     async def connected(self, agent: str | list[str] | None = None, handshake_completed: bool = False):
         """Checks if an agent is connected to us or not.
 
@@ -1230,8 +738,7 @@ class Agent(AgentBasics):
         return len(correctly_asked) > 0
 
     async def do_subscribe(self, stream_owners: list[str] | None = None, stream_props: list[str] | None = None,
-                           unsubscribe: bool = False,
-                           _requester: str | list | None = None, _request_time: float = -1.):
+                           unsubscribe: bool = False, interaction: Interaction | None = None):
         """Executes a subscription or unsubscription request received from another agent. It processes the stream
         properties, adds or removes the streams from the agent's known streams, and handles the underlying PubSub topic
         subscriptions (async).
@@ -1240,8 +747,7 @@ class Agent(AgentBasics):
             stream_owners: A list of peer IDs who own the streams.
             stream_props: A list of JSON-serialized stream properties.
             unsubscribe: A boolean to indicate unsubscription.
-            _requester: The ID of the requesting agent.
-            _request_time: The time the request was made.
+            interaction: The interaction that triggered this subscription.
 
         Returns:
             True if the action is successful, False otherwise.
@@ -1249,6 +755,7 @@ class Agent(AgentBasics):
         log.debug(f"[do_subscribe] unsubscribe: {unsubscribe}, "
                   f"stream_owners: {stream_owners}, stream_props: ... ({len(stream_props)} props)")
 
+        _requester = interaction.requester
         if _requester is not None:
             if isinstance(_requester, list):
                 for _r in _requester:
@@ -1298,24 +805,6 @@ class Agent(AgentBasics):
                 if not (await self.remove_streams(peer_id=stream_owner, name=prop_obj.get_name())):
                     log.misc(f"Unable to unsubscribe from pubsub stream ({prop_obj.get_name()}) "
                              f"of agent {stream_owner}")
-        return True
-
-    async def done_subscribe(self, unsubscribe: bool = False, _requester: str | None = None):
-        """Handles the confirmation that a subscription or unsubscription request has been completed by another agent.
-        It adds the requester to the set of agents that have completed their asked tasks (async).
-
-        Args:
-            unsubscribe: A boolean indicating if it was an unsubscription.
-            _requester: The ID of the agent who completed the task.
-
-        Returns:
-            Always True.
-        """
-        what = "subscribing" if unsubscribe else "unsubscribing"
-        log.misc(f"Agent {_requester} finished {what}")
-
-        # Remembering that the agent that invoked this action is the one who actually subscribed
-        self._agents_who_completed_what_they_were_asked.add(_requester)
         return True
 
     async def record(self, net_hash: str, samples: int = 100):
@@ -1862,227 +1351,6 @@ class Agent(AgentBasics):
         else:
             return True
 
-    def clear_recipients(self, net_hash):
-        # Backward compatibility
-        stream_dict = self.known_streams[net_hash]
-        ref_uuid = None
-        for stream_obj in stream_dict.values():
-            ref_uuid = stream_obj.get_uuid()
-            break  # Assuming UUID is the same on all the streams of the group (fine for backward compatibility)
-        interaction = Interaction(streams=[net_hash], uuid=ref_uuid)
-        self.im.unregister(interaction)
-
-    def add_recipient(self, net_hash: str, recipient: list[str] | str):
-        # Backward compatibility
-        stream_dict = self.known_streams[net_hash]
-        ref_uuid = None
-        for stream_obj in stream_dict.values():
-            ref_uuid = stream_obj.get_uuid()
-            break  # Assuming UUID is the same on all the streams of the group (fine for backward compatibility)
-        interaction = self.im.get_interaction(uuid=ref_uuid)
-        if interaction is not None:
-            if recipient not in interaction.target:
-                interaction.target += (recipient if not isinstance(recipient, str) else [recipient])
-        else:
-            interaction = Interaction(streams=[net_hash], num_steps=1, requester=self.get_peer_id(),
-                                      target=recipient, uuid=ref_uuid)
-            self.im.register_lazy(interaction)
-
-    async def __ask_gen_or_learn(self, for_what: str, agent: str | list[str],
-                                 u_hashes: list[str] | None,
-                                 yhat_hashes: list[str] | None,
-                                 samples: int = 100,
-                                 from_state: str | None = None,
-                                 to_state: str | None = None,
-                                 ref_uuid: str | None = None):
-        """A private helper method that encapsulates the logic for sending a 'do_gen' or 'do_learn' action request to
-        another agent. It handles the normalization of stream hashes, sets up recipients for direct messages, and adds
-        the target agent to the list of agents asked (async).
-
-        Args:
-            for_what: A string indicating whether to ask for 'gen' or 'learn'.
-            agent: The ID of the agent to send the request to.
-            u_hashes: A list of input stream hashes.
-            yhat_hashes: A list of target stream hashes (for learning).
-            samples: The number of samples.
-            from_state: The optional starting state from which the 'do_gen'/'do_learn' should be executed.
-            to_state: The optional destination state where the 'do_gen'/'do_learn' should lead if correctly executed.
-            ref_uuid: The UUID for the request.
-
-        Returns:
-            True if the request was sent successfully, False otherwise.
-        """
-        assert for_what in ["gen", "learn"]
-
-        if for_what == "learn":
-            for yhat_hash in yhat_hashes:
-                yhat_stream_dict = self.known_streams[yhat_hash]
-                for yhat_stream in yhat_stream_dict.values():
-                    if isinstance(yhat_stream, BufferedDataStream):
-                        y_text = yhat_stream.to_text_snippet(length=200)
-                        if y_text is not None and len(y_text) > 0:
-                            log.misc("Asking to learn: \"" + y_text + "\"")
-
-        # Triggering
-        if for_what == "gen":
-            interaction = \
-                await self.send(target=agent, action_name="do_gen",
-                                action_kwargs=({"u_hashes": u_hashes} if len(u_hashes) > 0 else {}) |
-                                              ({"samples": samples}),
-                                num_steps=samples,
-                                streams=u_hashes,
-                                from_state=from_state, to_state=to_state,
-                                uuid=ref_uuid)
-            if samples > 1:
-                for c in interaction.target:
-                    self._agents_who_were_asked.add(c)
-            return interaction
-
-        elif for_what == "learn":
-            interaction = \
-                await self.send(target=agent, action_name="do_learn",
-                                action_kwargs=({"u_hashes": u_hashes} if len(u_hashes) > 0 else {}) |
-                                              ({"yhat_hashes": yhat_hashes} if len(yhat_hashes) > 0 else {}) |
-                                              ({"samples": samples}),
-                                num_steps=samples,
-                                streams=u_hashes + yhat_hashes,
-                                from_state=from_state, to_state=to_state,
-                                uuid=ref_uuid)
-
-            if samples > 1:
-                for c in interaction.target:
-                    self._agents_who_were_asked.add(c)
-            return interaction
-
-    def __process_streams(self,
-                          u_hashes: list[str] | None,
-                          yhat_hashes: list[str] | None,
-                          learn: bool = False,
-                          ref_uuid: str | None = None):
-        """A private helper method that contains the core logic for processing data streams, either for generation or
-        learning. It reads input streams, passes them to the agent's processor, and handles the output streams.
-        It's designed to be called repeatedly by multistep actions like `do_gen` and `do_learn`.
-
-        Args:
-            u_hashes: A list of input stream hashes.
-            yhat_hashes: A list of target stream hashes (for learning).
-            learn: A boolean to indicate if the task is a learning task.
-            ref_uuid: The UUID for the request.
-
-        Returns:
-            True if the stream processing is successful, False otherwise.
-        """
-
-        # Getting current step index
-        k = self.get_action_step()
-
-        # Checking data and creating new buffered streams
-        if k == 0:
-            log.debug("[__process_streams] First action step")
-
-            # Checking data
-            if u_hashes is not None:
-                for u_hash in u_hashes:
-                    if u_hash is not None and u_hash not in self.known_streams:
-                        log.error(f"Unknown stream (u_hash): {u_hash}")
-                        return False
-            if yhat_hashes is not None:
-                for yhat_hash in yhat_hashes:
-                    if yhat_hash is not None and yhat_hash not in self.known_streams:
-                        log.error(f"Unknown stream (yhat_hash): {yhat_hash}")
-                        return False
-
-        if self.is_last_action_step():
-            log.debug("[__process_streams] Last action step detected")
-
-        log.debug(f"[__process_streams] Generating data, step {k}")
-
-        # Generate output
-        outputs, data_tag_from_inputs = (
-            self.generate(input_net_hashes=u_hashes, first=(k == 0), last=self.is_last_action_step(),
-                          ref_uuid=ref_uuid))
-        if outputs is None:
-            return False
-        log.debug(f"[__process_streams] data_tag_from_inputs: {data_tag_from_inputs}")
-        if data_tag_from_inputs is None:
-            data_tag_from_inputs = -1
-            log.debug(f"[__process_streams] data_tag_from_inputs (forced): {data_tag_from_inputs}")
-
-        # Learn
-        if learn:
-            log.debug(f"[__process_streams] learning, step {k}")
-            loss_values, data_tags_from_targets = self.learn_generate(outputs=outputs, targets_net_hashes=yhat_hashes)
-            log.debug(f"[__process_streams] data_tags_from_targets: {data_tags_from_targets}")
-            if loss_values is None or data_tags_from_targets is None:
-                return False
-
-            # Fusing data tags
-            data_tags = [data_tag_from_inputs if _data_tag == -1 else _data_tag for _data_tag in data_tags_from_targets]
-            log.user(f"Losses: {loss_values}, Step: {k}, Tags: {data_tags}")
-        else:
-            data_tags = [data_tag_from_inputs] * len(outputs)
-        log.debug(f"[__process_streams] data_tags (final): {data_tags}")
-
-        # Set each data sample in "outputs" to the right stream
-        i = 0
-        for net_hash, stream_dict in self.proc_streams.items():
-
-            # Public output streams are only considered if the agent IS NOT acting in a world
-            # private output streams are only considered if the agent IS acting in a world
-            if self.behaving_in_world() == next(iter(stream_dict.values())).props.is_public():
-                continue
-
-            # Setting the data sample
-            for stream_name, stream_obj in stream_dict.items():
-                log.debug(f"[__process_streams] Setting the {i}-th network output to stream with "
-                          f"net_hash: {net_hash}, name: {stream_name}")
-
-                # Here we exploit the fact that streams were inserted in order
-                try:
-                    stream_obj.set(stream_obj.props.check_and_postprocess(outputs[i]), data_tags[i], uuid=ref_uuid)
-                except Exception as e:
-                    log.error(f"Error while post-processing the processor output\nException: {e}")
-                    return False
-
-                i += 1
-
-        return True
-
-    async def __complete_do(self, do_what: str, peer_id_who_asked: str, all_hashes: list[str] | None,
-                            send_back_confirmation: bool = True, ref_uuid: str | None = None):
-        """A private helper method to be called at the end of a `do_gen` or `do_learn` action. It performs cleanup
-        tasks, such as clearing UUIDs on streams, and sends a confirmation message back to the requesting agent (async).
-
-        Args:
-            do_what: A string ('gen' or 'learn') indicating which task was completed.
-            peer_id_who_asked: The ID of the agent who requested the task.
-            all_hashes: A list of all stream hashes involved in the task.
-            send_back_confirmation: A boolean to indicate if a confirmation message should be sent.
-
-        Returns:
-            True if the completion process is successful, False otherwise.
-        """
-        assert do_what in ["gen", "learn"]
-
-        if do_what == "gen":
-            for net_hash, stream_dict in self.proc_streams.items():
-                for stream in stream_dict.values():
-                    if isinstance(stream, BufferedDataStream):
-                        y_text = stream.to_text_snippet(length=200)
-                        if y_text is not None:
-                            log.misc("Generated: \"" + y_text + "\"")
-
-        # Confirming
-        if send_back_confirmation:
-            if await self.send(target=peer_id_who_asked, action_name="done_" + do_what, action_kwargs={},
-                               uuid=ref_uuid):
-                return True
-            else:
-                log.error(f"Unable to confirm '{do_what}' to {peer_id_who_asked}")
-                return False
-        else:
-            return True
-
     def __compare_streams(self, net_hash_a: str, net_hash_b: str,
                           how: str = "mse", steps: int = 100, re_offset: bool = False):
         """A private helper method that compares two buffered data streams based on a specified metric (e.g., MSE,
@@ -2363,3 +1631,729 @@ class Agent(AgentBasics):
                 # From user specified hash to a net hash (e.g., peer_id:name_or_group to peer_id::ps:name_or_group)
                 net_hashes_copy.append(self.user_stream_hash_to_net_hash(net_hashes[i]))
         return net_hashes_copy
+
+    # ==================================================================================================================
+    # BEGIN OF DEPRECATED METHODS
+    # ==================================================================================================================
+    @deprecated("Use the interaction-based design")
+    def clear_recipients(self, net_hash):
+        #DEPRECATED
+
+        # Backward compatibility
+        stream_dict = self.known_streams[net_hash]
+        ref_uuid = None
+        for stream_obj in stream_dict.values():
+            ref_uuid = stream_obj.get_uuid()
+            break  # Assuming UUID is the same on all the streams of the group (fine for backward compatibility)
+        interaction = Interaction(streams=[net_hash], uuid=ref_uuid)
+        self.im.unregister(interaction)
+
+    @deprecated("Use the interaction-based design")
+    def add_recipient(self, net_hash: str, recipient: list[str] | str):
+        # DEPRECATED
+
+        # Backward compatibility
+        stream_dict = self.known_streams[net_hash]
+        ref_uuid = None
+        for stream_obj in stream_dict.values():
+            ref_uuid = stream_obj.get_uuid()
+            break  # Assuming UUID is the same on all the streams of the group (fine for backward compatibility)
+        interaction = self.im.get_interaction(uuid=ref_uuid)
+        if interaction is not None:
+            if recipient not in interaction.target:
+                interaction.target += (recipient if not isinstance(recipient, str) else [recipient])
+        else:
+            interaction = Interaction(streams=[net_hash], num_steps=1, requester=self.get_peer_id(),
+                                      target=recipient, uuid=ref_uuid)
+            self.im.register_lazy(interaction)
+
+    @deprecated("Use send")
+    async def set_next_action(self, agent: str | None, action: str, args: dict | None = None,
+                              from_state: str | None = None, to_state: str | None = None, ref_uuid: str | None = None):
+        """DEPRECATED: Try to tell another agent what is the next action it should run (async).
+
+        Args:
+            agent: The ID of the agent to send the action to or a valid wildcard like "<valid_cmp>" for a set of agents
+                (if None the agents in self._engaged_agents will be considered).
+            action: The name of the action to be executed by the agent.
+            args: A dictionary of arguments for the action. Defaults to None.
+            from_state: The optional starting state from which the action should be executed.
+            to_state: The optional destination state where the action should lead if correctly executed.
+            ref_uuid: An optional UUID for referencing the action. Defaults to None.
+
+        Returns:
+            True if the action was successfully sent to the target agent or to at least one of the
+            involved agents (wildcard case).
+        """
+
+        # Backward compatibility
+        return (await self.send(action_name=action,
+                                target=agent,
+                                action_kwargs=args,
+                                from_state=from_state,
+                                to_state=to_state,
+                                uuid=ref_uuid)) is not None
+
+    @deprecated("Use interactions")
+    async def ask_gen(self, agent: str | None = None, u_hashes: list[str] | None = None,
+                      samples: int = 100, time: float = -1., timeout: float = -1.,
+                      from_state: str | None = None, to_state: str | None = None,
+                      ask_uuid: str | None = None,
+                      ignore_uuid: bool = False):
+        """DEPRECATED: Asking for generation.
+
+        Args:
+            agent: The ID of the agent to ask for generation, or a valid wildcard like "<valid_cmp>"
+                for a set of agents (if None the agents in self._engaged_agents will be considered).
+            u_hashes: A list of input stream hashes for generation. Defaults to None.
+            samples: The number of samples to generate. Defaults to 100.
+            from_state: The optional starting state from which the generation should be executed.
+            to_state: The optional destination state where the generation should lead if correctly executed.
+            ask_uuid: Specify the UUID of the action (if None - default -, it is randomly generated).
+            ignore_uuid: Force a None UUID instead of generating a random one.
+
+        Returns:
+            True if the generation request was successfully sent to at least one involved agent, False otherwise.
+        """
+        assert samples is not None, "Missing basic action information"
+
+        # - if "agent" is a peer ID, the involved agents will be a list with one element.
+        # - if "agent" is a known wildcard, as "<valid_cmp>", then involved agents will be self._valid_cmp_agents
+        # - if "agent" is None, then the current agent in self._engaged_agents will be returned
+        involved_agents = self.__involved_agents(agent)
+        log.debug(f"[ask_gen] Involved_agents: {involved_agents}")
+
+        if len(involved_agents) == 0:
+            log.debug(f"[ask_gen] No involved agents, action ask_gen returns False")
+            return False
+
+        # Create a copy of the input hashes, normalizing them in the appropriate way
+        u_hashes_copy = self.__normalize_user_hash(u_hashes)
+
+        # Generate a new UUID for this request
+        ref_uuid = AgentBasics.generate_uuid() if ask_uuid is None else ask_uuid
+        if ignore_uuid:
+            ref_uuid = None
+
+        # If the input streams are all owned by this agent, discard UUID
+        all_owned = True
+        for i in range(len(u_hashes_copy)):
+            if u_hashes_copy[i] not in self.owned_streams:
+                all_owned = False
+                break
+        if not all_owned:
+            ref_uuid = None
+
+        log.debug(f"[ask_gen] Input streams u_hashes: {u_hashes_copy}")
+
+        log.misc(f"Asking {', '.join(involved_agents)} to generate signal given {u_hashes_copy} "
+                 f"(ref_uuid: {ref_uuid})")
+        self._agents_who_completed_what_they_were_asked = set()
+        self._agents_who_were_asked = set()
+        interaction = await self.__ask_gen_or_learn(for_what="gen", agent=involved_agents,
+                                                    u_hashes=u_hashes_copy,
+                                                    yhat_hashes=None,
+                                                    from_state=from_state, to_state=to_state,
+                                                    samples=samples, ref_uuid=ref_uuid)
+        log.debug(f"[ask_gen] Asking {involved_agents} returned {interaction}")
+        correctly_asked = interaction.target
+
+        # Preparing the buffered stream where to store data, if needed
+        if interaction is not None and len(correctly_asked) > 0:
+            for i in range(len(u_hashes_copy)):
+
+                # If there are our own streams involved, and they are buffered, let's plan to restart them when we will
+                # start sending them through the net: moreover, let's set the local stream UUID appropriately to
+                # the generated UUID
+                if u_hashes_copy[i] in self.owned_streams:
+
+                    stream_dict = self.known_streams[u_hashes_copy[i]]
+                    for stream_name, stream_obj in stream_dict.items():
+
+                        # Plan to restart buffered streams
+                        if isinstance(stream_obj, BufferedDataStream):
+                            stream_obj.plan_restart_before_next_get(requested_by="send_stream_samples", uuid=ref_uuid)
+
+                        # Activate the stream (if it was off)
+                        stream_obj.enable()
+
+                        # If ask_uuid is given, then there could be something that was previously generated by the
+                        # processor, hence we must edit the UUID of such data
+                        if ask_uuid is not None or ignore_uuid:
+                            data = stream_obj.get_last_added_uuid_in_data()
+                            if data is not None:
+                                stream_obj.edit_uuid_in_data(current_uuid=data.uuid, new_uuid=ref_uuid)
+
+            # Saving
+            self.last_ref_uuid = ref_uuid
+
+        log.debug(f"[ask_gen] Overall, the action ask_gen will return {len(correctly_asked) > 0}")
+        return len(correctly_asked) > 0
+
+    @deprecated("Use process")
+    async def do_gen(self, u_hashes: list[str] | None = None, extra_hashes: list[str] | None = None,
+                     samples: int = 100, time: float = -1., timeout: float = -1.,
+                     _requester: str | list | None = None, _request_time: float = -1., _request_uuid: str | None = None,
+                     _completed: bool = False) -> bool:
+        """DEPRECATED: Generate a signal (async).
+
+        Args:
+            u_hashes: A list of input stream hashes for generation. Defaults to None.
+            extra_hashes: A list of streams that might be used in a custom manner when overloading this function
+                (warning: they are not passed to the processor).
+            samples: The number of samples to generate. Defaults to 100.
+            seconds, it is declared as complete. Defaults to -1.
+            _requester: The ID of the agent who requested generation (automatically set by the action calling routine).
+            _request_time: The time the generation was requested (automatically set by the action calling routine).
+            _request_uuid: The UUID of the generation request (automatically set by the action calling routine).
+            _completed: A boolean indicating if the generation is already completed (automatically set by the action
+                calling routine). This will tell that it is time to run a final procedure.
+
+        Returns:
+            True if the signal generation was successful, False otherwise.
+        """
+        assert samples is not None, "Missing basic action information"
+
+        log.debug(f"[do_gen] u_hashes: {u_hashes}, extra_hashes: {extra_hashes}, "
+                  f"samples: {samples}, "
+                  f"requester: {_requester}, request_time: {_request_time}, request_uuid: {_request_uuid}, "
+                  f"completed: {_completed}")
+
+        if _requester is not None:
+            if isinstance(_requester, list):
+                for _r in _requester:
+                    if self.behaving_in_world():
+                        if _r not in self.world_agents and _r not in self.world_masters and _r != "system":
+                            log.error(f"Unknown agent: {_r} in list {_requester} (fully skipping generation)")
+                            return False
+                    else:
+                        if _r not in self.public_agents and _r != "system":
+                            log.error(f"Unknown agent: {_r} in list {_requester} (fully skipping generation)")
+                            return False
+            else:
+                if self.behaving_in_world():
+                    if (_requester not in self.world_agents and _requester not in self.world_masters
+                            and _requester != "system"):
+                        log.error(f"Unknown agent: {_requester} (fully skipping generation)")
+                        return False
+                else:
+                    if _requester not in self.public_agents and _requester != "system":
+                        log.error(f"Unknown agent: {_requester} (fully skipping generation)")
+                        return False
+
+        # Create a copy of the input hashes, normalizing them in the appropriate way
+        u_hashes_copy = self.__normalize_user_hash(u_hashes)
+
+        # Create a copy of the input hashes, normalizing them in the appropriate way
+        extra_hashes_copy = self.__normalize_user_hash(extra_hashes)
+
+        # Check what is the step ID of the multistep action
+        k = self.get_action_step()
+
+        # In the first step of this action, we change the UUID of the local stream associated to the input data we will
+        # use to handle this action, setting expectations to avoid handling tags of old data
+        if k == 0:
+            for net_hash in extra_hashes_copy:
+                if net_hash in self.known_streams:
+
+                    # If the data arrived before this action, then the UUID is already set, and here there is
+                    # no need to do anything; if the data has not yet arrived (common case) ...
+                    self.im.add_lazy_stream_to_interaction(net_hash, self.im.get_current())
+                else:
+                    log.misc(f"Unknown stream mentioned in extra_hashes: {net_hash}")
+                    return False
+
+        if not _completed:
+            log.misc(f"Generating signal")
+            ret = self.__process_streams(u_hashes=u_hashes_copy, yhat_hashes=None, learn=False,
+                                         ref_uuid=_request_uuid)
+            if not ret:
+                log.misc(f"Generating signal failed")
+            else:
+                if not self.is_multi_steps_action():
+                    log.misc(f"Completing signal generation (degenerate single-step case of a multi-step action)")
+                    all_hashes = u_hashes_copy + extra_hashes_copy
+                    ret = await self.__complete_do(do_what="gen", peer_id_who_asked=_requester,
+                                                   all_hashes=all_hashes,
+                                                   send_back_confirmation=False, ref_uuid=_request_uuid)
+                    if not ret:
+                        log.misc(f"Completing signal generation failed")
+            return ret
+        else:
+            log.misc(f"Completing signal generation")
+            all_hashes = u_hashes_copy + extra_hashes_copy
+            ret = await self.__complete_do(do_what="gen", peer_id_who_asked=_requester, all_hashes=all_hashes,
+                                           ref_uuid=_request_uuid)
+            if not ret:
+                log.misc(f"Completing signal generation failed")
+            return ret
+
+    @deprecated("Use the interaction-based design")
+    async def done_gen(self, _requester: str | None = None):
+        """DEPRECATED: This is a way to get back the confirmation of a completed generation (async).
+
+        Args:
+            _requester: The ID of the agent who completed the generation. Defaults to None.
+
+        Returns:
+            True if the generation confirmation was successfully handled by this agent, False is something went wrong.
+        """
+        log.misc(f"Agent {_requester} finished generation")
+
+        # Searching for the processor-streams of the agent who generated data
+        processor_streams = self.find_streams(_requester, name_or_group="processor")
+        if processor_streams is None or len(processor_streams) == 0:
+            log.error("Unexpected confirmation of finished generation")
+            return False
+
+        # Remembering that the agent that invoked this action is the one who generated the data, and what he generated
+        # could be used in future action (for example, in evaluation processes)
+        self._agents_who_completed_what_they_were_asked.add(_requester)
+
+        return True
+
+    @deprecated("Use interactions")
+    async def ask_learn(self, agent: str | None = None,
+                        u_hashes: list[str] | None = None, yhat_hashes: list[str] | None = None,
+                        samples: int = 100, time: float = -1., timeout: float = -1.,
+                        from_state: str | None = None, to_state: str | None = None,
+                        ask_uuid: str | None = None,
+                        ignore_uuid: bool = False):
+        """DEPRECATED: Asking for learning to generate (async).
+
+        .. deprecated::
+            Use :meth:`send` with ``action_name="learn"`` instead.
+
+        Args:
+            agent: The ID of the agent to ask for generation, or a valid wildcard like "<valid_cmp>"
+                for a set of agents (if None the agents in self._engaged_agents will be considered).
+            u_hashes: A list of input stream hashes for inference. Defaults to None.
+            yhat_hashes: A list of target stream hashes to be used for loss computation. Defaults to None.
+            samples: The number of samples to learn from. Defaults to 100.
+            from_state: The optional starting state from which learning should be executed.
+            to_state: The optional destination state where learning should lead if correctly executed.
+            ask_uuid: Specify the action UUID (default = None, i.e., it is automatically generated).
+            ignore_uuid: If True, the UUID is fully ignored (i.e, forced to None).
+
+        Returns:
+            True if the learning request was successfully sent to at least one involved agent, False otherwise.
+        """
+        assert samples is not None, "Missing basic action information"
+
+        # - if "agent" is a peer ID, the involved agents will be a list with one element.
+        # - if "agent" is a known wildcard, as "<valid_cmp>", then involved agents will be self._valid_cmp_agents
+        # - if "agent" is None, then the current agent in self._engaged_agents will be returned
+        involved_agents = self.__involved_agents(agent)
+        log.debug(f"[ask_learn] Involved agents: {involved_agents}")
+
+        if len(involved_agents) == 0:
+            log.debug(f"[ask_learn] No involved agents, action will return False")
+            return False
+
+        # Create a copy of the input hashes, normalizing them in the appropriate way
+        u_hashes_copy = self.__normalize_user_hash(u_hashes)
+
+        # Create a copy of the target hashes, normalizing them in the appropriate way
+        yhat_hashes_copy = self.__normalize_user_hash(yhat_hashes)
+
+        # Generate a new UUID for this request
+        ref_uuid = AgentBasics.generate_uuid() if ask_uuid is None else ask_uuid
+        if ignore_uuid:
+            ref_uuid = None
+
+        # If the input streams are all owned by this agent, discard UUID
+        all_owned = True
+        for i in range(len(u_hashes_copy)):
+            if u_hashes_copy[i] not in self.owned_streams:
+                all_owned = False
+                break
+        if all_owned:
+            for i in range(len(yhat_hashes_copy)):
+                if yhat_hashes_copy[i] not in self.owned_streams:
+                    all_owned = False
+                    break
+        # if not all_owned:
+        #    ref_uuid = None
+
+        log.misc(f"Asking {', '.join(involved_agents)} to learn to generate signal {yhat_hashes_copy}, "
+                 f"given {u_hashes_copy} (ref_uuid: {ref_uuid})")
+        self._agents_who_completed_what_they_were_asked = set()
+        self._agents_who_were_asked = set()
+        interaction = await self.__ask_gen_or_learn(for_what="learn", agent=involved_agents,
+                                                    u_hashes=u_hashes_copy,
+                                                    yhat_hashes=yhat_hashes_copy,
+                                                    from_state=from_state, to_state=to_state,
+                                                    samples=samples, ref_uuid=ref_uuid)
+        log.debug(f"[ask_gen] Asking {involved_agents} returned {interaction}")
+        correctly_asked = interaction.target
+
+        # Preparing the buffered stream where to store data, if needed
+        if interaction is not None and len(correctly_asked) > 0:
+            for i in range(len(u_hashes_copy)):
+
+                # If there are our own streams involved, and they are buffered, let's plan to restart them when we will
+                # start sending them through the net: moreover, let's set the local stream UUID appropriately to
+                # the generated UUID
+                if u_hashes_copy[i] in self.owned_streams:
+
+                    stream_dict = self.known_streams[u_hashes_copy[i]]
+                    for stream_name, stream_obj in stream_dict.items():
+
+                        # Plan to restart buffered streams
+                        if isinstance(stream_obj, BufferedDataStream):
+                            stream_obj.plan_restart_before_next_get(requested_by="send_stream_samples", uuid=ref_uuid)
+
+                        # Activate the stream (if it was off)
+                        stream_obj.enable()
+
+                        # If ask_uuid is given, then there could be something that was previously generated by the
+                        # processor, hence we must edit the UUID of such data
+                        if ask_uuid is not None:
+                            data = stream_obj.get_last_added_uuid_in_data()
+                            if data is not None:
+                                stream_obj.edit_uuid_in_data(current_uuid=data.uuid, new_uuid=ref_uuid)
+
+            for i in range(len(yhat_hashes_copy)):
+
+                # If there are our own streams involved, and they are buffered, let's plan to restart them when we will
+                # start sending them through the net: moreover, let's set the local stream UUID appropriately to
+                # the generated UUID
+                if yhat_hashes_copy[i] in self.owned_streams:
+
+                    stream_dict = self.known_streams[yhat_hashes_copy[i]]
+                    for stream_name, stream_obj in stream_dict.items():
+
+                        # Plan to restart buffered streams
+                        if isinstance(stream_obj, BufferedDataStream):
+                            stream_obj.plan_restart_before_next_get(requested_by="send_stream_samples", uuid=ref_uuid)
+
+                        # Activate the stream (if it was off)
+                        stream_obj.enable()
+
+                        # If ask_uuid is given, then there could be something that was previously generated by the
+                        # processor, hence we must edit the UUID of such data
+                        if ask_uuid is not None:
+                            data = stream_obj.get_last_added_uuid_in_data()
+                            if data is not None:
+                                stream_obj.edit_uuid_in_data(current_uuid=data.uuid, new_uuid=ref_uuid)
+
+            # Saving
+            self.last_ref_uuid = ref_uuid
+
+        log.debug(f"[ask_learn] Overall the action ask_learn will return {len(correctly_asked) > 0}")
+        return len(correctly_asked) > 0
+
+    @deprecated("Use learn")
+    async def do_learn(self, yhat_hashes: list[str] | None = None, u_hashes: list[str] | None = None,
+                       extra_hashes: list[str] | None = None,
+                       samples: int = 100, time: float = -1., timeout: float = -1.,
+                       _requester: str | None = None, _request_time: float = -1., _request_uuid: str | None = None,
+                       _completed: bool = False) -> bool:
+        """DEPRECATED: Learn to generate a signal (async).
+
+        Args:
+            yhat_hashes: A list of target stream hashes to be used for loss computation. Defaults to None.
+            u_hashes: A list of input stream hashes for inference. Defaults to None.
+            extra_hashes: A list of streams that might be used in a custom manner when overloading this function
+                (warning: they are not passed to the processor).
+            samples: The number of samples to learn from. Defaults to 100.
+            time: The max time duration of the learning procedure. Defaults to -1.
+            timeout: The timeout for learning attempts: if calling the learning action fails for more than "timeout"
+            seconds, it is declared as complete. Defaults to -1.
+            _requester: The ID of the agent who requested learning (automatically set by the action calling routine).
+            _request_time: The time learning was requested (automatically set by the action calling routine).
+            _request_uuid: The UUID of the learning request (automatically set by the action calling routine).
+            _completed: A boolean indicating if the learning is already completed (automatically set by the action
+                calling routine). This will tell that it is time to run a final procedure.
+
+        Returns:
+            True if the signal generation was successful, False otherwise.
+        """
+        assert samples is not None and time is not None and timeout is not None, "Missing basic action information"
+
+        log.debug(f"[do_learn] samples: {samples}, time: {time}, timeout: {timeout}, "
+                  f"requester: {_requester}, request_time: {_request_time}, request_uuid: {_request_uuid} "
+                  f"completed: {_completed}")
+
+        if _requester not in self.world_agents and _requester not in self.world_masters:
+            log.error(f"Unknown agent: {_requester}")
+            return False
+
+        # Check what is the step ID of the multistep action
+        k = self.get_action_step()
+
+        # Create a copy of the input hashes, normalizing them in the appropriate way
+        u_hashes_copy = self.__normalize_user_hash(u_hashes)
+
+        # Create a copy of the input hashes, normalizing them in the appropriate way
+        yhat_hashes_copy = self.__normalize_user_hash(yhat_hashes)
+
+        # Create a copy of the input hashes, normalizing them in the appropriate way
+        extra_hashes_copy = self.__normalize_user_hash(extra_hashes)
+
+        # In the first step of this action, we change the UUID of the local stream associated to the input data we will
+        # use to handle this action, setting expectations to avoid handling tags of old data
+        if k == 0:
+            if u_hashes_copy is not None:
+                for net_hash in u_hashes_copy:
+                    if net_hash in self.known_streams:
+                        # If the data arrived before this action, then the UUID is already set, and here there is
+                        # no need to do anything; if the data has not yet arrived (common case) ...
+                        interaction = Interaction(uuid=_request_uuid, requester=_requester,
+                                                  target=self.get_peer_id())
+                        self.im.register_lazy(interaction)
+                        self.im.add_lazy_stream_to_interaction(net_hash, interaction)
+                        # stream_obj.add_interaction(Interaction(uuid=_request_uuid,
+                        #                                       requester=_requester, target=self.get_peer_id()))
+
+            if yhat_hashes_copy is not None:
+                for net_hash in yhat_hashes_copy:
+                    if net_hash in self.known_streams:
+                        # for stream_name, stream_obj in self.known_streams[net_hash].values():
+                        interaction = Interaction(uuid=_request_uuid, requester=_requester, target=self.get_peer_id())
+                        self.im.register_lazy(interaction)
+                        self.im.add_lazy_stream_to_interaction(net_hash, interaction)
+                        # stream_obj.add_interaction(Interaction(uuid=_request_uuid,
+                        #                                       requester=_requester, target=self.get_peer_id()))
+
+        if not _completed:
+            log.misc(f"Learning to generate signal {yhat_hashes_copy}")
+            ret = self.__process_streams(u_hashes=u_hashes_copy, yhat_hashes=yhat_hashes_copy, learn=True,
+                                         ref_uuid=_request_uuid)
+            if not ret:
+                log.misc(f"Learning to generate signal {yhat_hashes_copy} failed")
+            self.proc_updated_since_last_save = True  # Set it after complete?
+            return ret
+        else:
+            log.misc(f"Completing learning to generate signal {yhat_hashes_copy}")
+            all_hashes = u_hashes_copy + yhat_hashes_copy + extra_hashes_copy
+            ret = await self.__complete_do(do_what="learn", peer_id_who_asked=_requester, all_hashes=all_hashes,
+                                           ref_uuid=_request_uuid)
+            if not ret:
+                log.misc(f"Completing learning to generate signal {yhat_hashes} failed")
+            return ret
+
+    @deprecated("Use the interaction-based design")
+    async def done_learn(self, _requester: str | None = None):
+        """DEPRECATED: This is a way to get back the confirmation of a completed learning procedure (async).
+
+        Args:
+            _requester: The ID of the agent who completed the learning procedure. Defaults to None.
+
+        Returns:
+            True if the learning-complete confirmation was successfully handled by this agent, False otherwise.
+        """
+        log.misc(f"Agent {_requester} finished learning")
+        self._agents_who_completed_what_they_were_asked.add(_requester)
+
+        # Searching for the processor-streams of the agent who generated the (inference) data
+        processor_streams = self.find_streams(_requester, name_or_group="processor")
+        if processor_streams is None or len(processor_streams) == 0:
+            log.error("Unexpected confirmation of finished learning")
+            return False
+
+        return True
+
+    @deprecated("Private method used by deprecated ones")
+    async def __ask_gen_or_learn(self, for_what: str, agent: str | list[str],
+                                 u_hashes: list[str] | None,
+                                 yhat_hashes: list[str] | None,
+                                 samples: int = 100,
+                                 from_state: str | None = None,
+                                 to_state: str | None = None,
+                                 ref_uuid: str | None = None):
+        """DEPREATED: A private helper method that encapsulates the logic for sending a 'do_gen' or 'do_learn' action
+        request to
+        another agent. It handles the normalization of stream hashes, sets up recipients for direct messages, and adds
+        the target agent to the list of agents asked (async).
+
+        Args:
+            for_what: A string indicating whether to ask for 'gen' or 'learn'.
+            agent: The ID of the agent to send the request to.
+            u_hashes: A list of input stream hashes.
+            yhat_hashes: A list of target stream hashes (for learning).
+            samples: The number of samples.
+            from_state: The optional starting state from which the 'do_gen'/'do_learn' should be executed.
+            to_state: The optional destination state where the 'do_gen'/'do_learn' should lead if correctly executed.
+            ref_uuid: The UUID for the request.
+
+        Returns:
+            True if the request was sent successfully, False otherwise.
+        """
+        assert for_what in ["gen", "learn"]
+
+        if for_what == "learn":
+            for yhat_hash in yhat_hashes:
+                yhat_stream_dict = self.known_streams[yhat_hash]
+                for yhat_stream in yhat_stream_dict.values():
+                    if isinstance(yhat_stream, BufferedDataStream):
+                        y_text = yhat_stream.to_text_snippet(length=200)
+                        if y_text is not None and len(y_text) > 0:
+                            log.misc("Asking to learn: \"" + y_text + "\"")
+
+        # Triggering
+        if for_what == "gen":
+            interaction = \
+                await self.send(target=agent, action_name="do_gen",
+                                action_kwargs=({"u_hashes": u_hashes} if len(u_hashes) > 0 else {}) |
+                                              ({"samples": samples}),
+                                num_steps=samples,
+                                streams=u_hashes,
+                                from_state=from_state, to_state=to_state,
+                                uuid=ref_uuid)
+            if samples > 1:
+                for c in interaction.target:
+                    self._agents_who_were_asked.add(c)
+            return interaction
+
+        elif for_what == "learn":
+            interaction = \
+                await self.send(target=agent, action_name="do_learn",
+                                action_kwargs=({"u_hashes": u_hashes} if len(u_hashes) > 0 else {}) |
+                                              ({"yhat_hashes": yhat_hashes} if len(yhat_hashes) > 0 else {}) |
+                                              ({"samples": samples}),
+                                num_steps=samples,
+                                streams=u_hashes + yhat_hashes,
+                                from_state=from_state, to_state=to_state,
+                                uuid=ref_uuid)
+
+            if samples > 1:
+                for c in interaction.target:
+                    self._agents_who_were_asked.add(c)
+            return interaction
+
+    @deprecated("Private method used by deprecated ones")
+    def __process_streams(self,
+                          u_hashes: list[str] | None,
+                          yhat_hashes: list[str] | None,
+                          learn: bool = False,
+                          ref_uuid: str | None = None):
+        """DEPRECATED: A private helper method that contains the core logic for processing data streams, either for
+        generation or
+        learning. It reads input streams, passes them to the agent's processor, and handles the output streams.
+        It's designed to be called repeatedly by multistep actions like `do_gen` and `do_learn`.
+
+        Args:
+            u_hashes: A list of input stream hashes.
+            yhat_hashes: A list of target stream hashes (for learning).
+            learn: A boolean to indicate if the task is a learning task.
+            ref_uuid: The UUID for the request.
+
+        Returns:
+            True if the stream processing is successful, False otherwise.
+        """
+
+        # Getting current step index
+        k = self.get_action_step()
+
+        # Checking data and creating new buffered streams
+        if k == 0:
+            log.debug("[__process_streams] First action step")
+
+            # Checking data
+            if u_hashes is not None:
+                for u_hash in u_hashes:
+                    if u_hash is not None and u_hash not in self.known_streams:
+                        log.error(f"Unknown stream (u_hash): {u_hash}")
+                        return False
+            if yhat_hashes is not None:
+                for yhat_hash in yhat_hashes:
+                    if yhat_hash is not None and yhat_hash not in self.known_streams:
+                        log.error(f"Unknown stream (yhat_hash): {yhat_hash}")
+                        return False
+
+        if self.is_last_action_step():
+            log.debug("[__process_streams] Last action step detected")
+
+        log.debug(f"[__process_streams] Generating data, step {k}")
+
+        # Generate output
+        outputs, data_tag_from_inputs = (
+            self.generate(input_net_hashes=u_hashes, first=(k == 0), last=self.is_last_action_step(),
+                          ref_uuid=ref_uuid))
+        if outputs is None:
+            return False
+        log.debug(f"[__process_streams] data_tag_from_inputs: {data_tag_from_inputs}")
+        if data_tag_from_inputs is None:
+            data_tag_from_inputs = -1
+            log.debug(f"[__process_streams] data_tag_from_inputs (forced): {data_tag_from_inputs}")
+
+        # Learn
+        if learn:
+            log.debug(f"[__process_streams] learning, step {k}")
+            loss_values, data_tags_from_targets = self.learn_generate(outputs=outputs, targets_net_hashes=yhat_hashes)
+            log.debug(f"[__process_streams] data_tags_from_targets: {data_tags_from_targets}")
+            if loss_values is None or data_tags_from_targets is None:
+                return False
+
+            # Fusing data tags
+            data_tags = [data_tag_from_inputs if _data_tag == -1 else _data_tag for _data_tag in data_tags_from_targets]
+            log.user(f"Losses: {loss_values}, Step: {k}, Tags: {data_tags}")
+        else:
+            data_tags = [data_tag_from_inputs] * len(outputs)
+        log.debug(f"[__process_streams] data_tags (final): {data_tags}")
+
+        # Set each data sample in "outputs" to the right stream
+        i = 0
+        for net_hash, stream_dict in self.proc_streams.items():
+
+            # Public output streams are only considered if the agent IS NOT acting in a world
+            # private output streams are only considered if the agent IS acting in a world
+            if self.behaving_in_world() == next(iter(stream_dict.values())).props.is_public():
+                continue
+
+            # Setting the data sample
+            for stream_name, stream_obj in stream_dict.items():
+                log.debug(f"[__process_streams] Setting the {i}-th network output to stream with "
+                          f"net_hash: {net_hash}, name: {stream_name}")
+
+                # Here we exploit the fact that streams were inserted in order
+                try:
+                    stream_obj.set(stream_obj.props.check_and_postprocess(outputs[i]), data_tags[i], uuid=ref_uuid)
+                except Exception as e:
+                    log.error(f"Error while post-processing the processor output\nException: {e}")
+                    return False
+
+                i += 1
+
+        return True
+
+    @deprecated("Private method used by deprecated ones")
+    async def __complete_do(self, do_what: str, peer_id_who_asked: str, all_hashes: list[str] | None,
+                            send_back_confirmation: bool = True, ref_uuid: str | None = None):
+        """DEPRECATED: A private helper method to be called at the end of a `do_gen` or `do_learn` action.
+        It performs cleanup
+        tasks, such as clearing UUIDs on streams, and sends a confirmation message back to the requesting agent (async).
+
+        Args:
+            do_what: A string ('gen' or 'learn') indicating which task was completed.
+            peer_id_who_asked: The ID of the agent who requested the task.
+            all_hashes: A list of all stream hashes involved in the task.
+            send_back_confirmation: A boolean to indicate if a confirmation message should be sent.
+
+        Returns:
+            True if the completion process is successful, False otherwise.
+        """
+        assert do_what in ["gen", "learn"]
+
+        if do_what == "gen":
+            for net_hash, stream_dict in self.proc_streams.items():
+                for stream in stream_dict.values():
+                    if isinstance(stream, BufferedDataStream):
+                        y_text = stream.to_text_snippet(length=200)
+                        if y_text is not None:
+                            log.misc("Generated: \"" + y_text + "\"")
+
+        # Confirming
+        if send_back_confirmation:
+            if await self.send(target=peer_id_who_asked, action_name="done_" + do_what, action_kwargs={},
+                               uuid=ref_uuid):
+                return True
+            else:
+                log.error(f"Unable to confirm '{do_what}' to {peer_id_who_asked}")
+                return False
+        else:
+            return True
+    # ==================================================================================================================
+    # END OF DEPRECATED METHODS
+    # ==================================================================================================================
