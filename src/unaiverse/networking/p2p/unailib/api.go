@@ -378,18 +378,18 @@ func CreateNode(
 		} else {
 			// In this case we want to use relays but not offer the service to others.
 			// If we are exploiting the DHT we can start an AutoRelay with PeerSource
-			if cfg.DHT.Keep {
-				// Enable AutoRelay. This uses the services above (DHT, AutoNAT)
-				// to find relays and bind to one if we are private.
-				options = append(options, libp2p.EnableAutoRelayWithPeerSource(
-					ni.PeerSource, 
-					autorelay.WithBootDelay(time.Second*10),
-					autorelay.WithNumRelays(1),            // Stop looking for a 2nd relay
-					autorelay.WithMinCandidates(1),        // Start with only 1 candidate found
-					autorelay.WithBackoff(time.Second*5),  // Retry every 5s, not every hour
-				))
-				logger.Debugf("[GO]   - Instance %d: AutoRelay client ENABLED.\n", instanceIndex)
-			}
+			// if cfg.DHT.Keep {
+			// Enable AutoRelay. This uses the services above (DHT, AutoNAT)
+			// to find relays and bind to one if we are private.
+			options = append(options, libp2p.EnableAutoRelayWithPeerSource(
+				ni.PeerSource, 
+				autorelay.WithBootDelay(time.Second*10),
+				autorelay.WithNumRelays(1),            // Stop looking for a 2nd relay
+				autorelay.WithMinCandidates(1),        // Start with only 1 candidate found
+				autorelay.WithBackoff(time.Second*5),  // Retry every 5s, not every hour
+			))
+			logger.Debugf("[GO]   - Instance %d: AutoRelay client ENABLED.\n", instanceIndex)
+			// }
 		}
 	}
 
