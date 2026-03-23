@@ -18,13 +18,11 @@ import torch
 import functools
 from PIL.Image import Image
 from typing import Callable
-
-from typing_extensions import deprecated
-
 from unaiverse.stats import Stats
 from unaiverse.clock import clock
 from unaiverse.custom import Custom
 from unaiverse.utils.logger import log
+from typing_extensions import deprecated
 from unaiverse.dataprops import DataProps
 from unaiverse.interaction import Interaction
 from unaiverse.agent_basics import AgentBasics
@@ -127,1106 +125,6 @@ class Agent(AgentBasics):
         # Stats
         self.stats = Stats(is_world=False)
         self.overwrite_stats = False  # Whether to overwrite stats when receiving the next STATS_RESPONSE from the world
-
-    def remove_peer_from_agent_status_attrs(self, peer_id: str) -> None:
-        """Removes a peer from all agent-level status tracking sets (overrides parent) (async).
-
-        Args:
-            peer_id: The peer ID to remove from status tracking structures.
-        """
-        super().remove_peer_from_agent_status_attrs(peer_id)
-        self._available = len(self._engaged_agents) == 0
-
-    def reset_agent_status_attrs(self) -> None:
-        """Resets all agent-level status attributes to their initial values (overrides parent)."""
-        super().reset_agent_status_attrs()  # this sets status vars to [], {}, 0, 0., False, in function of their type
-        self._available = True
-        self._repeat = 1
-        self._last_recorded_stream_num = 1
-
-    async def send(self, interaction: Interaction | None = None,
-                   action_name: str | None = None,
-                   target: str | None = None,
-                   action_kwargs: dict | None = None,
-                   streams: tuple[list[str], int] | list[str] | None = None,
-                   data_samples: list[str | Image | torch.Tensor] | None = None,
-                   num_steps: int = -1,
-                   max_time: float = -1.,
-                   from_state: str | None = None,
-                   to_state: str | None = None,
-                   uuid: str | None = "random") -> 'Interaction | None':
-        """Send an interaction request to one or more target agents (async).
-
-        Accepts either a pre-built :class:`Interaction` object *or* raw arguments from which one will be created.
-
-        Args:
-            interaction: A pre-built Interaction.
-            action_name: The action name (str) if building one from raw args.
-                Ignored when a pre-built Interaction is provided.
-            target: Peer ID (or wildcard such as ``"<valid_cmp>"``) of the target
-                agent. Ignored when a pre-built Interaction is provided.
-            action_kwargs: Action arguments dict.  Ignored when a pre-built Interaction
-                is provided.
-            streams: List of ``(stream_user_hash, num_samples)`` tuples (or just stream_user_hash is num_samples = 1).
-                Ignored when a pre-built Interaction is provided.
-            data_samples: List of actual data samples. Ignored when a pre-built Interaction is provided.
-            num_steps: Number of steps the interaction spans (used when building from raw args).
-                Ignored when a pre-built Interaction is provided.
-            max_time: Maximum time for the interaction. Ignored when a pre-built Interaction is provided.
-            from_state: Optional source state. Ignored when a pre-built Interaction provided.
-            to_state: Optional destination state. Ignored when a pre-built Interaction provided.
-            uuid: Optional UUID of the interaction. Ignored when a pre-built Interaction is provided.
-
-        Returns:
-            The Interaction on success, ``None`` on failure.
-        """
-        # Build Interaction from raw args if needed
-        if interaction is None:
-            _, private_peer_id = self.get_peer_ids()
-            interaction = Interaction(action_name=action_name, action_kwargs=action_kwargs,
-                                      streams=streams, data_samples=data_samples,
-                                      num_steps=num_steps,
-                                      requester=private_peer_id, target=target,
-                                      from_state=from_state, to_state=to_state,
-                                      timeout=max_time, uuid=uuid)
-        else:
-            # Ensure requester is set
-            if interaction.requester is None:
-                public_peer_id, private_peer_id = self.get_peer_ids()
-                interaction.requester = private_peer_id if self.behaving_in_world() else public_peer_id
-
-        # Resolve target agent(s)
-        involved_agents = self.__involved_agents(interaction.target)
-        if len(involved_agents) == 0:
-            return None
-
-        # Build the content for the interaction message
-        content = interaction.to_dict()
-        at_least_one_completed = False
-        correctly_contacted = []
-        for _peer_id in involved_agents:
-            ret = await self._node_conn.send(_peer_id, channel_trail=None,
-                                             content=content, content_type=Msg.INTERACTION)
-            if ret:
-                correctly_contacted.append(_peer_id)
-                at_least_one_completed = at_least_one_completed or ret
-                log.debug(f"[send] Sent interaction {interaction.uuid} "
-                          f"(action={interaction.action_name}) to {_peer_id}, result={ret}")
-
-        if at_least_one_completed:
-
-            # Updating targets with the list of actually contacted agents
-            interaction.target = correctly_contacted
-
-            # Register with the Interaction Manager
-            if not self.im.register_sent(interaction):
-                return None
-            else:
-                return interaction
-        else:
-            return None
-
-    async def process(self) -> bool:
-        """Runs one inference step: reads from stdin, calls the processor, and writes to stdout (async).
-
-        Returns:
-            True if the step ran successfully, False otherwise.
-        """
-
-        # Getting input data from the input stream
-        input_data = self.stdin.get()
-
-        # Getting data tag
-        data_tag = self.stdin.get_tag()
-
-        # Passing input data to the processor and getting output back
-        if input_data is None:
-            return False
-
-        # Customizable input hook
-        try:
-            input_data = self.hook_proc_tweak_inputs(input_data)
-        except Exception as e:
-            log.error(f"Error tweaking the processor inputs: {e}")
-            return False
-
-        # Processing data
-        try:
-            output_data = self.proc(*input_data)
-        except Exception as e:
-            log.error(f"Error running the processor: {e}")
-            return False
-
-        # Customizable output hook
-        try:
-            output_data = self.hook_proc_tweak_outputs(output_data)
-        except Exception as e:
-            log.error(f"Error tweaking the processor outputs: {e}")
-            return False
-
-        # Pushing output data to the output stream
-        self.stdout.set(output_data, data_tag)
-        return True
-
-    async def learn(self) -> bool:
-        """Runs one learning step: first performs inference, then runs a backward pass (async).
-
-        Returns:
-            True if the learning step ran successfully, False otherwise.
-        """
-        if (self.proc_opts['optimizer'] is None
-                or self.proc_opts['losses'] is None
-                or len(self.proc_opts['losses']) == 0):
-            log.misc(f"Current processor has no learning skills (or learning options not specified)")
-            return False
-
-        # Inference first
-        if await self.process():
-
-            # Getting input data from the input stream
-            target_data = self.stdtar.get()
-
-            # Learning from the last performed inference and the current targets
-            try:
-                loss_values = self.proc.learn_backward(target_data)
-            except Exception as e:
-                log.error(f"Error while learning: {e}")
-                return False
-
-            # Printing
-            log.user(f"Losses: {loss_values}, Step: {self.get_action_step()}, Tags: {self.stdin.get_tag()}", rep=True)
-            return True
-        else:
-            return False
-
-    async def set_engaged_partner(self, agent: str | list[str] | set[str] | None, clear_found: bool = True) -> bool:
-        """Virtually forces the engagement with a single agent (or a group of agents), clearing all existing
-        engagements and results of previous find operations (async).
-
-        Args:
-            agent: The agent or the list of agents to engage (if None, we only clear the list of engaged partners).
-            clear_found: Clears results of previously run find operations (True by default).
-
-        Returns:
-            True all the times.
-        """
-        if clear_found:
-            self._found_agents.clear()
-        self._engaged_agents.clear()
-        if agent is not None:
-            if isinstance(agent, str):
-                agent = [agent]
-            for a in agent:
-                self._engaged_agents.add(a)
-        self._available = len(self._engaged_agents) == 0
-        return True
-
-    async def send_engagement(self) -> bool:
-        """Offer engagement to the agents whose identifiers are in self._found_agents (async).
-
-        Returns:
-            True if engagement requests were successfully sent to at least one found agent, False otherwise.
-        """
-        at_least_one_sent = False
-
-        if len(self._found_agents) > 0:
-            log.misc(f"Sending engagement request to {', '.join([x for x in self._found_agents])}")
-        my_role_str = self._node_profile.get_dynamic_profile()['connections']['role']
-        for found_agent in self._found_agents:  # The list of found agents will be cleared after this function
-            if await self.send(target=found_agent, action_name="get_engagement",
-                               action_kwargs={"sender_role": my_role_str}):
-                at_least_one_sent = True
-            else:
-                log.error(f"Unable to send engagement to {found_agent}")
-        return at_least_one_sent
-
-    async def get_engagement(self, acceptable_role: str | None = None, sender_role: str | None = None,
-                             interaction: Interaction | None = None) -> bool:
-        """Receive engagement from another agent whose authority is in the specified range (async).
-
-        Args:
-            acceptable_role: The role that the sender must have for engagement to be accepted. Defaults to None.
-            sender_role: The role of the agent sending the engagement request. Defaults to None.
-            interaction: The interaction triggered by the agent requesting engagement (automatically set).
-
-        Returns:
-            True if the engagement was successfully received and confirmed, False otherwise.
-        """
-        _requester = interaction.requester if interaction is not None else None
-        log.misc(
-            f"Getting engagement from {_requester}, whose role is {sender_role} (looking for {acceptable_role})")
-        if _requester not in self.world_agents and _requester not in self.world_masters:
-            log.error(f"Unknown agent: {_requester}")
-            return False
-
-        if sender_role is None:
-            log.error(f"Unknown role of {_requester}")
-            return False
-
-        if acceptable_role is None:
-            log.error(f"Invalid acceptable role: {acceptable_role}")
-            return False
-
-        # Confirming
-        if self._available:
-            acceptable_role_int = self.ROLE_STR_TO_BITS[acceptable_role]
-            if "~" not in acceptable_role:
-                sender_role_int = (self.ROLE_STR_TO_BITS[sender_role] >> 2) << 2
-            else:
-                sender_role_int = self.ROLE_STR_TO_BITS[sender_role]
-
-            if acceptable_role_int == sender_role_int:
-                if await self.send(target=_requester, action_name="got_engagement"):
-                    self._engaged_agents.add(_requester)
-
-                    # Marking this agent as not available since it engaged with another one
-                    self._available = False
-                    return True
-                else:
-                    log.error(f"Unable to confirm engagement to {_requester}")
-                    return False
-            else:
-                log.error(f"Cannot engage to {_requester}")
-                return False
-        else:
-            log.error(f"Cannot engage to {_requester}")
-            return False
-
-    async def got_engagement(self, interaction: Interaction | None = None) -> bool:
-        """Confirm an engagement (async).
-
-        Args:
-            interaction: The interaction triggered by the agent requesting engagement (automatically set).
-
-        Returns:
-            True if the engagement was successfully confirmed, False otherwise.
-        """
-        _requester = interaction.requester
-        log.misc(f"Confirming engagement with {_requester}")
-        if _requester in self._found_agents:
-            self._engaged_agents.add(_requester)
-
-            # Marking this agent as not available since it engaged with another one
-            self._available = False
-
-            # Removing the agent from the list of asked agents
-            self._found_agents.discard(_requester)
-            return True
-        else:
-            log.error(f"Unable to confirm engagement with {_requester}")
-            return False
-
-    async def send_disengagement(self, send_disconnection_too: bool = False) -> bool:
-        """Ask for disengagement (async).
-
-        Args:
-            send_disconnection_too: Whether to send a disconnect-suggestion together with the disengagement.
-
-        Returns:
-            True if disengagement requests were successfully sent to at least one engaged agent, False otherwise.
-        """
-        at_least_one_sent = False
-
-        if len(self._engaged_agents) > 0:
-            log.misc(f"Sending disengagement request to {', '.join([x for x in self._engaged_agents])}")
-        for agent in self._engaged_agents:
-            if await self.send(target=agent, action_name="get_disengagement",
-                               action_kwargs={"disconnect_too": send_disconnection_too}):
-                at_least_one_sent = True
-            else:
-                log.error(f"Unable to send disengagement to {agent}")
-
-        if at_least_one_sent:
-            self._engaged_agents.clear()  # There is no "got_disengagement"
-        return at_least_one_sent
-
-    async def get_disengagement(self, disconnect_too: bool = False, interaction: Interaction | None = None) -> bool:
-        """Get a disengagement request from an agent (async).
-
-        Args:
-            disconnect_too: Whether to disconnect the agent who sent the disengagement.
-            interaction: The interaction triggered by the agent requesting disengagement (automatically set).
-
-        Returns:
-            True if the disengagement request was successfully processed, False otherwise.
-        """
-        _requester = interaction.requester if interaction is not None else None
-        log.misc(f"Getting a disengagement request from {_requester}")
-        if _requester not in self.world_agents and _requester not in self.world_masters:
-            log.error(f"Unknown agent: {_requester}")
-            return False
-
-        if _requester not in self._engaged_agents:
-            log.error(f"Not previously engaged to {_requester}")
-            return False
-
-        self._engaged_agents.discard(_requester)  # Remove if present
-
-        if disconnect_too:
-            if interaction is not None:
-                interaction.send_status = False  # This will avoid sending back a confirmation for this interaction
-            await self._node_purge_fcn(_requester)
-
-        # Marking this agent as available if not engaged to any agent
-        self._available = len(self._engaged_agents) == 0
-        return True
-
-    async def disengage_all(self) -> bool:
-        """Disengage all the previously engaged agents (async).
-
-        Returns:
-            True if the disengagement procedure was successfully executed, False otherwise.
-        """
-        log.misc(f"Disengaging all agents")
-        self._engaged_agents = set()
-
-        # Marking this agent as available
-        self._available = True
-        return True
-
-    async def disconnect(self, agent: str) -> bool:
-        """Disconnects an agent (async).
-
-        Args:
-            agent: The peer ID of the agent to disconnect.
-
-        Returns:
-            Always True.
-        """
-        log.misc(f"Disconnecting agent: {agent}")
-        await self._node_purge_fcn(agent)  # This will also call remove_agent, that will call remove_streams
-        return True
-
-    async def disconnect_by_role(self, role: str | list[str], disengage_too: bool = False) -> bool:
-        """Disconnects from all agents that match a specified role (async).
-        It finds the agents and calls the node's purge function on each.
-
-        Args:
-            role: A string or list of strings representing the role(s) of agents to disconnect from.
-            disengage_too: Also forces the sending of a disengagement (before disconnecting - default False).
-
-        Returns:
-            Always True.
-        """
-        log.misc(f"Disconnecting agents with role: {role}")
-        if disengage_too:
-            await self.send_disengagement(send_disconnection_too=True)
-        if await self.find_agents(role):
-            found_agents = copy.deepcopy(self._found_agents)
-            for agent in found_agents:
-                await self._node_purge_fcn(agent)  # This will also call remove_agent, that will call remove_streams
-        return True
-
-    @action
-    async def disconnected(self, agent: str | None = None, handshake_completed: bool = False) -> bool:
-        """Checks if a specific set of agents (by ID or wildcard) are no longer connected to the agent.
-        It returns False if any of the specified agents are still connected (async).
-
-        Args:
-            agent: The ID of the agent or a wildcard to check.
-            handshake_completed: If True, only consider agents that have completed the handshake.
-
-        Returns:
-            True if all involved agents are disconnected, False otherwise.
-
-        """
-
-        # - if "agent" is a peer ID, the involved agents will be a list with one element.
-        # - if "agent" is a known wildcard, as "<valid_cmp>", then involved agents will be self._valid_cmp_agents
-        # - if "agent" is None, then the current agent in self._engaged_agents will be returned
-        involved_agents = self.__involved_agents(agent)
-        if len(involved_agents) == 0:
-            return False
-
-        log.misc(f"Checking if all these agents are not connected to me anymore: {involved_agents}")
-        all_disconnected = True
-        for agent in involved_agents:
-            if handshake_completed:
-                if agent in self.all_agents:
-                    all_disconnected = False
-                    break
-            else:
-                if agent in self.all_agents or self._node_conn.is_connected(agent):
-                    all_disconnected = False
-                    break
-        return all_disconnected
-
-    async def received_some_asked_data(self, processing_fcn: str | None = None) -> bool:
-        """Checks if any of the agents that were previously asked for data (e.g., via `ask_gen`) have sent a stream
-        sample back. Optionally, it can process the received data with a specified function (async).
-
-        Args:
-            processing_fcn: The name of a function to process the received data.
-
-        Returns:
-            True if at least one data sample was received, False otherwise.
-        """
-        _processing_fcn = None
-        if processing_fcn is not None:
-            if hasattr(self, processing_fcn):
-                _processing_fcn = getattr(self, processing_fcn)
-                if not callable(_processing_fcn):
-                    _processing_fcn = None
-            if _processing_fcn is None:
-                log.error(f"Processing function not found: {processing_fcn}")
-
-        got_something = False
-        sent = list(self.im.sent.values()) + list(self.im.sent_recently_completed)
-        for interaction in sent:
-            uuid = interaction.uuid
-            agents = interaction.target
-            for agent in agents:
-                net_hash_to_stream_dict = self.find_streams(agent, "processor", discard_owned=True)
-                for stream_dict in net_hash_to_stream_dict.values():
-                    for stream_obj in stream_dict.values():
-                        if not stream_obj.props.is_public():
-                            data = stream_obj.get("received_some_asked_data", uuid=uuid)
-                            data_tag = stream_obj.get_tag(uuid=uuid)
-
-                            if data is not None:
-                                if _processing_fcn is None:
-                                    return True
-                                else:
-                                    got_something = True
-                                    _processing_fcn(agent, stream_obj.props, data, data_tag)
-        return got_something
-
-    async def nop(self, message: str | None = None) -> bool:
-        """Do nothing (async).
-
-        Args:
-            message: An optional message to print. Defaults to None.
-
-        Returns:
-            Always True.
-        """
-        if message is not None:
-            log.misc(message)
-        return True
-
-    async def wait_for_actions(self, agent: str, from_state: str, to_state: str, wait: bool) -> bool:
-        """Lock or unlock every action between a pair of states in the state machine of a target agent (async).
-
-        Args:
-            agent: The ID of the agent to send the action locking request to, or a valid wildcard like "<valid_cmp>"
-                for a set of agents (if None the agents in self._engaged_agents will be considered).
-            from_state: The starting state of the actions to be locked/unlocked.
-            to_state: The ending state of the actions to be locked/unlocked.
-            wait: A boolean indicating whether to wait for the actions to complete (wait == !ready).
-
-        Returns:
-            True if the request was successfully sent to at least one involved agent, False otherwise.
-        """
-
-        # - if "agent" is a peer ID, the involved agents will be a list with one element.
-        # - if "agent" is a known wildcard, as "<valid_cmp>", then involved agents will be self._valid_cmp_agents
-        # - if "agent" is None, then the current agent in self._engaged_agents will be returned
-        involved_agents = self.__involved_agents(agent)
-        if len(involved_agents) == 0:
-            return False
-
-        at_least_one_completed = False
-        for _agent in involved_agents:
-            log.misc(f"Telling {_agent} to alter his HSM {from_state} -> {to_state} (wait: {wait}) "
-                     f"by calling method 'wait_for_actions' on it")
-            ret = await self._node_conn.send(_agent, channel_trail=None,
-                                             content={'method': 'wait_for_actions',
-                                                      'args': (from_state, to_state, wait)},
-                                             content_type=Msg.HSM)
-            at_least_one_completed = at_least_one_completed or ret
-        return at_least_one_completed
-
-    async def connected(self, agent: str | list[str] | None = None, handshake_completed: bool = False) -> bool:
-        """Checks if an agent is connected to us or not.
-
-        Args:
-            agent: The agent to check (or None if there are other already set engaged agents).
-            handshake_completed: If True, only consider agents that have completed the handshake.
-
-        Returns:
-            True if all the requested agents are indeed connected.
-        """
-
-        # - if "agent" is a peer ID, the involved agents will be a list with one element.
-        # - if "agent" is a known wildcard, as "<valid_cmp>", then involved agents will be self._valid_cmp_agents
-        # - if "agent" is None, then the current agent in self._engaged_agents will be returned
-        involved_agents = self.__involved_agents(agent)
-        if len(involved_agents) == 0:
-            return False
-
-        log.misc(f"Checking if all these agents are connected to me now: {involved_agents}")
-
-        for agent in involved_agents:
-            if handshake_completed:
-                if agent not in self.all_agents:
-                    return False
-            else:
-                if not self._node_conn.is_connected(agent):
-                    return False
-        return True
-
-    async def all_asked_finished(self) -> bool:
-        """Checks if all agents that were previously asked to perform a task (e.g., generate or learn) have sent a
-        completion confirmation. It compares the set of agents asked with the set of agents that have completed
-        the task (async).
-
-        Returns:
-            True if all agents are done, False otherwise.
-        """
-        return self._agents_who_were_asked == self._agents_who_completed_what_they_were_asked
-
-    async def all_engagements_completed(self) -> bool:
-        """Checks if all engagement requests that were sent have been confirmed. It returns True if there are no agents
-        remaining in the `_found_agents` list, implying all have been engaged with or discarded (async).
-
-        Returns:
-            True if all engagements are complete, False otherwise.
-
-        """
-        return len(self._found_agents) == 0
-
-    async def agents_are_waiting(self) -> bool:
-        """Checks if there are any agents who have connected but have not yet been fully processed or added to the
-        agent's known lists. This indicates that new agents are waiting to be managed (async).
-
-        Returns:
-            True if there are waiting agents, False otherwise.
-        """
-        log.misc(f"Current set of {len(self._node_agents_waiting)} connected peer IDs non managed yet: "
-                 f"{list(self._node_agents_waiting.keys())}")
-        for found_agent in self._found_agents:
-            if found_agent in self._node_agents_waiting:
-                return True
-        return False
-
-    async def ask_subscribe(self, agent: str | None = None,
-                            stream_hashes: list[str] | None = None, unsubscribe: bool = False) -> bool:
-        """Requests a remote agent or a group of agents to subscribe to or unsubscribe from a list of specified PubSub
-        streams. It normalizes the stream hashes and sends an action request containing the stream properties (async).
-
-        Args:
-            agent: The target agent's ID or a wildcard.
-            stream_hashes: A list of streams to subscribe to or unsubscribe from.
-            unsubscribe: A boolean to indicate if it's an unsubscription request.
-
-        Returns:
-            True if the request was sent to at least one agent, False otherwise.
-        """
-
-        # - if "agent" is a peer ID, the involved agents will be a list with one element.
-        # - if "agent" is a known wildcard, as "<valid_cmp>", then involved agents will be self._valid_cmp_agents
-        # - if "agent" is None, then the current agent in self._engaged_agents will be returned
-        involved_agents = self.__involved_agents(agent)
-        log.debug(f"[ask_subscribe] Involved_agents: {involved_agents}")
-
-        if len(involved_agents) == 0:
-            log.debug(f"[ask_subscribe] No involved agents, action ask_gen returns False")
-            return False
-
-        # Create a copy of the stream hashes, normalizing them in the appropriate way
-        stream_hashes_copy = self.__normalize_user_hash(stream_hashes)
-
-        # Getting properties
-        stream_owners = []
-        stream_props = []
-        for i in range(len(stream_hashes_copy)):
-            stream_dict = self.known_streams[stream_hashes_copy[i]]
-            peer_id = DataProps.peer_id_from_net_hash(stream_hashes_copy[i])
-            for name, stream_obj in stream_dict.items():
-                stream_owners.append(peer_id)
-                stream_props.append(json.dumps(stream_obj.props.to_dict()))
-
-        what = "subscribe to" if not unsubscribe else "unsubscribe from "
-        log.misc(f"Asking {', '.join(involved_agents)} to {what} {stream_hashes}")
-        self._agents_who_completed_what_they_were_asked = set()
-        self._agents_who_were_asked = set()
-        correctly_asked = []
-        for agent in involved_agents:
-            if await self.send(target=agent, action_name="do_subscribe", action_kwargs={"stream_owners": stream_owners,
-                                                                                        "stream_props": stream_props,
-                                                                                        "unsubscribe": unsubscribe}):
-                self._agents_who_were_asked.add(agent)
-                ret = True
-            else:
-                what = "subscribe" if not unsubscribe else "unsubscribe"
-                log.error(f"Unable to ask {agent} to {what}")
-                ret = False
-            log.debug(f"[ask_subscribe] Asking {agent} returned {ret}")
-            if ret:
-                correctly_asked.append(agent)
-
-        log.debug(f"[ask_subscribe] Overall, the action ask_subscribe (unsubscribe: {unsubscribe})"
-                  f" will return {len(correctly_asked) > 0}")
-        return len(correctly_asked) > 0
-
-    async def do_subscribe(self, stream_owners: list[str] | None = None, stream_props: list[str] | None = None,
-                           unsubscribe: bool = False, interaction: Interaction | None = None) -> bool:
-        """Executes a subscription or unsubscription request received from another agent. It processes the stream
-        properties, adds or removes the streams from the agent's known streams, and handles the underlying PubSub topic
-        subscriptions (async).
-
-        Args:
-            stream_owners: A list of peer IDs who own the streams.
-            stream_props: A list of JSON-serialized stream properties.
-            unsubscribe: A boolean to indicate unsubscription.
-            interaction: The interaction that triggered this subscription.
-
-        Returns:
-            True if the action is successful, False otherwise.
-        """
-        log.debug(f"[do_subscribe] unsubscribe: {unsubscribe}, "
-                  f"stream_owners: {stream_owners}, stream_props: ... ({len(stream_props)} props)")
-
-        _requester = interaction.requester
-        if _requester is not None:
-            if isinstance(_requester, list):
-                for _r in _requester:
-                    if self.behaving_in_world():
-                        if _r not in self.world_agents and _requester not in self.world_masters:
-                            log.error(f"Unknown agent: {_r} in list {_requester} (fully skipping do_subscribe)")
-                            return False
-                    else:
-                        if _r not in self.public_agents:
-                            log.error(f"Unknown agent: {_r} in list {_requester} (fully skipping do_subscribe)")
-                            return False
-            else:
-                if self.behaving_in_world():
-                    if _requester not in self.world_agents and _requester not in self.world_masters:
-                        log.error(f"Unknown agent: {_requester} (fully skipping do_subscribe)")
-                        return False
-                else:
-                    if _requester not in self.public_agents:
-                        log.error(f"Unknown agent: {_requester} (fully skipping do_subscribe)")
-                        return False
-        else:
-            log.error("Unknown requester (None)")
-            return False
-
-        # Building properties
-        props_dicts = []
-        props_objs = []
-        for i in range(len(stream_props)):
-            p_dict = json.loads(stream_props[i])
-            props = DataProps.from_dict(p_dict)
-            if props.is_pubsub():
-                props_dicts.append(p_dict)
-                props_objs.append(props)
-            else:
-                log.error(f"Expecting a pubsub stream, got a stream named {props.get_name()} "
-                          f"(group is {props.get_group()}), which is not pubsub")
-                return False
-
-        # Adding new streams and subscribing (if compatible with our processor)
-        for stream_owner, prop_dict, prop_obj in zip(stream_owners, props_dicts, props_objs):
-            if not unsubscribe:
-                if not (await self.add_compatible_streams(peer_id=stream_owner, streams_in_profile=[prop_dict],
-                                                          buffered=False, public=False)):
-                    log.misc(f"Unable to add a pubsub stream ({prop_obj.get_name()}) from agent {stream_owner}: "
-                             f"no compatible streams were found")
-            else:
-                if not (await self.remove_streams(peer_id=stream_owner, name=prop_obj.get_name())):
-                    log.misc(f"Unable to unsubscribe from pubsub stream ({prop_obj.get_name()}) "
-                             f"of agent {stream_owner}")
-        return True
-
-    async def record(self, net_hash: str, samples: int = 100) -> bool:
-        """Records data from a specified stream into a new, owned `BufferedDataStream`. This is a multistep action
-        that captures a sequence of samples over time and then adds the new recorded stream to the agent's profile
-        (async).
-
-        Args:
-            net_hash: The hash of the stream to record.
-            samples: The number of samples to record.
-
-        Returns:
-            True if a sample was successfully recorded, False otherwise.
-        """
-        assert samples is not None, "Missing basic action information"
-
-        k = self.get_action_step()
-
-        log.misc(f"Recording stream {net_hash}")
-
-        if k == 0:
-
-            # Getting stream(s)
-            _net_hash = self.user_stream_hash_to_net_hash(net_hash)  # In case of ambiguity, it yields the first one
-            if _net_hash is None:
-                log.error(f"Unknown stream {net_hash}")
-                return False
-            else:
-                net_hash = _net_hash
-
-            stream_src_dict = self.known_streams[net_hash]
-
-            # Creating the new recorded stream (same props of the recorded one, just owned now)
-            stream_dest_dict = {}
-            for name, stream_obj in stream_src_dict.items():
-                props = stream_obj.props.clone()
-                props.set_group("recorded" + str(self._last_recorded_stream_num))
-                stream_dest_dict[name] = BufferedDataStream(props=props)
-            self._last_recorded_stream_dict = stream_dest_dict
-            self._last_recording_stream_dict = stream_src_dict
-
-        else:
-
-            # Retrieving the stream(s)
-            stream_dest_dict = self._last_recorded_stream_dict
-            stream_src_dict = self._last_recording_stream_dict
-
-        # Recording
-        for name, stream_obj in stream_src_dict.items():
-            stream_obj: Stream
-            x = stream_obj.get(requested_by="record")
-            if x is None:
-                log.debug("[record] data sample missing, returning False")
-                return False
-            else:
-                log.debug(f"[record] data_tag: {stream_obj.get_tag()}, data_uuid: {None}")
-            stream_dest_dict[name].set(x, k)  # Saving specific data tags 0, 1, 2, ... #record_steps - 1
-
-        # Updating profile
-        if self.is_last_action_step():
-            log.debug("[record] last action step detected, finishing")
-
-            # Dummy get to ensure that the next get will return None (i.e., we only PubSub if somebody restarts this)
-            for stream_obj in stream_dest_dict.values():
-                stream_obj.get(requested_by="send_stream_samples")
-
-            self.add_streams(list(stream_dest_dict.values()), owned=True)
-            self.update_streams_in_profile()
-            await self.subscribe_to_pubsub_owned_streams()
-            await self.send_profile_to_all()
-
-            # New recorded stream
-            self._last_recorded_stream_num += 1
-
-        return True
-
-    async def connect_by_role(self, role: str | list[str], filter_fcn: str | None = None) -> bool:
-        """Finds and attempts to connect with agents whose profiles match a specific role. It can be optionally
-        filtered by a custom function. It returns True if at least one valid agent is found (async).
-
-        Args:
-            role: The role or list of roles to search for.
-            filter_fcn: The name of an optional filter function.
-
-        Returns:
-            True if at least one agent is found and a connection request is made, False otherwise.
-        """
-        log.misc(f"Asking to get in touch with all agents whose role is {role}")
-
-        if self.get_action_step() == 0:
-            role_list = role if isinstance(role, list) else [role]
-            self._found_agents.clear()
-            at_least_one_is_valid = False
-
-            for role in role_list:
-                role = self.ROLE_STR_TO_BITS[role]
-
-                found_addresses1, found_peer_ids1 = self._node_conn.find_addrs_by_role(Agent.ROLE_WORLD_MASTER | role,
-                                                                                       return_peer_ids_too=True)
-                found_addresses2, found_peer_ids2 = self._node_conn.find_addrs_by_role(Agent.ROLE_WORLD_AGENT | role,
-                                                                                       return_peer_ids_too=True)
-                found_addresses = found_addresses1 + found_addresses2
-                found_peer_ids = found_peer_ids1 + found_peer_ids2
-
-                if filter_fcn is not None:
-                    if hasattr(self, filter_fcn):
-                        filter_fcn = getattr(self, filter_fcn)
-                        if callable(filter_fcn):
-                            found_addresses, found_peer_ids = filter_fcn(found_addresses, found_peer_ids)
-                    else:
-                        log.error(f"Filter function not found: {filter_fcn}")
-
-                log.misc(f"Found addresses ({len(found_addresses)}) with role: {role}")
-                for f_addr, f_peer_id in zip(found_addresses, found_peer_ids):
-                    if not self._node_conn.is_connected(f_peer_id):
-                        log.misc(f"Asking to get in touch with {f_addr}...")
-                        peer_id = await self._node_ask_to_get_in_touch_fcn(addresses=f_addr, public=False)
-                    else:
-                        log.misc(f"Not-asking to get in touch with {f_addr}, "
-                                 f"since I am already connected to the corresponding peer...")
-                        peer_id = f_peer_id
-                    if peer_id is not None:
-                        at_least_one_is_valid = True
-                        self._found_agents.add(peer_id)
-                    log.misc(f"...returned {peer_id}")
-            return at_least_one_is_valid
-        else:
-            return True
-
-    async def find_agents(self, role: str | list[str], engage: bool = False, handshake_completed: bool = False) -> bool:
-        """Locally searches through the agent's known peers (world and public agents) to find agents with a specific
-        role. It populates the `_found_agents` set with the peer IDs of matching agents (async).
-
-        Args:
-            role: The role or list of roles to search for.
-            handshake_completed: If True, only consider agents that have completed the handshake.
-            engage: If you want to force the found agents to be the ones that you are engaged with.
-
-        Returns:
-            True if at least one agent is found, False otherwise.
-        """
-        log.misc(f"Finding an available agent whose role is {role}")
-        role_list = role if isinstance(role, list) else [role]
-        self._found_agents = set()
-
-        for role_str in role_list:
-            role_int = self.ROLE_STR_TO_BITS[role_str]
-
-            _, found_peer_ids1 = self._node_conn.find_addrs_by_role(Agent.ROLE_WORLD_MASTER | role_int,
-                                                                    return_peer_ids_too=True)
-            _, found_peer_ids2 = self._node_conn.find_addrs_by_role(Agent.ROLE_WORLD_AGENT | role_int,
-                                                                    return_peer_ids_too=True)
-            found_peer_ids = found_peer_ids1 + found_peer_ids2
-
-            for peer_id in found_peer_ids:
-                if not handshake_completed or peer_id in self.all_agents:
-                    self._found_agents.add(peer_id)  # Peer IDs here
-
-        log.debug(f"[find_agents] Found these agents: {self._found_agents}")
-        if engage:
-            self._engaged_agents = copy.deepcopy(self._found_agents)
-        return len(self._found_agents) > 0
-
-    async def next_pref_stream(self) -> bool:
-        """Moves the internal pointer to the next stream in the list of preferred streams, which is often used for
-        playlist-like operations. It wraps around to the beginning if it reaches the end (async).
-
-        Returns:
-            True if the move is successful, False if the list is empty.
-        """
-        if len(self._preferred_streams) == 0:
-            log.error(f"Cannot move to the next stream because the list of preferred streams is empty")
-            return False
-
-        self._cur_preferred_stream = (self._cur_preferred_stream + 1) % len(self._preferred_streams)
-        suffix = ", warning: restarted" if self._cur_preferred_stream == 0 else ""
-        log.misc(
-            f"Moving to the next preferred stream ({self._preferred_streams[self._cur_preferred_stream]}){suffix}")
-        return True
-
-    async def first_pref_stream(self) -> bool:
-        """Resets the internal pointer to the first stream in the list of preferred streams. This is useful for
-        restarting a playback or processing loop (async).
-
-        Returns:
-            True if the move is successful, False if the list is empty.
-        """
-        if len(self._preferred_streams) == 0:
-            log.error(f"Cannot move to the first stream because the list of preferred streams is empty")
-            return False
-
-        self._cur_preferred_stream = 0
-        log.misc(f"Moving to the first preferred stream ({self._preferred_streams[self._cur_preferred_stream]})")
-        return True
-
-    async def check_pref_stream(self, what: str = "last") -> bool:
-        """Checks the position of the current preferred stream within the list. It can check if it's the first, last,
-        or if it has completed a full round, among other checks (async).
-
-        Args:
-            what: A string specifying the type of check to perform (e.g., 'first', 'last', 'last_round').
-
-        Returns:
-            True if the condition is met, False otherwise.
-        """
-        valid = ['first', 'last', 'not_first', 'not_last', 'last_round', 'not_last_round', 'last_song', 'not_last_song']
-        assert what in valid, f"The what argument can only be one of {valid}"
-
-        log.misc(f"Checking if the current preferred playlist item "
-                 f"(id: {self._cur_preferred_stream}) is the '{what}' one")
-        if what == "first":
-            return self._cur_preferred_stream == 0
-        elif what == "last":
-            return self._cur_preferred_stream == len(self._preferred_streams) - 1
-        elif what == "not_first":
-            return self._cur_preferred_stream != 0
-        elif what == "not_last":
-            return self._cur_preferred_stream != len(self._preferred_streams) - 1
-        elif what == "last_round":
-            return (self._cur_preferred_stream + len(self._preferred_streams) // self._repeat >=
-                    len(self._preferred_streams))
-        elif what == "not_last_round":
-            return (self._cur_preferred_stream + len(self._preferred_streams) // self._repeat <
-                    len(self._preferred_streams))
-        elif what == "last_song":
-            num_streams_in_playlist = len(self._preferred_streams) // self._repeat
-            return (self._cur_preferred_stream + 1) % num_streams_in_playlist == 0
-        elif what == "not_last_song":
-            num_streams_in_playlist = len(self._preferred_streams) // self._repeat
-            return (self._cur_preferred_stream + 1) % num_streams_in_playlist != 0
-
-    async def set_pref_streams(self, net_hashes: list[str], repeat: int = 1) -> bool:
-        """Fills the agent's list of preferred streams (a playlist). It can repeat the playlist a specified number of
-        times and resolves user-provided stream hashes to their full network hashes (async).
-
-        Args:
-            net_hashes: A list of stream hashes to add to the playlist.
-            repeat: The number of times to repeat the playlist.
-
-        Returns:
-            Always True.
-        """
-        log.misc(f"Setting up a list of {len(net_hashes)} preferred streams")
-        self._cur_preferred_stream = 0
-        self._preferred_streams = []
-        self._repeat = repeat
-        for i in range(0, self._repeat):
-            for net_hash in net_hashes:
-
-                # We are tolerating both peer_id:name_or_group and also peer_id::ps:name_or_group
-                components = net_hash.split(":")
-                peer_id = components[0]
-                name_or_group = components[-1]
-                net_hash_to_streams = self.find_streams(peer_id=peer_id, name_or_group=name_or_group)
-                for _net_hash in net_hash_to_streams.keys():
-                    self._preferred_streams.append(_net_hash)
-
-        return True
-
-    async def evaluate(self, stream_hash: str, how: str, steps: int = 100, re_offset: bool = False) -> bool:
-        """Evaluates the performance of agents that have completed a generation task. It compares the generated data
-        from each agent with a local stream (which can be a ground truth or reference stream) using a specified
-        comparison method (async).
-
-        Args:
-            stream_hash: The hash of the local stream to use for comparison.
-            how: The name of the comparison method to use.
-            steps: The number of steps to perform the evaluation.
-            re_offset: A boolean to indicate whether to re-offset the streams.
-
-        Returns:
-            True if the evaluation is successful, False otherwise.
-        """
-        if not self.buffer_generated_by_others:
-            log.error("Cannot evaluate if not buffering data generated by others")
-            return False
-
-        if stream_hash == "<playlist>":
-            net_hash = self._preferred_streams[self._cur_preferred_stream]
-        else:
-            net_hash = self.user_stream_hash_to_net_hash(stream_hash)
-
-        self._eval_results = {}
-        log.debug(f"[eval] Agents returning streams: {self._agents_who_completed_what_they_were_asked}")
-        for peer_id in self._agents_who_completed_what_they_were_asked:
-            if peer_id not in self.last_buffered_peer_id_to_info:
-                log.error(f"Missing buffered stream for {peer_id}, cannot evaluate!")
-                continue
-            received_net_hash = self.last_buffered_peer_id_to_info[peer_id]["net_hash"]
-            log.misc(f"Comparing {net_hash} with {received_net_hash}")
-            eval_result, ret = self.__compare_streams(net_hash_a=net_hash,
-                                                      net_hash_b=received_net_hash,
-                                                      how=how, steps=steps, re_offset=re_offset)
-            log.misc(f"Result of the comparison: {eval_result}")
-            if not ret:
-                return False
-            else:
-                peer_id = DataProps.peer_id_from_net_hash(received_net_hash)
-                self._eval_results[peer_id] = eval_result
-
-        return True
-
-    async def compare_eval(self, cmp: str, thres: float, good_if_true: bool = True) -> bool:
-        """Compares the results of a previous evaluation to a given threshold or finds the best result among all
-        agents. It can check for minimum, maximum, or simple threshold-based comparisons, and it populates a list of
-        'valid' agents that passed the comparison (async).
-
-        Args:
-            cmp: The comparison operator (e.g., '<', '>', 'min').
-            thres: The threshold value for comparison.
-            good_if_true: A boolean to invert the pass/fail logic.
-
-        Returns:
-            True if at least one agent passed the comparison, False otherwise.
-        """
-        assert cmp in ["<", ">", ">=", "<=", "min", "max"], f"Invalid comparison operator: {cmp}"
-        assert thres >= 0. or cmp in ["min", "max"], f"Invalid evaluation threshold: {thres} (it must be in >= 0.)"
-
-        self._valid_cmp_agents = set()
-        msgs = []
-        best_so_far = -1
-
-        min_or_max = None
-        leq_or_geq = None
-        if cmp in ["min", "max"]:
-            min_or_max = "minimum" if cmp == "min" else "maximum"
-            leq_or_geq = "<=" if cmp == "min" else ">="
-
-        if len(self._eval_results) == 0:
-            log.user("No results to evaluate!")
-
-        for agent_peer_id, eval_result in self._eval_results.items():
-            if cmp not in ["min", "max"]:
-                log.misc(f"Checking if result {eval_result} {cmp} {thres}, for agent {agent_peer_id}")
-            else:
-                if thres >= 0:
-                    log.misc(f"Checking if result {eval_result} is the {min_or_max} so far, "
-                             f"only if {leq_or_geq} {thres}, for agent {agent_peer_id}")
-                else:
-                    log.misc(
-                        f"Checking if result {eval_result} is the {min_or_max} so far, for agent {agent_peer_id}")
-
-            if eval_result < 0.:
-                log.user(f"Invalid evaluation result: {eval_result}")
-                return False
-
-            owner_account = self.all_agents[agent_peer_id].get_static_profile()['email']
-            agent_name = self.all_agents[agent_peer_id].get_static_profile()['node_name']
-
-            if cmp != "min" and cmp != "max":
-                outcome = False
-                if cmp == "<" and eval_result < thres:
-                    outcome = True
-                elif cmp == "<=" and eval_result <= thres:
-                    outcome = True
-                elif cmp == ">" and eval_result > thres:
-                    outcome = True
-                elif cmp == ">=" and eval_result >= thres:
-                    outcome = True
-
-                if cmp[0] == "<" or cmp[0] == "<=":
-                    alias = 'error level' if good_if_true else 'mark'
-                else:
-                    alias = 'mark' if good_if_true else 'error level'
-
-                if good_if_true:
-                    if outcome:
-                        msgs.append(f"Agent {owner_account}/{agent_name} passed with {alias} {eval_result}/{thres}")
-                        self._valid_cmp_agents.add(agent_peer_id)
-                    else:
-                        msgs.append(f"Agent {owner_account}/{agent_name} did not pass, {alias} {eval_result}/{thres}")
-                else:
-                    if outcome:
-                        msgs.append(f"Agent {owner_account}/{agent_name} did not pass, {alias} {eval_result}/{thres}")
-                    else:
-                        msgs.append(f"Agent {owner_account}/{agent_name} passed with {alias} {eval_result}/{thres}")
-                        self._valid_cmp_agents.add(agent_peer_id)
-            else:
-                if ((cmp == "min" and (thres < 0 or eval_result <= thres) and
-                     (eval_result < best_so_far or best_so_far < 0)) or
-                        (cmp == "max" and (thres < 0 or eval_result >= thres) and
-                         (eval_result > best_so_far or best_so_far < 0))):
-                    best_so_far = eval_result
-                    self._valid_cmp_agents = {agent_peer_id}
-                    msgs = [f"The best agent is {owner_account}/{agent_name}"]
-                else:
-                    msgs = [f"No best agent found for the considered threshold ({thres})"]
-
-        for msg in msgs:
-            log.user(msg)
-
-        if len(self._valid_cmp_agents) == 0:
-
-            # # cheating (hack):
-            # self._valid_cmp_agents.append(agent_peer_id)
-            # log.misc(", ".join(msgs))
-            # return True
-            return False
-        else:
-            return True
 
     def collect_and_store_own_stats(self) -> None:
         """Collects this agent's own stats and pushes them to the stats recorder."""
@@ -1372,6 +270,1103 @@ class Agent(AgentBasics):
                                            content=list_of_badge_dictionaries,
                                            content_type=Msg.BADGE_SUGGESTIONS)):
             log.error("Failed to send badge suggestions to the world")
+            return False
+        else:
+            return True
+
+    def remove_peer_from_agent_status_attrs(self, peer_id: str) -> None:
+        """Removes a peer from all agent-level status tracking sets (overrides parent) (async).
+
+        Args:
+            peer_id: The peer ID to remove from status tracking structures.
+        """
+        super().remove_peer_from_agent_status_attrs(peer_id)
+        self._available = len(self._engaged_agents) == 0
+
+    def reset_agent_status_attrs(self) -> None:
+        """Resets all agent-level status attributes to their initial values (overrides parent)."""
+        super().reset_agent_status_attrs()  # this sets status vars to [], {}, 0, 0., False, in function of their type
+        self._available = True
+        self._repeat = 1
+        self._last_recorded_stream_num = 1
+
+    async def send(self, interaction: Interaction | None = None,
+                   action_name: str | None = None,
+                   target: str | None = None,
+                   action_kwargs: dict | None = None,
+                   streams: tuple[list[str], int] | list[str] | None = None,
+                   data_samples: list[str | Image | torch.Tensor] | None = None,
+                   num_steps: int = -1,
+                   max_time: float = -1.,
+                   from_state: str | None = None,
+                   to_state: str | None = None,
+                   uuid: str | None = "random") -> 'Interaction | None':
+        """Send an interaction request to one or more target agents (async).
+
+        Accepts either a pre-built :class:`Interaction` object *or* raw arguments from which one will be created.
+
+        Args:
+            interaction: A pre-built Interaction.
+            action_name: The action name (str) if building one from raw args.
+                Ignored when a pre-built Interaction is provided.
+            target: Peer ID (or wildcard such as ``"<valid_cmp>"``) of the target
+                agent. Ignored when a pre-built Interaction is provided.
+            action_kwargs: Action arguments dict.  Ignored when a pre-built Interaction
+                is provided.
+            streams: List of ``(stream_user_hash, num_samples)`` tuples (or just stream_user_hash is num_samples = 1).
+                Ignored when a pre-built Interaction is provided.
+            data_samples: List of actual data samples. Ignored when a pre-built Interaction is provided.
+            num_steps: Number of steps the interaction spans (used when building from raw args).
+                Ignored when a pre-built Interaction is provided.
+            max_time: Maximum time for the interaction. Ignored when a pre-built Interaction is provided.
+            from_state: Optional source state. Ignored when a pre-built Interaction provided.
+            to_state: Optional destination state. Ignored when a pre-built Interaction provided.
+            uuid: Optional UUID of the interaction. Ignored when a pre-built Interaction is provided.
+
+        Returns:
+            The Interaction on success, ``None`` on failure.
+        """
+        # Build Interaction from raw args if needed
+        if interaction is None:
+            _, private_peer_id = self.get_peer_ids()
+            interaction = Interaction(action_name=action_name, action_kwargs=action_kwargs,
+                                      streams=streams, data_samples=data_samples,
+                                      num_steps=num_steps,
+                                      requester=private_peer_id, target=target,
+                                      from_state=from_state, to_state=to_state,
+                                      timeout=max_time, uuid=uuid)
+        else:
+            # Ensure requester is set
+            if interaction.requester is None:
+                public_peer_id, private_peer_id = self.get_peer_ids()
+                interaction.requester = private_peer_id if self.behaving_in_world() else public_peer_id
+
+        # Resolve target agent(s)
+        involved_agents = self.__involved_agents(interaction.target)
+        if len(involved_agents) == 0:
+            return None
+
+        # Build the content for the interaction message
+        content = interaction.to_dict()
+        at_least_one_completed = False
+        correctly_contacted = []
+        for _peer_id in involved_agents:
+            ret = await self._node_conn.send(_peer_id, channel_trail=None,
+                                             content=content, content_type=Msg.INTERACTION)
+            if ret:
+                correctly_contacted.append(_peer_id)
+                at_least_one_completed = at_least_one_completed or ret
+                log.debug(f"[send] Sent interaction {interaction.uuid} "
+                          f"(action={interaction.action_name}) to {_peer_id}, result={ret}")
+
+        if at_least_one_completed:
+
+            # Updating targets with the list of actually contacted agents
+            interaction.target = correctly_contacted
+
+            # Register with the Interaction Manager
+            if not self.im.register_sent(interaction):
+                return None
+            else:
+                return interaction
+        else:
+            return None
+
+    @action
+    async def process(self) -> bool:
+        """Runs one inference step: reads from stdin, calls the processor, and writes to stdout (async).
+
+        Returns:
+            True if the step ran successfully, False otherwise.
+        """
+
+        # Getting input data from the input stream
+        input_data = self.stdin.get()
+
+        # Getting data tag
+        data_tag = self.stdin.get_tag()
+
+        # Passing input data to the processor and getting output back
+        if input_data is None:
+            return False
+
+        # Customizable input hook
+        try:
+            input_data = self.hook_proc_tweak_inputs(input_data)
+        except Exception as e:
+            log.error(f"Error tweaking the processor inputs: {e}")
+            return False
+
+        # Processing data
+        try:
+            output_data = self.proc(*input_data)
+        except Exception as e:
+            log.error(f"Error running the processor: {e}")
+            return False
+
+        # Customizable output hook
+        try:
+            output_data = self.hook_proc_tweak_outputs(output_data)
+        except Exception as e:
+            log.error(f"Error tweaking the processor outputs: {e}")
+            return False
+
+        # Pushing output data to the output stream
+        self.stdout.set(output_data, data_tag)
+        return True
+
+    @action
+    async def learn(self) -> bool:
+        """Runs one learning step: first performs inference, then runs a backward pass (async).
+
+        Returns:
+            True if the learning step ran successfully, False otherwise.
+        """
+        if (self.proc_opts['optimizer'] is None
+                or self.proc_opts['losses'] is None
+                or len(self.proc_opts['losses']) == 0):
+            log.misc(f"Current processor has no learning skills (or learning options not specified)")
+            return False
+
+        # Inference first
+        if await self.process():
+
+            # Getting input data from the input stream
+            target_data = self.stdtar.get()
+
+            # Learning from the last performed inference and the current targets
+            try:
+                loss_values = self.proc.learn_backward(target_data)
+            except Exception as e:
+                log.error(f"Error while learning: {e}")
+                return False
+
+            # Printing
+            log.user(f"Losses: {loss_values}, Step: {self.get_action_step()}, Tags: {self.stdin.get_tag()}", rep=True)
+            return True
+        else:
+            return False
+
+    @action
+    async def set_engaged_partner(self, agent: str | list[str] | set[str] | None, clear_found: bool = True) -> bool:
+        """Virtually forces the engagement with a single agent (or a group of agents), clearing all existing
+        engagements and results of previous find operations (async).
+
+        Args:
+            agent: The agent or the list of agents to engage (if None, we only clear the list of engaged partners).
+            clear_found: Clears results of previously run find operations (True by default).
+
+        Returns:
+            True all the times.
+        """
+        if clear_found:
+            self._found_agents.clear()
+        self._engaged_agents.clear()
+        if agent is not None:
+            if isinstance(agent, str):
+                agent = [agent]
+            for a in agent:
+                self._engaged_agents.add(a)
+        self._available = len(self._engaged_agents) == 0
+        return True
+
+    @action
+    async def send_engagement(self) -> bool:
+        """Offer engagement to the agents whose identifiers are in self._found_agents (async).
+
+        Returns:
+            True if engagement requests were successfully sent to at least one found agent, False otherwise.
+        """
+        at_least_one_sent = False
+
+        if len(self._found_agents) > 0:
+            log.misc(f"Sending engagement request to {', '.join([x for x in self._found_agents])}")
+        my_role_str = self._node_profile.get_dynamic_profile()['connections']['role']
+        for found_agent in self._found_agents:  # The list of found agents will be cleared after this function
+            if await self.send(target=found_agent, action_name="get_engagement",
+                               action_kwargs={"sender_role": my_role_str}):
+                at_least_one_sent = True
+            else:
+                log.error(f"Unable to send engagement to {found_agent}")
+        return at_least_one_sent
+
+    @action
+    async def get_engagement(self, acceptable_role: str | None = None, sender_role: str | None = None,
+                             interaction: Interaction | None = None) -> bool:
+        """Receive engagement from another agent whose authority is in the specified range (async).
+
+        Args:
+            acceptable_role: The role that the sender must have for engagement to be accepted. Defaults to None.
+            sender_role: The role of the agent sending the engagement request. Defaults to None.
+            interaction: The interaction triggered by the agent requesting engagement (automatically set).
+
+        Returns:
+            True if the engagement was successfully received and confirmed, False otherwise.
+        """
+        _requester = interaction.requester if interaction is not None else None
+        log.misc(
+            f"Getting engagement from {_requester}, whose role is {sender_role} (looking for {acceptable_role})")
+        if _requester not in self.world_agents and _requester not in self.world_masters:
+            log.error(f"Unknown agent: {_requester}")
+            return False
+
+        if sender_role is None:
+            log.error(f"Unknown role of {_requester}")
+            return False
+
+        if acceptable_role is None:
+            log.error(f"Invalid acceptable role: {acceptable_role}")
+            return False
+
+        # Confirming
+        if self._available:
+            acceptable_role_int = self.ROLE_STR_TO_BITS[acceptable_role]
+            if "~" not in acceptable_role:
+                sender_role_int = (self.ROLE_STR_TO_BITS[sender_role] >> 2) << 2
+            else:
+                sender_role_int = self.ROLE_STR_TO_BITS[sender_role]
+
+            if acceptable_role_int == sender_role_int:
+                if await self.send(target=_requester, action_name="got_engagement"):
+                    self._engaged_agents.add(_requester)
+
+                    # Marking this agent as not available since it engaged with another one
+                    self._available = False
+                    return True
+                else:
+                    log.error(f"Unable to confirm engagement to {_requester}")
+                    return False
+            else:
+                log.error(f"Cannot engage to {_requester}")
+                return False
+        else:
+            log.error(f"Cannot engage to {_requester}")
+            return False
+
+    @action
+    async def got_engagement(self, interaction: Interaction | None = None) -> bool:
+        """Confirm an engagement (async).
+
+        Args:
+            interaction: The interaction triggered by the agent requesting engagement (automatically set).
+
+        Returns:
+            True if the engagement was successfully confirmed, False otherwise.
+        """
+        _requester = interaction.requester
+        log.misc(f"Confirming engagement with {_requester}")
+        if _requester in self._found_agents:
+            self._engaged_agents.add(_requester)
+
+            # Marking this agent as not available since it engaged with another one
+            self._available = False
+
+            # Removing the agent from the list of asked agents
+            self._found_agents.discard(_requester)
+            return True
+        else:
+            log.error(f"Unable to confirm engagement with {_requester}")
+            return False
+
+    @action
+    async def send_disengagement(self, send_disconnection_too: bool = False) -> bool:
+        """Ask for disengagement (async).
+
+        Args:
+            send_disconnection_too: Whether to send a disconnect-suggestion together with the disengagement.
+
+        Returns:
+            True if disengagement requests were successfully sent to at least one engaged agent, False otherwise.
+        """
+        at_least_one_sent = False
+
+        if len(self._engaged_agents) > 0:
+            log.misc(f"Sending disengagement request to {', '.join([x for x in self._engaged_agents])}")
+        for agent in self._engaged_agents:
+            if await self.send(target=agent, action_name="get_disengagement",
+                               action_kwargs={"disconnect_too": send_disconnection_too}):
+                at_least_one_sent = True
+            else:
+                log.error(f"Unable to send disengagement to {agent}")
+
+        if at_least_one_sent:
+            self._engaged_agents.clear()  # There is no "got_disengagement"
+        return at_least_one_sent
+
+    @action
+    async def get_disengagement(self, disconnect_too: bool = False, interaction: Interaction | None = None) -> bool:
+        """Get a disengagement request from an agent (async).
+
+        Args:
+            disconnect_too: Whether to disconnect the agent who sent the disengagement.
+            interaction: The interaction triggered by the agent requesting disengagement (automatically set).
+
+        Returns:
+            True if the disengagement request was successfully processed, False otherwise.
+        """
+        _requester = interaction.requester if interaction is not None else None
+        log.misc(f"Getting a disengagement request from {_requester}")
+        if _requester not in self.world_agents and _requester not in self.world_masters:
+            log.error(f"Unknown agent: {_requester}")
+            return False
+
+        if _requester not in self._engaged_agents:
+            log.error(f"Not previously engaged to {_requester}")
+            return False
+
+        self._engaged_agents.discard(_requester)  # Remove if present
+
+        if disconnect_too:
+            if interaction is not None:
+                interaction.send_status = False  # This will avoid sending back a confirmation for this interaction
+            await self._node_purge_fcn(_requester)
+
+        # Marking this agent as available if not engaged to any agent
+        self._available = len(self._engaged_agents) == 0
+        return True
+
+    @action
+    async def disengage_all(self) -> bool:
+        """Disengage all the previously engaged agents (async).
+
+        Returns:
+            True if the disengagement procedure was successfully executed, False otherwise.
+        """
+        log.misc(f"Disengaging all agents")
+        self._engaged_agents = set()
+
+        # Marking this agent as available
+        self._available = True
+        return True
+
+    @action
+    async def disconnect(self, agent: str) -> bool:
+        """Disconnects an agent (async).
+
+        Args:
+            agent: The peer ID of the agent to disconnect.
+
+        Returns:
+            Always True.
+        """
+        log.misc(f"Disconnecting agent: {agent}")
+        await self._node_purge_fcn(agent)  # This will also call remove_agent, that will call remove_streams
+        return True
+
+    @action
+    async def disconnect_by_role(self, role: str | list[str], disengage_too: bool = False) -> bool:
+        """Disconnects from all agents that match a specified role (async).
+        It finds the agents and calls the node's purge function on each.
+
+        Args:
+            role: A string or list of strings representing the role(s) of agents to disconnect from.
+            disengage_too: Also forces the sending of a disengagement (before disconnecting - default False).
+
+        Returns:
+            Always True.
+        """
+        log.misc(f"Disconnecting agents with role: {role}")
+        if disengage_too:
+            await self.send_disengagement(send_disconnection_too=True)
+        if await self.find_agents(role):
+            found_agents = copy.deepcopy(self._found_agents)
+            for agent in found_agents:
+                await self._node_purge_fcn(agent)  # This will also call remove_agent, that will call remove_streams
+        return True
+
+    @action
+    @action
+    async def disconnected(self, agent: str | None = None, handshake_completed: bool = False) -> bool:
+        """Checks if a specific set of agents (by ID or wildcard) are no longer connected to the agent.
+        It returns False if any of the specified agents are still connected (async).
+
+        Args:
+            agent: The ID of the agent or a wildcard to check.
+            handshake_completed: If True, only consider agents that have completed the handshake.
+
+        Returns:
+            True if all involved agents are disconnected, False otherwise.
+
+        """
+
+        # - if "agent" is a peer ID, the involved agents will be a list with one element.
+        # - if "agent" is a known wildcard, as "<valid_cmp>", then involved agents will be self._valid_cmp_agents
+        # - if "agent" is None, then the current agent in self._engaged_agents will be returned
+        involved_agents = self.__involved_agents(agent)
+        if len(involved_agents) == 0:
+            return False
+
+        log.misc(f"Checking if all these agents are not connected to me anymore: {involved_agents}")
+        all_disconnected = True
+        for agent in involved_agents:
+            if handshake_completed:
+                if agent in self.all_agents:
+                    all_disconnected = False
+                    break
+            else:
+                if agent in self.all_agents or self._node_conn.is_connected(agent):
+                    all_disconnected = False
+                    break
+        return all_disconnected
+
+    @action
+    async def received_some_asked_data(self, processing_fcn: str | None = None) -> bool:
+        """Checks if any of the agents that were previously asked for data (e.g., via `ask_gen`) have sent a stream
+        sample back. Optionally, it can process the received data with a specified function (async).
+
+        Args:
+            processing_fcn: The name of a function to process the received data.
+
+        Returns:
+            True if at least one data sample was received, False otherwise.
+        """
+        _processing_fcn = None
+        if processing_fcn is not None:
+            if hasattr(self, processing_fcn):
+                _processing_fcn = getattr(self, processing_fcn)
+                if not callable(_processing_fcn):
+                    _processing_fcn = None
+            if _processing_fcn is None:
+                log.error(f"Processing function not found: {processing_fcn}")
+
+        got_something = False
+        sent = list(self.im.sent.values()) + list(self.im.sent_recently_completed)
+        for interaction in sent:
+            uuid = interaction.uuid
+            agents = interaction.target
+            for agent in agents:
+                net_hash_to_stream_dict = self.find_streams(agent, "processor", discard_owned=True)
+                for stream_dict in net_hash_to_stream_dict.values():
+                    for stream_obj in stream_dict.values():
+                        if not stream_obj.props.is_public():
+                            data = stream_obj.get("received_some_asked_data", uuid=uuid)
+                            data_tag = stream_obj.get_tag(uuid=uuid)
+
+                            if data is not None:
+                                if _processing_fcn is None:
+                                    return True
+                                else:
+                                    got_something = True
+                                    _processing_fcn(agent, stream_obj.props, data, data_tag)
+        return got_something
+
+    @action
+    async def nop(self, message: str | None = None) -> bool:
+        """Do nothing (async).
+
+        Args:
+            message: An optional message to print. Defaults to None.
+
+        Returns:
+            Always True.
+        """
+        if message is not None:
+            log.misc(message)
+        return True
+
+    @action
+    async def connected(self, agent: str | list[str] | None = None, handshake_completed: bool = False) -> bool:
+        """Checks if an agent is connected to us or not.
+
+        Args:
+            agent: The agent to check (or None if there are other already set engaged agents).
+            handshake_completed: If True, only consider agents that have completed the handshake.
+
+        Returns:
+            True if all the requested agents are indeed connected.
+        """
+
+        # - if "agent" is a peer ID, the involved agents will be a list with one element.
+        # - if "agent" is a known wildcard, as "<valid_cmp>", then involved agents will be self._valid_cmp_agents
+        # - if "agent" is None, then the current agent in self._engaged_agents will be returned
+        involved_agents = self.__involved_agents(agent)
+        if len(involved_agents) == 0:
+            return False
+
+        log.misc(f"Checking if all these agents are connected to me now: {involved_agents}")
+
+        for agent in involved_agents:
+            if handshake_completed:
+                if agent not in self.all_agents:
+                    return False
+            else:
+                if not self._node_conn.is_connected(agent):
+                    return False
+        return True
+
+    @action
+    async def all_asked_finished(self) -> bool:
+        """Checks if all agents that were previously asked to perform a task (e.g., generate or learn) have sent a
+        completion confirmation. It compares the set of agents asked with the set of agents that have completed
+        the task (async).
+
+        Returns:
+            True if all agents are done, False otherwise.
+        """
+        return self._agents_who_were_asked == self._agents_who_completed_what_they_were_asked
+
+    @action
+    async def all_engagements_completed(self) -> bool:
+        """Checks if all engagement requests that were sent have been confirmed. It returns True if there are no agents
+        remaining in the `_found_agents` list, implying all have been engaged with or discarded (async).
+
+        Returns:
+            True if all engagements are complete, False otherwise.
+
+        """
+        return len(self._found_agents) == 0
+
+    @action
+    async def agents_are_waiting(self) -> bool:
+        """Checks if there are any agents who have connected but have not yet been fully processed or added to the
+        agent's known lists. This indicates that new agents are waiting to be managed (async).
+
+        Returns:
+            True if there are waiting agents, False otherwise.
+        """
+        log.misc(f"Current set of {len(self._node_agents_waiting)} connected peer IDs non managed yet: "
+                 f"{list(self._node_agents_waiting.keys())}")
+        for found_agent in self._found_agents:
+            if found_agent in self._node_agents_waiting:
+                return True
+        return False
+
+    @action
+    async def ask_subscribe(self, agent: str | None = None,
+                            stream_hashes: list[str] | None = None, unsubscribe: bool = False) -> bool:
+        """Requests a remote agent or a group of agents to subscribe to or unsubscribe from a list of specified PubSub
+        streams. It normalizes the stream hashes and sends an action request containing the stream properties (async).
+
+        Args:
+            agent: The target agent's ID or a wildcard.
+            stream_hashes: A list of streams to subscribe to or unsubscribe from.
+            unsubscribe: A boolean to indicate if it's an unsubscription request.
+
+        Returns:
+            True if the request was sent to at least one agent, False otherwise.
+        """
+
+        # - if "agent" is a peer ID, the involved agents will be a list with one element.
+        # - if "agent" is a known wildcard, as "<valid_cmp>", then involved agents will be self._valid_cmp_agents
+        # - if "agent" is None, then the current agent in self._engaged_agents will be returned
+        involved_agents = self.__involved_agents(agent)
+        log.debug(f"[ask_subscribe] Involved_agents: {involved_agents}")
+
+        if len(involved_agents) == 0:
+            log.debug(f"[ask_subscribe] No involved agents, action ask_gen returns False")
+            return False
+
+        # Create a copy of the stream hashes, normalizing them in the appropriate way
+        stream_hashes_copy = self.__normalize_user_hash(stream_hashes)
+
+        # Getting properties
+        stream_owners = []
+        stream_props = []
+        for i in range(len(stream_hashes_copy)):
+            stream_dict = self.known_streams[stream_hashes_copy[i]]
+            peer_id = DataProps.peer_id_from_net_hash(stream_hashes_copy[i])
+            for name, stream_obj in stream_dict.items():
+                stream_owners.append(peer_id)
+                stream_props.append(json.dumps(stream_obj.props.to_dict()))
+
+        what = "subscribe to" if not unsubscribe else "unsubscribe from "
+        log.misc(f"Asking {', '.join(involved_agents)} to {what} {stream_hashes}")
+        self._agents_who_completed_what_they_were_asked = set()
+        self._agents_who_were_asked = set()
+        correctly_asked = []
+        for agent in involved_agents:
+            if await self.send(target=agent, action_name="do_subscribe", action_kwargs={"stream_owners": stream_owners,
+                                                                                        "stream_props": stream_props,
+                                                                                        "unsubscribe": unsubscribe}):
+                self._agents_who_were_asked.add(agent)
+                ret = True
+            else:
+                what = "subscribe" if not unsubscribe else "unsubscribe"
+                log.error(f"Unable to ask {agent} to {what}")
+                ret = False
+            log.debug(f"[ask_subscribe] Asking {agent} returned {ret}")
+            if ret:
+                correctly_asked.append(agent)
+
+        log.debug(f"[ask_subscribe] Overall, the action ask_subscribe (unsubscribe: {unsubscribe})"
+                  f" will return {len(correctly_asked) > 0}")
+        return len(correctly_asked) > 0
+
+    @action
+    async def do_subscribe(self, stream_owners: list[str] | None = None, stream_props: list[str] | None = None,
+                           unsubscribe: bool = False, interaction: Interaction | None = None) -> bool:
+        """Executes a subscription or unsubscription request received from another agent. It processes the stream
+        properties, adds or removes the streams from the agent's known streams, and handles the underlying PubSub topic
+        subscriptions (async).
+
+        Args:
+            stream_owners: A list of peer IDs who own the streams.
+            stream_props: A list of JSON-serialized stream properties.
+            unsubscribe: A boolean to indicate unsubscription.
+            interaction: The interaction that triggered this subscription.
+
+        Returns:
+            True if the action is successful, False otherwise.
+        """
+        log.debug(f"[do_subscribe] unsubscribe: {unsubscribe}, "
+                  f"stream_owners: {stream_owners}, stream_props: ... ({len(stream_props)} props)")
+
+        _requester = interaction.requester
+        if _requester is not None:
+            if isinstance(_requester, list):
+                for _r in _requester:
+                    if self.behaving_in_world():
+                        if _r not in self.world_agents and _requester not in self.world_masters:
+                            log.error(f"Unknown agent: {_r} in list {_requester} (fully skipping do_subscribe)")
+                            return False
+                    else:
+                        if _r not in self.public_agents:
+                            log.error(f"Unknown agent: {_r} in list {_requester} (fully skipping do_subscribe)")
+                            return False
+            else:
+                if self.behaving_in_world():
+                    if _requester not in self.world_agents and _requester not in self.world_masters:
+                        log.error(f"Unknown agent: {_requester} (fully skipping do_subscribe)")
+                        return False
+                else:
+                    if _requester not in self.public_agents:
+                        log.error(f"Unknown agent: {_requester} (fully skipping do_subscribe)")
+                        return False
+        else:
+            log.error("Unknown requester (None)")
+            return False
+
+        # Building properties
+        props_dicts = []
+        props_objs = []
+        for i in range(len(stream_props)):
+            p_dict = json.loads(stream_props[i])
+            props = DataProps.from_dict(p_dict)
+            if props.is_pubsub():
+                props_dicts.append(p_dict)
+                props_objs.append(props)
+            else:
+                log.error(f"Expecting a pubsub stream, got a stream named {props.get_name()} "
+                          f"(group is {props.get_group()}), which is not pubsub")
+                return False
+
+        # Adding new streams and subscribing (if compatible with our processor)
+        for stream_owner, prop_dict, prop_obj in zip(stream_owners, props_dicts, props_objs):
+            if not unsubscribe:
+                if not (await self.add_compatible_streams(peer_id=stream_owner, streams_in_profile=[prop_dict],
+                                                          buffered=False, public=False)):
+                    log.misc(f"Unable to add a pubsub stream ({prop_obj.get_name()}) from agent {stream_owner}: "
+                             f"no compatible streams were found")
+            else:
+                if not (await self.remove_streams(peer_id=stream_owner, name=prop_obj.get_name())):
+                    log.misc(f"Unable to unsubscribe from pubsub stream ({prop_obj.get_name()}) "
+                             f"of agent {stream_owner}")
+        return True
+
+    @action
+    async def record(self, net_hash: str, samples: int = 100) -> bool:
+        """Records data from a specified stream into a new, owned `BufferedDataStream`. This is a multistep action
+        that captures a sequence of samples over time and then adds the new recorded stream to the agent's profile
+        (async).
+
+        Args:
+            net_hash: The hash of the stream to record.
+            samples: The number of samples to record.
+
+        Returns:
+            True if a sample was successfully recorded, False otherwise.
+        """
+        assert samples is not None, "Missing basic action information"
+
+        k = self.get_action_step()
+
+        log.misc(f"Recording stream {net_hash}")
+
+        if k == 0:
+
+            # Getting stream(s)
+            _net_hash = self.user_stream_hash_to_net_hash(net_hash)  # In case of ambiguity, it yields the first one
+            if _net_hash is None:
+                log.error(f"Unknown stream {net_hash}")
+                return False
+            else:
+                net_hash = _net_hash
+
+            stream_src_dict = self.known_streams[net_hash]
+
+            # Creating the new recorded stream (same props of the recorded one, just owned now)
+            stream_dest_dict = {}
+            for name, stream_obj in stream_src_dict.items():
+                props = stream_obj.props.clone()
+                props.set_group("recorded" + str(self._last_recorded_stream_num))
+                stream_dest_dict[name] = BufferedDataStream(props=props)
+            self._last_recorded_stream_dict = stream_dest_dict
+            self._last_recording_stream_dict = stream_src_dict
+
+        else:
+
+            # Retrieving the stream(s)
+            stream_dest_dict = self._last_recorded_stream_dict
+            stream_src_dict = self._last_recording_stream_dict
+
+        # Recording
+        for name, stream_obj in stream_src_dict.items():
+            stream_obj: Stream
+            x = stream_obj.get(requested_by="record")
+            if x is None:
+                log.debug("[record] data sample missing, returning False")
+                return False
+            else:
+                log.debug(f"[record] data_tag: {stream_obj.get_tag()}, data_uuid: {None}")
+            stream_dest_dict[name].set(x, k)  # Saving specific data tags 0, 1, 2, ... #record_steps - 1
+
+        # Updating profile
+        if self.is_last_action_step():
+            log.debug("[record] last action step detected, finishing")
+
+            # Dummy get to ensure that the next get will return None (i.e., we only PubSub if somebody restarts this)
+            for stream_obj in stream_dest_dict.values():
+                stream_obj.get(requested_by="send_stream_samples")
+
+            self.add_streams(list(stream_dest_dict.values()), owned=True)
+            self.update_streams_in_profile()
+            await self.subscribe_to_pubsub_owned_streams()
+            await self.send_profile_to_all()
+
+            # New recorded stream
+            self._last_recorded_stream_num += 1
+
+        return True
+
+    @action
+    async def connect_by_role(self, role: str | list[str], filter_fcn: str | None = None) -> bool:
+        """Finds and attempts to connect with agents whose profiles match a specific role. It can be optionally
+        filtered by a custom function. It returns True if at least one valid agent is found (async).
+
+        Args:
+            role: The role or list of roles to search for.
+            filter_fcn: The name of an optional filter function.
+
+        Returns:
+            True if at least one agent is found and a connection request is made, False otherwise.
+        """
+        log.misc(f"Asking to get in touch with all agents whose role is {role}")
+
+        if self.get_action_step() == 0:
+            role_list = role if isinstance(role, list) else [role]
+            self._found_agents.clear()
+            at_least_one_is_valid = False
+
+            for role in role_list:
+                role = self.ROLE_STR_TO_BITS[role]
+
+                found_addresses1, found_peer_ids1 = self._node_conn.find_addrs_by_role(Agent.ROLE_WORLD_MASTER | role,
+                                                                                       return_peer_ids_too=True)
+                found_addresses2, found_peer_ids2 = self._node_conn.find_addrs_by_role(Agent.ROLE_WORLD_AGENT | role,
+                                                                                       return_peer_ids_too=True)
+                found_addresses = found_addresses1 + found_addresses2
+                found_peer_ids = found_peer_ids1 + found_peer_ids2
+
+                if filter_fcn is not None:
+                    if hasattr(self, filter_fcn):
+                        filter_fcn = getattr(self, filter_fcn)
+                        if callable(filter_fcn):
+                            found_addresses, found_peer_ids = filter_fcn(found_addresses, found_peer_ids)
+                    else:
+                        log.error(f"Filter function not found: {filter_fcn}")
+
+                log.misc(f"Found addresses ({len(found_addresses)}) with role: {role}")
+                for f_addr, f_peer_id in zip(found_addresses, found_peer_ids):
+                    if not self._node_conn.is_connected(f_peer_id):
+                        log.misc(f"Asking to get in touch with {f_addr}...")
+                        peer_id = await self._node_ask_to_get_in_touch_fcn(addresses=f_addr, public=False)
+                    else:
+                        log.misc(f"Not-asking to get in touch with {f_addr}, "
+                                 f"since I am already connected to the corresponding peer...")
+                        peer_id = f_peer_id
+                    if peer_id is not None:
+                        at_least_one_is_valid = True
+                        self._found_agents.add(peer_id)
+                    log.misc(f"...returned {peer_id}")
+            return at_least_one_is_valid
+        else:
+            return True
+
+    @action
+    async def find_agents(self, role: str | list[str], engage: bool = False, handshake_completed: bool = False) -> bool:
+        """Locally searches through the agent's known peers (world and public agents) to find agents with a specific
+        role. It populates the `_found_agents` set with the peer IDs of matching agents (async).
+
+        Args:
+            role: The role or list of roles to search for.
+            handshake_completed: If True, only consider agents that have completed the handshake.
+            engage: If you want to force the found agents to be the ones that you are engaged with.
+
+        Returns:
+            True if at least one agent is found, False otherwise.
+        """
+        log.misc(f"Finding an available agent whose role is {role}")
+        role_list = role if isinstance(role, list) else [role]
+        self._found_agents = set()
+
+        for role_str in role_list:
+            role_int = self.ROLE_STR_TO_BITS[role_str]
+
+            _, found_peer_ids1 = self._node_conn.find_addrs_by_role(Agent.ROLE_WORLD_MASTER | role_int,
+                                                                    return_peer_ids_too=True)
+            _, found_peer_ids2 = self._node_conn.find_addrs_by_role(Agent.ROLE_WORLD_AGENT | role_int,
+                                                                    return_peer_ids_too=True)
+            found_peer_ids = found_peer_ids1 + found_peer_ids2
+
+            for peer_id in found_peer_ids:
+                if not handshake_completed or peer_id in self.all_agents:
+                    self._found_agents.add(peer_id)  # Peer IDs here
+
+        log.debug(f"[find_agents] Found these agents: {self._found_agents}")
+        if engage:
+            self._engaged_agents = copy.deepcopy(self._found_agents)
+        return len(self._found_agents) > 0
+
+    @action
+    async def next_pref_stream(self) -> bool:
+        """Moves the internal pointer to the next stream in the list of preferred streams, which is often used for
+        playlist-like operations. It wraps around to the beginning if it reaches the end (async).
+
+        Returns:
+            True if the move is successful, False if the list is empty.
+        """
+        if len(self._preferred_streams) == 0:
+            log.error(f"Cannot move to the next stream because the list of preferred streams is empty")
+            return False
+
+        self._cur_preferred_stream = (self._cur_preferred_stream + 1) % len(self._preferred_streams)
+        suffix = ", warning: restarted" if self._cur_preferred_stream == 0 else ""
+        log.misc(
+            f"Moving to the next preferred stream ({self._preferred_streams[self._cur_preferred_stream]}){suffix}")
+        return True
+
+    @action
+    async def first_pref_stream(self) -> bool:
+        """Resets the internal pointer to the first stream in the list of preferred streams. This is useful for
+        restarting a playback or processing loop (async).
+
+        Returns:
+            True if the move is successful, False if the list is empty.
+        """
+        if len(self._preferred_streams) == 0:
+            log.error(f"Cannot move to the first stream because the list of preferred streams is empty")
+            return False
+
+        self._cur_preferred_stream = 0
+        log.misc(f"Moving to the first preferred stream ({self._preferred_streams[self._cur_preferred_stream]})")
+        return True
+
+    @action
+    async def check_pref_stream(self, what: str = "last") -> bool:
+        """Checks the position of the current preferred stream within the list. It can check if it's the first, last,
+        or if it has completed a full round, among other checks (async).
+
+        Args:
+            what: A string specifying the type of check to perform (e.g., 'first', 'last', 'last_round').
+
+        Returns:
+            True if the condition is met, False otherwise.
+        """
+        valid = ['first', 'last', 'not_first', 'not_last', 'last_round', 'not_last_round', 'last_song', 'not_last_song']
+        assert what in valid, f"The what argument can only be one of {valid}"
+
+        log.misc(f"Checking if the current preferred playlist item "
+                 f"(id: {self._cur_preferred_stream}) is the '{what}' one")
+        if what == "first":
+            return self._cur_preferred_stream == 0
+        elif what == "last":
+            return self._cur_preferred_stream == len(self._preferred_streams) - 1
+        elif what == "not_first":
+            return self._cur_preferred_stream != 0
+        elif what == "not_last":
+            return self._cur_preferred_stream != len(self._preferred_streams) - 1
+        elif what == "last_round":
+            return (self._cur_preferred_stream + len(self._preferred_streams) // self._repeat >=
+                    len(self._preferred_streams))
+        elif what == "not_last_round":
+            return (self._cur_preferred_stream + len(self._preferred_streams) // self._repeat <
+                    len(self._preferred_streams))
+        elif what == "last_song":
+            num_streams_in_playlist = len(self._preferred_streams) // self._repeat
+            return (self._cur_preferred_stream + 1) % num_streams_in_playlist == 0
+        elif what == "not_last_song":
+            num_streams_in_playlist = len(self._preferred_streams) // self._repeat
+            return (self._cur_preferred_stream + 1) % num_streams_in_playlist != 0
+
+    @action
+    async def set_pref_streams(self, net_hashes: list[str], repeat: int = 1) -> bool:
+        """Fills the agent's list of preferred streams (a playlist). It can repeat the playlist a specified number of
+        times and resolves user-provided stream hashes to their full network hashes (async).
+
+        Args:
+            net_hashes: A list of stream hashes to add to the playlist.
+            repeat: The number of times to repeat the playlist.
+
+        Returns:
+            Always True.
+        """
+        log.misc(f"Setting up a list of {len(net_hashes)} preferred streams")
+        self._cur_preferred_stream = 0
+        self._preferred_streams = []
+        self._repeat = repeat
+        for i in range(0, self._repeat):
+            for net_hash in net_hashes:
+
+                # We are tolerating both peer_id:name_or_group and also peer_id::ps:name_or_group
+                components = net_hash.split(":")
+                peer_id = components[0]
+                name_or_group = components[-1]
+                net_hash_to_streams = self.find_streams(peer_id=peer_id, name_or_group=name_or_group)
+                for _net_hash in net_hash_to_streams.keys():
+                    self._preferred_streams.append(_net_hash)
+
+        return True
+
+    @action
+    async def evaluate(self, stream_hash: str, how: str, steps: int = 100, re_offset: bool = False) -> bool:
+        """Evaluates the performance of agents that have completed a generation task. It compares the generated data
+        from each agent with a local stream (which can be a ground truth or reference stream) using a specified
+        comparison method (async).
+
+        Args:
+            stream_hash: The hash of the local stream to use for comparison.
+            how: The name of the comparison method to use.
+            steps: The number of steps to perform the evaluation.
+            re_offset: A boolean to indicate whether to re-offset the streams.
+
+        Returns:
+            True if the evaluation is successful, False otherwise.
+        """
+        if not self.buffer_generated_by_others:
+            log.error("Cannot evaluate if not buffering data generated by others")
+            return False
+
+        if stream_hash == "<playlist>":
+            net_hash = self._preferred_streams[self._cur_preferred_stream]
+        else:
+            net_hash = self.user_stream_hash_to_net_hash(stream_hash)
+
+        self._eval_results = {}
+        log.debug(f"[eval] Agents returning streams: {self._agents_who_completed_what_they_were_asked}")
+        for peer_id in self._agents_who_completed_what_they_were_asked:
+            if peer_id not in self.last_buffered_peer_id_to_info:
+                log.error(f"Missing buffered stream for {peer_id}, cannot evaluate!")
+                continue
+            received_net_hash = self.last_buffered_peer_id_to_info[peer_id]["net_hash"]
+            log.misc(f"Comparing {net_hash} with {received_net_hash}")
+            eval_result, ret = self.__compare_streams(net_hash_a=net_hash,
+                                                      net_hash_b=received_net_hash,
+                                                      how=how, steps=steps, re_offset=re_offset)
+            log.misc(f"Result of the comparison: {eval_result}")
+            if not ret:
+                return False
+            else:
+                peer_id = DataProps.peer_id_from_net_hash(received_net_hash)
+                self._eval_results[peer_id] = eval_result
+
+        return True
+
+    @action
+    async def compare_eval(self, cmp: str, thres: float, good_if_true: bool = True) -> bool:
+        """Compares the results of a previous evaluation to a given threshold or finds the best result among all
+        agents. It can check for minimum, maximum, or simple threshold-based comparisons, and it populates a list of
+        'valid' agents that passed the comparison (async).
+
+        Args:
+            cmp: The comparison operator (e.g., '<', '>', 'min').
+            thres: The threshold value for comparison.
+            good_if_true: A boolean to invert the pass/fail logic.
+
+        Returns:
+            True if at least one agent passed the comparison, False otherwise.
+        """
+        assert cmp in ["<", ">", ">=", "<=", "min", "max"], f"Invalid comparison operator: {cmp}"
+        assert thres >= 0. or cmp in ["min", "max"], f"Invalid evaluation threshold: {thres} (it must be in >= 0.)"
+
+        self._valid_cmp_agents = set()
+        msgs = []
+        best_so_far = -1
+
+        min_or_max = None
+        leq_or_geq = None
+        if cmp in ["min", "max"]:
+            min_or_max = "minimum" if cmp == "min" else "maximum"
+            leq_or_geq = "<=" if cmp == "min" else ">="
+
+        if len(self._eval_results) == 0:
+            log.user("No results to evaluate!")
+
+        for agent_peer_id, eval_result in self._eval_results.items():
+            if cmp not in ["min", "max"]:
+                log.misc(f"Checking if result {eval_result} {cmp} {thres}, for agent {agent_peer_id}")
+            else:
+                if thres >= 0:
+                    log.misc(f"Checking if result {eval_result} is the {min_or_max} so far, "
+                             f"only if {leq_or_geq} {thres}, for agent {agent_peer_id}")
+                else:
+                    log.misc(
+                        f"Checking if result {eval_result} is the {min_or_max} so far, for agent {agent_peer_id}")
+
+            if eval_result < 0.:
+                log.user(f"Invalid evaluation result: {eval_result}")
+                return False
+
+            owner_account = self.all_agents[agent_peer_id].get_static_profile()['email']
+            agent_name = self.all_agents[agent_peer_id].get_static_profile()['node_name']
+
+            if cmp != "min" and cmp != "max":
+                outcome = False
+                if cmp == "<" and eval_result < thres:
+                    outcome = True
+                elif cmp == "<=" and eval_result <= thres:
+                    outcome = True
+                elif cmp == ">" and eval_result > thres:
+                    outcome = True
+                elif cmp == ">=" and eval_result >= thres:
+                    outcome = True
+
+                if cmp[0] == "<" or cmp[0] == "<=":
+                    alias = 'error level' if good_if_true else 'mark'
+                else:
+                    alias = 'mark' if good_if_true else 'error level'
+
+                if good_if_true:
+                    if outcome:
+                        msgs.append(f"Agent {owner_account}/{agent_name} passed with {alias} {eval_result}/{thres}")
+                        self._valid_cmp_agents.add(agent_peer_id)
+                    else:
+                        msgs.append(f"Agent {owner_account}/{agent_name} did not pass, {alias} {eval_result}/{thres}")
+                else:
+                    if outcome:
+                        msgs.append(f"Agent {owner_account}/{agent_name} did not pass, {alias} {eval_result}/{thres}")
+                    else:
+                        msgs.append(f"Agent {owner_account}/{agent_name} passed with {alias} {eval_result}/{thres}")
+                        self._valid_cmp_agents.add(agent_peer_id)
+            else:
+                if ((cmp == "min" and (thres < 0 or eval_result <= thres) and
+                     (eval_result < best_so_far or best_so_far < 0)) or
+                        (cmp == "max" and (thres < 0 or eval_result >= thres) and
+                         (eval_result > best_so_far or best_so_far < 0))):
+                    best_so_far = eval_result
+                    self._valid_cmp_agents = {agent_peer_id}
+                    msgs = [f"The best agent is {owner_account}/{agent_name}"]
+                else:
+                    msgs = [f"No best agent found for the considered threshold ({thres})"]
+
+        for msg in msgs:
+            log.user(msg)
+
+        if len(self._valid_cmp_agents) == 0:
+
+            # # cheating (hack):
+            # self._valid_cmp_agents.append(agent_peer_id)
+            # log.misc(", ".join(msgs))
+            # return True
             return False
         else:
             return True

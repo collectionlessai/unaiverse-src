@@ -2109,28 +2109,6 @@ class HybridStateMachine:
                     if arg_name in action.args:
                         action.set_as_not_ready()
 
-    def wait_for_actions(self, from_state: str, to_state: str, wait: bool = True):
-        """Sets the `ready` flag for a specific action (or group of actions) between two states. This allows for
-        fine-grained control over which transitions are active.
-
-        Args:
-            from_state: The name of the starting state.
-            to_state: The name of the destination state.
-            wait: A boolean flag to either set the action as not ready (`True`) or ready (`False`).
-
-        Returns:
-            True if the specified action was found, False otherwise.
-        """
-        if from_state not in self.transitions or to_state not in self.transitions[from_state]:
-            return False
-
-        for action in self.transitions[from_state][to_state]:
-            if wait:
-                action.set_as_not_ready()
-            else:
-                action.set_as_ready()
-        return True
-
     def save(self, filename: str, only_if_changed: object | None = None):
         """Saves the state machine's current configuration to a JSON file. It can optionally check if the configuration
         has changed before saving to avoid redundant file writes.
