@@ -84,20 +84,29 @@ class HybridStateMachine:
         self.set_actionable(actionable)
 
     # Backward compatibility
-    def set_print_fcn(self, print_fcn, supports_html):
+    def set_print_fcn(self, print_fcn: Callable, supports_html: bool) -> None:
+        """Backward-compatibility hook to redirect log output to a custom print function.
+
+        Args:
+            print_fcn: The callable to use for printing log messages.
+            supports_html: Whether the print function can render HTML formatting.
+        """
         if log is not None:
             log.set_print_fcn(print_fcn, supports_html)
 
-    def show_ticks_in_action_messages(self, do_it: bool = True):
+    def show_ticks_in_action_messages(self, do_it: bool = True) -> None:
+        """Enables or disables tick symbols appended to action log messages upon completion."""
         self.show_action_completion = do_it
 
-    def show_marks_in_blocking_state_messages(self, do_it: bool = True):
+    def show_marks_in_blocking_state_messages(self, do_it: bool = True) -> None:
+        """Enables or disables colored markers (🔴/🟢) appended to blocking-state log messages."""
         self.show_blocking_states = do_it
 
-    def show_request_info_in_action_messages(self, do_it: bool = True):
+    def show_request_info_in_action_messages(self, do_it: bool = True) -> None:
+        """Enables or disables requester/UUID info appended to action log messages."""
         self.show_action_request_info = do_it
 
-    def set_welcome_message(self, msg):
+    def set_welcome_message(self, msg: str | None) -> None:
         """Sets a message that will be printed only once when the initial state is reached."""
 
         if msg is not None:
@@ -107,7 +116,7 @@ class HybridStateMachine:
             self.welcome_msg = None
             self.welcome_msg_with_wildcards = None
 
-    def to_dict(self):
+    def to_dict(self) -> dict:
         """Serializes the state machine's current configuration into a dictionary. This includes its states,
         transitions, roles, and the current action being executed. It is useful for saving the state of the machine or
         for logging its status in a structured format.
@@ -134,7 +143,7 @@ class HybridStateMachine:
             'cur_action': self.__action.to_list() if self.__action is not None else None
         }
 
-    def __str__(self):
+    def __str__(self) -> str:
         """Generates a human-readable string representation of the state machine. It uses the `to_dict` method to get
         the machine's data and then formats it as a compact JSON string, making it easy to inspect for debugging
         purposes.
@@ -179,7 +188,7 @@ class HybridStateMachine:
 
         return remove_newlines_in_lists(json_str)
 
-    def set_actionable(self, obj: object):
+    def set_actionable(self, obj: object) -> None:
         """Sets the object on which the state machine's actions will be performed. This allows the same state machine
         logic to be applied to different objects. It updates the `actionable` reference for all states and actions
         within the machine.
@@ -196,7 +205,7 @@ class HybridStateMachine:
             if state_obj.action is not None:
                 state_obj.action.actionable = obj
 
-    def set_policy(self, policy_fcn: Callable[[list[Action]], tuple[int, Interaction | None]]):
+    def set_policy(self, policy_fcn: Callable[[list[Action]], tuple[int, Interaction | None]]) -> None:
         """Sets the policy to be used in selecting what action to perform in the current state.
 
         Args:
@@ -208,7 +217,7 @@ class HybridStateMachine:
 
     def set_policy_filter(self, filter_fcn: Callable[
         [int, Interaction | None, list[Action], dict], tuple[int, Interaction | None]],
-                          filter_fcn_opts: dict):
+                          filter_fcn_opts: dict) -> None:
         """Sets the filter function that will overload the decision of the policy.
 
         Args:
@@ -222,7 +231,7 @@ class HybridStateMachine:
         self.policy_filter_opts = filter_fcn_opts
         self.policy_filter_opts.clear()
 
-    def set_wildcards(self, wildcards: dict[str, str | float | int] | None, permanent: bool = False):
+    def set_wildcards(self, wildcards: dict[str, str | float | int] | None, permanent: bool = False) -> None:
         """Sets the dictionary of wildcards that are used to dynamically replace placeholder values in action
         arguments. It updates all actions with the new wildcard dictionary.
 
@@ -244,7 +253,7 @@ class HybridStateMachine:
             if permanent:
                 self.set_welcome_message(self.welcome_msg)
 
-    def set_role(self, role: str):
+    def set_role(self, role: str) -> None:
         """Sets the role of the agent associated with this state machine. This can be used to influence state machine
         behavior based on the agent's role (e.g., 'teacher', 'student').
 
@@ -254,7 +263,7 @@ class HybridStateMachine:
         self.role = role
         self.update_wildcard("<role>", self.role)
 
-    def get_wildcards(self):
+    def get_wildcards(self) -> dict:
         """Retrieves the dictionary of wildcards currently used by the state machine.
 
         Returns:
@@ -262,7 +271,7 @@ class HybridStateMachine:
         """
         return self.wildcards
 
-    def add_wildcards(self, wildcards: dict[str, str | float | int | list[str]], permanent: bool = False):
+    def add_wildcards(self, wildcards: dict[str, str | float | int | list[str]], permanent: bool = False) -> None:
         """Adds new key-value pairs to the existing wildcard dictionary. It also triggers an update to all actions with
         the new combined dictionary.
 
@@ -274,12 +283,17 @@ class HybridStateMachine:
             self.wildcards.update(wildcards)
             self.set_wildcards(self.wildcards, permanent=False)
         else:
-            self.set_wildcards(self.wildcards, permanent=True)
+            self.set_wildcards(wildcards, permanent=True)
 
-    def replace_wildcards(self, wildcards: dict[str, str | float | int | list[str]]):
+    def replace_wildcards(self, wildcards: dict[str, str | float | int | list[str]]) -> None:
+        """Permanently replaces all wildcard values, making the substitution the new baseline.
+
+        Args:
+            wildcards: A dictionary of wildcard key-value pairs to apply permanently.
+        """
         self.add_wildcards(wildcards, permanent=True)
 
-    def update_wildcard(self, wildcard_key: str, wildcard_value: str | float | int):
+    def update_wildcard(self, wildcard_key: str, wildcard_value: str | float | int) -> None:
         """Updates the value of a single existing wildcard. It raises an error if the key does not exist. This method
         is useful for changing a single dynamic value without redefining all wildcards.
 
@@ -291,7 +305,7 @@ class HybridStateMachine:
         self.wildcards[wildcard_key] = wildcard_value
         self.set_wildcards(self.wildcards)
 
-    def get_action_step_idx(self):
+    def get_action_step_idx(self) -> int:
         """Retrieves the current step index of the action being executed. This is particularly useful for tracking the
         progress of multistep actions.
 
@@ -301,7 +315,7 @@ class HybridStateMachine:
         return self.__cur_feasible_actions_status['selected_interaction'].get_step_idx() \
             if self.__action is not None else -1
 
-    def is_busy_acting(self):
+    def is_busy_acting(self) -> bool:
         """Checks if the state machine is currently executing an action. This is determined by checking if the action
         step index is greater than or equal to 0.
 
@@ -312,7 +326,7 @@ class HybridStateMachine:
 
     def add_state(self, state: str, action: str = None, args: dict | None = None, state_id: int | None = None,
                   waiting_time: float | None = None, blocking: bool | None = None,
-                  msg: str | None = None, msg_action: str | None = None):
+                  msg: str | None = None, msg_action: str | None = None) -> None:
         """Adds a new state to the state machine. This method can create a new state with an optional inner action or
         update an existing state. It assigns a unique ID to the state and its action.
 
@@ -363,11 +377,15 @@ class HybridStateMachine:
 
         sta.set_state_machine(self)
 
-    def get_state_name(self, consider_limbo: bool = False):
+    def get_state_name(self, consider_limbo: bool = False) -> str | None:
         """Retrieves the name of the current state of the state machine.
 
+        Args:
+            consider_limbo: If True and the current state is None (mid-transition), returns the limbo state
+                name instead.
+
         Returns:
-            A string with the state's name, or `None` if no state is set.
+            A string with the state's name, or ``None`` if no state is set.
         """
 
         if not consider_limbo:
@@ -378,7 +396,7 @@ class HybridStateMachine:
             else:
                 return self.state
 
-    def get_state(self):
+    def get_state(self) -> 'State | None':
         """Retrieves the current `State` object of the state machine.
 
         Returns:
@@ -386,7 +404,7 @@ class HybridStateMachine:
         """
         return self.states[self.state] if self.state is not None else None
 
-    def get_all_states(self):
+    def get_all_states(self) -> list['State']:
         """Retrieves the list of all `State` objects.
 
         Returns:
@@ -394,7 +412,7 @@ class HybridStateMachine:
         """
         return self.__id_to_state
 
-    def get_all_actions(self):
+    def get_all_actions(self) -> list['Action']:
         """Retrieves the list of all `Action` objects.
 
         Returns:
@@ -402,7 +420,7 @@ class HybridStateMachine:
         """
         return self.__id_to_action
 
-    def get_action(self):
+    def get_action(self) -> 'Action | None':
         """Retrieves the `Action` object that is currently being executed.
 
         Returns:
@@ -410,7 +428,7 @@ class HybridStateMachine:
         """
         return self.__action
 
-    def get_action_name(self):
+    def get_action_name(self) -> str | None:
         """Retrieves the name of the action currently being executed.
 
         Returns:
@@ -418,7 +436,7 @@ class HybridStateMachine:
         """
         return self.__action.name if self.__action is not None else None
 
-    def get_last_completed_action_name(self):
+    def get_last_completed_action_name(self) -> str | None:
         """Retrieves the name of the last action that was correctly executed.
 
         Returns:
@@ -426,7 +444,7 @@ class HybridStateMachine:
         """
         return self.__last_completed_action.name if self.__last_completed_action is not None else None
 
-    def reset_state(self):
+    def reset_state(self) -> None:
         """Resets the state machine to its initial state. This clears the current action, the previous state, and
         the limbo state. It also resets the step counters for all actions within the machine.
         """
@@ -442,15 +460,15 @@ class HybridStateMachine:
                 s.action.clear_interactions()
                 s.action.system_interaction.reset_state()
 
-    def get_states(self):
+    def get_states(self) -> list:
         """Returns an iterable of all state names defined in the state machine.
 
         Returns:
             An iterable of state names.
         """
-        return list(set(list(self.transitions.keys()) + self.__id_to_state))
+        return [s.name for s in self.__id_to_state]
 
-    def set_state(self, state: str):
+    def set_state(self, state: str) -> None:
         """Sets the current state of the state machine to a new, specified state. It also handles the transition logic
         by resetting the current action and updating the previous state. Raises an error if the new state is not known
         to the machine.
@@ -469,10 +487,16 @@ class HybridStateMachine:
         else:
             raise ValueError("Unknown state: " + str(state))
 
-    def are_debug_messages_active(self):
+    def are_debug_messages_active(self) -> bool:
+        """Returns whether debug messages (auto-generated labels, ticks, marks) are currently active."""
         return self.__debug_messages_active
 
-    def set_debug_messages_active(self, yes: bool):
+    def set_debug_messages_active(self, yes: bool) -> None:
+        """Activates or deactivates debug mode, enabling ticks, blocking marks, request info, and auto-labels.
+
+        Args:
+            yes: True to enable debug mode, False to restore original messages and disable extra info.
+        """
         self.__debug_messages_active = yes
 
         if yes:
@@ -499,7 +523,14 @@ class HybridStateMachine:
             self.__id_to_original_state_msg.clear()
             self.__id_to_original_action_msg.clear()
 
-    def generate_auto_messages(self, states: bool = True, actions: bool = True, force: bool = False):
+    def generate_auto_messages(self, states: bool = True, actions: bool = True, force: bool = False) -> None:
+        """Auto-generates human-readable messages for states and actions that currently have none.
+
+        Args:
+            states: If True, generates messages for states (and their inner actions).
+            actions: If True, generates messages for transition actions.
+            force: If True, overwrites existing messages, appending the original text in brackets.
+        """
         if states is True and len(self.__id_to_original_state_msg) == 0:
             for state in self.__id_to_state:
                 original1 = state.msg_with_wildcards
@@ -532,7 +563,8 @@ class HybridStateMachine:
 
     def add_transit(self, from_state: str, to_state: str,
                     action: str, args: dict | None = None, ready: bool = True,
-                    act_id: int | None = None, msg: str | None = None, avoid_changing_ready: bool = False):
+                    act_id: int | None = None, msg: str | None = None,
+                    avoid_changing_ready: bool = False) -> None:
         """Defines a transition between two states with an associated action. This method is central to building the
         state machine's logic. It can also handle loading and integrating a complete state machine from a file,
         resolving any state name clashes.
@@ -637,7 +669,7 @@ class HybridStateMachine:
 
         new_action.set_state_machine(self)
 
-    def include(self, hsm, make_a_copy=False):
+    def include(self, hsm, make_a_copy=False) -> None:
         """Integrates the states and transitions of another state machine (`hsm`) into the current one. This is a
         crucial method for composing complex state machines from smaller, reusable components. It copies wildcards,
         states, and transitions, ensuring that all actions and states are properly added and linked. This method also
@@ -685,10 +717,10 @@ class HybridStateMachine:
             self.limbo_state = hsm.limbo_state
             self.set_welcome_message(hsm.welcome_msg_with_wildcards)
             self.show_blocking_states = hsm.show_blocking_states
-            self.show_action_completion = hsm.show_blocking_states
+            self.show_action_completion = hsm.show_action_completion
             self.show_action_request_info = hsm.show_action_request_info
 
-    def must_wait(self):
+    def must_wait(self) -> bool:
         """Checks if the current state is in a waiting period before any transitions can occur.
 
         Returns:
@@ -699,7 +731,7 @@ class HybridStateMachine:
         else:
             return False
 
-    def is_enabled(self):
+    def is_enabled(self) -> bool:
         """A simple getter to check if the state machine is currently enabled to run.
 
         Returns:
@@ -707,7 +739,7 @@ class HybridStateMachine:
         """
         return self.enabled
 
-    def enable(self, yes_or_not: bool):
+    def enable(self, yes_or_not: bool) -> None:
         """Enables or disables the state machine. When disabled, the `act_states` and `act_transitions` methods will
         not perform any actions.
 
@@ -716,7 +748,7 @@ class HybridStateMachine:
         """
         self.enabled = yes_or_not
 
-    async def act_states(self):
+    async def act_states(self) -> None:
         """Executes the inner action of the current state, if one exists. This method is for actions that occur upon
         entering a state but do not cause an immediate transition. It only runs if the state machine is enabled (async).
         """
@@ -726,7 +758,7 @@ class HybridStateMachine:
         if self.state is not None:  # When in the middle of an action, the state is Nones
             await self.states[self.state]()  # Run the action (if any)
 
-    async def act_transitions(self, only_the_ones_with_interactions: bool = False):
+    async def act_transitions(self, only_the_ones_with_interactions: bool = False) -> int:
         """This is the core execution loop for transitions. It finds all feasible actions from the current state and,
         using a policy, selects and executes one. It handles single-step and multistep actions, managing state changes,
         timeouts, and failed executions. It returns an integer status code indicating the outcome (e.g., transition
@@ -786,9 +818,9 @@ class HybridStateMachine:
                     action.interactions.remove_completed()
                     if len(action.interactions) == 0:
                         idx_to_remove.append(i)
+                        if self.__action is not None and self.__action == action:
+                            self.__action = None
             for i in idx_to_remove:
-                if self.__action is not None and self.__action == actions_list[i]:
-                    self.__action = None
                 del actions_list[i]
                 del to_state_list[i]
                 del attempts_to_serve_an_interaction_list[i]
@@ -988,7 +1020,7 @@ class HybridStateMachine:
         self.__state_changed = False
         return -1
 
-    async def act(self):
+    async def act(self) -> None:
         """A high-level method that combines `act_states` and `act_transitions` to run the state machine. It repeatedly
         processes states and transitions until a blocking state is reached or all feasible actions have been tried,
         thus ensuring a complete processing cycle in one call (async).
@@ -1006,7 +1038,7 @@ class HybridStateMachine:
             if ret != 0 or (self.state is not None and self.states[self.state].blocking):
                 break
 
-    def get_state_changed(self):
+    def get_state_changed(self) -> bool:
         """Returns an internal flag that indicates if a state transition has occurred in the last execution cycle.
         This can be used by an external loop to know when to re-evaluate the state machine's context.
 
@@ -1015,7 +1047,7 @@ class HybridStateMachine:
         """
         return self.__state_changed
 
-    def request_action(self, interaction: Interaction | None = None, **kwargs):
+    def request_action(self, interaction: Interaction | None = None, **kwargs) -> bool:
         """Allows an external entity to request a specific action. The request is validated by a signature checker
         (if one exists) and then queued on the corresponding action. This method enables dynamic, external triggers for
         state machine transitions.
@@ -1080,7 +1112,7 @@ class HybridStateMachine:
         log.statem("Requested action not found", state=self.get_state_name())
         return False
 
-    def wait_for_all_actions_that_start_with(self, prefix):
+    def wait_for_all_actions_that_start_with(self, prefix: str) -> None:
         """Sets the `ready` flag to `False` for all actions whose name begins with a given prefix. This method is used
         to programmatically disable a group of actions, effectively pausing them.
 
@@ -1093,7 +1125,7 @@ class HybridStateMachine:
                     if action.name.startswith(prefix):
                         action.set_as_not_ready()
 
-    def wait_for_all_actions_that_include_an_arg(self, arg_name):
+    def wait_for_all_actions_that_include_an_arg(self, arg_name: str) -> None:
         """Sets the `ready` flag to `False` for all actions that include a specific argument name in their signature.
         This provides another way to programmatically disable actions.
 
@@ -1106,7 +1138,7 @@ class HybridStateMachine:
                     if arg_name in action.args:
                         action.set_as_not_ready()
 
-    def save(self, filename: str, only_if_changed: object | None = None):
+    def save(self, filename: str, only_if_changed: object | None = None) -> bool:
         """Saves the state machine's current configuration to a JSON file. It can optionally check if the configuration
         has changed before saving to avoid redundant file writes.
 
@@ -1131,7 +1163,7 @@ class HybridStateMachine:
             file.write(str(self))
         return True
 
-    def load(self, filename_or_hsm_as_string: str | io.TextIOWrapper):
+    def load(self, filename_or_hsm_as_string: str | io.TextIOWrapper) -> 'HybridStateMachine':
         """Loads a state machine's configuration from a JSON file or a JSON string. It reconstructs the states,
         actions, and transitions from the serialized data. This method is critical for persistence and for loading
         pre-defined state machine models.
@@ -1218,7 +1250,7 @@ class HybridStateMachine:
                                      avoid_changing_ready=True)
         return self
 
-    def to_graphviz(self):
+    def to_graphviz(self) -> graphviz.Digraph:
         """Generates a Graphviz `Digraph` object representing the state machine's structure. This method visualizes
         states as nodes and transitions as edges. It includes details such as node shapes (diamond for initial state,
         oval for others), styles (filled for blocking states), and labels for both states and transitions. The labels
@@ -1299,7 +1331,7 @@ class HybridStateMachine:
                                _attributes={'id': "edge" + str(action.id)})
         return graph
 
-    def save_pdf(self, filename: str):
+    def save_pdf(self, filename: str) -> bool:
         """Saves the state machine's Graphviz representation as a PDF file. It calls `to_graphviz()` to create the
         graph and then uses the Graphviz library's `render` method to generate the PDF.
 
@@ -1319,7 +1351,7 @@ class HybridStateMachine:
             log.error(f"Error while saving to PDF {e}")
             return False
 
-    def print_actions(self, state: str | None = None):
+    def print_actions(self, state: str | None = None) -> None:
         """Prints a list of all transitions and their associated actions from a given state. If no state is provided,
         it defaults to the current state. This method is useful for quickly inspecting the available transitions from
         a specific point in the state machine's flow.
@@ -1335,7 +1367,7 @@ class HybridStateMachine:
                 log.user(f"{state} --> {to_state} {action}")
 
     # Noinspection PyMethodMayBeStatic
-    def __policy_first_requested_or_first_ready(self, actions_list: list[Action]) -> tuple[int, Interaction | None]:
+    def __policy_first_requested_or_first_ready(self, actions_list: list[Action]) -> tuple[int, Interaction | None]:  # noqa: E501
         """This is the default policy for selecting which action to execute from a list of feasible actions.
         It prioritizes actions that have been explicitly requested (i.e., have pending requests) on a first-come,
         first-served basis. If no requested actions are found, it then selects the first action in the list that is

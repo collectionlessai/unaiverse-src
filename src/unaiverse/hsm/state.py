@@ -51,7 +51,7 @@ class State:
         self.wildcards = {}  # Value-to-value (es: <playlist> to this:and:this)
         self.msg_with_wildcards = self.msg
 
-    async def __call__(self, *args, **kwargs):
+    async def __call__(self, *args, **kwargs) -> int | None:
         """Executes the state's logic. If a `waiting_time` is set, it starts a timer. If an `action` is associated with
         the state, it resets the action's step counter and then executes the action by calling it. It returns the
         result of the action's execution (async).
@@ -88,7 +88,7 @@ class State:
         else:
             return None
 
-    def __str__(self):
+    def __str__(self) -> str:
         """Provides a string representation of the `State` object. This is useful for debugging and logging, as it
         summarizes the state's properties, including its name, ID, waiting time, blocking status, and its associated
         action (if any).
@@ -99,10 +99,11 @@ class State:
         return (f"[State: {self.name}] id: {self.id}, waiting_time: {self.waiting_time}, blocking: {self.blocking}, "
                 f"action -> {self.action if self.action is not None else 'none'}, msg: {self.msg}")
 
-    def set_state_machine(self, hsm):
+    def set_state_machine(self, hsm: object) -> None:
+        """Registers the parent state machine that owns this state."""
         self.state_machine = hsm
 
-    def set_msg(self, msg):
+    def set_msg(self, msg: str | None) -> None:
         """Sets the message associated to this state."""
 
         if msg is not None:
@@ -112,7 +113,7 @@ class State:
             self.msg = None
             self.msg_with_wildcards = None
 
-    def must_wait(self):
+    def must_wait(self) -> bool:
         """Checks if the state needs to wait before it can transition. It compares the current elapsed time since
         entering the state with the configured `waiting_time`. If the elapsed time is less than the waiting time,
         it returns `True`, indicating the state is still in a waiting period.
@@ -129,7 +130,7 @@ class State:
         else:
             return False
 
-    def to_list(self):
+    def to_list(self) -> list:
         """Converts the state's properties into a list. This method is useful for serialization, allowing the state to
         be easily stored or transmitted. It includes the action's minimal list representation, the state's ID,
         blocking status, waiting time, and message.
@@ -144,7 +145,7 @@ class State:
         return ((self.action.to_list(minimal=True) if self.action is not None else [None, None]) +
                 ([self.id, self.blocking, self.waiting_time] + ([msg] if msg is not None else [])))
 
-    def has_action(self):
+    def has_action(self) -> bool:
         """A simple getter that checks if an action is associated with the state.
 
         Returns:
@@ -152,7 +153,7 @@ class State:
         """
         return self.action is not None
 
-    def get_starting_time(self):
+    def get_starting_time(self) -> float:
         """Retrieves the timestamp when the state's execution began. This is used to calculate the elapsed waiting time.
 
         Returns:
@@ -160,7 +161,7 @@ class State:
         """
         return self.starting_time
 
-    def reset(self):
+    def reset(self) -> None:
         """Resets the state's internal counters. This method is typically called when re-entering a state. It sets the
         `starting_time` to zero and also resets the associated action's step counter if an action exists.
         """
@@ -168,7 +169,7 @@ class State:
         if self.action is not None:
             self.action.system_interaction.reset_state()
 
-    def set_blocking(self, blocking: bool):
+    def set_blocking(self, blocking: bool) -> None:
         """Sets the blocking status of the state. A blocking state will prevent the state machine from transitioning to
         the next state until the action is fully completed.
 
@@ -177,19 +178,20 @@ class State:
         """
         self.blocking = blocking
 
-    def set_wildcards(self, wildcards: dict[str, str | float | int] | None, permanent: bool = False):
+    def set_wildcards(self, wildcards: dict[str, str | float | int] | None, permanent: bool = False) -> None:
         """Replaces wildcard values in the state messages. This method is used to dynamically
         configure state messages with context-specific data.
 
         Args:
             wildcards: A dictionary mapping wildcard placeholders to their concrete values.
+            permanent: If True, the wildcard substitution becomes the new baseline (default: False).
         """
         self.wildcards = wildcards if wildcards is not None else {}
         self.__replace_wildcard_values()
         if permanent:
             self.set_msg(self.msg)
 
-    def __replace_wildcard_values(self):
+    def __replace_wildcard_values(self) -> None:
         """A private helper method that replaces placeholder values (wildcards) in the state message.
         It handles both single-value and list-based wildcards.
         """

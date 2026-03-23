@@ -40,3 +40,18 @@ class Custom:
     # Arguments
     STREAM_ARG_NAMES = {'stream', 'streams', 'u_hashes', 'yhat_hashes'}
     AGENT_ARG_NAMES = {'agent', 'agents', 'partner', 'partners'}
+
+    # HSM wildcards
+    DEFAULT_WILDCARDS = {'<world>': '<world>', '<agent>': '<agent>', '<partner>': '<partner>', '<role>': '<role>'}
+
+    # Candidate Action argument names (when calling an action) that tells that such an action is multi-steps
+    SECONDS_ARG_NAMES = {'time'}
+    TIMEOUT_ARG_NAMES = {'timeout'}
+    DELAY_ARG_NAMES = {'delay'}
+    NOT_ALLOWED_IN_ACTION_SIGNATURE = SECONDS_ARG_NAMES | TIMEOUT_ARG_NAMES | DELAY_ARG_NAMES
+    INTERACTION_ARG_NAMES = {'interaction', '_requester'}
+    DEFAULT_TIMEOUT = 10.0
+
+    # Deprecated Action argument-related things
+    SPECIAL_DEPRECATED_CASES_PREFIXES = {'ask_', 'do_', 'done_'}
+    NOT_READY_PREFIXES = {'get_', 'got_', 'do_', 'done_'}

@@ -17,6 +17,7 @@ import copy
 import html
 import time
 import inspect
+from collections.abc import Callable, Iterator
 from unaiverse.utils.logger import log
 from unaiverse.interaction import Interaction
 
@@ -125,17 +126,20 @@ class Action:
         self.system_interaction.set_action_ref(self)
 
     @property
-    def ready(self):
+    def ready(self) -> bool:
+        """Returns the inner readiness flag of the action."""
         return self.inner
 
     @property
     def has_completion_step(self) -> bool:
+        """Returns whether the action has a dedicated completion step (deprecated actions only)."""
         return self.deprecated_has_completion
 
-    def set_state_machine(self, hsm):
+    def set_state_machine(self, hsm: object) -> None:
+        """Registers the parent state machine that owns this action."""
         self.state_machine = hsm
 
-    async def __call__(self, interaction: Interaction | None = None):
+    async def __call__(self, interaction: Interaction | None = None) -> int:
         """Executes the action's associated method. This is the main entry point for running an action. It handles
         multistep logic by updating the step counter and checking for completion based on steps, time, or timeout.
         It also injects dynamic arguments like the `requester`, `request_time`, and `request_uuid` into the method's
@@ -146,7 +150,8 @@ class Action:
             interaction: The Interaction object or None, if the action was not requested by other agents.
 
         Returns:
-            A boolean indicating whether the action was executed successfully.
+            An integer status code: ``0`` for success, ``1`` to retry, ``2`` to skip/move to next, ``-1`` for
+            unexpected cases.
         """
         if interaction is None:
             interaction = self.system_interaction
@@ -264,7 +269,7 @@ class Action:
         # Unexpected
         return -1
 
-    def __str__(self):
+    def __str__(self) -> str:
         """Provides a string representation of the `Action` instance.
 
         Returns:
@@ -275,22 +280,23 @@ class Action:
                 f"ready (inner): {self.inner}, outer: {self.outer}, interactions: {str(self.interactions)}, "
                 f"msg: {str(self.msg)}]")
 
-    def to_code_str(self):
+    def to_code_str(self) -> str:
+        """Returns a compact code-style string representation of the action (for logging/debugging)."""
         s = f"aati:{self.name}|{self.args}|{[self.__total_time, self.__timeout, self.__delay]}|"
         if len(self.interactions) > 0:
             return s + "\n" + "\n".join(f"   {inter}" for inter in self.interactions)
         else:
             return s + "no-int"
 
-    def set_as_ready(self):
+    def set_as_ready(self) -> None:
         """Sets the action's ready flag to `True`, indicating it can now be executed."""
         self.inner = True
 
-    def set_as_not_ready(self):
+    def set_as_not_ready(self) -> None:
         """Sets the action's ready flag to `False`, preventing it from being executed."""
         self.inner = False
 
-    def set_msg(self, msg):
+    def set_msg(self, msg: str | None) -> None:
         """Sets the message associated to this action."""
 
         if msg is not None:
@@ -300,13 +306,13 @@ class Action:
             self.msg = None
             self.msg_with_wildcards = None
 
-    def is_ready(self, consider_interactions: bool = True, delay_starting_time: float = -1.):
+    def is_ready(self, consider_interactions: bool = True, delay_starting_time: float = -1.) -> bool:
         """Checks if the action is ready to be executed. It returns `True` if the `ready` flag is set or if there are
         any pending interactions.
 
         Args:
             consider_interactions: A boolean flag to include pending interactions in the readiness check.
-            delay_starting_time: The starting type from which the delay is calculated (in seconds).
+            delay_starting_time: The starting time from which the delay is calculated (in seconds).
 
         Returns:
             A boolean indicating the action's readiness.
@@ -316,16 +322,19 @@ class Action:
         return not is_delayed and (self.inner or (consider_interactions and self.outer and len(
             self.interactions.get_interactions(doable_only=True)) > 0))
 
-    def allows_outer_interactions(self):
+    def allows_outer_interactions(self) -> bool:
+        """Returns whether this action can be triggered by external (outer) interactions."""
         return self.outer
 
-    def allows_inner_interactions(self):
+    def allows_inner_interactions(self) -> bool:
+        """Returns whether this action can be triggered internally (inner readiness flag)."""
         return self.inner
 
-    def set_default_timeout(self):
+    def set_default_timeout(self) -> None:
+        """Sets the timeout to the class-level default value (``Action.DEFAULT_TIMEOUT``)."""
         self.__timeout = Action.DEFAULT_TIMEOUT
 
-    def is_pedantic(self):
+    def is_pedantic(self) -> bool:
         """Checks if a timeout has been configured for the action.
 
         Returns:
@@ -333,16 +342,19 @@ class Action:
         """
         return self.__timeout > 0
 
-    def get_total_time(self):
+    def get_total_time(self) -> float | str:
+        """Returns the total execution time configured for this action (0 means no limit)."""
         return self.__total_time
 
-    def get_timeout(self):
+    def get_timeout(self) -> float | str:
+        """Returns the timeout configured for this action (0 means no timeout)."""
         return self.__timeout
 
-    def get_delay(self):
+    def get_delay(self) -> float | str:
+        """Returns the delay configured for this action (0 means no delay)."""
         return self.__delay
 
-    def to_list(self, minimal=False):
+    def to_list(self, minimal=False) -> list:
         """Converts the action's properties into a list for easy serialization. It can generate either a full or a
         minimal representation.
 
@@ -368,7 +380,7 @@ class Action:
         else:
             return [self.name, self.args | special_args]
 
-    def same_as(self, name: str, args: dict | None):
+    def same_as(self, name: str, args: dict | None) -> bool:
         """Compares the current action to a target action by name and arguments. It returns `True` if they are
         considered the same, ignoring specific arguments like time or timeout.
 
@@ -396,7 +408,7 @@ class Action:
                 all(k in args_to_exclude or k not in self.args or self.args[k] == v for k, v in args.items()))
 
     def check_provided_args(self, args: dict, exception: bool = False, remove_special_arguments: bool = False) -> bool:
-        """A private helper method to validate that all provided arguments for an action exist in the action's
+        """A helper method that validates that all provided arguments for an action exist in the action's
         parameter list. It can either raise a `ValueError` or return a boolean.
 
         Args:
@@ -436,7 +448,7 @@ class Action:
                 del args[arg_name]
         return True
 
-    def set_wildcards(self, wildcards: dict[str, str | float | int] | None, permanent: bool = False):
+    def set_wildcards(self, wildcards: dict[str, str | float | int] | None, permanent: bool = False) -> None:
         """Replaces wildcard values in the action's arguments with actual values. This method is used to dynamically
         configure actions with context-specific data.
 
@@ -455,7 +467,7 @@ class Action:
             self.__delay_with_wildcard = None
             self.set_msg(self.msg)
 
-    def add_interaction(self, interaction: Interaction):
+    def add_interaction(self, interaction: Interaction) -> bool:
         """Adds a new interaction to the action's internal list.
         This is used to track pending requests that might make the action ready to be executed.
 
@@ -470,7 +482,7 @@ class Action:
         self.interactions.add(interaction)
         return True
 
-    def clear_interactions(self, requester: str | None = None):
+    def clear_interactions(self, requester: str | None = None) -> None:
         """Clears all pending requests from the action's list."""
         if requester is None:
             self.interactions = ActionInteractionList()
@@ -480,7 +492,13 @@ class Action:
                 for req in requests:
                     self.interactions.remove(req)
 
-    def clear_interaction(self, requester: str, req_id: int):
+    def clear_interaction(self, requester: str, req_id: int) -> None:
+        """Removes a single specific interaction identified by requester and insertion-order ID.
+
+        Args:
+            requester: The peer ID of the requester who owns the interaction.
+            req_id: The insertion-order ID of the interaction to remove.
+        """
         req = self.interactions.get_interaction(req_id, requester)
         if req is not None:
             self.interactions.remove(req)
@@ -493,7 +511,7 @@ class Action:
         """
         return self.interactions
 
-    def get_actual_params(self, additional_args: dict | None):
+    def get_actual_params(self, additional_args: dict | None) -> dict | None:
         """A helper method that resolves all parameters for an action's execution. It combines the action's
         default arguments, initial arguments, and any additional arguments provided during the call, ensuring all
         necessary parameters have a value.
@@ -521,7 +539,7 @@ class Action:
 
     get_list_of_requests = get_list_of_interactions  # Backward compatibility
 
-    def __action_name_to_callable(self, action_name: str):
+    def __action_name_to_callable(self, action_name: str) -> Callable | None:
         """A private helper method that resolves a string action name into a callable method on the `actionable`
         object. It raises a `ValueError` if the method is not found.
 
@@ -539,7 +557,7 @@ class Action:
         else:
             return None
 
-    def __get_action_params(self):
+    def __get_action_params(self) -> None:
         """A private helper method that inspects the signature of the action's method to populate the list of
         supported parameters and their default values.
         """
@@ -555,7 +573,7 @@ class Action:
                          f"this is a special argument that is automatically handled, and cannot be "
                          f"included in the function signature (change its name).")
 
-    def __replace_wildcard_values(self, args: dict | None = None):
+    def __replace_wildcard_values(self, args: dict | None = None) -> dict:
         """A private helper method that replaces placeholder values (wildcards) in the action's arguments with their
         actual, concrete values. It handles both single-value and list-based wildcards.
         """
@@ -601,7 +619,7 @@ class Action:
 
         return args
 
-    def __guess_total_time(self, args):
+    def __guess_total_time(self, args) -> None:
         """A private helper method that attempts to determine the total execution time for an action by looking for a
         'time' or 'seconds' argument.
 
@@ -622,7 +640,7 @@ class Action:
                     pass
                 break
 
-    def __guess_timeout(self, args):
+    def __guess_timeout(self, args) -> None:
         """A private helper method that attempts to determine the timeout duration for an action by looking for a
         'timeout' argument.
 
@@ -642,7 +660,7 @@ class Action:
                         self.__timeout = -1.
                 break
 
-    def __guess_delay(self, args):
+    def __guess_delay(self, args) -> None:
         """A private helper method that attempts to determine a delay duration for an action by looking for a 'delay'
         argument.
 
@@ -666,12 +684,23 @@ class Action:
 
 class ActionInteractionList:
     def __init__(self, max_per_requester: int = -1):
+        """Initializes an empty interaction list with an optional per-requester cap.
+
+        Args:
+            max_per_requester: Maximum number of interactions stored per requester (-1 for unlimited).
+        """
         self.by_insertion_order = []
         self.by_requester_and_by_insertion_order = {}
         self.max_per_requester = max_per_requester
         self.by_insertion_order_entering_time = []
 
-    def add(self, interaction: Interaction):
+    def add(self, interaction: Interaction) -> None:
+        """Appends an interaction to the list, updating all internal indices. Interactions with ``uuid=None`` are
+        deduplicated per requester. If ``max_per_requester`` is set, the oldest entry for that requester is evicted.
+
+        Args:
+            interaction: The Interaction object to add.
+        """
 
         # Updating by-requester index
         if interaction.requester not in self.by_requester_and_by_insertion_order:
@@ -699,7 +728,12 @@ class ActionInteractionList:
         # Saving joining time
         self.by_insertion_order_entering_time.append(time.perf_counter())
 
-    def remove(self, interaction: Interaction):
+    def remove(self, interaction: Interaction) -> None:
+        """Removes an interaction from the list, reindexing all subsequent entries to keep indices consistent.
+
+        Args:
+            interaction: The Interaction object to remove.
+        """
         if interaction.is_valid():
             if (interaction.by_insertion_order_id < len(self.by_insertion_order) and
                     self.by_insertion_order[interaction.by_insertion_order_id] == interaction):
@@ -718,7 +752,12 @@ class ActionInteractionList:
                 interaction.by_insertion_order_id = -1
                 interaction.by_requester_insertion_order_id = -1
 
-    def remove_due_to_timeout(self, timeout_secs: float):
+    def remove_due_to_timeout(self, timeout_secs: float) -> None:
+        """Removes all interactions that have been waiting longer than the specified timeout.
+
+        Args:
+            timeout_secs: The maximum age in seconds; older interactions are removed.
+        """
         to_remove = []
         for i, req in enumerate(self.by_insertion_order):
             if (time.perf_counter() - self.by_insertion_order_entering_time[i]) >= timeout_secs:
@@ -726,7 +765,8 @@ class ActionInteractionList:
         for req in to_remove:
             self.remove(req)
 
-    def remove_completed(self):
+    def remove_completed(self) -> None:
+        """Removes all interactions that have been marked as completed."""
         to_remove = []
         for i, req in enumerate(self.by_insertion_order):
             if req.completed:
@@ -734,7 +774,12 @@ class ActionInteractionList:
         for req in to_remove:
             self.remove(req)
 
-    def move_interaction_to_back(self, interaction: Interaction):
+    def move_interaction_to_back(self, interaction: Interaction) -> None:
+        """Moves an interaction to the back of the insertion-order list, preserving its original entering time.
+
+        Args:
+            interaction: The Interaction object to reposition.
+        """
         if interaction.is_valid():
             try:
                 entering_time = self.by_insertion_order_entering_time[interaction.by_insertion_order_id]
@@ -744,7 +789,12 @@ class ActionInteractionList:
             except Exception as e:
                 raise e
 
-    def move_requester_to_back(self, requester: str):
+    def move_requester_to_back(self, requester: str) -> None:
+        """Moves all interactions belonging to a requester to the back of the list, preserving their entering times.
+
+        Args:
+            requester: The peer ID whose interactions should be moved to the back.
+        """
         requests = self.get_interactions(requester)
         if requests is not None and len(requests) > 0:
             requests_copy = []
@@ -758,7 +808,16 @@ class ActionInteractionList:
                 self.add(req)
                 self.by_insertion_order_entering_time[req.by_insertion_order_id] = entering_times[i]
 
-    def get_interaction(self, req_order_id: int, requester: str | None = None):
+    def get_interaction(self, req_order_id: int, requester: str | None = None) -> Interaction | None:
+        """Retrieves an interaction by its insertion-order index, optionally scoped to a specific requester.
+
+        Args:
+            req_order_id: The insertion-order index of the interaction to retrieve.
+            requester: If provided, scopes the lookup to this requester's sub-list.
+
+        Returns:
+            The matching Interaction, or None if not found.
+        """
         if req_order_id < 0 and req_order_id != -1:
             return None
         if requester is None:
@@ -769,13 +828,38 @@ class ActionInteractionList:
             return self.by_requester_and_by_insertion_order[requester][req_order_id] \
                 if req_order_id < len(self.by_requester_and_by_insertion_order[requester]) else None
 
-    def get_oldest_interaction(self, requester: str | None = None):
+    def get_oldest_interaction(self, requester: str | None = None) -> Interaction | None:
+        """Returns the oldest (first-added) interaction, optionally scoped to a specific requester.
+
+        Args:
+            requester: If provided, scopes the lookup to this requester's sub-list.
+
+        Returns:
+            The oldest Interaction, or None if the list is empty.
+        """
         return self.get_interaction(0, requester)
 
-    def get_most_recent_interaction(self, requester: str | None = None):
+    def get_most_recent_interaction(self, requester: str | None = None) -> Interaction | None:
+        """Returns the most recently added interaction, optionally scoped to a specific requester.
+
+        Args:
+            requester: If provided, scopes the lookup to this requester's sub-list.
+
+        Returns:
+            The most recent Interaction, or None if the list is empty.
+        """
         return self.get_interaction(-1, requester)
 
-    def get_interaction_by_uuid(self, requester: str, uuid: str | None) -> None | Interaction:
+    def get_interaction_by_uuid(self, requester: str, uuid: str | None) -> Interaction | None:
+        """Finds the first interaction for a given requester that matches the specified UUID.
+
+        Args:
+            requester: The peer ID of the requester.
+            uuid: The UUID to search for (may be None).
+
+        Returns:
+            The matching Interaction, or None if not found.
+        """
         requests = self.get_interactions(requester)
         if requests is None or len(requests) == 0:
             return None
@@ -784,14 +868,26 @@ class ActionInteractionList:
             if req.uuid == uuid:
                 return req
 
-    def keep_only_the_most_recent_interaction(self):
+    def keep_only_the_most_recent_interaction(self) -> None:
+        """Discards all interactions except the most recently added one, preserving its entering time."""
         req = self.get_most_recent_interaction()
         entering_time = self.by_insertion_order_entering_time[req.by_insertion_order_id]
         self.clear()
         self.add(req)
         self.by_insertion_order_entering_time[req.by_insertion_order_id] = entering_time
 
-    def get_interactions(self, requester: str | None = None, to_str: bool = False, doable_only: bool = False):
+    def get_interactions(self, requester: str | None = None, to_str: bool = False,
+                         doable_only: bool = False) -> list[Interaction] | str:
+        """Returns interactions, optionally filtered by requester or doability, or as a JSON string.
+
+        Args:
+            requester: If provided, returns only interactions from this requester.
+            to_str: If True, returns a JSON-encoded string instead of a list.
+            doable_only: If True, filters to only interactions that pass ``check_if_doable()``.
+
+        Returns:
+            A list of Interaction objects, or a JSON-encoded string if ``to_str`` is True.
+        """
         if requester is None:
             reqs = self.by_insertion_order
             if doable_only:
@@ -815,21 +911,32 @@ class ActionInteractionList:
                 else:
                     return json.dumps([])
 
-    def clear(self):
+    def clear(self) -> None:
+        """Removes all interactions and resets all internal indices."""
         self.by_insertion_order.clear()
         self.by_requester_and_by_insertion_order.clear()
         self.by_insertion_order_entering_time.clear()
 
-    def is_requester_known(self, requester: str):
+    def is_requester_known(self, requester: str) -> bool:
+        """Checks whether any interactions from the given requester are currently stored.
+
+        Args:
+            requester: The peer ID to look up.
+
+        Returns:
+            True if the requester has at least one interaction in the list, False otherwise.
+        """
         return requester in self.by_requester_and_by_insertion_order
 
-    def __len__(self):
+    def __len__(self) -> int:
+        """Returns the total number of interactions in the list."""
         return len(self.by_insertion_order)
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[Interaction]:
+        """Iterates over all interactions in insertion order."""
         return iter(self.by_insertion_order)
 
-    def __str__(self):
+    def __str__(self) -> str:
         """Provides a string representation of the `ActionInteractionList` instance.
 
         Returns:
