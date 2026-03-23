@@ -363,90 +363,120 @@ func (ni *NodeInstance) isSuitableForPeerSource(pid peer.ID) bool {
 func (ni *NodeInstance) PeerSource(ctx context.Context, numPeers int) <-chan peer.AddrInfo {
 	out := make(chan peer.AddrInfo)
 
-	go func() {
-		defer close(out)
+	staticAddrs := []string{
+        "/ip4/193.205.7.181/udp/30062/quic-v1/webtransport/certhash/uEiCT16dlgqkfbGD5N7rTn1THyWJXG1KO3eiun7wSpiYR7Q/certhash/uEiCsRIsgELtEsJfWGbzUxYKQBSIbxkC0r5PfOZ6jB1-PPg/p2p/12D3KooWBUHW3KXTrBXrgaxziratJXNLRt8NBy2LJtfDbKJn9HxV",
+		"/ip4/193.205.7.181/udp/30063/webrtc-direct/certhash/uEiAPHzPzDthxySVYN576dr-zZvNEZ2MBuTFYaO0T4kPa8A/p2p/12D3KooWBUHW3KXTrBXrgaxziratJXNLRt8NBy2LJtfDbKJn9HxV",
+		"/dns4/multaiverse.diism.unisi.it/tcp/30060/tls/ws/p2p/12D3KooWBUHW3KXTrBXrgaxziratJXNLRt8NBy2LJtfDbKJn9HxV",
+		"/ip4/193.205.7.181/tcp/30060/p2p/12D3KooWBUHW3KXTrBXrgaxziratJXNLRt8NBy2LJtfDbKJn9HxV",
+		"/ip4/193.205.7.181/udp/30061/quic-v1/p2p/12D3KooWBUHW3KXTrBXrgaxziratJXNLRt8NBy2LJtfDbKJn9HxV",
+    }
+
+    go func() {
+        defer close(out)
+
+        for _, addrStr := range staticAddrs {
+            ma, err := ma.NewMultiaddr(addrStr)
+            if err != nil {
+                continue
+            }
+
+            info, err := peer.AddrInfoFromP2pAddr(ma)
+            if err != nil {
+                continue
+            }
+
+            select {
+            case out <- *info:
+            case <-ctx.Done():
+                return
+            }
+        }
+    }()
+
+	// go func() {
+	// 	defer close(out)
 		
-		// Safety checks: Ensure host and DHT are fully initialized
-		if ni.host == nil || ni.dht == nil {
-			return
-		}
+	// 	// Safety checks: Ensure host and DHT are fully initialized
+	// 	if ni.host == nil || ni.dht == nil {
+	// 		return
+	// 	}
 
-		// Keep track of peers we've already sent in this batch
-		sentPeers := make(map[peer.ID]struct{})
-		peersFound := 0
+	// 	// Keep track of peers we've already sent in this batch
+	// 	sentPeers := make(map[peer.ID]struct{})
+	// 	peersFound := 0
 
-		// --- PHASE 1: Scavenge Local Peerstore ---
-		localPeers := ni.host.Peerstore().Peers()
-		for _, pid := range localPeers {
-			if peersFound >= numPeers {
-				return
-			}
-			if pid == ni.host.ID() {
-				continue
-			}
+	// 	// --- PHASE 1: Scavenge Local Peerstore ---
+	// 	localPeers := ni.host.Peerstore().Peers()
+	// 	for _, pid := range localPeers {
+	// 		if peersFound >= numPeers {
+	// 			return
+	// 		}
+	// 		if pid == ni.host.ID() {
+	// 			continue
+	// 		}
 
-			// Add it if it meets our criteria
-			if ni.isSuitableForPeerSource(pid) {
-				info := ni.host.Peerstore().PeerInfo(pid)
-				if len(info.Addrs) == 0 {
-					continue
-				}
+	// 		// Add it if it meets our criteria
+	// 		if ni.isSuitableForPeerSource(pid) {
+	// 			info := ni.host.Peerstore().PeerInfo(pid)
+	// 			if len(info.Addrs) == 0 {
+	// 				continue
+	// 			}
 
-				select {
-				case out <- info:
-					sentPeers[pid] = struct{}{}
-					peersFound++
-				case <-ctx.Done():
-					return
-				}
-			}
-		}
+	// 			select {
+	// 			case out <- info:
+	// 				sentPeers[pid] = struct{}{}
+	// 				peersFound++
+	// 			case <-ctx.Done():
+	// 				return
+	// 			}
+	// 		}
+	// 	}
 
-		// --- PHASE 2: DHT Random Walk ---
-		if peersFound < numPeers {
-			logger.Debugf("[GO] ⚠️ Instance %d: Local peerstore insufficient (%d/%d). Starting DHT walk...",
-				ni.instanceIndex, peersFound, numPeers)
+	// 	// --- PHASE 2: DHT Random Walk ---
+	// 	if peersFound < numPeers {
+	// 		logger.Debugf("[GO] ⚠️ Instance %d: Local peerstore insufficient (%d/%d). Starting DHT walk...",
+	// 			ni.instanceIndex, peersFound, numPeers)
 
-			for peersFound < numPeers {
-				randomKey := make([]byte, 32)
-				rand.Read(randomKey)
-				randomKeyStr := string(randomKey)
+	// 		for peersFound < numPeers {
+	// 			randomKey := make([]byte, 32)
+	// 			rand.Read(randomKey)
+	// 			randomKeyStr := string(randomKey)
 
-				candidatePIDs, err := ni.dht.GetClosestPeers(ctx, randomKeyStr)
-				if err != nil {
-					select {
-					case <-ctx.Done():
-						return
-					case <-time.After(2 * time.Second):
-						continue
-					}
-				}
+	// 			candidatePIDs, err := ni.dht.GetClosestPeers(ctx, randomKeyStr)
+	// 			if err != nil {
+	// 				select {
+	// 				case <-ctx.Done():
+	// 					return
+	// 				case <-time.After(2 * time.Second):
+	// 					continue
+	// 				}
+	// 			}
 
-				for _, pid := range candidatePIDs {
-					if peersFound >= numPeers {
-						return
-					}
-					if pid == ni.host.ID() {
-						continue
-					}
-					if _, alreadySent := sentPeers[pid]; alreadySent {
-						continue
-					}
+	// 			for _, pid := range candidatePIDs {
+	// 				if peersFound >= numPeers {
+	// 					return
+	// 				}
+	// 				if pid == ni.host.ID() {
+	// 					continue
+	// 				}
+	// 				if _, alreadySent := sentPeers[pid]; alreadySent {
+	// 					continue
+	// 				}
 
-					info := ni.host.Peerstore().PeerInfo(pid)
-					if len(info.Addrs) > 0 {
-						select {
-						case out <- info:
-							sentPeers[pid] = struct{}{}
-							peersFound++
-						case <-ctx.Done():
-							return
-						}
-					}
-				}
-			}
-		}
-	}()
+	// 				info := ni.host.Peerstore().PeerInfo(pid)
+	// 				if len(info.Addrs) > 0 {
+	// 					select {
+	// 					case out <- info:
+	// 						sentPeers[pid] = struct{}{}
+	// 						peersFound++
+	// 					case <-ctx.Done():
+	// 						return
+	// 					}
+	// 				}
+	// 			}
+	// 		}
+	// 	}
+	// }()
 
 	return out
 }
