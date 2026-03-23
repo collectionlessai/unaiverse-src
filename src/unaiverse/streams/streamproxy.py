@@ -15,6 +15,7 @@
 from itertools import islice
 from unaiverse.dataprops import DataProps
 from unaiverse.streams.streams import Stream
+from unaiverse.interaction import Interaction
 from unaiverse.utils.misc import GenException
 
 
