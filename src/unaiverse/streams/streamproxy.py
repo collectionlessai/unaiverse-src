@@ -13,10 +13,9 @@
                  Main Developers:    Stefano Melacci (Project Leader), Christian Di Maio, Tommaso Guidi
 """
 from itertools import islice
-from unaiverse.streams.dataprops import DataProps
 from unaiverse.streams.streams import Stream
-from unaiverse.interaction import Interaction
 from unaiverse.utils.misc import GenException
+from unaiverse.streams.dataprops import DataProps
 
 
 class StreamProxy:
@@ -87,7 +86,7 @@ class StreamProxy:
         else:
             raise GenException(f"Unknown stream: {key}")
 
-    def add_interaction(self, interaction: Interaction):
+    def add_interaction(self, interaction: 'Interaction'):
         for s in self._stream_list:
             s.add_interacton(interaction)
 
@@ -111,7 +110,7 @@ class StreamProxy:
                 return interaction  # This will happen at the 1st iteration for the way "has_interaction" is implemented
         return None  # This will never happen, since we already ensured that it "has_interaction"
 
-    def set(self, key_or_data, data=None, data_tag: int = -1, uuid: str | None = None, target: str | None = None):
+    def set(self, key_or_data, data=None, data_tag: int = -1, uuid: str | None = None):
         """Set data on a stream.
 
         Usage (example for stdin - it could be other StreamIO):
@@ -126,14 +125,6 @@ class StreamProxy:
         """
         if len(self._stream_list) == 0:
             raise GenException("No streams bound to this StreamIO")
-
-        if target is not None:
-            interaction = Interaction(uuid=uuid, target=target)  # Empty interaction
-
-            # It happens that data arrive before the interaction, hence we add this auto-built interaction object.
-            # When the actual interaction will arrive, the "add_interaction" will be called by the Interaction Manager,
-            # that will update the auto-built interaction with the actual one, keeping the data.
-            self.add_interaction(interaction)
 
         if isinstance(key_or_data, list):
             if len(key_or_data) != len(self._stream_list):

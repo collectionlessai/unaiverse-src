@@ -24,12 +24,6 @@ from tqdm import tqdm
 from pathlib import Path
 from datetime import datetime
 from collections import deque
-from unaiverse.modules.utils import has_human_processor as _has_human_processor
-
-
-# Backward compatibility
-def has_human_processor(*args, **kwargs):
-    return _has_human_processor(*args, **kwargs)
 
 
 class GenException(Exception):

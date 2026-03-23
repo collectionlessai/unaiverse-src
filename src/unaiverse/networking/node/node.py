@@ -38,9 +38,9 @@ from unaiverse.utils.logger import Ch, log
 from unaiverse.interaction import Interaction
 from unaiverse.networking.p2p.messages import Msg
 from unaiverse.networking.p2p import P2P, P2PError
-from unaiverse.streams import DataProps, BufferedStream
 from unaiverse.networking.node.connpool import NodeConn
 from unaiverse.networking.node.profile import NodeProfile
+from unaiverse.streams.streams import DataProps, BufferedStream
 from unaiverse.utils.misc import (GenException, get_key_considering_multiple_sources, save_node_addresses_to_file,
                                   PolicyFilterHuman, prepare_app_dir)
 
@@ -1192,7 +1192,7 @@ class Node:
                     else:
                         log.misc("No address changes detected.")
                 except Exception as e:
-                    self.err(f"Failed to check for address updates: {e}")
+                    log.error(f"Failed to check for address updates: {e}")
 
                 # Refresh relay reservation if nearing expiration
                 if self.relay_reservation_expiry is not None:
@@ -1205,7 +1205,7 @@ class Node:
                             self.relay_reservation_expiry = datetime.fromisoformat(
                                 new_expiry_utc.replace('Z', '+00:00'))
                             log.misc(f"Relay reservation renewed. New expiration: "
-                                    f"{self.relay_reservation_expiry.strftime('%Y-%m-%d %H:%M:%S')} UTC")
+                                     f"{self.relay_reservation_expiry.strftime('%Y-%m-%d %H:%M:%S')} UTC")
                         else:
                             log.error("Failed to renew relay reservation. Node may become unreachable.")
                             self.relay_reservation_expiry = None
@@ -2027,7 +2027,8 @@ class Node:
 
                 if expiry_utc is not None:
                     self.relay_reservation_expiry = (datetime.fromisoformat(expiry_utc.replace('Z', '+00:00')))
-                    log.user(f"Reserved relay slot. Expires at {self.relay_reservation_expiry.strftime('%Y-%m-%d %H:%M:%S')} UTC")
+                    log.user(f"Reserved relay slot. Expires at "
+                             f"{self.relay_reservation_expiry.strftime('%Y-%m-%d %H:%M:%S')} UTC")
                 else:
                     log.error("An error occurred during relay reservation.")
             

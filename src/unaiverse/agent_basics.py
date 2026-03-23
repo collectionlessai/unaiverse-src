@@ -240,7 +240,7 @@ class AgentBasics:
 
     def set_node_info(self, conn: ConnectionPools, profile: NodeProfile,
                       ask_to_get_in_touch_fcn: Callable, purge_fcn: Callable, node_identity_dir: str,
-                      agents_waiting: set) -> bool:
+                      agents_waiting: dict) -> bool:
         """Set the required information from the node that hosts this agent.
 
         Args:
@@ -249,7 +249,7 @@ class AgentBasics:
             ask_to_get_in_touch_fcn: The function to call to request getting in touch with another peer.
             purge_fcn: The function to call to purge (kill/disconnect) a connection.
             node_identity_dir: The folder where the node identity files are stored.
-            agents_waiting: Set of agents that connected to this node but have not been evaluated yet to be added.
+            agents_waiting: Dict of agents that connected to this node but have not been evaluated yet to be added.
 
         Returns:
             True upon successful setup.

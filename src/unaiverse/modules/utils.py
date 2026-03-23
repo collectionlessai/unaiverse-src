@@ -19,9 +19,9 @@ import inspect
 import logging
 import numpy as np
 from PIL import Image
-from unaiverse.streams.dataprops import Stream
 from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
+from unaiverse.streams.dataprops import Stream
 
 
 class GenException(Exception):

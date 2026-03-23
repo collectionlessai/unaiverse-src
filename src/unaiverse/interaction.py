@@ -21,9 +21,9 @@ from unaiverse.clock import clock
 from unaiverse.custom import Custom
 from collections.abc import Callable
 from unaiverse.utils.logger import log
-from unaiverse.streams.dataprops import DataProps
 from unaiverse.utils.misc import GenException
 from unaiverse.streams.streamproxy import StreamProxy
+from unaiverse.streams.dataprops import DataProps
 from unaiverse.streams.streams import Stream, BufferedStream, serialize_payload, deserialize_payload
 
 
@@ -138,6 +138,21 @@ class Interaction:
         # Back-reference to the InteractionManager (set when registered)
         self.__im: 'InteractionManager | None' = None
 
+    @property
+    def created(self) -> bool:
+        """True when the interaction has finished."""
+        return self.status == InteractionStatus.CREATED
+
+    @property
+    def completed(self) -> bool:
+        """True when the interaction has finished."""
+        return self.status == InteractionStatus.COMPLETED
+
+    @property
+    def running(self) -> bool:
+        """True when the interaction is currently running."""
+        return self.status == InteractionStatus.RUNNING
+
     def set_manager(self,
                     im: 'InteractionManager',
                     stdin_streams: dict[str, Stream | object],
@@ -155,6 +170,335 @@ class Interaction:
                              for i in range(0, len(self.data_samples))}
         self.iostreams.bind(self.stdin_streams | self.stdtar_streams | self.stdext_streams | self.owned_streams |
                             data_samples_dict)
+
+    def reset_state(self):
+        """Resets the state, including the step counter and timing metrics, allowing it to be re-run from the
+        beginning.
+        """
+        self.__step_idx = -1
+        self.__starting_time = 0.
+        self.__timeout_starting_time = 0.
+
+    def set_mark(self, mark: object):
+        self.__mark = mark
+
+    def get_mark(self):
+        return self.__mark
+
+    def get_step_idx(self):
+        return self.__step_idx
+
+    def set_step_idx(self, steps: int):
+        self.__step_idx = steps
+
+    def inc_step_idx(self):
+        self.__step_idx += 1
+
+    def dec_step_idx(self):
+        self.__step_idx -= 1
+
+    def set_starting_time(self, t: float):
+        self.__starting_time = t
+
+    def set_timeout_starting_time(self, t: float):
+        self.__timeout_starting_time = t
+
+    def get_total_steps(self):
+        """Retrieves the total number of steps configured for the action.
+
+        Returns:
+            An integer representing the total steps.
+        """
+        return self.num_steps
+
+    def get_starting_time(self):
+        """Retrieves the timestamp when the action's current execution started.
+
+        Returns:
+            A float representing the starting time.
+        """
+        return self.__starting_time
+
+    def get_timeout_starting_time(self):
+        """Retrieves the timestamp when the action's current execution started.
+
+        Returns:
+            A float representing the timeout starting time.
+        """
+        return self.__timeout_starting_time
+
+    def is_multi_steps(self):
+        """Determines if the action is configured to be a multistep action (i.e., not a single-step action).
+
+        Returns:
+            A boolean indicating if the action is multistep.
+        """
+        return self.num_steps > 1
+
+    def is_single_step(self):
+        return self.num_steps == 1 or self.num_steps < 0  # Action with a single data sample or no data samples at all
+
+    def is_valid(self):
+        return self.by_insertion_order_id >= 0 and self.by_requester_insertion_order_id >= 0
+
+    def is_completed(self):
+        return self.status == InteractionStatus.COMPLETED
+
+    def was_data_sent_after_completion(self):
+        return self.data_sent_after_completion
+
+    def has_dummy_requester(self):
+        return self.requester is None
+
+    def set_arg(self, arg_name: str, arg_value: object):
+        self.action_kwargs[arg_name] = arg_value
+
+    def get_arg(self, arg_name):
+        return self.action_kwargs[arg_name] if arg_name in self.action_kwargs else None
+
+    def was_at_least_one_step_done(self):
+        return self.__step_idx >= 0
+
+    def was_last_step_done(self):
+        """Determines if the action has reached its completion criteria, either by reaching the total number of steps
+        or by exceeding the maximum allowed execution time.
+
+        Returns:
+            True if the action is completed, False otherwise.
+        """
+        return ((self.num_steps < 0 and self.__step_idx == 0) or  # Action with no data (no steps)
+                (self.num_steps > 0 and self.__step_idx == self.num_steps - 1))  # Action with one or more steps
+
+    def is_delayed(self, starting_time: float):
+        """Checks if the action is currently in a delayed state and cannot be executed yet, based on a defined delay
+        period.
+
+        Args:
+            starting_time: The time the delay period began.
+
+        Returns:
+            True if the action is delayed, False otherwise.
+        """
+        return self.action_ref.get_delay() > 0 and (time.perf_counter() - starting_time) <= self.action_ref.get_delay()
+
+    def is_timed_out(self):
+        """Checks if the action has exceeded its configured timeout period since the last successful execution attempt.
+
+        Returns:
+            True if the action has timed out, False otherwise.
+        """
+
+        # If the action was never started (even a failed attempt), this method has no sense
+        if self.__starting_time <= 0.:
+            return False
+
+        # Checking global timeout: if too much time passed, no matter if the action started or not, it's timeout!
+        if self.action_ref.get_total_time() > 0:
+            if self.action_ref.get_total_time() <= (time.perf_counter() - self.__starting_time):
+                log.inter(f"Timeout for {self.action_name}! "
+                          f"({(time.perf_counter() - self.__starting_time)}/"
+                          f"{self.action_ref.get_total_time()})!")
+                return True
+            else:
+                log.debug(f"Running timeout for {self.action_name}! "
+                          f"({(time.perf_counter() - self.__starting_time)}/"
+                          f"{self.action_ref.get_total_time()})!")
+
+        # Checking next-step timeout
+        if self.__timeout_starting_time > 0. and self.action_ref.get_timeout() > 0:
+            if self.action_ref.get_timeout() <= (time.perf_counter() - self.__timeout_starting_time):
+                log.inter(
+                    f"Hot timeout for {self.action_name}! "
+                    f"({(time.perf_counter() - self.__timeout_starting_time)}/"
+                    f"{self.action_ref.get_timeout()})!")
+                return True
+            else:
+                log.debug(f"Running hot timeout for {self.action_name} "
+                          f"({(time.perf_counter() - self.__timeout_starting_time)}/"
+                          f"{self.action_ref.get_timeout()})!")
+                return False
+        else:
+            return False
+
+    def set_action_ref(self, action_ref: object):
+        self.action_ref = action_ref
+
+        # Augmenting argument list, by fusing with the arguments defined in the HSM
+        action_kwargs = self.action_kwargs if self.action_kwargs is not None else {}
+        self.action_ref.check_provided_args(action_kwargs, exception=True)
+
+        # Force a default timeout on multistep actions, to avoid infinite trials
+        if self.is_multi_steps() and self.action_ref.get_timeout() <= 0:
+            self.action_ref.set_default_timeout()
+
+    def has_stream(self, user_hash):
+        return user_hash in self.iostreams or user_hash in self.lazy_streams
+
+    def add_lazy_stream(self, user_hash, stream_obj, is_owned: bool = False):
+        if not self.has_stream(user_hash):
+            self.lazy_streams[user_hash] = stream_obj
+            if is_owned:
+                self.owned_streams[user_hash] = stream_obj
+            self.iostreams.add_new_bind(user_hash, stream_obj)
+
+    def mark_running(self):
+        """Mark this interaction as currently running."""
+        self.status = InteractionStatus.RUNNING
+        self.timestamp_started = clock.get_time()
+        self.cycle_started = clock.get_cycle()
+
+    def mark_completed(self, reason: 'CompletionReason', dest_state: str | None = None):
+        """Mark this interaction as completed.
+
+        Args:
+            reason: The reason for completion.
+            dest_state: The destination state reached by completing this action.
+        """
+        self.status = InteractionStatus.COMPLETED
+        self.destination_state = dest_state
+        self.completion_reason = reason
+        self.timestamp_completed = clock.get_time()
+        self.cycle_completed = clock.get_cycle()
+
+    def clear_from_streams_and_action(self):
+
+        # Clearing interaction from all the streams involved as input, extra, or targets
+        for stream in self.iostreams:
+
+            # Skipping data samples and default input values
+            if not isinstance(stream, Stream):
+                continue
+
+            stream.remove_interaction(self)
+
+        # Clearing interaction from action list
+        if self.action_ref is not None:
+            self.action_ref.get_list_of_interactions().remove(self)
+
+    def is_expired(self, timeout_secs: float | None = None) -> bool:
+        """Check if this interaction has expired based on an external timeout.
+
+        Args:
+            timeout_secs: Maximum higher-priority timeout in seconds (default: None).
+
+        Returns:
+            True if the interaction is older than timeout_secs.
+        """
+
+        # Deciding the real value of timeout_specs, also in function of the interaction-specific timeout (if given)
+        if timeout_secs is not None and timeout_secs > 0. and self.timeout is not None and self.timeout > 0.:
+            timeout_secs = min(timeout_secs, self.timeout)
+        elif timeout_secs is None or timeout_secs <= 0.:
+            timeout_secs = self.timeout  # It could still be None or < 0.
+
+        if timeout_secs is None or timeout_secs <= 0.:  # Perpetual interaction
+            return False
+        else:
+            return (clock.get_time() - self.timestamp_created) >= timeout_secs
+
+    def record_data_tags(self, data_tags: dict[str, int], timestamps: dict[str, float] | None = None):
+        """Record that data with the given tag was received for this interaction.
+
+        Args:
+            data_tags: The data tags/sequence numbers.
+            timestamps: Optional timestamps (defaults to current time).
+        """
+        for stream_name, data_tag in data_tags.items():
+            self.received_data_tags[stream_name].append(data_tag)
+            self.received_timestamps[stream_name].append(
+                timestamps[stream_name] if timestamps is not None and stream_name in timestamps
+                else clock.get_time())
+
+    def check_if_doable(self):
+        if self.__im is not None:
+            return self.__im.check_if_doable(self)
+        else:
+            return not self.completed  # System interactions does not have an interaction manager
+
+    def alter_arg(self, arg_name: str, arg_value: object):
+        if arg_name in self.action_kwargs:
+            self.action_kwargs[arg_name] = arg_value
+            return True
+        else:
+            return False
+
+    def to_dict(self) -> dict:
+        """Serialize this interaction for network transmission.
+
+        Returns:
+            A dictionary representation of this interaction.
+        """
+        return {
+            'uuid': self.uuid,
+            'action_name': self.action_name,
+            'requester': self.requester,
+            'target': self.target,
+            'action_kwargs': self.action_kwargs,
+            'streams': self.streams,
+            'data_samples': serialize_payload(self.data_samples),
+            'num_steps': self.num_steps,
+            'completion_reason': self.completion_reason.value if self.completion_reason else None,
+            'destination_state': self.destination_state,
+            'from_state': self.from_state,
+            'to_state': self.to_state,
+            'timeout': self.timeout,
+            'status': self.status.value
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> 'Interaction':
+        """Deserialize an Interaction from a dictionary.
+
+        Args:
+            d: Dictionary from to_dict().
+
+        Returns:
+            A new Interaction instance.
+        """
+        interaction = cls(
+            action_name=d['action_name'],
+            action_kwargs=d.get('action_kwargs', {}),
+            streams=d.get('streams', []),
+            data_samples=d.get('data_samples', None),
+            num_steps=d.get('num_steps'),
+            requester=d.get('requester'),
+            target=d.get('target'),
+            from_state=d.get('from_state'),
+            to_state=d.get('to_state'),
+            timeout=d.get('timeout', -1.),
+        )
+        interaction.uuid = d['uuid']
+        interaction.status = InteractionStatus(d['status'])
+        if d.get('completion_reason'):
+            interaction.completion_reason = CompletionReason(d['completion_reason'])
+        interaction.destination_state = d.get('destination_state')
+        return interaction
+
+    def to_status_dict(self) -> dict:
+        """Build a minimal status dict for status update messages.
+
+        Returns:
+            A dictionary with uuid, status, completion_reason, destination_state, and data_tag.
+        """
+        return {
+            'uuid': self.uuid,
+            'status': self.status.value,
+            'completion_reason': self.completion_reason.value if self.completion_reason else None,
+            'destination_state': self.destination_state,
+            'data_tags': {k: self.received_data_tags[k][-1] for k in self.received_data_tags.keys()}
+            if self.received_data_tags else None,
+        }
+
+    def to_code_str(self, include_uuid: bool = False):
+        s = ""
+        if include_uuid:
+            s = f"{self.uuid} => "
+        return s + (f"artss:{self.action_name}|{self.requester}|{self.target}|"
+                    f"{self.iostreams}|{self.status.value[0:3]}" +
+                    (("_" + self.completion_reason.value[0:3]) if self.completion_reason is not None else ""))
+
+    def to_str(self):
+        return json.dumps([self.requester, self.action_kwargs, self.timestamp_created, self.uuid])
 
     @staticmethod
     def __parse_streams(streams: list):
@@ -286,165 +630,6 @@ class Interaction:
             raise GenException(f'Unexpected format type: {format_type}')
         return _streams
 
-    def reset_state(self):
-        """Resets the state, including the step counter and timing metrics, allowing it to be re-run from the
-        beginning.
-        """
-        self.__step_idx = -1
-        self.__starting_time = 0.
-        self.__timeout_starting_time = 0.
-
-    def set_mark(self, mark: object):
-        self.__mark = mark
-
-    def get_mark(self):
-        return self.__mark
-
-    def get_step_idx(self):
-        return self.__step_idx
-
-    def set_step_idx(self, steps: int):
-        self.__step_idx = steps
-
-    def inc_step_idx(self):
-        self.__step_idx += 1
-
-    def dec_step_idx(self):
-        self.__step_idx -= 1
-
-    def set_starting_time(self, t: float):
-        self.__starting_time = t
-
-    def set_timeout_starting_time(self, t: float):
-        self.__timeout_starting_time = t
-
-    def get_total_steps(self):
-        """Retrieves the total number of steps configured for the action.
-
-        Returns:
-            An integer representing the total steps.
-        """
-        return self.num_steps
-
-    def get_starting_time(self):
-        """Retrieves the timestamp when the action's current execution started.
-
-        Returns:
-            A float representing the starting time.
-        """
-        return self.__starting_time
-
-    def get_timeout_starting_time(self):
-        """Retrieves the timestamp when the action's current execution started.
-
-        Returns:
-            A float representing the timeout starting time.
-        """
-        return self.__timeout_starting_time
-
-    def is_multi_steps(self):
-        """Determines if the action is configured to be a multistep action (i.e., not a single-step action).
-
-        Returns:
-            A boolean indicating if the action is multistep.
-        """
-        return self.num_steps > 1
-
-    def is_single_step(self):
-        return self.num_steps == 1 or self.num_steps < 0  # Action with a single data sample or no data samples at all
-
-    def is_valid(self):
-        return self.by_insertion_order_id >= 0 and self.by_requester_insertion_order_id >= 0
-
-    def is_completed(self):
-        return self.status == InteractionStatus.COMPLETED
-
-    def was_data_sent_after_completion(self):
-        return self.data_sent_after_completion
-
-    def has_dummy_requester(self):
-        return self.requester is None
-
-    def to_str(self):
-        return json.dumps([self.requester, self.action_kwargs, self.timestamp_created, self.uuid])
-
-    def alter_arg(self, arg_name: str, arg_value: object):
-        if arg_name in self.action_kwargs:
-            self.action_kwargs[arg_name] = arg_value
-            return True
-        else:
-            return False
-
-    def set_arg(self, arg_name: str, arg_value: object):
-        self.action_kwargs[arg_name] = arg_value
-
-    def get_arg(self, arg_name):
-        return self.action_kwargs[arg_name] if arg_name in self.action_kwargs else None
-
-    def was_at_least_one_step_done(self):
-        return self.__step_idx >= 0
-
-    def was_last_step_done(self):
-        """Determines if the action has reached its completion criteria, either by reaching the total number of steps
-        or by exceeding the maximum allowed execution time.
-
-        Returns:
-            True if the action is completed, False otherwise.
-        """
-        return ((self.num_steps < 0 and self.__step_idx == 0) or  # Action with no data (no steps)
-                (self.num_steps > 0 and self.__step_idx == self.num_steps - 1))  # Action with one or more steps
-
-    def is_delayed(self, starting_time: float):
-        """Checks if the action is currently in a delayed state and cannot be executed yet, based on a defined delay
-        period.
-
-        Args:
-            starting_time: The time the delay period began.
-
-        Returns:
-            True if the action is delayed, False otherwise.
-        """
-        return self.action_ref.get_delay() > 0 and (time.perf_counter() - starting_time) <= self.action_ref.get_delay()
-
-    def is_timed_out(self):
-        """Checks if the action has exceeded its configured timeout period since the last successful execution attempt.
-
-        Returns:
-            True if the action has timed out, False otherwise.
-        """
-
-        # If the action was never started (even a failed attempt), this method has no sense
-        if self.__starting_time <= 0.:
-            return False
-
-        # Checking global timeout: if too much time passed, no matter if the action started or not, it's timeout!
-        if self.action_ref.get_total_time() > 0:
-            if self.action_ref.get_total_time() <= (time.perf_counter() - self.__starting_time):
-                log.inter(f"Timeout for {self.action_name}! "
-                          f"({(time.perf_counter() - self.__starting_time)}/"
-                          f"{self.action_ref.get_total_time()})!")
-                return True
-            else:
-                log.debug(f"Running timeout for {self.action_name}! "
-                          f"({(time.perf_counter() - self.__starting_time)}/"
-                          f"{self.action_ref.get_total_time()})!")
-
-        # Checking next-step timeout
-        if self.__timeout_starting_time > 0. and self.action_ref.get_timeout() > 0:
-            if self.action_ref.get_timeout() <= (time.perf_counter() - self.__timeout_starting_time):
-                log.inter(
-                    f"Hot timeout for {self.action_name}! "
-                    f"({(time.perf_counter() - self.__timeout_starting_time)}/"
-                    f"{self.action_ref.get_timeout()})!")
-                return True
-            else:
-                log.debug(f"Running hot timeout for {self.action_name} "
-                          f"({(time.perf_counter() - self.__timeout_starting_time)}/"
-                          f"{self.action_ref.get_timeout()})!")
-                return False
-        else:
-            return False
-
     def __str__(self):
         """Provides a string representation of the `Interaction` instance.
 
@@ -452,191 +637,6 @@ class Interaction:
             A string containing a formatted summary of the instance.
         """
         return f"{self.to_code_str()}"
-
-    @property
-    def created(self) -> bool:
-        """True when the interaction has finished."""
-        return self.status == InteractionStatus.CREATED
-
-    @property
-    def completed(self) -> bool:
-        """True when the interaction has finished."""
-        return self.status == InteractionStatus.COMPLETED
-
-    @property
-    def running(self) -> bool:
-        """True when the interaction is currently running."""
-        return self.status == InteractionStatus.RUNNING
-
-    def set_action_ref(self, action_ref: object):
-        self.action_ref = action_ref
-
-        # Augmenting argument list, by fusing with the arguments defined in the HSM
-        action_kwargs = self.action_kwargs if self.action_kwargs is not None else {}
-        self.action_ref.check_provided_args(action_kwargs, exception=True)
-
-        # Force a default timeout on multistep actions, to avoid infinite trials
-        if self.is_multi_steps() and self.action_ref.get_timeout() <= 0:
-            self.action_ref.set_default_timeout()
-
-    def has_stream(self, user_hash):
-        return user_hash in self.iostreams or user_hash in self.lazy_streams
-
-    def add_lazy_stream(self, user_hash, stream_obj, is_owned: bool = False):
-        if not self.has_stream(user_hash):
-            self.lazy_streams[user_hash] = stream_obj
-            if is_owned:
-                self.owned_streams[user_hash] = stream_obj
-            self.iostreams.add_new_bind(user_hash, stream_obj)
-
-    def mark_running(self):
-        """Mark this interaction as currently running."""
-        self.status = InteractionStatus.RUNNING
-        self.timestamp_started = clock.get_time()
-        self.cycle_started = clock.get_cycle()
-
-    def mark_completed(self, reason: 'CompletionReason', dest_state: str | None = None):
-        """Mark this interaction as completed.
-
-        Args:
-            reason: The reason for completion.
-            dest_state: The destination state reached by completing this action.
-        """
-        self.status = InteractionStatus.COMPLETED
-        self.destination_state = dest_state
-        self.completion_reason = reason
-        self.timestamp_completed = clock.get_time()
-        self.cycle_completed = clock.get_cycle()
-
-    def clear_from_streams_and_action(self):
-
-        # Clearing interaction from all the streams involved as input, extra, or targets
-        for stream in self.iostreams:
-
-            # Skipping data samples and default input values
-            if not isinstance(stream, Stream):
-                continue
-
-            stream.remove_interaction(self)
-
-        # Clearing interaction from action list
-        if self.action_ref is not None:
-            self.action_ref.get_list_of_interactions().remove(self)
-
-    def is_expired(self, timeout_secs: float | None = None) -> bool:
-        """Check if this interaction has expired based on an external timeout.
-
-        Args:
-            timeout_secs: Maximum higher-priority timeout in seconds (default: None).
-
-        Returns:
-            True if the interaction is older than timeout_secs.
-        """
-
-        # Deciding the real value of timeout_specs, also in function of the interaction-specific timeout (if given)
-        if timeout_secs is not None and timeout_secs > 0. and self.timeout is not None and self.timeout > 0.:
-            timeout_secs = min(timeout_secs, self.timeout)
-        elif timeout_secs is None or timeout_secs <= 0.:
-            timeout_secs = self.timeout  # It could still be None or < 0.
-
-        if timeout_secs is None or timeout_secs <= 0.:  # Perpetual interaction
-            return False
-        else:
-            return (clock.get_time() - self.timestamp_created) >= timeout_secs
-
-    def record_data_tags(self, data_tags: dict[str, int], timestamps: dict[str, float] | None = None):
-        """Record that data with the given tag was received for this interaction.
-
-        Args:
-            data_tags: The data tags/sequence numbers.
-            timestamps: Optional timestamps (defaults to current time).
-        """
-        for stream_name, data_tag in data_tags.items():
-            self.received_data_tags[stream_name].append(data_tag)
-            self.received_timestamps[stream_name].append(
-                timestamps[stream_name] if timestamps is not None and stream_name in timestamps
-                else clock.get_time())
-
-    def check_if_doable(self):
-        if self.__im is not None:
-            return self.__im.check_if_doable(self)
-        else:
-            return not self.completed  # System interactions does not have an interaction manager
-
-    def to_dict(self) -> dict:
-        """Serialize this interaction for network transmission.
-
-        Returns:
-            A dictionary representation of this interaction.
-        """
-        return {
-            'uuid': self.uuid,
-            'action_name': self.action_name,
-            'requester': self.requester,
-            'target': self.target,
-            'action_kwargs': self.action_kwargs,
-            'streams': self.streams,
-            'data_samples': serialize_payload(self.data_samples),
-            'num_steps': self.num_steps,
-            'completion_reason': self.completion_reason.value if self.completion_reason else None,
-            'destination_state': self.destination_state,
-            'from_state': self.from_state,
-            'to_state': self.to_state,
-            'timeout': self.timeout,
-            'status': self.status.value
-        }
-
-    def to_code_str(self, include_uuid: bool = False):
-        s = ""
-        if include_uuid:
-            s = f"{self.uuid} => "
-        return s + (f"artss:{self.action_name}|{self.requester}|{self.target}|"
-                    f"{self.iostreams}|{self.status.value[0:3]}" +
-                    (("_" + self.completion_reason.value[0:3]) if self.completion_reason is not None else ""))
-
-    @classmethod
-    def from_dict(cls, d: dict) -> 'Interaction':
-        """Deserialize an Interaction from a dictionary.
-
-        Args:
-            d: Dictionary from to_dict().
-
-        Returns:
-            A new Interaction instance.
-        """
-        interaction = cls(
-            action_name=d['action_name'],
-            action_kwargs=d.get('action_kwargs', {}),
-            streams=d.get('streams', []),
-            data_samples=d.get('data_samples', None),
-            num_steps=d.get('num_steps'),
-            requester=d.get('requester'),
-            target=d.get('target'),
-            from_state=d.get('from_state'),
-            to_state=d.get('to_state'),
-            timeout=d.get('timeout', -1.),
-        )
-        interaction.uuid = d['uuid']
-        interaction.status = InteractionStatus(d['status'])
-        if d.get('completion_reason'):
-            interaction.completion_reason = CompletionReason(d['completion_reason'])
-        interaction.destination_state = d.get('destination_state')
-        return interaction
-
-    def to_status_dict(self) -> dict:
-        """Build a minimal status dict for status update messages.
-
-        Returns:
-            A dictionary with uuid, status, completion_reason, destination_state, and data_tag.
-        """
-        return {
-            'uuid': self.uuid,
-            'status': self.status.value,
-            'completion_reason': self.completion_reason.value if self.completion_reason else None,
-            'destination_state': self.destination_state,
-            'data_tags': {k: self.received_data_tags[k][-1] for k in self.received_data_tags.keys()}
-            if self.received_data_tags else None,
-        }
 
 
 class InteractionManager:
@@ -834,20 +834,6 @@ class InteractionManager:
         interaction.status = InteractionStatus.LAZY
         self.last_registered = interaction
         return True
-
-    def __normalize_to_user_hashes(self, stream_hash):
-        user_hashes = []
-        if Stream.is_user_hash(stream_hash):
-            user_hashes.append(stream_hash)
-        elif Stream.is_net_hash(stream_hash):
-            net_hash = stream_hash
-            if net_hash in self.agent.known_streams:
-                streams = self.agent.known_streams[net_hash]
-                for stream_obj in streams.values():
-                    name = stream_obj.props.name
-                    user_hash = DataProps.user_hash_from_net_hash(net_hash, name)
-                    user_hashes.append(user_hash)
-        return user_hashes
 
     def expand_and_normalize_streams(self, interaction: Interaction) -> (
             tuple[dict[str | None, list], dict[str | None, list]] | tuple[None, None]):
@@ -1260,6 +1246,20 @@ class InteractionManager:
                         to_remove.append(inter)
         for inter in to_remove:
             self.complete(inter, reason=CompletionReason.DISCONNECTED)
+
+    def __normalize_to_user_hashes(self, stream_hash):
+        user_hashes = []
+        if Stream.is_user_hash(stream_hash):
+            user_hashes.append(stream_hash)
+        elif Stream.is_net_hash(stream_hash):
+            net_hash = stream_hash
+            if net_hash in self.agent.known_streams:
+                streams = self.agent.known_streams[net_hash]
+                for stream_obj in streams.values():
+                    name = stream_obj.props.name
+                    user_hash = DataProps.user_hash_from_net_hash(net_hash, name)
+                    user_hashes.append(user_hash)
+        return user_hashes
 
     def __str__(self):
         s1 = ""

@@ -21,14 +21,10 @@ import json
 import torch
 import base64
 import random
-import pathlib
-from .clock import clock
 from PIL.Image import Image
-
-from .custom import Custom
 from .dataprops import DataProps
-from unaiverse.utils.logger import log
-from unaiverse.utils.misc import MultiPartLimitedDict
+from unaiverse.clock import clock
+from unaiverse.custom import Custom
 from unaiverse.utils.misc import show_images_grid, GenException
 
 
@@ -220,27 +216,6 @@ class Stream:
     def is_public(self):
         return self.get_props().is_public()
 
-    def __getitem__(self, idx_and_uuid: tuple[int, str | None]) -> tuple[torch.Tensor | Image | str | None, int]:
-        """Get item for a specific clock cycle. Not implemented for base class: it will be implemented in buffered data
-        streams or stream that can generate data on-the-fly.
-
-        Args:
-            idx_and_uuid (tuple[int, str | None]): Index of the data to retrieve and UUID (tuple).
-
-        Raises:
-            ValueError: Always, since this method should be overridden.
-        """
-        raise ValueError("Not implemented (expected to be only present in data streams that are buffered or "
-                         "that can generated on the fly)")
-
-    def __str__(self) -> str:
-        """String representation of the object.
-
-        Returns:
-            str: String representation of the object.
-        """
-        return self.to_code_str()
-
     def to_code_str(self):
         s = (f"ngti:{self.props.name}|{self.props.group}|{self.props.data_type}" +
              ("_pubsub" if self.props.pubsub else "") + "|")
@@ -255,14 +230,6 @@ class Stream:
         else:
             s += "no-int,no-data"
         return s
-
-    def __len__(self):
-        """Get the length of the stream.
-
-        Returns:
-            int: Infinity (as this is a lifelong stream).
-        """
-        return math.inf
 
     def set(self,
             data: torch.Tensor | Image | str, data_tag: int = -1, keep_existing_tag: bool = False,
@@ -425,26 +392,6 @@ class Stream:
                 del self.interactions_by_uuid[uuid]
         return to_remove
 
-    def get_uuid(self, expected: bool = False) -> str | None:
-        """Deprecated."""
-        return self._last_set_uuid
-
-    def set_uuid(self, ref_uuid: str | None, expected: bool = False):
-        """Deprecated."""
-        if not expected:
-            self._last_set_uuid = ref_uuid
-
-    def clear_uuid_if_marked_as_clearable(self):
-        """Deprecated."""
-        self.clear_uuid()
-
-    def clear_uuid(self):
-        """Deprecated."""
-        self._last_set_uuid = None
-        self.clear_all_interactions()
-        self.clear_all_data()
-        return True
-
     def add_interaction(self, interaction: object):
         """Register an interaction that involves this stream.
 
@@ -533,6 +480,62 @@ class Stream:
             None
         """
         self.props = data_stream.props
+
+    def __len__(self):
+        """Get the length of the stream.
+
+        Returns:
+            int: Infinity (as this is a lifelong stream).
+        """
+        return math.inf
+
+    def __getitem__(self, idx_and_uuid: tuple[int, str | None]) -> tuple[torch.Tensor | Image | str | None, int]:
+        """Get item for a specific clock cycle. Not implemented for base class: it will be implemented in buffered data
+        streams or stream that can generate data on-the-fly.
+
+        Args:
+            idx_and_uuid (tuple[int, str | None]): Index of the data to retrieve and UUID (tuple).
+
+        Raises:
+            ValueError: Always, since this method should be overridden.
+        """
+        raise ValueError("Not implemented (expected to be only present in data streams that are buffered or "
+                         "that can generated on the fly)")
+
+    def __str__(self) -> str:
+        """String representation of the object.
+
+        Returns:
+            str: String representation of the object.
+        """
+        return self.to_code_str()
+
+    # ==================================================================================================================
+    # BEGIN OF DEPRECATED METHODS
+    # ==================================================================================================================
+    def get_uuid(self, expected: bool = False) -> str | None:
+        """DEPRECATED"""
+        return self._last_set_uuid
+
+    def set_uuid(self, ref_uuid: str | None, expected: bool = False):
+        """DEPRECATED"""
+        if not expected:
+            self._last_set_uuid = ref_uuid
+
+    def clear_uuid_if_marked_as_clearable(self):
+        """DEPRECATED"""
+        self.clear_uuid()
+
+    def clear_uuid(self):
+        """DEPRECATED"""
+        self._last_set_uuid = None
+        self.clear_all_interactions()
+        self.clear_all_data()
+        return True
+    # ==================================================================================================================
+    # END OF DEPRECATED METHODS
+    # ==================================================================================================================
+
 
 
 class BufferedStream(Stream):
@@ -1001,14 +1004,6 @@ class ImageFileStream(BufferedStream):
         # Possibly print to screen the "clickable" list of images
         if show_images:
             show_images_grid(self.image_paths)
-            for i, image_path in enumerate(self.image_paths):
-                abs_path = os.path.abspath(image_path)
-                file_url = pathlib.Path(abs_path).as_uri()
-                basename = os.path.basename(abs_path)  # 'photo.jpg'
-                parent = os.path.basename(os.path.dirname(abs_path))  # 'images'
-                label = os.path.join(parent, basename) if parent else basename
-                clickable_label = f"\033]8;;{file_url}\033\\[{label}]\033]8;;\033\\"
-                log.user(str(i) + " => " + clickable_label)
 
     def __len__(self):
         """Return the number of images in the dataset.
@@ -1235,6 +1230,11 @@ def deserialize_payload(json_str):
     return output
 
 
-# Backward compatibility aliases (Deprecated)
+# ==================================================================================================================
+# BEGIN OF DEPRECATED NAMES
+# ==================================================================================================================
 DataStream = Stream
 BufferedDataStream = BufferedStream
+# ==================================================================================================================
+# END OF DEPRECATED METHODS
+# ==================================================================================================================

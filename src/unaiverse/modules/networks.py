@@ -21,9 +21,9 @@ from PIL import Image
 import urllib.request
 from typing import Callable
 import torch.nn.functional as F
-from unaiverse.streams.dataprops import Stream
 from unaiverse.modules.cnu.cnus import CNUs
 from unaiverse.modules.cnu.layers import LinearCNU
+from unaiverse.streams.dataprops import Data4Proc as Stream
 from transformers import pipeline, AutoProcessor, AutoModelForCausalLM, AutoTokenizer
 from unaiverse.modules.utils import get_proc_inputs_and_proc_outputs_for_image_classification
 from unaiverse.modules.utils import ModuleWrapper, transforms_factory, get_proc_inputs_and_proc_outputs_for_rnn

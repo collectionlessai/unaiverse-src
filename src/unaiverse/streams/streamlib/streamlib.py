@@ -15,7 +15,7 @@
 import math
 import torch
 from unaiverse.clock import clock
-from unaiverse.streams import BufferedStream, DataProps
+from unaiverse.streams.streams import BufferedStream, DataProps
 
 
 class AllHotLabelStream(BufferedStream):

@@ -17,7 +17,7 @@ from unaiverse.clock import clock
 from typing import List, Dict, Any
 from unaiverse.utils.logger import log
 from unaiverse.agent import AgentBasics
-from unaiverse.hsm import HybridStateMachine
+from unaiverse.hsm.hsm import HybridStateMachine
 from unaiverse.networking.p2p.messages import Msg
 from unaiverse.networking.node.profile import NodeProfile
 
