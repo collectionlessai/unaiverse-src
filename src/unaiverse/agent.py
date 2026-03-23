@@ -128,11 +128,17 @@ class Agent(AgentBasics):
         self.stats = Stats(is_world=False)
         self.overwrite_stats = False  # Whether to overwrite stats when receiving the next STATS_RESPONSE from the world
 
-    def remove_peer_from_agent_status_attrs(self, peer_id):
+    def remove_peer_from_agent_status_attrs(self, peer_id: str) -> None:
+        """Removes a peer from all agent-level status tracking sets (overrides parent) (async).
+
+        Args:
+            peer_id: The peer ID to remove from status tracking structures.
+        """
         super().remove_peer_from_agent_status_attrs(peer_id)
         self._available = len(self._engaged_agents) == 0
 
-    def reset_agent_status_attrs(self):
+    def reset_agent_status_attrs(self) -> None:
+        """Resets all agent-level status attributes to their initial values (overrides parent)."""
         super().reset_agent_status_attrs()  # this sets status vars to [], {}, 0, 0., False, in function of their type
         self._available = True
         self._repeat = 1
@@ -164,6 +170,8 @@ class Agent(AgentBasics):
             streams: List of ``(stream_user_hash, num_samples)`` tuples (or just stream_user_hash is num_samples = 1).
                 Ignored when a pre-built Interaction is provided.
             data_samples: List of actual data samples. Ignored when a pre-built Interaction is provided.
+            num_steps: Number of steps the interaction spans (used when building from raw args).
+                Ignored when a pre-built Interaction is provided.
             max_time: Maximum time for the interaction. Ignored when a pre-built Interaction is provided.
             from_state: Optional source state. Ignored when a pre-built Interaction is provided.
             to_state: Optional destination state. Ignored when a pre-built Interaction provided.
@@ -219,6 +227,11 @@ class Agent(AgentBasics):
             return None
 
     async def process(self) -> bool:
+        """Runs one inference step: reads from stdin, calls the processor, and writes to stdout (async).
+
+        Returns:
+            True if the step ran successfully, False otherwise.
+        """
 
         # Getting input data from the input stream
         input_data = self.stdin.get()
@@ -256,6 +269,11 @@ class Agent(AgentBasics):
         return True
 
     async def learn(self) -> bool:
+        """Runs one learning step: first performs inference, then runs a backward pass (async).
+
+        Returns:
+            True if the learning step ran successfully, False otherwise.
+        """
         if (self.proc_opts['optimizer'] is None
                 or self.proc_opts['losses'] is None
                 or len(self.proc_opts['losses']) == 0):
@@ -281,12 +299,12 @@ class Agent(AgentBasics):
         else:
             return False
 
-    async def set_engaged_partner(self, agent: str | list[str] | set[str] | None, clear_found: bool = True):
+    async def set_engaged_partner(self, agent: str | list[str] | set[str] | None, clear_found: bool = True) -> bool:
         """Virtually forces the engagement with a single agent (or a group of agents), clearing all existing
         engagements and results of previous find operations (async).
 
         Args:
-            agent: The agent or the list of agents to engage (it None, we only clear the list of engaged partners).
+            agent: The agent or the list of agents to engage (if None, we only clear the list of engaged partners).
             clear_found: Clears results of previously run find operations (True by default).
 
         Returns:
@@ -303,7 +321,7 @@ class Agent(AgentBasics):
         self._available = len(self._engaged_agents) == 0
         return True
 
-    async def send_engagement(self):
+    async def send_engagement(self) -> bool:
         """Offer engagement to the agents whose identifiers are in self._found_agents (async).
 
         Returns:
@@ -323,7 +341,7 @@ class Agent(AgentBasics):
         return at_least_one_sent
 
     async def get_engagement(self, acceptable_role: str | None = None, sender_role: str | None = None,
-                             interaction: Interaction | None = None):
+                             interaction: Interaction | None = None) -> bool:
         """Receive engagement from another agent whose authority is in the specified range (async).
 
         Args:
@@ -370,7 +388,7 @@ class Agent(AgentBasics):
             log.error(f"Cannot engage to {_requester}")
             return False
 
-    async def got_engagement(self, interaction: Interaction | None = None):
+    async def got_engagement(self, interaction: Interaction | None = None) -> bool:
         """Confirm an engagement (async).
 
         Args:
@@ -394,7 +412,7 @@ class Agent(AgentBasics):
             log.error(f"Unable to confirm engagement with {_requester}")
             return False
 
-    async def send_disengagement(self, send_disconnection_too: bool = False):
+    async def send_disengagement(self, send_disconnection_too: bool = False) -> bool:
         """Ask for disengagement (async).
 
         Args:
@@ -418,12 +436,12 @@ class Agent(AgentBasics):
             self._engaged_agents.clear()  # There is no "got_disengagement"
         return at_least_one_sent
 
-    async def get_disengagement(self, disconnect_too: bool = False, interaction: Interaction | None = None):
+    async def get_disengagement(self, disconnect_too: bool = False, interaction: Interaction | None = None) -> bool:
         """Get a disengagement request from an agent (async).
 
         Args:
             disconnect_too: Whether to disconnect the agent who sent the disengagement.
-            interaction: The ID of the agent requesting disengagement. Defaults to None.
+            interaction: The interaction triggered by the agent requesting disengagement (automatically set).
 
         Returns:
             True if the disengagement request was successfully processed, False otherwise.
@@ -449,7 +467,7 @@ class Agent(AgentBasics):
         self._available = len(self._engaged_agents) == 0
         return True
 
-    async def disengage_all(self):
+    async def disengage_all(self) -> bool:
         """Disengage all the previously engaged agents (async).
 
         Returns:
@@ -462,7 +480,7 @@ class Agent(AgentBasics):
         self._available = True
         return True
 
-    async def disconnect(self, agent: str):
+    async def disconnect(self, agent: str) -> bool:
         """Disconnects an agent (async).
 
         Args:
@@ -475,7 +493,7 @@ class Agent(AgentBasics):
         await self._node_purge_fcn(agent)  # This will also call remove_agent, that will call remove_streams
         return True
 
-    async def disconnect_by_role(self, role: str | list[str], disengage_too: bool = False):
+    async def disconnect_by_role(self, role: str | list[str], disengage_too: bool = False) -> bool:
         """Disconnects from all agents that match a specified role (async).
         It finds the agents and calls the node's purge function on each.
 
@@ -496,7 +514,7 @@ class Agent(AgentBasics):
         return True
 
     @action
-    async def disconnected(self, agent: str | None = None, handshake_completed: bool = False):
+    async def disconnected(self, agent: str | None = None, handshake_completed: bool = False) -> bool:
         """Checks if a specific set of agents (by ID or wildcard) are no longer connected to the agent.
         It returns False if any of the specified agents are still connected (async).
 
@@ -529,7 +547,7 @@ class Agent(AgentBasics):
                     break
         return all_disconnected
 
-    async def received_some_asked_data(self, processing_fcn: str | None = None):
+    async def received_some_asked_data(self, processing_fcn: str | None = None) -> bool:
         """Checks if any of the agents that were previously asked for data (e.g., via `ask_gen`) have sent a stream
         sample back. Optionally, it can process the received data with a specified function (async).
 
@@ -569,7 +587,7 @@ class Agent(AgentBasics):
                                     _processing_fcn(agent, stream_obj.props, data, data_tag)
         return got_something
 
-    async def nop(self, message: str | None = None):
+    async def nop(self, message: str | None = None) -> bool:
         """Do nothing (async).
 
         Args:
@@ -582,7 +600,7 @@ class Agent(AgentBasics):
             log.misc(message)
         return True
 
-    async def wait_for_actions(self, agent: str, from_state: str, to_state: str, wait: bool):
+    async def wait_for_actions(self, agent: str, from_state: str, to_state: str, wait: bool) -> bool:
         """Lock or unlock every action between a pair of states in the state machine of a target agent (async).
 
         Args:
@@ -614,7 +632,7 @@ class Agent(AgentBasics):
             at_least_one_completed = at_least_one_completed or ret
         return at_least_one_completed
 
-    async def connected(self, agent: str | list[str] | None = None, handshake_completed: bool = False):
+    async def connected(self, agent: str | list[str] | None = None, handshake_completed: bool = False) -> bool:
         """Checks if an agent is connected to us or not.
 
         Args:
@@ -643,7 +661,7 @@ class Agent(AgentBasics):
                     return False
         return True
 
-    async def all_asked_finished(self):
+    async def all_asked_finished(self) -> bool:
         """Checks if all agents that were previously asked to perform a task (e.g., generate or learn) have sent a
         completion confirmation. It compares the set of agents asked with the set of agents that have completed
         the task (async).
@@ -653,7 +671,7 @@ class Agent(AgentBasics):
         """
         return self._agents_who_were_asked == self._agents_who_completed_what_they_were_asked
 
-    async def all_engagements_completed(self):
+    async def all_engagements_completed(self) -> bool:
         """Checks if all engagement requests that were sent have been confirmed. It returns True if there are no agents
         remaining in the `_found_agents` list, implying all have been engaged with or discarded (async).
 
@@ -663,7 +681,7 @@ class Agent(AgentBasics):
         """
         return len(self._found_agents) == 0
 
-    async def agents_are_waiting(self):
+    async def agents_are_waiting(self) -> bool:
         """Checks if there are any agents who have connected but have not yet been fully processed or added to the
         agent's known lists. This indicates that new agents are waiting to be managed (async).
 
@@ -678,7 +696,7 @@ class Agent(AgentBasics):
         return False
 
     async def ask_subscribe(self, agent: str | None = None,
-                            stream_hashes: list[str] | None = None, unsubscribe: bool = False):
+                            stream_hashes: list[str] | None = None, unsubscribe: bool = False) -> bool:
         """Requests a remote agent or a group of agents to subscribe to or unsubscribe from a list of specified PubSub
         streams. It normalizes the stream hashes and sends an action request containing the stream properties (async).
 
@@ -738,7 +756,7 @@ class Agent(AgentBasics):
         return len(correctly_asked) > 0
 
     async def do_subscribe(self, stream_owners: list[str] | None = None, stream_props: list[str] | None = None,
-                           unsubscribe: bool = False, interaction: Interaction | None = None):
+                           unsubscribe: bool = False, interaction: Interaction | None = None) -> bool:
         """Executes a subscription or unsubscription request received from another agent. It processes the stream
         properties, adds or removes the streams from the agent's known streams, and handles the underlying PubSub topic
         subscriptions (async).
@@ -807,7 +825,7 @@ class Agent(AgentBasics):
                              f"of agent {stream_owner}")
         return True
 
-    async def record(self, net_hash: str, samples: int = 100):
+    async def record(self, net_hash: str, samples: int = 100) -> bool:
         """Records data from a specified stream into a new, owned `BufferedDataStream`. This is a multistep action
         that captures a sequence of samples over time and then adds the new recorded stream to the agent's profile
         (async).
@@ -881,7 +899,7 @@ class Agent(AgentBasics):
 
         return True
 
-    async def connect_by_role(self, role: str | list[str], filter_fcn: str | None = None):
+    async def connect_by_role(self, role: str | list[str], filter_fcn: str | None = None) -> bool:
         """Finds and attempts to connect with agents whose profiles match a specific role. It can be optionally
         filtered by a custom function. It returns True if at least one valid agent is found (async).
 
@@ -934,7 +952,7 @@ class Agent(AgentBasics):
         else:
             return True
 
-    async def find_agents(self, role: str | list[str], engage: bool = False, handshake_completed: bool = False):
+    async def find_agents(self, role: str | list[str], engage: bool = False, handshake_completed: bool = False) -> bool:
         """Locally searches through the agent's known peers (world and public agents) to find agents with a specific
         role. It populates the `_found_agents` set with the peer IDs of matching agents (async).
 
@@ -968,7 +986,7 @@ class Agent(AgentBasics):
             self._engaged_agents = copy.deepcopy(self._found_agents)
         return len(self._found_agents) > 0
 
-    async def next_pref_stream(self):
+    async def next_pref_stream(self) -> bool:
         """Moves the internal pointer to the next stream in the list of preferred streams, which is often used for
         playlist-like operations. It wraps around to the beginning if it reaches the end (async).
 
@@ -985,7 +1003,7 @@ class Agent(AgentBasics):
             f"Moving to the next preferred stream ({self._preferred_streams[self._cur_preferred_stream]}){suffix}")
         return True
 
-    async def first_pref_stream(self):
+    async def first_pref_stream(self) -> bool:
         """Resets the internal pointer to the first stream in the list of preferred streams. This is useful for
         restarting a playback or processing loop (async).
 
@@ -1000,7 +1018,7 @@ class Agent(AgentBasics):
         log.misc(f"Moving to the first preferred stream ({self._preferred_streams[self._cur_preferred_stream]})")
         return True
 
-    async def check_pref_stream(self, what: str = "last"):
+    async def check_pref_stream(self, what: str = "last") -> bool:
         """Checks the position of the current preferred stream within the list. It can check if it's the first, last,
         or if it has completed a full round, among other checks (async).
 
@@ -1036,7 +1054,7 @@ class Agent(AgentBasics):
             num_streams_in_playlist = len(self._preferred_streams) // self._repeat
             return (self._cur_preferred_stream + 1) % num_streams_in_playlist != 0
 
-    async def set_pref_streams(self, net_hashes: list[str], repeat: int = 1):
+    async def set_pref_streams(self, net_hashes: list[str], repeat: int = 1) -> bool:
         """Fills the agent's list of preferred streams (a playlist). It can repeat the playlist a specified number of
         times and resolves user-provided stream hashes to their full network hashes (async).
 
@@ -1064,7 +1082,7 @@ class Agent(AgentBasics):
 
         return True
 
-    async def evaluate(self, stream_hash: str, how: str, steps: int = 100, re_offset: bool = False):
+    async def evaluate(self, stream_hash: str, how: str, steps: int = 100, re_offset: bool = False) -> bool:
         """Evaluates the performance of agents that have completed a generation task. It compares the generated data
         from each agent with a local stream (which can be a ground truth or reference stream) using a specified
         comparison method (async).
@@ -1107,7 +1125,7 @@ class Agent(AgentBasics):
 
         return True
 
-    async def compare_eval(self, cmp: str, thres: float, good_if_true: bool = True):
+    async def compare_eval(self, cmp: str, thres: float, good_if_true: bool = True) -> bool:
         """Compares the results of a previous evaluation to a given threshold or finds the best result among all
         agents. It can check for minimum, maximum, or simple threshold-based comparisons, and it populates a list of
         'valid' agents that passed the comparison (async).
@@ -1206,7 +1224,7 @@ class Agent(AgentBasics):
         else:
             return True
 
-    def collect_and_store_own_stats(self):
+    def collect_and_store_own_stats(self) -> None:
         """Collects this agent's own stats and pushes them to the stats recorder."""
         if self.stats is None:
             return
@@ -1229,7 +1247,7 @@ class Agent(AgentBasics):
         except Exception as e:
             log.error(f"[Stats] Error storing HSM stats: {e}")
 
-    async def send_stats_to_world(self):
+    async def send_stats_to_world(self) -> None:
         """Sends the agent's currently buffered stats to the world and clears them (async)."""
         if not self.in_world():
             log.debug("[send_stats_to_world] Not in a world, skipping stats send.")
@@ -1262,13 +1280,16 @@ class Agent(AgentBasics):
                                            content_type=Msg.STATS_REQUEST)):
             log.error("Failed to request stats to world.")
 
-    def update_stats_view(self, received_view, overwrite: bool = False):
-        """
-        Updates the _world_view attribute of the Stats object.
+    def update_stats_view(self, received_view: dict, overwrite: bool = False) -> None:
+        """Updates the stats view with the data received from the world.
+
+        Args:
+            received_view: The view dictionary received from the world.
+            overwrite: Whether to overwrite existing entries. Defaults to False.
         """
         self.stats.update_view(received_view, overwrite)
 
-    async def suggest_role_to_world(self, agent: str | None, role: str):
+    async def suggest_role_to_world(self, agent: str | None, role: str) -> bool:
         """Suggests a role change for one or more agents to the world master. It iterates through the involved agents,
         checks if their current role differs from the suggested one, and sends a role suggestion message to the
         world master (async).
@@ -1308,7 +1329,7 @@ class Agent(AgentBasics):
 
     async def suggest_badges_to_world(self, agent: str | None = None,
                                       score: float = -1.0, badge_type: str = "completed",
-                                      badge_description: str | None = None):
+                                      badge_description: str | None = None) -> bool:
         """Suggests one or more badges to the world master for specific agents. This is typically used to reward agents
         for completing tasks, such as for a competition. It sends a message with the badge details, including the score
         and type, to the world master (async).
@@ -1352,7 +1373,7 @@ class Agent(AgentBasics):
             return True
 
     def __compare_streams(self, net_hash_a: str, net_hash_b: str,
-                          how: str = "mse", steps: int = 100, re_offset: bool = False):
+                          how: str = "mse", steps: int = 100, re_offset: bool = False) -> tuple[float, bool]:
         """A private helper method that compares two buffered data streams based on a specified metric (e.g., MSE,
         max accuracy). It handles stream compatibility checks, data retrieval, and the actual comparison, returning a
         dissimilarity score.
@@ -1618,6 +1639,17 @@ class Agent(AgentBasics):
         return list(involved_agents)
 
     def __normalize_user_hash(self, net_hashes: list[str] | None) -> list[str]:
+        """Normalizes user-provided stream hashes to their full network-hash equivalents.
+
+        Handles the ``<playlist>`` wildcard and converts ``peer_id:name_or_group`` shorthands to full
+        ``peer_id::ps:name_or_group`` net hashes.
+
+        Args:
+            net_hashes: A list of user-provided stream hashes to normalize, or None.
+
+        Returns:
+            A list of resolved network hashes (empty list if input is None).
+        """
         if net_hashes is None:
             return []
         net_hashes_copy = []
@@ -1636,8 +1668,12 @@ class Agent(AgentBasics):
     # BEGIN OF DEPRECATED METHODS
     # ==================================================================================================================
     @deprecated("Use the interaction-based design")
-    def clear_recipients(self, net_hash):
-        #DEPRECATED
+    def clear_recipients(self, net_hash: str) -> None:
+        """DEPRECATED: Clears all recipients for a given stream by unregistering its interaction.
+
+        Args:
+            net_hash: The network hash of the stream whose recipients should be cleared.
+        """
 
         # Backward compatibility
         stream_dict = self.known_streams[net_hash]
@@ -1649,8 +1685,13 @@ class Agent(AgentBasics):
         self.im.unregister(interaction)
 
     @deprecated("Use the interaction-based design")
-    def add_recipient(self, net_hash: str, recipient: list[str] | str):
-        # DEPRECATED
+    def add_recipient(self, net_hash: str, recipient: list[str] | str) -> None:
+        """DEPRECATED: Registers a recipient for a stream, creating a lazy interaction if needed.
+
+        Args:
+            net_hash: The network hash of the stream.
+            recipient: The peer ID (or list of peer IDs) to register as a recipient.
+        """
 
         # Backward compatibility
         stream_dict = self.known_streams[net_hash]
@@ -1669,7 +1710,8 @@ class Agent(AgentBasics):
 
     @deprecated("Use send")
     async def set_next_action(self, agent: str | None, action: str, args: dict | None = None,
-                              from_state: str | None = None, to_state: str | None = None, ref_uuid: str | None = None):
+                              from_state: str | None = None, to_state: str | None = None,
+                              ref_uuid: str | None = None) -> bool:
         """DEPRECATED: Try to tell another agent what is the next action it should run (async).
 
         Args:
@@ -1699,7 +1741,7 @@ class Agent(AgentBasics):
                       samples: int = 100, time: float = -1., timeout: float = -1.,
                       from_state: str | None = None, to_state: str | None = None,
                       ask_uuid: str | None = None,
-                      ignore_uuid: bool = False):
+                      ignore_uuid: bool = False) -> bool:
         """DEPRECATED: Asking for generation.
 
         Args:
@@ -1707,6 +1749,9 @@ class Agent(AgentBasics):
                 for a set of agents (if None the agents in self._engaged_agents will be considered).
             u_hashes: A list of input stream hashes for generation. Defaults to None.
             samples: The number of samples to generate. Defaults to 100.
+            time: Maximum time duration for the generation procedure. Defaults to -1 (unlimited).
+            timeout: Timeout in seconds; if the action keeps failing for longer than this it is
+                declared complete. Defaults to -1 (no timeout).
             from_state: The optional starting state from which the generation should be executed.
             to_state: The optional destination state where the generation should lead if correctly executed.
             ask_uuid: Specify the UUID of the action (if None - default -, it is randomly generated).
@@ -1802,7 +1847,9 @@ class Agent(AgentBasics):
             extra_hashes: A list of streams that might be used in a custom manner when overloading this function
                 (warning: they are not passed to the processor).
             samples: The number of samples to generate. Defaults to 100.
-            seconds, it is declared as complete. Defaults to -1.
+            time: Maximum time duration for the generation procedure. Defaults to -1 (unlimited).
+            timeout: Timeout in seconds; if the action keeps failing for longer than this it is
+                declared complete. Defaults to -1 (no timeout).
             _requester: The ID of the agent who requested generation (automatically set by the action calling routine).
             _request_time: The time the generation was requested (automatically set by the action calling routine).
             _request_uuid: The UUID of the generation request (automatically set by the action calling routine).
@@ -1889,7 +1936,7 @@ class Agent(AgentBasics):
             return ret
 
     @deprecated("Use the interaction-based design")
-    async def done_gen(self, _requester: str | None = None):
+    async def done_gen(self, _requester: str | None = None) -> bool:
         """DEPRECATED: This is a way to get back the confirmation of a completed generation (async).
 
         Args:
@@ -1918,7 +1965,7 @@ class Agent(AgentBasics):
                         samples: int = 100, time: float = -1., timeout: float = -1.,
                         from_state: str | None = None, to_state: str | None = None,
                         ask_uuid: str | None = None,
-                        ignore_uuid: bool = False):
+                        ignore_uuid: bool = False) -> bool:
         """DEPRECATED: Asking for learning to generate (async).
 
         .. deprecated::
@@ -1930,6 +1977,9 @@ class Agent(AgentBasics):
             u_hashes: A list of input stream hashes for inference. Defaults to None.
             yhat_hashes: A list of target stream hashes to be used for loss computation. Defaults to None.
             samples: The number of samples to learn from. Defaults to 100.
+            time: Maximum time duration for the learning procedure. Defaults to -1 (unlimited).
+            timeout: Timeout in seconds; if the action keeps failing for longer than this it is
+                declared complete. Defaults to -1 (no timeout).
             from_state: The optional starting state from which learning should be executed.
             to_state: The optional destination state where learning should lead if correctly executed.
             ask_uuid: Specify the action UUID (default = None, i.e., it is automatically generated).
@@ -2067,7 +2117,7 @@ class Agent(AgentBasics):
                 calling routine). This will tell that it is time to run a final procedure.
 
         Returns:
-            True if the signal generation was successful, False otherwise.
+            True if the learning step was successful, False otherwise.
         """
         assert samples is not None and time is not None and timeout is not None, "Missing basic action information"
 
@@ -2134,7 +2184,7 @@ class Agent(AgentBasics):
             return ret
 
     @deprecated("Use the interaction-based design")
-    async def done_learn(self, _requester: str | None = None):
+    async def done_learn(self, _requester: str | None = None) -> bool:
         """DEPRECATED: This is a way to get back the confirmation of a completed learning procedure (async).
 
         Args:
@@ -2161,8 +2211,8 @@ class Agent(AgentBasics):
                                  samples: int = 100,
                                  from_state: str | None = None,
                                  to_state: str | None = None,
-                                 ref_uuid: str | None = None):
-        """DEPREATED: A private helper method that encapsulates the logic for sending a 'do_gen' or 'do_learn' action
+                                 ref_uuid: str | None = None) -> 'Interaction | None':
+        """DEPRECATED: A private helper method that encapsulates the logic for sending a 'do_gen' or 'do_learn' action
         request to
         another agent. It handles the normalization of stream hashes, sets up recipients for direct messages, and adds
         the target agent to the list of agents asked (async).
@@ -2178,7 +2228,7 @@ class Agent(AgentBasics):
             ref_uuid: The UUID for the request.
 
         Returns:
-            True if the request was sent successfully, False otherwise.
+            The Interaction object if the request was sent successfully, None otherwise.
         """
         assert for_what in ["gen", "learn"]
 
@@ -2227,7 +2277,7 @@ class Agent(AgentBasics):
                           u_hashes: list[str] | None,
                           yhat_hashes: list[str] | None,
                           learn: bool = False,
-                          ref_uuid: str | None = None):
+                          ref_uuid: str | None = None) -> bool:
         """DEPRECATED: A private helper method that contains the core logic for processing data streams, either for
         generation or
         learning. It reads input streams, passes them to the agent's processor, and handles the output streams.
@@ -2320,7 +2370,7 @@ class Agent(AgentBasics):
 
     @deprecated("Private method used by deprecated ones")
     async def __complete_do(self, do_what: str, peer_id_who_asked: str, all_hashes: list[str] | None,
-                            send_back_confirmation: bool = True, ref_uuid: str | None = None):
+                            send_back_confirmation: bool = True, ref_uuid: str | None = None) -> bool:
         """DEPRECATED: A private helper method to be called at the end of a `do_gen` or `do_learn` action.
         It performs cleanup
         tasks, such as clearing UUIDs on streams, and sends a confirmation message back to the requesting agent (async).
@@ -2330,6 +2380,7 @@ class Agent(AgentBasics):
             peer_id_who_asked: The ID of the agent who requested the task.
             all_hashes: A list of all stream hashes involved in the task.
             send_back_confirmation: A boolean to indicate if a confirmation message should be sent.
+            ref_uuid: The UUID of the interaction to use when sending the confirmation. Defaults to None.
 
         Returns:
             True if the completion process is successful, False otherwise.
