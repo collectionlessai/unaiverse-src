@@ -20,6 +20,7 @@ from PIL.Image import Image
 from typing import Callable
 from unaiverse.stats import Stats
 from unaiverse.clock import clock
+from unaiverse.custom import Custom
 from unaiverse.utils.logger import log
 from unaiverse.dataprops import DataProps
 from unaiverse.interaction import Interaction
@@ -56,7 +57,7 @@ def action(func: Callable) -> Callable:
         resolved_kwargs = {}
         for key, value in kwargs.items():
 
-            if key in Agent.AGENT_ARG_NAMES:
+            if key in Custom.AGENT_ARG_NAMES:
                 if isinstance(value, str):
                     resolved = self.resolve_agent_ref(value)
                     resolved_kwargs[key] = resolved if resolved is not None else value
@@ -70,7 +71,7 @@ def action(func: Callable) -> Callable:
                 else:
                     resolved_kwargs[key] = value
 
-            elif key in Agent.STREAM_ARG_NAMES:
+            elif key in Custom.STREAM_ARG_NAMES:
                 if isinstance(value, str):
                     resolved = self.resolve_stream_ref(value)
                     resolved_kwargs[key] = resolved if resolved is not None else value
@@ -97,9 +98,6 @@ def action(func: Callable) -> Callable:
 
 class Agent(AgentBasics):
     """This class contains those basic actions that can be performed by every agent."""
-
-    STREAM_ARG_NAMES = {'stream', 'streams', 'u_hashes', 'yhat_hashes'}
-    AGENT_ARG_NAMES = {'agent', 'agents', 'partner', 'partners'}
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)

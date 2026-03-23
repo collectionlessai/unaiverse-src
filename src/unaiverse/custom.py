@@ -36,3 +36,7 @@ class Custom:
 
     # Misc
     ACTION_TICKS_PER_STATUS = ["   ✅ ", "   🔄 ", "   ❌ "]  # Keep the final spaces
+
+    # Arguments
+    STREAM_ARG_NAMES = {'stream', 'streams', 'u_hashes', 'yhat_hashes'}
+    AGENT_ARG_NAMES = {'agent', 'agents', 'partner', 'partners'}

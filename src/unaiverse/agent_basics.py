@@ -19,6 +19,8 @@ import pickle
 import uuid as _uuid
 import importlib.resources
 from PIL.Image import Image
+from typing_extensions import deprecated
+
 from unaiverse.clock import clock
 from unaiverse.custom import Custom
 from unaiverse.stats import Stats
@@ -1262,291 +1264,6 @@ class AgentBasics:
                 log.error("Failed to send profile, removing (disconnecting) " + peer_id)
                 await self.remove_agent(peer_id)
 
-    def generate(self, input_net_hashes: list[str] | None = None,
-                 inputs: list[str | torch.Tensor | Image] | None = None,
-                 first: bool = False, last: bool = False, ref_uuid: str | None = None) -> (
-            tuple[tuple[torch.Tensor] | None, int]):
-        """Generate new signals.
-
-        Args:
-            input_net_hashes: A list of network hashes to be considered as input streams (they will be sub-selected).
-            inputs: A list of data to be directly provided as input to the processor (if not None, input_net_hashes is
-                ignored).
-            first: If True, indicates this is the first generation call in a sequence.
-            last: If True, indicates this is the last generation call in a sequence.
-            ref_uuid: An optional UUID to match against input stream UUIDs (it can be None).
-
-        Returns:
-            A tuple containing:
-                - A tuple of torch.Tensor objects representing the generated output, or None if generation failed.
-                - An integer representing a data tag or status.
-        """
-
-        # Preparing processor input
-        if inputs is None:
-            inputs = [None] * len(self.proc_inputs)
-            matched = set()
-            data_tag = None
-
-            if input_net_hashes is None:
-                input_net_hashes = []
-
-            # Checking UUIDs and searching the provided input streams: we look to match them with the processor input
-            for net_hash in input_net_hashes:
-                if net_hash is None:
-                    return None, - 1
-
-                stream_dict = self.known_streams[net_hash]
-                for stream_name, stream in stream_dict.items():
-
-                    # Checking the UUID in our known streams, comparing it with the UUID provided as input:
-                    # if they are not compatible, we don't generate at all
-                    if ref_uuid is not None and ref_uuid not in stream.get_data_uuids():
-                        log.debug(f"[generate] The UUIDs of stream {net_hash} ({list(stream.get_data_uuids())}) "
-                                  f"does not include the one we were  "
-                                  f"looking for ({ref_uuid}), skipping this stream")
-                        continue
-
-                    # Matching the currently checked input stream with one of the processor inputs
-                    stream_sample = stream.get(requested_by="generate", uuid=ref_uuid)
-                    for i in range(len(self.proc_inputs)):
-
-                        # If the current input stream is compatible with the i-th input slot...
-                        if (net_hash, stream_name) in self.compat_in_streams[i]:
-
-                            # If the current input stream was already assigned to another input slot
-                            # (different from "i") we skip the generation
-                            if (net_hash, stream_name) in matched:
-                                log.error("Cannot generate: ambiguous input streams provided "
-                                          "(they can match multiple processor inputs)")
-                                return None, -1
-
-                            # Found a valid assignment: getting stream sample
-                            log.debug(f"[generate] Setting the {i}-th network input to stream with "
-                                      f"net_hash: {net_hash}, name: {stream_name}")
-                            if stream_sample is None:
-                                log.debug(f"[generate] Failed setting the {i}-th input, got a None sample "
-                                          f"(uuid={ref_uuid})")
-                            else:
-                                log.debug(f"[generate] Going ahead setting the {i}-th input, got a valid sample")
-
-                                # Found a valid assignment: associating it to the i-th input slot
-                                try:
-                                    inputs[i] = self.proc_inputs[i].check_and_preprocess(stream_sample,
-                                                                                         device=self.proc.device)
-                                except Exception as e:
-                                    log.error(f"Error while checking and preprocessing the {i}-th input [{e}]")
-                                    continue
-
-                                log.debug(f"[generate] Finished setting the {i}-th input, preprocessing complete")
-
-                                # Found a valid assignment: saving match
-                                matched.add((net_hash, stream_name))
-
-                                # If all the inputs share the same data tag, we will return it,
-                                # otherwise we set it at -1 (meaning no tag)
-                                if data_tag is None:
-                                    data_tag = stream.get_tag(uuid=ref_uuid)
-                                elif data_tag != stream.get_tag(uuid=ref_uuid):
-                                    data_tag = -1
-
-                                if stream.props.is_text():
-                                    log.debug(f"[generate] Input {i} of the network: {stream_sample}")
-                                break
-
-            # Checking if we were able to match some data for each input slot of the network (processor)
-            for i in range(len(self.proc_inputs)):
-                if inputs[i] is None:
-                    if self.proc_optional_inputs[i]["has_default"]:
-                        inputs[i] = self.proc_optional_inputs[i]["default_value"]
-                    else:
-                        return None, -1
-
-            # If we reach this point and data_tag is still None, it means that inputs were all taken from defaults
-            if data_tag is None:
-                return None, -1
-        else:
-            data_tag = -1
-
-        if inputs is not None:
-            input_shapes = []
-            for x in inputs:
-                if isinstance(x, torch.Tensor):
-                    input_shapes.append(x.shape)
-                else:
-                    input_shapes.append("<non-tensor>")
-            log.debug(f"[generate] Input shapes: {input_shapes}")
-            log.debug(f"[generate] Input data tag: {data_tag}")
-
-        # Calling processor (inference) passing the collected inputs
-        if "proc_callback_inputs" in type(self).__dict__:
-            inputs = self.proc_callback_inputs(inputs)  # Backward compatibility
-        else:
-            inputs = self.hook_proc_tweak_inputs(inputs)
-        try:
-            outputs = self.proc(*inputs, first=first, last=last)
-
-            # Ensuring the output is a tuple, even if composed by a single tensor
-            if not isinstance(outputs, tuple):
-                outputs = (outputs,)
-        except Exception as e:
-            log.error(f"Error while calling the processor [{e}]")
-            outputs = (None,) * len(self.proc_outputs)
-        outputs = self.hook_proc_tweak_outputs(outputs)
-
-        # Saving
-        self.last_ref_uuid = ref_uuid
-
-        if outputs is not None:
-            i = 0
-            for net_hash, stream_dict in self.proc_streams.items():
-                for stream in stream_dict.values():
-                    if self.behaving_in_world() != stream.props.is_public():
-                        if outputs[i] is not None:
-                            if stream.props.is_tensor() or stream.props.is_text():
-                                log.debug(f"[generate] outputs[{i}]: {str(stream.props.to_text(outputs[i]))}")
-                            else:
-                                log.debug(
-                                    f"[generate] outputs[{i}]: not None, but it cannot be converted to text")
-                        else:
-                            log.debug(f"[generate] outputs[{i}]: None")
-                        i += 1
-            log.debug(f"[generate] Output shapes: "
-                      f"{[x.shape if isinstance(x, torch.Tensor) else '<non-tensor>' for x in outputs]}")
-
-        return outputs, data_tag
-
-    def learn_generate(self,
-                       outputs: tuple[torch.Tensor],
-                       targets_net_hashes: list[str] | None,
-                       ref_uuid: str | None = None) -> tuple[list[float] | None, list[float] | None]:
-        """Learn (i.e., update model params) by matching the given processor outputs with a set of targets (if any).
-
-        Args:
-            outputs: A tuple of torch.Tensor representing the outputs generated by the agent's processor.
-            targets_net_hashes: An optional list of network hashes identifying the streams
-                                from which target data should be retrieved for learning.
-                                If None, losses are evaluated without explicit targets.
-            ref_uuid: UUID of the interaction associated to the learning procedure.
-
-        Returns:
-            A tuple containing:
-            - A list of float values representing the individual loss values for each output.
-              Returns None if targets are specified but cannot be found.
-            - A list of integers representing the data tags of the given target streams (None if no targets were given).
-        """
-
-        # Cannot learn without optimizer and losses
-        if (self.proc_opts['optimizer'] is None or self.proc_opts['losses'] is None or
-                len(self.proc_opts['losses']) == 0):
-            return None, None
-
-        # Matching targets with the output slots of the processor
-        at_least_one_target_found = False
-        if targets_net_hashes is not None:
-            targets = [None] * len(self.proc_outputs)
-            matched = set()
-            data_tags = [-1] * len(self.proc_outputs)
-
-            # For each target stream group...
-            for net_hash in targets_net_hashes:
-                stream_dict = self.known_streams[net_hash]
-
-                # For each stream of the current target group....
-                for stream_name, stream in stream_dict.items():
-                    stream_sample = None
-
-                    # For each output slot of our processor... (index "i")
-                    for i in range(len(self.proc_outputs)):
-
-                        # Check if the i-th target was already assigned or if the i-th output is not a tensor
-                        if targets[i] is not None or not isinstance(outputs[i], torch.Tensor):
-                            continue
-
-                        # If the target stream is compatible with the i-th output of the processor...
-                        if (net_hash, stream_name) in self.compat_out_streams[i]:
-
-                            # If the current target was already assigned to another output slot (different from "i)"
-                            # we skip learning
-                            if (net_hash, stream_name) in matched:
-                                log.error("Cannot generate: ambiguous target streams provided "
-                                          "(they can match multiple processor outputs)")
-                                return None, None
-
-                            # Found a valid assignment: getting stream sample
-                            if stream_sample is None:
-                                stream_sample = stream.get(requested_by="learn_generate", uuid=ref_uuid)
-                                if stream_sample is None:
-                                    return None, None
-
-                            # Found a valid assignment: associating target to the i-th output slot
-                            try:
-                                targets[i] = self.proc_outputs[i].check_and_preprocess(stream_sample,
-                                                                                       allow_class_ids=True,
-                                                                                       targets=True,
-                                                                                       device=self.proc.device)
-                            except Exception as e:
-                                log.error(f"Error while checking and preprocessing the {i}-th targets [{e}]")
-
-                            # Found a valid assignment: saving match
-                            matched.add((net_hash, stream_name))
-
-                            # Saving tag
-                            data_tags[i] = stream.get_tag(uuid=ref_uuid)
-
-                            # Confirming
-                            at_least_one_target_found = True
-
-                            if stream.props.is_tensor():
-                                log.debug("[generate] Target of the network: " +
-                                          str(stream.props.to_text(targets[i])))
-                            elif stream.props.is_text():
-                                log.debug("[generate] Target of the network: " + stream_sample)
-                            break
-
-            # If no targets were matched, we skip learning
-            if not at_least_one_target_found:
-                log.error(f"Cannot learn: cannot find a valid target for any output positions of the processor")
-                return None, None
-        else:
-
-            # If no targets were provided, it is expected to be the case of fully unsupervised learning
-            data_tags = None
-            targets = None
-
-        # Retrieving custom elements from the option dictionary
-        loss_functions: list = self.proc_opts['losses']
-        optimizer: torch.optim.optimizer.Optimizer | None = self.proc_opts['optimizer']
-
-        # Evaluating loss function(s), one for each processor output slot (they are set to 0. if no targets are there)
-        if targets_net_hashes is not None:
-
-            # Supervised or partly supervised learning
-            loss_values = [loss_fcn(outputs[i], targets[i]) if targets[i] is not None else
-                           torch.tensor(0., device=self.proc.device)
-                           for i, loss_fcn in enumerate(loss_functions)]
-            loss = torch.stack(loss_values).sum()  # Sum of losses
-        else:
-
-            # Unsupervised learning
-            loss_values = [loss_fcn(outputs[i]) for i, loss_fcn in enumerate(loss_functions)]
-            loss = torch.stack(loss_values).sum()  # Sum of losses
-
-        # Learning step
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-        # This is where parameters are actually updated, but the flag is set
-        # upon success in do_learn which is the outer method calling this one
-        # self.proc_updated_since_last_save = True
-
-        # Teaching (for autoregressive models, expected to have attribute "y")
-        if hasattr(self.proc, 'y'):
-            self.proc.y = targets[0]
-
-        # Returning a list of float values and the data tags of the targets
-        return [loss_value.item() for loss_value in loss_values], data_tags
-
     async def behave(self):
         """Behave in the current environment, calling the state-machines of the public and private networks (async)."""
 
@@ -1722,7 +1439,7 @@ class AgentBasics:
         net_hash = DataProps.normalize_net_hash(net_hash)
 
         log.misc(f"Got a stream sample from {net_hash}...")
-        if sample_dict is None:  # hasattr(sample_dict, "keys") //// or not isinstance(sample_dict, dict):
+        if sample_dict is None:
             log.error(f"Invalid sample (expected a dictionary, got {type(sample_dict)})")
             return False
 
@@ -2046,13 +1763,6 @@ class AgentBasics:
             for stream_obj in stream_dict.values():
                 stream_obj.set_tag(data_tag, uuid=uuid)
 
-    def set_uuid(self, net_hash: str, uuid: int | None, expected: bool = False):
-        """Deprecated."""
-        if net_hash in self.known_streams:
-            stream_dict = self.known_streams[net_hash]
-            for stream_obj in stream_dict.values():
-                stream_obj.set_uuid(uuid, expected=expected)
-
     def force_action_step(self, step: int):
         self.overridden_action_step = step if step >= 0 else None
 
@@ -2188,12 +1898,6 @@ class AgentBasics:
         _selected_request = None
         return _selected_action_idx, _selected_request
 
-    def proc_callback_inputs(self, inputs):
-        return self.hook_proc_tweak_inputs(inputs)
-
-    def proc_callback_outputs(self, outputs):
-        return self.hook_proc_tweak_outputs(outputs)
-
     def hook_proc_tweak_inputs(self, inputs):
         """A callback method that saves the inputs to the processor right before execution.
 
@@ -2233,6 +1937,52 @@ class AgentBasics:
             The same data passed to the function.
         """
         return data
+
+    def remove_peer_from_agent_status_attrs(self, peer_id):
+        """Remove a peer ID from the status of the agent, assuming it to be the represented by attributes that start
+        with '_'."""
+        for attr_name in dir(self):
+            if attr_name.startswith("_") and (not attr_name.startswith("__") and not attr_name.startswith("_Agent")
+                                              and not attr_name.startswith("_WAgent")):
+                try:
+                    value = getattr(self, attr_name)
+                    if isinstance(value, list):
+                        setattr(self, attr_name, [v for v in value if v != peer_id])
+                    elif isinstance(value, set):
+                        value.discard(peer_id)
+                    elif isinstance(value, dict):
+                        if peer_id in value:
+                            del value[peer_id]
+                except AttributeError:
+                    continue  # Skip read-only attributes
+
+    def reset_agent_status_attrs(self):
+        """Resets attributes that represent the status of the agent, assuming to be the ones that start with '_'."""
+        for attr_name in dir(self):
+            if attr_name.startswith("_") and (not attr_name.startswith("__") and not attr_name.startswith("_Agent")
+                                              and not attr_name.startswith("_WAgent")):
+                try:
+                    value = getattr(self, attr_name)
+                    if isinstance(value, list):
+                        setattr(self, attr_name, [])
+                    elif isinstance(value, set):
+                        setattr(self, attr_name, set())
+                    elif isinstance(value, dict):
+                        setattr(self, attr_name, {})
+                    elif isinstance(value, int):
+                        setattr(self, attr_name, 0)
+                    elif isinstance(value, float):
+                        setattr(self, attr_name, 0.)
+                    elif isinstance(value, bool):
+                        setattr(self, attr_name, False)
+                except AttributeError:
+                    continue  # Skip read-only attributes
+
+    def streams_to_str(self):
+        return "Streams:\n" + "\n".join([(("   *" if user_hash in self.owned_streams_by_user_hash else "   ") +
+                                          DataProps.peer_id_from_user_hash(user_hash) + " => " +
+                                          str(stream).replace("\n", "\n   "))
+                                         for user_hash, stream in self.known_streams_by_user_hash.items()])
 
     def agent_state_dict(self):
         """Returns a dictionary containing an instance of the agent's state that can be saved."""
@@ -2413,60 +2163,328 @@ class AgentBasics:
         for (peer_id, name) in to_remove:
             await self.remove_streams(peer_id, name)
 
-    def remove_peer_from_agent_status_attrs(self, peer_id):
-        """Remove a peer ID from the status of the agent, assuming it to be the represented by attributes that start
-        with '_'."""
-        for attr_name in dir(self):
-            if attr_name.startswith("_") and (not attr_name.startswith("__") and not attr_name.startswith("_Agent")
-                                              and not attr_name.startswith("_WAgent")):
-                try:
-                    value = getattr(self, attr_name)
-                    if isinstance(value, list):
-                        setattr(self, attr_name, [v for v in value if v != peer_id])
-                    elif isinstance(value, set):
-                        value.discard(peer_id)
-                    elif isinstance(value, dict):
-                        if peer_id in value:
-                            del value[peer_id]
-                except AttributeError:
-                    continue  # Skip read-only attributes
-
-    def reset_agent_status_attrs(self):
-        """Resets attributes that represent the status of the agent, assuming to be the ones that start with '_'."""
-        for attr_name in dir(self):
-            if attr_name.startswith("_") and (not attr_name.startswith("__") and not attr_name.startswith("_Agent")
-                                              and not attr_name.startswith("_WAgent")):
-                try:
-                    value = getattr(self, attr_name)
-                    if isinstance(value, list):
-                        setattr(self, attr_name, [])
-                    elif isinstance(value, set):
-                        setattr(self, attr_name, set())
-                    elif isinstance(value, dict):
-                        setattr(self, attr_name, {})
-                    elif isinstance(value, int):
-                        setattr(self, attr_name, 0)
-                    elif isinstance(value, float):
-                        setattr(self, attr_name, 0.)
-                    elif isinstance(value, bool):
-                        setattr(self, attr_name, False)
-                except AttributeError:
-                    continue  # Skip read-only attributes
-
-    def streams_to_str(self):
-        return "Streams:\n" + "\n".join([(("   *" if user_hash in self.owned_streams_by_user_hash else "   ") +
-                                          DataProps.peer_id_from_user_hash(user_hash) + " => " +
-                                          str(stream).replace("\n", "\n   "))
-                                         for user_hash, stream in self.known_streams_by_user_hash.items()])
-
+    # ==================================================================================================================
+    # BEGIN OF DEPRECATED METHODS
+    # ==================================================================================================================
+    @deprecated("Use the provided logger")
     def out(self, msg):
         """DEPRECATED"""
         log.misc(msg)
 
+    @deprecated("Use the provided logger")
     def err(self, msg):
         """DEPRECATED"""
         log.error(msg)
 
+    @deprecated("Use the provided logger")
     def deb(self, msg):
         """DEPRECATED"""
         log.debug(msg)
+
+    @deprecated("Use the interaction-based design")
+    def set_uuid(self, net_hash: str, uuid: int | None, expected: bool = False):
+        """DEPRECATED"""
+        if net_hash in self.known_streams:
+            stream_dict = self.known_streams[net_hash]
+            for stream_obj in stream_dict.values():
+                stream_obj.set_uuid(uuid, expected=expected)
+
+    @deprecated("Use hook_proc_tweak_inputs")
+    def proc_callback_inputs(self, inputs):
+        """DEPRECATED"""
+        return self.hook_proc_tweak_inputs(inputs)
+
+    @deprecated("Use hook_proc_tweak_outputs")
+    def proc_callback_outputs(self, outputs):
+        """DEPRECATED"""
+        return self.hook_proc_tweak_outputs(outputs)
+
+    @deprecated("Use the interaction-based methods")
+    def generate(self, input_net_hashes: list[str] | None = None,
+                 inputs: list[str | torch.Tensor | Image] | None = None,
+                 first: bool = False, last: bool = False, ref_uuid: str | None = None) -> (
+            tuple[tuple[torch.Tensor] | None, int]):
+        """DEPRECATED: Generate new signals.
+
+        Args:
+            input_net_hashes: A list of network hashes to be considered as input streams (they will be sub-selected).
+            inputs: A list of data to be directly provided as input to the processor (if not None, input_net_hashes is
+                ignored).
+            first: If True, indicates this is the first generation call in a sequence.
+            last: If True, indicates this is the last generation call in a sequence.
+            ref_uuid: An optional UUID to match against input stream UUIDs (it can be None).
+
+        Returns:
+            A tuple containing:
+                - A tuple of torch.Tensor objects representing the generated output, or None if generation failed.
+                - An integer representing a data tag or status.
+        """
+
+        # Preparing processor input
+        if inputs is None:
+            inputs = [None] * len(self.proc_inputs)
+            matched = set()
+            data_tag = None
+
+            if input_net_hashes is None:
+                input_net_hashes = []
+
+            # Checking UUIDs and searching the provided input streams: we look to match them with the processor input
+            for net_hash in input_net_hashes:
+                if net_hash is None:
+                    return None, - 1
+
+                stream_dict = self.known_streams[net_hash]
+                for stream_name, stream in stream_dict.items():
+
+                    # Checking the UUID in our known streams, comparing it with the UUID provided as input:
+                    # if they are not compatible, we don't generate at all
+                    if ref_uuid is not None and ref_uuid not in stream.get_data_uuids():
+                        log.debug(f"[generate] The UUIDs of stream {net_hash} ({list(stream.get_data_uuids())}) "
+                                  f"does not include the one we were  "
+                                  f"looking for ({ref_uuid}), skipping this stream")
+                        continue
+
+                    # Matching the currently checked input stream with one of the processor inputs
+                    stream_sample = stream.get(requested_by="generate", uuid=ref_uuid)
+                    for i in range(len(self.proc_inputs)):
+
+                        # If the current input stream is compatible with the i-th input slot...
+                        if (net_hash, stream_name) in self.compat_in_streams[i]:
+
+                            # If the current input stream was already assigned to another input slot
+                            # (different from "i") we skip the generation
+                            if (net_hash, stream_name) in matched:
+                                log.error("Cannot generate: ambiguous input streams provided "
+                                          "(they can match multiple processor inputs)")
+                                return None, -1
+
+                            # Found a valid assignment: getting stream sample
+                            log.debug(f"[generate] Setting the {i}-th network input to stream with "
+                                      f"net_hash: {net_hash}, name: {stream_name}")
+                            if stream_sample is None:
+                                log.debug(f"[generate] Failed setting the {i}-th input, got a None sample "
+                                          f"(uuid={ref_uuid})")
+                            else:
+                                log.debug(f"[generate] Going ahead setting the {i}-th input, got a valid sample")
+
+                                # Found a valid assignment: associating it to the i-th input slot
+                                try:
+                                    inputs[i] = self.proc_inputs[i].check_and_preprocess(stream_sample,
+                                                                                         device=self.proc.device)
+                                except Exception as e:
+                                    log.error(f"Error while checking and preprocessing the {i}-th input [{e}]")
+                                    continue
+
+                                log.debug(f"[generate] Finished setting the {i}-th input, preprocessing complete")
+
+                                # Found a valid assignment: saving match
+                                matched.add((net_hash, stream_name))
+
+                                # If all the inputs share the same data tag, we will return it,
+                                # otherwise we set it at -1 (meaning no tag)
+                                if data_tag is None:
+                                    data_tag = stream.get_tag(uuid=ref_uuid)
+                                elif data_tag != stream.get_tag(uuid=ref_uuid):
+                                    data_tag = -1
+
+                                if stream.props.is_text():
+                                    log.debug(f"[generate] Input {i} of the network: {stream_sample}")
+                                break
+
+            # Checking if we were able to match some data for each input slot of the network (processor)
+            for i in range(len(self.proc_inputs)):
+                if inputs[i] is None:
+                    if self.proc_optional_inputs[i]["has_default"]:
+                        inputs[i] = self.proc_optional_inputs[i]["default_value"]
+                    else:
+                        return None, -1
+
+            # If we reach this point and data_tag is still None, it means that inputs were all taken from defaults
+            if data_tag is None:
+                return None, -1
+        else:
+            data_tag = -1
+
+        if inputs is not None:
+            input_shapes = []
+            for x in inputs:
+                if isinstance(x, torch.Tensor):
+                    input_shapes.append(x.shape)
+                else:
+                    input_shapes.append("<non-tensor>")
+            log.debug(f"[generate] Input shapes: {input_shapes}")
+            log.debug(f"[generate] Input data tag: {data_tag}")
+
+        # Calling processor (inference) passing the collected inputs
+        if "proc_callback_inputs" in type(self).__dict__:
+            inputs = self.proc_callback_inputs(inputs)  # Backward compatibility
+        else:
+            inputs = self.hook_proc_tweak_inputs(inputs)
+        try:
+            outputs = self.proc(*inputs, first=first, last=last)
+
+            # Ensuring the output is a tuple, even if composed by a single tensor
+            if not isinstance(outputs, tuple):
+                outputs = (outputs,)
+        except Exception as e:
+            log.error(f"Error while calling the processor [{e}]")
+            outputs = (None,) * len(self.proc_outputs)
+        outputs = self.hook_proc_tweak_outputs(outputs)
+
+        # Saving
+        self.last_ref_uuid = ref_uuid
+
+        if outputs is not None:
+            i = 0
+            for net_hash, stream_dict in self.proc_streams.items():
+                for stream in stream_dict.values():
+                    if self.behaving_in_world() != stream.props.is_public():
+                        if outputs[i] is not None:
+                            if stream.props.is_tensor() or stream.props.is_text():
+                                log.debug(f"[generate] outputs[{i}]: {str(stream.props.to_text(outputs[i]))}")
+                            else:
+                                log.debug(
+                                    f"[generate] outputs[{i}]: not None, but it cannot be converted to text")
+                        else:
+                            log.debug(f"[generate] outputs[{i}]: None")
+                        i += 1
+            log.debug(f"[generate] Output shapes: "
+                      f"{[x.shape if isinstance(x, torch.Tensor) else '<non-tensor>' for x in outputs]}")
+
+        return outputs, data_tag
+
+    @deprecated("Use the interaction-based methods")
+    def learn_generate(self,
+                       outputs: tuple[torch.Tensor],
+                       targets_net_hashes: list[str] | None,
+                       ref_uuid: str | None = None) -> tuple[list[float] | None, list[float] | None]:
+        """DEPRECATED: Learn (i.e., update model params) by matching the given processor outputs with a set of targets.
+
+        Args:
+            outputs: A tuple of torch.Tensor representing the outputs generated by the agent's processor.
+            targets_net_hashes: An optional list of network hashes identifying the streams
+                                from which target data should be retrieved for learning.
+                                If None, losses are evaluated without explicit targets.
+            ref_uuid: UUID of the interaction associated to the learning procedure.
+
+        Returns:
+            A tuple containing:
+            - A list of float values representing the individual loss values for each output.
+              Returns None if targets are specified but cannot be found.
+            - A list of integers representing the data tags of the given target streams (None if no targets were given).
+        """
+
+        # Cannot learn without optimizer and losses
+        if (self.proc_opts['optimizer'] is None or self.proc_opts['losses'] is None or
+                len(self.proc_opts['losses']) == 0):
+            return None, None
+
+        # Matching targets with the output slots of the processor
+        at_least_one_target_found = False
+        if targets_net_hashes is not None:
+            targets = [None] * len(self.proc_outputs)
+            matched = set()
+            data_tags = [-1] * len(self.proc_outputs)
+
+            # For each target stream group...
+            for net_hash in targets_net_hashes:
+                stream_dict = self.known_streams[net_hash]
+
+                # For each stream of the current target group....
+                for stream_name, stream in stream_dict.items():
+                    stream_sample = None
+
+                    # For each output slot of our processor... (index "i")
+                    for i in range(len(self.proc_outputs)):
+
+                        # Check if the i-th target was already assigned or if the i-th output is not a tensor
+                        if targets[i] is not None or not isinstance(outputs[i], torch.Tensor):
+                            continue
+
+                        # If the target stream is compatible with the i-th output of the processor...
+                        if (net_hash, stream_name) in self.compat_out_streams[i]:
+
+                            # If the current target was already assigned to another output slot (different from "i)"
+                            # we skip learning
+                            if (net_hash, stream_name) in matched:
+                                log.error("Cannot generate: ambiguous target streams provided "
+                                          "(they can match multiple processor outputs)")
+                                return None, None
+
+                            # Found a valid assignment: getting stream sample
+                            if stream_sample is None:
+                                stream_sample = stream.get(requested_by="learn_generate", uuid=ref_uuid)
+                                if stream_sample is None:
+                                    return None, None
+
+                            # Found a valid assignment: associating target to the i-th output slot
+                            try:
+                                targets[i] = self.proc_outputs[i].check_and_preprocess(stream_sample,
+                                                                                       allow_class_ids=True,
+                                                                                       targets=True,
+                                                                                       device=self.proc.device)
+                            except Exception as e:
+                                log.error(f"Error while checking and preprocessing the {i}-th targets [{e}]")
+
+                            # Found a valid assignment: saving match
+                            matched.add((net_hash, stream_name))
+
+                            # Saving tag
+                            data_tags[i] = stream.get_tag(uuid=ref_uuid)
+
+                            # Confirming
+                            at_least_one_target_found = True
+
+                            if stream.props.is_tensor():
+                                log.debug("[generate] Target of the network: " +
+                                          str(stream.props.to_text(targets[i])))
+                            elif stream.props.is_text():
+                                log.debug("[generate] Target of the network: " + stream_sample)
+                            break
+
+            # If no targets were matched, we skip learning
+            if not at_least_one_target_found:
+                log.error(f"Cannot learn: cannot find a valid target for any output positions of the processor")
+                return None, None
+        else:
+
+            # If no targets were provided, it is expected to be the case of fully unsupervised learning
+            data_tags = None
+            targets = None
+
+        # Retrieving custom elements from the option dictionary
+        loss_functions: list = self.proc_opts['losses']
+        optimizer: torch.optim.optimizer.Optimizer | None = self.proc_opts['optimizer']
+
+        # Evaluating loss function(s), one for each processor output slot (they are set to 0. if no targets are there)
+        if targets_net_hashes is not None:
+
+            # Supervised or partly supervised learning
+            loss_values = [loss_fcn(outputs[i], targets[i]) if targets[i] is not None else
+                           torch.tensor(0., device=self.proc.device)
+                           for i, loss_fcn in enumerate(loss_functions)]
+            loss = torch.stack(loss_values).sum()  # Sum of losses
+        else:
+
+            # Unsupervised learning
+            loss_values = [loss_fcn(outputs[i]) for i, loss_fcn in enumerate(loss_functions)]
+            loss = torch.stack(loss_values).sum()  # Sum of losses
+
+        # Learning step
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+        # This is where parameters are actually updated, but the flag is set
+        # upon success in do_learn which is the outer method calling this one
+        # self.proc_updated_since_last_save = True
+
+        # Teaching (for autoregressive models, expected to have attribute "y")
+        if hasattr(self.proc, 'y'):
+            self.proc.y = targets[0]
+
+        # Returning a list of float values and the data tags of the targets
+        return [loss_value.item() for loss_value in loss_values], data_tags
+    # ==================================================================================================================
+    # END OF DEPRECATED METHODS
+    # ==================================================================================================================
