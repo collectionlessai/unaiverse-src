@@ -65,7 +65,7 @@ def action(func: Callable) -> Callable:
                     resolved = self.resolve_agent_ref(value)
                     resolved_kwargs[key] = resolved if resolved is not None else value
                 elif isinstance(value, list | tuple):
-                    _values = value.copy()  # Shallow
+                    _values = list(value)  # Shallow
                     for i, _value in _values:
                         _resolved = self.resolve_agent_ref(_value)
                         if _resolved is not None:
@@ -79,7 +79,7 @@ def action(func: Callable) -> Callable:
                     resolved = self.resolve_stream_ref(value)
                     resolved_kwargs[key] = resolved if resolved is not None else value
                 elif isinstance(value, list | tuple):
-                    _values = value.copy()  # Shallow
+                    _values = list(value)  # Shallow
                     for i, _value in _values:
                         _resolved = self.resolve_stream_ref(_value)
                         if _resolved is not None:
@@ -150,7 +150,7 @@ class Agent(AgentBasics):
                    action_kwargs: dict | None = None,
                    streams: tuple[list[str], int] | list[str] | None = None,
                    data_samples: list[str | Image | torch.Tensor] | None = None,
-                   num_steps: int = -1.,
+                   num_steps: int = -1,
                    max_time: float = -1.,
                    from_state: str | None = None,
                    to_state: str | None = None,
@@ -173,7 +173,7 @@ class Agent(AgentBasics):
             num_steps: Number of steps the interaction spans (used when building from raw args).
                 Ignored when a pre-built Interaction is provided.
             max_time: Maximum time for the interaction. Ignored when a pre-built Interaction is provided.
-            from_state: Optional source state. Ignored when a pre-built Interaction is provided.
+            from_state: Optional source state. Ignored when a pre-built Interaction provided.
             to_state: Optional destination state. Ignored when a pre-built Interaction provided.
             uuid: Optional UUID of the interaction. Ignored when a pre-built Interaction is provided.
 
@@ -281,7 +281,7 @@ class Agent(AgentBasics):
             return False
 
         # Inference first
-        if self.process():
+        if await self.process():
 
             # Getting input data from the input stream
             target_data = self.stdtar.get()
@@ -361,6 +361,10 @@ class Agent(AgentBasics):
 
         if sender_role is None:
             log.error(f"Unknown role of {_requester}")
+            return False
+
+        if acceptable_role is None:
+            log.error(f"Invalid acceptable role: {acceptable_role}")
             return False
 
         # Confirming
@@ -1489,28 +1493,30 @@ class Agent(AgentBasics):
         if steps > len(stream_a) and steps > len(stream_b):
             log.error(f"Cannot compare streams for {steps} steps, since both of them are shorter "
                       f"(length of the first stream is {len(stream_a)}, of the second stream is {len(stream_b)})")
+            return -1., False
 
         if not stream_a.get_props().is_compatible(stream_b.get_props()):
             log.error(f"Cannot compare incompatible streams")
+            return -1., False
 
         def compare(_a: torch.Tensor | str, _b: torch.Tensor | str, _how: str = "mse") -> float:
             """Compare two samples of signals or descriptors, returning a dissimilarity score >= 0."""
 
-            assert how in ['mse', 'max', 'same'] or how.startswith("geq"), f"Invalid comparison in terms of {how}"
+            assert _how in ['mse', 'max', 'same'] or _how.startswith("geq"), f"Invalid comparison in terms of {_how}"
 
             if isinstance(_a, torch.Tensor) and isinstance(_b, torch.Tensor):
                 if _a.shape != _b.shape:
                     return 1.  # Mismatching
                 if _a.dtype == torch.long and _b.dtype == torch.long:  # Token IDS
                     return 1. - float((_a == _b).sum().item()) / _a.numel()  # Accuracy
-                elif how == "mse":
+                elif _how == "mse":
                     ret = torch.nn.functional.mse_loss(_a, _b, reduction='mean')
-                elif how == "max":
+                elif _how == "max":
                     ret = 1. - float((torch.argmax(_a) == torch.argmax(_b)).sum().item())
-                elif how == "same":
+                elif _how == "same":
                     ret = 1. - float(torch.eq(_a, _b).sum()) / _a.numel()
                 else:
-                    thres = float(how[3:])
+                    thres = float(_how[3:])
                     ret = 1. - float(torch.sum((_a > thres) == (_b > thres)).item()) / _a.numel()
             else:
                 ret = 1. - float(_a == _b)  # Strings (always handled as 'same')
@@ -1801,7 +1807,9 @@ class Agent(AgentBasics):
                                                     from_state=from_state, to_state=to_state,
                                                     samples=samples, ref_uuid=ref_uuid)
         log.debug(f"[ask_gen] Asking {involved_agents} returned {interaction}")
-        correctly_asked = interaction.target
+        correctly_asked = []
+        if interaction is not None:
+            correctly_asked = interaction.target
 
         # Preparing the buffered stream where to store data, if needed
         if interaction is not None and len(correctly_asked) > 0:
@@ -2035,7 +2043,9 @@ class Agent(AgentBasics):
                                                     from_state=from_state, to_state=to_state,
                                                     samples=samples, ref_uuid=ref_uuid)
         log.debug(f"[ask_gen] Asking {involved_agents} returned {interaction}")
-        correctly_asked = interaction.target
+        correctly_asked = []
+        if interaction is not None:
+            correctly_asked = interaction.target
 
         # Preparing the buffered stream where to store data, if needed
         if interaction is not None and len(correctly_asked) > 0:
@@ -2124,6 +2134,9 @@ class Agent(AgentBasics):
         log.debug(f"[do_learn] samples: {samples}, time: {time}, timeout: {timeout}, "
                   f"requester: {_requester}, request_time: {_request_time}, request_uuid: {_request_uuid} "
                   f"completed: {_completed}")
+
+        if _requester is None:
+            return False
 
         if _requester not in self.world_agents and _requester not in self.world_masters:
             log.error(f"Unknown agent: {_requester}")
@@ -2251,7 +2264,7 @@ class Agent(AgentBasics):
                                 streams=u_hashes,
                                 from_state=from_state, to_state=to_state,
                                 uuid=ref_uuid)
-            if samples > 1:
+            if interaction is not None and samples > 1:
                 for c in interaction.target:
                     self._agents_who_were_asked.add(c)
             return interaction
@@ -2267,7 +2280,7 @@ class Agent(AgentBasics):
                                 from_state=from_state, to_state=to_state,
                                 uuid=ref_uuid)
 
-            if samples > 1:
+            if interaction is not None and samples > 1:
                 for c in interaction.target:
                     self._agents_who_were_asked.add(c)
             return interaction
