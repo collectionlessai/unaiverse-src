@@ -17,10 +17,10 @@ import json
 import math
 import zlib
 import sqlite3
+from typing import Any
 from datetime import timedelta
 from unaiverse.utils.logger import log
 from sortedcontainers import SortedDict
-from typing import Any, Set, List, Dict, Tuple, Optional, Union
 
 
 # A fixed palette for consistent coloring
@@ -63,7 +63,13 @@ class UIPlot:
     Allows users to build plots using Python methods instead of dicts/JSON.
     """
     def __init__(self, title: str = '', height: int = 400):
-        self._data: List[Dict[str, Any]] = []
+        """Initializes a UIPlot with an empty data list and a pre-configured dark-theme layout.
+
+        Args:
+            title: Title text shown at the top of the plot.
+            height: Height of the plot in pixels.
+        """
+        self._data: list[dict[str, Any]] = []
         
         # Define the standard axis style for a "boxed" look
         axis_style = {
@@ -79,7 +85,7 @@ class UIPlot:
             'layer': 'below traces'     # Key fix: puts grid BEHIND the box border
         }
         
-        self._layout: Dict[str, Any] = {
+        self._layout: dict[str, Any] = {
             'title': title,
             'height': height,
             'xaxis': {**axis_style, 'title': 'Time'},
@@ -91,9 +97,18 @@ class UIPlot:
             'font': {'color': THEME['text_main']}
         }
 
-    def add_line(self, x: List[Any], y: List[Any], name: str, color=None,
-                 legend_group: str = None, show_legend: bool = True):
-        """Adds a standard time-series line."""
+    def add_line(self, x: list[Any], y: list[Any], name: str, color: str | None = None,
+                 legend_group: str | None = None, show_legend: bool = True):
+        """Adds a standard time-series line.
+
+        Args:
+            x: Sequence of x-axis values (e.g., timestamps).
+            y: Sequence of y-axis values.
+            name: Label shown in the legend.
+            color: CSS color string for the line. Defaults to the primary theme color.
+            legend_group: Plotly legend group name for toggling related traces together.
+            show_legend: Whether to display this trace in the legend.
+        """
         if color is None:
             color = THEME['main']
         trace = {
@@ -107,8 +122,15 @@ class UIPlot:
         }
         self._data.append(trace)
 
-    def add_area(self, x: List[Any], y: List[Any], name: str, color=None):
-        """Adds a filled area chart."""
+    def add_area(self, x: list[Any], y: list[Any], name: str, color: str | None = None):
+        """Adds a filled area chart.
+
+        Args:
+            x: Sequence of x-axis values.
+            y: Sequence of y-axis values.
+            name: Label shown in the legend.
+            color: CSS color string for the fill/line. Defaults to the primary theme color.
+        """
         if color is None:
             color = THEME['main']
         trace = {
@@ -119,7 +141,12 @@ class UIPlot:
         self._data.append(trace)
 
     def add_indicator(self, value: Any, title: str):
-        """Adds a big number indicator."""
+        """Adds a big number indicator.
+
+        Args:
+            value: Numeric (or any) value to display prominently.
+            title: Subtitle text rendered below the number.
+        """
         self._data.append({
             'type': 'indicator',
             'mode': 'number',
@@ -128,8 +155,13 @@ class UIPlot:
         })
         self._layout['height'] = 300  # Indicators usually need less height
 
-    def add_table(self, headers: List[str] | None, columns: List[List[Any]]):
-        """Adds a data table."""
+    def add_table(self, headers: list[str] | None, columns: list[list[Any]]):
+        """Adds a data table.
+
+        Args:
+            headers: Column header labels, or ``None`` to hide the header row.
+            columns: Column data as a list of lists, one inner list per column.
+        """
         num_columns = len(columns) if columns else 0
         if headers:
             header_cfg = {
@@ -158,8 +190,17 @@ class UIPlot:
         }
         self._data.append(trace)
     
-    def add_bar(self, xs: List[Any], ys: List[Any], names: List[str], colors=None):
-        """Adds a bar chart trace."""
+    def add_bar(self, xs: list[Any], ys: list[Any], names: list[str],
+                colors: list[str] | str | None = None):
+        """Adds a bar chart trace.
+
+        Args:
+            xs: Category labels for the x-axis.
+            ys: Numeric values for bar heights.
+            names: Text annotations placed on top of each bar.
+            colors: Single CSS color string or a list of per-bar color strings.
+                Defaults to the primary theme color.
+        """
         if colors is None:
             colors = THEME['main']
         trace = {
@@ -174,16 +215,31 @@ class UIPlot:
         self._data.append(trace)
         self._layout['yaxis'].update({'title': 'Value'})
     
-    def add_trace(self, trace: Dict[str, Any]):
-        """Generic method to add any raw Plotly trace."""
+    def add_trace(self, trace: dict[str, Any]):
+        """Generic method to add any raw Plotly trace.
+
+        Args:
+            trace: A Plotly trace dictionary (e.g., ``{'type': 'scatter', ...}``).
+        """
         self._data.append(trace)
 
     def set_y_range(self, min_val: float, max_val: float):
-        """Force Y-axis limits."""
+        """Force Y-axis limits.
+
+        Args:
+            min_val: Lower bound of the Y-axis.
+            max_val: Upper bound of the Y-axis.
+        """
         self._layout.setdefault('yaxis', {})['range'] = [min_val, max_val]
 
     def set_layout_opt(self, key: str, value: Any):
-        """Generic setter for advanced layout options."""
+        """Generic setter for advanced layout options.
+
+        Args:
+            key: Top-level Plotly layout key (e.g., ``'xaxis'``, ``'legend'``).
+            value: Value to assign. If the key already holds a dict and ``value`` is also
+                a dict, the existing dict is updated (merged) rather than replaced.
+        """
         if isinstance(value, dict) and key in self._layout:
             self._layout[key].update(value)
         else:
@@ -191,9 +247,16 @@ class UIPlot:
     
     def set_legend(self, orientation: str = 'v', x: float = 1.0, y: float = 1.0,
                    xanchor: str = 'left', yanchor: str = 'top'):
-        """
-        Configures the legend position and orientation.
-        orientation: 'v' (vertical) or 'h' (horizontal)
+        """Configures the legend position and orientation.
+
+        Args:
+            orientation: Legend orientation. ``'v'`` for vertical, ``'h'`` for horizontal.
+            x: Horizontal position of the legend anchor in paper coordinates (0–1).
+            y: Vertical position of the legend anchor in paper coordinates (0–1).
+            xanchor: Horizontal alignment of the legend box relative to ``x``.
+                One of ``'left'``, ``'center'``, ``'right'``.
+            yanchor: Vertical alignment of the legend box relative to ``y``.
+                One of ``'top'``, ``'middle'``, ``'bottom'``.
         """
         self._layout['showlegend'] = True
         self._layout['legend'] = {
@@ -208,7 +271,11 @@ class UIPlot:
         }
 
     def to_json(self) -> str:
-        """Serializes the panel to the format the Frontend expects."""
+        """Serializes the panel to the format the Frontend expects.
+
+        Returns:
+            JSON string with ``'data'`` and ``'layout'`` keys ready for Plotly.
+        """
         return json.dumps({'data': self._data, 'layout': self._layout})
 
 
@@ -217,7 +284,12 @@ class DefaultBaseDash:
     A generic 2x2 Grid Dashboard for the base Stats class.
     Forces #111111 background to match the WStats styling.
     """
-    def __init__(self, title="Network Overview"):
+    def __init__(self, title: str = "Network Overview"):
+        """Initializes the 2x2 grid dashboard with default dark-theme layout.
+
+        Args:
+            title: Main title displayed at the top of the dashboard.
+        """
         self.traces = []
         self.layout = {
             "title": title,
@@ -264,6 +336,13 @@ class DefaultBaseDash:
         }
 
     def add_panel(self, ui_plot: UIPlot, position: str):
+        """Merges a UIPlot into one of the four fixed grid positions.
+
+        Args:
+            ui_plot: The UIPlot instance whose traces and layout settings are merged in.
+            position: Grid cell to target. One of ``'top_left'``, ``'top_right'``,
+                ``'bot_left'``, ``'bot_right'``.
+        """
         if position not in self._map:
             return
 
@@ -304,7 +383,12 @@ class DefaultBaseDash:
                 "font": {"size": 14, "color": THEME['text_main']} 
             })
 
-    def to_json(self):
+    def to_json(self) -> str:
+        """Serializes the dashboard to the format the Frontend expects.
+
+        Returns:
+            JSON string with ``'data'`` and ``'layout'`` keys ready for Plotly.
+        """
         return json.dumps({"data": self.traces, "layout": self.layout})
 
 
@@ -334,10 +418,10 @@ class Stats:
               keyed by timestamp.
     """
     # These are all the keys in the local _stats dictionary collected by the world
-    CORE_WORLD_STATS_STATIC_SCHEMA: Dict[str, Tuple[type, Any]] = {
+    CORE_WORLD_STATS_STATIC_SCHEMA: dict[str, tuple[type, Any]] = {
         'graph': (dict, {'nodes': {}, 'edges': {}})
     }
-    CORE_WORLD_STATS_DYNAMIC_SCHEMA: Dict[str, Tuple[type, Any]] = {
+    CORE_WORLD_STATS_DYNAMIC_SCHEMA: dict[str, tuple[type, Any]] = {
         'world_masters': (int, 0),
         'world_agents': (int, 0),
         'human_agents': (int, 0),
@@ -345,25 +429,25 @@ class Stats:
     }
 
     # These are all the keys in the local _stats dictionary collected by the agent
-    CORE_AGENT_STATS_STATIC_SCHEMA: Dict[str, Tuple[type, Any]] = {
+    CORE_AGENT_STATS_STATIC_SCHEMA: dict[str, tuple[type, Any]] = {
         'connected_peers': (list, []),
         'state': (str, None),
         'action': (str, None),
         'last_action': (str, None)
     }
-    CORE_AGENT_STATS_DYNAMIC_SCHEMA: Dict[str, Tuple[type, Any]] = {}
+    CORE_AGENT_STATS_DYNAMIC_SCHEMA: dict[str, tuple[type, Any]] = {}
     
     # Then we have the stats collected on behalf of other peers (by the agent or the world)
-    CORE_OUTER_STATS_STATIC_SCHEMA: Dict[str, Tuple[type, Any]] = {}
-    CORE_OUTER_STATS_DYNAMIC_SCHEMA: Dict[str, Tuple[type, Any]] = {}
+    CORE_OUTER_STATS_STATIC_SCHEMA: dict[str, tuple[type, Any]] = {}
+    CORE_OUTER_STATS_DYNAMIC_SCHEMA: dict[str, tuple[type, Any]] = {}
     
     # We also add class variables to extend these sets
-    CUSTOM_WORLD_STATS_STATIC_SCHEMA: Dict[str, Tuple[type, Any]] = {}
-    CUSTOM_WORLD_STATS_DYNAMIC_SCHEMA: Dict[str, Tuple[type, Any]] = {}
-    CUSTOM_AGENT_STATS_STATIC_SCHEMA: Dict[str, Tuple[type, Any]] = {}
-    CUSTOM_AGENT_STATS_DYNAMIC_SCHEMA: Dict[str, Tuple[type, Any]] = {}
-    CUSTOM_OUTER_STATS_STATIC_SCHEMA: Dict[str, Tuple[type, Any]] = {}
-    CUSTOM_OUTER_STATS_DYNAMIC_SCHEMA: Dict[str, Tuple[type, Any]] = {}
+    CUSTOM_WORLD_STATS_STATIC_SCHEMA: dict[str, tuple[type, Any]] = {}
+    CUSTOM_WORLD_STATS_DYNAMIC_SCHEMA: dict[str, tuple[type, Any]] = {}
+    CUSTOM_AGENT_STATS_STATIC_SCHEMA: dict[str, tuple[type, Any]] = {}
+    CUSTOM_AGENT_STATS_DYNAMIC_SCHEMA: dict[str, tuple[type, Any]] = {}
+    CUSTOM_OUTER_STATS_STATIC_SCHEMA: dict[str, tuple[type, Any]] = {}
+    CUSTOM_OUTER_STATS_DYNAMIC_SCHEMA: dict[str, tuple[type, Any]] = {}
     
     # Key for grouping stats in the _stats dictionary (both world and agent)
     GROUP_KEY = 'peer_stats'  # _BY_PEER stats are grouped under this key
@@ -374,7 +458,18 @@ class Stats:
     def __init__(self, is_world: bool,
                  db_path: str | None = None,  # only needed by the world
                  cache_window_hours: float = 2.0):  # only needed by the world
-        
+        """Initializes the Stats engine in either World or Agent mode.
+
+        Args:
+            is_world: When ``True``, initialises the full World-side engine including the
+                SQLite database, hot cache, and persistence buffers. When ``False``,
+                initialises a lightweight Agent-side buffer.
+            db_path: Filesystem path for the SQLite database file. Required when
+                ``is_world`` is ``True``; ignored otherwise.
+            cache_window_hours: Duration (in hours) of the in-memory rolling window kept
+                by the World hot cache. Older dynamic data is evicted from RAM while
+                remaining on disk.
+        """
         self.is_world: bool = is_world
         self.max_seen_timestamp: int = 0
         
@@ -387,23 +482,23 @@ class Stats:
         self.OUTER_STATS_DYNAMIC_SCHEMA = self.CORE_OUTER_STATS_DYNAMIC_SCHEMA | self.CUSTOM_OUTER_STATS_DYNAMIC_SCHEMA
         
         # --- Master key sets for easier lookup ---
-        self.all_static_keys: Set[str] = set()
-        self.all_dynamic_keys: Set[str] = set()
-        self.all_keys: Set[str] = set()
-        self.world_grouped_keys: Set[str] = set()
-        self.world_ungrouped_keys: Set[str] = set()
-        self.agent_grouped_keys: Set[str] = set()
-        self.agent_ungrouped_keys: Set[str] = set()
+        self.all_static_keys: set[str] = set()
+        self.all_dynamic_keys: set[str] = set()
+        self.all_keys: set[str] = set()
+        self.world_grouped_keys: set[str] = set()
+        self.world_ungrouped_keys: set[str] = set()
+        self.agent_grouped_keys: set[str] = set()
+        self.agent_ungrouped_keys: set[str] = set()
         self.stat_types = {}
-        self._stat_defaults: Dict[str, Any] = {}
+        self._stat_defaults: dict[str, Any] = {}
         self._initialize_key_sets()
 
         if self.is_world:
             # --- World Configuration ---
-            self._stats: Dict[str, Any] = {self.GROUP_KEY: {}}
+            self._stats: dict[str, Any] = {self.GROUP_KEY: {}}
             self.min_window_duration = timedelta(hours=cache_window_hours)
             self.db_path = db_path
-            self._db_conn: Optional[sqlite3.Connection] = None
+            self._db_conn: sqlite3.Connection | None = None
             self._static_db_buffer = []
             self._dynamic_db_buffer = []
 
@@ -413,9 +508,9 @@ class Stats:
             self._load_existing_stats()  # Hydrates _stats from disk
         else:
             # --- Agent Initialization (Simple Buffer) ---
-            self._world_view: Dict[str, Any] = {}
+            self._world_view: dict[str, Any] = {}
             self.min_window_duration = timedelta(hours=3.0)  # cache for the _world_view
-            self._update_batch: List[Dict[str, Any]] = []
+            self._update_batch: list[dict[str, Any]] = []
 
     def _initialize_key_sets(self):
         """Populates the master key sets and the type for later use."""
@@ -516,8 +611,17 @@ class Stats:
                     # It will be populated by _hydrate_dynamic_caches_from_db
                     peer_data.setdefault(key, SortedDict())
 
-    def _get_peer_stat_cache(self, peer_id: str, stat_name: str) -> Union[SortedDict, dict, None]:
-        """(World-only) Helper to get or create the cache structure for a peer stat on demand."""
+    def _get_peer_stat_cache(self, peer_id: str, stat_name: str) -> SortedDict | dict | None:
+        """(World-only) Helper to get or create the cache structure for a peer stat on demand.
+
+        Args:
+            peer_id: Identifier of the peer whose cache entry is retrieved or created.
+            stat_name: Name of the statistic to look up within the peer's cache.
+
+        Returns:
+            A ``SortedDict`` for dynamic stats, a plain ``dict`` (or scalar default) for
+            static stats, or ``None`` if this instance is not the World.
+        """
         if not self.is_world:
             return
         
@@ -532,8 +636,13 @@ class Stats:
 
     # --- SHARED API ---
     def store_stat(self, stat_name: str, value: Any, peer_id: str, timestamp: int):
-        """Unified API to store a stat. It then calls private methods to
-        differentiate between static and dynamic stats.
+        """Unified API to store a stat. Dispatches to static or dynamic storage.
+
+        Args:
+            stat_name: Name of the statistic as defined in one of the schema dicts.
+            value: Value to store. Type-validated and cast according to the schema.
+            peer_id: Identifier of the peer this stat belongs to.
+            timestamp: Millisecond Unix timestamp associated with the measurement.
         """
         if stat_name not in self.all_keys:
             self._err(f'Stat "{stat_name}" is not defined.')
@@ -544,7 +653,23 @@ class Stats:
         else:
             self._store_dynamic(stat_name, value, peer_id, timestamp)
     
-    def _validate_type(self, stat_name, value):
+    def _validate_type(self, stat_name: str, value: Any) -> Any:
+        """Validates and casts ``value`` to the type declared in the schema.
+
+        If ``value`` is already the correct type it is returned unchanged. Otherwise a
+        cast is attempted. On failure the value is coerced to ``str`` and an error is
+        logged.
+
+        Args:
+            stat_name: Name of the statistic whose schema type is looked up.
+            value: Raw value to validate.
+
+        Returns:
+            The value cast to the schema-declared type, or a ``str`` fallback.
+
+        Raises:
+            KeyError: If ``stat_name`` is not present in ``stat_types``.
+        """
         if stat_name not in self.stat_types:
             raise KeyError(f'Statistic "{stat_name}" is not defined in the stat_types schema.')
         
@@ -562,7 +687,15 @@ class Stats:
                 return str(value)  # Fallback
 
     def _make_json_serializable(self, value: Any) -> Any:
-        """Recursively converts non-serializable types (like sets) to lists."""
+        """Recursively converts non-serializable types (like sets) to lists.
+
+        Args:
+            value: Arbitrary Python value that may contain sets, dicts, lists, or scalars.
+
+        Returns:
+            A JSON-serializable equivalent of ``value``, with sets converted to lists
+            and nested structures recursed into.
+        """
         if isinstance(value, set):
             return list(value)
         if isinstance(value, dict):
@@ -578,10 +711,16 @@ class Stats:
         return value
 
     def _store_static(self, stat_name: str, value: Any, peer_id: str, timestamp: int):
-        """
-        Unified API to store a static (single-value) stat.
-        - On Agent: Adds to the network send buffer.
-        - On World: Updates the hot cache and adds to the DB buffer.
+        """Stores a static (single-value) stat.
+
+        On Agent: de-duplicates and appends to the network send buffer.
+        On World: updates the hot cache and appends to the DB write buffer.
+
+        Args:
+            stat_name: Name of the static statistic.
+            value: New value for the stat. Type-validated before storage.
+            peer_id: Identifier of the peer this stat belongs to.
+            timestamp: Millisecond Unix timestamp of the measurement.
         """
         value = self._validate_type(stat_name, value)
         if self.is_world:
@@ -612,11 +751,18 @@ class Stats:
                 'value': value
             })
 
-    def _store_dynamic(self, stat_name: str, value: Any, peer_id: str, timestamp: float):
-        """
-        Unified API to store a dynamic (time-series) stat.
-        - On Agent: Gets current time, adds to network send buffer.
-        - On World: Uses provided timestamp, updates hot cache, adds to DB buffer.
+    def _store_dynamic(self, stat_name: str, value: Any, peer_id: str, timestamp: int):
+        """Stores a dynamic (time-series) stat.
+
+        On Agent: appends to the network send buffer.
+        On World: inserts into the rolling hot-cache ``SortedDict``, prunes old entries,
+        and appends to the DB write buffer.
+
+        Args:
+            stat_name: Name of the dynamic statistic.
+            value: New measurement value. Type-validated before storage.
+            peer_id: Identifier of the peer this stat belongs to.
+            timestamp: Millisecond Unix timestamp used as the time-series key.
         """
         value = self._validate_type(stat_name, value)
         if self.is_world:
@@ -655,21 +801,26 @@ class Stats:
             })
     
     # --- AGENT API ---
-    def update_view(self, view_data: Dict[str, Any] = None, overwrite: bool = False):
-        """
-        (Agent-side) Replaces the local view with data received from World.
-        This is 'dumb' storage: we don't parse it, we just store it for plotting.
-        
-        The view has this structure:
-        {
-            "world": { "stat_name": value_or_timeseries },
-            "peers": { "peer_id": { "stat_name": value_or_timeseries } }
-        }
-        For Dynamic stats, returns a list of lists: [[timestamp, value], ...] for efficient JSON/Plotly usage.
-        
+    def update_view(self, view_data: dict[str, Any] | None = None, overwrite: bool = False):
+        """(Agent-side) Merges a snapshot received from the World into the local view.
+
+        This is 'dumb' storage: the data is kept as-is for later plotting without further
+        parsing. Dynamic stats are extended (appended) rather than replaced unless
+        ``overwrite`` is set.
+
+        Expected ``view_data`` structure::
+
+            {
+                "world": { "stat_name": value_or_timeseries },
+                "peers": { "peer_id": { "stat_name": value_or_timeseries } }
+            }
+
+        For dynamic stats, each ``value_or_timeseries`` is a list of ``[timestamp, value]``
+        pairs for efficient JSON/Plotly usage.
+
         Args:
             view_data: The snapshot received from the world.
-            overwrite: If True, replaces the entire current view instead of merging.
+            overwrite: If ``True``, discards the current view before merging the new data.
         """
         if self.is_world:
             return
@@ -687,7 +838,7 @@ class Stats:
                 if last_ts > self.max_seen_timestamp:
                     self.max_seen_timestamp = int(last_ts)
         
-        def _merge_dict(target: Dict, source: Dict):
+        def _merge_dict(target: dict, source: dict):
             """
             Helper to merge source into target with special handling for dynamic stats.
             Copies a source dict { "stat_name": value_or_timeseries } into target.
@@ -712,14 +863,22 @@ class Stats:
                 target_peer = target_peers.setdefault(peer_id, {})
                 _merge_dict(target_peer, peer_data)
     
-    def _get_last_val_from_view(self, view: Dict, name: str) -> str:
-        """Helper to extract a scalar value safely from the view snapshot.
-        View structure:
-                {
-                "world": { "stat_name": value_or_timeseries },
-                "peers": { "peer_id": { "stat_name": value_or_timeseries } }
-                }
-            For Dynamic stats we have a list of lists: [[timestamp, value], ...]"""
+    def _get_last_val_from_view(self, view: dict[str, Any], name: str) -> str:
+        """Extracts the most recent scalar value for a world-level stat from the view snapshot.
+
+        For dynamic stats (stored as ``[[timestamp, value], ...]``), the last pair's value
+        is returned. For static stats, the value itself is returned. Only world-level
+        (ungrouped) stats are searched.
+
+        Args:
+            view: View snapshot dictionary as returned by ``get_view`` or stored in
+                ``_world_view``.
+            name: Stat name to look up.
+
+        Returns:
+            A string representation of the latest value, ``"-"`` if the stat is absent.
+            Float values are formatted to three decimal places.
+        """
         val = None
         # Try World (Ungrouped)
         if name in view.get('world', {}):
@@ -734,11 +893,22 @@ class Stats:
             return f"{val:.3f}"
         return str(val) if val is not None else "-"
 
-    def get_stats(self):
+    def get_stats(self) -> dict[str, Any]:
+        """Returns the raw internal stats dictionary (World-only).
+
+        Returns:
+            The ``_stats`` hot-cache dictionary containing ungrouped world stats and
+            the peer-grouped stats keyed by ``GROUP_KEY``.
+        """
         return self._stats
 
-    def get_payload_for_world(self) -> List[Dict[str, Any]]:
-        """(Agent-only) Gathers, returns, and clears all stats to be sent to the world."""
+    def get_payload_for_world(self) -> list[dict[str, Any]]:
+        """(Agent-only) Gathers, returns, and clears all pending stats to be sent to the world.
+
+        Returns:
+            List of stat update dicts, each with ``'peer_id'``, ``'stat_name'``,
+            ``'timestamp'``, and ``'value'`` keys. Returns an empty list on the World side.
+        """
         if self.is_world:
             return []
         
@@ -748,17 +918,27 @@ class Stats:
         return payload
 
     # --- WORLD API ---
-    def get_view(self, since_timestamp: int = 0) -> Dict[str, Any]:
-        """
-        (World-side) Returns a clean, JSON-serializable dictionary of the CURRENT in-memory cache.
-        Used for initial handshake or lightweight polling.
-        
-        Structure returned:
-        {
-            "world": { "stat_name": value_or_timeseries },
-            "peers": { "peer_id": { "stat_name": value_or_timeseries } }
-        }
-        For Dynamic stats, returns a list of lists: [[timestamp, value], ...] for efficient JSON/Plotly usage.
+    def get_view(self, since_timestamp: int = 0) -> dict[str, Any]:
+        """(World-side) Returns a JSON-serializable snapshot of the current in-memory cache.
+
+        Used for initial handshakes or lightweight polling. Dynamic stats are filtered to
+        only include entries newer than ``since_timestamp``.
+
+        Args:
+            since_timestamp: Millisecond Unix timestamp. Only dynamic data points with a
+                timestamp strictly greater than this value are included. Pass ``0`` to
+                include all cached data.
+
+        Returns:
+            Dictionary with the structure::
+
+                {
+                    "world": { "stat_name": value_or_timeseries },
+                    "peers": { "peer_id": { "stat_name": value_or_timeseries } }
+                }
+
+            For dynamic stats, ``value_or_timeseries`` is a list of ``[timestamp, value]``
+            pairs. Returns an empty dict when called on the Agent side.
         """
         if not self.is_world:
             return {}
@@ -788,7 +968,20 @@ class Stats:
         return snapshot
     
     def _serialize_value(self, value: Any, since_timestamp: int) -> Any:
-        """Helper to convert SortedDicts to [[t, v], ...] and clean other types."""
+        """Converts a cached value to a JSON-serializable form.
+
+        ``SortedDict`` caches are sliced from ``since_timestamp`` and converted to
+        ``[[timestamp, value], ...]`` lists. All other values are passed through
+        ``_make_json_serializable``.
+
+        Args:
+            value: A ``SortedDict`` time-series cache, or any static value.
+            since_timestamp: Lower-bound millisecond timestamp for slicing dynamic data.
+
+        Returns:
+            A list of ``[timestamp, value]`` pairs for dynamic stats, or the JSON-safe
+            equivalent of ``value`` for static stats.
+        """
         if isinstance(value, SortedDict):
             idx = value.bisect_left(since_timestamp)
             sliced_items = value.items()[idx:]
@@ -799,10 +992,15 @@ class Stats:
             return self._make_json_serializable(value)
     
     def get_last_value(self, stat_name: str, peer_id: str | None = None) -> Any | None:
-        """Public API to get the most recent value of any stat, whether static or dynamic.
-        - If peer_id is None, it searches for an ungrouped (world-level) stat.
-        - If peer_id is provided, it searches for a grouped stat for that peer.
-        Returns the last value, or None if not found.
+        """Returns the most recent value of any stat, whether static or dynamic.
+
+        Args:
+            stat_name: Name of the statistic to retrieve.
+            peer_id: When ``None``, looks up an ungrouped (world-level) stat. When
+                provided, looks up a peer-grouped stat for that peer.
+
+        Returns:
+            The most recent value, or ``None`` if the stat is unknown or has no data.
         """
         if stat_name in self.all_static_keys:
             return self._get_last_static_value(stat_name, peer_id)
@@ -813,16 +1011,21 @@ class Stats:
             return None
         
     def _get_last_dynamic_value(self, stat_name: str, peer_id: str | None = None) -> Any | None:
-        """
-        Returns the most recent value of a dynamic stat from the hot cache.
-        - If peer_id is None, it searches for an ungrouped (world-level) stat.
-        - If peer_id is provided, it searches for a grouped stat for that peer.
-        Returns None if the stat is not found or has no entries.
+        """Returns the most recent value of a dynamic stat from the hot cache.
+
+        Args:
+            stat_name: Name of the dynamic statistic.
+            peer_id: When ``None``, searches for an ungrouped (world-level) stat. When
+                provided, searches for a peer-grouped stat for that peer.
+
+        Returns:
+            The most recently recorded value, or ``None`` if the stat is not found, the
+            cache is empty, or this instance is not the World.
         """
         if not self.is_world:
             return None  # Agents don't have this cache
             
-        cache: Optional[SortedDict] = None
+        cache: SortedDict | None = None
         
         if peer_id is None:
             # --- This is an ungrouped (world) stat ---
@@ -842,11 +1045,16 @@ class Stats:
         return None  # Stat not found or no values
     
     def _get_last_static_value(self, stat_name: str, peer_id: str | None = None) -> Any | None:
-        """
-        Returns the current value of a static stat from the hot cache.
-        - If peer_id is None, it searches for an ungrouped (world-level) stat.
-        - If peer_id is provided, it searches for a grouped stat for that peer.
-        Returns None if the stat is not found.
+        """Returns the current value of a static stat from the hot cache.
+
+        Args:
+            stat_name: Name of the static statistic.
+            peer_id: When ``None``, searches for an ungrouped (world-level) stat. When
+                provided, searches for a peer-grouped stat for that peer.
+
+        Returns:
+            The current cached value, or ``None`` if the stat is not found or this
+            instance is not the World.
         """
         if not self.is_world:
             return None  # Agents don't have this cache
@@ -1020,19 +1228,32 @@ class Stats:
 
     # --- WORLD API (QUERYING) ---
     def query_history(self,
-                      stat_names=None,
-                      peer_ids=None,
-                      time_range: Union[Tuple[int, int], int, None] = None,
-                      value_range: Tuple[float, float] | None = None,
-                      limit: int | None = None) -> Dict[str, Any]:
-        """
-        (World-only) Queries the SQLite DB for specific stats, potentially filtering by VALUE.
-        Returns the same structure as get_view(), allowing the agent to ingest it seamlessly.
-        Automatically flushes the current memory buffer to DB before querying
-        to ensure "read-your-writes" consistency.
-        
+                      stat_names: list[str] | None = None,
+                      peer_ids: list[str] | None = None,
+                      time_range: tuple[int, int] | int | None = None,
+                      value_range: tuple[float, float] | None = None,
+                      limit: int | None = None) -> dict[str, Any]:
+        """(World-only) Queries the SQLite DB for historical stats with optional filters.
+
+        Automatically flushes the current memory buffers to the DB before querying to
+        ensure "read-your-writes" consistency. Returns the same structure as
+        ``get_view()``, so the Agent can ingest it seamlessly.
+
         Args:
-            value_range: (min, max) - Only returns rows where val_num is within range.
+            stat_names: Restrict results to these stat names. Pass ``None`` or ``[]``
+                to include all stats.
+            peer_ids: Restrict results to these peer IDs. Pass ``None`` or ``[]`` to
+                include all peers.
+            time_range: Time filter for dynamic stats. An ``int`` is treated as a
+                "since X" lower bound; a ``(start, end)`` tuple filters to the closed
+                interval ``[start, end]``. Pass ``None`` for no time filter.
+            value_range: ``(min, max)`` numeric range filter applied to ``val_num``.
+                Rows without a numeric value are excluded when this filter is active.
+            limit: Maximum number of dynamic-stat rows to return. Defaults to 5000.
+
+        Returns:
+            Dictionary with the same structure as ``get_view()``. Returns an empty dict
+            when called on the Agent side or when the DB connection is unavailable.
         """
         if stat_names is None:
             stat_names = []
@@ -1166,8 +1387,21 @@ class Stats:
             
         return snapshot
 
-    def _aggregate_time_indexed_stats_over_peers(self, stats: dict) -> tuple[dict, dict]:
-        """(World-only) Aggregates time-indexed peer stats (mean/std) from CACHE."""
+    def _aggregate_time_indexed_stats_over_peers(self, stats: dict[str, Any]) -> tuple[dict, dict]:
+        """(World-only) Aggregates time-indexed peer stats (mean/std) from the cache.
+
+        For each numeric stat present in at least one peer's ``SortedDict`` cache, builds
+        a time-aligned mean and standard-deviation series across all peers.
+
+        Args:
+            stats: The raw ``_stats`` dict (as returned by ``get_stats()``), containing
+                ungrouped world stats and the ``GROUP_KEY`` sub-dict of peer caches.
+
+        Returns:
+            A two-element tuple ``(mean_dict, std_dict)`` where each element maps
+            ``stat_name -> {timestamp: value}``. Values may be ``None`` for timestamps
+            with no valid peer data.
+        """
         mean_dict = {}
         std_dict = {}
         peer_stats = stats.get(self.GROUP_KEY, {})
@@ -1228,8 +1462,12 @@ class Stats:
 
         return mean_dict, std_dict
     
-    def shutdown(self):
-        """Call this explicitly when your application is closing."""
+    def shutdown(self) -> None:
+        """Flushes pending stats and closes the SQLite connection.
+
+        Call this explicitly when the application is shutting down to ensure all
+        buffered data is persisted. On the Agent side this is a no-op.
+        """
         if self.is_world and self._db_conn:
             self._deb('Shutdown: Saving final stats...')
             try:
@@ -1252,9 +1490,19 @@ class Stats:
     
     # --- PLOTTING INTERFACE ---
     def plot(self, since_timestamp: int = 0) -> str | None:
-        """
-        Default dashboard implementation. 
-        Visualizes Core Stats: Topology, Agent Counts, States, and Actions.
+        """Builds and returns the default 2x2 dashboard JSON.
+
+        Visualizes core stats: network topology, agent-count history, state distribution,
+        and last-action distribution.
+
+        Args:
+            since_timestamp: Millisecond Unix timestamp. Only dynamic data points newer
+                than this value are included in the time-series panels. Pass ``0`` to
+                include all cached data.
+
+        Returns:
+            JSON string representing the Plotly dashboard, or ``None`` if no view data
+            is available.
         """
         # 1. Get Data view
         view = self.get_view(since_timestamp) if self.is_world else self._world_view
@@ -1314,10 +1562,23 @@ class Stats:
 
         return dash.to_json()
     
-    def _populate_time_series(self, panel: UIPlot, view: Dict, stat_name: str,
-                              peer_ids: List[str] | None = None, color_override: str = None,
-                              show_legend: bool = True, title_override: str = None):
-        """Extracts [[t,v],...] lists and adds lines to panel. Supports custom titles and colors."""
+    def _populate_time_series(self, panel: 'UIPlot', view: dict[str, Any], stat_name: str,
+                              peer_ids: list[str] | None = None, color_override: str | None = None,
+                              show_legend: bool = True, title_override: str | None = None):
+        """Extracts ``[[t, v], ...]`` time-series data and adds line traces to a panel.
+
+        Args:
+            panel: Target ``UIPlot`` instance to receive the line traces.
+            view: View snapshot dictionary as produced by ``get_view`` or ``_world_view``.
+            stat_name: Name of the dynamic stat to plot.
+            peer_ids: Subset of peer IDs to include. Pass ``None`` to include all peers
+                present in the view.
+            color_override: CSS color string applied to all traces. Defaults to
+                per-peer consistent colors or the primary theme color for world data.
+            show_legend: Whether to show these traces in the legend.
+            title_override: Custom label for the world-level trace. Defaults to
+                ``"World"``.
+        """
         def get_xy(raw):
             if isinstance(raw, list) and raw and isinstance(raw[0], list):
                 return [r[0] for r in raw], [r[1] for r in raw]
@@ -1345,8 +1606,17 @@ class Stats:
                     panel.add_line(x, y, name=f'{pid[-6:]}', color=c,
                                    legend_group=pid, show_legend=show_legend)
     
-    def _populate_indicator(self, panel: UIPlot, view: Dict, stat_name: str, peer_ids: List[str] | None = None):
-        """Extracts a scalar value and adds indicator."""
+    def _populate_indicator(self, panel: 'UIPlot', view: dict[str, Any], stat_name: str,
+                            peer_ids: list[str] | None = None):
+        """Extracts a scalar value and adds a big-number indicator trace to the panel.
+
+        Args:
+            panel: Target ``UIPlot`` instance to receive the indicator.
+            view: View snapshot dictionary.
+            stat_name: Stat name whose value is displayed.
+            peer_ids: Peer IDs to search when the stat is not found at world level.
+                The first available peer's value is used. Pass ``None`` to search all peers.
+        """
         val = None
         if 'world' in view and stat_name in view['world']:
             val = view['world'][stat_name]
@@ -1358,8 +1628,16 @@ class Stats:
 
         panel.add_indicator(val, title=stat_name)
 
-    def _populate_table(self, panel: UIPlot, view: Dict, stat_name: str, peer_ids: List[str] | None = None):
-        """Extracts data for a table."""
+    def _populate_table(self, panel: 'UIPlot', view: dict[str, Any], stat_name: str,
+                        peer_ids: list[str] | None = None):
+        """Builds a two-column ``Entity / Value`` table and adds it to the panel.
+
+        Args:
+            panel: Target ``UIPlot`` instance to receive the table trace.
+            view: View snapshot dictionary.
+            stat_name: Stat name to look up for each entity.
+            peer_ids: Subset of peer IDs to include. Pass ``None`` to include all peers.
+        """
         headers = ['Entity', 'Value']
         col_ent = []
         col_val = []
@@ -1380,8 +1658,14 @@ class Stats:
         
         panel.add_table(headers, [col_ent, col_val])
     
-    def _populate_graph(self, panel: UIPlot, view: Dict, stat_name: str):
-        """Calculates layout and adds graph traces to the panel."""
+    def _populate_graph(self, panel: 'UIPlot', view: dict[str, Any], stat_name: str):
+        """Renders a network graph (nodes + edges) onto the panel using a circular layout.
+
+        Args:
+            panel: Target ``UIPlot`` instance to receive the edge and node traces.
+            view: View snapshot dictionary containing the world-level graph stat.
+            stat_name: Name of the stat that holds the graph data (typically ``'graph'``).
+        """
         
         # 1. Fetch Data
         raw_graph = view.get('world', {}).get(stat_name, {})
@@ -1477,10 +1761,16 @@ class Stats:
         # panel.set_layout_opt('xaxis', {'visible': False})
         # panel.set_layout_opt('yaxis', {'visible': False})
     
-    def _populate_distribution(self, panel: UIPlot, view: Dict, stat_name: str):
-        """
-        Aggregates peer values into a frequency count (Bar Chart).
-        e.g., {"IDLE": 3, "RUNNING": 5}
+    def _populate_distribution(self, panel: 'UIPlot', view: dict[str, Any], stat_name: str):
+        """Aggregates peer values into a frequency-count bar chart.
+
+        Counts how many peers hold each distinct value for the given stat and adds a
+        sorted bar chart (e.g., ``{"IDLE": 3, "RUNNING": 5}``).
+
+        Args:
+            panel: Target ``UIPlot`` instance to receive the bar trace.
+            view: View snapshot dictionary.
+            stat_name: Name of the static stat to aggregate across peers.
         """
         peers_dict = view.get('peers', {})
         counts = {}
@@ -1500,7 +1790,18 @@ class Stats:
         panel.add_bar(xs=sorted_keys, ys=sorted_vals, names=sorted_vals, colors=colors)
     
     def _get_consistent_color(self, unique_str: str) -> str:
-        """Deterministic color generation based on string hash."""
+        """Returns a deterministic color from the theme palette for a given string.
+
+        Uses an Adler-32 checksum of the string to select a palette index, ensuring
+        the same string always maps to the same color across renders.
+
+        Args:
+            unique_str: Any string (e.g., a peer ID or state name) used as the hash key.
+
+        Returns:
+            A CSS hex color string from the ``THEME['peers']`` palette. Returns
+            ``'#ffffff'`` for empty strings.
+        """
         if not unique_str:
             return '#ffffff'
         idx = zlib.adler32(str(unique_str).encode()) % len(THEME['peers'])
@@ -1510,15 +1811,27 @@ class Stats:
     # BEGIN OF DEPRECATED METHODS
     # ==================================================================================================================
     def _out(self, msg: str):
-        """DEPRECATED Prints a message using the node's out function."""
+        """DEPRECATED: Logs a stats-level message.
+
+        Args:
+            msg: Message text to log.
+        """
         log.stats(msg)
 
     def _err(self, msg: str):
-        """DEPRECATED Prints an error message."""
+        """DEPRECATED: Logs an error message.
+
+        Args:
+            msg: Error message text to log.
+        """
         log.error(msg)
 
     def _deb(self, msg: str):
-        """DEPRECATED Prints a debug message if enabled."""
+        """DEPRECATED: Logs a debug message.
+
+        Args:
+            msg: Debug message text to log.
+        """
         log.debug(msg)
     # ==================================================================================================================
     # END OF DEPRECATED METHODS

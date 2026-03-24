@@ -203,7 +203,14 @@ def transforms_factory(trans_type: str, add_batch_dim: bool = True,
 
 
 def hard_tanh(x: torch.Tensor) -> torch.Tensor:
-    """Clamps tensor values to the range [-1, 1] (hard tanh activation)."""
+    """Clamps tensor values to the range [-1, 1] (hard tanh activation).
+
+    Args:
+        x: Input tensor.
+
+    Returns:
+        Tensor with all values clamped to ``[-1, 1]``.
+    """
     return torch.clamp(x, min=-1., max=1.)
 
 

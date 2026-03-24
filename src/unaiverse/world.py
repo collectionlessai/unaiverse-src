@@ -184,7 +184,7 @@ class World(AgentBasics):
         self._node_profile.mark_change_in_connections()
 
     # Get all the badges requested by the world
-    def get_all_badges(self) -> dict:
+    def get_all_badges(self) -> dict[str, list[dict[str, Any]]]:
         """Retrieves all badges that have been added to the world's record for all agents.
         This provides a central log of achievements or performance metrics.
 

@@ -31,14 +31,14 @@ class NodeProfile:
     def __init__(self,
                  static: dict,
                  dynamic: dict,
-                 cv: dict) -> None:
+                 cv: list) -> None:
         """Initialises a NodeProfile from static, dynamic, and CV data.
 
         Args:
             static: Dictionary of static profile fields (e.g. node_id, node_type, name, email).
             dynamic: Dictionary of dynamic profile fields (e.g. os, memory, peer_id).  Only
                 keys that are expected by the internal template are copied in.
-            cv: List of CV dictionaries; entries are sorted by ``last_edit_utc`` before storage.
+            cv: List of CV entry dictionaries; entries are sorted by ``last_edit_utc`` before storage.
 
         Raises:
             ValueError: If ``static`` is empty or any required static key is missing.
@@ -158,7 +158,7 @@ class NodeProfile:
         # Flag
         self._connections_updated = False
 
-    def update_cv(self, new_cv: list) -> None:
+    def update_cv(self, new_cv: list[dict]) -> None:
         """Replaces the stored CV data with a new list of CV entries.
 
         Args:

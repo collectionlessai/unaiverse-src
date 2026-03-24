@@ -215,7 +215,7 @@ def check_json_start_wait(handle: threading.Thread) -> None:
     handle.join()
 
 
-def show_images_grid(image_paths: list, max_cols: int = 3) -> None:
+def show_images_grid(image_paths: list[str], max_cols: int = 3) -> None:
     """Displays a grid of images from the given file paths using matplotlib.
 
     Args:
@@ -285,7 +285,7 @@ class FileTracker:
         self.prefix = prefix
         self.last_state = self.__scan_files()
 
-    def __scan_files(self) -> dict:
+    def __scan_files(self) -> dict[str, float]:
         """Scans the monitored folder and returns a snapshot of matching files and their mtimes.
 
         Returns:
@@ -498,6 +498,7 @@ class PolicyFilterHuman:
     """Policy filter that redirects generation/learning actions to the human processor input stream."""
 
     def __init__(self) -> None:
+        """Initialises the PolicyFilterHuman."""
         pass
 
     def __call__(self, action_id: int, request: object, all_actions: object,
