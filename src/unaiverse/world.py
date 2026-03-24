@@ -12,9 +12,9 @@
                  Code Repositories:  https://github.com/collectionlessai/
                  Main Developers:    Stefano Melacci (Project Leader), Christian Di Maio, Tommaso Guidi
 """
+from typing import Any
 from unaiverse.stats import Stats
 from unaiverse.clock import clock
-from typing import Any
 from unaiverse.utils.logger import log
 from unaiverse.agent import AgentBasics
 from unaiverse.hsm.hsm import HybridStateMachine
