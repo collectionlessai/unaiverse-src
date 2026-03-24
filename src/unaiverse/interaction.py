@@ -54,12 +54,14 @@ class Interaction:
             action_kwargs: Action arguments (dict, no streams).
             streams: List of (stream_name - a.k.a. stream user hash, num_samples) tuples specifying expected data.
             data_samples: List of actual data samples (alternative to samples specification).
+            num_steps: Total number of steps for this interaction (-1 means no data-based steps).
             requester: Peer ID of the agent originating this interaction.
             target: Peer ID of the target agent or list of peer IDs.
             from_state: Name of the state from which the interaction is expected to happen.
             to_state: Name of the state where the interaction is supposed to yield.
             timeout: Maximum timeout until which the interaction is valid (-1 means no limit: the InteractionManager
-            will override this with its internal timeout valid for all actions).
+                will override this with its internal timeout valid for all actions).
+            uuid: Unique identifier string; ``"random"`` generates one automatically, ``None`` leaves it unset.
         """
         # Identity
         self.uuid: str = _uuid.uuid4().hex[0:8] if (uuid is not None and uuid == 'random') else uuid
@@ -93,8 +95,8 @@ class Interaction:
                 self.num_steps = max([stream_dict['num_samples'] for stream_dict in self.streams])
 
         # Actual data (alternative to samples above)
-        if streams is None and data_samples is not None and len(data_samples) > 0:
-            if isinstance(data_samples[0], dict):  # If it is a list of dicts, each is type_name->base64...
+        if streams is None and data_samples is not None:
+            if isinstance(data_samples, str):  # If it is JSON string of a list of dicts, each is type_name->base64...
                 self.data_samples: list = deserialize_payload(data_samples)  # List of PIL.Image, torch.Tensor, str, ...
             else:
                 self.data_samples = data_samples  # List of PIL.Image, torch.Tensor, str, ...
@@ -114,7 +116,7 @@ class Interaction:
 
         # Participants
         self.requester: str | None = requester
-        self.target: list[str] | None = target if isinstance(target, list) else [target]
+        self.target: list[str | None] = target if isinstance(target, list) else [target]
 
         # Destination state reached, if the action was completed (for status messages)
         self.destination_state: str | None = None
@@ -140,7 +142,7 @@ class Interaction:
 
     @property
     def created(self) -> bool:
-        """True when the interaction has finished."""
+        """True when the interaction has just been created and not yet requested or received."""
         return self.status == InteractionStatus.CREATED
 
     @property
@@ -158,7 +160,16 @@ class Interaction:
                     stdin_streams: dict[str, Stream | object],
                     stdtar_streams: dict[str, Stream | object],
                     stdext_streams: dict[str, Stream | object],
-                    owned_streams: dict[str, Stream | object]):
+                    owned_streams: dict[str, Stream | object]) -> None:
+        """Bind this interaction to its owning InteractionManager and initialize its stream references.
+
+        Args:
+            im: The InteractionManager that owns this interaction.
+            stdin_streams: Mapping from user-hash to stream objects used as processor inputs.
+            stdtar_streams: Mapping from user-hash to stream objects used as processor targets.
+            stdext_streams: Mapping from user-hash to stream objects used as extra (non-input) streams.
+            owned_streams: Mapping from user-hash to stream objects owned by this agent.
+        """
         self.__im = im
         self.timestamp_created = clock.get_time()
         self.cycle_created = clock.get_cycle()
@@ -179,31 +190,51 @@ class Interaction:
         self.__starting_time = 0.
         self.__timeout_starting_time = 0.
 
-    def set_mark(self, mark: object):
+    def set_mark(self, mark: object) -> None:
+        """Store an arbitrary marker object on the interaction."""
         self.__mark = mark
 
-    def get_mark(self):
+    def get_mark(self) -> object:
+        """Return the marker object previously set by set_mark."""
         return self.__mark
 
-    def get_step_idx(self):
+    def get_step_idx(self) -> int:
+        """Return the index of the last completed step (-1 if no steps done yet)."""
         return self.__step_idx
 
-    def set_step_idx(self, steps: int):
+    def set_step_idx(self, steps: int) -> None:
+        """Directly assign the current step index.
+
+        Args:
+            steps: The step index to set.
+        """
         self.__step_idx = steps
 
-    def inc_step_idx(self):
+    def inc_step_idx(self) -> None:
+        """Increment the step index by one."""
         self.__step_idx += 1
 
-    def dec_step_idx(self):
+    def dec_step_idx(self) -> None:
+        """Decrement the step index by one."""
         self.__step_idx -= 1
 
-    def set_starting_time(self, t: float):
+    def set_starting_time(self, t: float) -> None:
+        """Record the wall-clock time at which execution started.
+
+        Args:
+            t: Starting timestamp (from ``time.perf_counter()``).
+        """
         self.__starting_time = t
 
-    def set_timeout_starting_time(self, t: float):
+    def set_timeout_starting_time(self, t: float) -> None:
+        """Record the wall-clock time used as the baseline for next-step timeout checks.
+
+        Args:
+            t: Timeout baseline timestamp (from ``time.perf_counter()``).
+        """
         self.__timeout_starting_time = t
 
-    def get_total_steps(self):
+    def get_total_steps(self) -> int:
         """Retrieves the total number of steps configured for the action.
 
         Returns:
@@ -211,7 +242,7 @@ class Interaction:
         """
         return self.num_steps
 
-    def get_starting_time(self):
+    def get_starting_time(self) -> float:
         """Retrieves the timestamp when the action's current execution started.
 
         Returns:
@@ -219,15 +250,15 @@ class Interaction:
         """
         return self.__starting_time
 
-    def get_timeout_starting_time(self):
-        """Retrieves the timestamp when the action's current execution started.
+    def get_timeout_starting_time(self) -> float:
+        """Retrieves the timestamp used as the baseline for next-step timeout checks.
 
         Returns:
             A float representing the timeout starting time.
         """
         return self.__timeout_starting_time
 
-    def is_multi_steps(self):
+    def is_multi_steps(self) -> bool:
         """Determines if the action is configured to be a multistep action (i.e., not a single-step action).
 
         Returns:
@@ -235,31 +266,51 @@ class Interaction:
         """
         return self.num_steps > 1
 
-    def is_single_step(self):
+    def is_single_step(self) -> bool:
+        """Return True if this is a single-step action (one data sample or no data at all)."""
         return self.num_steps == 1 or self.num_steps < 0  # Action with a single data sample or no data samples at all
 
-    def is_valid(self):
+    def is_valid(self) -> bool:
+        """Return True if the interaction has been assigned insertion-order IDs by the action."""
         return self.by_insertion_order_id >= 0 and self.by_requester_insertion_order_id >= 0
 
-    def is_completed(self):
+    def is_completed(self) -> bool:
+        """Return True if the interaction status is COMPLETED."""
         return self.status == InteractionStatus.COMPLETED
 
-    def was_data_sent_after_completion(self):
+    def was_data_sent_after_completion(self) -> bool:
+        """Return True if data was generated and sent after this interaction completed."""
         return self.data_sent_after_completion
 
-    def has_dummy_requester(self):
+    def has_dummy_requester(self) -> bool:
+        """Return True if no requester peer ID is set (system-generated interaction)."""
         return self.requester is None
 
-    def set_arg(self, arg_name: str, arg_value: object):
+    def set_arg(self, arg_name: str, arg_value: object) -> None:
+        """Set or overwrite an action keyword argument.
+
+        Args:
+            arg_name: The argument name.
+            arg_value: The value to assign.
+        """
         self.action_kwargs[arg_name] = arg_value
 
-    def get_arg(self, arg_name):
+    def get_arg(self, arg_name: str) -> object:
+        """Retrieve an action keyword argument by name.
+
+        Args:
+            arg_name: The argument name to look up.
+
+        Returns:
+            The argument value, or ``None`` if the argument is not present.
+        """
         return self.action_kwargs[arg_name] if arg_name in self.action_kwargs else None
 
-    def was_at_least_one_step_done(self):
+    def was_at_least_one_step_done(self) -> bool:
+        """Return True if at least one execution step has been completed."""
         return self.__step_idx >= 0
 
-    def was_last_step_done(self):
+    def was_last_step_done(self) -> bool:
         """Determines if the action has reached its completion criteria, either by reaching the total number of steps
         or by exceeding the maximum allowed execution time.
 
@@ -320,7 +371,12 @@ class Interaction:
         else:
             return False
 
-    def set_action_ref(self, action_ref: object):
+    def set_action_ref(self, action_ref: object) -> None:
+        """Bind the interaction to its Action object and validate/augment its argument list.
+
+        Args:
+            action_ref: The Action instance that will execute this interaction.
+        """
         self.action_ref = action_ref
 
         # Augmenting argument list, by fusing with the arguments defined in the HSM
@@ -331,23 +387,35 @@ class Interaction:
         if self.is_multi_steps() and self.action_ref.get_timeout() <= 0:
             self.action_ref.set_default_timeout()
 
-    def has_stream(self, user_hash):
+    def has_stream(self, user_hash: str) -> bool:
+        """Return True if a stream with the given user hash is already registered.
+
+        Args:
+            user_hash: The stream's user-level hash identifier.
+        """
         return user_hash in self.iostreams or user_hash in self.lazy_streams
 
-    def add_lazy_stream(self, user_hash, stream_obj, is_owned: bool = False):
+    def add_lazy_stream(self, user_hash: str, stream_obj: Stream, is_owned: bool = False) -> None:
+        """Lazily attach an additional stream to this interaction after it was created.
+
+        Args:
+            user_hash: The stream's user-level hash identifier.
+            stream_obj: The stream object to attach.
+            is_owned: Whether the stream is owned by the current agent.
+        """
         if not self.has_stream(user_hash):
             self.lazy_streams[user_hash] = stream_obj
             if is_owned:
                 self.owned_streams[user_hash] = stream_obj
             self.iostreams.add_new_bind(user_hash, stream_obj)
 
-    def mark_running(self):
+    def mark_running(self) -> None:
         """Mark this interaction as currently running."""
         self.status = InteractionStatus.RUNNING
         self.timestamp_started = clock.get_time()
         self.cycle_started = clock.get_cycle()
 
-    def mark_completed(self, reason: 'CompletionReason', dest_state: str | None = None):
+    def mark_completed(self, reason: 'CompletionReason', dest_state: str | None = None) -> None:
         """Mark this interaction as completed.
 
         Args:
@@ -360,7 +428,8 @@ class Interaction:
         self.timestamp_completed = clock.get_time()
         self.cycle_completed = clock.get_cycle()
 
-    def clear_from_streams_and_action(self):
+    def clear_from_streams_and_action(self) -> None:
+        """Deregister this interaction from all its associated streams and from its action's interaction list."""
 
         # Clearing interaction from all the streams involved as input, extra, or targets
         for stream in self.iostreams:
@@ -404,18 +473,32 @@ class Interaction:
             timestamps: Optional timestamps (defaults to current time).
         """
         for stream_name, data_tag in data_tags.items():
-            self.received_data_tags[stream_name].append(data_tag)
-            self.received_timestamps[stream_name].append(
+            self.received_data_tags.setdefault(stream_name, []).append(data_tag)
+            self.received_timestamps.setdefault(stream_name, []).append(
                 timestamps[stream_name] if timestamps is not None and stream_name in timestamps
                 else clock.get_time())
 
-    def check_if_doable(self):
+    def check_if_doable(self) -> bool:
+        """Return True if the interaction can currently be executed.
+
+        Delegates to the owning InteractionManager when present; for system interactions without a manager,
+        returns True as long as the interaction is not yet completed.
+        """
         if self.__im is not None:
             return self.__im.check_if_doable(self)
         else:
             return not self.completed  # System interactions does not have an interaction manager
 
-    def alter_arg(self, arg_name: str, arg_value: object):
+    def alter_arg(self, arg_name: str, arg_value: object) -> bool:
+        """Overwrite an existing action keyword argument, leaving the dict unchanged if the key is absent.
+
+        Args:
+            arg_name: The argument name to update.
+            arg_value: The new value to assign.
+
+        Returns:
+            True if the argument existed and was updated; False otherwise.
+        """
         if arg_name in self.action_kwargs:
             self.action_kwargs[arg_name] = arg_value
             return True
@@ -489,7 +572,15 @@ class Interaction:
             if self.received_data_tags else None,
         }
 
-    def to_code_str(self, include_uuid: bool = False):
+    def to_code_str(self, include_uuid: bool = False) -> str:
+        """Return a compact single-line representation for logs and debugging.
+
+        Args:
+            include_uuid: Prepend the interaction UUID to the output when True.
+
+        Returns:
+            A compact string describing the interaction.
+        """
         s = ""
         if include_uuid:
             s = f"{self.uuid} => "
@@ -497,7 +588,12 @@ class Interaction:
                     f"{self.iostreams}|{self.status.value[0:3]}" +
                     (("_" + self.completion_reason.value[0:3]) if self.completion_reason is not None else ""))
 
-    def to_str(self):
+    def to_str(self) -> str:
+        """Return a JSON-encoded string with the core interaction fields for logging.
+
+        Returns:
+            A JSON string containing requester, action_kwargs, timestamp_created, and uuid.
+        """
         return json.dumps([self.requester, self.action_kwargs, self.timestamp_created, self.uuid])
 
     @staticmethod
@@ -565,7 +661,7 @@ class Interaction:
                         format_type.discard('detailed')
                         break
                     if (k == 'redirect' and s[k] is not None and
-                            (not isinstance(s, str) or s[k] not in {'stdin', 'stdext', 'stdtar'})):
+                            (not isinstance(s[k], str) or s[k] not in {'stdin', 'stdext', 'stdtar'})):
                         format_type.discard('detailed')
                         break
         if (len(format_type) == 3 and
@@ -630,12 +726,8 @@ class Interaction:
             raise GenException(f'Unexpected format type: {format_type}')
         return _streams
 
-    def __str__(self):
-        """Provides a string representation of the `Interaction` instance.
-
-        Returns:
-            A string containing a formatted summary of the instance.
-        """
+    def __str__(self) -> str:
+        """Return a compact string representation of this Interaction."""
         return f"{self.to_code_str()}"
 
 
@@ -656,6 +748,7 @@ class InteractionManager:
 
         Args:
             agent: Back-reference to the owning agent (AgentBasics instance).
+            max_interactions: Maximum number of simultaneously tracked interactions (sent + received + lazy).
         """
         self.agent = agent
         self.max_interactions = max_interactions
@@ -668,20 +761,35 @@ class InteractionManager:
         self.received_recently_completed: set[Interaction] = set()  # Completed interactions
         self.lazy_recently_completed: set[Interaction] = set()  # Completed interactions
 
-    def room_for_registration(self):
+    def room_for_registration(self) -> bool:
+        """Return True if there is capacity to register another interaction."""
         return len(self.sent) + len(self.received) + len(self.lazy) < self.max_interactions
 
-    def count_interactions(self):
+    def count_interactions(self) -> int:
+        """Return the total number of tracked interactions, including recently completed ones."""
         return (len(self.sent) + len(self.received) + len(self.lazy) +
                 len(self.sent_recently_completed) + len(self.received_recently_completed) +
                 len(self.lazy_recently_completed))
 
-    def clear_from_all_owned_streams(self, interaction: Interaction):
+    def clear_from_all_owned_streams(self, interaction: Interaction) -> None:
+        """Remove the given interaction from every owned stream that references it.
+
+        Args:
+            interaction: The interaction to deregister from owned streams.
+        """
         for stream_obj in self.agent.owned_streams_by_user_hash.values():
             if stream_obj.has_interaction(interaction.uuid):
                 stream_obj.remove_interaction(interaction)
 
-    def unregister(self, interaction: Interaction):
+    def unregister(self, interaction: Interaction) -> bool:
+        """Deregister an interaction from all tracking dicts and dissociate it from streams and actions.
+
+        Args:
+            interaction: The interaction to remove.
+
+        Returns:
+            True if the interaction was found and removed from at least one tracking dict.
+        """
         # if len(interaction.iostreams) == 0:
         #     self.clear_from_all_owned_streams(interaction)
         interaction.clear_from_streams_and_action()
@@ -702,6 +810,9 @@ class InteractionManager:
 
         Args:
             interaction: The Interaction to register.
+
+        Returns:
+            True if registration succeeded; False if there is no room or the streams are invalid.
         """
         if not self.room_for_registration():
             log.error(f"No more room for interactions (limit: {self.max_interactions})")
@@ -744,6 +855,9 @@ class InteractionManager:
 
         Args:
             interaction: The Interaction to register.
+
+        Returns:
+            True if registration succeeded; False if there is no room, streams are invalid, or matching failed.
         """
         if not self.room_for_registration():
             log.error(f"No more room for interactions (limit: {self.max_interactions})")
@@ -808,6 +922,9 @@ class InteractionManager:
 
         Args:
             interaction: The Interaction to register.
+
+        Returns:
+            True if registration succeeded; False if there is no room or the streams are invalid.
         """
         if not self.room_for_registration():
             log.error(f"No more room for interactions (limit: {self.max_interactions})")
@@ -837,6 +954,21 @@ class InteractionManager:
 
     def expand_and_normalize_streams(self, interaction: Interaction) -> (
             tuple[dict[str | None, list], dict[str | None, list]] | tuple[None, None]):
+        """Resolve all stream references in an interaction to fully-populated stream dicts.
+
+        Translates user-level and net-level hashes into detailed dicts containing ``user_hash``,
+        ``net_hash``, ``name``, ``group``, and the stream object itself, grouped by their suggested
+        redirection (``'stdin'``, ``'stdtar'``, ``'stdext'``, or ``None``).
+
+        Args:
+            interaction: The interaction whose stream list should be expanded.
+
+        Returns:
+            A 2-tuple ``(expanded_streams, expanded_owned_streams)`` where each element is a dict
+            keyed by redirection hint (``'stdin'``, ``'stdtar'``, ``'stdext'``, ``None``) mapping to
+            lists of fully-populated stream dicts.  Returns ``(None, None)`` if any stream hash cannot
+            be resolved.
+        """
 
         # Guessing net hash and specific name af each stream: if the name was not provided, then all the streams of the
         # group are considered. Generating a full list of streams, distinguishing them in function of their suggested
@@ -880,6 +1012,21 @@ class InteractionManager:
         return expanded_streams, expanded_owned_streams
 
     def match_streams(self, expanded_streams: dict) -> tuple[bool, dict, dict, dict]:
+        """Assign expanded stream dicts to stdin, stdtar, or stdext based on processor compatibility.
+
+        Attempts to match streams to the processor's input and output argument slots, following any
+        redirection hints.  Streams that do not fit a processor slot are placed in stdext.
+
+        Args:
+            expanded_streams: The output of ``expand_and_normalize_streams``; a dict keyed by
+                redirection hint (``'stdin'``, ``'stdtar'``, ``'stdext'``, ``None``) containing lists
+                of fully-populated stream dicts.
+
+        Returns:
+            A 4-tuple ``(valid, stdin_streams, stdtar_streams, stdext_streams)`` where ``valid`` is
+            False if required processor inputs have no matching stream and no default value, and the
+            remaining three elements are ``{user_hash: stream_obj}`` dicts for each category.
+        """
 
         # Assigning streams to 'stdin' or 'stdext', following the given suggestions, when possible, and being a bit
         # heuristic for all the not-well-defined cases
@@ -919,7 +1066,7 @@ class InteractionManager:
                         return False, {}, {}, {}
                     else:
                         stdin_streams["<default_input_pos_" + str(i) + ">"] = (
-                            self.agent.self.agent.proc_optional_inputs)[i]["default_value"]
+                            self.agent.proc_optional_inputs)[i]["default_value"]
                 else:
                     stdin_streams[pos_stdin_streams[i]] = self.agent.known_streams_by_user_hash[pos_stdin_streams[i]]
 
@@ -946,7 +1093,7 @@ class InteractionManager:
             # We ensured that the not-filled-arguments of the processor have a default value, otherwise no ways
             for i in range(len(self.agent.proc_outputs)):
                 if pos_stdtar_streams[i] is not None:
-                    stdin_streams[pos_stdtar_streams[i]] = self.agent.known_streams_by_user_hash[pos_stdtar_streams[i]]
+                    stdtar_streams[pos_stdtar_streams[i]] = self.agent.known_streams_by_user_hash[pos_stdtar_streams[i]]
 
         # We add to 'stdext' all the streams that did not fit the processor (both coming from suggestions in 'stdin' or
         # not suggested at all)
@@ -958,6 +1105,14 @@ class InteractionManager:
         return True, stdin_streams, stdtar_streams, stdext_streams
 
     def check_if_doable(self, interaction: Interaction) -> bool:
+        """Return True if the given interaction can be executed right now.
+
+        An interaction is doable when it is not yet completed, the requester is a known agent, and
+        either all involved streams have fresh data or a deprecated completion step is pending.
+
+        Args:
+            interaction: The interaction to evaluate.
+        """
         requester_is_known = interaction.requester in self.agent.all_agents
         run_deprecated_completion_step = ((interaction.is_timed_out() and
                                            interaction.was_at_least_one_step_done()) or
@@ -965,13 +1120,15 @@ class InteractionManager:
         return (not interaction.completed and requester_is_known and
                 (self.check_stream_readiness(interaction) or run_deprecated_completion_step))
 
-    def get_current(self):
+    def get_current(self) -> Interaction | None:
+        """Return the currently executing interaction, or None if no interaction is running."""
         return self.current
 
-    def get_last_registered(self):
+    def get_last_registered(self) -> Interaction | None:
+        """Return the most recently registered interaction, or None if none have been registered."""
         return self.last_registered
 
-    def set_current(self, interaction: Interaction | None):
+    def set_current(self, interaction: Interaction | None) -> None:
         """Set the given interaction as the currently executing one.
 
         This marks the interaction as running and configures the agent's
@@ -997,13 +1154,31 @@ class InteractionManager:
             self.agent.stdtar.bind({})
             self.agent.stdext.bind(self.agent.env_streams_by_user_hash)
 
-    def has_data(self, interaction: 'Interaction'):
+    def has_data(self, interaction: 'Interaction') -> bool:
+        """Return True if any owned stream has data available for the given interaction.
+
+        Args:
+            interaction: The interaction to check data availability for.
+        """
         for stream_obj in self.agent.owned_streams_by_user_hash.values():
-            if stream_obj.has_data(interaction):
+            if stream_obj.has_data(interaction.uuid):
                 return True
         return False
 
-    def get_recipients(self, interaction: 'Interaction'):
+    def get_recipients(self, interaction: 'Interaction') -> list[str]:
+        """Return the list of peer IDs that should receive data generated by the interaction.
+
+        For sent interactions the recipients are the interaction targets; for received interactions it
+        is the original requester; for lazy interactions it is the interaction targets.  Unknown
+        (unregistered) interactions fall back to the interaction's target list for backward
+        compatibility.
+
+        Args:
+            interaction: The interaction whose recipients should be determined.
+
+        Returns:
+            A list of peer ID strings, filtering out any ``None`` entries.
+        """
         if self.is_known(interaction):
             log.streams("IS KNOWN")
             if self.is_sent(interaction):
@@ -1026,7 +1201,15 @@ class InteractionManager:
             recipients = interaction.target  # This is always a list, even when with 1 element only
         return [x for x in recipients if x is not None]
 
-    def complete(self, interaction: 'Interaction', reason: 'CompletionReason', dest_state: str | None = None):
+    def complete(self, interaction: 'Interaction', reason: 'CompletionReason',
+                 dest_state: str | None = None) -> None:
+        """Mark an interaction as completed and move it to the recently-completed set.
+
+        Args:
+            interaction: The interaction to complete.
+            reason: The reason for completion.
+            dest_state: The destination state reached, if any.
+        """
         if interaction is not None:
             interaction.mark_completed(reason, dest_state=dest_state)
             if (interaction.uuid in self.sent and
@@ -1042,7 +1225,7 @@ class InteractionManager:
                 self.lazy_recently_completed.add(interaction)
                 del self.lazy[interaction.uuid]
 
-    def complete_current(self, dest_state: str, reason: 'CompletionReason'):
+    def complete_current(self, dest_state: str, reason: 'CompletionReason') -> None:
         """Mark the current interaction as completed.
 
         Args:
@@ -1095,7 +1278,7 @@ class InteractionManager:
 
         return drained
 
-    def complete_expired(self):
+    def complete_expired(self) -> None:
         """Remove expired interactions and return them for notification.
 
         Checks all received and sent interactions against the timeout.
@@ -1114,7 +1297,8 @@ class InteractionManager:
                         not any(target in self.agent.all_agents for target in interaction.target)):
                     self.complete(interaction, reason=CompletionReason.DISCONNECTED)
 
-    def clear_expired_stream_data(self):
+    def clear_expired_stream_data(self) -> None:
+        """Purge stale buffered data from streams whose associated interaction is done or gone."""
         all_interactions = list(self.received.values()) + list(self.sent.values()) + list(self.lazy.values())
         for interaction in all_interactions:
             for stream in interaction.iostreams:
@@ -1158,11 +1342,11 @@ class InteractionManager:
                 # Check if stream has data with a tag not yet consumed by this interaction
                 current_tag = stream_obj.get_tag() if hasattr(stream_obj, 'get_tag') else (
                     getattr(stream_obj, 'data_tag', -1))
-                if last_received_data_tag is not None and current_tag != last_received_data_tag:
+                if last_received_data_tag is not None and current_tag == last_received_data_tag:
                     return False  # Already consumed this sample
         return True
 
-    def update_sent_status(self, status_dict: dict):
+    def update_sent_status(self, status_dict: dict) -> None:
         """Update a previously sent interaction's status from a received status message.
 
         Args:
@@ -1185,18 +1369,48 @@ class InteractionManager:
                 self.complete(interaction, dest_state=interaction_destination_state, reason=completion_reason)
 
     def is_received(self, interaction: Interaction) -> bool:
+        """Return True if the interaction was received from another agent (active or recently completed).
+
+        Args:
+            interaction: The interaction to check.
+        """
         return interaction.uuid in self.received or interaction in self.received_recently_completed
 
     def is_sent(self, interaction: Interaction) -> bool:
+        """Return True if the interaction was sent by this agent (active or recently completed).
+
+        Args:
+            interaction: The interaction to check.
+        """
         return interaction.uuid in self.sent or interaction in self.sent_recently_completed
 
     def is_lazy(self, interaction: Interaction) -> bool:
+        """Return True if the interaction was lazily generated within this agent (active or recently completed).
+
+        Args:
+            interaction: The interaction to check.
+        """
         return interaction.uuid in self.lazy or interaction in self.lazy_recently_completed
 
-    def is_known(self, interaction: Interaction):
+    def is_known(self, interaction: Interaction) -> bool:
+        """Return True if the interaction is tracked in any of sent, received, or lazy dicts.
+
+        Args:
+            interaction: The interaction to check.
+        """
         return self.is_received(interaction) or self.is_sent(interaction) or self.is_lazy(interaction)
 
-    def get_interaction(self, uuid: str | None, consider_completed_too: bool = False):
+    def get_interaction(self, uuid: str | None, consider_completed_too: bool = False) -> Interaction | None:
+        """Look up an interaction by UUID across the active tracking dicts.
+
+        Args:
+            uuid: The UUID string to look up.
+            consider_completed_too: When True, also search the recently-completed sets and return the
+                most recently completed match (there may be more than one with the same UUID).
+
+        Returns:
+            The matching Interaction, or None if not found.
+        """
         if uuid in self.received:
             return self.received[uuid]
         elif uuid in self.sent:
@@ -1222,7 +1436,13 @@ class InteractionManager:
             else:
                 return None
 
-    def add_lazy_stream_to_interaction(self, stream_hash: str, interaction: Interaction):
+    def add_lazy_stream_to_interaction(self, stream_hash: str, interaction: Interaction) -> None:
+        """Attach a stream (identified by hash) to an already-registered interaction as a lazy stream.
+
+        Args:
+            stream_hash: A user-level or net-level stream hash to resolve and attach.
+            interaction: The interaction to attach the stream to.
+        """
         user_hashes = self.__normalize_to_user_hashes(stream_hash)
         log.debug(f"[add_lazy_stream_to_interaction] stream_hash={stream_hash}, user_hashes={user_hashes}, "
                   f"interaction={interaction}")
@@ -1232,7 +1452,12 @@ class InteractionManager:
             interaction.add_lazy_stream(user_hash, stream_obj,
                                         is_owned=user_hash in self.agent.owned_streams_by_user_hash)
 
-    def remove_interactions_of_agent(self, agent):
+    def remove_interactions_of_agent(self, agent: str) -> None:
+        """Complete and deregister all interactions that involve the given agent as requester or target.
+
+        Args:
+            agent: Peer ID of the agent being removed.
+        """
         interaction_dicts = [self.sent, self.received, self.lazy]
         to_remove = []
         for interaction_dict in interaction_dicts:
@@ -1247,7 +1472,16 @@ class InteractionManager:
         for inter in to_remove:
             self.complete(inter, reason=CompletionReason.DISCONNECTED)
 
-    def __normalize_to_user_hashes(self, stream_hash):
+    def __normalize_to_user_hashes(self, stream_hash: str) -> list[str]:
+        """Expand a stream hash (user-level or net-level) into a list of user-level hashes.
+
+        Args:
+            stream_hash: A user-level hash (returns it directly) or a net-level hash (expanded to all
+                matching user-level hashes known to this agent).
+
+        Returns:
+            A list of user-level hash strings.
+        """
         user_hashes = []
         if Stream.is_user_hash(stream_hash):
             user_hashes.append(stream_hash)
@@ -1261,7 +1495,8 @@ class InteractionManager:
                     user_hashes.append(user_hash)
         return user_hashes
 
-    def __str__(self):
+    def __str__(self) -> str:
+        """Return a multi-line human-readable summary of all tracked interactions."""
         s1 = ""
         s2 = ""
         s3 = ""
