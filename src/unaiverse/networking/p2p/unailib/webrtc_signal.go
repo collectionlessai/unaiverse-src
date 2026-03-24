@@ -24,7 +24,7 @@ import (
 // getWebRTCConfig builds a pion WebRTC configuration from the node's stored ICE config.
 // Falls back to Google's public STUN servers when no config is present.
 func getWebRTCConfig(ni *NodeInstance) pwebrtc.Configuration {
-	if ni.iceConfig != nil {
+	if ni.iceConfig != nil && (len(ni.iceConfig.STUNServers) > 0 || len(ni.iceConfig.TURNServers) > 0) {
 		servers := []pwebrtc.ICEServer{}
 		if len(ni.iceConfig.STUNServers) > 0 {
 			servers = append(servers, pwebrtc.ICEServer{URLs: ni.iceConfig.STUNServers})
