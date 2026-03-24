@@ -43,7 +43,13 @@ class StreamProxy:
         self._streams = streams.copy()  # Shallow copy
         self._stream_list = list(streams.values())
 
-    def add_new_bind(self, stream_hash: str, stream: Stream):
+    def add_new_bind(self, stream_hash: str, stream: Stream) -> None:
+        """Register an additional stream under the given hash, if not already bound.
+
+        Args:
+            stream_hash: The key (typically a user hash) to associate with the stream.
+            stream: The Stream object to add.
+        """
         if stream_hash not in self._streams:
             self._streams[stream_hash] = stream
             self._stream_list.append(stream)
@@ -52,11 +58,12 @@ class StreamProxy:
         """Get data from a stream.
 
         Args:
-            key: Stream name (str), index (int), or None for single-stream case.
-            requested_by (str | None): The identifier of "who" requests access to the stream data (default: None).
+            key: Stream name (str), index (int), or None to retrieve from all streams.
+            requested_by: The identifier of who requests access to the stream data (default: None).
+            uuid: UUID of the interaction to retrieve data for (default: None).
 
         Returns:
-            The data from the requested stream.
+            The data from the requested stream, or None if no new data is available.
         """
         if len(self._stream_list) == 0:
             raise GenException("No streams bound to this StreamIO")
@@ -86,11 +93,24 @@ class StreamProxy:
         else:
             raise GenException(f"Unknown stream: {key}")
 
-    def add_interaction(self, interaction: 'Interaction'):
-        for s in self._stream_list:
-            s.add_interacton(interaction)
+    def add_interaction(self, interaction) -> None:
+        """Register an interaction on all bound streams.
 
-    def has_interaction(self, uuid: str | None):
+        Args:
+            interaction: The Interaction object to register.
+        """
+        for s in self._stream_list:
+            s.add_interaction(interaction)
+
+    def has_interaction(self, uuid: str | None) -> bool:
+        """Check whether all bound streams have an interaction for the given UUID.
+
+        Args:
+            uuid: The UUID to look up.
+
+        Returns:
+            True if every bound stream has an interaction for that UUID, False otherwise.
+        """
         for s in self._stream_list:
             if not isinstance(s, Stream):
                 continue
@@ -98,7 +118,15 @@ class StreamProxy:
                 return False
         return True
 
-    def get_interaction(self, uuid: str | None):
+    def get_interaction(self, uuid: str | None) -> object | None:
+        """Retrieve the interaction for the given UUID from the first stream that has one.
+
+        Args:
+            uuid: The UUID of the interaction to retrieve.
+
+        Returns:
+            The Interaction object if found, else None.
+        """
         if not self.has_interaction(uuid):
             return None
 
@@ -119,9 +147,11 @@ class StreamProxy:
             - ``self.stdin.set(stream_index, data)`` — by index
 
         Args:
-            key_or_data: Stream name/index if data is also provided, or the data itself
-                         for the single-stream case.
-            data: The data to set (when key_or_data is a name/index).
+            key_or_data: Stream name/index if ``data`` is also provided, the data itself
+                for the single-stream case, or a list of values to set on all streams at once.
+            data: The data to set (when ``key_or_data`` is a name/index).
+            data_tag: Custom integer tag for the sample (default: -1, meaning auto-tag).
+            uuid: UUID of the interaction for which data is being set (default: None).
         """
         if len(self._stream_list) == 0:
             raise GenException("No streams bound to this StreamIO")
@@ -153,7 +183,19 @@ class StreamProxy:
         else:
             raise GenException(f"Unknown stream: {key_or_data}")
 
-    def get_tag(self, key: str | int | None = None, uuid: str | None = None):
+    def get_tag(self, key: str | int | None = None, uuid: str | None = None) -> int:
+        """Return the data tag for the given stream key and UUID.
+
+        Args:
+            key: Stream name (str), index (int), or None to return the max tag across all streams.
+            uuid: UUID of the interaction to query (default: None).
+
+        Returns:
+            The integer data tag, or -1 if not applicable.
+
+        Raises:
+            GenException: If no streams are bound or the key is not found.
+        """
         if len(self._stream_list) == 0:
             raise GenException("No streams bound to this StreamIO")
 
@@ -179,24 +221,49 @@ class StreamProxy:
         else:
             raise GenException(f"Unknown stream: {key}")
 
-    def clear(self):
+    def clear(self) -> None:
+        """Reset all bound streams by setting their data to None."""
         self.set([None] * len(self))
 
-    def __getitem__(self, key):
-        self.get(key)
+    def __getitem__(self, key: str | int):
+        """Retrieve data from the stream identified by ``key``.
 
-    def __len__(self):
+        Args:
+            key: Stream name or index.
+        """
+        return self.get(key)
+
+    def __len__(self) -> int:
+        """Return the number of bound streams."""
         return len(self._stream_list)
 
     def __iter__(self):
+        """Iterate over the bound stream objects.
+
+        Returns:
+            An iterator over the stream list.
+        """
         return iter(self._stream_list)
 
-    def __contains__(self, key):
+    def __contains__(self, key: object) -> bool:
+        """Check whether a stream name is bound to this proxy.
+
+        Args:
+            key: A stream name string to look up.
+
+        Returns:
+            True if ``key`` is a bound stream name, False otherwise.
+        """
         if isinstance(key, str):
             return key in self._streams
         return False
 
     def items(self):
+        """Iterate over ``(stream_name, stream)`` pairs for all bound streams.
+
+        Returns:
+            An iterator of ``(key, value)`` pairs.
+        """
         for key, value in self._streams.items():
             yield key, value
 
@@ -205,7 +272,12 @@ class StreamProxy:
         """Return the names (user hashes) of all bound streams."""
         return list(self._streams.keys())
 
-    def __str__(self):
+    def __str__(self) -> str:
+        """Return a compact human-readable summary of the bound streams, grouped by peer.
+
+        Returns:
+            A comma-separated string of ``peer:stream1,stream2`` entries, or ``"no-streams"`` if empty.
+        """
         grouped_by_user = {}
         for user_hash in self._streams.keys():
             user = DataProps.peer_id_from_user_hash(user_hash)

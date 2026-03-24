@@ -29,7 +29,13 @@ from unaiverse.utils.misc import show_images_grid, GenException
 
 
 class Data:
-    def __init__(self, copy_me: 'Data' = None, uuid: str | None = None):
+    def __init__(self, copy_me: 'Data | None' = None, uuid: str | None = None) -> None:
+        """Initialize a Data instance, optionally as a shallow copy of another Data object.
+
+        Args:
+            copy_me: Another Data instance to copy from (shallow copy). If None, creates a fresh instance.
+            uuid: UUID to assign to the new instance (ignored when copy_me is provided).
+        """
         if not copy_me:
             self.data = None
             self.data_timestamp = 0.
@@ -43,7 +49,12 @@ class Data:
             self.data_tag = copy_me.data_tag
             self.uuid = copy_me.uuid
 
-    def to_code_str(self):
+    def to_code_str(self) -> str:
+        """Return a compact string encoding the data availability and tag for debugging.
+
+        Returns:
+            A short string of the form ``dt:<ok|no>|<tag>``.
+        """
         return "dt:" + ("no" if self.data is None else "ok") + "|" + str(self.data_tag)
 
 
@@ -150,73 +161,165 @@ class Stream:
             stream.props.tensor_labels[0] = group if group != 'none' else name
         return stream
 
-    def enable(self):
-        """Enable the stream, allowing data to be retrieved.
-
-        Returns:
-            None
-        """
+    def enable(self) -> None:
+        """Enable the stream, allowing data to be retrieved."""
         self.enabled = True
 
-    def disable(self):
-        """Disable the stream, preventing data from being retrieved.
-
-        Returns:
-            None
-        """
+    def disable(self) -> None:
+        """Disable the stream, preventing data from being retrieved."""
         self.enabled = False
 
     def get_props(self) -> DataProps:
+        """Return the DataProps object associated with this stream.
+
+        Returns:
+            The DataProps instance describing this stream's properties.
+        """
         return self.props
 
-    def net_hash(self, prefix: str):
+    def net_hash(self, prefix: str) -> str:
+        """Return the network hash for this stream.
+
+        Args:
+            prefix: The peer ID prefix.
+
+        Returns:
+            The network hash string.
+        """
         return self.get_props().net_hash(prefix)
 
-    def user_hash(self, prefix: str):
+    def user_hash(self, prefix: str) -> str:
+        """Return the user hash for this stream.
+
+        Args:
+            prefix: The peer ID prefix.
+
+        Returns:
+            The user hash string.
+        """
         return self.get_props().user_hash(prefix)
 
     @staticmethod
-    def peer_id_from_net_hash(net_hash):
+    def peer_id_from_net_hash(net_hash: str) -> str:
+        """Extract the peer ID from a network hash.
+
+        Args:
+            net_hash: The network hash string.
+
+        Returns:
+            The peer ID portion of the hash.
+        """
         return DataProps.peer_id_from_net_hash(net_hash)
 
     @staticmethod
-    def peer_id_from_user_hash(user_hash):
+    def peer_id_from_user_hash(user_hash: str) -> str:
+        """Extract the peer ID from a user hash.
+
+        Args:
+            user_hash: The user hash string.
+
+        Returns:
+            The peer ID portion of the hash.
+        """
         return DataProps.peer_id_from_user_hash(user_hash)
 
     @staticmethod
-    def name_from_user_hash(user_hash):
+    def name_from_user_hash(user_hash: str) -> str:
+        """Extract the stream name from a user hash.
+
+        Args:
+            user_hash: The user hash string.
+
+        Returns:
+            The stream name portion of the hash.
+        """
         return DataProps.name_from_user_hash(user_hash)
 
     @staticmethod
-    def peer_id_from_hash(some_hash):
+    def peer_id_from_hash(some_hash: str) -> str | None:
+        """Extract the peer ID from either a net hash or a user hash.
+
+        Args:
+            some_hash: A net hash or user hash string.
+
+        Returns:
+            The peer ID string, or None if the hash format is unrecognised.
+        """
         if Stream.is_net_hash(some_hash):
             return DataProps.peer_id_from_net_hash(some_hash)
         elif Stream.is_user_hash(some_hash):
             return DataProps.peer_id_from_user_hash(some_hash)
 
     @staticmethod
-    def name_or_group_from_net_hash(net_hash):
+    def name_or_group_from_net_hash(net_hash: str) -> str:
+        """Extract the name or group from a network hash.
+
+        Args:
+            net_hash: The network hash string.
+
+        Returns:
+            The name or group portion of the hash.
+        """
         return DataProps.name_or_group_from_net_hash(net_hash)
 
     @staticmethod
-    def is_pubsub_from_net_hash(net_hash):
+    def is_pubsub_from_net_hash(net_hash: str) -> bool:
+        """Check if a network hash belongs to a Pub/Sub stream.
+
+        Args:
+            net_hash: The network hash string.
+
+        Returns:
+            True if the hash encodes a Pub/Sub stream, False otherwise.
+        """
         return DataProps.is_pubsub_from_net_hash(net_hash)
 
     @staticmethod
-    def is_net_hash(some_hash: str):
+    def is_net_hash(some_hash: str) -> bool:
+        """Check if the given hash is a network hash (contains '::').
+
+        Args:
+            some_hash: The hash string to test.
+
+        Returns:
+            True if it is a net hash, False otherwise.
+        """
         return '::' in some_hash
 
     @staticmethod
-    def is_user_hash(some_hash: str):
+    def is_user_hash(some_hash: str) -> bool:
+        """Check if the given hash is a user hash (contains ':' but not '::').
+
+        Args:
+            some_hash: The hash string to test.
+
+        Returns:
+            True if it is a user hash, False otherwise.
+        """
         return ':' in some_hash and not Stream.is_net_hash(some_hash)
 
-    def is_pubsub(self):
+    def is_pubsub(self) -> bool:
+        """Check whether this stream uses Pub/Sub.
+
+        Returns:
+            True if the stream is a Pub/Sub stream, False otherwise.
+        """
         return self.get_props().is_pubsub()
 
-    def is_public(self):
+    def is_public(self) -> bool:
+        """Check whether this stream is public.
+
+        Returns:
+            True if the stream is public, False otherwise.
+        """
         return self.get_props().is_public()
 
-    def to_code_str(self):
+    def to_code_str(self) -> str:
+        """Return a compact multi-line debug string describing the stream's current state.
+
+        Returns:
+            A string encoding the stream name, group, type, and per-UUID interaction/data status.
+        """
         s = (f"ngti:{self.props.name}|{self.props.group}|{self.props.data_type}" +
              ("_pubsub" if self.props.pubsub else "") + "|")
         uuids = self.interactions_by_uuid.keys() | self.data_by_uuid.keys()
@@ -237,13 +340,13 @@ class Stream:
         """Set a new data sample into the stream, that will be provided when calling "get()".
 
         Args:
-            data (torch.Tensor): Data sample to set.
-            data_tag (int): Custom data time tag >= 0 (Default: -1, meaning no tags).
+            data: Data sample to set (tensor, PIL image, or string).
+            data_tag: Custom data time tag >= 0 (Default: -1, meaning no tags).
             keep_existing_tag: Keep the data tag that is already in the stream, if the provided data_tag arg is -1.
-            uuid (str): UUID of the interaction storing this data (can be None, default None).
+            uuid: UUID of the interaction storing this data (can be None, default None).
 
         Returns:
-            bool: True if data was accepted based on time constraints, else False.
+            The updated Data struct if data was accepted based on time constraints, else None.
         """
         if not self.enabled:
             return None
@@ -271,21 +374,47 @@ class Stream:
         else:
             return None
 
-    def has_interaction(self, uuid: str | None):
+    def has_interaction(self, uuid: str | None) -> bool:
+        """Check whether an interaction is registered for the given UUID.
+
+        Args:
+            uuid: The UUID to look up.
+
+        Returns:
+            True if an interaction exists for that UUID, False otherwise.
+        """
         return uuid in self.interactions_by_uuid
 
-    def has_data(self, uuid: str | None):
+    def has_data(self, uuid: str | None) -> bool:
+        """Check whether data is stored for the given UUID.
 
+        Args:
+            uuid: The UUID to look up.
+
+        Returns:
+            True if data exists for that UUID, False otherwise.
+        """
         # Backward compatibility
         if uuid is None and self._last_set_uuid is not None:
             uuid = self._last_set_uuid
 
         return uuid in self.data_by_uuid
 
-    def has_data_and_interaction(self, uuid: str | None):
+    def has_data_and_interaction(self, uuid: str | None) -> bool:
+        """Check whether both an interaction and data exist for the given UUID.
+
+        Args:
+            uuid: The UUID to look up.
+
+        Returns:
+            True if both an interaction and data exist for that UUID, False otherwise.
+        """
         return self.has_interaction(uuid) and self.has_data(uuid)
 
-    def limit_data_without_interactions(self):
+    def limit_data_without_interactions(self) -> None:
+        """Evict the oldest data entries that have no associated interaction, keeping at most
+        ``Custom.MAX_STREAM_DATA_WITHOUT_INTERACTIONS`` such entries.
+        """
         c, oldest_uuid_without_interaction = self.count_data_without_interactions()
         while c >= Custom.MAX_STREAM_DATA_WITHOUT_INTERACTIONS:
             del self.data_by_uuid[oldest_uuid_without_interaction]
@@ -293,7 +422,13 @@ class Stream:
                 break
             c, oldest_uuid_without_interaction = self.count_data_without_interactions()
 
-    def count_data_without_interactions(self):
+    def count_data_without_interactions(self) -> tuple[int, str | None]:
+        """Count data entries that have no associated interaction, and return the oldest such UUID.
+
+        Returns:
+            A tuple ``(count, oldest_uuid)`` where ``count`` is the number of data entries without an interaction
+            and ``oldest_uuid`` is the UUID of the oldest such entry (or None if count is zero).
+        """
         c = 0
         oldest_uuid = None
         for uuid in self.data_by_uuid:
@@ -304,16 +439,30 @@ class Stream:
         return c, oldest_uuid
 
     def get_data_uuids(self):
+        """Return the set of UUIDs for which data has been stored.
+
+        Returns:
+            A view of the keys in the internal data-by-UUID mapping.
+        """
         return self.data_by_uuid.keys()
 
     def get_interaction_uuids(self):
+        """Return the set of UUIDs for which an interaction has been registered.
+
+        Returns:
+            A view of the keys in the internal interactions-by-UUID mapping.
+        """
         return self.interactions_by_uuid.keys()
 
     def get(self, requested_by: str | None = None, uuid: str | None = None) -> str | Image | torch.Tensor | None:
         """Get the most recent data sample from the stream (i.e., the last one that was "set").
 
+        Args:
+            requested_by: Identifier of the caller; when provided, each caller receives each sample at most once.
+            uuid: UUID of the interaction whose data to retrieve (defaults to the last set UUID).
+
         Returns:
-            torch.Tensor | None: Adapted data sample if available.
+            The most recent data sample if available and not already returned to this caller, else None.
         """
 
         # Backward compatibility
@@ -340,7 +489,14 @@ class Stream:
         return self.get(requested_by, uuid)
 
     def get_timestamp(self, uuid: str | None = None) -> float | None:
+        """Return the timestamp at which data was last set for the given UUID.
 
+        Args:
+            uuid: The UUID to query (defaults to the last set UUID).
+
+        Returns:
+            The data timestamp as a float, or None if no data exists for that UUID.
+        """
         # Backward compatibility
         if uuid is None and self._last_set_uuid is not None:
             uuid = self._last_set_uuid
@@ -351,7 +507,14 @@ class Stream:
         return self.data_by_uuid[uuid].data_timestamp
 
     def get_tag(self, uuid: str | None = None) -> int | None:
+        """Return the data tag associated with the latest sample for the given UUID.
 
+        Args:
+            uuid: The UUID to query (defaults to the last set UUID).
+
+        Returns:
+            The integer data tag, or None if no data exists for that UUID.
+        """
         # Backward compatibility
         if uuid is None and self._last_set_uuid is not None:
             uuid = self._last_set_uuid
@@ -361,8 +524,13 @@ class Stream:
 
         return self.data_by_uuid[uuid].data_tag
 
-    def set_tag(self, data_tag: int, uuid: str | None = None):
+    def set_tag(self, data_tag: int, uuid: str | None = None) -> None:
+        """Overwrite the data tag for the given UUID without changing the data itself.
 
+        Args:
+            data_tag: The new integer tag value.
+            uuid: The UUID to update (defaults to the last set UUID).
+        """
         # Backward compatibility
         if uuid is None and self._last_set_uuid is not None:
             uuid = self._last_set_uuid
@@ -372,11 +540,24 @@ class Stream:
 
         self.data_by_uuid[uuid].data_tag = data_tag
 
-    def clear_data(self, uuid: str | None = None):
+    def clear_data(self, uuid: str | None = None) -> None:
+        """Remove the data entry for the given UUID, if present.
+
+        Args:
+            uuid: The UUID whose data should be removed.
+        """
         if uuid in self.data_by_uuid:
             del self.data_by_uuid[uuid]
 
-    def clear_expired_data(self, timeout):
+    def clear_expired_data(self, timeout: float) -> list[str]:
+        """Remove all data entries whose timestamp is older than the given timeout.
+
+        Args:
+            timeout: Maximum age in seconds; entries older than this are deleted. No-op if <= 0.
+
+        Returns:
+            A list of UUIDs that were removed.
+        """
         if timeout <= 0.:
             return []
 
@@ -392,7 +573,7 @@ class Stream:
                 del self.interactions_by_uuid[uuid]
         return to_remove
 
-    def add_interaction(self, interaction: object):
+    def add_interaction(self, interaction: object) -> None:
         """Register an interaction that involves this stream.
 
         Args:
@@ -404,14 +585,20 @@ class Stream:
         self.interactions_by_uuid[uuid] = interaction
         self._last_set_uuid = interaction.uuid
 
-    def edit_uuid_in_data(self, current_uuid: str, new_uuid: str):
+    def edit_uuid_in_data(self, current_uuid: str, new_uuid: str) -> None:
+        """Rename a UUID in the data store (used when a temporary UUID is replaced by a permanent one).
+
+        Args:
+            current_uuid: The existing UUID to rename.
+            new_uuid: The replacement UUID.
+        """
         if self.has_data(current_uuid):
             data = self.data_by_uuid[current_uuid]
             data.uuid = new_uuid
             self.data_by_uuid[new_uuid] = data
             del self.data_by_uuid[current_uuid]
 
-    def remove_interaction(self, interaction: object):
+    def remove_interaction(self, interaction: object) -> None:
         """Remove an interaction from this stream.
 
         Args:
@@ -421,17 +608,22 @@ class Stream:
         if uuid in self.interactions_by_uuid:
             del self.interactions_by_uuid[uuid]
 
-    def clear_all_interactions(self):
+    def clear_all_interactions(self) -> None:
+        """Remove all registered interactions from this stream."""
         self.interactions_by_uuid = {}
 
-    def clear_all_data(self):
+    def clear_all_data(self) -> None:
+        """Remove all stored data from this stream."""
         self.data_by_uuid = {}
 
     def get_interaction(self, uuid: str | None = None) -> object | None:
-        """Get an interaction involving this stream, given its UUID.
+        """Get the interaction registered for the given UUID.
+
+        Args:
+            uuid: The UUID to look up.
 
         Returns:
-            Interaction object or None.
+            The Interaction object for that UUID, or None if not found.
         """
         if uuid not in self.interactions_by_uuid:
             return None
@@ -439,10 +631,10 @@ class Stream:
             return self.interactions_by_uuid[uuid]
 
     def get_last_added_uuid_in_interactions(self) -> object | None:
-        """Get an interaction involving this stream, given its UUID.
+        """Return the most recently registered interaction.
 
         Returns:
-            Interaction object or None.
+            The last-added Interaction object, or None if no interactions are registered.
         """
         if len(self.interactions_by_uuid) == 0:
             return None
@@ -451,10 +643,10 @@ class Stream:
             return self.interactions_by_uuid[uuid]
 
     def get_last_added_uuid_in_data(self) -> object | None:
-        """Get an interaction involving this stream, given its UUID.
+        """Return the most recently added Data struct.
 
         Returns:
-            Interaction object or None.
+            The last-added Data object, or None if no data has been stored.
         """
         if len(self.data_by_uuid) == 0:
             return None
@@ -517,16 +709,16 @@ class Stream:
         """DEPRECATED"""
         return self._last_set_uuid
 
-    def set_uuid(self, ref_uuid: str | None, expected: bool = False):
+    def set_uuid(self, ref_uuid: str | None, expected: bool = False) -> None:
         """DEPRECATED"""
         if not expected:
             self._last_set_uuid = ref_uuid
 
-    def clear_uuid_if_marked_as_clearable(self):
+    def clear_uuid_if_marked_as_clearable(self) -> None:
         """DEPRECATED"""
         self.clear_uuid()
 
-    def clear_uuid(self):
+    def clear_uuid(self) -> bool:
         """DEPRECATED"""
         self._last_set_uuid = None
         self.clear_all_interactions()
@@ -537,19 +729,19 @@ class Stream:
     # ==================================================================================================================
 
 
-
 class BufferedStream(Stream):
     """
     Data stream with buffer support to store historical data.
     """
 
     def __init__(self, props: DataProps,
-                 is_static: bool = False, is_queue: bool = False):
+                 is_static: bool = False, is_queue: bool = False) -> None:
         """Initialize a BufferedStream.
 
         Args:
-            is_static (bool): If True, the buffer stores only one item that is reused.
-            is_queue (bool): If True, the buffer acts as a data queue.
+            props: The DataProps object describing the stream's data type and properties.
+            is_static: If True, the buffer stores only one item that is reused.
+            is_queue: If True, the buffer acts as a data queue.
         """
         super().__init__(props=props)
 
@@ -571,9 +763,19 @@ class BufferedStream(Stream):
         self.restart_before_next_get_by_uuid: dict[None | str, set] = {None: set()}  # set()
 
     def get_data_uuids(self):
+        """Return the set of UUIDs for which buffered data exists.
+
+        Returns:
+            A view of the keys in the internal data-buffer-by-UUID mapping.
+        """
         return self.data_buffer_by_uuid.keys()
 
-    def add_interaction(self, interaction):
+    def add_interaction(self, interaction: object) -> None:
+        """Register an interaction and initialise per-UUID buffer structures if needed.
+
+        Args:
+            interaction: The Interaction object to register.
+        """
         super().add_interaction(interaction)
         uuid = interaction.uuid
         if uuid not in self.data_buffer_by_uuid:
@@ -592,8 +794,12 @@ class BufferedStream(Stream):
     def get(self, requested_by: str | None = None, uuid: str | None = None) -> str | Image | torch.Tensor | None:
         """Get the current data sample based on cycle and buffer.
 
+        Args:
+            requested_by: Identifier of the caller for per-caller deduplication.
+            uuid: UUID of the interaction to retrieve data for (defaults to the last set UUID).
+
         Returns:
-            Current buffered sample.
+            The current buffered sample, or None if no new data is available for this caller.
         """
         if uuid is None and self._last_set_uuid is not None:
             uuid = self._last_set_uuid
@@ -645,13 +851,13 @@ class BufferedStream(Stream):
         """Store a new data sample into the buffer.
 
         Args:
-            data (torch.Tensor | PIL.Image | str): Data to store.
-            data_tag (int): Custom data time tag >= 0 (Default: -1, meaning no tags).
+            data: Data to store (tensor, PIL image, or string).
+            data_tag: Custom data time tag >= 0 (Default: -1, meaning no tags).
             keep_existing_tag: Keep the data tag that is already in the stream, if the provided data_tag arg is -1.
             uuid: UUID of the data.
 
         Returns:
-            bool: True if the data was buffered.
+            The updated Data struct if the data was buffered, else None.
         """
         if not self.enabled:
             return None
@@ -693,7 +899,7 @@ class BufferedStream(Stream):
                         # Filling gaps with "None"
                         cycle = clock.get_cycle()
                         if cycle > self.last_cycle_by_uuid[uuid] + 1:
-                            for cycle in range(cycle, self.last_cycle_by_uuid[uuid] + 1):
+                            for cycle in range(self.last_cycle_by_uuid[uuid] + 1, cycle):
                                 self.data_buffer_by_uuid[uuid].append(Data(uuid=uuid))
                             self.last_cycle_by_uuid[uuid] = cycle - 1
 
@@ -734,29 +940,35 @@ class BufferedStream(Stream):
         """
         m = 0
         for z in self.data_buffer_by_uuid.values():
-            m = max(0, len(z))
+            m = max(m, len(z))
         return m
 
-    def set_first_cycle(self, cycle, uuid: str | None = None):
-        """Manually set the first cycle for the buffer.
+    def set_first_cycle(self, cycle: int, uuid: str | None = None) -> None:
+        """Manually set the first cycle for the buffer and adjust the last-cycle counter.
 
         Args:
-            cycle (int): Global cycle to start from.
-            uuid: UUID of the data.
+            cycle: Global cycle number to start from.
+            uuid: UUID of the data (defaults to the global/no-UUID slot).
         """
         self.first_cycle_by_uuid[uuid] = cycle
         self.last_cycle_by_uuid[uuid] = cycle + len(self.data_buffer_by_uuid[uuid])
 
-    def get_first_cycle(self, uuid: str | None = None):
-        """Get the first cycle of the stream.
+    def get_first_cycle(self, uuid: str | None = None) -> int:
+        """Return the first buffered cycle for the given UUID.
+
+        Args:
+            uuid: UUID of the data (defaults to the global/no-UUID slot).
 
         Returns:
-            int: First cycle value.
+            The first cycle value (-1 if not yet set).
         """
         return self.first_cycle_by_uuid[uuid]
 
-    def restart(self, uuid: str | None = None):
-        """Restart the buffer using the current clock cycle.
+    def restart(self, uuid: str | None = None) -> None:
+        """Restart the buffer read-position to the current clock cycle.
+
+        Args:
+            uuid: UUID of the data to restart (defaults to the global/no-UUID slot).
         """
         if self.is_ready_only:
             uuid = None
@@ -767,7 +979,13 @@ class BufferedStream(Stream):
             if uuid in self.data_by_uuid:
                 del self.data_by_uuid[uuid]
 
-    def edit_uuid_in_data(self, current_uuid: str, new_uuid: str):
+    def edit_uuid_in_data(self, current_uuid: str, new_uuid: str) -> None:
+        """Rename a UUID across all buffer structures (used when a temporary UUID is replaced).
+
+        Args:
+            current_uuid: The existing UUID to rename.
+            new_uuid: The replacement UUID.
+        """
         super().edit_uuid_in_data(current_uuid, new_uuid)
 
         edit_what = [self.data_buffer_by_uuid, self.text_buffer_by_uuid, self.first_cycle_by_uuid,
@@ -783,7 +1001,13 @@ class BufferedStream(Stream):
             for data in self.data_buffer_by_uuid[new_uuid]:
                 data.uuid = new_uuid
 
-    def plan_restart_before_next_get(self, requested_by: str, uuid: str | None = None):
+    def plan_restart_before_next_get(self, requested_by: str, uuid: str | None = None) -> None:
+        """Schedule a buffer restart to happen just before the next ``get()`` call by the given caller.
+
+        Args:
+            requested_by: Identifier of the caller that will trigger the restart.
+            uuid: UUID of the buffer to restart (defaults to the global/no-UUID slot).
+        """
         if uuid not in self.restart_before_next_get_by_uuid:
             self.restart_before_next_get_by_uuid[uuid] = set()
         self.restart_before_next_get_by_uuid[uuid].add(requested_by)
@@ -804,7 +1028,12 @@ class BufferedStream(Stream):
 
         self.restart_before_next_get_by_uuid = {None: set()}  # set()
 
-    def shuffle_buffer(self, seed: int = -1):
+    def shuffle_buffer(self, seed: int = -1) -> None:
+        """Shuffle the data (and text) buffer in-place for each UUID.
+
+        Args:
+            seed: Random seed for reproducibility. Use -1 (default) for a non-seeded shuffle.
+        """
         for uuid in self.data_buffer_by_uuid.keys():
             old_buffer = self.data_buffer_by_uuid[uuid]
             indices = list(range(len(old_buffer)))
@@ -831,15 +1060,15 @@ class BufferedStream(Stream):
                 for i in indices:
                     self.text_buffer_by_uuid[uuid].append(old_text_buffer[i])
 
-    def to_text_snippet(self, length: int | None = None, uuid: str | None = None):
+    def to_text_snippet(self, length: int | None = None, uuid: str | None = None) -> str | None:
         """Convert buffered text samples to a single long string.
 
         Args:
-            length (int | None): Optional length of the resulting text snippet.
+            length: Optional maximum character length of the resulting text snippet.
             uuid: UUID of the data.
 
         Returns:
-            str | None: Human-readable text sequence.
+            Human-readable text sequence, or None if no text data is available.
         """
         if self.text_buffer_by_uuid is not None and len(self.text_buffer_by_uuid[uuid]) > 0:
             text_buffer = self.text_buffer_by_uuid[uuid]
@@ -900,7 +1129,7 @@ class BufferedStream(Stream):
 
         for k in range(0, num_steps, stride):
             _idx = since_what_idx_in_getitem + k
-            data = self[(_idx, uuid)]
+            data, tag = self[(_idx, uuid)]
 
             if data is not None:
                 ret_cycles.append(since_what_cycle + k)
@@ -914,13 +1143,14 @@ class Dataset(BufferedStream):
     A buffered dataset that streams data from a PyTorch dataset and simulates data-streams for input/output.
     """
 
-    def __init__(self, tensor_dataset, shape: tuple, index: int = 0, batch_size: int = 1):
+    def __init__(self, tensor_dataset, shape: tuple, index: int = 0, batch_size: int = 1) -> None:
         """Initialize a Dataset instance, which wraps around a PyTorch Dataset.
 
         Args:
-            tensor_dataset (torch.utils.data.Dataset): The PyTorch Dataset to wrap.
-            shape (tuple): The shape of each sample from the data stream.
-            index (int): The index of the element returned by __getitem__ to pick up.
+            tensor_dataset: The PyTorch Dataset to wrap (must support ``len()`` and indexed access).
+            shape: The shape of each sample from the data stream.
+            index: The index of the element returned by ``__getitem__`` to pick up (default: 0).
+            batch_size: Number of samples to group into each batch (default: 1).
         """
         sample = tensor_dataset[0][index]
         if isinstance(sample, torch.Tensor):
@@ -972,10 +1202,11 @@ class ImageFileStream(BufferedStream):
         """Initialize an ImageFileStream instance for streaming image data.
 
         Args:
-            image_dir (str): The directory containing image files.
-            list_of_image_files (str): Path to the file with list of file names of the images.
-            device (torch.device): The device to store the tensors on. Default is CPU.
-            circular (bool): Whether to loop the dataset or not. Default is True.
+            image_dir: The directory containing image files.
+            list_of_image_files: Path to the file with list of file names of the images (one per line).
+            device: The device to store the tensors on. Default is CPU.
+            circular: Whether to loop the dataset or not. Default is True.
+            show_images: If True, display a clickable grid of the images. Default is False.
         """
         self.image_dir = image_dir
         self.device = device if device is not None else torch.device("cpu")
@@ -1041,14 +1272,15 @@ class LabelStream(BufferedStream):
     def __init__(self, label_dir: str, label_file_csv: str,
                  device: torch.device = None, circular: bool = True, single_class: bool = False,
                  line_header: bool = False):
-        """Initialize an LabelStream instance for streaming labels.
+        """Initialize a LabelStream instance for streaming labels.
 
         Args:
-            label_dir (str): The directory containing image files.
-            label_file_csv (str): Path to the CSV file with labels for the images.
-            device (torch.device): The device to store the tensors on. Default is CPU.
-            circular (bool): Whether to loop the dataset or not. Default is True.
-            single_class (bool): Whether to only consider a single class for labeling. Default is False.
+            label_dir: The directory containing label files.
+            label_file_csv: Path to the CSV file with labels (format: ``filename,label1,label2,...``).
+            device: The device to store the tensors on. Default is CPU.
+            circular: Whether to loop the dataset or not. Default is True.
+            single_class: Whether to only consider a single class for labeling. Default is False.
+            line_header: If True, treat the first field as a header to skip. Default is False.
         """
         self.label_dir = label_dir
         self.device = device if device is not None else torch.device("cpu")
@@ -1085,7 +1317,7 @@ class LabelStream(BufferedStream):
         with open(label_file_csv, 'r') as f:
             for line in f:
                 parts = line.strip().split(',')
-                label = parts if not line_header else parts[1:]
+                label = parts[1:] if not line_header else parts[2:]
                 target_vector = torch.zeros((1, len(class_names)), dtype=torch.float32)
                 for lab in label:
                     idx = class_name_to_index[lab]
@@ -1179,7 +1411,19 @@ class TokensStream(BufferedStream):
         self.restart()
 
 
-def serialize_payload(data_list: list):
+def serialize_payload(data_list: list) -> str:
+    """Serialize a list of tensors, PIL images, and/or strings to a JSON string.
+
+    Args:
+        data_list: List of values to serialize; each element must be a ``torch.Tensor``,
+            a PIL ``Image``, or a ``str``.
+
+    Returns:
+        A JSON-encoded string representation of the payload.
+
+    Raises:
+        GenException: If any element in ``data_list`` is of an unsupported type.
+    """
     payload = []
 
     for value in data_list:
@@ -1208,7 +1452,18 @@ def serialize_payload(data_list: list):
     return json.dumps(payload)
 
 
-def deserialize_payload(json_str):
+def deserialize_payload(json_str: str) -> list:
+    """Deserialize a JSON payload string back into a list of tensors, PIL images, and/or strings.
+
+    Args:
+        json_str: A JSON string previously produced by :func:`serialize_payload`.
+
+    Returns:
+        A list of deserialized objects (``torch.Tensor``, PIL ``Image``, or ``str``).
+
+    Raises:
+        GenException: If an item declares an unrecognised type.
+    """
     payload = json.loads(json_str)
     output = []
 

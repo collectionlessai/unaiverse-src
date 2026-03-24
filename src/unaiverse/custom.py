@@ -15,10 +15,6 @@ class Custom:
     SEND_STATS_EVERY = 30.  # Seconds (warning: modified in Node constructor!)
     SAVE_CHECKPOINT_EVERY = -1.  # When negative, means "do not save" (warning: modified by means in Node constructor!)
 
-    # Interactions
-    MAX_INTERACTIONS = 100
-    MAX_STREAM_DATA_WITHOUT_INTERACTIONS = 2
-
     # Environment variable
     PRINT_LEVEL = int(os.getenv("NODE_PRINT", "0"))  # 0, 1, 2
     LOG_TO_FILE = int(os.getenv("NODE_LOG", "0")) == 1  # 0, 1
@@ -57,5 +53,7 @@ class Custom:
     NOT_READY_PREFIXES = {'get_', 'got_', 'do_', 'done_'}
 
     # Interactions
+    MAX_INTERACTIONS = 100
+    MAX_STREAM_DATA_WITHOUT_INTERACTIONS = 2
     DEFAULT_INTER_TIMEOUT = 60. * 5.  # Seconds
     DRAIN_TIMEOUT = 0.

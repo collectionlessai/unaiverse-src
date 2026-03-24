@@ -29,7 +29,15 @@ class FileContainer:
     mime_type: str
     
     @classmethod
-    def from_path(cls, file_path: str):
+    def from_path(cls, file_path: str) -> 'FileContainer':
+        """Create a FileContainer by reading a file from the given path.
+
+        Args:
+            file_path: Absolute or relative path to the file to read.
+
+        Returns:
+            A FileContainer instance with the file's content, name, and guessed MIME type.
+        """
         # 1. Guess MIME type based on extension
         mime_type, _ = mimetypes.guess_type(file_path)
         if mime_type is None:
@@ -46,7 +54,7 @@ class FileContainer:
 
 
 class Stream:
-    def __init__(self, *args, private_only: bool = False, public_only: bool = False, **kwargs):
+    def __init__(self, *args: object, private_only: bool = False, public_only: bool = False, **kwargs: object) -> None:
         """Initializes a `Stream` object, which is a container for one or two `DataProps` instances. It creates a
          `DataProps` object for a private stream and, optionally, a public stream.
 
@@ -78,7 +86,7 @@ class Stream:
             kwargs['public'] = True
             self.props.append(DataProps(*args, **kwargs))
 
-    def to_list_of_dicts(self):
+    def to_list_of_dicts(self) -> list[dict]:
         """Converts the contained `DataProps` objects into a list of dictionaries. Each dictionary represents the
         properties of a single data stream.
 
@@ -87,7 +95,7 @@ class Stream:
         """
         return [props.to_dict() for props in self.props]
 
-    def to_dict(self):
+    def to_dict(self) -> None:
         """Raises a `RuntimeError` because this method is intended for a single `DataProps` object, not for the
         container class `Stream` which can hold multiple properties.
 
@@ -96,7 +104,7 @@ class Stream:
         """
         raise RuntimeError("This method can only be called on a DataProps object and not on Stream")
 
-    def from_dict(self):
+    def from_dict(self) -> None:
         """Raises a `RuntimeError` because this method is intended for a single `DataProps` object, not for the
         container class `Stream` which can hold multiple properties.
 
@@ -105,7 +113,7 @@ class Stream:
         """
         raise RuntimeError("This method can only be called on a DataProps object and not on Stream")
 
-    def clone(self):
+    def clone(self) -> 'Stream':
         """Creates and returns a deep copy of the `Stream` object.
 
         Returns:
@@ -117,7 +125,7 @@ class Stream:
             ret.props.append(p.clone())
         return ret
 
-    def is_public(self):
+    def is_public(self) -> None:
         """Raises a `RuntimeError` because this method is intended for a single `DataProps` object, not for the
         container class `Stream` which can hold multiple properties.
 
@@ -126,7 +134,7 @@ class Stream:
         """
         raise RuntimeError("This method can only be called on a DataProps object and not on Stream")
 
-    def __str__(self):
+    def __str__(self) -> str:
         """Provides a formatted string representation of the `Stream` object. It lists the number of `DataProps`
         objects it contains and includes the string representation of each of them.
 
@@ -139,7 +147,7 @@ class Stream:
             s += "\t" + z
         return s
 
-    def __getattr__(self, method_or_attribute_name):
+    def __getattr__(self, method_or_attribute_name: str):
         """Handles dynamic attribute and method access for the `Stream` class. If the requested method name starts
         with 'set_', it creates a new function that applies the corresponding setter method to all contained
         `DataProps` objects. For any other attribute, it returns the attribute from the first `DataProps` object
@@ -287,7 +295,7 @@ class DataProps:
 
             # Checking labels
             assert tensor_labels is None or (isinstance(tensor_labels, list) or
-                                             (isinstance(tensor_shape, str) and
+                                             (isinstance(tensor_labels, str) and
                                               tensor_labels.startswith("AutoTokenizer:"))), \
                 f"Invalid tensor labels: {tensor_labels}"
 
@@ -296,7 +304,7 @@ class DataProps:
                 if not (isinstance(tensor_labels, str) and tensor_labels.startswith("AutoTokenizer:")):
                     self.tensor_labels = TensorLabels(self, labels=tensor_labels, labeling_rule=tensor_labeling_rule)
                 else:
-                    self.set_tensor_labels_from_auto_tokenizer(tensor_labels.split[:][1])
+                    self.set_tensor_labels_from_auto_tokenizer(tensor_labels.split(":")[1])
 
         elif self.is_img():
 
@@ -371,7 +379,7 @@ class DataProps:
         self.pubsub = pubsub
         self.public = public
 
-    def to_dict(self):
+    def to_dict(self) -> dict:
         """Serializes the `DataProps` object into a dictionary, making it suitable for transmission or storage.
         It converts complex types like `torch.dtype` and `TensorLabels` into simple, serializable formats.
 
@@ -392,7 +400,7 @@ class DataProps:
         }
 
     @staticmethod
-    def from_dict(d_props):
+    def from_dict(d_props: dict) -> 'DataProps':
         """A static method that deserializes a dictionary into a `DataProps` object.
 
         Args:
@@ -414,7 +422,7 @@ class DataProps:
                          pubsub=d_props['pubsub'],
                          public=d_props['public'])
 
-    def clone(self):
+    def clone(self) -> 'DataProps':
         """Creates and returns a deep copy of the `DataProps` instance.
         It preserves the original transformation objects rather than re-evaluating them.
 
@@ -436,7 +444,7 @@ class DataProps:
                          pubsub=self.pubsub,
                          public=self.public)
 
-    def get_name(self):
+    def get_name(self) -> str:
         """Retrieves the name of the data stream.
 
         Returns:
@@ -445,7 +453,7 @@ class DataProps:
 
         return self.name
 
-    def get_group(self):
+    def get_group(self) -> str:
         """Retrieves the name of the group to which the data stream belongs.
 
         Returns:
@@ -454,7 +462,7 @@ class DataProps:
 
         return self.group
 
-    def get_description(self):
+    def get_description(self) -> str:
         """Retrieves the description of the data.
 
         Returns:
@@ -462,7 +470,7 @@ class DataProps:
         """
         return self.data_desc
 
-    def get_tensor_labels(self):
+    def get_tensor_labels(self) -> list[str] | None:
         """Retrieves the list of tensor labels, if they exist.
 
         Returns:
@@ -470,7 +478,7 @@ class DataProps:
         """
         return self.tensor_labels.labels if self.tensor_labels is not None else None
 
-    def set_name(self, name: str):
+    def set_name(self, name: str) -> None:
         """Sets a new name for the stream, with a check for invalid characters.
 
         Args:
@@ -479,7 +487,7 @@ class DataProps:
         assert "~" not in name, "Invalid chars in stream name"
         self.name = name
 
-    def set_group(self, group: str):
+    def set_group(self, group: str) -> None:
         """Sets a new group name for the stream, with a check for invalid characters.
 
         Args:
@@ -488,7 +496,7 @@ class DataProps:
         assert "~" not in group, "Invalid chars in group name"
         self.group = group
 
-    def set_description(self, desc: str):
+    def set_description(self, desc: str) -> None:
         """Sets a new description for the data.
 
         Args:
@@ -496,7 +504,7 @@ class DataProps:
         """
         self.data_desc = desc
 
-    def set_public(self, public: bool):
+    def set_public(self, public: bool) -> None:
         """Sets whether the stream is public or not.
 
         Args:
@@ -504,7 +512,7 @@ class DataProps:
         """
         self.public = public
 
-    def set_pubsub(self, pubsub: bool):
+    def set_pubsub(self, pubsub: bool) -> None:
         """Sets whether the stream uses Pub/Sub or direct messaging.
 
         Args:
@@ -512,7 +520,7 @@ class DataProps:
         """
         self.pubsub = pubsub
 
-    def is_tensor(self):
+    def is_tensor(self) -> bool:
         """Checks if the data type is 'tensor'.
 
         Returns:
@@ -520,7 +528,7 @@ class DataProps:
         """
         return self.data_type == "tensor"
 
-    def is_img(self):
+    def is_img(self) -> bool:
         """Checks if the data type is 'img'.
 
         Returns:
@@ -528,15 +536,15 @@ class DataProps:
         """
         return self.data_type == "img"
 
-    def is_text(self):
+    def is_text(self) -> bool:
         """Checks if the data type is 'text'.
 
         Returns:
             True if the type is 'text', False otherwise.
         """
         return self.data_type == "text"
-    
-    def is_file(self):
+
+    def is_file(self) -> bool:
         """Checks if the data type is 'file'.
 
         Returns:
@@ -544,7 +552,7 @@ class DataProps:
         """
         return self.data_type == "file"
 
-    def is_tensor_long(self):
+    def is_tensor_long(self) -> bool:
         """Checks if the tensor's data type is `torch.long`.
 
         Returns:
@@ -552,7 +560,7 @@ class DataProps:
         """
         return self.tensor_dtype == torch.long if self.tensor_dtype is not None else False
 
-    def is_tensor_float(self):
+    def is_tensor_float(self) -> bool:
         """Checks if the tensor's data type is a float type (e.g., `torch.float32`).
 
         Returns:
@@ -560,7 +568,7 @@ class DataProps:
         """
         return str(self.tensor_dtype).startswith("torch.float") if self.tensor_dtype is not None else False
 
-    def is_tensor_img(self):
+    def is_tensor_img(self) -> bool:
         """Checks if the tensor's shape corresponds to a typical image format (4D, with 1 or 3 channels).
 
         Returns:
@@ -569,7 +577,7 @@ class DataProps:
         return len(self.tensor_shape) == 4 and (self.tensor_shape[1] == 1 or self.tensor_shape[1] == 3) \
             if self.tensor_shape is not None else False
 
-    def is_tensor_token_ids(self):
+    def is_tensor_token_ids(self) -> bool:
         """Checks if the tensor represents token IDs, which is indicated by `torch.long` data type and a 2D shape
         suitable for sequences.
 
@@ -580,7 +588,7 @@ class DataProps:
                 len(self.tensor_shape) == 2 and (self.tensor_shape[1] >= 1 or self.tensor_shape[1] is None)) \
             if self.tensor_shape is not None else False
 
-    def is_tensor_target_id(self):
+    def is_tensor_target_id(self) -> bool:
         """Checks if the tensor represents a single target ID, indicated by `torch.long` data type and a 1D shape.
 
         Returns:
@@ -590,7 +598,7 @@ class DataProps:
                 len(self.tensor_shape) == 1) \
             if self.tensor_shape is not None else False
 
-    def is_all(self):
+    def is_all(self) -> bool:
         """Checks if the data type is 'all', which is a wildcard type.
 
         Returns:
@@ -598,7 +606,7 @@ class DataProps:
         """
         return self.data_type == "all"
 
-    def net_hash(self, prefix: str):
+    def net_hash(self, prefix: str) -> str:
         """Generates a unique network hash for the stream using a provided prefix, Pub/Sub status, and name/group.
 
         Args:
@@ -609,7 +617,7 @@ class DataProps:
         """
         return DataProps.build_net_hash(prefix, self.pubsub, self.name_or_group())
 
-    def user_hash(self, prefix: str):
+    def user_hash(self, prefix: str) -> str:
         """Generates a unique user hash for the stream using a provided prefix and name.
 
         Args:
@@ -621,7 +629,7 @@ class DataProps:
         return DataProps.build_user_hash(prefix, self.name)
 
     @staticmethod
-    def peer_id_from_net_hash(net_hash):
+    def peer_id_from_net_hash(net_hash: str) -> str:
         """A static method to extract the peer ID from a network hash.
 
         Args:
@@ -633,7 +641,7 @@ class DataProps:
         return net_hash.split("::")[0]
 
     @staticmethod
-    def peer_id_from_user_hash(user_hash):
+    def peer_id_from_user_hash(user_hash: str) -> str:
         """A static method to extract the peer ID from a user hash.
 
         Args:
@@ -645,7 +653,7 @@ class DataProps:
         return user_hash.split(":")[0]
 
     @staticmethod
-    def name_or_group_from_net_hash(net_hash):
+    def name_or_group_from_net_hash(net_hash: str) -> str:
         """A static method to extract the name or group from a network hash.
 
         Args:
@@ -657,7 +665,7 @@ class DataProps:
         return net_hash.split("::ps:")[1] if DataProps.is_pubsub_from_net_hash(net_hash) else net_hash.split("::dm:")[1]
 
     @staticmethod
-    def name_from_user_hash(user_hash):
+    def name_from_user_hash(user_hash: str) -> str:
         """A static method to extract the name from a user hash.
 
         Args:
@@ -669,7 +677,7 @@ class DataProps:
         return user_hash.split(":")[1]
 
     @staticmethod
-    def is_pubsub_from_net_hash(net_hash):
+    def is_pubsub_from_net_hash(net_hash: str) -> bool:
         """A static method to check if a network hash belongs to a Pub/Sub stream.
 
         Args:
@@ -680,7 +688,7 @@ class DataProps:
         """
         return "::ps:" in net_hash
 
-    def name_or_group(self):
+    def name_or_group(self) -> str:
         """Retrieves the group name if it's set, otherwise defaults to the stream name.
 
         Returns:
@@ -690,7 +698,7 @@ class DataProps:
         return group if group != 'none' else self.get_name()
 
     @staticmethod
-    def build_net_hash(prefix: str, pubsub: bool, name_or_group: str):
+    def build_net_hash(prefix: str, pubsub: bool, name_or_group: str) -> str:
         """A static method to construct a complete network hash from a prefix, Pub/Sub status, and name/group.
 
         Args:
@@ -707,7 +715,7 @@ class DataProps:
             return f"{prefix}::dm:{name_or_group}"
 
     @staticmethod
-    def build_user_hash(prefix: str, name: str):
+    def build_user_hash(prefix: str, name: str) -> str:
         """A static method to construct a complete user hash from a prefix and name.
 
         Args:
@@ -715,12 +723,12 @@ class DataProps:
             name: The name of the stream.
 
         Returns:
-            The constructed network hash string.
+            The constructed user hash string.
         """
         return f"{prefix}:{name}"
 
     @staticmethod
-    def user_hash_from_net_hash(net_hash: str, name: str):
+    def user_hash_from_net_hash(net_hash: str, name: str) -> str:
         """Generates a unique user hash for the stream using a provided network hash
 
         Args:
@@ -734,7 +742,7 @@ class DataProps:
         return DataProps.build_user_hash(prefix, name)
 
     @staticmethod
-    def normalize_net_hash(not_normalized_net_hash: str):
+    def normalize_net_hash(not_normalized_net_hash: str) -> str:
         """A static method that cleans up or normalizes a network hash string to a canonical format, particularly
         for direct messages.
 
@@ -753,7 +761,7 @@ class DataProps:
         else:
             return not_normalized_net_hash
 
-    def is_pubsub(self):
+    def is_pubsub(self) -> bool:
         """Checks if the stream is set to use Pub/Sub.
 
         Returns:
@@ -761,7 +769,7 @@ class DataProps:
         """
         return self.pubsub
 
-    def is_public(self):
+    def is_public(self) -> bool:
         """Checks if the stream is set to be public.
 
         Returns:
@@ -769,7 +777,7 @@ class DataProps:
         """
         return self.public
 
-    def set_tensor_labels_from_auto_tokenizer(self, model_id):
+    def set_tensor_labels_from_auto_tokenizer(self, model_id: str) -> None:
         """Initializes and sets the tensor labels by fetching the vocabulary from a Hugging Face `AutoTokenizer`
         model ID.
 
@@ -826,7 +834,7 @@ class DataProps:
         """
         return data[:, self.tensor_labels.indices] if self.tensor_labels.indices is not None else data
 
-    def is_flat_tensor_with_labels(self):
+    def is_flat_tensor_with_labels(self) -> bool:
         """Checks if the tensor is a 2D array and has labels, which is a common structure for general feature data.
 
         Returns:
@@ -834,7 +842,7 @@ class DataProps:
         """
         return self.is_tensor() and len(self.tensor_shape) == 2 and self.has_tensor_labels()
 
-    def has_tensor_labels(self):
+    def has_tensor_labels(self) -> bool:
         """Checks if any tensor labels are associated with the stream.
 
         Returns:
@@ -1154,7 +1162,7 @@ class DataProps:
         else:
             return True
 
-    def __str__(self):
+    def __str__(self) -> str:
         """Provides a string representation of the DataProps instance.
 
         Returns:
@@ -1214,7 +1222,7 @@ class TensorLabels:
         self.num_labels = num_labels
         self.indices = None
 
-    def to_dict(self):
+    def to_dict(self) -> dict:
         """Serializes the `TensorLabels` instance into a dictionary, which includes the list of labels and the original
         labeling rule.
 
@@ -1226,20 +1234,20 @@ class TensorLabels:
             'labeling_rule': self.original_labeling_rule
         }
 
-    def clear_indices(self):
+    def clear_indices(self) -> None:
         """Resets the internal `indices` attribute to `None`. This effectively clears any previous label adaptation
         that was performed and allows the object to revert to its original, non-interleaved state.
         """
         self.indices = None
 
-    def __getitem__(self, idx):
+    def __getitem__(self, idx: int) -> str:
         """Retrieves the label at the specified index.
 
         Args:
-            idx (int): The index of the label to retrieve.
+            idx: The index of the label to retrieve.
 
         Returns:
-            str: The label at the specified index.
+            The label at the specified index.
 
         Raises:
             ValueError: If the index is out of bounds or labels are not defined.
@@ -1250,11 +1258,11 @@ class TensorLabels:
             raise ValueError(f"Invalid index {idx} for attribute labels of size {self.num_labels}")
         return self.labels[idx]
 
-    def __len__(self):
+    def __len__(self) -> int:
         """Returns the number of labels.
 
         Returns:
-            int: The number of labels.
+            The number of labels.
         """
         return self.num_labels
 
@@ -1262,21 +1270,21 @@ class TensorLabels:
         """Iterates over the labels.
 
         Returns:
-            iterator: An iterator over the labels.
+            An iterator over the labels list.
         """
         return iter(self.labels) if self.labels is not None else iter([])
 
-    def __str__(self):
+    def __str__(self) -> str:
         """Provides a string representation of the DataLabels instance.
 
         Returns:
-            str: The string representation of the instance.
+            The string representation of the instance.
         """
         return (f"[TensorLabels] "
                 f"labels: {self.labels}, labeling_rule: {self.labeling_rule}, "
                 f"indices_in_superset: {self.indices})")
 
-    def __eq__(self, other):
+    def __eq__(self, other: object) -> bool:
         """Defines how two `TensorLabels` instances are compared for equality using the `==` operator. Two instances
         are considered equal if they have the same number of labels and the labels themselves match in order.
 
@@ -1287,7 +1295,7 @@ class TensorLabels:
             True if the instances are equal, False otherwise.
         """
         if not isinstance(other, TensorLabels):
-            return ValueError("Cannot compare a TensorLabels instance and something else")
+            return False
 
         if self.num_labels == other.num_labels:
             if self.num_labels > 0:
@@ -1300,14 +1308,11 @@ class TensorLabels:
         else:
             return False
 
-    def interleave_with(self, superset_labels: list[str]):
+    def interleave_with(self, superset_labels: list[str]) -> None:
         """Interleaves the current labels with a super-set of labels, determining how to index them.
 
         Args:
-            superset_labels (list[str]): The super-set of labels to interleave with.
-
-        Returns:
-            None
+            superset_labels: The super-set of labels to interleave with.
 
         Raises:
             AssertionError: If the super-set of labels is not compatible.
