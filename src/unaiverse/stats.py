@@ -996,7 +996,7 @@ class Stats:
                 SELECT timestamp, peer_id, stat_name, val_num, val_str, val_json 
                 FROM dynamic_stats 
                 WHERE timestamp > ?
-                ORDER BY timestamp ASC
+                ORDER BY timestamp
             """, (cutoff_t_ms,))
             
             count = 0
