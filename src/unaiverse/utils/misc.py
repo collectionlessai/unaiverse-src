@@ -31,8 +31,18 @@ class GenException(Exception):
     pass
 
 
-def save_node_addresses_to_file(node, dir_path: str, public: bool,
-                                filename: str = "addresses.txt", append: bool = False):
+def save_node_addresses_to_file(node: object, dir_path: str, public: bool,
+                                filename: str = "addresses.txt", append: bool = False) -> None:
+    """Writes the hosted node's name and its public or world addresses to a file.
+
+    Args:
+        node: The node object whose addresses are to be saved; expected to expose
+            ``hosted.get_name()``, ``get_public_addresses()``, and ``get_world_addresses()``.
+        dir_path: Directory in which the output file is created.
+        public: If True, saves the public addresses; otherwise saves the world addresses.
+        filename: Name of the output file (default: ``"addresses.txt"``).
+        append: If True, appends to an existing file instead of overwriting it (default: False).
+    """
     address_file = os.path.join(dir_path, filename)
     with open(address_file, "w" if not append else "a") as file:
         file.write(node.hosted.get_name() + ";" +
@@ -41,6 +51,19 @@ def save_node_addresses_to_file(node, dir_path: str, public: bool,
 
 
 def get_node_addresses_from_file(dir_path: str, filename: str = "addresses.txt") -> dict[str, list[str]]:
+    """Reads node names and their address lists from a file.
+
+    Supports both the legacy single-address-per-line format (starting with ``"/"``) and the
+    current ``name;[addr, ...]`` semicolon-separated format.
+
+    Args:
+        dir_path: Directory containing the file.
+        filename: Name of the file to read (default: ``"addresses.txt"``).
+
+    Returns:
+        A dictionary mapping node names to lists of address strings.  Legacy files are
+        returned under the key ``"unk"``.
+    """
     ret = {}
     with open(os.path.join(dir_path, filename)) as file:
         lines = file.readlines()
@@ -67,35 +90,54 @@ def get_node_addresses_from_file(dir_path: str, filename: str = "addresses.txt")
 
 
 class Silent:
-    def __init__(self, ignore: bool = False):
+    """Context manager that suppresses stdout by redirecting it to /dev/null."""
+
+    def __init__(self, ignore: bool = False) -> None:
+        """Initialises the Silent context manager.
+
+        Args:
+            ignore: If True, stdout is not suppressed (context manager is a no-op; default: False).
+        """
         self.ignore = ignore
 
-    def __enter__(self):
+    def __enter__(self) -> None:
+        """Redirects stdout to /dev/null on entry (unless ignore is True)."""
         if not self.ignore:
             self._original_stdout = sys.stdout
             sys.stdout = open(os.devnull, "w")
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    def __exit__(self, exc_type: type | None, exc_val: BaseException | None,
+                 exc_tb: object | None) -> None:
+        """Restores the original stdout on exit (unless ignore is True)."""
         if not self.ignore:
             sys.stdout.close()
             sys.stdout = self._original_stdout
 
 
 # The countdown function
-def countdown_start(seconds: int, msg: str):
+def countdown_start(seconds: int, msg: str) -> threading.Thread:
+    """Starts a tqdm progress-bar countdown in a background thread.
+
+    Args:
+        seconds: Number of seconds to count down.
+        msg: Description label displayed next to the progress bar.
+
+    Returns:
+        The background ``threading.Thread`` running the countdown.
+    """
     class TqdmPrintRedirector:
-        def __init__(self, tqdm_instance):
+        def __init__(self, tqdm_instance: object) -> None:
             self.tqdm_instance = tqdm_instance
             self.original_stdout = sys.__stdout__
 
-        def write(self, s):
+        def write(self, s: str) -> None:
             if s.strip():  # Ignore empty lines (needed for the way tqdm works)
                 self.tqdm_instance.write(s, file=self.original_stdout)
 
-        def flush(self):
+        def flush(self) -> None:
             pass  # Tqdm handles flushing
 
-    def drawing(secs: int, message: str):
+    def drawing(secs: int, message: str) -> None:
         with tqdm(total=secs, desc=message, file=sys.__stdout__) as t:
             sys.stdout = TqdmPrintRedirector(t)  # Redirect prints to tqdm.write
             for i in range(secs):
@@ -109,11 +151,26 @@ def countdown_start(seconds: int, msg: str):
     return handle
 
 
-def countdown_wait(handle):
+def countdown_wait(handle: threading.Thread) -> None:
+    """Blocks until the countdown thread created by ``countdown_start`` finishes.
+
+    Args:
+        handle: The thread handle returned by ``countdown_start``.
+    """
     handle.join()
 
 
-def check_json_start(file: str, msg: str, delete_existing: bool = False):
+def check_json_start(file: str, msg: str, delete_existing: bool = False) -> threading.Thread:
+    """Starts a background daemon thread that monitors a JSON file for changes and pretty-prints it.
+
+    Args:
+        file: Path to the JSON file to monitor.
+        msg: A header message printed once when monitoring begins.
+        delete_existing: If True, removes the file before starting the monitor (default: False).
+
+    Returns:
+        The daemon ``threading.Thread`` running the file-watcher loop.
+    """
     from rich.json import JSON
     from rich.console import Console
     cons = Console(file=sys.__stdout__)
@@ -149,11 +206,22 @@ def check_json_start(file: str, msg: str, delete_existing: bool = False):
     return handle
 
 
-def check_json_start_wait(handle):
+def check_json_start_wait(handle: threading.Thread) -> None:
+    """Blocks until the JSON-watcher thread created by ``check_json_start`` finishes.
+
+    Args:
+        handle: The thread handle returned by ``check_json_start``.
+    """
     handle.join()
 
 
-def show_images_grid(image_paths, max_cols=3):
+def show_images_grid(image_paths: list, max_cols: int = 3) -> None:
+    """Displays a grid of images from the given file paths using matplotlib.
+
+    Args:
+        image_paths: A list of file-path strings pointing to the images to display.
+        max_cols: Maximum number of columns in the grid (default: 3).
+    """
     import matplotlib.pyplot as plt
     import matplotlib.image as mpimg
 
@@ -188,11 +256,6 @@ def show_images_grid(image_paths, max_cols=3):
         ax.axis('off')
         ax.set_title(str(idx), fontsize=12, fontweight='bold')
 
-    # Display images
-    for ax, img in zip(axes, images):
-        ax.imshow(img)
-        ax.axis('off')
-
     plt.subplots_adjust(wspace=0, hspace=0)
 
     # Turn on interactive mode
@@ -204,14 +267,30 @@ def show_images_grid(image_paths, max_cols=3):
 
 
 class FileTracker:
-    def __init__(self, folder, ext=".json", prefix=None, skip=None):
+    """Monitors a folder for file creation, modification, and deletion events."""
+
+    def __init__(self, folder: str, ext: str = ".json",
+                 prefix: str | None = None, skip: str | None = None) -> None:
+        """Initialises the FileTracker and takes an initial snapshot of the folder.
+
+        Args:
+            folder: Path to the folder to monitor.
+            ext: File extension to watch (default: ``".json"``).
+            prefix: If set, only files whose names start with this prefix are tracked (default: None).
+            skip: If set, files with this exact name are ignored (default: None).
+        """
         self.folder = Path(folder)
         self.ext = ext.lower()
         self.skip = skip
         self.prefix = prefix
         self.last_state = self.__scan_files()
 
-    def __scan_files(self):
+    def __scan_files(self) -> dict:
+        """Scans the monitored folder and returns a snapshot of matching files and their mtimes.
+
+        Returns:
+            A dictionary mapping file names to their last-modification timestamps.
+        """
         state = {}
         for file in self.folder.iterdir():
             if ((file.is_file() and file.suffix.lower() == self.ext and
@@ -220,7 +299,14 @@ class FileTracker:
                 state[file.name] = os.path.getmtime(file)
         return state
 
-    def something_changed(self):
+    def something_changed(self) -> bool:
+        """Checks whether any tracked file has been created, modified, or deleted since the last call.
+
+        Updates the internal snapshot on every call.
+
+        Returns:
+            True if at least one file changed, False otherwise.
+        """
         new_state = self.__scan_files()
 
         created = [f for f in new_state if f not in self.last_state]
@@ -232,7 +318,15 @@ class FileTracker:
         return has_changed
 
 
-def prepare_app_dir(app_name: str = "unaiverse"):
+def prepare_app_dir(app_name: str = "unaiverse") -> str:
+    """Resolves and creates the platform-appropriate application data directory.
+
+    Args:
+        app_name: Name of the application subdirectory (default: ``"unaiverse"``).
+
+    Returns:
+        The absolute path to the created directory.
+    """
     app_name = app_name.lower()
     if os.name == "nt":  # Windows
         if os.getenv("APPDATA") is not None:
@@ -246,6 +340,20 @@ def prepare_app_dir(app_name: str = "unaiverse"):
 
 
 def get_key_considering_multiple_sources(key_variable: str | None) -> str:
+    """Retrieves the UNaIVERSE authentication key from one of several sources.
+
+    Checks, in priority order: (1) the ``key_variable`` argument, (2) the ``NODE_KEY``
+    environment variable, and (3) a cached key file.  If multiple sources are found,
+    a warning is printed.  If no source is found, the user is prompted interactively and
+    the entered key is saved to the cache file for future use.
+
+    Args:
+        key_variable: A key string passed directly from code, or None (and placeholder
+            strings enclosed in ``<...>`` are also treated as None).
+
+    Returns:
+        The resolved authentication key string.
+    """
 
     # Creating folder (if needed) to store the key
     try:
@@ -287,6 +395,7 @@ def get_key_considering_multiple_sources(key_variable: str | None) -> str:
                 if _key != _prev_key:
                     mismatching = True
                 multiple_source = True
+                _prev_key = _key
             else:
                 _prev_key = _key
                 first_key = _key
@@ -316,19 +425,52 @@ def get_key_considering_multiple_sources(key_variable: str | None) -> str:
 
 
 class PolicyFilterSelfGen:
-    def __init__(self, wait: float, add_random_up_to: float = 0.):
+    """Policy filter that delays self-generation or learning actions by a configurable wait time."""
+
+    def __init__(self, wait: float, add_random_up_to: float = 0.) -> None:
+        """Initialises the PolicyFilterSelfGen.
+
+        Args:
+            wait: Minimum number of seconds to wait before allowing a ``do_gen`` or
+                ``do_learn`` action to proceed.
+            add_random_up_to: Upper bound of an additional random delay in seconds
+                added to ``wait`` (default: 0.0; negative values are clamped to 0.0).
+
+        Raises:
+            GenException: If ``wait`` is not greater than zero.
+        """
         self.wait = wait
         self.add_random_up_to = max(add_random_up_to, 0.)
         if wait <= 0.:
             raise GenException("Invalid number of seconds ('wait' must be > 0)")
 
-    def __call__(self, action_id, request, all_actions, policy_filter_opts):
-        """Run the policy filter."""
+    def __call__(self, action_id: int, request: object, all_actions: object,
+                 policy_filter_opts: dict) -> tuple[int, object]:
+        """Applies the timing-based filter to the selected policy action.
+
+        For ``do_gen`` and ``do_learn`` actions, defers execution until the configured
+        wait time has elapsed since the action was first selected.
+
+        Args:
+            action_id: Index of the action selected by the policy.
+            request: The request object associated with the action, or None.
+            all_actions: The collection of all available actions (indexed by ``action_id``).
+            policy_filter_opts: A mutable dictionary carrying per-agent filter state;
+                must contain an ``"agent"`` key.
+
+        Returns:
+            A tuple ``(action_id, request)`` with the (possibly deferred) decision.
+            Returns ``(-1, None)`` to signal that the action should be skipped this cycle.
+        """
 
         # Getting basic info from the policy options (reference ot agent, and to the last time do_gen was approved)
         if 'first_t' not in policy_filter_opts:
             policy_filter_opts['first_t'] = -1
-        _agent, _first_t = policy_filter_opts['agent'], policy_filter_opts['first_t']
+
+        # This is also available:
+        # _agent, _first_t = policy_filter_opts['agent']
+
+        _first_t = policy_filter_opts['first_t']
 
         # If the agent lives in the TuringHotel world...
         action = all_actions[action_id]
@@ -353,11 +495,29 @@ class PolicyFilterSelfGen:
 
 
 class PolicyFilterHuman:
-    def __init__(self):
+    """Policy filter that redirects generation/learning actions to the human processor input stream."""
+
+    def __init__(self) -> None:
         pass
 
-    def __call__(self, action_id, request, all_actions, policy_filter_opts):
-        """Run the policy filter."""
+    def __call__(self, action_id: int, request: object, all_actions: object,
+                 policy_filter_opts: dict) -> tuple[int, object]:
+        """Applies the human-input filter to the selected policy action.
+
+        Disables the agent's processor input stream and, for ``do_gen`` / ``do_learn``
+        actions with a dashed request, redirects the input hashes to the human processor's
+        input stream.
+
+        Args:
+            action_id: Index of the action selected by the policy.
+            request: The request object associated with the action, or None.
+            all_actions: The collection of all available actions (indexed by ``action_id``).
+            policy_filter_opts: A mutable dictionary carrying per-agent filter state;
+                must contain ``"agent"`` and ``"public"`` keys.
+
+        Returns:
+            A tuple ``(action_id, request)`` with the (possibly altered) decision.
+        """
 
         # Getting basic info from the policy options (reference to agent)
         agent = policy_filter_opts['agent']
@@ -439,18 +599,35 @@ class PolicyFilterHuman:
 
 
 class MultiPartLimitedDict(dict):
-    def __init__(self, part_name_to_limit):
+    """A dict subclass that keeps at most a configurable number of entries per named partition."""
+
+    def __init__(self, part_name_to_limit: dict) -> None:
+        """Initialises the MultiPartLimitedDict.
+
+        Args:
+            part_name_to_limit: A dictionary mapping partition names to their maximum entry counts.
+        """
         super().__init__()
         self._limits = part_name_to_limit
         self._trackers = {k: deque() for k in part_name_to_limit}
         self._current_part = next(iter(part_name_to_limit.keys()))  # Default part
 
-    def set_part(self, part_label):
-        """Switch which 'bucket' new keys are attributed to."""
+    def set_part(self, part_label: str) -> None:
+        """Switches the active partition so that subsequent ``__setitem__`` calls are attributed to it.
+
+        Args:
+            part_label: The name of the partition to activate.  Unknown labels are silently ignored.
+        """
         if part_label in self._limits:
             self._current_part = part_label
 
-    def __setitem__(self, key, value):
+    def __setitem__(self, key: object, value: object) -> None:
+        """Inserts or updates a key/value pair in the active partition, evicting the oldest entry if full.
+
+        Args:
+            key: The dictionary key to set.
+            value: The value to associate with the key.
+        """
         part = self._current_part
         limit = self._limits[part]
         tracker = self._trackers[part]
