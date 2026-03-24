@@ -31,7 +31,18 @@ class NodeProfile:
     def __init__(self,
                  static: dict,
                  dynamic: dict,
-                 cv: dict):
+                 cv: dict) -> None:
+        """Initialises a NodeProfile from static, dynamic, and CV data.
+
+        Args:
+            static: Dictionary of static profile fields (e.g. node_id, node_type, name, email).
+            dynamic: Dictionary of dynamic profile fields (e.g. os, memory, peer_id).  Only
+                keys that are expected by the internal template are copied in.
+            cv: List of CV dictionaries; entries are sorted by ``last_edit_utc`` before storage.
+
+        Raises:
+            ValueError: If ``static`` is empty or any required static key is missing.
+        """
 
         # Checking provided data
         if not static:
@@ -147,27 +158,30 @@ class NodeProfile:
         # Flag
         self._connections_updated = False
 
-    def update_cv(self, new_cv):
+    def update_cv(self, new_cv: list) -> None:
+        """Replaces the stored CV data with a new list of CV entries.
+
+        Args:
+            new_cv: The new CV data as a list of dictionaries.
+        """
         self._profile_data['cv'] = new_cv
 
     @classmethod
     def from_dict(cls, combined_data: dict) -> 'NodeProfile':
-        """Factory method to create a NodeProfile instance from a dictionary
-        containing combined profile data (static, specs, and CV list of dicts).
+        """Creates a NodeProfile instance from a combined profile dictionary.
 
         Args:
-            combined_data (dict): A dictionary representing the node profile,
-                                  typically loaded from JSON or received over the network.
-                                  Expected to contain 'node_id', 'cv' (list of dicts),
-                                  'node_specification' (dict), 'peer_id', 'peer_addresses'
-                                  and other profile keys.
+            combined_data: A dictionary representing the node profile, typically loaded from
+                JSON or received over the network.  Expected to contain a ``"static"`` key
+                (with at least ``"node_id"``), a ``"dynamic"`` key, and a ``"cv"`` key
+                (list of dicts).
 
         Returns:
-            NodeProfile: A new instance of NodeProfile populated from the dictionary.
+            A new NodeProfile instance populated from the dictionary.
 
         Raises:
-            ValueError: If 'node_id' is missing in the input dictionary.
-            TypeError: If the 'cv' data is present but not a list.
+            ValueError: If ``"node_id"`` is absent from the ``"static"`` sub-dictionary.
+            TypeError: If the ``"cv"`` data is present but not a list.
         """
 
         # Ensure essential 'node_id' is present
@@ -185,14 +199,23 @@ class NodeProfile:
 
     # Get operating system information
     @staticmethod
-    def _get_os_spec():
-        """Extracts operating system information."""
+    def _get_os_spec() -> str:
+        """Extracts the operating system platform string.
+
+        Returns:
+            A human-readable string identifying the current OS and version.
+        """
         return platform.platform()
 
     # Get cpu information
     @staticmethod
-    def _get_cpu_info():
-        """Extracts CPU core information."""
+    def _get_cpu_info() -> dict:
+        """Extracts CPU core count information.
+
+        Returns:
+            A dictionary with keys ``"physical_cores"`` and ``"logical_cores"`` (both ``int``
+            or ``None`` on error).
+        """
         try:
             return {
                 'physical_cores': psutil.cpu_count(logical=False),
@@ -204,8 +227,13 @@ class NodeProfile:
 
     # Get memory information
     @staticmethod
-    def _get_memory_info():
-        """Extracts memory information in GB."""
+    def _get_memory_info() -> dict:
+        """Extracts system memory statistics in gigabytes.
+
+        Returns:
+            A dictionary with keys ``"total"``, ``"available"``, and ``"used"`` (all ``float``).
+            Returns zeros on error.
+        """
         try:
             mem = psutil.virtual_memory()
             total_gb = mem.total / (1024 ** 3)
@@ -222,10 +250,15 @@ class NodeProfile:
 
     # Get public ip address
     @staticmethod
-    def _get_public_ip_address() -> str | None:
+    def _get_public_ip_address() -> str:
         """Attempts to retrieve the public IP address using an external web service.
-        Uses multiple services as fallbacks.
-        Returns the public IP address string or None if retrieval fails.
+
+        Tries several services in order and returns the first valid IPv4/IPv6 address found.
+        If all services fail, returns the string ``'Public IP not available.'``.
+
+        Returns:
+            The public IP address as a string, or ``'Public IP not available.'`` if all
+            lookup attempts fail.
         """
 
         # List of reliable services that return the public IP as plain text
@@ -270,11 +303,23 @@ class NodeProfile:
                 # Catch any other unexpected errors
                 continue  # Try the next service on error
 
-        return 'Public IP not available.'  # Return None if all services fail
+        return 'Public IP not available.'
 
     # Get guessed location based on IP address
-    def _get_geolocation_from_ip(self, ip_address):
-        """Retrieves geolocation data (same as before)."""
+    def _get_geolocation_from_ip(self, ip_address: str) -> dict:
+        """Retrieves geolocation data for the given IP address via the ip-api.com service.
+
+        Results are cached in ``self._geolocation_cache`` to avoid repeated API calls.
+        Private, loopback, and unspecified addresses are handled locally without a network call.
+
+        Args:
+            ip_address: The IPv4 or IPv6 address string to geolocate.
+
+        Returns:
+            A dictionary with geolocation fields (``"country"``, ``"city"``, ``"latitude"``,
+            ``"longitude"``, etc.) on success, or a dictionary with an ``"error"`` key on
+            failure or for non-routable addresses.
+        """
 
         # Added a check for local/private IPs to avoid unnecessary API calls
         try:
@@ -346,7 +391,13 @@ class NodeProfile:
 
     # This is the function that collects all the information for the 'node_specification'
     def _get_current_specs(self) -> dict:
-        """Gathers current system specifications.
+        """Gathers current system specifications (OS, CPU, memory, IP, and location).
+
+        Returns:
+            A dictionary suitable for merging into the dynamic profile, containing
+            ``"timestamp"``, ``"os"``, ``"cpu_cores"``, ``"logical_cpus"``, ``"memory_gb"``,
+            ``"memory_avail"``, ``"memory_used"``, ``"public_ip_address"``, and
+            ``"guessed_location"``.
         """
         cpu_info = self._get_cpu_info()
         memory_info = self._get_memory_info()
@@ -366,7 +417,12 @@ class NodeProfile:
             if location_method != "manual" else location
         }
 
-    def _fill_missing_specs(self):
+    def _fill_missing_specs(self) -> None:
+        """Fills any ``None`` fields in the dynamic profile with current system specs.
+
+        Only calls ``_get_current_specs`` if at least one dynamic field is still ``None``.
+        Also updates ``_profile_last_updated``.
+        """
         dynamic_profile = self.get_dynamic_profile()
         current_specs = None
         for k in dynamic_profile.keys():
@@ -379,7 +435,18 @@ class NodeProfile:
         self._profile_last_updated = datetime.datetime.now(timezone.utc)  # Mark profile as checked/updated
 
     def check_and_update_specs(self, update_only: bool = True) -> bool:
-        """Checks current specs against saved specs. Updates profile data."""
+        """Checks current system specs and updates the dynamic profile accordingly.
+
+        Args:
+            update_only: If True, unconditionally merges current specs into the dynamic
+                profile without change detection.  If False, compares each spec field
+                against the saved value and only merges when a change is detected
+                (default: True).
+
+        Returns:
+            True if any spec field changed (only meaningful when ``update_only=False``),
+            False otherwise.
+        """
 
         current_specs = self._get_current_specs()
         specs_changed = False
@@ -390,42 +457,32 @@ class NodeProfile:
             saved_specs = self._profile_data['dynamic'].copy()
             change_details = []
 
-            if saved_specs is None:
+            # Compare current specs with saved specs (ignore timestamp for comparison)
+            keys_to_compare = current_specs.keys()
 
-                # No previous specification exists, capture the current one
-                self._profile_data['dynamic'] |= current_specs
-                specs_changed = True
-                change_details.append("Initial specification captured")
+            for key in keys_to_compare:
+                if key == 'timestamp':
+                    continue
 
-            else:
+                saved_value = saved_specs.get(key)
+                current_value = current_specs.get(key)
 
-                # Compare current specs with saved specs (ignore timestamp for comparison)
-                keys_to_compare = current_specs.keys()
-
-                for key in keys_to_compare:
-                    if key == 'timestamp':
-                        continue
-
-                    saved_value = saved_specs.get(key)
-                    current_value = current_specs.get(key)
-
-                    # Handle float comparison with tolerance
-                    if isinstance(saved_value, float) and isinstance(current_value, float):
-                        if abs(current_value - saved_value) > 1e-6:  # Tolerance for float changes
-                            change_details.append(f"{key}: from {saved_value:.2f} to {current_value:.2f}")
-                            specs_changed = True
-
-                    elif saved_value != current_value:
-                        change_details.append(f"{key}: from {saved_value} to {current_value}")
+                # Handle float comparison with tolerance
+                if isinstance(saved_value, float) and isinstance(current_value, float):
+                    if abs(current_value - saved_value) > 1e-6:  # Tolerance for float changes
+                        change_details.append(f"{key}: from {saved_value:.2f} to {current_value:.2f}")
                         specs_changed = True
 
-                # Comparing total resources (OS, CPU, total RAM/Disk) is more typical for 'specification' changes.
-                if specs_changed:
+                elif saved_value != current_value:
+                    change_details.append(f"{key}: from {saved_value} to {current_value}")
+                    specs_changed = True
 
-                    # Update the specification in the profile data with the new current specs
-                    self._profile_data['dynamic'] |= current_specs
-                    change_summary = ", ".join(change_details)
-                    log.print(f"Specs changed for '{self._profile_data['static']['node_id']}': {change_summary}")
+            # Comparing total resources (OS, CPU, total RAM/Disk) is more typical for 'specification' changes.
+            if specs_changed:
+                # Update the specification in the profile data with the new current specs
+                self._profile_data['dynamic'] |= current_specs
+                change_summary = ", ".join(change_details)
+                log.print(f"Specs changed for '{self._profile_data['static']['node_id']}': {change_summary}")
 
         self._profile_last_updated = datetime.datetime.now(timezone.utc)  # Mark profile as checked/updated
 
@@ -433,27 +490,66 @@ class NodeProfile:
 
     # Get profile data as dict: cv, dynamic_profile, static_profile
     def get_static_profile(self) -> dict:
+        """Returns the static portion of the profile data.
+
+        Returns:
+            A dictionary containing static profile fields such as node_id, node_type,
+            and user identity information.
+        """
         return self._profile_data['static']
 
     def get_dynamic_profile(self) -> dict:
+        """Returns the dynamic portion of the profile data.
+
+        Returns:
+            A dictionary containing dynamic profile fields such as OS, CPU, memory,
+            IP address, peer information, and connection state.
+        """
         return self._profile_data['dynamic']
 
-    def get_cv(self):
+    def get_cv(self) -> list:
+        """Returns the CV data associated with this node profile.
+
+        Returns:
+            A list of CV entry dictionaries, sorted by ``last_edit_utc``.
+        """
         return self._profile_data['cv']
 
-    def get_all_profile(self):
+    def get_all_profile(self) -> dict:
+        """Returns the complete profile data dictionary.
+
+        Returns:
+            A dictionary with keys ``"static"``, ``"dynamic"``, and ``"cv"``.
+        """
         return self._profile_data
 
-    def mark_change_in_connections(self):
+    def mark_change_in_connections(self) -> None:
+        """Flags that a connection change has occurred since the last reset."""
         self._connections_updated = True
 
-    def unmark_change_in_connections(self):
+    def unmark_change_in_connections(self) -> None:
+        """Clears the connection-change flag."""
         self._connections_updated = False
 
-    def connections_changed(self):
+    def connections_changed(self) -> bool:
+        """Returns whether a connection change has been recorded since the last reset.
+
+        Returns:
+            True if connections have changed, False otherwise.
+        """
         return self._connections_updated
 
-    def verify_cv_hash(self, cv_hash: str):
+    def verify_cv_hash(self, cv_hash: str) -> tuple[bool, tuple[str, str]]:
+        """Verifies a CV hash against the hash computed from the stored CV data.
+
+        Args:
+            cv_hash: The hash string to verify.
+
+        Returns:
+            A tuple ``(match, (provided_hash, computed_hash))`` where ``match`` is True if
+            the hashes are equal, and the second element contains both hash strings for
+            diagnostic purposes.
+        """
         computed_hash = hashlib.blake2b(json.dumps(self._profile_data['cv']).encode("utf-8"),
                                         digest_size=16).hexdigest()
         return cv_hash == computed_hash, (cv_hash, computed_hash)
