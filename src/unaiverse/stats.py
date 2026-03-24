@@ -268,6 +268,7 @@ class DefaultBaseDash:
             return
 
         xa, ya = self._map[position]
+        self.layout: dict[str, dict[str, list[float]]]
         x_dom: list[float] = self.layout[xa]["domain"]
         y_dom: list[float] = self.layout[ya]["domain"]
 
@@ -293,6 +294,7 @@ class DefaultBaseDash:
 
         # Add Title via Annotation
         if src_l.get("title"):
+            self.layout: dict[str, list]
             self.layout.setdefault("annotations", []).append({
                 "text": f"<b>{src_l['title']}</b>",
                 "x": (x_dom[0] + x_dom[1]) / 2, 

@@ -14,7 +14,7 @@
 """
 from unaiverse.stats import Stats
 from unaiverse.clock import clock
-from typing import List, Dict, Any
+from typing import Any
 from unaiverse.utils.logger import log
 from unaiverse.agent import AgentBasics
 from unaiverse.hsm.hsm import HybridStateMachine
@@ -23,12 +23,18 @@ from unaiverse.networking.node.profile import NodeProfile
 
 
 class World(AgentBasics):
+    """A special AgentBasics subclass representing a world node with no processor or behaviour."""
 
-    def __init__(self, world_folder: str, merge_flat_stream_labels: bool = False, stats: Stats | None = None):
-        """Initializes a World object, which acts as a special agent without a processor or behavior.
+    def __init__(self, world_folder: str, merge_flat_stream_labels: bool = False,
+                 stats: Stats | None = None) -> None:
+        """Initialises a World object as a special agent with no processor or behaviour.
 
         Args:
-            world_folder: The path of the world folder, with JSON files of the behaviors (per role) and agent.py.
+            world_folder: Path to the world folder containing per-role behaviour JSON files
+                and ``agent.py``.
+            merge_flat_stream_labels: If True, flat stream labels are merged (default: False).
+            stats: An optional Stats instance for recording world metrics.  If None, a default
+                Stats instance is created inside the world folder (default: None).
         """
 
         # Creating a "special" agent with no processor and no behavior, but with a "world_folder", which is our world
@@ -69,7 +75,8 @@ class World(AgentBasics):
         """
         assert self.is_world, "Assigning a role is expected to be done by the world"
 
-        if profile.get_dynamic_profile()['guessed_location'] == 'Some Dummy Location, Just An Example Here':
+        if ('guessed_location' in profile.get_dynamic_profile() and
+                profile.get_dynamic_profile()['guessed_location'] == 'Some Dummy Location, Just An Example Here'):
             pass
 
         # Currently, roles are only world masters and world agents
@@ -81,7 +88,7 @@ class World(AgentBasics):
         else:
             return AgentBasics.ROLE_BITS_TO_STR[AgentBasics.ROLE_WORLD_AGENT]
 
-    async def set_role(self, peer_id: str, role: int):
+    async def set_role(self, peer_id: str, role: int) -> None:
         """Sets a new role for a specific agent and broadcasts this change to the agent (async).
 
         It computes the new role and sends a message containing the new role and the corresponding default behavior
@@ -98,7 +105,7 @@ class World(AgentBasics):
         new_role_without_base_int = (role >> 2) << 2
         new_role = (cur_role & 3) | new_role_without_base_int
 
-        if new_role != role:
+        if new_role != cur_role:
             self._node_conn.set_role(peer_id, new_role)
             log("Telling an agent that his role changed")
             if not (await self._node_conn.send(peer_id, channel_trail=None,
@@ -114,7 +121,7 @@ class World(AgentBasics):
             else:
                 self.role_changed_by_world = True
 
-    def set_addresses_in_profile(self, peer_id, addresses):
+    def set_addresses_in_profile(self, peer_id: str, addresses: list[str]) -> None:
         """Updates the network addresses in an agent's profile.
 
         Args:
@@ -132,7 +139,7 @@ class World(AgentBasics):
             log.error(f"Cannot set addresses in profile, unknown peer_id {peer_id}")
 
     def add_badge(self, peer_id: str, score: float, badge_type: str, agent_token: str,
-                  badge_description: str | None = None):
+                  badge_description: str | None = None) -> None:
         """Requests a badge for a specific agent, which can be used to track and reward agent performance.
         It validates the score and badge type and stores the badge information in an internal dictionary.
 
@@ -142,6 +149,9 @@ class World(AgentBasics):
             badge_type: The type of badge to be awarded.
             agent_token: The token of the agent receiving the badge.
             badge_description: An optional text description for the badge.
+
+        Raises:
+            ValueError: If ``score`` is not in [0.0, 1.0] or ``badge_type`` is not a recognised type.
         """
 
         # Validate score
@@ -174,7 +184,7 @@ class World(AgentBasics):
         self._node_profile.mark_change_in_connections()
 
     # Get all the badges requested by the world
-    def get_all_badges(self):
+    def get_all_badges(self) -> dict:
         """Retrieves all badges that have been added to the world's record for all agents.
         This provides a central log of achievements or performance metrics.
 
@@ -183,13 +193,22 @@ class World(AgentBasics):
         """
         return self.agent_badges
 
-    def clear_badges(self):
+    def clear_badges(self) -> None:
         """Clears all badge records from the world's memory.
         This can be used to reset competition results or clean up state after a specific event.
         """
         self.agent_badges = {}
 
     async def add_agent(self, peer_id: str, profile: NodeProfile) -> bool:
+        """Registers a new agent in the world and records the public-to-private peer ID mapping (async).
+
+        Args:
+            peer_id: The private peer ID of the new agent.
+            profile: The NodeProfile of the new agent.
+
+        Returns:
+            True if the agent was successfully added by the parent class, False otherwise.
+        """
         if await super().add_agent(peer_id, profile):
             public_peer_id = profile.get_dynamic_profile()["peer_id"]
             self.private_peer_of[public_peer_id] = peer_id
@@ -197,19 +216,28 @@ class World(AgentBasics):
         else:
             return False
 
-    async def remove_agent(self, peer_id: str):
+    async def remove_agent(self, peer_id: str) -> bool:
+        """Removes an agent from the world and cleans up the public-to-private peer ID mapping (async).
+
+        Args:
+            peer_id: The private peer ID of the agent to remove.
+
+        Returns:
+            True if the agent was successfully removed by the parent class, False otherwise.
+        """
         profile = None
         if peer_id in self.all_agents:
             profile = self.all_agents[peer_id]
         if await super().remove_agent(peer_id):
-            public_peer_id = profile.get_dynamic_profile()["peer_id"]
-            if public_peer_id in self.private_peer_of:
-                del self.private_peer_of[public_peer_id]
+            if profile is not None:
+                public_peer_id = profile.get_dynamic_profile()["peer_id"]
+                if public_peer_id in self.private_peer_of:
+                    del self.private_peer_of[public_peer_id]
             return True
         else:
             return False
 
-    def collect_and_store_own_stats(self):
+    def collect_and_store_own_stats(self) -> None:
         """Collects this world's own stats and pushes them to the stats recorder."""
         if self.stats is None:
             return
@@ -218,7 +246,7 @@ class World(AgentBasics):
         _, own_private_pid = self.get_peer_ids()
 
         # Helper to add if value changed
-        def store_if_changed(stat_name, new_value):
+        def store_if_changed(stat_name: str, new_value: object) -> None:
             last_value = self.stats.get_last_value(stat_name)
             if last_value != new_value:
                 # Note: We pass the world's *own* peer_id for its *own* stats
@@ -232,12 +260,32 @@ class World(AgentBasics):
         except Exception as e:
             log.error(f"[Stats] Error updating own world stats: {e}")
 
-    def _process_custom_stat(self, stat_name, value, peer_id, timestamp) -> bool:
-        """Hook for subclasses to intercept a stat. Return True if handled."""
+    def _process_custom_stat(self, stat_name: str, value: object,
+                             peer_id: str, timestamp: int) -> bool:
+        """Hook for subclasses to intercept and handle a custom stat before default processing.
+
+        Args:
+            stat_name: The name of the incoming statistic.
+            value: The value of the statistic.
+            peer_id: The peer ID of the agent that sent the stat.
+            timestamp: The timestamp of the stat in milliseconds.
+
+        Returns:
+            True if this method handled the stat (skips default processing), False otherwise.
+        """
         return False
 
-    def _extract_graph_node_info(self, peer_id: str) -> Dict[str, Any]:
-        """Helper to extract lightweight visualization data from NodeProfile."""
+    def _extract_graph_node_info(self, peer_id: str) -> dict[str, Any]:
+        """Extracts lightweight visualisation metadata for a node from its NodeProfile.
+
+        Args:
+            peer_id: The peer ID of the node to inspect; uses the world's own profile
+                if the ID matches the world's private peer ID.
+
+        Returns:
+            A dictionary of display fields (name, owner, role, type, badge count, etc.),
+            or an empty dict if the profile cannot be found.
+        """
 
         if peer_id == self.get_peer_ids()[1]:
             # this is the world itself
@@ -250,19 +298,26 @@ class World(AgentBasics):
         # Accessing the inner private dict of NodeProfile based on your class structure
         static_profile = profile.get_static_profile()
         dynamic_profile = profile.get_dynamic_profile()
+        cv = profile.get_cv()
 
         return {
             'Name': static_profile.get('node_name', '~'),
             'Owner': static_profile.get('email', '~'),
             'Role': dynamic_profile.get('connections', {}).get('role', 'unknown').split('~')[-1],
             'Type': static_profile.get('node_type', '~'),
-            'Number of Badges': len(dynamic_profile.get('cv', [])),
+            'Number of Badges': len(cv),
             'Current Action': self.stats.get_last_value('action', peer_id=peer_id) or '~',
             'Current State': self.stats.get_last_value('state', peer_id=peer_id) or '~',
         }
 
-    def _update_graph(self, peer_id: str, connected_peers_list: List[str], timestamp: int):
-        """Updates both graph connectivity (edges) and node metadata."""
+    def _update_graph(self, peer_id: str, connected_peers_list: list[str], timestamp: int) -> None:
+        """Updates graph connectivity (edges) and node metadata for the given peer.
+
+        Args:
+            peer_id: The peer ID whose connections are being updated.
+            connected_peers_list: The current list of peer IDs connected to ``peer_id``.
+            timestamp: The timestamp of the update in milliseconds.
+        """
 
         # 1. initialize structure if missing (e.g. first run or after DB load)
         graph_stat = self.stats.get_stats().setdefault("graph", {'nodes': {}, 'edges': {}})
@@ -303,7 +358,7 @@ class World(AgentBasics):
         world_peer_id = self.get_peer_ids()[1]
         self.stats.store_stat('graph', graph_stat, peer_id=world_peer_id, timestamp=timestamp)
 
-    def _prune_graph(self):
+    def _prune_graph(self) -> None:
         """Removes nodes that are no longer connected to the World."""
         graph_stat = self.stats.get_stats().get("graph")
         if not graph_stat:
@@ -331,8 +386,19 @@ class World(AgentBasics):
             for other_pid in edges:
                 edges[other_pid].discard(pid)
 
-    def add_peer_stats(self, peer_stats_batch: List[Dict[str, Any]], sender_peer_id: str | None = None):
-        """(World-only) Processes a batch of stats received from a peer."""
+    def add_peer_stats(self, peer_stats_batch: list[dict[str, Any]],
+                       sender_peer_id: str | None = None) -> None:
+        """Processes a batch of stats received from a peer and updates internal state (world-only).
+
+        Stores valid stats in the Stats recorder, collects ``connected_peers`` updates for
+        deferred graph processing, and calls ``_prune_graph`` at the end of each batch.
+
+        Args:
+            peer_stats_batch: A list of stat-update dictionaries, each containing
+                ``"peer_id"``, ``"stat_name"``, ``"timestamp"``, and ``"value"`` keys.
+            sender_peer_id: The peer ID of the sender; currently unused for filtering
+                (default: None).
+        """
 
         # 1. Update own stats (this logic is now in the World)
         self.collect_and_store_own_stats()
@@ -376,7 +442,7 @@ class World(AgentBasics):
         # Clean the graph from potentially stale peers
         self._prune_graph()
 
-    def debug_stats_dashboard(self):
+    def debug_stats_dashboard(self) -> None:
         """Helper to verify the dashboard looks correct during development."""
         import plotly.io as pio
 
