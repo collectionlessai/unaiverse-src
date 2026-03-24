@@ -21,6 +21,7 @@ from typing import Any
 from datetime import timedelta
 from unaiverse.utils.logger import log
 from sortedcontainers import SortedDict
+from typing_extensions import deprecated
 
 
 # A fixed palette for consistent coloring
@@ -461,9 +462,9 @@ class Stats:
         """Initializes the Stats engine in either World or Agent mode.
 
         Args:
-            is_world: When ``True``, initialises the full World-side engine including the
+            is_world: When ``True``, initializes the full World-side engine including the
                 SQLite database, hot cache, and persistence buffers. When ``False``,
-                initialises a lightweight Agent-side buffer.
+                initializes a lightweight Agent-side buffer.
             db_path: Filesystem path for the SQLite database file. Required when
                 ``is_world`` is ``True``; ignored otherwise.
             cache_window_hours: Duration (in hours) of the in-memory rolling window kept
@@ -656,7 +657,7 @@ class Stats:
     def _validate_type(self, stat_name: str, value: Any) -> Any:
         """Validates and casts ``value`` to the type declared in the schema.
 
-        If ``value`` is already the correct type it is returned unchanged. Otherwise a
+        If ``value`` is already the correct type it is returned unchanged, otherwise a
         cast is attempted. On failure the value is coerced to ``str`` and an error is
         logged.
 
@@ -1810,6 +1811,7 @@ class Stats:
     # ==================================================================================================================
     # BEGIN OF DEPRECATED METHODS
     # ==================================================================================================================
+    @deprecated("Use the new logger")
     def _out(self, msg: str):
         """DEPRECATED: Logs a stats-level message.
 
@@ -1818,6 +1820,7 @@ class Stats:
         """
         log.stats(msg)
 
+    @deprecated("Use the new logger")
     def _err(self, msg: str):
         """DEPRECATED: Logs an error message.
 
@@ -1826,6 +1829,7 @@ class Stats:
         """
         log.error(msg)
 
+    @deprecated("Use the new logger")
     def _deb(self, msg: str):
         """DEPRECATED: Logs a debug message.
 
