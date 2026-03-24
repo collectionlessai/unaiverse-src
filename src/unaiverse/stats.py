@@ -409,18 +409,6 @@ class Stats:
             self.min_window_duration = timedelta(hours=3.0)  # cache for the _world_view
             self._update_batch: List[Dict[str, Any]] = []
 
-    def _out(self, msg: str):
-        """DEPRECATED Prints a message using the node's out function."""
-        log.stats(msg)
-
-    def _err(self, msg: str):
-        """DEPRECATED Prints an error message."""
-        log.error(msg)
-
-    def _deb(self, msg: str):
-        """DEPRECATED Prints a debug message if enabled."""
-        log.debug(msg)
-
     def _initialize_key_sets(self):
         """Populates the master key sets and the type for later use."""
         # Combine all schema definitions
@@ -1504,3 +1492,21 @@ class Stats:
             return '#ffffff'
         idx = zlib.adler32(str(unique_str).encode()) % len(THEME['peers'])
         return THEME['peers'][idx]
+
+    # ==================================================================================================================
+    # BEGIN OF DEPRECATED METHODS
+    # ==================================================================================================================
+    def _out(self, msg: str):
+        """DEPRECATED Prints a message using the node's out function."""
+        log.stats(msg)
+
+    def _err(self, msg: str):
+        """DEPRECATED Prints an error message."""
+        log.error(msg)
+
+    def _deb(self, msg: str):
+        """DEPRECATED Prints a debug message if enabled."""
+        log.debug(msg)
+    # ==================================================================================================================
+    # END OF DEPRECATED METHODS
+    # ==================================================================================================================

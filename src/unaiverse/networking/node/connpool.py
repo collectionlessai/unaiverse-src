@@ -446,10 +446,11 @@ class ConnectionPools:
         """
         # Pop all messages
         p2p = self[p2p_name]
-        byte_messages: list[bytes] = p2p.pop_messages()  # Pop all messages
+        byte_messages = p2p.pop_messages()  # Pop all messages
         # Process the list of message dictionaries
         processed_messages: list[Msg] = []
         for i, msg_dict in enumerate(byte_messages):
+            msg_dict: dict
             try:
                 # Extract and validate required fields from the Go message structure
                 # Go structure: {"from":"Qm...", "data":"BASE64_ENCODED_DATA"}

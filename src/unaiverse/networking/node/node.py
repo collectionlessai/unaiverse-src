@@ -26,13 +26,14 @@ import asyncio
 import requests
 import threading
 from PIL import Image
-from typing import Dict, Any, Optional
+from typing import Any
 from collections import deque
+from datetime import timedelta
 from unaiverse.clock import clock
 from unaiverse.world import World
 from unaiverse.agent import Agent
-from datetime import timedelta
 from unaiverse.custom import Custom
+from collections.abc import Callable
 from datetime import datetime, timezone
 from unaiverse.utils.logger import Ch, log
 from unaiverse.interaction import Interaction
@@ -64,7 +65,7 @@ class Node:
                  world_masters_node_names: list[str] | set[str] = None,  # Optional: it will be converted to node IDs
                  allow_connection_through_relay: bool = True,
                  talk_to_relay_based_nodes: bool = True,
-                 run_hook: callable = None,
+                 run_hook: Callable[['Node'], None] | None = None,
                  send_stats_every: float = 30.,
                  save_checkpoint_every: float = -1.):
         """Initializes a new instance of the Node class.
@@ -77,6 +78,7 @@ class Node:
             node_id: A unique identifier for the node (use this or the node name, not both).
             hidden: A flag to determine if the node is hidden (i.e., only the owner of the account can see it).
             clock_delta: The minimum time delta for the node's clock.
+            base_identity_dir: Base directory for storing node identity files. If None, uses the default app directory.
             only_certified_agents: A flag to allow only certified agents to connect.
             allowed_node_ids: A list or set of allowed node IDs to connect (t is loaded from the online profile).
             world_masters_node_ids: A list or set of world masters' node IDs (it is also loaded from online profile).
@@ -148,7 +150,7 @@ class Node:
         self.last_rendezvous_time = 0.
 
         # Automatic address update and relay refresh (if needed)
-        self.relay_reservation_expiry: Optional[datetime] = None
+        self.relay_reservation_expiry: datetime | None = None
 
         # Interview of newly connected nodes
         self.reconnected = set()
@@ -174,7 +176,6 @@ class Node:
         self.agents_to_interview: dict[str, [float, NodeProfile | None]] = {}  # Peer_id -> [time, profile | None]
         self.agents_expected_to_send_ack = {}
         self.agents_that_provided_ping_pong = set()
-        self.last_rejected_agents = deque(maxlen=self.conn)
         self.joining_world_info = None
         self.first = True
 
@@ -440,7 +441,7 @@ class Node:
         except Exception as e:
             log.error(f"Error while sending alive message to server! [{e}]")
 
-    def get_node_token(self, peer_ids):
+    def get_node_token(self, peer_ids: list[str]) -> None:
         """Generates and retrieves a node token from the root server.
 
         Args:
@@ -470,8 +471,8 @@ class Node:
         if self.conn is not None:
             self.conn.set_token(self.node_token)
 
-    def get_cv(self):
-        """Retrieves the node's CV (Curriculum Vitae) from the root server
+    def get_cv(self) -> dict:
+        """Retrieves the node's CV (Curriculum Vitae) from the root server.
 
         Returns:
             The node's CV as a dictionary.
@@ -487,7 +488,7 @@ class Node:
                 else:
                     log.critical(f"Error while getting CV from server [{e}]")
 
-    def send_dynamic_profile(self):
+    def send_dynamic_profile(self) -> None:
         """Sends the node's dynamic profile to the root server."""
         try:
             self.__root(api="/account/node/profile/dynamic/post", payload={"node_id": self.node_id,
@@ -496,8 +497,8 @@ class Node:
         except Exception as e:
             log.error(f"Error while sending dynamic profile to root server [{e}]")
 
-    async def send_badges(self):
-        """Sends new badges assigned by a world node to the root server and notifies the agents (async)."""
+    async def send_badges(self) -> None:
+        """Sends new badges assigned by a world node to the root server and notifies the agents. (async)"""
         if self.node_type is Node.WORLD:
             peer_id_to_badges = self.world.get_all_badges()
             if len(peer_id_to_badges) > 0:
@@ -583,16 +584,17 @@ class Node:
 
     async def ask_to_get_in_touch(self, node_name: str | None = None, addresses: list[str] | None = None,
                                   node_id: str | None = None,
-                                  public: bool = True, before_updating_pools_fcn=None, run_count: int = 0):
-        """Tries to connect to another agent or world node (async).
+                                  public: bool = True, before_updating_pools_fcn: Callable = None,
+                                  run_count: int = 0) -> str | None:
+        """Tries to connect to another agent or world node. (async)
 
         Args:
-            node_name: Name of the node to join (alternative to addresses below)
+            node_name: Name of the node to join (alternative to addresses below).
             addresses: A list of network addresses to connect to (alternative to node_name).
             node_id: The ID of the node to connect to (alternative to node_name and addresses).
             public: A boolean flag indicating whether to use the public or world P2P network.
-            before_updating_pools_fcn: A function to call before updating the connection pools.
-            run_count: The number of connection attempts made.
+            before_updating_pools_fcn: A callable invoked with the peer ID before updating the connection pools.
+            run_count: The number of connection attempts made so far (used for internal retry logic).
 
         Returns:
             The peer ID of the connected node if successful, otherwise None.
@@ -618,7 +620,8 @@ class Node:
                 addresses = self.__root(api="account/node/get/addresses",
                                         payload=payload)["addresses"]
             except Exception as e:
-                GenException(f"Error while retrieving addresses of node named {node_name} [{e}]")
+                log.error(f"Error while retrieving addresses of node named {node_name} [{e}]")
+                return None
 
         if addresses is None or len(addresses) == 0:
             log.error(f"Addresses of {node_name} were not found, cannot connect!")
@@ -671,14 +674,14 @@ class Node:
             return None
 
     async def ask_to_join_world(self, node_name: str | None = None, addresses: list[str] | None = None,
-                                node_id: str | None = None, **kwargs):
-        """Initiates a request to join a world (async).
+                                node_id: str | None = None, **kwargs) -> str | None:
+        """Initiates a request to join a world. (async)
 
         Args:
             node_name: The name of the node hosting the world to join (alternative to addresses below).
-            addresses: A list of network addresses of the world node (alternative to world_name).
+            addresses: A list of network addresses of the world node (alternative to node_name).
             node_id: The ID of the node to join (alternative to node_name and addresses).
-            **kwargs: Additional options for joining the world.
+            **kwargs: Additional options forwarded to ask_to_get_in_touch.
 
         Returns:
             The public peer ID of the world node if the connection request is successful, otherwise None.
@@ -701,8 +704,8 @@ class Node:
             log.error("Failed to join world!")
         return peer_id
 
-    async def leave(self, peer_id: str):
-        """Disconnects the node from a specific peer, typically a world (async).
+    async def leave(self, peer_id: str) -> None:
+        """Disconnects the node from a specific peer, typically a world. (async)
 
         Args:
             peer_id: The peer ID of the node to leave.
@@ -773,16 +776,21 @@ class Node:
                 await self.hosted.remove_agent(peer_id)
             await self.conn.remove(peer_id)
 
-    async def leave_world(self):
-        """Initiates the process of leaving a world (async).
-
-        Returns:
-            None.
-        """
+    async def leave_world(self) -> None:
+        """Initiates the process of leaving a world. (async)"""
         if self.profile.get_dynamic_profile()['connections']['world_peer_id'] is not None:
             await self.leave(self.profile.get_dynamic_profile()['connections']['world_peer_id'])
 
     def search(self, query_text: str, email: str | None = None) -> list[NodeProfile]:
+        """Searches the UNaIVERSE platform for nodes matching the given query.
+
+        Args:
+            query_text: The text query used to search for nodes.
+            email: An optional email address to filter results by account owner.
+
+        Returns:
+            A list of NodeProfile objects matching the search query.
+        """
         profiles_as_list_of_dict = []
         profiles = []
 
@@ -805,7 +813,7 @@ class Node:
                          f"Query: {query_text}, email: {email} [{e}]")
         return profiles
 
-    def run(self, *args, **kwargs):
+    def run(self, *args, **kwargs) -> None:
         """Starts the main execution loop for the node, calling method run_async(...) by means of asyncio.run.
         See documentation of method run_async."""
         try:
@@ -821,16 +829,17 @@ class Node:
                         resume_from_checkpoint: bool = False,
                         join_world: str | list[str] | None = None,
                         get_in_touch: str | list[str] | None = None,
-                        **kwargs):
-        """Starts the main execution loop for the node (async).
+                        **kwargs) -> None:
+        """Starts the main execution loop for the node. (async)
 
         Args:
             cycles: The number of clock cycles to run the loop for. If None, runs indefinitely.
             max_time: The maximum time in seconds to run the loop. If None, runs indefinitely.
-            interact_mode: A boolean value that turns interactive mode of (still experimental!).
+            interact_mode: A boolean value that turns interactive mode on (still experimental!).
             resume_from_checkpoint: If True, we load the checkpoint saved (if present).
             join_world: The name of the World to join or the list of its addresses.
             get_in_touch: The name of Agent to connect to or the list of its addresses.
+            **kwargs: Additional keyword arguments forwarded to ask_to_join_world or ask_to_get_in_touch.
         """
         log.set_sub("gen")
 
@@ -864,12 +873,12 @@ class Node:
             else:
                 joined_this_world = ret  # saving peer ID
         elif self.hosted.world_profile is not None:
-            # we resumed from a state in which we were in this world, so we reconnect
+            # We resumed from a state in which we were in this world, so we reconnect
             world_name = self.hosted.world_profile.get_static_profile()['node_name']
             owner_email = self.hosted.world_profile.get_static_profile()['email']
             ret = await self.ask_to_join_world(node_name=f'{owner_email}/{world_name}', **kwargs)
             if ret is None:
-                log.critical(f"Unable to connect to world: {join_world}")
+                log.critical(f"Unable to connect to world: {owner_email}/{world_name}")
             else:
                 joined_this_world = ret  # saving peer ID
         elif get_in_touch is not None:
@@ -943,7 +952,7 @@ class Node:
                     log.critical("Interactive mode requires a processor that generates a text stream")
 
                 def keyboard_listener(k_queue):
-                    with patch_stdout(raw=True):  # type: ignore
+                    with (patch_stdout(raw=True)):  # type: ignore
                         while True:
                             webcam_shot = None
                             keyboard_msg = prompt("\n👉 ")  # Get from keyboards
@@ -965,8 +974,8 @@ class Node:
                             if keyboard_msg is not None and len(keyboard_msg) > 0:
                                 k_queue.put((keyboard_msg, webcam_shot, "whatever"))  # Store in the asynch queue
 
-                            if keyboard_msg.strip() == "exit" or keyboard_msg.strip() == "quit":
-                                k_queue.put((keyboard_msg, webcam_shot, "whatever"))  # Store in the asynch queue
+                            if (keyboard_msg is not None and
+                                    (keyboard_msg.strip() == "exit" or keyboard_msg.strip() == "quit")):
                                 break
 
                 keyboard_queue = queue.Queue()  # Create a thread-safe queue for communication
@@ -1292,8 +1301,8 @@ class Node:
                 except Exception:
                     pass
 
-    async def __handle_network_connections(self):
-        """Manages new and lost network connections (async)."""
+    async def __handle_network_connections(self) -> None:
+        """Manages new and lost network connections. (async)"""
 
         # Getting fresh lists of existing world agents and world masters (from the rendezvous)
         if self.node_type is Node.AGENT:
@@ -1462,11 +1471,11 @@ class Node:
             dynamic_profile['connections']['world_peer_id'] = world_private_peer_id
             self.profile.mark_change_in_connections()
 
-    async def __handle_network_messages(self, interact_mode_opts=None):
-        """Handles and processes all incoming network messages (async).
+    async def __handle_network_messages(self, interact_mode_opts: dict | None = None) -> None:
+        """Handles and processes all incoming network messages. (async)
 
         Args:
-            interact_mode_opts: A dictionary of options for interactive mode.
+            interact_mode_opts: A dictionary of options for interactive mode, or None if not in interactive mode.
         """
         # Fetching all messages,
         public_messages = await self.conn.get_messages(p2p_name=NodeConn.P2P_PUBLIC)
@@ -1994,8 +2003,8 @@ class Node:
 
     async def __join_world(self, profile: NodeProfile, role: int,
                            agent_actions: str | None, agent_stats_code: str | None,
-                           rendezvous_tag: int, initial_stats: Dict[str, Any] | None):
-        """Performs the actual operation of joining a world after receiving confirmation (async).
+                           rendezvous_tag: int, initial_stats: dict[str, Any] | None) -> bool:
+        """Performs the actual operation of joining a world after receiving confirmation. (async)
 
         Args:
             profile: The profile of the world to join.
@@ -2166,8 +2175,8 @@ class Node:
         else:
             return False
 
-    async def __join_agent(self, profile: NodeProfile, peer_id: str):
-        """Adds a new known agent after receiving an approval message (async).
+    async def __join_agent(self, profile: NodeProfile, peer_id: str) -> bool:
+        """Adds a new known agent after receiving an approval message. (async)
 
         Args:
             profile: The profile of the agent to join.
@@ -2187,8 +2196,8 @@ class Node:
         del self.agents_expected_to_send_ack[peer_id]
         return True
 
-    async def __interview_enqueue(self, peer_id: str):
-        """Adds a newly connected peer to the queue of agents to be interviewed (async).
+    async def __interview_enqueue(self, peer_id: str) -> bool:
+        """Adds a newly connected peer to the queue of agents to be interviewed. (async)
 
         Args:
             peer_id: The peer ID of the agent to interview.
@@ -2218,8 +2227,8 @@ class Node:
         self.agents_to_interview[peer_id] = [clock.get_time(), None]  # Peer ID -> [time, profile]; no profile yet
         return True
 
-    async def __interview_check_profile(self, peer_id: str, node_id: str, profile: NodeProfile):
-        """Checks if a received profile is acceptable and valid (async).
+    async def __interview_check_profile(self, peer_id: str, node_id: str, profile: NodeProfile) -> bool:
+        """Checks if a received profile is acceptable and valid. (async)
 
         Args:
             peer_id: The peer ID of the node that sent the profile.
@@ -2300,8 +2309,8 @@ class Node:
                     log.misc(f"Peer f{peer_id} sent a profile in the private network, unexpected")
                     return False
 
-    async def __interview_clean(self):
-        """Removes outdated or timed-out interview requests from the queue (async)."""
+    async def __interview_clean(self) -> None:
+        """Removes outdated or timed-out interview requests from the queue. (async)"""
         cur_time = clock.get_time()
         agents_to_remove = []
         for peer_id, (profile_time, profile) in self.agents_to_interview.items():
@@ -2315,9 +2324,9 @@ class Node:
         for peer_id in agents_to_remove:
             await self.__purge(peer_id)  # This will also remove the peer from the queue of peers to interview
 
-    async def __handle_connected_without_ack(self):
+    async def __handle_connected_without_ack(self) -> None:
         """Removes connected peers from the queue if they haven't sent an acknowledgment within
-        the timeout period (async)."""
+        the timeout period. (async)"""
         cur_time = clock.get_time()
         agents_to_remove = []
         agents_to_retry = []
@@ -2347,11 +2356,12 @@ class Node:
                      f"{connection_dict['args_of_ask_to_get_in_touch']}")
             await self.ask_to_get_in_touch(**connection_dict["args_of_ask_to_get_in_touch"])  # Trying again
 
-    async def __purge(self, peer_id: str, keep_connection: bool = False):
-        """Removes a peer from all relevant connection lists and queues (async).
+    async def __purge(self, peer_id: str, keep_connection: bool = False) -> None:
+        """Removes a peer from all relevant connection lists and queues. (async)
 
         Args:
             peer_id: The peer ID of the node to purge.
+            keep_connection: If True, the underlying P2P connection is preserved (only queues are cleared).
         """
         await self.hosted.remove_agent(peer_id)
 
@@ -2370,8 +2380,16 @@ class Node:
         self.agents_that_provided_ping_pong.discard(peer_id)
 
     @staticmethod
-    def __sort_messages_by_priority(messages):
-        """Sort messages by priority: world approval and agent approval first."""
+    def __sort_messages_by_priority(messages: list) -> list:
+        """Sort messages by priority: world approval and agent approval first.
+
+        Args:
+            messages: The list of Msg objects to sort.
+
+        Returns:
+            A new list with world-approval messages first, then agent-approval, then action requests,
+            then all other messages.
+        """
 
         _world_approval_messages = []
         _agent_approval_messages = []
@@ -2388,7 +2406,7 @@ class Node:
                 _other_messages.append(_msg)
         return _world_approval_messages + _agent_approval_messages + _action_messages + _other_messages
 
-    def __root(self, api: str, payload: dict):
+    def __root(self, api: str, payload: dict) -> dict:
         """Sends a POST request to the root server's API endpoint.
 
         Args:
@@ -2422,7 +2440,7 @@ class Node:
             log.critical(f"An error occurred while making the POST request: {e}")
 
     @staticmethod
-    def __analyze_code(file_in_memory):
+    def __analyze_code(file_in_memory: str) -> bool:
         """Analyzes a string of Python code for dangerous or unsafe functions and modules.
 
         Args:
@@ -2485,12 +2503,12 @@ class Node:
 
         return True
 
-    async def __handle_inspector_command(self, cmd: str, arg):
-        """Handles commands received from an inspector node (async).
+    async def __handle_inspector_command(self, cmd: str, arg: str | None) -> None:
+        """Handles commands received from an inspector node. (async)
 
         Args:
             cmd: The command string.
-            arg: The argument for the command.
+            arg: The argument for the command, or None if no argument is provided.
         """
         log.misc(f"Handling inspector message {cmd}, with arg {arg}")
 
@@ -2521,8 +2539,8 @@ class Node:
             else:
                 log.error(f"Unknown inspector command: {cmd}")
 
-    async def __send_to_inspector(self):
-        """Sends status updates and data to the connected inspector node (async)."""
+    async def __send_to_inspector(self) -> None:
+        """Sends status updates and data to the connected inspector node. (async)"""
 
         # Collecting console
         console = log.get_inspector_console()
@@ -2634,7 +2652,7 @@ class NodeSynchronizer:
         self.server_checkpoints = None
         self.gap = 0.  # Seconds
 
-    def add_node(self, node: Node):
+    def add_node(self, node: 'Node') -> None:
         """Adds a new node to the synchronizer.
 
         Args:
@@ -2658,12 +2676,12 @@ class NodeSynchronizer:
                 if node.node_id in self.world_masters_node_ids:
                     self.world_masters.add(node.agent.get_name())
 
-    async def run(self, addresses: list[str] | None, synch_cycles: int | None = None):
-        """Starts the main execution loop for the node (async).
+    async def run(self, addresses: list[str] | None, synch_cycles: int | None = None) -> None:
+        """Starts the main execution loop for the synchronizer. (async)
 
         Args:
-            addresses: Addresses of the world to connect to.
-            synch_cycles: The number of clock cycles to run the loop for. If None, runs indefinitely.
+            addresses: Addresses of the world to connect to, or None if not joining a world.
+            synch_cycles: The number of synchronized clock cycles to run. If None, runs indefinitely.
         """
         if self.world is None:
             log.critical("Missing world node")
