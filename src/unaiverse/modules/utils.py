@@ -29,11 +29,37 @@ class GenException(Exception):
     pass
 
 
-def has_human_processor(agent):
+def has_human_processor(agent: object) -> bool:
+    """Checks whether the given agent has a human processor module.
+
+    Args:
+        agent: The agent object to inspect; expected to have a ``proc`` attribute.
+
+    Returns:
+        True if the agent's processor module is a HumanModule, False otherwise.
+    """
     return agent.proc is not None and isinstance(agent.proc.module, HumanModule)
 
 
-def transforms_factory(trans_type: str, add_batch_dim: bool = True, return_inverse: bool = False):
+def transforms_factory(trans_type: str, add_batch_dim: bool = True,
+                       return_inverse: bool = False) -> transforms.Compose:
+    """Builds and returns a torchvision transform pipeline for the given type.
+
+    Args:
+        trans_type: A string identifying the desired transform.  Supported values are
+            ``"rgb<N>"`` / ``"gray<N>"`` (resize + center-crop to ``<N>`` pixels, with normalisation),
+            ``"rgb-no_norm<N>"`` / ``"gray-no_norm<N>"`` (resize + center-crop, no normalisation),
+            ``"rgb"`` / ``"gray"`` (full-image with normalisation),
+            ``"rgb-no_norm"`` / ``"gray-no_norm"`` (full-image, no normalisation), and
+            ``"gray_mnist"`` (MNIST-specific 28×28 grayscale pipeline).
+        add_batch_dim: If True, appends an ``unsqueeze(0)`` step to the forward transform and
+            inserts a ``squeeze(0)`` step at the start of the inverse transform (default: True).
+        return_inverse: If True, returns the inverse (de-normalisation) transform instead of the
+            forward transform (default: False).
+
+    Returns:
+        The requested ``transforms.Compose`` pipeline.
+    """
     supported_types = {"rgb*",          "gray*",
                        "rgb-no_norm*",  "gray-no_norm*",
                        "rgb",           "gray",
@@ -177,23 +203,54 @@ def transforms_factory(trans_type: str, add_batch_dim: bool = True, return_inver
 
 
 def hard_tanh(x: torch.Tensor) -> torch.Tensor:
+    """Clamps tensor values to the range [-1, 1] (hard tanh activation)."""
     return torch.clamp(x, min=-1., max=1.)
 
 
-def target_shape_fixed_cross_entropy(output, target, *args, **kwargs):
+def target_shape_fixed_cross_entropy(output: torch.Tensor, target: torch.Tensor,
+                                     *args, **kwargs) -> torch.Tensor:
+    """Computes cross-entropy loss, squeezing a leading batch dimension from the target if present.
+
+    Args:
+        output: The model output logits tensor.
+        target: The target class-index tensor; if it has more than one dimension the first
+            dimension is squeezed before calling ``cross_entropy``.
+        *args: Additional positional arguments forwarded to ``torch.nn.functional.cross_entropy``.
+        **kwargs: Additional keyword arguments forwarded to ``torch.nn.functional.cross_entropy``.
+
+    Returns:
+        The scalar cross-entropy loss tensor.
+    """
     if len(target.shape) > 1:
         target = target.squeeze(0)
     return torch.nn.functional.cross_entropy(output, target, *args, **kwargs)
 
 
 def set_seed(seed: int) -> None:
+    """Seeds all relevant random-number generators for reproducibility.
+
+    Args:
+        seed: The integer seed value.  If negative, no seeding is performed.
+    """
     if seed >= 0:
         torch.manual_seed(seed)
         random.seed(seed)
         np.random.seed(0)
 
 
-def get_proc_inputs_and_proc_outputs_for_rnn(u_shape: torch.Size | tuple, du_dim: int, y_dim: int):
+def get_proc_inputs_and_proc_outputs_for_rnn(u_shape: torch.Size | tuple, du_dim: int,
+                                             y_dim: int) -> tuple[list, list]:
+    """Creates Stream descriptors for the inputs and output of an RNN-style processor.
+
+    Args:
+        u_shape: Shape of the main input tensor (excluding the batch dimension).
+        du_dim: Dimensionality of the secondary (delta-u) input.
+        y_dim: Dimensionality of the output.
+
+    Returns:
+        A tuple ``(proc_inputs, proc_outputs)`` where each element is a list of
+        ``Stream`` objects describing the processor's I/O signature.
+    """
     if isinstance(u_shape, torch.Size):
         u_shape = tuple(u_shape)
     proc_inputs = [
@@ -209,7 +266,16 @@ def get_proc_inputs_and_proc_outputs_for_rnn(u_shape: torch.Size | tuple, du_dim
     return proc_inputs, proc_outputs
 
 
-def get_proc_inputs_and_proc_outputs_for_image_classification(y_dim: int):
+def get_proc_inputs_and_proc_outputs_for_image_classification(y_dim: int) -> tuple[list, list]:
+    """Creates Stream descriptors for the inputs and output of an image-classification processor.
+
+    Args:
+        y_dim: Number of output classes.  Pass ``-1`` to default to 1000 (ImageNet).
+
+    Returns:
+        A tuple ``(proc_inputs, proc_outputs)`` where each element is a list of
+        ``Stream`` objects describing the processor's I/O signature.
+    """
     if y_dim == -1:
         y_dim = 1000  # Assuming ImageNet-trained models
     proc_inputs = [Stream(data_type="img", pubsub=False, private_only=True)]
@@ -218,11 +284,29 @@ def get_proc_inputs_and_proc_outputs_for_image_classification(y_dim: int):
     return proc_inputs, proc_outputs
 
 
-def isinstance_fcn(obj, class_to_check):
+def isinstance_fcn(obj: object, class_to_check: type | tuple) -> bool:
+    """Thin wrapper around the built-in ``isinstance`` function.
+
+    Args:
+        obj: The object to test.
+        class_to_check: A type or tuple of types to check against.
+
+    Returns:
+        True if ``obj`` is an instance of ``class_to_check``, False otherwise.
+    """
     return isinstance(obj, class_to_check)
 
 
-def error_rate_mnist_test_set(network: torch.nn.Module, mnist_data_save_path: str):
+def error_rate_mnist_test_set(network: torch.nn.Module, mnist_data_save_path: str) -> float:
+    """Evaluates a network's classification error rate on the MNIST test set.
+
+    Args:
+        network: The PyTorch module to evaluate.
+        mnist_data_save_path: Path where the MNIST dataset will be downloaded and cached.
+
+    Returns:
+        The fraction of misclassified test samples (in [0, 1]).
+    """
 
     # Getting MNIST test set
     mnist_test = datasets.MNIST(root=mnist_data_save_path,
@@ -253,25 +337,57 @@ def error_rate_mnist_test_set(network: torch.nn.Module, mnist_data_save_path: st
 
 
 class MultiIdentity(torch.nn.Module):
-    def __init__(self):
+    """Identity module that passes one or more inputs through unchanged."""
+
+    def __init__(self) -> None:
         super().__init__()
 
-    def forward(self, *args, **kwargs):
+    def forward(self, *args, **kwargs) -> object | tuple:
+        """Returns the single input unchanged, or all positional inputs as a tuple.
+
+        Args:
+            *args: One or more input tensors / objects.
+            **kwargs: Unused.
+
+        Returns:
+            The single input if exactly one positional argument is given, otherwise the
+            full ``args`` tuple.
+        """
         if len(args) == 1:
             return args[0]
         return args
 
 
 class HumanModule(torch.nn.Module):
-    def __init__(self):
+    """Dummy human-in-the-loop module that echoes text and image inputs unchanged."""
+
+    def __init__(self) -> None:
         super().__init__()
 
-    def forward(self, text: str | None = None, img: Image.Image | None = None, whatever: object | None = None):
+    def forward(self, text: str | None = None, img: Image.Image | None = None,
+                whatever: object | None = None) -> tuple[str | None, Image.Image | None]:
+        """Returns the text and image inputs as-is (placeholder for human interaction).
+
+        Args:
+            text: Optional text input.
+            img: Optional PIL image input.
+            whatever: Optional additional input (ignored).
+
+        Returns:
+            A tuple ``(text, img)`` with the unchanged inputs.
+        """
         return text, img
 
 
 class LoggerModule(torch.nn.Module):
-    def __init__(self, log_file="app_log.txt"):
+    """A module that logs inputs and outputs to a file and cycles through a vocabulary of dummy responses."""
+
+    def __init__(self, log_file: str = "app_log.txt") -> None:
+        """Initialises the LoggerModule.
+
+        Args:
+            log_file: Path to the log file that records inputs and outputs (default: ``"app_log.txt"``).
+        """
         super().__init__()
         self.log_file = log_file
         self._initialized = False
@@ -287,7 +403,8 @@ class LoggerModule(torch.nn.Module):
                          "norway", "sweden", "belgium", "romania", "sunny", "snowy", "rainy"]
         random.shuffle(self._objects)
 
-    def __setup_logger(self):
+    def __setup_logger(self) -> None:
+        """Creates the output directory and initialises the file-based logger handler."""
         os.makedirs(os.path.abspath(os.path.dirname(self.log_file)), exist_ok=True)
         self.__handler = logging.FileHandler(self.log_file, mode='w')  # 'w' mode overwrites the file
         formatter = logging.Formatter('%(message)s')
@@ -295,7 +412,17 @@ class LoggerModule(torch.nn.Module):
         self._logger.addHandler(self.__handler)
         self._initialized = True
 
-    def forward(self, text: str, img: Image = None):
+    def forward(self, text: str, img: Image.Image | None = None) -> tuple[str | None, Image.Image | None]:
+        """Logs the received inputs and returns a cycling dummy text response with no image output.
+
+        Args:
+            text: The text input to log.
+            img: An optional PIL image input to log (not forwarded to the output).
+
+        Returns:
+            A tuple ``(response_text, None)`` where ``response_text`` is the next item from
+            the internal word cycle.
+        """
         if not self._initialized:
             self.__setup_logger()
         self._logger.info("-------------------------------------------------------------------------------")
@@ -312,12 +439,23 @@ class LoggerModule(torch.nn.Module):
 
 
 class ModuleWrapper(torch.nn.Module):
+    """Wraps a torch.nn.Module with Stream-based input/output preprocessing and optional learning support."""
+
     def __init__(self,
                  module: torch.nn.Module | None = None,
                  proc_inputs: list[Stream] | None = None,
                  proc_outputs: list[Stream] | None = None,
                  proc_opts: dict | None = None,
-                 seed: int = -1):
+                 seed: int = -1) -> None:
+        """Initialises the ModuleWrapper.
+
+        Args:
+            module: The torch.nn.Module to wrap (default: None).
+            proc_inputs: List of Stream objects describing the input types (default: None).
+            proc_outputs: List of Stream objects describing the output types (default: None).
+            proc_opts: Dictionary with keys ``"optimizer"`` and ``"losses"`` (default: None).
+            seed: Random seed to fix before instantiation; negative values are ignored (default: -1).
+        """
         super(ModuleWrapper, self).__init__()
         self.device = None  # The device which is supposed to host the module
         self.module = None  # The module itself
@@ -332,7 +470,17 @@ class ModuleWrapper(torch.nn.Module):
         self.module = module.to(self.device) if module is not None else None
         self.__last_raw_outputs = None
 
-    def forward(self, *args, **kwargs):
+    def forward(self, *args, **kwargs) -> tuple:
+        """Preprocesses inputs, runs the wrapped module, and post-processes the outputs.
+
+        Args:
+            *args: Positional inputs; each element is preprocessed via the corresponding ``proc_inputs`` Stream.
+            **kwargs: Extra keyword arguments forwarded to the module.  The ``first`` and ``last``
+                keys are silently removed before the call.
+
+        Returns:
+            A tuple of post-processed outputs, one per entry in ``proc_outputs``.
+        """
 
         # The forward signature expected by who calls this method is:
         # forward(self, *args, first: bool, last: bool, **kwargs)
@@ -360,7 +508,17 @@ class ModuleWrapper(torch.nn.Module):
 
         return tuple(outputs)
 
-    def learn_backward(self, targets: list | None = None):
+    def learn_backward(self, targets: list | None = None) -> list | bool:
+        """Runs a supervised or unsupervised backward pass and optimiser step.
+
+        Args:
+            targets: Optional list of target tensors, one per processor output.  Individual
+                entries may be ``None`` (treated as unsupervised for that slot).
+
+        Returns:
+            A list of per-output loss values if a backward pass was performed, or ``False``
+            if ``proc_opts`` contains no optimiser or losses.
+        """
         if (self.proc_opts is None or len(self.proc_opts) == 0 or
                 ('losses' not in self.proc_opts and 'optimizer' not in self.proc_opts)):
             return False
@@ -369,7 +527,7 @@ class ModuleWrapper(torch.nn.Module):
         optimizer: torch.optim.optimizer.Optimizer | None = self.proc_opts['optimizer']
 
         # Evaluating loss function(s), one for each processor output slot (they are set to 0. if no targets are there)
-        if targets is not None and len(targets) > 0 and any(x is None for x in targets):
+        if targets is not None and len(targets) > 0 and any(x is not None for x in targets):
 
             # Preprocessing targets
             targets = [self.proc_outputs[i].check_and_preprocess(targets[i], device=self.device,
@@ -400,8 +558,20 @@ class ModuleWrapper(torch.nn.Module):
 
 
 class AgentProcessorChecker:
+    """Validates and normalises the processor-related attributes of an agent-like container object."""
 
-    def __init__(self, processor_container: object):
+    def __init__(self, processor_container: object) -> None:
+        """Validates and normalises processor attributes on the given container.
+
+        Checks that ``processor_container`` exposes the required processor attributes, performs
+        type validation, auto-wraps plain ``torch.nn.Module`` objects in ``ModuleWrapper``,
+        and infers missing ``proc_inputs``, ``proc_outputs``, and ``proc_opts`` heuristically.
+        The validated and completed values are written back onto ``processor_container``.
+
+        Args:
+            processor_container: Any object that exposes ``proc``, ``proc_inputs``,
+                ``proc_outputs``, ``proc_opts``, and ``proc_optional_inputs`` attributes.
+        """
         assert hasattr(processor_container, 'proc'), "Invalid processor container object"
         assert hasattr(processor_container, 'proc_inputs'), "Invalid processor container object"
         assert hasattr(processor_container, 'proc_outputs'), "Invalid processor container object"
@@ -472,7 +642,7 @@ class AgentProcessorChecker:
                 self.proc_outputs = [Stream(data_type="text", pubsub=False, private_only=False),
                                      Stream(data_type="img", pubsub=False, private_only=False)]
                 self.proc = ModuleWrapper(module=HumanModule(), proc_inputs=self.proc_inputs,
-                                      proc_outputs=self.proc_outputs)
+                                          proc_outputs=self.proc_outputs)
                 self.proc.device = torch.device("cpu")
 
             # Wrapping to have the basic attributes (device)
@@ -519,7 +689,8 @@ class AgentProcessorChecker:
         processor_container.proc_opts = self.proc_opts
         processor_container.proc_optional_inputs = self.proc_optional_inputs
 
-    def __guess_proc_inputs(self):
+    def __guess_proc_inputs(self) -> None:
+        """Heuristically infers ``proc_inputs`` from the first layer of the wrapped module."""
         if hasattr(self.proc, "proc_inputs"):
             if self.proc.proc_inputs is not None:
                 self.proc_inputs = []
@@ -531,12 +702,6 @@ class AgentProcessorChecker:
 
         # Traverse modules to find the first real layer (skip containers like Sequential)
         for layer in self.proc.modules():
-            if (not isinstance(layer, (torch.nn.Sequential,
-                                       torch.nn.ModuleList,
-                                       torch.nn.ModuleDict))
-                    and not isinstance(layer, torch.nn.Module)
-                    and hasattr(layer, 'weight')):
-                continue  # Skip non-leaf layers
             if isinstance(layer, (torch.nn.Conv2d, torch.nn.Linear, torch.nn.Conv1d, torch.nn.Embedding)):
                 first_layer = layer
                 break
@@ -659,7 +824,8 @@ class AgentProcessorChecker:
                                    pubsub=False,
                                    private_only=True)]
 
-    def __guess_proc_outputs(self):
+    def __guess_proc_outputs(self) -> None:
+        """Heuristically infers ``proc_outputs`` by running a dummy forward pass."""
         if hasattr(self.proc, "proc_outputs"):
             if self.proc.proc_outputs is not None:
                 self.proc_outputs = []
@@ -741,7 +907,8 @@ class AgentProcessorChecker:
                                             pubsub=False,
                                             private_only=True))
 
-    def __guess_proc_opts(self):
+    def __guess_proc_opts(self) -> None:
+        """Fills in missing optimiser and loss entries in ``proc_opts``."""
         if self.proc_opts is None:
             if isinstance(self.proc.module, MultiIdentity) or len(list(self.proc.parameters())) == 0:
                 self.proc_opts = {"optimizer": None,
@@ -755,7 +922,8 @@ class AgentProcessorChecker:
             if "losses" not in self.proc_opts:
                 self.proc_opts["losses"] = [None] * len(self.proc_outputs)
 
-    def __fix_proc_opts(self):
+    def __fix_proc_opts(self) -> None:
+        """Normalises ``proc_opts`` to always contain the canonical ``"optimizer"`` and ``"losses"`` keys."""
         opts = {}
         found_optimizer = False
         found_loss = False
@@ -767,7 +935,7 @@ class AgentProcessorChecker:
             found_loss = True
 
         if not found_loss:
-            opts['losses'] = [torch.nn.functional.mse_loss] * len(self.proc_opts)
+            opts['losses'] = [torch.nn.functional.mse_loss] * len(self.proc_outputs)
 
         for k, v in self.proc_opts.items():
             if isinstance(v, torch.optim.Optimizer):
@@ -781,7 +949,7 @@ class AgentProcessorChecker:
                     else:
                         cannot_fix = True
                         break
-            elif k == "losses" and isinstance(v, list) or isinstance(v, tuple):
+            elif k == "losses" and (isinstance(v, list) or isinstance(v, tuple)):
                 opts["losses"] = v
                 continue
             elif (v == torch.nn.functional.mse_loss or isinstance(v, torch.nn.MSELoss)
@@ -815,7 +983,8 @@ class AgentProcessorChecker:
         # Updating
         self.proc_opts = opts
 
-    def __guess_proc_optional_inputs(self):
+    def __guess_proc_optional_inputs(self) -> None:
+        """Infers which processor inputs have default values by inspecting the module's ``forward`` signature."""
         self.proc_optional_inputs = []
         if isinstance(self.proc, ModuleWrapper):
             if hasattr(self.proc.module, "forward"):

@@ -20,6 +20,7 @@ import datetime
 import requests
 import ipaddress
 from datetime import timezone
+from unaiverse.utils.logger import log
 
 
 class NodeProfile:
@@ -198,7 +199,7 @@ class NodeProfile:
                 'logical_cores': psutil.cpu_count(logical=True)
             }
         except Exception as e:
-            print(f"Error getting CPU info: {e}")
+            log.error(f"Error getting CPU info: {e}")
             return {'physical_cores': None, 'logical_cores': None}
 
     # Get memory information
@@ -216,7 +217,7 @@ class NodeProfile:
                 'used': float(used_gb)
             }
         except Exception as e:
-            print(f"Error getting memory info: {e}")
+            log.error(f"Error getting memory info: {e}")
             return {'total': 0.0, 'available': 0.0, 'used': 0.0}
 
     # Get public ip address
@@ -424,7 +425,7 @@ class NodeProfile:
                     # Update the specification in the profile data with the new current specs
                     self._profile_data['dynamic'] |= current_specs
                     change_summary = ", ".join(change_details)
-                    print(f"Specs changed for '{self._profile_data['static']['node_id']}': {change_summary}")
+                    log.print(f"Specs changed for '{self._profile_data['static']['node_id']}': {change_summary}")
 
         self._profile_last_updated = datetime.datetime.now(timezone.utc)  # Mark profile as checked/updated
 
