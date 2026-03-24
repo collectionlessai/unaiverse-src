@@ -118,27 +118,11 @@ class GoLibP2P:
         """
         ...
 
-    def InitiateWebRTCConnection(self, instance: int, peer_id: bytes) -> int:
-        """
-        InitiateWebRTCConnection(instance: int, peer_id: bytes) -> bytes
-
-        Initiates a WebRTC connection with the specified peer. Returns a JSON result.
-        """
-        ...
-
     def GetWebRTCConnections(self, instance: int) -> int:
         """
         GetWebRTCConnections(instance: int) -> bytes
 
         Returns a list of all active WebRTC connections. Returns a JSON result.
-        """
-        ...
-
-    def CloseWebRTCConnection(self, instance: int, peer_id: bytes) -> int:
-        """
-        CloseWebRTCConnection(instance: int, peer_id: bytes) -> bytes
-
-        Closes a WebRTC connection with the specified peer. Returns a JSON result.
         """
         ...
 

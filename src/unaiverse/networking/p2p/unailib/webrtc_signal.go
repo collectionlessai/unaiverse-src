@@ -160,6 +160,23 @@ func registerWebRTCDataChannel(ni *NodeInstance, remotePeer peer.ID, dc *pwebrtc
 			ni.webrtcMutex.Unlock()
 			logger.Infof("[GO] 🗑️ Instance %d: WebRTC connection with %s removed (%s)",
 				ni.instanceIndex, remotePeer, state)
+
+			// If the underlying libp2p connection also died, we can prune this peer entirely (we can assume it's a friendly peer).
+			if ni.host != nil {
+				if len(ni.host.Network().ConnsToPeer(remotePeer)) == 0 {
+					logger.Infof("[GO] 🧹 Instance %d: WebRTC died and no libp2p connections remain for %s. Pruning peer.", ni.instanceIndex, remotePeer)
+					ni.peersMutex.Lock()
+					delete(ni.friendlyPeers, remotePeer)
+					ni.peersMutex.Unlock()
+
+					ni.streamsMutex.Lock()
+					if stream, ok := ni.persistentChatStreams[remotePeer]; ok {
+						_ = stream.Close()
+						delete(ni.persistentChatStreams, remotePeer)
+					}
+					ni.streamsMutex.Unlock()
+				}
+			}
 		}
 	})
 }
@@ -196,6 +213,18 @@ func handleSignalingStream(ni *NodeInstance, s network.Stream) {
 	defer s.Close()
 
 	remotePeer := s.Conn().RemotePeer()
+	ni.webrtcMutex.RLock()
+	existing, exists := ni.webrtcConnections[remotePeer]
+	ni.webrtcMutex.RUnlock()
+
+	if exists {
+		if existing.dc != nil {
+			if existing.dc.ReadyState() == pwebrtc.DataChannelStateOpen {
+				logger.Warnf("[GO] ⚠️ Instance %d: Rejecting redundant WebRTC signaling from %s (already connected)", ni.instanceIndex, remotePeer)
+				return
+			}
+		}
+	}
 	logger.Infof("[GO] 📶 Instance %d: Incoming WebRTC signaling from %s", ni.instanceIndex, remotePeer)
 
 	ctx, cancel := context.WithTimeout(ni.ctx, webrtcSignalingTimeout)
