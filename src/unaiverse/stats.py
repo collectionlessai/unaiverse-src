@@ -91,9 +91,11 @@ class UIPlot:
             'font': {'color': THEME['text_main']}
         }
 
-    def add_line(self, x: List[Any], y: List[Any], name: str, color: str = THEME['main'],
+    def add_line(self, x: List[Any], y: List[Any], name: str, color=None,
                  legend_group: str = None, show_legend: bool = True):
         """Adds a standard time-series line."""
+        if color is None:
+            color = THEME['main']
         trace = {
             'x': x, 'y': y,
             'name': name,
@@ -105,8 +107,10 @@ class UIPlot:
         }
         self._data.append(trace)
 
-    def add_area(self, x: List[Any], y: List[Any], name: str, color: str = THEME['main']):
+    def add_area(self, x: List[Any], y: List[Any], name: str, color=None):
         """Adds a filled area chart."""
+        if color is None:
+            color = THEME['main']
         trace = {
             'x': x, 'y': y, 'name': name,
             'type': 'scatter', 'fill': 'tozeroy',
@@ -154,8 +158,10 @@ class UIPlot:
         }
         self._data.append(trace)
     
-    def add_bar(self, xs: List[Any], ys: List[Any], names: List[str], colors: Union[str, List[str]] = THEME['main']):
+    def add_bar(self, xs: List[Any], ys: List[Any], names: List[str], colors=None):
         """Adds a bar chart trace."""
+        if colors is None:
+            colors = THEME['main']
         trace = {
             'type': 'bar',
             'x': xs,
@@ -262,8 +268,8 @@ class DefaultBaseDash:
             return
 
         xa, ya = self._map[position]
-        x_dom = self.layout[xa]["domain"]
-        y_dom = self.layout[ya]["domain"]
+        x_dom: list[float] = self.layout[xa]["domain"]
+        y_dom: list[float] = self.layout[ya]["domain"]
 
         # Merge Traces
         for t in ui_plot._data:
@@ -386,7 +392,7 @@ class Stats:
         self.world_ungrouped_keys: Set[str] = set()
         self.agent_grouped_keys: Set[str] = set()
         self.agent_ungrouped_keys: Set[str] = set()
-        self.stat_types: Dict[str, str] = {}
+        self.stat_types = {}
         self._stat_defaults: Dict[str, Any] = {}
         self._initialize_key_sets()
 
@@ -396,8 +402,8 @@ class Stats:
             self.min_window_duration = timedelta(hours=cache_window_hours)
             self.db_path = db_path
             self._db_conn: Optional[sqlite3.Connection] = None
-            self._static_db_buffer: List[Tuple[str, str]] = []
-            self._dynamic_db_buffer: List[Tuple[float, str, str, str]] = []
+            self._static_db_buffer = []
+            self._dynamic_db_buffer = []
 
             # --- World Initialization ---
             self._init_db()  # Connect and create tables
@@ -1012,8 +1018,8 @@ class Stats:
 
     # --- WORLD API (QUERYING) ---
     def query_history(self,
-                      stat_names: List[str] = [],
-                      peer_ids: List[str] = [],
+                      stat_names=None,
+                      peer_ids=None,
                       time_range: Union[Tuple[int, int], int, None] = None,
                       value_range: Tuple[float, float] | None = None,
                       limit: int | None = None) -> Dict[str, Any]:
@@ -1026,6 +1032,10 @@ class Stats:
         Args:
             value_range: (min, max) - Only returns rows where val_num is within range.
         """
+        if stat_names is None:
+            stat_names = []
+        if peer_ids is None:
+            peer_ids = []
         if not self.is_world or not self._db_conn:
             return {}
         
@@ -1068,6 +1078,7 @@ class Stats:
                         if 'nodes' not in val:
                             val['nodes'] = {}
                     else:
+                        val: dict
                         # Convert entire dict to sets (as it was before)
                         edges_set = {k: set(v) for k, v in val.items()}
                         # Migrate to new structure on the fly
@@ -1182,8 +1193,8 @@ class Stats:
                 if not series:
                     continue
                 filled = []
-                series_times = series.keys()
-                series_vals = series.values()
+                series_times = list(series.keys())
+                series_vals = list(series.values())
                 
                 last_val = series_vals[0]
                 series_idx = 0

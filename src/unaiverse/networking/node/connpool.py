@@ -25,7 +25,7 @@ class ConnectionPools:
 
     def __init__(self, max_connections: int, pool_name_to_p2p_name_and_ratio: dict[str, [str, float]],
                  p2p_name_to_p2p: dict[str, P2P],
-                 public_key: str | None = None, token: str | None = None):
+                 public_key: str | None = None, token: str | None = None) -> None:
         """Initializes a new instance of the ConnectionPools class.
 
         Args:
@@ -114,7 +114,7 @@ class ConnectionPools:
                 pool_contents_max_con_and_p2p)
             self.p2p_to_pool_names[p2p].append(pool_name)
 
-    def __str__(self):
+    def __str__(self) -> str:
         """Returns a human-readable string representation of the connection pools' status.
 
         Args:
@@ -139,7 +139,7 @@ class ConnectionPools:
             s += ss
         return s
 
-    def __getitem__(self, p2p_name):
+    def __getitem__(self, p2p_name: str) -> P2P:
         """Retrieves a P2P object by its name.
 
         Args:
@@ -150,7 +150,7 @@ class ConnectionPools:
         """
         return self.p2p_name_to_p2p[p2p_name]
 
-    async def conn_routing_fcn(self, connected_peer_infos: list, p2p: P2P):
+    async def conn_routing_fcn(self, connected_peer_infos: list, p2p: P2P) -> dict:
         """A placeholder function that must be implemented to route connected peers to the correct pool (async).
 
         Args:
@@ -162,7 +162,7 @@ class ConnectionPools:
         """
         raise NotImplementedError("You must implement conn_routing_fcn!")
 
-    async def __connect(self, p2p: P2P, addresses: list[str]):
+    async def __connect(self, p2p: P2P, addresses: list[str]) -> tuple[str | None, bool]:
         """Establishes a connection to a peer via a P2P network (async).
 
         Args:
@@ -228,7 +228,7 @@ class ConnectionPools:
                 return None, False
 
     @staticmethod
-    async def disconnect(p2p: P2P, peer_id: str):
+    async def disconnect(p2p: P2P, peer_id: str) -> bool:
         """Disconnects from a specific peer on a P2P network (async).
 
         Args:
@@ -244,7 +244,7 @@ class ConnectionPools:
             return False
         return True
 
-    def set_token(self, token: str):
+    def set_token(self, token: str) -> None:
         """Sets the authentication token for the connection pools.
 
         Args:
@@ -252,7 +252,7 @@ class ConnectionPools:
         """
         self.__token = token
 
-    async def verify_token(self, token: str, peer_id: str):
+    async def verify_token(self, token: str, peer_id: str) -> tuple[str | None, str | None]:
         """Verifies a received token using the provided public key (async).
 
         Args:
@@ -263,12 +263,12 @@ class ConnectionPools:
             A tuple containing the node ID and CV hash if the token is valid, otherwise None.
         """
         if self.__token_verifier is None:
-            return None
+            return None, None
         else:
             node_id, cv_hash = self.__token_verifier.verify_token(token, p2p_peer=peer_id)
             return node_id, cv_hash  # If the verification fails, this is None, None
 
-    async def connect(self, addresses: list[str], p2p_name: str):
+    async def connect(self, addresses: list[str], p2p_name: str) -> tuple[str | None, bool]:
         """Connects to a peer on a specified P2P network (async).
 
         Args:
@@ -300,7 +300,7 @@ class ConnectionPools:
         except P2PError:
             return None
 
-    def add(self, peer_info: dict, pool_name: str):
+    def add(self, peer_info: dict, pool_name: str) -> bool:
         """Adds a connected peer to a specified connection pool.
 
         Args:
@@ -331,7 +331,7 @@ class ConnectionPools:
         else:
             return False
 
-    async def remove(self, peer_id: str):
+    async def remove(self, peer_id: str) -> bool:
         """Removes a peer from its connection pool and disconnects from it (async).
 
         Args:
@@ -358,7 +358,7 @@ class ConnectionPools:
         else:
             return False
 
-    def get_all_connected_peer_infos(self, pool_name: str):
+    def get_all_connected_peer_infos(self, pool_name: str) -> list[dict]:
         """Retrieves a list of peer information dictionaries for a given pool.
 
         Args:
@@ -369,7 +369,7 @@ class ConnectionPools:
         """
         return list(self.pool_name_to_peer_infos[pool_name].values())
 
-    def get_pool_status(self):
+    def get_pool_status(self) -> dict[str, set]:
         """Returns a dictionary showing the set of peer IDs in each pool.
 
         Args:
@@ -380,7 +380,7 @@ class ConnectionPools:
         """
         return {k: v[0] for k, v in self.pool_name_to_pool_triple.items()}
 
-    def get_all_connected_peer_ids(self):
+    def get_all_connected_peer_ids(self) -> list[str]:
         """Retrieves a list of all peer IDs currently connected across all pools.
 
         Args:
@@ -391,7 +391,7 @@ class ConnectionPools:
         """
         return list(self.peer_id_to_pool_name.keys())
 
-    async def update(self):
+    async def update(self) -> tuple[dict, dict]:
         """Refreshes the connection pools by checking for new and lost connections (async).
 
         Args:
@@ -515,7 +515,7 @@ class ConnectionPools:
 
         return processed_messages
 
-    def get_added_after_updating(self, pool_name: str | None = None):
+    def get_added_after_updating(self, pool_name: str | None = None) -> set | dict:
         """Retrieves the peers that were added in the last update cycle.
 
         Args:
@@ -529,7 +529,7 @@ class ConnectionPools:
         else:
             return self.pool_name_to_added_in_last_update
 
-    def get_removed_after_updating(self, pool_name: str | None = None):
+    def get_removed_after_updating(self, pool_name: str | None = None) -> set | dict:
         """Retrieves the peers that were removed in the last update cycle.
 
         Args:
@@ -543,7 +543,7 @@ class ConnectionPools:
         else:
             return self.pool_name_to_removed_in_last_update
 
-    def get_last_token(self, peer_id):
+    def get_last_token(self, peer_id: str) -> str | None:
         """Retrieves the last known token for a given peer.
 
         Args:
@@ -554,7 +554,7 @@ class ConnectionPools:
         """
         return self.peer_id_to_token[peer_id] if peer_id in self.peer_id_to_token else None
 
-    def is_connected(self, peer_id: str, pool_name: str | None = None):
+    def is_connected(self, peer_id: str, pool_name: str | None = None) -> bool:
         """Checks if a peer is currently connected, optionally in a specific pool.
 
         Args:
@@ -569,7 +569,7 @@ class ConnectionPools:
         else:
             return peer_id in self.peer_id_to_pool_name and pool_name == self.peer_id_to_pool_name[peer_id]
 
-    def get_pool_of(self, peer_id: str):
+    def get_pool_of(self, peer_id: str) -> str | None:
         """Gets the pool name for a given connected peer.
 
         Args:
@@ -583,7 +583,7 @@ class ConnectionPools:
         else:
             return None
 
-    def size(self, pool_name: str | None = None):
+    def size(self, pool_name: str | None = None) -> int:
         """Returns the number of connections in a specific pool or the total number across all pools.
 
         Args:
@@ -593,15 +593,15 @@ class ConnectionPools:
             The size of the pool or the total number of connections.
         """
         if pool_name is not None:
-            return len(self.pool_name_to_pool_triple[pool_name])
+            return len(self.pool_name_to_pool_triple[pool_name][0])
         else:
             c = 0
             for v in self.pool_name_to_pool_triple.values():
-                c += len(v)
+                c += len(v[0])
             return c
 
     async def send(self, peer_id: str, channel_trail: str | None,
-                   content_type: str, content: bytes | dict | None = None, p2p: P2P | None = None):
+                   content_type: str, content: bytes | dict | None = None, p2p: P2P | None = None) -> bool:
         """Sends a direct message to a specific peer (async).
 
         Args:
@@ -648,7 +648,7 @@ class ConnectionPools:
             log.error("Sending error is: " + str(e), sub=p2p.log_sub)
             return False
 
-    async def subscribe(self, peer_id: str, channel: str, default_p2p_name: str | None = None):
+    async def subscribe(self, peer_id: str, channel: str, default_p2p_name: str | None = None) -> bool:
         """Subscribes to a topic/channel on a P2P network (async).
 
         Args:
@@ -680,7 +680,7 @@ class ConnectionPools:
             return False
         return True
 
-    async def unsubscribe(self, peer_id: str, channel: str, default_p2p_name: str | None = None):
+    async def unsubscribe(self, peer_id: str, channel: str, default_p2p_name: str | None = None) -> bool:
         """Unsubscribes from a topic/channel on a P2P network (async).
 
         Args:
@@ -713,7 +713,7 @@ class ConnectionPools:
         return True
 
     async def publish(self, peer_id: str, channel: str,
-                      content_type: str, content: bytes | dict | tuple | None = None):
+                      content_type: str, content: bytes | dict | tuple | None = None) -> bool:
         """Publishes a message to a topic/channel on a P2P network (async).
 
         Args:
@@ -842,11 +842,11 @@ class NodeConn(ConnectionPools):
         # Rendezvous
         self.rendezvous_tag = -1
 
-    def reset_rendezvous_tag(self):
+    def reset_rendezvous_tag(self) -> None:
         """Resets the rendezvous tag to its initial state."""
         self.rendezvous_tag = -1
 
-    async def conn_routing_fcn(self, connected_peer_infos: list, p2p: P2P):
+    async def conn_routing_fcn(self, connected_peer_infos: list, p2p: P2P) -> dict:
         """Routes connected peers to the correct connection pool based on their network and role (async).
 
         Args:
@@ -900,7 +900,7 @@ class NodeConn(ConnectionPools):
 
         return pool_name_and_peer_id_to_peer_info
 
-    def set_world(self, world_peer_id: str | None):
+    def set_world(self, world_peer_id: str | None) -> None:
         """Sets the peer ID of the world node.
 
         Args:
@@ -908,7 +908,7 @@ class NodeConn(ConnectionPools):
         """
         self.world_node_peer_id = world_peer_id
 
-    def set_inspector(self, inspector_peer_id: str | None):
+    def set_inspector(self, inspector_peer_id: str | None) -> None:
         """Sets the peer ID of the inspector.
 
         Args:
@@ -916,7 +916,7 @@ class NodeConn(ConnectionPools):
         """
         self.inspector_peer_id = inspector_peer_id
 
-    def get_world_peer_id(self):
+    def get_world_peer_id(self) -> str | None:
         """Returns the peer ID of the world node.
 
         Args:
@@ -927,7 +927,7 @@ class NodeConn(ConnectionPools):
         """
         return self.world_node_peer_id
 
-    def set_addresses_in_peer_info(self, peer_id, addresses):
+    def set_addresses_in_peer_info(self, peer_id: str, addresses: list[str]) -> None:
         """Updates the list of addresses for a given peer.
 
         Args:
@@ -940,7 +940,7 @@ class NodeConn(ConnectionPools):
             for _addrs in addresses:
                 addrs.append(_addrs)
 
-    def set_role(self, peer_id, new_role: int):
+    def set_role(self, peer_id: str, new_role: int) -> None:
         """Updates the role of a peer and its associated role-based lists.
 
         Args:
@@ -965,7 +965,7 @@ class NodeConn(ConnectionPools):
             self.role_to_peer_ids[new_role] = set()
         self.role_to_peer_ids[new_role].add(peer_id)
 
-    def set_world_agents_list(self, world_agents_list_peer_infos: list[dict] | None):
+    def set_world_agents_list(self, world_agents_list_peer_infos: list[dict] | None) -> None:
         """Sets the list of all world agents based on a provided list of peer information.
 
         Args:
@@ -995,7 +995,7 @@ class NodeConn(ConnectionPools):
 
         self.world_agents_and_world_masters_list = self.world_agents_list | self.world_masters_list
 
-    def set_world_masters_list(self, world_masters_list_peer_infos: list[dict] | None):
+    def set_world_masters_list(self, world_masters_list_peer_infos: list[dict] | None) -> None:
         """Sets the list of all world masters based on a provided list of peer information.
 
         Args:
@@ -1025,7 +1025,7 @@ class NodeConn(ConnectionPools):
 
         self.world_agents_and_world_masters_list = self.world_agents_list | self.world_masters_list
 
-    def add_to_world_agents_list(self, peer_id: str, addrs: list[str], role: int = -1):
+    def add_to_world_agents_list(self, peer_id: str, addrs: list[str], role: int = -1) -> None:
         """Adds a new world agent to the list.
 
         Args:
@@ -1042,7 +1042,7 @@ class NodeConn(ConnectionPools):
         self.set_role(peer_id, role)
         self.world_agents_and_world_masters_list = self.world_agents_list | self.world_masters_list
 
-    def add_to_world_masters_list(self, peer_id: str, addrs: list[str], role: int = -1):
+    def add_to_world_masters_list(self, peer_id: str, addrs: list[str], role: int = -1) -> None:
         """Adds a new world master to the list.
 
         Args:
@@ -1059,14 +1059,14 @@ class NodeConn(ConnectionPools):
         self.set_role(peer_id, role)
         self.world_agents_and_world_masters_list = self.world_agents_list | self.world_masters_list
 
-    def get_added_after_updating(self, pool_names: list[str] | None = None):
+    def get_added_after_updating(self, pool_names: list[str] | None = None) -> dict[str, set]:
         """Retrieves the set of peers added after the last update cycle for specified pools.
 
         Args:
             pool_names: A list of pool names to check. If None, checks all pools.
 
         Returns:
-            A dictionary mapping pool names to sets of added peer IDs, or a single set if only one pool is specified.
+            A dictionary mapping pool names to sets of added peer IDs.
         """
         if pool_names is not None:
             ret = {}
@@ -1076,14 +1076,14 @@ class NodeConn(ConnectionPools):
         else:
             return super().get_added_after_updating()
 
-    def get_removed_after_updating(self, pool_names: list[str] | None = None):
+    def get_removed_after_updating(self, pool_names: list[str] | None = None) -> dict[str, set]:
         """Retrieves the set of peers removed after the last update cycle for specified pools.
 
         Args:
             pool_names: A list of pool names to check. If None, checks all pools.
 
         Returns:
-            A dictionary mapping pool names to sets of removed peer IDs, or a single set if only one pool is specified.
+            A dictionary mapping pool names to sets of removed peer IDs.
         """
         if pool_names is not None:
             ret = {}
@@ -1093,7 +1093,7 @@ class NodeConn(ConnectionPools):
         else:
             return super().get_removed_after_updating()
 
-    def size(self, pool_names: list[str] | None = None):
+    def size(self, pool_names: list[str] | None = None) -> int:
         """Returns the total number of connections across all specified pools.
 
         Args:
@@ -1102,15 +1102,15 @@ class NodeConn(ConnectionPools):
         Returns:
             The total number of connections.
         """
-        if pool_names is not None:
+        if pool_names is None:
             return super().size()
         else:
             c = 0
-            for p in self.pool_names:
+            for p in pool_names:
                 c += super().size(p)
             return c
 
-    def is_connected(self, peer_id: str, pool_names: list[str] | None = None):
+    def is_connected(self, peer_id: str, pool_names: list[str] | None = None) -> bool:
         """Checks if a peer is connected in any of the specified pools.
 
         Args:
@@ -1128,7 +1128,7 @@ class NodeConn(ConnectionPools):
                     return True
             return False
 
-    def is_public(self, peer_id):
+    def is_public(self, peer_id: str) -> bool:
         """Checks if a peer is connected via the public network.
 
         Args:
@@ -1140,7 +1140,7 @@ class NodeConn(ConnectionPools):
         pool_name = self.get_pool_of(peer_id)
         return pool_name in NodeConn.PUBLIC
 
-    def is_world_master(self, peer_id):
+    def is_world_master(self, peer_id: str) -> bool:
         """Checks if a peer is a world master.
 
         Args:
@@ -1152,7 +1152,7 @@ class NodeConn(ConnectionPools):
         pool_name = self.get_pool_of(peer_id)
         return pool_name in NodeConn.WORLD_MASTERS
 
-    def is_world_node(self, peer_id):
+    def is_world_node(self, peer_id: str) -> bool:
         """Checks if a peer is the world node.
 
         Args:
@@ -1164,7 +1164,7 @@ class NodeConn(ConnectionPools):
         pool_name = self.get_pool_of(peer_id)
         return pool_name in NodeConn.WORLD_NODE
 
-    def is_in_world(self, peer_id):
+    def is_in_world(self, peer_id: str) -> bool:
         """Checks if a peer is connected to the world network.
 
         Args:
@@ -1176,7 +1176,7 @@ class NodeConn(ConnectionPools):
         pool_name = self.get_pool_of(peer_id)
         return pool_name in NodeConn.WORLD
 
-    def get_role(self, peer_id):
+    def get_role(self, peer_id: str) -> int:
         """Retrieves the role of a given peer.
 
         Args:
@@ -1190,7 +1190,7 @@ class NodeConn(ConnectionPools):
         assert role & 1 != 0 or role == 0, "Expecting public role to be zero (all-zero-bits)"
         return role
 
-    def get_addrs(self, peer_id):
+    def get_addrs(self, peer_id: str) -> list[str] | None:
         """Retrieves the list of addresses for a given peer.
 
         Args:
@@ -1201,7 +1201,7 @@ class NodeConn(ConnectionPools):
         """
         return self.peer_id_to_addrs.get(peer_id)
 
-    def in_connection_queues(self, peer_id):
+    def in_connection_queues(self, peer_id: str) -> bool:
         """Checks if a peer ID exists in any connection pool.
 
         Args:
@@ -1212,7 +1212,7 @@ class NodeConn(ConnectionPools):
         """
         return peer_id in self.peer_id_to_pool_name
 
-    def find_addrs_by_role(self, role, return_peer_ids_too: bool = False):
+    def find_addrs_by_role(self, role: int, return_peer_ids_too: bool = False) -> list | tuple[list, list]:
         """Finds all addresses of peers with a specific role.
 
         Args:
@@ -1241,7 +1241,7 @@ class NodeConn(ConnectionPools):
         else:
             return ret_addrs, ret_peer_ids
 
-    def count_by_role(self, role: int):
+    def count_by_role(self, role: int) -> int:
         """Counts the number of peers with a specific role.
 
         Args:
@@ -1255,7 +1255,7 @@ class NodeConn(ConnectionPools):
         else:
             return 0
 
-    def get_all_connected_peer_infos(self, pool_names: list[str] | set[str]):
+    def get_all_connected_peer_infos(self, pool_names: list[str] | set[str]) -> list[dict]:
         """Retrieves a list of all peer info dictionaries for the specified pools.
 
         Args:
@@ -1269,7 +1269,7 @@ class NodeConn(ConnectionPools):
             ret += super().get_all_connected_peer_infos(p)
         return ret
 
-    async def set_world_agents_and_world_masters_lists_from_rendezvous(self):
+    async def set_world_agents_and_world_masters_lists_from_rendezvous(self) -> None:
         """Updates the lists of world agents and masters using data from the rendezvous topic (async)."""
         rendezvous_state = self.p2p_world.get_rendezvous_peers_info()
 
@@ -1304,7 +1304,7 @@ class NodeConn(ConnectionPools):
                 self.set_world_agents_list(world_agents_peer_infos)
                 self.set_world_masters_list(world_masters_peer_infos)
 
-    async def get_cv_hash_from_last_token(self, peer_id):
+    async def get_cv_hash_from_last_token(self, peer_id: str) -> str | None:
         """Retrieves the CV hash from the last token received from a peer (async).
 
         Args:
@@ -1320,7 +1320,7 @@ class NodeConn(ConnectionPools):
         else:
             return None
 
-    async def remove(self, peer_id: str):
+    async def remove(self, peer_id: str) -> None:
         """Removes a peer and its associated information from all lists and pools (async).
 
         Args:
@@ -1330,7 +1330,7 @@ class NodeConn(ConnectionPools):
         # if peer_id in self.peer_id_to_addrs:
         #    del self.peer_id_to_addrs[peer_id]
 
-    async def remove_all_world_agents(self):
+    async def remove_all_world_agents(self) -> None:
         """Removes all connected world agents from the pools and role lists (async)."""
         peer_infos = self.get_all_connected_peer_infos(NodeConn.WORLD)
         for c in peer_infos:
@@ -1339,10 +1339,10 @@ class NodeConn(ConnectionPools):
             if peer_id in self.peer_id_to_addrs:
                 del self.peer_id_to_addrs[peer_id]
             for role, peer_ids in self.role_to_peer_ids.items():
-                if role & 1 == NodeConn.WORLD:
+                if role & 1 == 1:
                     peer_ids.remove(peer_id)
 
-    async def subscribe(self, peer_id: str, channel: str, default_p2p_name: str | None = None):
+    async def subscribe(self, peer_id: str, channel: str, default_p2p_name: str | None = None) -> bool:
         """Subscribes to a channel, defaulting to the world P2P network if a network is not specified (async).
 
         Args:
