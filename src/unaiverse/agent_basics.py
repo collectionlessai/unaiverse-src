@@ -32,8 +32,8 @@ from unaiverse.streams.streamproxy import StreamProxy
 from unaiverse.networking.node.profile import NodeProfile
 from unaiverse.utils.misc import GenException, FileTracker
 from unaiverse.streams.streams import Stream, BufferedStream
+from unaiverse.streams.dataprops import DataProps, StreamType
 from unaiverse.networking.node.connpool import ConnectionPools
-from unaiverse.streams.dataprops import DataProps, Stream as StreamSpecs
 from unaiverse.interaction import Interaction, InteractionManager
 from unaiverse.modules.utils import AgentProcessorChecker, ModuleWrapper
 
@@ -70,8 +70,8 @@ class AgentBasics:
 
     def __init__(self,
                  proc: ModuleWrapper | torch.nn.Module | None,
-                 proc_inputs: list[StreamSpecs | str] | None = None,
-                 proc_outputs: list[StreamSpecs | str] | None = None,
+                 proc_inputs: list[StreamType | str] | None = None,
+                 proc_outputs: list[StreamType | str] | None = None,
                  proc_opts: dict | None = None,
                  behav: HybridStateMachine | None = None,
                  behav_lone_wolf: HybridStateMachine | str = "serve",
@@ -113,8 +113,8 @@ class AgentBasics:
         self.proc_last_inputs = None
         self.proc_last_outputs = None
         self.proc_optional_inputs = None
-        self.proc_net_hash = {'public': None, 'private': None}
-        self.proc_in_net_hash = {'public': None, 'private': None}
+        self.proc_net_hash: dict[str, None | str] = {'public': None, 'private': None}
+        self.proc_in_net_hash: dict[str, None | str] = {'public': None, 'private': None}
         self.merge_flat_stream_labels = merge_flat_stream_labels
         self.buffer_generated = buffer_generated
         self.buffer_generated_by_others = buffer_generated_by_others
@@ -1130,14 +1130,14 @@ class AgentBasics:
                         self.proc_net_hash['private'] = net_hash
 
     async def add_compatible_streams(self, peer_id: str,
-                                     streams_in_profile: list[DataProps], buffered: bool = False,
+                                     streams_in_profile: list[dict], buffered: bool = False,
                                      add_all: bool = False, public: bool = True) -> bool:
         """Add to the list of processor-compatible-streams those streams provided as arguments that are actually
         found to be compatible with the processor (if they are pubsub, it also subscribes to them) (async).
 
         Args:
             peer_id: The peer ID of the agent providing the streams.
-            streams_in_profile: A list of DataProps objects representing the streams from the peer's profile.
+            streams_in_profile: A list of dictionaries (DataProps to dict) representing the streams in peer's profile.
             buffered: If True, the added streams will be of type BufferedStream.
             add_all: If True, all streams from the profile are added, regardless of processor compatibility.
             public: Consider public streams only (or private streams only).
@@ -1970,16 +1970,16 @@ class AgentBasics:
             _list_of_requests = action.get_list_of_interactions()
             if len(_list_of_requests) > 0:
                 _selected_action_idx = i
-                _selected_request = _list_of_requests.get_oldest_interaction()
-                return _selected_action_idx, _selected_request
+                _selected_interaction = _list_of_requests.get_oldest_interaction()
+                return _selected_action_idx, _selected_interaction
         for i, action in enumerate(actions_list):
             if action.is_ready(consider_interactions=False):
                 _selected_action_idx = i
-                _selected_request = action.system_interaction
-                return _selected_action_idx, _selected_request
+                _selected_interaction = action.system_interaction
+                return _selected_action_idx, _selected_interaction
         _selected_action_idx = -1
-        _selected_request = None
-        return _selected_action_idx, _selected_request
+        _selected_interaction = None
+        return _selected_action_idx, _selected_interaction
 
     def hook_proc_tweak_inputs(self, inputs):
         """A callback method that saves the inputs to the processor right before execution.

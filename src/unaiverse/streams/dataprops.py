@@ -53,7 +53,7 @@ class FileContainer:
         return cls(content=file_bytes, filename=filename, mime_type=mime_type)
 
 
-class Stream:
+class StreamType:
     def __init__(self, *args: object, private_only: bool = False, public_only: bool = False, **kwargs: object) -> None:
         """Initializes a `Stream` object, which is a container for one or two `DataProps` instances. It creates a
          `DataProps` object for a private stream and, optionally, a public stream.
@@ -113,13 +113,13 @@ class Stream:
         """
         raise RuntimeError("This method can only be called on a DataProps object and not on Stream")
 
-    def clone(self) -> 'Stream':
+    def clone(self) -> 'StreamType':
         """Creates and returns a deep copy of the `Stream` object.
 
         Returns:
             A new `Stream` object that is a clone of the original.
         """
-        ret = Stream()
+        ret = StreamType()
         ret.props = []
         for p in self.props:
             ret.props.append(p.clone())
@@ -1357,4 +1357,4 @@ class TensorLabels:
 
 
 # Backward compatibility alias (Deprecated)
-Data4Proc = Stream
+Data4Proc = StreamType

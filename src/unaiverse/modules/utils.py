@@ -21,7 +21,7 @@ import numpy as np
 from PIL import Image
 from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
-from unaiverse.streams.dataprops import Stream
+from unaiverse.streams.dataprops import StreamType
 
 
 class GenException(Exception):
@@ -261,14 +261,14 @@ def get_proc_inputs_and_proc_outputs_for_rnn(u_shape: torch.Size | tuple, du_dim
     if isinstance(u_shape, torch.Size):
         u_shape = tuple(u_shape)
     proc_inputs = [
-        Stream(data_type="tensor", tensor_shape=(None,) + u_shape, tensor_dtype=torch.float32,
-               pubsub=False, private_only=True),
-        Stream(data_type="tensor", tensor_shape=(None, du_dim,), tensor_dtype=torch.float32,
-               pubsub=False, private_only=True)
+        StreamType(data_type="tensor", tensor_shape=(None,) + u_shape, tensor_dtype=torch.float32,
+                   pubsub=False, private_only=True),
+        StreamType(data_type="tensor", tensor_shape=(None, du_dim,), tensor_dtype=torch.float32,
+                   pubsub=False, private_only=True)
     ]
     proc_outputs = [
-        Stream(data_type="tensor", tensor_shape=(None, y_dim), tensor_dtype=torch.float32,
-               pubsub=False, private_only=True)
+        StreamType(data_type="tensor", tensor_shape=(None, y_dim), tensor_dtype=torch.float32,
+                   pubsub=False, private_only=True)
     ]
     return proc_inputs, proc_outputs
 
@@ -285,9 +285,9 @@ def get_proc_inputs_and_proc_outputs_for_image_classification(y_dim: int) -> tup
     """
     if y_dim == -1:
         y_dim = 1000  # Assuming ImageNet-trained models
-    proc_inputs = [Stream(data_type="img", pubsub=False, private_only=True)]
-    proc_outputs = [Stream(data_type="tensor", tensor_shape=(None, y_dim), tensor_dtype=torch.float32,
-                           pubsub=False, private_only=True)]
+    proc_inputs = [StreamType(data_type="img", pubsub=False, private_only=True)]
+    proc_outputs = [StreamType(data_type="tensor", tensor_shape=(None, y_dim), tensor_dtype=torch.float32,
+                               pubsub=False, private_only=True)]
     return proc_inputs, proc_outputs
 
 
@@ -450,8 +450,8 @@ class ModuleWrapper(torch.nn.Module):
 
     def __init__(self,
                  module: torch.nn.Module | None = None,
-                 proc_inputs: list[Stream] | None = None,
-                 proc_outputs: list[Stream] | None = None,
+                 proc_inputs: list[StreamType] | None = None,
+                 proc_outputs: list[StreamType] | None = None,
                  proc_opts: dict | None = None,
                  seed: int = -1) -> None:
         """Initialises the ModuleWrapper.
@@ -587,8 +587,8 @@ class AgentProcessorChecker:
 
         # Getting processor-related info from the main object which collects processor and its properties
         proc: torch.nn.Module = processor_container.proc
-        proc_inputs: list[Stream] | None = processor_container.proc_inputs
-        proc_outputs: list[Stream] | None = processor_container.proc_outputs
+        proc_inputs: list[StreamType] | None = processor_container.proc_inputs
+        proc_outputs: list[StreamType] | None = processor_container.proc_outputs
         proc_opts: dict | None = processor_container.proc_opts
         proc_optional_inputs: list | None = processor_container.proc_optional_inputs
 
@@ -602,13 +602,13 @@ class AgentProcessorChecker:
                 isinstance_fcn(proc_inputs, list) and (len(proc_inputs) == 0 or
                                                        (len(proc_inputs) > 0 and
                                                         isinstance_fcn(proc_inputs[0],
-                                                                       (Stream, str))))))):
+                                                                       (StreamType, str))))))):
             raise GenException("Invalid proc_inputs: it must be None or a list of Stream/str")
         if not ((proc_outputs is None or (
                 isinstance_fcn(proc_outputs, list) and (len(proc_outputs) == 0 or
                                                         (len(proc_outputs) > 0 and
                                                          isinstance_fcn(proc_outputs[0],
-                                                                        (Stream, str))))))):
+                                                                        (StreamType, str))))))):
             raise GenException("Invalid proc_inputs: it must be None or a list of Stream/str")
         if not (proc_opts is None or isinstance_fcn(proc_opts, dict)):
             raise GenException("Invalid proc_opts: it must be None or a dictionary")
@@ -618,7 +618,7 @@ class AgentProcessorChecker:
             for i, p in enumerate(proc_inputs_copy):
                 if isinstance(p, str):
                     try:
-                        proc_inputs_copy[i] = Stream(data_type=p, pubsub=False, private_only=False)
+                        proc_inputs_copy[i] = StreamType(data_type=p, pubsub=False, private_only=False)
                     except Exception as e:
                         raise GenException(f"Invalid Stream type {p}: {e}")
             proc_inputs = proc_inputs_copy
@@ -633,9 +633,9 @@ class AgentProcessorChecker:
         # Dummy processor (if no processor was provided)
         if self.proc is None:
             if self.proc_inputs is None:
-                self.proc_inputs = [Stream(data_type="all", pubsub=False, private_only=False)]
+                self.proc_inputs = [StreamType(data_type="all", pubsub=False, private_only=False)]
             if self.proc_outputs is None:
-                self.proc_outputs = [Stream(data_type="all", pubsub=False, private_only=False)]
+                self.proc_outputs = [StreamType(data_type="all", pubsub=False, private_only=False)]
             self.proc_opts = {'optimizer': None, 'losses': [None] * len(self.proc_outputs)}
             self.proc = ModuleWrapper(module=MultiIdentity(), proc_inputs=self.proc_inputs,
                                       proc_outputs=self.proc_outputs, proc_opts=self.proc_opts)
@@ -644,10 +644,10 @@ class AgentProcessorChecker:
 
             # String telling it is a human
             if isinstance(self.proc, str) and self.proc.lower() == "human":
-                self.proc_inputs = [Stream(data_type="text", pubsub=False, private_only=False),
-                                    Stream(data_type="img", pubsub=False, private_only=False)]
-                self.proc_outputs = [Stream(data_type="text", pubsub=False, private_only=False),
-                                     Stream(data_type="img", pubsub=False, private_only=False)]
+                self.proc_inputs = [StreamType(data_type="text", pubsub=False, private_only=False),
+                                    StreamType(data_type="img", pubsub=False, private_only=False)]
+                self.proc_outputs = [StreamType(data_type="text", pubsub=False, private_only=False),
+                                     StreamType(data_type="img", pubsub=False, private_only=False)]
                 self.proc = ModuleWrapper(module=HumanModule(), proc_inputs=self.proc_inputs,
                                           proc_outputs=self.proc_outputs)
                 self.proc.device = torch.device("cpu")
@@ -820,16 +820,16 @@ class AgentProcessorChecker:
                              "please explicitly provide it (proc_input)")
 
         # Setting the input attribute
-        self.proc_inputs = [Stream(name="proc_input_0",
-                                   data_type=data_type,
-                                   data_desc=data_desc,
-                                   tensor_shape=tensor_shape,
-                                   tensor_labels=tensor_labels,
-                                   tensor_dtype=tensor_dtype,
-                                   stream_to_proc_transforms=stream_to_proc_transforms,
-                                   proc_to_stream_transforms=proc_to_stream_transforms,
-                                   pubsub=False,
-                                   private_only=True)]
+        self.proc_inputs = [StreamType(name="proc_input_0",
+                                       data_type=data_type,
+                                       data_desc=data_desc,
+                                       tensor_shape=tensor_shape,
+                                       tensor_labels=tensor_labels,
+                                       tensor_dtype=tensor_dtype,
+                                       stream_to_proc_transforms=stream_to_proc_transforms,
+                                       proc_to_stream_transforms=proc_to_stream_transforms,
+                                       pubsub=False,
+                                       private_only=True)]
 
     def __guess_proc_outputs(self) -> None:
         """Heuristically infers ``proc_outputs`` by running a dummy forward pass."""
@@ -903,16 +903,16 @@ class AgentProcessorChecker:
                 raise ValueError(f"Unsupported output type {type(output)}")
 
             # Setting the output attribute
-            self.proc_outputs.append(Stream(name="proc_output_" + str(j),
-                                            data_type=data_type,
-                                            data_desc=data_desc,
-                                            tensor_shape=tensor_shape,
-                                            tensor_labels=tensor_labels,
-                                            tensor_dtype=tensor_dtype,
-                                            stream_to_proc_transforms=stream_to_proc_transforms,
-                                            proc_to_stream_transforms=proc_to_stream_transforms,
-                                            pubsub=False,
-                                            private_only=True))
+            self.proc_outputs.append(StreamType(name="proc_output_" + str(j),
+                                                data_type=data_type,
+                                                data_desc=data_desc,
+                                                tensor_shape=tensor_shape,
+                                                tensor_labels=tensor_labels,
+                                                tensor_dtype=tensor_dtype,
+                                                stream_to_proc_transforms=stream_to_proc_transforms,
+                                                proc_to_stream_transforms=proc_to_stream_transforms,
+                                                pubsub=False,
+                                                private_only=True))
 
     def __guess_proc_opts(self) -> None:
         """Fills in missing optimiser and loss entries in ``proc_opts``."""

@@ -372,7 +372,6 @@ class Agent(AgentBasics):
         else:
             return None
 
-
     @action
     async def process(self) -> bool:
         """Runs one inference step: reads from stdin, calls the processor, and writes to stdout (async).
