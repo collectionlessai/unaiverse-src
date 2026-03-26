@@ -30,7 +30,11 @@ class Action:
                  idx: int = -1,
                  ready: bool = True,
                  msg: str | None = None,
-                 avoid_changing_ready: bool = False):
+                 avoid_changing_ready: bool = False,
+                 teleport: bool = False,
+                 total_time: float = 0.,
+                 timeout: float = 0,
+                 delay: float = 0):
         """Initializes an `Action` object, which encapsulates a method to be executed on a given object (`actionable`)
         with specified arguments. It sets up various properties for managing multistep actions, including
         `total_steps`, `total_time`, and `timeout`. It also handles wildcard argument replacement and checks for the
@@ -46,6 +50,13 @@ class Action:
             msg: An optional human-readable message.
             avoid_changing_ready: A boolean indicating that the selected ready state should not be changed by
                 internal rules.
+            teleport: A boolean indicating that this action must be hidden when drawing the state machine ('teleport').
+            total_time: The number of seconds representing the max duration of this action (from the moment it stars).
+                When <= 0., then no limits.
+            timeout: The number of seconds representing the max time we keep try running this action before giving up.
+                When <= 0., then no timeouts at all.
+            delay: The number of seconds that must pass when joining a state before considering this action.
+                When <= 0., then no delays at all.
         """
         # Basic properties
         self.name = name  # Name of the action (name of the corresponding method)
@@ -59,6 +70,8 @@ class Action:
         self.inner = ready
         self.outer = True
         self.state_machine = None
+        self.teleport = teleport
+        self.__mark = None
 
         # Fix UNICODE chars
         if self.msg is not None:
@@ -74,17 +87,17 @@ class Action:
         self.__get_action_params()  # This will fill the two attributes above
 
         # Time-based metrics
-        self.__total_time = 0  # A total time <= 0 means "no total time at all"
+        self.__total_time = total_time  # A total time <= 0 means "no total time at all"
         self.__total_time_with_wildcard = None
         self.__guess_total_time(self.args)  # This will "guess" the value of self.__total_time from the args dict
 
         # Time-based metrics
-        self.__timeout = 0  # A timeout <= 0 means "no total time at all"
+        self.__timeout = timeout  # A timeout <= 0 means "no total time at all"
         self.__timeout_with_wildcard = None
         self.__guess_timeout(self.args)  # This will "guess" the value of self.__timeout from the args dict
 
         # Time-based metrics
-        self.__delay = 0
+        self.__delay = delay
         self.__delay_with_wildcard = None
         self.__guess_delay(self.args)  # This will "guess" the value of self.__delay from the args dict
 
@@ -129,6 +142,18 @@ class Action:
     def set_state_machine(self, hsm: object) -> None:
         """Registers the parent state machine that owns this Custom."""
         self.state_machine = hsm
+
+    def set_mark(self, mark: object) -> None:
+        """Store an arbitrary marker object on the action."""
+        self.__mark = mark
+
+    def get_mark(self) -> object:
+        """Return the marker object previously set by set_mark."""
+        return self.__mark
+
+    def clear_mark(self) -> None:
+        """Clear the arbitrary marker object on the action."""
+        self.__mark = None
 
     async def __call__(self, interaction: Interaction | None = None) -> int:
         """Executes the action's associated method. This is the main entry point for running an Action. It handles
@@ -195,6 +220,7 @@ class Action:
                     actual_args[p] = self.get_timeout()
         else:
             if interaction.is_timed_out():
+                interaction.clear_mark()
                 if interaction.is_single_step():
                     return 2
                 if interaction.is_multi_steps():
@@ -203,7 +229,7 @@ class Action:
                     else:
                         return 2
             if interaction.is_multi_steps() and interaction.was_at_least_one_step_done():
-                if not self.actionable.im.check_stream_readiness(interaction):
+                if interaction.get_new_stream_data_tags(all_fresh_or_fail=True) is None:
                     return 1
 
             for p in self.param_list:
@@ -226,6 +252,7 @@ class Action:
                 if self.is_pedantic():
                     return 1
                 else:
+                    interaction.clear_mark()
                     return 2
             if interaction.is_multi_steps():
                 if self.deprecated:
@@ -234,6 +261,7 @@ class Action:
                     else:
                         return 2
                 else:
+                    interaction.clear_mark()
                     if interaction.was_at_least_one_step_done():
                         return 0
                     else:
@@ -244,6 +272,7 @@ class Action:
             interaction.set_timeout_starting_time(time.perf_counter())
 
             if interaction.is_single_step():
+                interaction.clear_mark()
                 return 0
             if interaction.is_multi_steps():
                 if self.deprecated:
@@ -253,6 +282,7 @@ class Action:
                         return 1
                 else:
                     if interaction.was_last_step_done():
+                        interaction.clear_mark()
                         return 0
                     else:
                         return 1
@@ -313,6 +343,10 @@ class Action:
         return not is_delayed and (self.inner or (consider_interactions and self.outer and len(
             self.interactions.get_interactions(doable_only=True)) > 0))
 
+    def is_teleport(self):
+        """Returns whether this action is a 'teleport' action, hidden from the shown state machine."""
+        return self.teleport
+
     def allows_outer_interactions(self) -> bool:
         """Returns whether this action can be triggered by external (outer) interactions."""
         return self.outer
@@ -320,6 +354,10 @@ class Action:
     def allows_inner_interactions(self) -> bool:
         """Returns whether this action can be triggered internally (inner readiness flag)."""
         return self.inner
+
+    def set_timeout(self, timeout: float) -> None:
+        """Sets the timeout to a custom value."""
+        self.__timeout = timeout
 
     def set_default_timeout(self) -> None:
         """Sets the timeout to the class-level default value (``Custom.DEFAULT_TIMEOUT``)."""
@@ -370,6 +408,24 @@ class Action:
             return [self.name, self.args | special_args, self.inner, self.id] + ([msg] if msg is not None else [])
         else:
             return [self.name, self.args | special_args]
+
+    def to_dict(self) -> dict:
+        """Converts the action's properties into a dict for easy serialization.
+
+        Returns:
+            A dict containing the action's properties.
+        """
+        d = {
+            "action": self.name,
+            "action_kwargs": self.args
+        }
+        if self.msg is not None:
+            d["msg"] = self.msg.encode("ascii", "xmlcharrefreplace").decode("ascii")
+        d["ready_without_outer_interactions"] = self.inner
+        d["max_duration"] = self.__total_time
+        d["retry_timeout"] = self.__timeout
+        d["time_to_wait_before_running"] = self.__delay
+        return d
 
     def same_as(self, name: str, args: dict | None) -> bool:
         """Compares the current action to a target action by name and arguments. It returns `True` if they are

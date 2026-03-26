@@ -47,6 +47,8 @@ class Custom:
     NOT_ALLOWED_IN_ACTION_SIGNATURE = SECONDS_ARG_NAMES | TIMEOUT_ARG_NAMES | DELAY_ARG_NAMES
     INTERACTION_ARG_NAMES = {'interaction', '_requester'}
     DEFAULT_TIMEOUT = 10.0
+    ALL_STATES_NAME = 'all'
+    NOT_ALLOWED_STATE_NAMES = {ALL_STATES_NAME}
 
     # Deprecated Action argument-related things
     SPECIAL_DEPRECATED_CASES_PREFIXES = {'ask_', 'do_', 'done_'}

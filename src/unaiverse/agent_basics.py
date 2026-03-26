@@ -441,14 +441,15 @@ class AgentBasics:
         if self.world_folder is not None and self.is_world:
 
             # Guessing roles from the list of json files
-            self.CUSTOM_ROLES = [os.path.splitext(f)[0] for f in os.listdir(self.world_folder)
+            listdir = os.listdir(self.world_folder)  # Do this only once
+            self.CUSTOM_ROLES = [os.path.splitext(f)[0] for f in listdir
                                  if os.path.isfile(os.path.join(self.world_folder, f))
                                  and f.lower().endswith(".json")]
             if len(self.CUSTOM_ROLES) == 0:
                 raise GenException(f"No world-role files (*.json) were found in the world folder {self.world_folder}")
 
             # Default behaviours (getting roles, that are the names of the files with extension "json")
-            default_behav_files = [os.path.join(self.world_folder, f) for f in os.listdir(self.world_folder)
+            default_behav_files = [os.path.join(self.world_folder, f) for f in listdir
                                    if os.path.isfile(os.path.join(self.world_folder, f)) and
                                    f.lower().endswith(".json")]
 
@@ -1332,8 +1333,13 @@ class AgentBasics:
             if (interaction.requester is not None and interaction.send_status and
                     interaction.requester in self.all_agents):
                 log.inter(f"Communicating completion of interaction {interaction.to_code_str(True)}")
+                my_public_peer_id, my_private_peer_id = self.get_peer_ids()
+                if interaction.requester in self.public_agents:
+                    my_peer_id = my_public_peer_id
+                else:
+                    my_peer_id = my_private_peer_id
                 ret = await self._node_conn.send(interaction.requester, channel_trail=None,
-                                                 content=interaction.to_status_dict(),
+                                                 content=interaction.to_status_dict(status_generated_by=my_peer_id),
                                                  content_type=Msg.INTERACTION_STATUS)
                 if not ret:
                     log.error(
@@ -2192,6 +2198,87 @@ class AgentBasics:
                 raise Exception(f"Error loading processor state: {e}")
 
         return True
+
+    async def _send(self, interaction: Interaction | None = None,
+                    action_name: str | None = None,
+                    target: str | list[str] | None = None,
+                    action_kwargs: dict | None = None,
+                    streams: tuple[list[str], int] | list[str] | None = None,
+                    data_samples: list[str | Image | torch.Tensor] | None = None,
+                    num_steps: int = -1,
+                    max_time: float = -1.,
+                    from_state: str | None = None,
+                    to_state: str | None = None,
+                    uuid: str | None = "random") -> 'Interaction | None':
+        """Send an interaction request to one or more target agents (async).
+
+        Accepts either a pre-built :class:`Interaction` object *or* raw arguments from which one will be created.
+
+        Args:
+            interaction: A pre-built Interaction.
+            action_name: The action name (str) if building one from raw args.
+                Ignored when a pre-built Interaction is provided.
+            target: Peer ID (or wildcard such as ``"<valid_cmp>"``) of the target
+                agent. It can be a list of agents. Ignored when a pre-built Interaction is provided.
+            action_kwargs: Action arguments dict.  Ignored when a pre-built Interaction
+                is provided.
+            streams: List of ``(stream_user_hash, num_samples)`` tuples (or just stream_user_hash if num_samples = 1).
+                Ignored when a pre-built Interaction is provided.
+            data_samples: List of actual data samples. Ignored when a pre-built Interaction is provided.
+            num_steps: Number of steps the interaction spans (used when building from raw args).
+                Ignored when a pre-built Interaction is provided.
+            max_time: Maximum time for the interaction. Ignored when a pre-built Interaction is provided.
+            from_state: Optional source state. Ignored when a pre-built Interaction provided.
+            to_state: Optional destination state. Ignored when a pre-built Interaction provided.
+            uuid: Optional UUID of the interaction. Ignored when a pre-built Interaction is provided.
+
+        Returns:
+            The Interaction on success, ``None`` on failure.
+        """
+        # Build Interaction from raw args if needed
+        if interaction is None:
+            _, private_peer_id = self.get_peer_ids()
+            interaction = Interaction(action_name=action_name, action_kwargs=action_kwargs,
+                                      streams=streams, data_samples=data_samples,
+                                      num_steps=num_steps,
+                                      requester=private_peer_id, target=target,
+                                      from_state=from_state, to_state=to_state,
+                                      timeout=max_time, uuid=uuid)
+        else:
+            # Ensure requester is set
+            if interaction.requester is None:
+                public_peer_id, private_peer_id = self.get_peer_ids()
+                interaction.requester = private_peer_id if self.behaving_in_world() else public_peer_id
+
+        # Resolve target agent(s)
+        if len(interaction.target) == 0:
+            return None
+
+        # Build the content for the interaction message
+        content = interaction.to_dict()
+        at_least_one_completed = False
+        correctly_contacted = []
+        for _peer_id in interaction.target:
+            ret = await self._node_conn.send(_peer_id, channel_trail=None,
+                                             content=content, content_type=Msg.INTERACTION)
+            if ret:
+                correctly_contacted.append(_peer_id)
+                at_least_one_completed = at_least_one_completed or ret
+                log.debug(f"[send] Sent interaction {interaction.uuid} "
+                          f"(action={interaction.action_name}) to {_peer_id}, result={ret}")
+
+        if at_least_one_completed:
+
+            # Updating targets with the list of actually contacted agents
+            interaction.update_target(correctly_contacted)
+
+            # Register with the Interaction Manager
+            if not self.im.register_sent(interaction):
+                return None
+            else:
+                return interaction
+        else:
+            return None
 
     def __str__(self):
         """String representation of an agent.

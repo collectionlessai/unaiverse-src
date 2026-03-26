@@ -16,8 +16,8 @@ import copy
 import json
 import torch
 import functools
-from PIL.Image import Image
 from typing import Callable
+from PIL.Image import Image
 from unaiverse.stats import Stats
 from unaiverse.clock import clock
 from unaiverse.custom import Custom
@@ -157,7 +157,7 @@ class Agent(AgentBasics):
 
         world_peer_id = self._node_conn.get_world_peer_id()
         if world_peer_id is None:
-            log.error("[send_stats_to_world] In world, but world_peer_id is None.")
+            log.error("Agent in world, but world_peer_id is None.")
             return
 
         self.collect_and_store_own_stats()  # update own stats
@@ -167,7 +167,7 @@ class Agent(AgentBasics):
             return
 
         # Send all stats
-        log.misc(f"[AGENT] Sending stats update to world {world_peer_id}...")
+        log.misc(f"Sending stats update to world {world_peer_id}...")
         if not (await self._node_conn.send(world_peer_id,
                                            channel_trail=None,
                                            content=payload,
@@ -175,7 +175,7 @@ class Agent(AgentBasics):
             log.error("Failed to send stats update to world.")
 
         # Ask the updates to the world (no overwrite required)
-        log.misc(f"[AGENT] Requesting stats update from world {world_peer_id}...")
+        log.misc(f"Requesting stats update from world {world_peer_id}...")
         if not (await self._node_conn.send(world_peer_id,
                                            channel_trail=None,
                                            content={'time_range': self.stats.max_seen_timestamp},
@@ -290,9 +290,9 @@ class Agent(AgentBasics):
         self._repeat = 1
         self._last_recorded_stream_num = 1
 
-    async def send(self, interaction: Interaction | None = None,
-                   action_name: str | None = None,
-                   target: str | None = None,
+    @action
+    async def send(self, action_name: str | None = None,
+                   target: str | list[str] | None = None,
                    action_kwargs: dict | None = None,
                    streams: tuple[list[str], int] | list[str] | None = None,
                    data_samples: list[str | Image | torch.Tensor] | None = None,
@@ -300,20 +300,21 @@ class Agent(AgentBasics):
                    max_time: float = -1.,
                    from_state: str | None = None,
                    to_state: str | None = None,
-                   uuid: str | None = "random") -> 'Interaction | None':
+                   uuid: str | None = "random",
+                   wait_completion: bool = False,
+                   interaction: Interaction | None = None) -> bool:
         """Send an interaction request to one or more target agents (async).
 
         Accepts either a pre-built :class:`Interaction` object *or* raw arguments from which one will be created.
 
         Args:
-            interaction: A pre-built Interaction.
             action_name: The action name (str) if building one from raw args.
                 Ignored when a pre-built Interaction is provided.
             target: Peer ID (or wildcard such as ``"<valid_cmp>"``) of the target
-                agent. Ignored when a pre-built Interaction is provided.
+                agent. It can be a list of agents. Ignored when a pre-built Interaction is provided.
             action_kwargs: Action arguments dict.  Ignored when a pre-built Interaction
                 is provided.
-            streams: List of ``(stream_user_hash, num_samples)`` tuples (or just stream_user_hash is num_samples = 1).
+            streams: List of ``(stream_user_hash, num_samples)`` tuples (or just stream_user_hash if num_samples = 1).
                 Ignored when a pre-built Interaction is provided.
             data_samples: List of actual data samples. Ignored when a pre-built Interaction is provided.
             num_steps: Number of steps the interaction spans (used when building from raw args).
@@ -322,55 +323,38 @@ class Agent(AgentBasics):
             from_state: Optional source state. Ignored when a pre-built Interaction provided.
             to_state: Optional destination state. Ignored when a pre-built Interaction provided.
             uuid: Optional UUID of the interaction. Ignored when a pre-built Interaction is provided.
+            wait_completion: If True, this action returns True if and only if we get a feed of interaction completion
+                from all the involved agents (Default: False).
+            interaction: The interaction triggered by the system to run this action (automatically set).
 
         Returns:
-            The Interaction on success, ``None`` on failure.
+            True if at least of the target agents was reached.
         """
-        # Build Interaction from raw args if needed
-        if interaction is None:
-            _, private_peer_id = self.get_peer_ids()
-            interaction = Interaction(action_name=action_name, action_kwargs=action_kwargs,
-                                      streams=streams, data_samples=data_samples,
-                                      num_steps=num_steps,
-                                      requester=private_peer_id, target=target,
-                                      from_state=from_state, to_state=to_state,
-                                      timeout=max_time, uuid=uuid)
-        else:
-            # Ensure requester is set
-            if interaction.requester is None:
-                public_peer_id, private_peer_id = self.get_peer_ids()
-                interaction.requester = private_peer_id if self.behaving_in_world() else public_peer_id
 
-        # Resolve target agent(s)
-        involved_agents = self.__involved_agents(interaction.target)
-        if len(involved_agents) == 0:
-            return None
+        # This action can only be triggered by the system, no ways
+        if not interaction.is_system():
+            return False
 
-        # Build the content for the interaction message
-        content = interaction.to_dict()
-        at_least_one_completed = False
-        correctly_contacted = []
-        for _peer_id in involved_agents:
-            ret = await self._node_conn.send(_peer_id, channel_trail=None,
-                                             content=content, content_type=Msg.INTERACTION)
-            if ret:
-                correctly_contacted.append(_peer_id)
-                at_least_one_completed = at_least_one_completed or ret
-                log.debug(f"[send] Sent interaction {interaction.uuid} "
-                          f"(action={interaction.action_name}) to {_peer_id}, result={ret}")
+        system_interaction = interaction
+        first_run = system_interaction.get_mark() is None
 
-        if at_least_one_completed:
-
-            # Updating targets with the list of actually contacted agents
-            interaction.target = correctly_contacted
-
-            # Register with the Interaction Manager
-            if not self.im.register_sent(interaction):
-                return None
+        if first_run:
+            target = self.__involved_agents(target)
+            sent_interaction = self._send(None, action_name, target, action_kwargs, streams,
+                                          data_samples, num_steps, max_time, from_state, to_state, uuid)
+            if wait_completion:
+                system_interaction.action_ref.set_default_timeout()  # This will make the action pedantic
+                system_interaction.set_mark(sent_interaction)  # First run, Saving the interaction that was sent
+                return False
             else:
-                return interaction
+                system_interaction.action_ref.set_timeout(-1.)  # Clear timeouts to ensure it is not pedantic
+                return sent_interaction is not None
         else:
-            return None
+            sent_interaction = system_interaction.get_mark()  # Loading the interaction that was sent at the first run
+            if sent_interaction.is_completed():
+                return True  # The mark will be automatically cleared by the Action class
+            else:
+                return False
 
     @action
     async def process(self) -> bool:
@@ -483,8 +467,8 @@ class Agent(AgentBasics):
             log.misc(f"Sending engagement request to {', '.join([x for x in self._found_agents])}")
         my_role_str = self._node_profile.get_dynamic_profile()['connections']['role']
         for found_agent in self._found_agents:  # The list of found agents will be cleared after this function
-            if await self.send(target=found_agent, action_name="get_engagement",
-                               action_kwargs={"sender_role": my_role_str}):
+            if await self._send(target=found_agent, action_name="get_engagement",
+                                action_kwargs={"sender_role": my_role_str}):
                 at_least_one_sent = True
             else:
                 log.error(f"Unable to send engagement to {found_agent}")
@@ -527,7 +511,7 @@ class Agent(AgentBasics):
                 sender_role_int = self.ROLE_STR_TO_BITS[sender_role]
 
             if acceptable_role_int == sender_role_int:
-                if await self.send(target=_requester, action_name="got_engagement"):
+                if await self._send(target=_requester, action_name="got_engagement"):
                     self._engaged_agents.add(_requester)
 
                     # Marking this agent as not available since it engaged with another one
@@ -583,8 +567,8 @@ class Agent(AgentBasics):
         if len(self._engaged_agents) > 0:
             log.misc(f"Sending disengagement request to {', '.join([x for x in self._engaged_agents])}")
         for agent in self._engaged_agents:
-            if await self.send(target=agent, action_name="get_disengagement",
-                               action_kwargs={"disconnect_too": send_disconnection_too}):
+            if await self._send(target=agent, action_name="get_disengagement",
+                                action_kwargs={"disconnect_too": send_disconnection_too}):
                 at_least_one_sent = True
             else:
                 log.error(f"Unable to send disengagement to {agent}")
@@ -875,9 +859,10 @@ class Agent(AgentBasics):
         self._agents_who_were_asked = set()
         correctly_asked = []
         for agent in involved_agents:
-            if await self.send(target=agent, action_name="do_subscribe", action_kwargs={"stream_owners": stream_owners,
-                                                                                        "stream_props": stream_props,
-                                                                                        "unsubscribe": unsubscribe}):
+            if await self._send(target=agent, action_name="do_subscribe",
+                                action_kwargs={"stream_owners": stream_owners,
+                                               "stream_props": stream_props,
+                                               "unsubscribe": unsubscribe}):
                 self._agents_who_were_asked.add(agent)
                 ret = True
             else:
@@ -1703,7 +1688,8 @@ class Agent(AgentBasics):
         interaction = self.im.get_interaction(uuid=ref_uuid)
         if interaction is not None:
             if recipient not in interaction.target:
-                interaction.target += (recipient if not isinstance(recipient, str) else [recipient])
+                interaction.update_target(interaction.target +
+                                          (recipient if not isinstance(recipient, str) else [recipient]))
         else:
             interaction = Interaction(streams=[net_hash], num_steps=1, requester=self.get_peer_id(),
                                       target=recipient, uuid=ref_uuid)
@@ -1730,12 +1716,12 @@ class Agent(AgentBasics):
         """
 
         # Backward compatibility
-        return (await self.send(action_name=action,
-                                target=agent,
-                                action_kwargs=args,
-                                from_state=from_state,
-                                to_state=to_state,
-                                uuid=ref_uuid)) is not None
+        return (await self._send(action_name=action,
+                                 target=agent,
+                                 action_kwargs=args,
+                                 from_state=from_state,
+                                 to_state=to_state,
+                                 uuid=ref_uuid)) is not None
 
     @deprecated("Use interactions")
     async def ask_gen(self, agent: str | None = None, u_hashes: list[str] | None = None,
@@ -2252,13 +2238,13 @@ class Agent(AgentBasics):
         # Triggering
         if for_what == "gen":
             interaction = \
-                await self.send(target=agent, action_name="do_gen",
-                                action_kwargs=({"u_hashes": u_hashes} if len(u_hashes) > 0 else {}) |
-                                              ({"samples": samples}),
-                                num_steps=samples,
-                                streams=u_hashes,
-                                from_state=from_state, to_state=to_state,
-                                uuid=ref_uuid)
+                await self._send(target=agent, action_name="do_gen",
+                                 action_kwargs=({"u_hashes": u_hashes} if len(u_hashes) > 0 else {}) |
+                                               ({"samples": samples}),
+                                 num_steps=samples,
+                                 streams=u_hashes,
+                                 from_state=from_state, to_state=to_state,
+                                 uuid=ref_uuid)
             if interaction is not None and samples > 1:
                 for c in interaction.target:
                     self._agents_who_were_asked.add(c)
@@ -2266,14 +2252,14 @@ class Agent(AgentBasics):
 
         elif for_what == "learn":
             interaction = \
-                await self.send(target=agent, action_name="do_learn",
-                                action_kwargs=({"u_hashes": u_hashes} if len(u_hashes) > 0 else {}) |
-                                              ({"yhat_hashes": yhat_hashes} if len(yhat_hashes) > 0 else {}) |
-                                              ({"samples": samples}),
-                                num_steps=samples,
-                                streams=u_hashes + yhat_hashes,
-                                from_state=from_state, to_state=to_state,
-                                uuid=ref_uuid)
+                await self._send(target=agent, action_name="do_learn",
+                                 action_kwargs=({"u_hashes": u_hashes} if len(u_hashes) > 0 else {}) |
+                                               ({"yhat_hashes": yhat_hashes} if len(yhat_hashes) > 0 else {}) |
+                                               ({"samples": samples}),
+                                 num_steps=samples,
+                                 streams=u_hashes + yhat_hashes,
+                                 from_state=from_state, to_state=to_state,
+                                 uuid=ref_uuid)
 
             if interaction is not None and samples > 1:
                 for c in interaction.target:
@@ -2405,8 +2391,8 @@ class Agent(AgentBasics):
 
         # Confirming
         if send_back_confirmation:
-            if await self.send(target=peer_id_who_asked, action_name="done_" + do_what, action_kwargs={},
-                               uuid=ref_uuid):
+            if await self._send(target=peer_id_who_asked, action_name="done_" + do_what, action_kwargs={},
+                                uuid=ref_uuid):
                 return True
             else:
                 log.error(f"Unable to confirm '{do_what}' to {peer_id_who_asked}")

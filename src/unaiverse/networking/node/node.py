@@ -27,7 +27,6 @@ import requests
 import threading
 from PIL import Image
 from typing import Any
-from collections import deque
 from datetime import timedelta
 from unaiverse.clock import clock
 from unaiverse.world import World
@@ -471,11 +470,11 @@ class Node:
         if self.conn is not None:
             self.conn.set_token(self.node_token)
 
-    def get_cv(self) -> dict:
+    def get_cv(self) -> list[dict]:
         """Retrieves the node's CV (Curriculum Vitae) from the root server.
 
         Returns:
-            The node's CV as a dictionary.
+            The node's CV as a list of dictionaries dictionary.
         """
         for i in range(0, 3):  # It will try 3 times before raising the exception...
             try:
@@ -2406,7 +2405,7 @@ class Node:
                 _other_messages.append(_msg)
         return _world_approval_messages + _agent_approval_messages + _action_messages + _other_messages
 
-    def __root(self, api: str, payload: dict) -> dict:
+    def __root(self, api: str, payload: dict) -> dict | list:
         """Sends a POST request to the root server's API endpoint.
 
         Args:

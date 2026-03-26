@@ -124,23 +124,109 @@ class HybridStateMachine:
         Returns:
             A dictionary representation of the state machine's properties.
         """
+
+        # Inverting the organization of the transition matrix, and considering teleport actions only
+        teleport_inv_transitions = {}
+        action_that_are_teleports = []
+        for src, dests in self.transitions.items():
+            for dest, actions in dests.items():
+                if dest == src:
+                    continue  # Skipping self loops for teleports (they should not be there at all, if so, we filter)
+                for act in actions:
+                    if act.is_teleport():
+                        action_that_are_teleports.append(act)
+                        if dest not in teleport_inv_transitions:
+                            teleport_inv_transitions[dest] = {}
+                        if src not in teleport_inv_transitions[dest]:
+                            teleport_inv_transitions[dest][src] = []
+                        teleport_inv_transitions[dest][src].append(act)
+
+        # Parsing destination states: if the same action connects this to all the possible states, then it is an
+        # "all"-like teleport
+        teleport_transitions = {Custom.ALL_STATES_NAME: {}}  # Keep "all" on top (it is handled like a new state)
+        for dest, srcs in teleport_inv_transitions.items():
+
+            # For each source state reaching the current destination...
+            for src, teleports in srcs.items():
+
+                # For each teleport linking source to the current destination...
+                for tel in teleports:
+                    if tel.get_mark() == "considered":  # Skipping already considered ones
+                        continue
+
+                    tel.set_mark("considered")  # Marking
+                    _found_teleports = [tel]
+
+                    # Let's see if a teleport equivalent to the considered one connects all sources
+                    for _src, _teleports in srcs.items():
+                        if src == _src:
+                            continue  # Already considered case
+
+                        _found = False
+                        for _tel in _teleports:
+                            if _tel.get_mark() == "considered":  # Skipping already considered ones
+                                continue
+
+                            if tel.name == _tel.name and tel.args == _tel.args:
+                                _tel.set_mark("considered")  # Marking
+                                _found_teleports.append(_tel)
+                                _found = True
+                                break
+                        if not _found:
+                            break
+
+                    # Distinguishing
+                    if len(_found_teleports) == len(srcs):
+                        if Custom.ALL_STATES_NAME not in teleport_transitions:
+                            teleport_transitions[Custom.ALL_STATES_NAME] = {}
+                        if dest not in teleport_transitions[Custom.ALL_STATES_NAME]:
+                            teleport_transitions[Custom.ALL_STATES_NAME][dest] = []
+                        teleport_transitions[Custom.ALL_STATES_NAME][dest].append(tel)  # Append a single one
+                    else:
+                        if src not in teleport_transitions:
+                            teleport_transitions[src] = {}
+                        if dest not in teleport_transitions[src]:
+                            teleport_transitions[src][dest] = []
+                        for _tel in _found_teleports:
+                            teleport_transitions[src][dest].append(_tel)
+
+        # Clearing mark
+        for tel in action_that_are_teleports:
+            tel.clear_mark()
+
         return {
-            'initial_state': self.initial_state,
-            'state': self.state,
-            'role': self.role,
-            'prev_state': self.prev_state,
-            'limbo_state': self.limbo_state,
-            'welcome_msg':
-                self.welcome_msg_with_wildcards.encode("ascii", "xmlcharrefreplace").decode(
-                    "ascii") if self.welcome_msg_with_wildcards is not None else None,
-            'highlight_blocking_states_in_messages': self.show_blocking_states,
-            'show_action_ticks_after_messages': self.show_action_completion,
-            'show_action_request_after_messages': self.show_action_request_info,
-            'state_actions': {state.name: state.to_list() for state in self.__id_to_state},
-            'transitions': {from_state: {to_state: [act.to_list() for act in action_list] for to_state, action_list in
-                                         to_states.items()} for from_state, to_states in self.transitions.items() if
-                            len(to_states) > 0},
-            'cur_action': self.__action.to_list() if self.__action is not None else None
+            'machine': {
+                'role': self.role,
+                'initial_state': self.initial_state,
+                'msg': self.welcome_msg_with_wildcards.encode("ascii", "xmlcharrefreplace").decode(
+                        "ascii") if self.welcome_msg_with_wildcards is not None else None,
+                'options': {
+                    'highlight_blocking_states_in_messages': self.show_blocking_states,
+                    'show_action_ticks_after_messages': self.show_action_completion,
+                    'show_action_request_after_messages': self.show_action_request_info
+                }
+            },
+            'states': {
+                state.name: state.to_dict() for state in self.__id_to_state
+            },
+            'transitions': {
+                from_state: {
+                    [{
+                        "on": act.to_dict(),
+                        "goto": to_state
+                    } for act in action_list if not act.is_teleport()]
+                    for to_state, action_list in to_states.items(),
+                } for from_state, to_states in self.transitions.items() if len(to_states) > 0
+            },
+            'teleports': {
+                from_state: {
+                    [{
+                        "on": act.to_dict(),
+                        "goto": to_state
+                    } for act in action_list]
+                    for to_state, action_list in to_states.items(),
+                } for from_state, to_states in teleport_transitions.items() if len(to_states) > 0
+            }
         }
 
     def __str__(self) -> str:
@@ -160,33 +246,7 @@ class HybridStateMachine:
                 return obj
 
         json_str = json.dumps(hsm_data, indent=4, default=custom_serializer)
-
-        # Compacting lists
-        def remove_newlines_in_lists(json_string):
-            stack = []
-            output = []
-            i = 0
-            while i < len(json_string):
-                char = json_string[i]
-                if char == '[':
-                    stack.append('[')
-                    output.append(char)
-                elif char == ']':
-                    stack.pop()
-                    output.append(char)
-                elif char == '\n' and stack:  # Skipping newline
-                    i += 1
-                    while i < len(json_string) and json_string[i] in ' \t':
-                        i += 1
-                    if output[-1] == ",":
-                        output.append(" ")
-                    continue  # Do not output newline or following spaces
-                else:
-                    output.append(char)
-                i += 1
-            return ''.join(output)
-
-        return remove_newlines_in_lists(json_str)
+        return json_str
 
     def set_actionable(self, obj: object) -> None:
         """Sets the object on which the state machine's actions will be performed. This allows the same state machine
@@ -564,7 +624,9 @@ class HybridStateMachine:
     def add_transit(self, from_state: str, to_state: str,
                     action: str, args: dict | None = None, ready: bool = True,
                     act_id: int | None = None, msg: str | None = None,
-                    avoid_changing_ready: bool = False) -> None:
+                    avoid_changing_ready: bool = False,
+                    teleport: bool = False,
+                    total_time: float = 0., timeout: float = 0., delay: float = 0.,) -> None:
         """Defines a transition between two states with an associated action. This method is central to building the
         state machine's logic. It can also handle loading and integrating a complete state machine from a file,
         resolving any state name clashes.
@@ -579,6 +641,13 @@ class HybridStateMachine:
             msg: An optional human-readable message for the action.
             avoid_changing_ready: A boolean indicating that the selected ready state should not be changed by
                 internal rules.
+            teleport: A boolean indicating that this transition must be hidden when drawing the machine ('teleport').
+            total_time: The number of seconds representing the max duration of this transition (from when it stars).
+                When <= 0., then no limits.
+            timeout: The number of seconds representing the max time we keep try running this transition before
+                giving up. When <= 0., then no timeouts at all.
+            delay: The number of seconds that must pass when joining a state before considering this transition.
+                When <= 0., then no delays at all.
         """
 
         # Plugging a previously loaded HSM
@@ -629,7 +698,8 @@ class HybridStateMachine:
 
             # Adding a transition to the initial state of the given HSM
             self.add_transit(from_state=from_state, to_state=hsm.initial_state, action=action, args=args,
-                             ready=ready, act_id=None, msg=msg)
+                             ready=ready, act_id=None, msg=msg, teleport=teleport,
+                             total_time=total_time, timeout=timeout, delay=delay)
 
             # Restoring
             self.initial_state = from_state if not initial_state_was_set else self.initial_state
@@ -663,7 +733,9 @@ class HybridStateMachine:
 
         # Adding the new action
         new_action = Action(name=action, args=args, idx=act_id, actionable=self.actionable, ready=ready, msg=msg,
-                            avoid_changing_ready=avoid_changing_ready)
+                            avoid_changing_ready=avoid_changing_ready,
+                            teleport=teleport,
+                            total_time=total_time, timeout=timeout, delay=delay)
         self.transitions[from_state][to_state].append(new_action)
         self.__id_to_action.append(new_action)
 
@@ -905,18 +977,15 @@ class HybridStateMachine:
             if self.actionable.im.current is None or self.actionable.im.current != interaction:
                 self.actionable.im.set_current(interaction)
 
-            # Status can be one of these:
-            # 0: action fully done;
-            # 1: try again this action;
-            # if action.name == "do_learn":
-            #    print(f"calling={action.name}, uuid={interaction.uuid if interaction is not None else 'no int'}")
             log.statem(f">>> ACTION {self.__action.name}...", state=self.get_state_name(True))
             if len(self.__action.get_list_of_interactions()) > 0:
                 log.statem(str(self.__action.get_list_of_interactions()))
 
+            # Status can be one of these:
+            # 0: action fully done;
+            # 1: try again this action;
+            # 2: failed, move to another action.
             status = await action(interaction=interaction)
-            # if action.name == "do_learn":
-            #    print(f"returned status={status}")
 
             if status == 0:
                 log.statem(f"+++ ACTION {self.__action.name} correctly completed", state=self.get_state_name(True))
@@ -930,6 +999,9 @@ class HybridStateMachine:
 
             # Post-call operations
             if status == 0:  # Done
+
+                # Memorizing tags of data used in this action call
+                interaction.record_data_tags()
 
                 # Clearing request
                 if interaction != self.__action.system_interaction:
@@ -970,7 +1042,7 @@ class HybridStateMachine:
                         list_of_residual_interactions.remove(_interaction)  # Clearing propagated requests
 
                     # if len(propagated_requests) > 0:
-                    #    print(f"!!! Reached state {self.state}, "
+                    #    print(f"Reached state {self.state}, "
                     #          f"propagated these requests taken from {self.__action.name}, and
                     #          now starting from here {propagated_requests}")
                     self.states[self.prev_state].reset()  # Reset starting time (only if state changed!)
@@ -982,6 +1054,9 @@ class HybridStateMachine:
                 return 0  # Transition done, no need to check other actions!
 
             elif status == 1:  # Try again the same action (either a new step or an already done-and-failed one)
+
+                # Memorizing tags of data used in this action call
+                interaction.record_data_tags()
 
                 # Update status
                 self.__state_changed = False
@@ -1164,6 +1239,149 @@ class HybridStateMachine:
         return True
 
     def load(self, filename_or_hsm_as_string: str | io.TextIOWrapper) -> 'HybridStateMachine':
+        """Loads a state machine's configuration from a JSON file or a JSON string. It reconstructs the states,
+        actions, and transitions from the serialized data. This method is critical for persistence and for loading
+        pre-defined state machine models.
+
+        Args:
+            filename_or_hsm_as_string: The path to the JSON file or a JSON string representation of the state machine.
+
+        Returns:
+            The loaded `HybridStateMachine` object (self).
+        """
+
+        # Loading the whole file
+        if (isinstance(filename_or_hsm_as_string, importlib.resources.abc.Traversable) or
+                isinstance(filename_or_hsm_as_string, io.TextIOWrapper)):
+
+            # Safe way to load when this file is packed in a pip package
+            hsm_data = json.load(filename_or_hsm_as_string)
+        else:
+
+            # Ordinary case
+            if os.path.exists(filename_or_hsm_as_string) and os.path.isfile(filename_or_hsm_as_string):
+                with open(filename_or_hsm_as_string, 'r', encoding="utf-8") as file:
+                    hsm_data = json.load(file)
+            else:
+
+                # Assuming it is a string
+                hsm_data = json.loads(filename_or_hsm_as_string)
+
+        # Backward compatibility
+        if "machine" not in hsm_data:
+            return self.load_backward_compat(filename_or_hsm_as_string)
+
+        # Getting state info
+        try:
+            self.initial_state = hsm_data['machine']['initial_state']
+            self.state = self.initial_state
+            self.prev_state = None
+            self.limbo_state = None
+            self.set_role(hsm_data['machine']['role'])
+            self.set_welcome_message(hsm_data['machine'].get('msg', None))
+            self.show_blocking_states = (
+                hsm_data['machine']['options'].get('highlight_blocking_states_in_messages', False))
+            self.show_action_completion = (
+                hsm_data['machine']['options'].get('show_action_ticks_after_messages', False))
+            self.show_action_request_info = (
+                hsm_data['machine']['options'].get('show_action_request_after_messages', False))
+        except Exception as e:
+            log.critical(f"Invalid JSON data format when loading the state machine [{e}]")
+
+        self.states = {}
+        self.transitions = {}
+
+        # Getting states
+        if 'states' not in hsm_data:
+            log.critical(f"Invalid JSON data format when loading the state machine (missing state list)")
+
+        for state, state_action in hsm_data['states'].items():
+            act_name = state_action.get("action", None)
+            act_args = state_action.get("action_kwargs", {})
+            blocking = state_action.get("blocking", True)
+            msg = state_action.get("msg", None)
+            waiting_time = state_action.get("wait_for_interactions", 0.)
+
+            self.add_state(state, action=act_name, args=act_args,
+                           waiting_time=waiting_time, blocking=blocking, msg=msg)
+
+        # Getting teleports (do it before getting ordinary transitions, so teleports will have priority)
+        if 'teleports' in hsm_data:
+
+            # Replicating the "all" teleport over all source states
+            if Custom.ALL_STATES_NAME in hsm_data['teleports']:
+                list_of_to_state_dicts = hsm_data['teleports'][Custom.ALL_STATES_NAME]
+
+                for to_state_dict in list_of_to_state_dicts:
+                    to_state = to_state_dict["goto"]
+                    action_dict = to_state_dict["on"]
+
+                    act_name = action_dict["action"]
+                    act_args = action_dict.get("action_kwargs", {})
+                    msg = action_dict.get("msg", None)
+                    act_ready = action_dict.get("ready", True)
+                    total_time = action_dict.get("max_duration", 0.)
+                    timeout = action_dict.get("retry_timeout", 0.)
+                    delay = action_dict.get("wait_before_running", 0.)
+
+                    # Looping over all states
+                    for from_state_obj in self.__id_to_state:
+                        from_state = from_state_obj.name
+
+                        # Skipping the destination state
+                        if from_state == to_state:
+                            continue
+
+                        self.add_transit(from_state, to_state,
+                                         action=act_name, args=act_args, ready=act_ready, msg=msg,
+                                         avoid_changing_ready=True, teleport=True,
+                                         total_time=total_time, timeout=timeout, delay=delay)
+
+            # Handling all the ordinary teleports
+            for from_state, list_of_to_state_dicts in hsm_data['teleports'].items():
+
+                # Skipping "all"-like teleport (already handled)
+                if from_state == Custom.ALL_STATES_NAME:
+                    continue
+
+                for to_state_dict in list_of_to_state_dicts:
+                    to_state = to_state_dict["goto"]
+                    action_dict = to_state_dict["on"]
+
+                    act_name = action_dict["action"]
+                    act_args = action_dict.get("action_kwargs", {})
+                    msg = action_dict.get("msg", None)
+                    act_ready = action_dict.get("ready", True)
+                    total_time = action_dict.get("max_duration", 0.)
+                    timeout = action_dict.get("retry_timeout", 0.)
+                    delay = action_dict.get("wait_before_running", 0.)
+
+                    self.add_transit(from_state, to_state,
+                                     action=act_name, args=act_args, ready=act_ready, msg=msg,
+                                     avoid_changing_ready=True, teleport=True,
+                                     total_time=total_time, timeout=timeout, delay=delay)
+
+        # Getting ordinary transitions
+        for from_state, list_of_to_state_dicts in hsm_data['transitions'].items():
+            for to_state_dict in list_of_to_state_dicts:
+                to_state = to_state_dict["goto"]
+                action_dict = to_state_dict["on"]
+
+                act_name = action_dict["action"]
+                act_args = action_dict.get("action_kwargs", {})
+                msg = action_dict.get("msg", None)
+                act_ready = action_dict.get("ready", True)
+                total_time = action_dict.get("max_duration", 0.)
+                timeout = action_dict.get("retry_timeout", 0.)
+                delay = action_dict.get("wait_before_running", 0.)
+
+                self.add_transit(from_state, to_state,
+                                 action=act_name, args=act_args, ready=act_ready, msg=msg,
+                                 avoid_changing_ready=True, total_time=total_time, timeout=timeout, delay=delay)
+
+        return self
+
+    def load_backward_compat(self, filename_or_hsm_as_string: str | io.TextIOWrapper) -> 'HybridStateMachine':
         """Loads a state machine's configuration from a JSON file or a JSON string. It reconstructs the states,
         actions, and transitions from the serialized data. This method is critical for persistence and for loading
         pre-defined state machine models.

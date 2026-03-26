@@ -14,6 +14,8 @@
 """
 import html
 import time
+
+from unaiverse.custom import Custom
 from unaiverse.utils.logger import log
 from unaiverse.hsm.action import Action
 
@@ -50,6 +52,9 @@ class State:
         # Message parts replaced by wildcards (commonly assumed to be in the format <value>)
         self.wildcards = {}  # Value-to-value (es: <playlist> to this:and:this)
         self.msg_with_wildcards = self.msg
+
+        if self.name is Custom.NOT_ALLOWED_STATE_NAMES:
+            log.critical(f"Invalid state name (not allowed): {self.name}")
 
     async def __call__(self, *args, **kwargs) -> int | None:
         """Executes the state's logic. If a `waiting_time` is set, it starts a timer. If an `action` is associated with
@@ -144,6 +149,23 @@ class State:
             msg = None
         return ((self.action.to_list(minimal=True) if self.action is not None else [None, None]) +
                 ([self.id, self.blocking, self.waiting_time] + ([msg] if msg is not None else [])))
+
+    def to_dict(self) -> dict:
+        """Converts the state's properties into a dict. This method is useful for serialization, allowing the state to
+        be easily stored or transmitted.
+
+        Returns:
+            A dict containing the state's properties.
+        """
+        d = {}
+        if self.action is not None:
+            d["action"] = self.action.name
+            d["action_kwargs"] = self.action.args
+        if self.msg is not None:
+            d["msg"] = self.msg.encode("ascii", "xmlcharrefreplace").decode("ascii")
+        d["blocking"] = self.blocking
+        d["time_to_wait_for_interactions"] = self.waiting_time
+        return d
 
     def has_action(self) -> bool:
         """A simple getter that checks if an action is associated with the state.

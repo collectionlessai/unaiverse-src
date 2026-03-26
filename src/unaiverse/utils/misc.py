@@ -12,6 +12,7 @@
                  Code Repositories:  https://github.com/collectionlessai/
                  Main Developers:    Stefano Melacci (Project Leader), Christian Di Maio, Tommaso Guidi
 """
+import logging
 import os
 import ast
 import sys
@@ -293,10 +294,14 @@ class FileTracker:
         """
         state = {}
         for file in self.folder.iterdir():
-            if ((file.is_file() and file.suffix.lower() == self.ext and
-                    (self.skip is None or file.name != self.skip)) and
-                    (self.prefix is None or file.name.startswith(self.prefix))):
-                state[file.name] = os.path.getmtime(file)
+            try:
+                if ((file.is_file() and file.suffix.lower() == self.ext and
+                        (self.skip is None or file.name != self.skip)) and
+                        (self.prefix is None or file.name.startswith(self.prefix))):
+                    # state[file.name] = os.path.getmtime(file) # this is less stable than what you see below
+                    state[file.name] = file.stat().st_mtime_ns
+            except Exception as e:
+                pass
         return state
 
     def something_changed(self) -> bool:
