@@ -292,8 +292,8 @@ class Node:
             "dht_enabled": False,
             "dht_keep": False,  # close it after autonat
             "webrtc_enabled": True,
-            "stun_servers": None,
-            "turn_servers": None,
+            "ice_stun_servers": None,
+            "ice_turn_servers": None,
         }
 
         # 2. Prepare a dictionary to store results or exceptions
