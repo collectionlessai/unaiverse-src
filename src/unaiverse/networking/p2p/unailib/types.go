@@ -28,7 +28,7 @@ const DisconnectionGracePeriod = 10 * time.Second
 const UnaiverseWebRTCSignalProtocol = "/unaiverse/webrtc-signal/1.0.0"
 const WebRTCDataChannelLabel = "unaiverse-data"
 // Total budget for the entire signaling handshake (offer → answer → DC open).
-const webrtcSignalingTimeout = 45 * time.Second
+const WebRTCSignalingTimeout = 45 * time.Second
 
 // --- Create a package-level logger ---
 var logger = golog.Logger("unailib")
@@ -209,4 +209,12 @@ type WebRTCConn struct {
 	pc         *pwebrtc.PeerConnection
 	dc         *pwebrtc.DataChannel
 	remotePeer peer.ID
+}
+
+// Define the list of default STUN servers to use if none are provided in the config.
+var defaultSTUNServers = []string{
+	"stun:stun.l.google.com:19302",
+	"stun:global.stun.twilio.com:3478",
+	"stun:stun.cloudflare.com:3478",
+	"stun:stun.services.mozilla.com:3478",
 }

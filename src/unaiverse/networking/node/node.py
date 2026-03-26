@@ -270,7 +270,10 @@ class Node:
             "tls_cert_path": env_cert_path,
             "tls_key_path": env_key_path,
             "dht_enabled": True,
-            "dht_keep": True
+            "dht_keep": False,
+            "webrtc_enabled": True,
+            "stun_servers": None,
+            "turn_servers": None,
         }
         
         p2p_w_config = {
@@ -286,8 +289,11 @@ class Node:
             "domain_name": env_domain,
             "tls_cert_path": env_cert_path,
             "tls_key_path": env_key_path,
-            "dht_enabled": True,
-            "dht_keep": False  # close it after autonat
+            "dht_enabled": False,
+            "dht_keep": False,  # close it after autonat
+            "webrtc_enabled": True,
+            "stun_servers": None,
+            "turn_servers": None,
         }
 
         # 2. Prepare a dictionary to store results or exceptions

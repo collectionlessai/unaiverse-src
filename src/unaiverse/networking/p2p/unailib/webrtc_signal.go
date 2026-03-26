@@ -25,23 +25,23 @@ import (
 // Falls back to Google's public STUN servers when no config is present.
 func getWebRTCConfig(ni *NodeInstance) pwebrtc.Configuration {
 	if ni.iceConfig != nil && (len(ni.iceConfig.STUNServers) > 0 || len(ni.iceConfig.TURNServers) > 0) {
-		servers := []pwebrtc.ICEServer{}
+		var STUNServers []pwebrtc.ICEServer
 		if len(ni.iceConfig.STUNServers) > 0 {
-			servers = append(servers, pwebrtc.ICEServer{URLs: ni.iceConfig.STUNServers})
+			STUNServers = append(STUNServers, pwebrtc.ICEServer{URLs: ni.iceConfig.STUNServers})
 		}
 		for _, t := range ni.iceConfig.TURNServers {
-			servers = append(servers, pwebrtc.ICEServer{
+			STUNServers = append(STUNServers, pwebrtc.ICEServer{
 				URLs:           t.URLs,
 				Username:       t.Username,
 				Credential:     t.Credential,
 				CredentialType: pwebrtc.ICECredentialTypePassword,
 			})
 		}
-		return pwebrtc.Configuration{ICEServers: servers}
+		return pwebrtc.Configuration{ICEServers: STUNServers}
 	}
 	return pwebrtc.Configuration{
 		ICEServers: []pwebrtc.ICEServer{
-			{URLs: []string{"stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"}},
+			{URLs: defaultSTUNServers},
 		},
 	}
 }
@@ -114,14 +114,14 @@ func parseDirectMessageFrame(data []byte) (channel string, payload []byte, err e
 		return "", nil, fmt.Errorf("frame too short (%d bytes)", len(data))
 	}
 	totalLength := binary.BigEndian.Uint32(data[0:4])
-	if uint32(len(data)) != totalLength+4 {
-		return "", nil, fmt.Errorf("frame length mismatch: header=%d actual=%d", totalLength, uint32(len(data))-4)
+	if uint32(len(data)) != totalLength + 4 {
+		return "", nil, fmt.Errorf("frame length mismatch: header=%d actual=%d", totalLength, uint32(len(data)) - 4)
 	}
 	channelLen := int(data[4])
-	if len(data) < 5+channelLen {
+	if len(data) < channelLen + 5 {
 		return "", nil, fmt.Errorf("frame truncated at channel name")
 	}
-	return string(data[5 : 5+channelLen]), data[5+channelLen:], nil
+	return string(data[5 : channelLen + 5]), data[channelLen + 5:], nil
 }
 
 // registerWebRTCDataChannel stores a newly-opened DataChannel connection and
@@ -227,10 +227,10 @@ func handleSignalingStream(ni *NodeInstance, s network.Stream) {
 	}
 	logger.Infof("[GO] 📶 Instance %d: Incoming WebRTC signaling from %s", ni.instanceIndex, remotePeer)
 
-	ctx, cancel := context.WithTimeout(ni.ctx, webrtcSignalingTimeout)
+	ctx, cancel := context.WithTimeout(ni.ctx, WebRTCSignalingTimeout)
 	defer cancel()
 
-	_ = s.SetDeadline(time.Now().Add(webrtcSignalingTimeout))
+	_ = s.SetDeadline(time.Now().Add(WebRTCSignalingTimeout))
 
 	// Read the SDP offer
 	offerMsg, err := readSignalMessage(s)
@@ -350,7 +350,7 @@ func initiateWebRTCConnection(ni *NodeInstance, remotePeer peer.ID) error {
 		return fmt.Errorf("already have an open WebRTC DataChannel with %s", remotePeer)
 	}
 
-	ctx, cancel := context.WithTimeout(ni.ctx, webrtcSignalingTimeout)
+	ctx, cancel := context.WithTimeout(ni.ctx, WebRTCSignalingTimeout)
 	defer cancel()
 
 	// Open signaling stream over existing (relayed) connection
@@ -363,7 +363,7 @@ func initiateWebRTCConnection(ni *NodeInstance, remotePeer peer.ID) error {
 		return fmt.Errorf("open signaling stream to %s: %w", remotePeer, err)
 	}
 	defer s.Close()
-	_ = s.SetDeadline(time.Now().Add(webrtcSignalingTimeout))
+	_ = s.SetDeadline(time.Now().Add(WebRTCSignalingTimeout))
 
 	// Create PeerConnection + DataChannel
 	pc, err := pwebrtc.NewPeerConnection(getWebRTCConfig(ni))

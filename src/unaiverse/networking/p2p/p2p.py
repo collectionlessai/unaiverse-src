@@ -99,7 +99,7 @@ class P2P:
                     # 'p2p-forge': 'info',
                     'nat': 'info',
                     'basichost': 'info',
-                    'p2p-circuit': 'info',
+                    'p2p-circuit': 'debug',
                     'relay': 'debug',
                     'p2p-holepunch': 'debug',
                     'tcp-tpt': 'info',
@@ -151,8 +151,8 @@ class P2P:
                  domain_name: Optional[str] = None,
                  tls_cert_path: Optional[str] = None,
                  tls_key_path: Optional[str] = None,
-                 dht_enabled: bool = False,
-                 dht_keep: bool = True,
+                 dht_enabled: bool = True,
+                 dht_keep: bool = False,
                  webrtc_enabled: bool = True,
                  ice_stun_servers: Optional[List[str]] = None,
                  ice_turn_servers: Optional[List[Dict[str, Any]]] = None,
@@ -246,8 +246,8 @@ class P2P:
             "webrtc": {
                 "enabled": webrtc_enabled,
                 "ice_config": {
-                    "stun_servers": ice_stun_servers or [],
-                    "turn_servers": ice_turn_servers or [],
+                    "stun_servers": ice_stun_servers,
+                    "turn_servers": ice_turn_servers,
                 } if webrtc_enabled else None,
             },
         }
