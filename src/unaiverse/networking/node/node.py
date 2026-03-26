@@ -272,8 +272,8 @@ class Node:
             "dht_enabled": True,
             "dht_keep": False,
             "webrtc_enabled": True,
-            "stun_servers": None,
-            "turn_servers": None,
+            "ice_stun_servers": None,
+            "ice_turn_servers": None,
         }
         
         p2p_w_config = {
