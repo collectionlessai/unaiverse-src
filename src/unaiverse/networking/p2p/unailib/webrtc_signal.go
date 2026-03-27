@@ -153,8 +153,7 @@ func registerWebRTCDataChannel(ni *NodeInstance, remotePeer peer.ID, dc *pwebrtc
 			ni.instanceIndex, remotePeer, state)
 		switch state {
 		case pwebrtc.PeerConnectionStateFailed,
-			pwebrtc.PeerConnectionStateClosed,
-			pwebrtc.PeerConnectionStateDisconnected:
+			pwebrtc.PeerConnectionStateClosed:
 			ni.webrtcMutex.Lock()
 			delete(ni.webrtcConnections, remotePeer)
 			ni.webrtcMutex.Unlock()
@@ -177,6 +176,9 @@ func registerWebRTCDataChannel(ni *NodeInstance, remotePeer peer.ID, dc *pwebrtc
 					ni.streamsMutex.Unlock()
 				}
 			}
+		case pwebrtc.PeerConnectionStateDisconnected:
+			logger.Warnf("[GO] ⚠️ Instance %d: WebRTC connection with %s is temporarily disconnected. Waiting for recovery...",
+				ni.instanceIndex, remotePeer)
 		}
 	})
 }

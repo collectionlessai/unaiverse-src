@@ -270,7 +270,7 @@ class Node:
             "tls_cert_path": env_cert_path,
             "tls_key_path": env_key_path,
             "dht_enabled": True,
-            "dht_keep": False,
+            "dht_keep": True,
             "webrtc_enabled": True,
             "ice_stun_servers": None,
             "ice_turn_servers": None,
@@ -289,7 +289,7 @@ class Node:
             "domain_name": env_domain,
             "tls_cert_path": env_cert_path,
             "tls_key_path": env_key_path,
-            "dht_enabled": False,
+            "dht_enabled": True,
             "dht_keep": False,  # close it after autonat
             "webrtc_enabled": True,
             "ice_stun_servers": None,
