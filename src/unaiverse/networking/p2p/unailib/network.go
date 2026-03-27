@@ -305,7 +305,7 @@ func enforceProtocolCompliance(ni *NodeInstance) {
 }
 
 // autoUpgradeWebRTC listens for newly identified peers. If a peer is connected
-// via a relay, it waits 30 seconds for native DCUtR to succeed. If it fails,
+// via a relay, it waits 20 seconds for native DCUtR to succeed. If it fails,
 // it initiates a WebRTC fallback.
 func autoUpgradeWebRTC(ni *NodeInstance) {
 	sub, err := ni.host.EventBus().Subscribe(new(event.EvtPeerIdentificationCompleted))
@@ -373,13 +373,13 @@ func autoUpgradeWebRTC(ni *NodeInstance) {
 					continue
 				}
 
-				logger.Infof("[GO] ⏳ Instance %d: Peer %s is relayed. Waiting 30s for native DCUtR to succeed before WebRTC fallback...", ni.instanceIndex, remotePeer)
+				logger.Infof("[GO] ⏳ Instance %d: Peer %s is relayed. Waiting 20s for native DCUtR to succeed before WebRTC fallback...", ni.instanceIndex, remotePeer)
 				
 				// Fire the timeout and upgrade asynchronously so we don't block the event loop
 				go func(pid peer.ID) {
 					// Wait for native DCUtR holepunching to do its thing
 					select {
-					case <-time.After(30 * time.Second):
+					case <-time.After(20 * time.Second):
 					case <-ni.ctx.Done():
 						return
 					}
@@ -399,7 +399,7 @@ func autoUpgradeWebRTC(ni *NodeInstance) {
 						return
 					}
 
-					logger.Warnf("[GO] ⚠️ Instance %d: Native direct connection to %s failed after 30s. Initiating WebRTC fallback...", ni.instanceIndex, pid)
+					logger.Warnf("[GO] ⚠️ Instance %d: Native direct connection to %s failed after 20s. Initiating WebRTC fallback...", ni.instanceIndex, pid)
 					err := initiateWebRTCConnection(ni, pid)
 					if err != nil {
 						logger.Errorf("[GO] ❌ Instance %d: WebRTC fallback failed for %s: %v", ni.instanceIndex, pid, err)

@@ -32,11 +32,36 @@ func getWebRTCAPI() *pwebrtc.API {
 		pwebrtc.NetworkTypeTCP4,
 	})
 
+	// 1. Aggressive Timeouts (Fail fast like a browser)
+	sEngine.SetICETimeouts(
+		2*time.Second,  // disconnected timeout
+		5*time.Second,  // failed timeout
+		2*time.Second,  // keep-alive
+	)
+
+	// 2. Restrict UDP ports to a range less likely to be blanket-blocked
+	err := sEngine.SetEphemeralUDPPortRange(10000, 10500)
+	if err != nil {
+		logger.Warnf("Failed to set ephemeral UDP port range: %v", err)
+	}
+
+	// 3. Setup single-port UDP Mux
+	udpListener, err := net.ListenUDP("udp", &net.UDPAddr{
+		IP:   net.IP{0, 0, 0, 0},
+		Port: 0, 
+	})
+	if err != nil {
+		logger.Warnf("Failed to setup UDP listener for WebRTC: %v", err)
+	} else {
+		udpMux := pwebrtc.NewICEUDPMux(nil, udpListener)
+		sEngine.SetICEUDPMux(udpMux)
+	}
+
+	// 4. Setup TCP Mux as fallback
 	tcpListener, err := net.ListenTCP("tcp", &net.TCPAddr{
 		IP:   net.IP{0, 0, 0, 0},
 		Port: 0,
 	})
-	
 	if err != nil {
 		logger.Warnf("Failed to setup TCP listener for WebRTC: %v", err)
 	} else {
@@ -277,6 +302,7 @@ func handleSignalingStream(ni *NodeInstance, s network.Stream) {
 		writeSignalMessage(s, SignalMessage{Type: "error", Message: "expected offer"})
 		return
 	}
+	logger.Debugf("[GO] 📥 Instance %d: Successfully received SDP offer from %s (length: %d bytes)", ni.instanceIndex, remotePeer, len(offerMsg.SDP))
 
 	// Create PeerConnection & set remote description using custom API
 	api := getWebRTCAPI()
@@ -290,8 +316,10 @@ func handleSignalingStream(ni *NodeInstance, s network.Stream) {
 	// Capture the DataChannel that the offerer will create.
 	dcReady := make(chan *pwebrtc.DataChannel, 1)
 	pc.OnDataChannel(func(dc *pwebrtc.DataChannel) {
+		logger.Debugf("[GO] 🔌 Instance %d: Remote peer %s created DataChannel '%s'", ni.instanceIndex, remotePeer, dc.Label())
 		if dc.Label() == WebRTCDataChannelLabel {
 			dc.OnOpen(func() {
+				logger.Debugf("[GO] 🟢 Instance %d: DataChannel '%s' with %s is now OPEN", ni.instanceIndex, dc.Label(), remotePeer)
 				select {
 				case dcReady <- dc:
 				default:
@@ -411,6 +439,8 @@ func initiateWebRTCConnection(ni *NodeInstance, remotePeer peer.ID) error {
 	// Channel closed when DC transitions to open.
 	dcOpen := make(chan struct{}, 1)
 	dc.OnOpen(func() {
+		logger.Debugf("[GO] 🟢 Instance %d: Local DataChannel '%s' with %s is now OPEN", ni.instanceIndex, WebRTCDataChannelLabel, remotePeer)
+		
 		select {
 		case dcOpen <- struct{}{}:
 		default:
@@ -460,6 +490,7 @@ func initiateWebRTCConnection(ni *NodeInstance, remotePeer peer.ID) error {
 		pc.Close()
 		return fmt.Errorf("expected answer from %s, got %q", remotePeer, answerMsg.Type)
 	}
+	logger.Debugf("[GO] 📥 Instance %d: Successfully received SDP answer from %s (length: %d bytes)", ni.instanceIndex, remotePeer, len(answerMsg.SDP))
 
 	answer := pwebrtc.SessionDescription{Type: pwebrtc.SDPTypeAnswer, SDP: answerMsg.SDP}
 	if err := pc.SetRemoteDescription(answer); err != nil {
