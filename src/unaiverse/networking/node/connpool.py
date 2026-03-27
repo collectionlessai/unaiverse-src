@@ -173,8 +173,8 @@ class ConnectionPools:
             A tuple containing the peer ID and a boolean indicating if the connection was established through a relay.
         """
 
-        force: str | None = None
-        #force: str | None = '/tcp'
+        # force: str | None = None
+        force: str | None = '/tcp'
         if force is not None:
             _addresses = [a for a in addresses if force in a]
             addresses.clear()
