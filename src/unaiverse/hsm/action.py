@@ -414,17 +414,16 @@ class Action:
         Returns:
             A dict containing the action's properties.
         """
-        d = {
+        return {
             "action": self.name,
-            "action_kwargs": self.args
+            "action_kwargs": self.args,
+            "msg": self.msg.encode("ascii",
+                                   "xmlcharrefreplace").decode("ascii") if self.msg is not None else None,
+            "ready": self.inner,
+            "max_duration": self.__total_time,
+            "retry_timeout": self.__timeout,
+            "time_to_wait_before_running": self.__delay
         }
-        if self.msg is not None:
-            d["msg"] = self.msg.encode("ascii", "xmlcharrefreplace").decode("ascii")
-        d["ready"] = self.inner
-        d["max_duration"] = self.__total_time
-        d["retry_timeout"] = self.__timeout
-        d["time_to_wait_before_running"] = self.__delay
-        return d
 
     def same_as(self, name: str, args: dict | None) -> bool:
         """Compares the current action to a target action by name and arguments. It returns `True` if they are

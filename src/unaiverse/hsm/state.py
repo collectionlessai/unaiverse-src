@@ -159,15 +159,14 @@ class State:
         Returns:
             A dict containing the state's properties.
         """
-        d = {}
-        if self.action is not None:
-            d["action"] = self.action.name
-            d["action_kwargs"] = self.action.args
-        if self.msg is not None:
-            d["msg"] = self.msg.encode("ascii", "xmlcharrefreplace").decode("ascii")
-        d["blocking"] = self.blocking
-        d["time_to_wait_for_interactions"] = self.waiting_time
-        return d
+        return {
+            "action": self.action.name if self.action is not None else None,
+            "action_kwargs": self.action.args if self.action is not None else {},
+            "msg": self.msg.encode("ascii",
+                                   "xmlcharrefreplace").decode("ascii") if self.msg is not None else None,
+            "blocking": self.blocking,
+            "time_to_wait_for_interactions": self.waiting_time
+        }
 
     def has_action(self) -> bool:
         """A simple getter that checks if an action is associated with the state.

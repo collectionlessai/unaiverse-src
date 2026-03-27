@@ -218,9 +218,9 @@ class AgentBasics:
             if self.behav_lone_wolf is not None and isinstance(self.behav_lone_wolf, str):
                 template_string = self.behav_lone_wolf
                 if template_string == "serve":
-                    json_to_load = "lone_wolf.json"
+                    json_to_load = "public.json"
                 elif template_string == "ask":
-                    json_to_load = "lone_wolf.json"
+                    json_to_load = "public.json"
                 else:
                     raise ValueError("Invalid behav_lone_wolf: it must be an HybridStateMachine or a string "
                                      "in ('serve', 'ask')")
@@ -703,7 +703,7 @@ class AgentBasics:
                                                            public=public))):  # This will also "add" the stream
                 return False
 
-        log.misc(f"Successfully added agent {profile.get_static_profile()['name']} "
+        log.misc(f"Successfully added agent {profile.get_static_profile()['node_name']} "
                  f"with peer ID {peer_id} (public: {public})")
         return True
 
@@ -1638,11 +1638,11 @@ class AgentBasics:
 
                         # Saving sample
                         self.known_streams[_net_hash][_name].set(data, data_tag, uuid=data_uuid)
-                        interaction = self.known_streams[net_hash][name].get_interaction(data_uuid)
-                        if interaction is not None:
-                            self.im.add_lazy_stream_to_interaction(DataProps.user_hash_from_net_hash(_net_hash, _name),
-                                                                   interaction)
-                            # self.known_streams[_net_hash][_name].add_interaction(interaction)
+                        if self.known_streams[_net_hash][_name].get_interaction(data_uuid) is None:
+                            interaction = self.known_streams[net_hash][name].get_interaction(data_uuid)
+                            if interaction is not None:
+                                self.im.add_lazy_stream_to_interaction(
+                                    DataProps.user_hash_from_net_hash(_net_hash, _name), interaction)
 
                 # If we decided to skip this sample...
                 else:
@@ -2284,18 +2284,16 @@ class AgentBasics:
         """
         # Build Interaction from raw args if needed
         if interaction is None:
-            _, private_peer_id = self.get_peer_ids()
             interaction = Interaction(action_name=action_name, action_kwargs=action_kwargs,
                                       streams=streams, data_samples=data_samples,
                                       num_steps=num_steps,
-                                      requester=private_peer_id, target=target,
+                                      requester=self.get_peer_id(), target=target,
                                       from_state=from_state, to_state=to_state,
                                       timeout=max_time, uuid=uuid)
         else:
             # Ensure requester is set
             if interaction.requester is None:
-                public_peer_id, private_peer_id = self.get_peer_ids()
-                interaction.requester = private_peer_id if self.behaving_in_world() else public_peer_id
+                interaction.requester = self.get_peer_id()
 
         # Resolve target agent(s)
         if len(interaction.target) == 0:

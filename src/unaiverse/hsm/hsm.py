@@ -212,22 +212,20 @@ class HybridStateMachine:
                 state.name: state.to_dict() for state in self.__id_to_state
             },
             'transitions': {
-                from_state: {
-                    [{
-                        "on": act.to_dict(),
-                        "goto": to_state
-                    } for act in action_list if not act.is_teleport()]
-                    for to_state, action_list in to_states.items(),
-                } for from_state, to_states in self.transitions.items() if len(to_states) > 0
+                from_state: [{
+                    "on": act.to_dict(),
+                    "goto": to_state
+                } for to_state, action_list in to_states.items()
+                    for act in action_list if not act.is_teleport()
+                ] for from_state, to_states in self.transitions.items() if len(to_states) > 0
             },
             'teleports': {
-                from_state: {
-                    [{
-                        "on": act.to_dict(),
-                        "goto": to_state
-                    } for act in action_list]
-                    for to_state, action_list in to_states.items(),
-                } for from_state, to_states in teleport_transitions.items() if len(to_states) > 0
+                from_state: [{
+                    "on": act.to_dict(),
+                    "goto": to_state
+                } for to_state, action_list in to_states.items()
+                    for act in action_list
+                ] for from_state, to_states in teleport_transitions.items() if len(to_states) > 0
             }
         }
 
@@ -1285,7 +1283,7 @@ class HybridStateMachine:
 
         # Backward compatibility
         if "machine" not in hsm_data:
-            return self.load_backward_compat(filename_or_hsm_as_string)
+            return self.load_backward_compat(hsm_data)
 
         # Getting state info
         try:
@@ -1321,7 +1319,26 @@ class HybridStateMachine:
             self.add_state(state, action=act_name, args=act_args,
                            waiting_time=waiting_time, blocking=blocking, msg=msg)
 
-        # Getting teleports (do it before getting ordinary transitions, so teleports will have priority)
+        # Getting ordinary transitions (before teleports, to ensure higher priority)
+        for from_state, list_of_to_state_dicts in hsm_data['transitions'].items():
+            for to_state_dict in list_of_to_state_dicts:
+                to_state = to_state_dict["goto"]
+                action_dict = to_state_dict["on"]
+
+                act_name = action_dict["action"]
+                act_args = action_dict.get("action_kwargs", {})
+                msg = action_dict.get("msg", None)
+                act_ready = action_dict.get("ready", True)
+                total_time = action_dict.get("max_duration", 0.)
+                timeout = action_dict.get("retry_timeout", 0.)
+                delay = action_dict.get("wait_before_running", 0.)
+
+                self.add_transit(from_state, to_state,
+                                 action=act_name, args=act_args, ready=act_ready, msg=msg,
+                                 avoid_changing_ready="ready" in action_dict, total_time=total_time,
+                                 timeout=timeout, delay=delay)
+
+        # Getting teleports (do it after getting ordinary transitions, so teleports will have lower priority)
         if 'teleports' in hsm_data:
 
             # Replicating the "all" teleport over all source states
@@ -1377,62 +1394,26 @@ class HybridStateMachine:
                                      avoid_changing_ready="ready" in action_dict, teleport=True,
                                      total_time=total_time, timeout=timeout, delay=delay)
 
-        # Getting ordinary transitions
-        for from_state, list_of_to_state_dicts in hsm_data['transitions'].items():
-            for to_state_dict in list_of_to_state_dicts:
-                to_state = to_state_dict["goto"]
-                action_dict = to_state_dict["on"]
-
-                act_name = action_dict["action"]
-                act_args = action_dict.get("action_kwargs", {})
-                msg = action_dict.get("msg", None)
-                act_ready = action_dict.get("ready", True)
-                total_time = action_dict.get("max_duration", 0.)
-                timeout = action_dict.get("retry_timeout", 0.)
-                delay = action_dict.get("wait_before_running", 0.)
-
-                self.add_transit(from_state, to_state,
-                                 action=act_name, args=act_args, ready=act_ready, msg=msg,
-                                 avoid_changing_ready="ready" in action_dict, total_time=total_time,
-                                 timeout=timeout, delay=delay)
-
         return self
 
-    def load_backward_compat(self, filename_or_hsm_as_string: str | io.TextIOWrapper) -> 'HybridStateMachine':
+    def load_backward_compat(self, hsm_data: dict) -> 'HybridStateMachine':
         """Loads a state machine's configuration from a JSON file or a JSON string. It reconstructs the states,
         actions, and transitions from the serialized data. This method is critical for persistence and for loading
         pre-defined state machine models.
 
         Args:
-            filename_or_hsm_as_string: The path to the JSON file or a JSON string representation of the state machine.
+            hsm_data: The dict with an HSM loaded from a JSON file.
 
         Returns:
             The loaded `HybridStateMachine` object (self).
         """
-
-        # Loading the whole file
-        if (isinstance(filename_or_hsm_as_string, importlib.resources.abc.Traversable) or
-                isinstance(filename_or_hsm_as_string, io.TextIOWrapper)):
-
-            # Safe way to load when this file is packed in a pip package
-            hsm_data = json.load(filename_or_hsm_as_string)
-        else:
-
-            # Ordinary case
-            if os.path.exists(filename_or_hsm_as_string) and os.path.isfile(filename_or_hsm_as_string):
-                with open(filename_or_hsm_as_string, 'r', encoding="utf-8") as file:
-                    hsm_data = json.load(file)
-            else:
-
-                # Assuming it is a string
-                hsm_data = json.loads(filename_or_hsm_as_string)
 
         # Getting state info
         self.initial_state = hsm_data['initial_state']
         self.state = hsm_data['state']
         self.prev_state = hsm_data['prev_state']
         self.limbo_state = hsm_data['limbo_state']
-        self.set_role(hsm_data.get('role', None))
+        self.set_role(hsm_data.get('role', 'unknown'))
         self.set_welcome_message(hsm_data.get('welcome_msg', None))
         self.show_blocking_states = hsm_data.get('highlight_blocking_states_in_messages', False)
         self.show_action_completion = hsm_data.get('show_action_ticks_after_messages', False)
@@ -1566,9 +1547,11 @@ class HybridStateMachine:
                                 done = True
                             i += 1
                         label = z
+                    edge_color = "#00000050" if action.is_teleport() else "#000000"
                     graph.edge(from_state, to_state, label=" " + label + " ", fontsize='8',
                                style='dashed' if not action.is_ready() else 'solid',
-                               color="#D3D3D380" if action.is_teleport() else "#000000",
+                               color=edge_color,
+                               fontcolor=edge_color,
                                _attributes={'id': "edge" + str(action.id)})
         return graph
 

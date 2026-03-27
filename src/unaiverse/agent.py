@@ -1787,7 +1787,7 @@ class Agent(AgentBasics):
                                                     yhat_hashes=None,
                                                     from_state=from_state, to_state=to_state,
                                                     samples=samples, ref_uuid=ref_uuid)
-        log.debug(f"[ask_gen] Asking {involved_agents} returned {interaction}")
+        log.debug(f"[ask_gen] Asking {involved_agents} returned {interaction.uuid} => {interaction}")
         correctly_asked = []
         if interaction is not None:
             correctly_asked = interaction.target
@@ -2143,22 +2143,14 @@ class Agent(AgentBasics):
                     if net_hash in self.known_streams:
                         # If the data arrived before this action, then the UUID is already set, and here there is
                         # no need to do anything; if the data has not yet arrived (common case) ...
-                        interaction = Interaction(uuid=_request_uuid, requester=_requester,
-                                                  target=self.get_peer_id())
-                        self.im.register_lazy(interaction)
-                        self.im.add_lazy_stream_to_interaction(net_hash, interaction)
-                        # stream_obj.add_interaction(Interaction(uuid=_request_uuid,
-                        #                                       requester=_requester, target=self.get_peer_id()))
+                        self.im.add_lazy_stream_to_interaction(net_hash, self.im.get_current())
 
             if yhat_hashes_copy is not None:
                 for net_hash in yhat_hashes_copy:
                     if net_hash in self.known_streams:
-                        # for stream_name, stream_obj in self.known_streams[net_hash].values():
-                        interaction = Interaction(uuid=_request_uuid, requester=_requester, target=self.get_peer_id())
-                        self.im.register_lazy(interaction)
-                        self.im.add_lazy_stream_to_interaction(net_hash, interaction)
-                        # stream_obj.add_interaction(Interaction(uuid=_request_uuid,
-                        #                                       requester=_requester, target=self.get_peer_id()))
+                        # If the data arrived before this action, then the UUID is already set, and here there is
+                        # no need to do anything; if the data has not yet arrived (common case) ...
+                        self.im.add_lazy_stream_to_interaction(net_hash, self.im.get_current())
 
         if not _completed:
             log.misc(f"Learning to generate signal {yhat_hashes_copy}")

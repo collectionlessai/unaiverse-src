@@ -756,8 +756,10 @@ class PolicyFilterHuman:
                         extra_hashes = request.get_arg("extra_hashes")
                         if extra_hashes is not None:
 
-                            # Arg 'extra_hashes' could have been already there for some world-specific reasons
-                            request.alter_arg("extra_hashes", extra_hashes + u_hashes)
+                            if not set(u_hashes).issubset(set(extra_hashes)):
+
+                                # Arg 'extra_hashes' could have been already there for some world-specific reasons
+                                request.alter_arg("extra_hashes", extra_hashes + u_hashes)
                         else:
 
                             # If arg 'extra_hashes' was not there
