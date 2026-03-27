@@ -11,7 +11,6 @@ package main
 import (
 	"io"
 	"fmt"
-	"net"
 	"time"
 	"bytes"
 	"context"
@@ -22,55 +21,55 @@ import (
 	pwebrtc "github.com/pion/webrtc/v4"
 )
 
-// getWebRTCAPI creates a custom Pion API that enables ICE-TCP
-// to mimic browser fallback behavior on strict networks.
-func getWebRTCAPI() *pwebrtc.API {
-	sEngine := pwebrtc.SettingEngine{}
+// // getWebRTCAPI creates a custom Pion API that enables ICE-TCP
+// // to mimic browser fallback behavior on strict networks.
+// func getWebRTCAPI() *pwebrtc.API {
+// 	sEngine := pwebrtc.SettingEngine{}
 	
-	sEngine.SetNetworkTypes([]pwebrtc.NetworkType{
-		pwebrtc.NetworkTypeUDP4,
-		pwebrtc.NetworkTypeTCP4,
-	})
+// 	sEngine.SetNetworkTypes([]pwebrtc.NetworkType{
+// 		pwebrtc.NetworkTypeUDP4,
+// 		pwebrtc.NetworkTypeTCP4,
+// 	})
 
-	// 1. Aggressive Timeouts (Fail fast like a browser)
-	sEngine.SetICETimeouts(
-		2*time.Second,  // disconnected timeout
-		5*time.Second,  // failed timeout
-		2*time.Second,  // keep-alive
-	)
+// 	// 1. Aggressive Timeouts (Fail fast like a browser)
+// 	sEngine.SetICETimeouts(
+// 		2*time.Second,  // disconnected timeout
+// 		5*time.Second,  // failed timeout
+// 		2*time.Second,  // keep-alive
+// 	)
 
-	// 2. Restrict UDP ports to a range less likely to be blanket-blocked
-	err := sEngine.SetEphemeralUDPPortRange(10000, 10500)
-	if err != nil {
-		logger.Warnf("Failed to set ephemeral UDP port range: %v", err)
-	}
+// 	// 2. Restrict UDP ports to a range less likely to be blanket-blocked
+// 	err := sEngine.SetEphemeralUDPPortRange(10000, 10500)
+// 	if err != nil {
+// 		logger.Warnf("Failed to set ephemeral UDP port range: %v", err)
+// 	}
 
-	// 3. Setup single-port UDP Mux
-	udpListener, err := net.ListenUDP("udp", &net.UDPAddr{
-		IP:   net.IP{0, 0, 0, 0},
-		Port: 0, 
-	})
-	if err != nil {
-		logger.Warnf("Failed to setup UDP listener for WebRTC: %v", err)
-	} else {
-		udpMux := pwebrtc.NewICEUDPMux(nil, udpListener)
-		sEngine.SetICEUDPMux(udpMux)
-	}
+// 	// 3. Setup single-port UDP Mux
+// 	udpListener, err := net.ListenUDP("udp", &net.UDPAddr{
+// 		IP:   net.IP{0, 0, 0, 0},
+// 		Port: 0, 
+// 	})
+// 	if err != nil {
+// 		logger.Warnf("Failed to setup UDP listener for WebRTC: %v", err)
+// 	} else {
+// 		udpMux := pwebrtc.NewICEUDPMux(nil, udpListener)
+// 		sEngine.SetICEUDPMux(udpMux)
+// 	}
 
-	// 4. Setup TCP Mux as fallback
-	tcpListener, err := net.ListenTCP("tcp", &net.TCPAddr{
-		IP:   net.IP{0, 0, 0, 0},
-		Port: 0,
-	})
-	if err != nil {
-		logger.Warnf("Failed to setup TCP listener for WebRTC: %v", err)
-	} else {
-		tcpMux := pwebrtc.NewICETCPMux(nil, tcpListener, 8)
-		sEngine.SetICETCPMux(tcpMux)
-	}
+// 	// 4. Setup TCP Mux as fallback
+// 	tcpListener, err := net.ListenTCP("tcp", &net.TCPAddr{
+// 		IP:   net.IP{0, 0, 0, 0},
+// 		Port: 0,
+// 	})
+// 	if err != nil {
+// 		logger.Warnf("Failed to setup TCP listener for WebRTC: %v", err)
+// 	} else {
+// 		tcpMux := pwebrtc.NewICETCPMux(nil, tcpListener, 8)
+// 		sEngine.SetICETCPMux(tcpMux)
+// 	}
 
-	return pwebrtc.NewAPI(pwebrtc.WithSettingEngine(sEngine))
-}
+// 	return pwebrtc.NewAPI(pwebrtc.WithSettingEngine(sEngine))
+// }
 
 // getWebRTCConfig builds a pion WebRTC configuration from the node's stored ICE config.
 // Falls back to Google's public STUN servers when no config is present.
@@ -305,8 +304,7 @@ func handleSignalingStream(ni *NodeInstance, s network.Stream) {
 	logger.Debugf("[GO] 📥 Instance %d: Successfully received SDP offer from %s (length: %d bytes)", ni.instanceIndex, remotePeer, len(offerMsg.SDP))
 
 	// Create PeerConnection & set remote description using custom API
-	api := getWebRTCAPI()
-	pc, err := api.NewPeerConnection(getWebRTCConfig(ni))
+	pc, err := pwebrtc.NewPeerConnection(getWebRTCConfig(ni))
 	if err != nil {
 		logger.Errorf("[GO] ❌ Instance %d: NewPeerConnection: %v", ni.instanceIndex, err)
 		writeSignalMessage(s, SignalMessage{Type: "error", Message: err.Error()})
@@ -423,8 +421,7 @@ func initiateWebRTCConnection(ni *NodeInstance, remotePeer peer.ID) error {
 	_ = s.SetDeadline(time.Now().Add(WebRTCSignalingTimeout))
 
 	// Create PeerConnection & set remote description using custom API
-	api := getWebRTCAPI()
-	pc, err := api.NewPeerConnection(getWebRTCConfig(ni))
+	pc, err := pwebrtc.NewPeerConnection(getWebRTCConfig(ni))
 	if err != nil {
 		return fmt.Errorf("NewPeerConnection: %w", err)
 	}

@@ -465,18 +465,31 @@ func (ni *NodeInstance) isSuitableForPeerSource(pid peer.ID) bool {
 
 	// Only accept wss-enabled nodes as relay
 	addrs := ps.Addrs(pid)
-	isSuitable := false
 	for _, addr := range addrs {
-		_, err = addr.ValueForProtocol(ma.P_WS) 
-		if err == nil {
-			_, err := addr.ValueForProtocol(ma.P_TLS) 
-			if err == nil {
-				isSuitable = true
-			}
+		portStr, err := addr.ValueForProtocol(ma.P_TCP)
+		if err != nil {
+			continue
 		}
+
+		if portStr != "443" {
+			continue
+		}
+
+		_, err = addr.ValueForProtocol(ma.P_WS)
+		if err != nil {
+			continue
+		}
+
+		_, err = addr.ValueForProtocol(ma.P_TLS)
+		if err != nil {
+			continue
+		}
+
+		// Found a valid wss address on port 443
+		return true
 	}
 
-	return isSuitable
+	return false
 }
 
 // PeerSource acts as the peer discovery backend for AutoRelay.
