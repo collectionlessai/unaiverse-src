@@ -3,7 +3,9 @@ import os
 
 class Custom:
 
-    # Custom configurations, default values
+    # ==================
+    # NODE CONFIGURATION
+    # ==================
     SEND_DYNAMIC_PROFILE_EVERY = 10.  # Seconds
     GET_NEW_TOKEN_EVERY = 23 * 60. * 60. + 30 * 60.  # Seconds (23 hours and 30 minutes, safer)
     PUBLISH_RENDEZVOUS_EVERY = 10.  # Seconds
@@ -15,7 +17,9 @@ class Custom:
     SEND_STATS_EVERY = 30.  # Seconds (warning: modified in Node constructor!)
     SAVE_CHECKPOINT_EVERY = -1.  # When negative, means "do not save" (warning: modified by means in Node constructor!)
 
-    # Environment variable
+    # =====================
+    # ENVIRONMENT VARIABLES
+    # =====================
     PRINT_LEVEL = int(os.getenv("NODE_PRINT", "0"))  # 0, 1, 2
     LOG_TO_FILE = int(os.getenv("NODE_LOG", "0")) == 1  # 0, 1
     SKIP_WAS_ALIVE_CHECK = os.getenv("NODE_IGNORE_ALIVE", "0") == "1"
@@ -30,31 +34,48 @@ class Custom:
     ENV_KEY_PATH = os.getenv("TLS_KEY_PATH", None)
     PATH_TO_APPEND_ADDRESSES = os.getenv("NODE_SAVE_RUNNING_ADDRESSES")
 
-    # Misc
+    # =============
+    # STATE MACHINE
+    # =============
+    ROLE_WILDCARD = '<role>'
+    WORLD_WILDCARD = '<world>'
+    AGENT_WILDCARD = '<agent>'
+    PARTNER_WILDCARD = '<partner>'
+    DEFAULT_WILDCARDS = {
+        WORLD_WILDCARD: WORLD_WILDCARD,
+        AGENT_WILDCARD: AGENT_WILDCARD,
+        PARTNER_WILDCARD: PARTNER_WILDCARD,
+        ROLE_WILDCARD: ROLE_WILDCARD
+    }
+
+    # Logged ticks for action completion (unique markers, used also to avoid repetitions)
     ACTION_TICKS_PER_STATUS = ["   ✅ ", "   🔄 ", "   ❌ "]  # Keep the final spaces
 
-    # Arguments
+    # =======
+    # ACTIONS
+    # =======
+
+    # Special action arguments, that will be considered when using the @action decorator
     STREAM_ARG_NAMES = {'stream', 'streams', 'u_hashes', 'yhat_hashes'}
     AGENT_ARG_NAMES = {'agent', 'agents', 'partner', 'partners'}
 
-    # HSM wildcards
-    DEFAULT_WILDCARDS = {'<world>': '<world>', '<agent>': '<agent>', '<partner>': '<partner>', '<role>': '<role>'}
-
-    # Candidate Action argument names (when calling an action) that tells that such an action is multi-steps
-    SECONDS_ARG_NAMES = {'time'}
-    TIMEOUT_ARG_NAMES = {'timeout'}
-    DELAY_ARG_NAMES = {'delay'}
+    # Candidate action argument names (when calling an action) that tells that such an action is multi-steps
+    SECONDS_ARG_NAMES = {'max_duration', 'time'}  # Keep the preferred name on top
+    TIMEOUT_ARG_NAMES = {'retry_timeout', 'timeout'}  # Keep the preferred name on top
+    DELAY_ARG_NAMES = {'wait_before_running', 'delay'}  # Keep the preferred name on top
     NOT_ALLOWED_IN_ACTION_SIGNATURE = SECONDS_ARG_NAMES | TIMEOUT_ARG_NAMES | DELAY_ARG_NAMES
     INTERACTION_ARG_NAMES = {'interaction', '_requester'}
     DEFAULT_TIMEOUT = 10.0
     ALL_STATES_NAME = 'all'
     NOT_ALLOWED_STATE_NAMES = {ALL_STATES_NAME}
 
-    # Deprecated Action argument-related things
+    # Deprecated action argument-related things
     SPECIAL_DEPRECATED_CASES_PREFIXES = {'ask_', 'do_', 'done_'}
-    NOT_READY_PREFIXES = {'get_', 'got_', 'do_', 'done_'}
+    DEPRECATED_COMPLETED_ARG = '_completed'
 
-    # Interactions
+    # ============
+    # INTERACTIONS
+    # ============
     MAX_INTERACTIONS = 100
     MAX_STREAM_DATA_WITHOUT_INTERACTIONS = 2
     DEFAULT_INTER_TIMEOUT = 60. * 5.  # Seconds

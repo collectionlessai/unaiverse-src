@@ -32,9 +32,9 @@ class Action:
                  msg: str | None = None,
                  avoid_changing_ready: bool = False,
                  teleport: bool = False,
-                 total_time: float = 0.,
-                 timeout: float = 0,
-                 delay: float = 0):
+                 total_time: float | str = 0.,
+                 timeout: float | str = 0,
+                 delay: float | str = 0):
         """Initializes an `Action` object, which encapsulates a method to be executed on a given object (`actionable`)
         with specified arguments. It sets up various properties for managing multistep actions, including
         `total_steps`, `total_time`, and `timeout`. It also handles wildcard argument replacement and checks for the
@@ -52,11 +52,11 @@ class Action:
                 internal rules.
             teleport: A boolean indicating that this action must be hidden when drawing the state machine ('teleport').
             total_time: The number of seconds representing the max duration of this action (from the moment it stars).
-                When <= 0., then no limits.
+                When <= 0., then no limits. It can be a wildcard (str).
             timeout: The number of seconds representing the max time we keep try running this action before giving up.
-                When <= 0., then no timeouts at all.
+                When <= 0., then no timeouts at all. It can be a wildcard (str).
             delay: The number of seconds that must pass when joining a state before considering this action.
-                When <= 0., then no delays at all.
+                When <= 0., then no delays at all. It can be a wildcard (str).
         """
         # Basic properties
         self.name = name  # Name of the action (name of the corresponding method)
@@ -88,17 +88,17 @@ class Action:
 
         # Time-based metrics
         self.__total_time = total_time  # A total time <= 0 means "no total time at all"
-        self.__total_time_with_wildcard = None
+        self.__total_time_with_wildcard = total_time if isinstance(total_time, str) else None
         self.__guess_total_time(self.args)  # This will "guess" the value of self.__total_time from the args dict
 
         # Time-based metrics
         self.__timeout = timeout  # A timeout <= 0 means "no total time at all"
-        self.__timeout_with_wildcard = None
+        self.__timeout_with_wildcard = timeout if isinstance(timeout, str) else None
         self.__guess_timeout(self.args)  # This will "guess" the value of self.__timeout from the args dict
 
         # Time-based metrics
         self.__delay = delay
-        self.__delay_with_wildcard = None
+        self.__delay_with_wildcard = delay if isinstance(delay, str) else None
         self.__guess_delay(self.args)  # This will "guess" the value of self.__delay from the args dict
 
         # Checking arguments (also removing 'timeout', 'delay', etc...)
@@ -110,16 +110,13 @@ class Action:
         self.msg_with_wildcards = self.msg
 
         # Checking
-        self.deprecated_has_completion = '_completed' in self.param_list
+        self.deprecated_has_completion = Custom.DEPRECATED_COMPLETED_ARG in self.param_list
 
         # Fixing (forcing NOT-ready on some actions)
         if not avoid_changing_ready:
-            for prefix in Custom.NOT_READY_PREFIXES:
-                if self.name.startswith(prefix):
-                    self.inner = False
-                    break
             for p in self.param_list:
                 if p in Custom.INTERACTION_ARG_NAMES:
+                    self.inner = False
                     self.outer = True
                     break
 
@@ -140,8 +137,9 @@ class Action:
         return self.deprecated_has_completion
 
     def set_state_machine(self, hsm: object) -> None:
-        """Registers the parent state machine that owns this Custom."""
+        """Registers the parent state machine that owns this action."""
         self.state_machine = hsm
+        self.set_wildcards(hsm.get_wildcards())
 
     def set_mark(self, mark: object) -> None:
         """Store an arbitrary marker object on the action."""
@@ -171,8 +169,9 @@ class Action:
         """
         if interaction is None:
             interaction = self.system_interaction
-        actual_args = self.get_actual_params(additional_args=interaction.action_kwargs)
-        actual_args = self.__replace_wildcard_values(actual_args)
+
+        interaction_args = self.__apply_wildcards_to_args(interaction.action_kwargs, in_place=False)
+        actual_args = self.get_actual_params(additional_args=interaction_args)
 
         if self.msg is not None:
             if self.state_machine.show_action_request_info and interaction is not None:
@@ -421,7 +420,7 @@ class Action:
         }
         if self.msg is not None:
             d["msg"] = self.msg.encode("ascii", "xmlcharrefreplace").decode("ascii")
-        d["ready_without_outer_interactions"] = self.inner
+        d["ready"] = self.inner
         d["max_duration"] = self.__total_time
         d["retry_timeout"] = self.__timeout
         d["time_to_wait_before_running"] = self.__delay
@@ -495,24 +494,13 @@ class Action:
                 del args[arg_name]
         return True
 
-    def set_wildcards(self, wildcards: dict[str, str | float | int] | None, permanent: bool = False) -> None:
-        """Replaces wildcard values in the action's arguments with actual values. This method is used to dynamically
-        configure actions with context-specific data.
+    def set_wildcards(self, wildcards: dict[str, str | float | int] | None) -> None:
+        """Replaces wildcard values with new ones.
 
         Args:
             wildcards: A dictionary mapping wildcard placeholders to their concrete values.
-            permanent: If True, the wildcard-based arguments will become the actual ones (default: False).
         """
-        if not permanent:
-            self.wildcards = wildcards if wildcards is not None else {}
-            self.__replace_wildcard_values()
-        else:
-            self.__replace_wildcard_values()
-            self.args_with_wildcards = copy.deepcopy(self.args)
-            self.__timeout_with_wildcard = None
-            self.__total_time_with_wildcard = None
-            self.__delay_with_wildcard = None
-            self.set_msg(self.msg)
+        self.wildcards = wildcards if wildcards is not None else {}
 
     def add_interaction(self, interaction: Interaction) -> bool:
         """Adds a new interaction to the action's internal list.
@@ -620,27 +608,17 @@ class Action:
                          f"this is a special argument that is automatically handled, and cannot be "
                          f"included in the function signature (change its name).")
 
-    def __replace_wildcard_values(self, args: dict | None = None) -> dict:
-        """A private helper method that replaces placeholder values (wildcards) in the action's arguments with their
+    def __apply_wildcards_to_args(self, args: dict | None = None, in_place: bool = True) -> dict:
+        """A private helper method that replaces placeholder values (wildcards) in given action's arguments with their
         actual, concrete values. It handles both single-value and list-based wildcards.
         """
+        if not in_place:
+            args = copy.deepcopy(args)
 
-        updated_static_stuff = True
-        if args is not None:
-            args = copy.copy(args)
-            updated_static_stuff = False
-
-        if updated_static_stuff:
-            if self.args_with_wildcards is None:
-                self.args_with_wildcards = copy.deepcopy(self.args)  # Backup before applying wildcards (1st time only)
-            else:
-                self.args = copy.deepcopy(self.args_with_wildcards)  # Restore a backup before applying wildcards
-            args = self.args
-
-            if self.msg_with_wildcards is not None:
-                self.msg = self.msg_with_wildcards
-
+        # Applying wildcard-suggested replacements
         for wildcard_from, wildcard_to in self.wildcards.items():
+
+            # ... to arguments
             for k, v in args.items():
                 if not isinstance(wildcard_to, str):
                     if wildcard_from == v:
@@ -654,17 +632,36 @@ class Action:
                         if wildcard_from in v:
                             args[k] = v.replace(wildcard_from, wildcard_to)
 
-            if updated_static_stuff:
-                if self.msg is not None:
-                    self.msg = self.msg.replace(wildcard_from, str(wildcard_to))
-                if self.__total_time_with_wildcard is not None and wildcard_from in self.__total_time_with_wildcard:
-                    self.__total_time = float(self.__total_time_with_wildcard.replace(wildcard_from, str(wildcard_to)))
-                if self.__timeout_with_wildcard is not None and wildcard_from in self.__timeout_with_wildcard:
-                    self.__timeout = float(self.__timeout_with_wildcard.replace(wildcard_from, str(wildcard_to)))
-                if self.__delay_with_wildcard is not None and wildcard_from in self.__delay_with_wildcard:
-                    self.__delay = float(self.__delay_with_wildcard.replace(wildcard_from, str(wildcard_to)))
-
         return args
+
+    def apply_wildcards(self) -> None:
+        """Given the current wildcards, it applies the replacements they suggest to whatever uses them."""
+
+        # Setting up the original wildcard-based arguments and messages
+        if self.args_with_wildcards is None:
+            self.args_with_wildcards = copy.deepcopy(self.args)  # Backup before applying wildcards (1st time only)
+        else:
+            self.args = copy.deepcopy(self.args_with_wildcards)  # Restore a backup before applying wildcards
+        if self.msg_with_wildcards is not None:
+            self.msg = self.msg_with_wildcards
+
+        # Applying wildcard-suggested replacements to arguments
+        self.__apply_wildcards_to_args(self.args)
+
+        # Applying wildcard-suggested replacements to message and other stuff
+        for wildcard_from, wildcard_to in self.wildcards.items():
+
+            # ... to message
+            if self.msg is not None:
+                self.msg = self.msg.replace(wildcard_from, str(wildcard_to))
+
+            # ... to the rest
+            if self.__total_time_with_wildcard is not None and wildcard_from in self.__total_time_with_wildcard:
+                self.__total_time = float(self.__total_time_with_wildcard.replace(wildcard_from, str(wildcard_to)))
+            if self.__timeout_with_wildcard is not None and wildcard_from in self.__timeout_with_wildcard:
+                self.__timeout = float(self.__timeout_with_wildcard.replace(wildcard_from, str(wildcard_to)))
+            if self.__delay_with_wildcard is not None and wildcard_from in self.__delay_with_wildcard:
+                self.__delay = float(self.__delay_with_wildcard.replace(wildcard_from, str(wildcard_to)))
 
     def __guess_total_time(self, args) -> None:
         """A private helper method that attempts to determine the total execution time for an action by looking for a

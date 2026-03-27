@@ -14,7 +14,6 @@
 """
 import os
 import torch
-import types
 import pickle
 import uuid as _uuid
 import importlib.resources
@@ -30,12 +29,13 @@ from unaiverse.hsm.hsm import HybridStateMachine
 from unaiverse.networking.p2p.messages import Msg
 from unaiverse.streams.streamproxy import StreamProxy
 from unaiverse.networking.node.profile import NodeProfile
-from unaiverse.utils.misc import GenException, FileTracker
 from unaiverse.streams.streams import Stream, BufferedStream
 from unaiverse.streams.dataprops import DataProps, StreamType
 from unaiverse.networking.node.connpool import ConnectionPools
 from unaiverse.interaction import Interaction, InteractionManager
 from unaiverse.modules.utils import AgentProcessorChecker, ModuleWrapper
+from unaiverse.utils.misc import (GenException, FileTracker, collect_py_files, load_agent_in_memory, pack_py_files,
+                                  unpack_py_files)
 
 
 class AgentBasics:
@@ -153,7 +153,7 @@ class AgentBasics:
         self.is_world = False  # If this instance is about a world: it will be discovered at creation time
 
         # World specific attributes (they are only used if this agent is actually a world)
-        self.agent_actions = None
+        self.packed_agent_files: str | None = None
         self.role_to_behav = {}
         self.agent_badges: dict[str, list[dict]] = {}  # Peer_id -> collected badges for other agents
         self.role_changed_by_world: bool = False
@@ -391,30 +391,54 @@ class AgentBasics:
         """
         return _uuid.uuid4().hex[0:8]
 
-    def augment_roles(self):
+    @staticmethod
+    def build_augmented_roles_dictionaries(custom_roles: list[str] | set[str]) -> tuple[dict[int, str], dict[str, int]]:
         """Augment the custom roles (role1, role2, etc.) with the default ones (public, world_master, etc.), generating
         all the mixed roles (world_master~role1, world_master~role2, ...)"""
 
+        role_bits_to_str = {k: v for k, v in AgentBasics.ROLE_BITS_TO_STR.items()}
+        role_str_to_bits = {k: v for k, v in AgentBasics.ROLE_STR_TO_BITS.items()}
+
         # Both Agent and World: Fusing basic roles and custom roles
-        if len(self.CUSTOM_ROLES) > 0:
-            if len(self.CUSTOM_ROLES) > 30:  # Safe value, could be increased
-                raise GenException("Maximum number of custom role overcame (max is 30)")
-            for i, role_str in enumerate(self.CUSTOM_ROLES):
+        if len(custom_roles) > 0:
+            if len(custom_roles) > 30:  # Safe value, could be increased
+                log.critical("Maximum number of custom role overcame (max is 30)")
+            for i, role_str in enumerate(custom_roles):
                 role_int = 1 << (i + 2)  # 000000100, then 00001000, etc. (recall that the first two bits are reserved)
-                self.ROLE_BITS_TO_STR[role_int] = role_str
-                self.ROLE_STR_TO_BITS[role_str] = role_int
+                role_bits_to_str[role_int] = role_str
+                AgentBasics.ROLE_STR_TO_BITS[role_str] = role_int
 
         # Both Agent and World: Augmenting roles
-        roles_not_to_be_augmented = {self.ROLE_PUBLIC, self.ROLE_WORLD_AGENT, self.ROLE_WORLD_MASTER}
-        role_bits_to_str_original = {k: v for k, v in self.ROLE_BITS_TO_STR.items()}
+        roles_not_to_be_augmented = {AgentBasics.ROLE_PUBLIC,
+                                     AgentBasics.ROLE_WORLD_AGENT,
+                                     AgentBasics.ROLE_WORLD_MASTER}
+        role_bits_to_str_original = {k: v for k, v in role_bits_to_str.items()}
         for role_int, role_str in role_bits_to_str_original.items():
             if role_int not in roles_not_to_be_augmented and "~" not in role_str:
-                for role_base_int in {self.ROLE_WORLD_AGENT, self.ROLE_WORLD_MASTER}:
+                for role_base_int in {AgentBasics.ROLE_WORLD_AGENT, AgentBasics.ROLE_WORLD_MASTER}:
                     augmented_role_int = role_base_int | role_int
-                    augmented_role_str = self.ROLE_BITS_TO_STR[role_base_int] + "~" + role_str
-                    if augmented_role_str not in self.ROLE_STR_TO_BITS:
-                        self.ROLE_STR_TO_BITS[augmented_role_str] = augmented_role_int
-                        self.ROLE_BITS_TO_STR[augmented_role_int] = augmented_role_str
+                    augmented_role_str = role_bits_to_str[role_base_int] + "~" + role_str
+                    if augmented_role_str not in role_str_to_bits:
+                        role_str_to_bits[augmented_role_str] = augmented_role_int
+                        role_bits_to_str[augmented_role_int] = augmented_role_str
+
+        return role_bits_to_str, role_str_to_bits
+
+    def augment_roles(self,
+                      role_bits_to_str: dict[int, str] | None = None,
+                      role_str_to_bits: dict[str, int] | None = None):
+        """Augment the custom roles (role1, role2, etc.) with the default ones (public, world_master, etc.), generating
+        all the mixed roles (world_master~role1, world_master~role2, ...)"""
+
+        if role_bits_to_str is None or role_str_to_bits is None:
+            role_bits_to_str, role_str_to_bits = AgentBasics.build_augmented_roles_dictionaries(self.CUSTOM_ROLES)
+
+        self.ROLE_BITS_TO_STR.clear()
+        for k, v in role_bits_to_str.items():
+            self.ROLE_BITS_TO_STR[k] = v
+        self.ROLE_STR_TO_BITS.clear()
+        for k, v in role_str_to_bits.items():
+            self.ROLE_STR_TO_BITS[k] = v
 
     async def clear_world_related_data(self):
         """Destroy all the cached information that is about a world (useful when leaving a world) (async)."""
@@ -453,32 +477,52 @@ class AgentBasics:
                                    if os.path.isfile(os.path.join(self.world_folder, f)) and
                                    f.lower().endswith(".json")]
 
-            # Loading action file
-            action_file = os.path.join(self.world_folder, 'agent.py')
+            # Loading Python files in the "world" folder
             try:
-                with open(action_file, 'r', encoding='utf-8') as file:
-                    self.agent_actions = file.read()
+                self.packed_agent_files = pack_py_files(collect_py_files(self.world_folder,
+                                                                         exclude_dirs={'pdf', 'stats'}))
             except Exception as e:
-                raise GenException(f'Error while reading the agent.py file: {action_file} [{e}]')
-
-            # Creating a dummy agent which supports the actions of the following state machines
-            mod = types.ModuleType("dynamic_module")
-            try:
-                exec(self.agent_actions, mod.__dict__)
-                dummy_agent = mod.WAgent(proc=None)
-                dummy_agent.CUSTOM_ROLES = self.CUSTOM_ROLES
-            except Exception as e:
-                raise GenException(f'Unable to create a valid agent object from the agent action file '
-                                   f'{action_file} [{e}]')
-
-            # Checking if the roles you wrote in agent.py are coherent with the JSON files in this folder
-            if dummy_agent.CUSTOM_ROLES != self.CUSTOM_ROLES:
-                raise GenException(f"Mismatching roles. "
-                                   f"Roles in JSON files: {self.CUSTOM_ROLES}. "
-                                   f"Roles specified in the agent.py file: {dummy_agent.CUSTOM_ROLES}")
+                raise GenException(f'Error while reading the agent-related python files in {self.world_folder} [{e}]')
 
             # Loading and refactoring behaviors
+            agent_files = unpack_py_files(self.packed_agent_files)
+
+            # Backward compatibility
+            if len(self.CUSTOM_ROLES) > 0:
+                found = 0
+                found_agent_py = False
+                for role in self.CUSTOM_ROLES:
+                    for file_name in agent_files.keys():
+                        if file_name == "agent.py":
+                            found_agent_py = True
+                        if file_name == f"{role}.py":
+                            found += 1
+                            break
+                if found != len(self.CUSTOM_ROLES):
+                    if found_agent_py:
+                        code_content = agent_files["agent.py"]
+
+                        # All roles go to the content of agent.py
+                        agent_files = {f"{k}.py": code_content for k in self.CUSTOM_ROLES}
+                        self.packed_agent_files = pack_py_files(agent_files)  # Repacking
+                    else:
+                        raise GenException(f'Mismatching JSON-file roles and .py files in {self.world_folder}')
+
             for role, default_behav_file in zip(self.CUSTOM_ROLES, default_behav_files):
+
+                # Creating a dummy agent which supports the actions of the following state machines
+                try:
+                    dummy_agent, dummy_agent_memory_finder = load_agent_in_memory(agent_files, role, proc=None)
+                    dummy_agent.CUSTOM_ROLES = self.CUSTOM_ROLES
+                except Exception as e:
+                    raise GenException(f'Unable to create a valid dummy agent object for agent with role {role} [{e}]')
+
+                # Checking if the roles you wrote in agent.py are coherent with the JSON files in this folder
+                if dummy_agent.CUSTOM_ROLES != self.CUSTOM_ROLES:
+                    raise GenException(f"Mismatching roles. "
+                                       f"Roles in JSON files: {self.CUSTOM_ROLES}. "
+                                       f"Roles specified in the agent.py file: {dummy_agent.CUSTOM_ROLES}")
+
                 try:
                     behav = HybridStateMachine(dummy_agent)
                     behav.load(default_behav_file)
@@ -498,6 +542,9 @@ class AgentBasics:
                         behav.save_pdf(os.path.join(self.world_folder, 'pdf', f'{role}.pdf'))
                 except Exception as e:
                     raise GenException(f'Error while saving the behav file {default_behav_file} for role {role} [{e}]')
+
+                # Clearing memory
+                dummy_agent_memory_finder.cleanup()
 
     def create_behav_files(self):
         """This method is called when building a world object. In your custom world-class, you can overload this method
@@ -739,7 +786,7 @@ class AgentBasics:
         log.misc(f"Successfully removed all agents")
 
     def add_behav_wildcard(self, wildcard_from: str, wildcard_to: object):
-        """Adds a wildcard mapping for the agent's behavior state machine.
+        """Adds a wildcard mapping for the agent's behavior state machine, use when joining worlds.
 
         Args:
             wildcard_from: The string to be used as a wildcard.

@@ -14,7 +14,6 @@
 """
 import html
 import time
-
 from unaiverse.custom import Custom
 from unaiverse.utils.logger import log
 from unaiverse.hsm.action import Action
@@ -107,6 +106,9 @@ class State:
     def set_state_machine(self, hsm: object) -> None:
         """Registers the parent state machine that owns this state."""
         self.state_machine = hsm
+        self.set_wildcards(hsm.get_wildcards())
+        if self.action is not None:
+            self.action.set_state_machine(hsm)
 
     def set_msg(self, msg: str | None) -> None:
         """Sets the message associated to this state."""
@@ -200,21 +202,18 @@ class State:
         """
         self.blocking = blocking
 
-    def set_wildcards(self, wildcards: dict[str, str | float | int] | None, permanent: bool = False) -> None:
-        """Replaces wildcard values in the state messages. This method is used to dynamically
-        configure state messages with context-specific data.
+    def set_wildcards(self, wildcards: dict[str, str | float | int] | None) -> None:
+        """Replaces wildcard dictionary.
 
         Args:
             wildcards: A dictionary mapping wildcard placeholders to their concrete values.
-            permanent: If True, the wildcard substitution becomes the new baseline (default: False).
         """
         self.wildcards = wildcards if wildcards is not None else {}
-        self.__replace_wildcard_values()
-        if permanent:
-            self.set_msg(self.msg)
+        if self.action is not None:
+            self.action.set_wildcards(self.wildcards)
 
-    def __replace_wildcard_values(self) -> None:
-        """A private helper method that replaces placeholder values (wildcards) in the state message.
+    def apply_wildcards(self) -> None:
+        """A method that replaces placeholder values (wildcards) in the state message.
         It handles both single-value and list-based wildcards.
         """
         if self.msg_with_wildcards is None:
@@ -225,3 +224,6 @@ class State:
         if self.msg is not None:
             for wildcard_from, wildcard_to in self.wildcards.items():
                 self.msg = self.msg.replace(wildcard_from, str(wildcard_to))
+
+        if self.action is not None:
+            self.action.apply_wildcards()

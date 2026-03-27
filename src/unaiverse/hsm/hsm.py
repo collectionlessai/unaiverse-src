@@ -27,7 +27,6 @@ from unaiverse.interaction import Interaction, CompletionReason
 
 
 class HybridStateMachine:
-    DEFAULT_WILDCARDS = {'<world>': '<world>', '<agent>': '<agent>', '<partner>': '<partner>', '<role>': '<role>'}
 
     def __init__(self, actionable: object, wildcards: dict[str, str | float | int] | None = None,
                  policy: Callable[[list[Action]], tuple[int, Interaction | None]] | None = None):
@@ -76,7 +75,10 @@ class HybridStateMachine:
         self.__id_to_original_action_msg: list[str | None] = []
 
         # Forcing default wildcards
-        self.add_wildcards(HybridStateMachine.DEFAULT_WILDCARDS)
+        self.add_wildcards(Custom.DEFAULT_WILDCARDS)
+
+        # Applying to the welcome message, state, actions, if needed
+        self.apply_wildcards()
 
         # Forcing output function
         self.__debug_messages_active = False
@@ -291,27 +293,42 @@ class HybridStateMachine:
         self.policy_filter_opts = filter_fcn_opts
         self.policy_filter_opts.clear()
 
-    def set_wildcards(self, wildcards: dict[str, str | float | int] | None, permanent: bool = False) -> None:
+    def set_wildcards(self, wildcards: dict[str, str | float | int] | None, apply: bool = False) -> None:
         """Sets the dictionary of wildcards that are used to dynamically replace placeholder values in action
-        arguments. It updates all actions with the new wildcard dictionary.
+        arguments.
 
         Args:
             wildcards: A dictionary containing wildcard key-value pairs.
-            permanent: If True, the wildcard-based arguments will become the actual ones (default: False).
+            apply: True if the wildcards must be applied to whatever uses it (defaults to False)
         """
         wildcards = wildcards if wildcards is not None else {}
-        if not permanent:
-            self.wildcards = wildcards
+
+        # Saving wildcard dictionary, completely replacing the previous one
+        self.wildcards = wildcards
+
+        # Propagating the reference to the new dictionary to actions and states.
         for action in self.__id_to_action:
-            action.set_wildcards(wildcards, permanent)
+            action.set_wildcards(self.wildcards)
         for state in self.__id_to_state:
-            state.set_wildcards(wildcards, permanent)
+            state.set_wildcards(self.wildcards)
+
+        if apply:
+            self.apply_wildcards()
+
+    def apply_wildcards(self) -> None:
+        """Given the current wildcards, it applies the replacements they suggest to whatever uses them."""
+
+        # Propagating the reference to the new dictionary to actions and states.
+        for action in self.__id_to_action:
+            action.apply_wildcards()
+        for state in self.__id_to_state:
+            state.apply_wildcards()
+
+        # If there is a welcome message that includes wildcards...
         if self.welcome_msg is not None:
             self.welcome_msg = self.welcome_msg_with_wildcards  # Restore before updating
             for wildcard_from, wildcard_to in self.wildcards.items():
                 self.welcome_msg = self.welcome_msg.replace(wildcard_from, str(wildcard_to))  # Update
-            if permanent:
-                self.set_welcome_message(self.welcome_msg)
 
     def set_role(self, role: str) -> None:
         """Sets the role of the agent associated with this state machine. This can be used to influence state machine
@@ -321,7 +338,8 @@ class HybridStateMachine:
             role: The string representation of the new role.
         """
         self.role = role
-        self.update_wildcard("<role>", self.role)
+        self.update_wildcard(Custom.ROLE_WILDCARD, self.role)
+        self.apply_wildcards()
 
     def get_wildcards(self) -> dict:
         """Retrieves the dictionary of wildcards currently used by the state machine.
@@ -331,39 +349,34 @@ class HybridStateMachine:
         """
         return self.wildcards
 
-    def add_wildcards(self, wildcards: dict[str, str | float | int | list[str]], permanent: bool = False) -> None:
-        """Adds new key-value pairs to the existing wildcard dictionary. It also triggers an update to all actions with
-        the new combined dictionary.
+    def add_wildcards(self, wildcards: dict[str, str | float | int | list[str]], apply: bool = False) -> None:
+        """Adds new key-value pairs to the existing wildcard dictionary.
 
         Args:
             wildcards: A dictionary of new wildcards to add.
-            permanent: If True, the wildcard-based arguments will become the actual ones (default: False).
+            apply: True if the wildcards must be applied to whatever uses it (defaults to False).
         """
-        if not permanent:
-            self.wildcards.update(wildcards)
-            self.set_wildcards(self.wildcards, permanent=False)
-        else:
-            self.set_wildcards(wildcards, permanent=True)
 
-    def replace_wildcards(self, wildcards: dict[str, str | float | int | list[str]]) -> None:
-        """Permanently replaces all wildcard values, making the substitution the new baseline.
+        # Update dictionary
+        self.wildcards.update(wildcards)
+        if apply:
+            self.apply_wildcards()
 
-        Args:
-            wildcards: A dictionary of wildcard key-value pairs to apply permanently.
-        """
-        self.add_wildcards(wildcards, permanent=True)
-
-    def update_wildcard(self, wildcard_key: str, wildcard_value: str | float | int) -> None:
+    def update_wildcard(self, wildcard_key: str, wildcard_value: str | float | int, apply: bool = False) -> None:
         """Updates the value of a single existing wildcard. It raises an error if the key does not exist. This method
         is useful for changing a single dynamic value without redefining all wildcards.
 
         Args:
             wildcard_key: The key of the wildcard to update.
             wildcard_value: The new value for the wildcard.
+            apply: True if the wildcards must be applied to whatever uses it (defaults to False).
         """
-        assert wildcard_key in self.wildcards, f"{wildcard_key} is not a valid wildcard"
-        self.wildcards[wildcard_key] = wildcard_value
-        self.set_wildcards(self.wildcards)
+        if wildcard_key not in self.wildcards:
+            log.error(f"{wildcard_key} is not a valid wildcard")
+        else:
+            self.wildcards[wildcard_key] = wildcard_value
+            if apply:
+                self.apply_wildcards()
 
     def get_action_step_idx(self) -> int:
         """Retrieves the current step index of the action being executed. This is particularly useful for tracking the
@@ -583,6 +596,9 @@ class HybridStateMachine:
             self.__id_to_original_state_msg.clear()
             self.__id_to_original_action_msg.clear()
 
+            # Apply wildcards to the restored messages
+            self.apply_wildcards()
+
     def generate_auto_messages(self, states: bool = True, actions: bool = True, force: bool = False) -> None:
         """Auto-generates human-readable messages for states and actions that currently have none.
 
@@ -739,7 +755,7 @@ class HybridStateMachine:
         self.transitions[from_state][to_state].append(new_action)
         self.__id_to_action.append(new_action)
 
-        new_action.set_state_machine(self)
+        new_action.set_state_machine(self)  # This will also share the same wildcards dictionary
 
     def include(self, hsm, make_a_copy=False) -> None:
         """Integrates the states and transitions of another state machine (`hsm`) into the current one. This is a
@@ -1300,7 +1316,7 @@ class HybridStateMachine:
             act_args = state_action.get("action_kwargs", {})
             blocking = state_action.get("blocking", True)
             msg = state_action.get("msg", None)
-            waiting_time = state_action.get("wait_for_interactions", 0.)
+            waiting_time = state_action.get("time_to_wait_for_interactions", 0.)
 
             self.add_state(state, action=act_name, args=act_args,
                            waiting_time=waiting_time, blocking=blocking, msg=msg)
@@ -1322,7 +1338,7 @@ class HybridStateMachine:
                     act_ready = action_dict.get("ready", True)
                     total_time = action_dict.get("max_duration", 0.)
                     timeout = action_dict.get("retry_timeout", 0.)
-                    delay = action_dict.get("wait_before_running", 0.)
+                    delay = action_dict.get("time_to_wait_before_running", 0.)
 
                     # Looping over all states
                     for from_state_obj in self.__id_to_state:
@@ -1334,7 +1350,7 @@ class HybridStateMachine:
 
                         self.add_transit(from_state, to_state,
                                          action=act_name, args=act_args, ready=act_ready, msg=msg,
-                                         avoid_changing_ready=True, teleport=True,
+                                         avoid_changing_ready="ready" in action_dict, teleport=True,
                                          total_time=total_time, timeout=timeout, delay=delay)
 
             # Handling all the ordinary teleports
@@ -1358,7 +1374,7 @@ class HybridStateMachine:
 
                     self.add_transit(from_state, to_state,
                                      action=act_name, args=act_args, ready=act_ready, msg=msg,
-                                     avoid_changing_ready=True, teleport=True,
+                                     avoid_changing_ready="ready" in action_dict, teleport=True,
                                      total_time=total_time, timeout=timeout, delay=delay)
 
         # Getting ordinary transitions
@@ -1377,7 +1393,8 @@ class HybridStateMachine:
 
                 self.add_transit(from_state, to_state,
                                  action=act_name, args=act_args, ready=act_ready, msg=msg,
-                                 avoid_changing_ready=True, total_time=total_time, timeout=timeout, delay=delay)
+                                 avoid_changing_ready="ready" in action_dict, total_time=total_time,
+                                 timeout=timeout, delay=delay)
 
         return self
 
@@ -1518,19 +1535,24 @@ class HybridStateMachine:
             for to_state, action_list in to_states.items():
                 for action in action_list:
                     special_args = {}
-                    if action.get_total_time() > 0:
+                    if isinstance(action.get_total_time(), str) or action.get_total_time() > 0:
                         special_args[next(iter(Custom.SECONDS_ARG_NAMES))] = action.get_total_time()
-                    if action.get_timeout() > 0:
+                    if isinstance(action.get_timeout(), str) or action.get_timeout() > 0:
                         special_args[next(iter(Custom.TIMEOUT_ARG_NAMES))] = action.get_timeout()
-                    if action.get_delay() > 0:
+                    if isinstance(action.get_delay(), str) or action.get_delay() > 0:
                         special_args[next(iter(Custom.DELAY_ARG_NAMES))] = action.get_delay()
                     args = action.args | special_args
                     s = "("
                     for i, (k, v) in enumerate(args.items()):
+                        if i >= len(action.args):
+                            s += ") ["
                         s += str(k) + "=" + (str(v) if not isinstance(v, str) else ("'" + str(v) + "'"))
                         if i < len(args) - 1:
                             s += ", "
-                    s += ")"
+                    if len(special_args) > 0:
+                        s += "]"
+                    else:
+                        s += ")"
                     label = action.name + s
                     if len(label) > 40:
                         tokens = label.split(" ")
@@ -1546,6 +1568,7 @@ class HybridStateMachine:
                         label = z
                     graph.edge(from_state, to_state, label=" " + label + " ", fontsize='8',
                                style='dashed' if not action.is_ready() else 'solid',
+                               color="#D3D3D380" if action.is_teleport() else "#000000",
                                _attributes={'id': "edge" + str(action.id)})
         return graph
 

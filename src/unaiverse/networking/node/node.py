@@ -42,7 +42,7 @@ from unaiverse.networking.node.connpool import NodeConn
 from unaiverse.networking.node.profile import NodeProfile
 from unaiverse.streams.streams import DataProps, BufferedStream
 from unaiverse.utils.misc import (GenException, get_key_considering_multiple_sources, save_node_addresses_to_file,
-                                  PolicyFilterHuman, prepare_app_dir)
+                                  PolicyFilterHuman, prepare_app_dir, load_agent_in_memory, unpack_py_files)
 
 
 class Node:
@@ -135,6 +135,8 @@ class Node:
         self.agent = hosted if self.node_type is Node.AGENT else None
         self.world = hosted if self.node_type is Node.WORLD else None
         self.conn = None  # Manages the network operations in the P2P network
+        self.memory_finder = None
+        self.world_agent_files = None
         self.talk_to_relay_based_nodes = talk_to_relay_based_nodes
 
         # Expected properties of the nodes that will try to connect to this one
@@ -376,7 +378,8 @@ class Node:
         # Update lone-wolf machines to replace default wildcards (like <agent>) - the private one will be handled when
         # joining a world
         if self.node_type is Node.AGENT:
-            self.agent.behav_lone_wolf.update_wildcard("<agent>", f"{self.get_public_peer_id()}")
+            self.agent.behav_lone_wolf.update_wildcard(Custom.AGENT_WILDCARD, f"{self.get_public_peer_id()}")
+            self.agent.behav_lone_wolf.apply_wildcards()
 
     def get_node_id_by_name(self, node_names: list[str], create_if_missing: bool = False,
                             node_type: str | None = None) -> tuple[list[str], list[bool]]:
@@ -744,6 +747,11 @@ class Node:
 
             if self.agent.__class__.__name__ == "WAgent":
                 new_agent = Agent(proc=None)
+
+                # Clearing memory
+                if self.memory_finder is not None:
+                    self.memory_finder.cleanup()
+                self.memory_finder = None
             else:
                 new_agent = self.agent
 
@@ -765,7 +773,8 @@ class Node:
             new_agent.set_policy_filter(self.agent.policy_filter_lone_wolf, public=True)
 
             # Fixing role in the agent profile
-            new_agent.accept_new_role(self.agent.ROLE_PUBLIC)
+            new_agent.world_profile = None  # It is already None actually...
+            new_agent.accept_new_role(Agent.ROLE_PUBLIC)
 
             # Updating node-level references
             self.agent = new_agent
@@ -1069,8 +1078,9 @@ class Node:
                                 log.disable_all_screen()  # Will disable all channels, except the default ones
                                 splash_text_shown = True
                                 if "lone_wolf_peer_id" in interact_mode_opts:
-                                    self.agent.behav_lone_wolf.update_wildcard("<partner>",
+                                    self.agent.behav_lone_wolf.update_wildcard(Custom.PARTNER_WILDCARD,
                                                                                interact_mode_opts['lone_wolf_peer_id'])
+                                    self.agent.behav_lone_wolf.apply_wildcards()
                                     log.user(f"\n*** Connected to agent "
                                              f"{interact_mode_opts['lone_wolf_peer_id']} ***")
                                 else:
@@ -1574,7 +1584,7 @@ class Node:
                                                                  'world_profile': self.profile.get_all_profile(),
                                                                  'rendezvous_tag': clock.get_cycle(),
                                                                  'your_role': role,
-                                                                 'agent_actions': self.world.agent_actions,
+                                                                 'agent_actions': self.world.packed_agent_files,
                                                                  'agent_stats_code': self.world.agent_stats_code,
                                                                  # 'initial_stats': self.world.stats.get_view()
                                                                  # if is_human else None,
@@ -1655,7 +1665,7 @@ class Node:
                         # Getting world profile (includes private addresses) and connecting to the world (privately)
                         await self.__join_world(profile=NodeProfile.from_dict(msg.content['world_profile']),
                                                 role=msg.content['your_role'],
-                                                agent_actions=msg.content['agent_actions'],
+                                                packed_agent_files=msg.content['agent_actions'],
                                                 agent_stats_code=msg.content.get('agent_stats_code', None),
                                                 rendezvous_tag=msg.content['rendezvous_tag'],
                                                 initial_stats=msg.content['initial_stats'])
@@ -1844,10 +1854,7 @@ class Node:
                     if msg.sender == self.conn.get_world_peer_id():
                         new_role_indication = msg.content
                         if new_role_indication['peer_id'] == self.get_world_peer_id():
-                            self.agent.accept_new_role(new_role_indication['role'])
-
-                            self.agent.behav.update_wildcard("<agent>", f"{self.get_world_peer_id()}")
-                            self.agent.behav.update_wildcard("<world>", f"{msg.sender}")
+                            self.__replace_agent_instance_by_role(role=new_role_indication['role'])
 
                 elif self.node_type is Node.WORLD:
                     if msg.sender in self.world.world_masters:
@@ -2001,14 +2008,14 @@ class Node:
         await self.__handle_connected_without_ack()
 
     async def __join_world(self, profile: NodeProfile, role: int,
-                           agent_actions: str | None, agent_stats_code: str | None,
+                           packed_agent_files: str | None, agent_stats_code: str | None,
                            rendezvous_tag: int, initial_stats: dict[str, Any] | None) -> bool:
         """Performs the actual operation of joining a world after receiving confirmation. (async)
 
         Args:
             profile: The profile of the world to join.
             role: The role assigned to the agent in the world (int).
-            agent_actions: A string of code defining the agent's actions.
+            packed_agent_files: The string encoding agent-code-files, defining the agent's actions.
             agent_stats_code: A string of code defining the statistics for this world.
             rendezvous_tag: The rendezvous tag from the world's profile.
             initial_stats: When joining a world we eventually receive the recent history.
@@ -2043,11 +2050,13 @@ class Node:
             # Load custom stats class if provided
             stats_class = None
             if agent_stats_code is not None and len(agent_stats_code) > 0:
-                # Checking code
-                if not Node.__analyze_code(agent_stats_code):
+
+                # Checking stats code
+                if not Node.__analyze_code({"stats.py": agent_stats_code}):
                     log.error("Invalid agent stats code (syntax errors or unsafe code) was provided by the world, "
                               "blocking the join operation")
                     return False
+
                 try:
                     stats_mod = types.ModuleType("dynamic_stats_module")
                     exec(agent_stats_code, stats_mod.__dict__)
@@ -2085,70 +2094,27 @@ class Node:
                 await self.leave(peer_id)
                 return False
 
-            # Setting actions
-            if agent_actions is not None and len(agent_actions) > 0:
+            # Getting agent files
+            try:
+                agent_files = unpack_py_files(packed_agent_files)
+            except Exception:
 
-                # Checking code
-                if not Node.__analyze_code(agent_actions):
-                    log.error(
-                        "Invalid agent actions code (syntax errors or unsafe code) was provided by the world, "
-                        "blocking the join operation")
-                    return False
-
-                # Creating a new agent with the received actions
-                if not self.agent.__class__.__name__ == "WAgent":
-                    mod = types.ModuleType("dynamic_module")
-                    exec(agent_actions, mod.__dict__)
-                    sys.modules["dynamic_module"] = mod
-                    new_agent = mod.WAgent(proc=None)
-                else:
-                    new_agent = self.agent
-
-                # Cloning attributes of the existing agent
-                for key, value in self.agent.__dict__.items():
-                    if hasattr(new_agent, key):  # This will skip ROLE_BITS_TO_STR, CUSTOM_ROLES, etc...
-                        if key == 'stats' and stats_class is not None:
-                            new_agent.stats = stats_class(is_world=False)
-                        else:
-                            setattr(new_agent, key, value)
-
-                # Telling the FSM that actions are related to this new agent
-                new_agent.behav.set_actionable(new_agent)
-                new_agent.behav_lone_wolf.set_actionable(new_agent)
-
-                # Inheriting the pre-defined policy filter (if any)
-                new_agent.set_policy_filter(self.agent.policy_filter, public=False)
-                new_agent.set_policy_filter(self.agent.policy_filter_lone_wolf, public=True)
-
-                # Setting up roles
+                # Backward compatibility (single agent.py for all roles)
                 roles = profile.get_dynamic_profile()['world_roles_fsm'].keys()
-                new_agent.CUSTOM_ROLES = roles
-                new_agent.augment_roles()
+                agent_files = {f"{k}.py": packed_agent_files for k in roles}
 
-                # Updating node-level references
-                old_agent = self.agent
-                self.agent = new_agent
-                self.hosted = new_agent
-            else:
-                old_agent = self.agent
-                if stats_class is not None:
-                    log.misc("Replacing default stats with custom WStats from world.")
-                    old_agent.stats = stats_class(is_world=False)
+            # Checking files
+            if not Node.__analyze_code(agent_files):
+                log.error(
+                    f"Invalid agent-related code (syntax errors or unsafe code) was provided by "
+                    f"the world, blocking the join operation")
+                return False
 
-            # inject the stats history
-            if initial_stats is not None:
-                self.agent.update_stats_view(initial_stats, overwrite=True)
+            # Saving reference files (in memory - needed if switching role)
+            self.world_agent_files = agent_files
 
-            # Saving the world profile
-            self.agent.world_profile = profile
-
-            # Setting the assigned role and default behavior (do it after having recreated the new agent object)
-            self.agent.accept_new_role(role)  # Do this after having done 'self.agent.world_profile = profile'
-
-            # Updating wildcards
-            self.agent.behav.update_wildcard("<agent>", f"{self.get_world_peer_id()}")
-            self.agent.behav.update_wildcard("<world>", f"{peer_id}")
-            self.agent.behav.add_wildcards(old_agent.behav_wildcards)
+            # Replacing agent instance with a new one, accordingly to the role
+            self.__replace_agent_instance_by_role(role, peer_id, profile, stats_class, initial_stats)
 
             # Telling the connection manager the info needed to discriminate peers (getting them from the world profile)
             # notice that the world node private ID was already told to the connection manager (see a few lines above)
@@ -2190,7 +2156,8 @@ class Node:
             return False
 
         if self.conn.is_public(peer_id):
-            self.agent.behav_lone_wolf.update_wildcard("<partner>", peer_id)
+            self.agent.behav_lone_wolf.update_wildcard(Custom.PARTNER_WILDCARD, peer_id)
+            self.agent.behav_lone_wolf.apply_wildcards()
 
         del self.agents_expected_to_send_ack[peer_id]
         return True
@@ -2439,11 +2406,11 @@ class Node:
             log.critical(f"An error occurred while making the POST request: {e}")
 
     @staticmethod
-    def __analyze_code(file_in_memory: str) -> bool:
+    def __analyze_code(files_in_memory: dict[str, str]) -> bool:
         """Analyzes a string of Python code for dangerous or unsafe functions and modules.
 
         Args:
-            file_in_memory: The string of Python code to analyze.
+            files_in_memory: The dict "file name to code string with contents".
 
         Returns:
             True if the code is considered safe, otherwise False.
@@ -2491,16 +2458,104 @@ class Node:
 
             return False
 
-        try:
-            tree = ast.parse(file_in_memory)
-        except SyntaxError:
-            return False
-
-        for _ast_node in ast.walk(tree):
-            if is_suspicious(_ast_node):
+        for file_in_memory in files_in_memory.values():
+            try:
+                tree = ast.parse(file_in_memory)
+            except SyntaxError:
                 return False
 
+            for _ast_node in ast.walk(tree):
+                if is_suspicious(_ast_node):
+                    return False
+
         return True
+
+    def __replace_agent_instance_by_role(self, role: int,
+                                         world_peer_id: str | None = None,
+                                         world_profile: NodeProfile | None = None,
+                                         stats_class=None,
+                                         initial_stats=None):
+        """Generating a new instance of the Agent class accordingly to the given role (when in-world only)."""
+
+        if world_profile is None:
+            world_profile = self.agent.world_profile
+
+        if world_peer_id is None:
+            world_peer_id = self.conn.get_world_peer_id()
+
+        if self.world_agent_files is not None and len(self.world_agent_files) > 0:
+
+            # Getting roles from the just got world profile
+            world_roles = world_profile.get_dynamic_profile()['world_roles_fsm'].keys()
+            role_bits_to_str, role_str_to_bits = Agent.build_augmented_roles_dictionaries(world_roles)
+
+            # Creating a new agent with the received actions
+            if not self.agent.__class__.__name__ == "WAgent":
+                base_role_str = role_bits_to_str[(role >> 2) << 2]
+                new_agent, new_agent_memory_finder = load_agent_in_memory(self.world_agent_files,
+                                                                          base_role_str,
+                                                                          proc=None)
+
+                # Saving new roles from the world ("custom roles") and building the augmented sets
+                new_agent.CUSTOM_ROLES.clear()
+                for r in world_roles:
+                    new_agent.CUSTOM_ROLES.append(r)
+                new_agent.augment_roles(role_bits_to_str, role_str_to_bits)
+            else:
+                new_agent = self.agent
+                new_agent_memory_finder = None
+
+            # Cloning attributes of the existing agent
+            for key, value in self.agent.__dict__.items():
+                if hasattr(new_agent, key):  # This will skip ROLE_BITS_TO_STR, CUSTOM_ROLES, etc...
+                    if key == 'stats' and stats_class is not None:
+                        new_agent.stats = stats_class(is_world=False)
+                    else:
+                        setattr(new_agent, key, value)
+
+            # Telling the FSM that actions are related to this new agent
+            # (the world FSM here is an empty FSM, keep it here to ensure its link with the new agent, in case of
+            # a no-role world)
+            new_agent.behav.set_actionable(new_agent)
+            new_agent.behav_lone_wolf.set_actionable(new_agent)
+
+            # Inheriting the pre-defined policy filter (if any)
+            new_agent.set_policy_filter(self.agent.policy_filter, public=False)
+            new_agent.set_policy_filter(self.agent.policy_filter_lone_wolf, public=True)
+
+            # Updating node-level references
+            old_agent = self.agent
+            old_memory_finder = self.memory_finder
+            self.agent = new_agent
+            self.hosted = new_agent
+            self.memory_finder = new_agent_memory_finder
+
+        else:
+            old_agent = self.agent
+            old_memory_finder = None
+            if stats_class is not None:
+                log.misc("Replacing default stats with custom WStats from world.")
+                old_agent.stats = stats_class(is_world=False)
+
+        # inject the stats history
+        if initial_stats is not None:
+            self.agent.update_stats_view(initial_stats, overwrite=True)
+
+        # Saving the world profile
+        self.agent.world_profile = world_profile
+
+        # Setting the assigned role and default behavior (do it after having recreated the new agent object)
+        self.agent.accept_new_role(role)  # Do this after having done 'self.agent.world_profile = profile'
+
+        # Updating wildcards
+        self.agent.behav.update_wildcard(Custom.AGENT_WILDCARD, f"{self.get_world_peer_id()}")
+        self.agent.behav.update_wildcard(Custom.WORLD_WILDCARD, f"{world_peer_id}")
+        self.agent.behav.add_wildcards(old_agent.behav_wildcards)
+        self.agent.behav.apply_wildcards()
+
+        # Clearing memory
+        if old_memory_finder is not None:
+            old_memory_finder.cleanup()
 
     async def __handle_inspector_command(self, cmd: str, arg: str | None) -> None:
         """Handles commands received from an inspector node. (async)

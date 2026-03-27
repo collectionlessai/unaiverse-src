@@ -12,17 +12,23 @@
                  Code Repositories:  https://github.com/collectionlessai/
                  Main Developers:    Stefano Melacci (Project Leader), Christian Di Maio, Tommaso Guidi
 """
-import logging
 import os
 import ast
 import sys
 import time
 import json
 import math
+import gzip
 import random
+import base64
 import threading
+import importlib
+import importlib.abc
+import uuid as _uuid
 from tqdm import tqdm
+from typing import Any
 from pathlib import Path
+import importlib.machinery
 from datetime import datetime
 from collections import deque
 
@@ -300,7 +306,7 @@ class FileTracker:
                         (self.prefix is None or file.name.startswith(self.prefix))):
                     # state[file.name] = os.path.getmtime(file) # this is less stable than what you see below
                     state[file.name] = file.stat().st_mtime_ns
-            except Exception as e:
+            except Exception:
                 pass
         return state
 
@@ -321,6 +327,192 @@ class FileTracker:
         has_changed = bool(created or modified or deleted)
         self.last_state = new_state
         return has_changed
+
+
+def pack_py_files(py_files: dict[str, str]) -> str:
+    """Serialize, gzip-compress and base64-encode a py-files dict.
+
+    Args:
+        py_files: Dict mapping relative paths to Python source text.
+
+    Returns:
+        A plain ASCII string suitable for embedding in any text-based message.
+    """
+    raw = json.dumps(py_files).encode('utf-8')
+    return base64.b64encode(gzip.compress(raw)).decode('ascii')
+
+
+def collect_py_files(folder: str, exclude_dirs: set[str] | None = None) -> dict[str, str]:
+    """Collect all .py sources under *folder*, skipping named subdirectories.
+
+    Args:
+        folder: Root folder to walk.
+        exclude_dirs: Sub-directory names to skip entirely (default: None).
+
+    Returns:
+        A dict mapping each file's path relative to *folder* (forward slashes,
+        e.g. ``'role1.py'``, ``'utils/helper.py'``) to its source text.
+    """
+    if exclude_dirs is None:
+        exclude_dirs = set()
+    root = Path(folder)
+    result: dict[str, str] = {}
+    for py_file in root.rglob('*.py'):
+        rel = py_file.relative_to(root)
+        if any(part in exclude_dirs for part in rel.parts[:-1]):
+            continue
+        file_name_with_relative_path = str(rel).replace('\\', '/')
+        result[file_name_with_relative_path] = py_file.read_text(encoding='utf-8')
+    return result
+
+
+def unpack_py_files(packed: str) -> dict[str, str]:
+    """Base64-decode, decompress and deserialize a packed py-files string.
+
+    Args:
+        packed: A string produced by ``pack_py_files``.
+
+    Returns:
+        The original dict mapping relative paths to Python source text.
+    """
+    return json.loads(gzip.decompress(base64.b64decode(packed)).decode('utf-8'))
+
+
+class _InMemoryLoader(importlib.abc.SourceLoader):
+    """Serves Python source from a plain string."""
+
+    def __init__(self, source: str, virtual_path: str) -> None:
+        self._source = source
+        self._path = virtual_path
+
+    def get_data(self, path: str) -> bytes:           # called by SourceLoader machinery
+        return self._source.encode('utf-8')
+
+    def get_filename(self, fullname: str) -> str:
+        return self._path
+
+
+class InMemoryFinder(importlib.abc.MetaPathFinder):
+    """MetaPathFinder that resolves imports from an in-memory source dict.
+
+    Each instance owns a unique namespace (e.g. ``_dyn_abc12345``) so that
+    concurrent worlds loaded by different agents never collide in sys.modules.
+
+    Args:
+        py_files: Dict mapping relative paths (forward-slash, e.g.
+            ``'role1.py'``, ``'utils/helper.py'``) to Python source text.
+        namespace: Unique string used as the top-level package name.
+    """
+
+    def __init__(self, py_files: dict[str, str], namespace: str) -> None:
+        self._ns = namespace
+
+        # fullname -> (source, virtual_path, is_package)
+        self._mods: dict[str, tuple[str, str, bool]] = {}
+
+        # Discover all directories that contain at least one .py file,
+        # so we can auto-generate implicit namespace packages for them.
+        dirs: set[str] = set()
+        for rel in py_files:
+            parts = rel.split('/')
+            for depth in range(1, len(parts)):
+                dirs.add('/'.join(parts[:depth]))
+
+        for rel, source in py_files.items():
+            parts = rel.split('/')
+            filename = parts[-1]
+            sub_dirs = parts[:-1]
+
+            if filename == '__init__.py':
+                mod_name = namespace + ('.' + '.'.join(sub_dirs) if sub_dirs else '')
+                is_pkg = True
+            else:
+                stem = filename[:-3]  # strip .py
+                mod_name = namespace + '.' + '.'.join(sub_dirs + [stem])
+                is_pkg = False
+
+            v_path = f'<world:{namespace}>/{rel}'
+            self._mods[mod_name] = (source, v_path, is_pkg)
+
+        # Auto-create empty namespace packages for directories with no __init__.py
+        for d in dirs:
+            pkg_name = namespace + '.' + d.replace('/', '.')
+            if pkg_name not in self._mods:
+                self._mods[pkg_name] = ('', f'<world:{namespace}>/{d}/__init__.py', True)
+
+    def find_spec(self, fullname: str, path: object, target: object = None) -> importlib.machinery.ModuleSpec | None:
+
+        # Root namespace package
+        if fullname == self._ns:
+            spec = importlib.machinery.ModuleSpec(fullname, loader=None, origin=f'<world:{self._ns}>', is_package=True)
+            spec.submodule_search_locations = []
+            return spec
+
+        if fullname not in self._mods:
+            return None
+
+        source, v_path, is_pkg = self._mods[fullname]
+        loader = _InMemoryLoader(source, v_path)
+        spec = importlib.machinery.ModuleSpec(fullname, loader, origin=v_path, is_package=is_pkg)
+        if is_pkg:
+            spec.submodule_search_locations = []
+        return spec
+
+    def cleanup(self) -> None:
+        """Remove all owned modules from "sys.modules" and unregister this finder.
+
+        Call this when the agent that was built from these sources is destroyed.
+        """
+        for name in list(self._mods):
+            sys.modules.pop(name, None)
+        sys.modules.pop(self._ns, None)
+        try:
+            sys.meta_path.remove(self)
+        except ValueError:
+            pass
+
+
+def load_agent_in_memory(py_files: dict[str, str], role: str, **init_kwargs: Any) -> tuple[Any, InMemoryFinder]:
+    """Instantiate a ``WAgent`` from an in-memory Python source tree.
+
+    The file ``{role}.py`` (at the root of *py_files*) is imported as the
+    agent's main module.  Any ``import`` statements inside it are resolved
+    against the other entries in *py_files* through a temporary
+    ``InMemoryFinder`` registered on ``sys.meta_path``.
+
+    Args:
+        py_files: Dict mapping relative paths to source text (as produced by
+            ``collect_py_files``).
+        role: Role name; ``{role}.py`` is the entry-point module.
+        **init_kwargs: Keyword arguments forwarded to ``WAgent.__init__``
+            (e.g. ``proc=None``).
+
+    Returns:
+        A ``(agent_instance, finder)`` tuple.  The caller **must** keep
+        *finder* alive as long as the agent is in use, and call
+        ``finder.cleanup()`` when the agent is destroyed.
+
+    Raises:
+        KeyError: If ``{role}.py`` is not present in *py_files*.
+        Exception: Any exception raised during module execution or
+            ``WAgent.__init__``.
+    """
+    if f'{role}.py' not in py_files:
+        raise GenException(f"No source file '{role}.py' found in the received module set "
+                           f"(available: {list(py_files)})")
+
+    namespace = f'_dyn_{_uuid.uuid4().hex[:8]}'
+    finder = InMemoryFinder(py_files, namespace)
+    sys.meta_path.insert(0, finder)  # insert first so it wins over real filesystem
+
+    try:
+        mod = importlib.import_module(f'{namespace}.{role}')
+        agent = mod.WAgent(**init_kwargs)
+    except Exception:
+        finder.cleanup()
+        raise
+
+    return agent, finder
 
 
 def prepare_app_dir(app_name: str = "unaiverse") -> str:
