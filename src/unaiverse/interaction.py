@@ -19,12 +19,11 @@ import inspect
 import uuid as _uuid
 from enum import Enum
 from unaiverse.clock import clock
-from unaiverse.custom import Custom
 from collections.abc import Callable
 from unaiverse.utils.logger import log
-from unaiverse.utils.misc import GenException
-from unaiverse.streams.streamproxy import StreamProxy
 from unaiverse.streams.dataprops import DataProps
+from unaiverse.custom import Custom, GenException
+from unaiverse.streams.streamproxy import StreamProxy
 from unaiverse.streams.streams import Stream, BufferedStream, serialize_payload, deserialize_payload
 
 
@@ -505,17 +504,8 @@ class Interaction:
             if num_completed == len(self.target):
                 self.mark_completed(reason)  # The completion reason of the last target who completed
 
-    def clear_from_streams_and_action(self) -> None:
-        """Deregister this interaction from all its associated streams and from its action's interaction list."""
-
-        # Clearing interaction from all the streams involved as input, extra, or targets
-        for stream in self.stream_proxy:
-
-            # Skipping data samples and default input values
-            if not isinstance(stream, Stream):
-                continue
-
-            stream.remove_interaction(self)
+    def clear_from_action(self) -> None:
+        """Deregister this interaction from its action's interaction list."""
 
         # Clearing interaction from action list
         if self.action_ref is not None:
@@ -904,13 +894,13 @@ class InteractionManager:
                 len(self.sent_recently_completed) + len(self.received_recently_completed) +
                 len(self.lazy_recently_completed))
 
-    def clear_from_all_owned_streams(self, interaction: Interaction) -> None:
-        """Remove the given interaction from every owned stream that references it.
+    def clear_from_all_streams(self, interaction: Interaction) -> None:
+        """Remove the given interaction from every stream that references it.
 
         Args:
-            interaction: The interaction to deregister from owned streams.
+            interaction: The interaction to deregister from all the known streams.
         """
-        for stream_obj in self.agent.owned_streams_by_user_hash.values():
+        for stream_obj in self.agent.known_streams_by_user_hash.values():
             if stream_obj.has_interaction(interaction.uuid):
                 stream_obj.remove_interaction(interaction)
 
@@ -923,7 +913,8 @@ class InteractionManager:
         Returns:
             True if the interaction was found and removed from at least one tracking dict.
         """
-        interaction.clear_from_streams_and_action()
+        interaction.clear_from_action()
+        self.clear_from_all_streams(interaction)
         found = False
         if interaction.uuid in self.sent and self.sent[interaction.uuid].requester == interaction.requester:
             del self.sent[interaction.uuid]
@@ -1336,7 +1327,7 @@ class InteractionManager:
 
     def complete(self, interaction: 'Interaction', reason: 'CompletionReason',
                  dest_state: str | None = None, target: str | None = None) -> None:
-        """Mark an interaction as completed and move it to the recently-completed set.
+        """Mark an interaction as completed and move it to the recently-completed set, removing it from its action.
 
         Args:
             interaction: The interaction to complete.
@@ -1346,6 +1337,7 @@ class InteractionManager:
         """
         if interaction is not None:
             interaction.mark_completed(reason, dest_state=dest_state, target=target)
+            interaction.clear_from_action()  # We do not remove it from streams yet - it might be needed for sending
             if interaction.completed:
                 if (interaction.uuid in self.sent and
                         interaction.requester == self.sent[interaction.uuid].requester):  # Distinguish chained
@@ -1404,13 +1396,13 @@ class InteractionManager:
                     to_remove.append(interaction)
                     drained.append(interaction)
             for interaction in to_remove:
-                interaction.clear_from_streams_and_action()
 
-                # Clearing from all the owned streams, that might have been used for output purposes
+                # Clearing from all the owned and not-owned streams (all), that might have been used for output purposes
+                # by the current agent or by others.
                 # In principle, only the processor streams should be involved, since it is the only one in which we plug
                 # this interaction in this class.
                 # However, the user might have added the interaction to other owned streams.
-                self.clear_from_all_owned_streams(interaction)
+                self.clear_from_all_streams(interaction)
 
                 self.sent_recently_completed.discard(interaction)
                 self.received_recently_completed.discard(interaction)
@@ -1663,6 +1655,7 @@ class CompletionReason(Enum):
     REJECTED = "rejected"  # The interaction was not accepted since the very beginning
     DISCONNECTED = "disconnected"
     ERROR = "error"  # An error occurred
+    DISCARDED = "discarded"  # Discarded by the agent (on purpose)
 
 
 class InteractionType(Enum):

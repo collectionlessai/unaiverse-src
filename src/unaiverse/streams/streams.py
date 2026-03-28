@@ -24,8 +24,9 @@ import random
 from PIL.Image import Image
 from .dataprops import DataProps
 from unaiverse.clock import clock
-from unaiverse.custom import Custom
-from unaiverse.utils.misc import show_images_grid, GenException
+from unaiverse.utils.logger import log
+from unaiverse.utils.misc import show_images_grid
+from unaiverse.custom import Custom, GenException
 
 
 class Data:
@@ -322,7 +323,7 @@ class Stream:
         """
         s = (f"ngti:{self.props.name}|{self.props.group}|{self.props.data_type}" +
              ("_pubsub" if self.props.pubsub else "") + "|")
-        uuids = self.interactions_by_uuid.keys() | self.data_by_uuid.keys()
+        uuids = self.interactions_by_uuid.keys() | self.get_data_uuids()  # Call get_data_uuids due to buffered streams
         if len(uuids) > 0:
             s += "\n" + "\n".join([f"   {uuid} => " +
                                    (self.interactions_by_uuid[uuid].to_code_str()
@@ -417,7 +418,7 @@ class Stream:
         """
         c, oldest_uuid_without_interaction = self.count_data_without_interactions()
         while c >= Custom.MAX_STREAM_DATA_WITHOUT_INTERACTIONS:
-            del self.data_by_uuid[oldest_uuid_without_interaction]
+            self.remove_data(oldest_uuid_without_interaction)  # Compatible with buffered streams
             if c == Custom.MAX_STREAM_DATA_WITHOUT_INTERACTIONS:
                 break
             c, oldest_uuid_without_interaction = self.count_data_without_interactions()
@@ -431,7 +432,9 @@ class Stream:
         """
         c = 0
         oldest_uuid = None
-        for uuid in self.data_by_uuid:
+        for uuid in self.get_data_uuids():  # Call get_data_uuids to be compatible with buffered streams
+            if uuid is None:  # Preserve the None (generic) UUID, important for buffered streams, excluded from counts
+                continue
             if uuid not in self.interactions_by_uuid:
                 if c == 0:
                     oldest_uuid = uuid
@@ -596,7 +599,7 @@ class Stream:
             data = self.data_by_uuid[current_uuid]
             data.uuid = new_uuid
             self.data_by_uuid[new_uuid] = data
-            del self.data_by_uuid[current_uuid]
+            del self.data_by_uuid[current_uuid]  # Do not call remove_data here, since it will break buffered streams
 
     def remove_interaction(self, interaction: object) -> None:
         """Remove an interaction from this stream.
@@ -607,10 +610,21 @@ class Stream:
         uuid = interaction.uuid
         if uuid in self.interactions_by_uuid:
             del self.interactions_by_uuid[uuid]
+            self.limit_data_without_interactions()
+
+    def remove_data(self, uuid: str | None) -> None:
+        """Remove data from this stream.
+
+        Args:
+            uuid: The UUID of the object to remove.
+        """
+        if uuid in self.data_by_uuid:
+            del self.data_by_uuid[uuid]
 
     def clear_all_interactions(self) -> None:
         """Remove all registered interactions from this stream."""
         self.interactions_by_uuid = {}
+        self.limit_data_without_interactions()
 
     def clear_all_data(self) -> None:
         """Remove all stored data from this stream."""
@@ -748,7 +762,7 @@ class BufferedStream(Stream):
         # Properties
         self.is_static = is_static  # A static stream store only one sample and always yields it
         self.is_queue = is_queue
-        self.is_ready_only = False
+        self.is_read_only = False
 
         # We store the data samples, and we cache their text representation (for speed)
         self.data_buffer_by_uuid: dict[None | str, list] = {None: []}
@@ -777,6 +791,16 @@ class BufferedStream(Stream):
             interaction: The Interaction object to register.
         """
         super().add_interaction(interaction)
+
+        # What happens: buffered streams always have some data to provide.
+        # However, they need to know what is the index of the data sample you are asking for, and this depends on the
+        # UUID. What if you ask (get()) data for a never seen before UUID?
+        # One might be tempted to say "ok, whenever a new UUID is asked in get(), we set its index to 0" and provide
+        # the data.
+        # This is not fine here.
+        # In fact, we want get() to only return data that was already deposited by some processes in the past.
+        # The past process which enables the data deposit is the presence of an interaction.
+        # Hence, we eagerly anticipate the creation of the following data structures here.
         uuid = interaction.uuid
         if uuid not in self.data_buffer_by_uuid:
             self.data_buffer_by_uuid[uuid] = []
@@ -823,8 +847,8 @@ class BufferedStream(Stream):
         # These two lines might make you think "hey, call super().set(self[cycle]), it is the same!"
         # however, it is not like that, since "set" will also call "adapt_to_labels", that is not needed for
         # buffered streams
-        if (first or self.last_get_cycle_by_uuid[uuid] != cycle and
-                (self.props.delta <= 0. or self.props.delta <= (clock.get_time() - data_struct.data_timestamp))):
+        if (first or (self.last_get_cycle_by_uuid[uuid] != cycle and
+                      (self.props.delta <= 0. or self.props.delta <= (clock.get_time() - data_struct.data_timestamp)))):
             self.last_get_cycle_by_uuid[uuid] = cycle
 
             if not self.is_queue:
@@ -866,7 +890,7 @@ class BufferedStream(Stream):
         if not self.enabled:
             return None
 
-        if self.is_ready_only:
+        if self.is_read_only:
             return None
 
         if self.is_queue and data is None:
@@ -922,7 +946,7 @@ class BufferedStream(Stream):
             torch.Tensor | None: The sample, if available.
         """
         idx, uuid = idx_and_uuid
-        if self.is_ready_only:
+        if self.is_read_only:
             uuid = None
         if not self.is_static:
             if uuid not in self.data_buffer_by_uuid or idx >= len(self.data_buffer_by_uuid[uuid]) or idx < 0:
@@ -974,9 +998,8 @@ class BufferedStream(Stream):
         Args:
             uuid: UUID of the data to restart (defaults to the global/no-UUID slot).
         """
-        if self.is_ready_only:
-            uuid = None
         if uuid in self.buffered_data_index_by_uuid:
+            log.debug(f"[restart] Restarting stream {self.props.name}, UUID {uuid}")
             self.set_first_cycle(max(clock.get_cycle(), 0), uuid)
             self.buffered_data_index_by_uuid[uuid] = -1
             self.last_get_cycle_by_uuid[uuid] = -2
@@ -1004,6 +1027,22 @@ class BufferedStream(Stream):
         if new_uuid in self.data_buffer_by_uuid:
             for data in self.data_buffer_by_uuid[new_uuid]:
                 data.uuid = new_uuid
+
+    def remove_data(self, uuid: str | None) -> None:
+        """Remove data from this stream.
+
+        Args:
+            uuid: The UUID of the object to remove.
+        """
+        super().remove_data(uuid)
+
+        remove_from_what = [self.data_buffer_by_uuid, self.text_buffer_by_uuid, self.first_cycle_by_uuid,
+                            self.last_cycle_by_uuid, self.last_get_cycle_by_uuid, self.buffered_data_index_by_uuid,
+                            self.restart_before_next_get_by_uuid]
+
+        for remove_from_this in remove_from_what:
+            if uuid in remove_from_this:
+                del remove_from_this[uuid]
 
     def plan_restart_before_next_get(self, requested_by: str, uuid: str | None = None) -> None:
         """Schedule a buffer restart to happen just before the next ``get()`` call by the given caller.
@@ -1074,7 +1113,8 @@ class BufferedStream(Stream):
         Returns:
             Human-readable text sequence, or None if no text data is available.
         """
-        if self.text_buffer_by_uuid is not None and len(self.text_buffer_by_uuid[uuid]) > 0:
+        if (self.text_buffer_by_uuid is not None and uuid in self.text_buffer_by_uuid and
+                len(self.text_buffer_by_uuid[uuid]) > 0):
             text_buffer = self.text_buffer_by_uuid[uuid]
             if length is not None:
                 le = max(length // 2, 1)
@@ -1192,7 +1232,7 @@ class Dataset(BufferedStream):
             super().set(torch.stack(batch), data_tag=i)
 
         # It was buffered previously than every other thing
-        self.is_ready_only = True
+        self.is_read_only = True
         self.restart()
 
 
@@ -1224,7 +1264,7 @@ class ImageFileStream(BufferedStream):
         super().__init__(props=DataProps(name=ImageFileStream.__name__,
                                          data_type="img",
                                          pubsub=True))
-        self.is_ready_only = True
+        self.is_read_only = True
 
         with open(list_of_image_files, 'r') as f:
             for line in f:
@@ -1313,7 +1353,7 @@ class LabelStream(BufferedStream):
                                          tensor_labels=class_names,
                                          tensor_labeling_rule="geq0.5" if not single_class else "max",
                                          pubsub=True))
-        self.is_ready_only = True
+        self.is_read_only = True
 
         for idx, class_name in enumerate(class_names):
             class_name_to_index[class_name] = idx
@@ -1411,7 +1451,7 @@ class TokensStream(BufferedStream):
             super().set(token, data_tag=i)
 
         # It was buffered previously than every other thing
-        self.is_ready_only = True
+        self.is_read_only = True
         self.restart()
 
 

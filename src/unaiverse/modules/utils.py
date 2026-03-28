@@ -20,13 +20,9 @@ import logging
 import numpy as np
 from PIL import Image
 from torch.utils.data import DataLoader
+from unaiverse.custom import GenException
 from torchvision import datasets, transforms
 from unaiverse.streams.dataprops import StreamType
-
-
-class GenException(Exception):
-    """Base exception for this application (a simple wrapper around a generic Exception)."""
-    pass
 
 
 def has_human_processor(agent: object) -> bool:

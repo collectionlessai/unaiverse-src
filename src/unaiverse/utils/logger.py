@@ -20,10 +20,8 @@ import threading
 from enum import Enum
 from typing import Any
 from pathlib import Path
-from unaiverse.clock import Clock
-from unaiverse.custom import Custom
 from datetime import datetime, timezone
-from unaiverse.modules.utils import GenException
+from unaiverse.custom import Custom, GenException
 
 
 class Ch(str, Enum):
@@ -263,7 +261,7 @@ class _Logger:
                 self._log_file = open(self._log_path, "w", encoding="utf-8", buffering=1)
             self._file_enabled = enabled
 
-    def set_clock(self, clock: Clock) -> None:
+    def set_clock(self, clock: 'Clock') -> None:
         """Update the current clock object."""
         with self._lock:
             self._clock = clock

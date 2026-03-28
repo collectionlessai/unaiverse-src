@@ -31,17 +31,17 @@ from datetime import timedelta
 from unaiverse.clock import clock
 from unaiverse.world import World
 from unaiverse.agent import Agent
-from unaiverse.custom import Custom
 from collections.abc import Callable
 from datetime import datetime, timezone
 from unaiverse.utils.logger import Ch, log
 from unaiverse.interaction import Interaction
 from unaiverse.networking.p2p.messages import Msg
+from unaiverse.custom import Custom, GenException
 from unaiverse.networking.p2p import P2P, P2PError
 from unaiverse.networking.node.connpool import NodeConn
 from unaiverse.networking.node.profile import NodeProfile
 from unaiverse.streams.streams import DataProps, BufferedStream
-from unaiverse.utils.misc import (GenException, get_key_considering_multiple_sources, save_node_addresses_to_file,
+from unaiverse.utils.misc import (get_key_considering_multiple_sources, save_node_addresses_to_file,
                                   PolicyFilterHuman, prepare_app_dir, load_agent_in_memory, unpack_py_files)
 
 

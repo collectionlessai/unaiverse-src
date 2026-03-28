@@ -80,3 +80,8 @@ class Custom:
     MAX_STREAM_DATA_WITHOUT_INTERACTIONS = 2
     DEFAULT_INTER_TIMEOUT = 60. * 5.  # Seconds
     DRAIN_TIMEOUT = 0.
+
+
+class GenException(Exception):
+    """Base exception for this application (a simple wrapper around a generic Exception)."""
+    pass

@@ -31,11 +31,7 @@ from pathlib import Path
 import importlib.machinery
 from datetime import datetime
 from collections import deque
-
-
-class GenException(Exception):
-    """Base exception for this application (a simple wrapper around a generic Exception)."""
-    pass
+from unaiverse.custom import GenException
 
 
 def save_node_addresses_to_file(node: object, dir_path: str, public: bool,
