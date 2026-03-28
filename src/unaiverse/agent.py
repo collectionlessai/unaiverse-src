@@ -588,7 +588,12 @@ class Agent(AgentBasics):
         Returns:
             True if the disengagement request was successfully processed, False otherwise.
         """
-        _requester = interaction.requester if interaction is not None else None
+
+        # Backward compatibility
+        if isinstance(interaction, str):
+            _requester = interaction
+        else:
+            _requester = interaction.requester if interaction is not None else None
         log.misc(f"Getting a disengagement request from {_requester}")
         if _requester not in self.world_agents and _requester not in self.world_masters:
             log.error(f"Unknown agent: {_requester}")
@@ -1787,7 +1792,7 @@ class Agent(AgentBasics):
                                                     yhat_hashes=None,
                                                     from_state=from_state, to_state=to_state,
                                                     samples=samples, ref_uuid=ref_uuid)
-        log.debug(f"[ask_gen] Asking {involved_agents} returned {interaction.uuid} => {interaction}")
+        log.debug(f"[ask_gen] Asking {involved_agents} returned {interaction.to_code_str(True)}")
         correctly_asked = []
         if interaction is not None:
             correctly_asked = interaction.target

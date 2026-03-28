@@ -65,8 +65,6 @@ class Action:
         self.interactions = ActionInteractionList()  # List of interactions to make this action ready to be executed
         self.id = idx  # Unique ID of the action (-1 if not needed)
         self.msg = msg  # Human-readable message associated to this instance of action
-        self.deprecated = any([self.name.startswith(p) for p in Custom.SPECIAL_DEPRECATED_CASES_PREFIXES])
-        self.deprecated_has_completion = False
         self.inner = ready
         self.outer = True
         self.state_machine = None
@@ -110,12 +108,14 @@ class Action:
         self.msg_with_wildcards = self.msg
 
         # Checking
+        self.deprecated = (any([self.name.startswith(p) for p in Custom.SPECIAL_DEPRECATED_CASES_PREFIXES]) and
+                           not any([p in Custom.INTERACTION_ARG_NAMES for p in self.param_list]))
         self.deprecated_has_completion = Custom.DEPRECATED_COMPLETED_ARG in self.param_list
 
         # Fixing (forcing NOT-ready on some actions)
         if not avoid_changing_ready:
             for p in self.param_list:
-                if p in Custom.INTERACTION_ARG_NAMES:
+                if p in Custom.INTERACTION_ARG_NAMES or p == "_requester":
                     self.inner = False
                     self.outer = True
                     break
@@ -232,13 +232,15 @@ class Action:
                     return 1
 
             for p in self.param_list:
-                if p in Custom.INTERACTION_ARG_NAMES:
+                if p in Custom.INTERACTION_ARG_NAMES or p == "_requester":  # Second part is for backward compatibility
                     actual_args[p] = interaction
 
             # If the action continues (multistep), increasing the step index
             # This is a step index, so interaction.__step == 0 means "doing/done 1 step"
             # We start with  interaction.__step = -1, that here will become 0 - it will be run in the following code
         interaction.inc_step_idx()
+
+        log.debug(f"action: {self.name}, deprecated: {self.deprecated}, actual_args: {actual_args}, param_list: {self.param_list}")
 
         # Calling the method here
         ret = await self.__fcn(**actual_args)
@@ -302,9 +304,9 @@ class Action:
 
     def to_code_str(self) -> str:
         """Returns a compact code-style string representation of the action (for logging/debugging)."""
-        s = f"aati:{self.name}|{self.args}|{[self.__total_time, self.__timeout, self.__delay]}|"
+        s = f"aai:{self.name}|{self.args}|"
         if len(self.interactions) > 0:
-            return s + "\n" + "\n".join(f"   {inter}" for inter in self.interactions)
+            return s + "\n" + "\n".join(f"   {inter.to_code_str(True)}" for inter in self.interactions)
         else:
             return s + "no-int"
 
@@ -382,31 +384,22 @@ class Action:
         """Returns the delay configured for this action (0 means no delay)."""
         return self.__delay
 
-    def to_list(self, minimal=False) -> list:
-        """Converts the action's properties into a list for easy serialization. It can generate either a full or a
-        minimal representation.
-
-        Args:
-            minimal: A boolean flag to return a minimal list representation.
+    def to_list(self) -> list:
+        """Converts the action's properties into a list for easy serialization and comparisons.
 
         Returns:
             A list containing the action's properties.
         """
-        special_args = {}
+        total_time = 0.
+        timeout = 0.
+        delay = 0.
         if isinstance(self.__total_time, str) or self.__total_time > 0:
-            special_args[next(iter(Custom.SECONDS_ARG_NAMES))] = self.__total_time
+            total_time = self.__total_time
         if isinstance(self.__timeout, str) or self.__timeout > 0.:
-            special_args[next(iter(Custom.TIMEOUT_ARG_NAMES))] = self.__timeout
+            timeout = self.__timeout
         if isinstance(self.__delay, str) or self.__delay > 0.:
-            special_args[next(iter(Custom.DELAY_ARG_NAMES))] = self.__delay
-        if not minimal:
-            if self.msg is not None:
-                msg = self.msg.encode("ascii", "xmlcharrefreplace").decode("ascii")
-            else:
-                msg = None
-            return [self.name, self.args | special_args, self.inner, self.id] + ([msg] if msg is not None else [])
-        else:
-            return [self.name, self.args | special_args]
+            delay = self.__delay
+        return [self.name, self.args, self.inner, self.outer, total_time, timeout, delay, self.msg]
 
     def to_dict(self) -> dict:
         """Converts the action's properties into a dict for easy serialization.
@@ -474,8 +467,8 @@ class Action:
                     break
             for arg_name in args.keys():
                 if arg_name in Custom.NOT_ALLOWED_IN_ACTION_SIGNATURE:
-                    if deprecated_format:
-                        continue
+                    # if deprecated_format:
+                    #    continue
                     if remove_special_arguments:
                         args_to_remove.append(arg_name)
                     else:
@@ -601,8 +594,9 @@ class Action:
 
         # Ensuring those *specially handled* arguments are not present in the method signature (they can only be
         # present in the kwargs used to call the function)
+        deprecated_hp = any([self.name.startswith(p) for p in Custom.SPECIAL_DEPRECATED_CASES_PREFIXES])
         for p in self.param_list:
-            if p in Custom.NOT_ALLOWED_IN_ACTION_SIGNATURE and not self.deprecated:
+            if p in Custom.NOT_ALLOWED_IN_ACTION_SIGNATURE and not deprecated_hp:
                 log.user(f"Action {self.name} includes argument {p} in its signature: "
                          f"this is a special argument that is automatically handled, and cannot be "
                          f"included in the function signature (change its name).")

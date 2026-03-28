@@ -137,21 +137,6 @@ class State:
         else:
             return False
 
-    def to_list(self) -> list:
-        """Converts the state's properties into a list. This method is useful for serialization, allowing the state to
-        be easily stored or transmitted. It includes the action's minimal list representation, the state's ID,
-        blocking status, waiting time, and message.
-
-        Returns:
-            A list containing the state's properties.
-        """
-        if self.msg is not None:
-            msg = self.msg.encode("ascii", "xmlcharrefreplace").decode("ascii")
-        else:
-            msg = None
-        return ((self.action.to_list(minimal=True) if self.action is not None else [None, None]) +
-                ([self.id, self.blocking, self.waiting_time] + ([msg] if msg is not None else [])))
-
     def to_dict(self) -> dict:
         """Converts the state's properties into a dict. This method is useful for serialization, allowing the state to
         be easily stored or transmitted.

@@ -405,6 +405,7 @@ class AgentBasics:
                 log.critical("Maximum number of custom role overcame (max is 30)")
             for i, role_str in enumerate(custom_roles):
                 role_int = 1 << (i + 2)  # 000000100, then 00001000, etc. (recall that the first two bits are reserved)
+                role_str_to_bits[role_str] = role_int
                 role_bits_to_str[role_int] = role_str
                 AgentBasics.ROLE_STR_TO_BITS[role_str] = role_int
 

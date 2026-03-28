@@ -828,8 +828,12 @@ class BufferedStream(Stream):
             self.last_get_cycle_by_uuid[uuid] = cycle
 
             if not self.is_queue:
-                self.buffered_data_index_by_uuid[uuid] += 1
-                new_data, new_tag = self[(self.buffered_data_index_by_uuid[uuid], uuid)]
+                if uuid in self.buffered_data_index_by_uuid:
+                    self.buffered_data_index_by_uuid[uuid] += 1
+                    idx = self.buffered_data_index_by_uuid[uuid]
+                else:
+                    idx = -1
+                new_data, new_tag = self[(idx, uuid)]
             else:
                 new_data, new_tag = self[(0, uuid)]
                 if new_data is not None:

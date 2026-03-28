@@ -64,7 +64,7 @@ class Custom:
     TIMEOUT_ARG_NAMES = {'retry_timeout', 'timeout'}  # Keep the preferred name on top
     DELAY_ARG_NAMES = {'wait_before_running', 'delay'}  # Keep the preferred name on top
     NOT_ALLOWED_IN_ACTION_SIGNATURE = SECONDS_ARG_NAMES | TIMEOUT_ARG_NAMES | DELAY_ARG_NAMES
-    INTERACTION_ARG_NAMES = {'interaction', '_requester'}
+    INTERACTION_ARG_NAMES = {'interaction'}
     DEFAULT_TIMEOUT = 10.0
     ALL_STATES_NAME = 'all'
     NOT_ALLOWED_STATE_NAMES = {ALL_STATES_NAME}

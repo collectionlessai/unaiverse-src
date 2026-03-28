@@ -15,6 +15,7 @@
 from . import streams
 from . import dataprops
 from . import streamproxy
-from .dataprops import DataProps, Data4Proc
-from .streams import Stream, BufferedStream, serialize_payload, deserialize_payload, ImageFileStream, DataStream
+from .dataprops import DataProps, Data4Proc, StreamType
+from .streams import (Stream, BufferedStream, serialize_payload, deserialize_payload, ImageFileStream,
+                      DataStream, Dataset)
 

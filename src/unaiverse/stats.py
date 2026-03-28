@@ -587,9 +587,9 @@ class Stats:
                 );
             """)
             self._db_conn.commit()
-            log.debug(f'SQLite DB initialized at {self.db_path}')
+            print(f'SQLite DB initialized at {self.db_path}')
         except Exception as e:
-            log.error(f'CRITICAL: Failed to initialize SQLite DB: {e}')
+            print(f'CRITICAL: Failed to initialize SQLite DB: {e}')
             self._db_conn = None
 
     def _initialize_cache_structure(self):
@@ -1179,10 +1179,10 @@ class Stats:
         """(World-only) Loads existing stats from disk to hydrate the cache."""
         if not self.is_world or not self._db_conn:
             return
-        log.debug('Loading existing stats from disk...')
+        print('Loading existing stats from disk...')
         self._load_static_from_db()
         self._hydrate_dynamic_caches_from_db()
-        log.debug('Finished loading stats.')
+        print('Finished loading stats.')
 
     def _load_static_from_db(self):
         """(World-only) Loads the static_stats table into the _stats hot cache."""
@@ -1222,12 +1222,12 @@ class Stats:
             self._dynamic_db_buffer = []
 
             if count > 0:
-                log.debug(f'Hydrated cache with {count} recent dynamic stats.')
+                print(f'Hydrated cache with {count} recent dynamic stats.')
             else:
-                log.debug('No recent dynamic stats found in DB.')
+                print('No recent dynamic stats found in DB.')
 
         except Exception as e:
-            log.error(f'Failed to hydrate dynamic caches from DB: {e}')
+            print(f'Failed to hydrate dynamic caches from DB: {e}')
 
     # --- WORLD API (QUERYING) ---
     def query_history(self,
@@ -1489,7 +1489,7 @@ class Stats:
             except Exception:
                 pass  # Don't raise in destructor
             self._db_conn.close()
-            log.debug('SQLite connection closed.')
+            print('SQLite connection closed.')
 
     # --- PLOTTING INTERFACE ---
     def plot(self, since_timestamp: int = 0) -> str | None:

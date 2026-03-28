@@ -1826,7 +1826,8 @@ class Node:
                             behav = self.agent.behav_lone_wolf \
                                 if msg.sender in self.agent.public_agents else self.agent.behav
                             if not behav.request_action(interaction):
-                                log.error("Cannot enqueue the interaction, incompatible action")
+                                log.error(f"Cannot enqueue the interaction, incompatible action. "
+                                          f"Interaction is: {interaction}")
                             else:
                                 # Register with the InteractionManager
                                 if hasattr(self.agent, 'im'):

@@ -157,7 +157,8 @@ class HybridStateMachine:
                         continue
 
                     tel.set_mark("considered")  # Marking
-                    _found_teleports = [tel]
+                    tel_to_list = tel.to_list()
+                    _found_teleports = [(src, tel)]
 
                     # Let's see if a teleport equivalent to the considered one connects all sources
                     for _src, _teleports in srcs.items():
@@ -169,28 +170,28 @@ class HybridStateMachine:
                             if _tel.get_mark() == "considered":  # Skipping already considered ones
                                 continue
 
-                            if tel.name == _tel.name and tel.args == _tel.args:
+                            if tel_to_list == _tel.to_list():
                                 _tel.set_mark("considered")  # Marking
-                                _found_teleports.append(_tel)
+                                _found_teleports.append((_src, _tel))
                                 _found = True
                                 break
                         if not _found:
                             break
 
                     # Distinguishing
-                    if len(_found_teleports) == len(srcs):
+                    if len(_found_teleports) == (len(self.states) - 1):
                         if Custom.ALL_STATES_NAME not in teleport_transitions:
                             teleport_transitions[Custom.ALL_STATES_NAME] = {}
                         if dest not in teleport_transitions[Custom.ALL_STATES_NAME]:
                             teleport_transitions[Custom.ALL_STATES_NAME][dest] = []
                         teleport_transitions[Custom.ALL_STATES_NAME][dest].append(tel)  # Append a single one
                     else:
-                        if src not in teleport_transitions:
-                            teleport_transitions[src] = {}
-                        if dest not in teleport_transitions[src]:
-                            teleport_transitions[src][dest] = []
-                        for _tel in _found_teleports:
-                            teleport_transitions[src][dest].append(_tel)
+                        for _src, _tel in _found_teleports:
+                            if _src not in teleport_transitions:
+                                teleport_transitions[_src] = {}
+                            if dest not in teleport_transitions[_src]:
+                                teleport_transitions[_src][dest] = []
+                            teleport_transitions[_src][dest].append(_tel)
 
         # Clearing mark
         for tel in action_that_are_teleports:
@@ -635,12 +636,29 @@ class HybridStateMachine:
 
                 self.__id_to_original_action_msg.append(original)
 
+    def add_global_teleport(self, to_state: str,
+                            action: str, args: dict | None = None, ready: bool = True,
+                            msg: str | None = None,
+                            total_time: float | str = 0., timeout: float | str = 0., delay: float | str = 0., ) -> None:
+        self.add_teleport(from_state=Custom.ALL_STATES_NAME, to_state=to_state, action=action, args=args,
+                          ready=ready, act_id=None,
+                          msg=msg, total_time=total_time, timeout=timeout, delay=delay)
+
+    def add_teleport(self, from_state: str, to_state: str,
+                     action: str, args: dict | None = None, ready: bool = True,
+                     act_id: int | None = None, msg: str | None = None, avoid_changing_ready: bool = False,
+                     total_time: float | str = 0., timeout: float | str = 0., delay: float | str = 0., ) -> None:
+        self.add_transit(from_state=from_state, to_state=to_state, action=action, args=args,
+                         ready=ready, act_id=act_id, avoid_changing_ready=avoid_changing_ready,
+                         msg=msg, teleport=True,
+                         total_time=total_time, timeout=timeout, delay=delay)
+
     def add_transit(self, from_state: str, to_state: str,
                     action: str, args: dict | None = None, ready: bool = True,
                     act_id: int | None = None, msg: str | None = None,
                     avoid_changing_ready: bool = False,
                     teleport: bool = False,
-                    total_time: float = 0., timeout: float = 0., delay: float = 0.,) -> None:
+                    total_time: float | str = 0., timeout: float | str = 0., delay: float | str = 0.,) -> None:
         """Defines a transition between two states with an associated action. This method is central to building the
         state machine's logic. It can also handle loading and integrating a complete state machine from a file,
         resolving any state name clashes.
@@ -663,6 +681,19 @@ class HybridStateMachine:
             delay: The number of seconds that must pass when joining a state before considering this transition.
                 When <= 0., then no delays at all.
         """
+
+        # Handling special state names
+        if from_state == Custom.ALL_STATES_NAME:
+            for from_state_obj in self.__id_to_state:
+                if from_state_obj.name == from_state:
+                    continue
+
+                # Adding a transition to the dest state
+                self.add_transit(from_state=from_state_obj.name, to_state=to_state, action=action, args=args,
+                                 ready=ready, act_id=None, avoid_changing_ready=avoid_changing_ready,
+                                 msg=msg, teleport=teleport,
+                                 total_time=total_time, timeout=timeout, delay=delay)
+            return
 
         # Plugging a previously loaded HSM
         if to_state.lower().endswith(".json"):
@@ -785,16 +816,19 @@ class HybridStateMachine:
         for _from_state, _to_states in hsm.transitions.items():
             for _to_state, _action_list in _to_states.items():
                 for _action in _action_list:
-                    special_args = {}
+                    total_time = 0.
+                    timeout = 0.
+                    delay = 0.
                     if isinstance(_action.get_total_time(), str) or _action.get_total_time() > 0:
-                        special_args[next(iter(Custom.SECONDS_ARG_NAMES))] = _action.get_total_time()
+                        total_time = _action.get_total_time()
                     if isinstance(_action.get_timeout(), str) or _action.get_timeout() > 0.:
-                        special_args[next(iter(Custom.TIMEOUT_ARG_NAMES))] = _action.get_timeout()
+                        timeout = _action.get_timeout()
                     if isinstance(_action.get_delay(), str) or _action.get_delay() > 0.:
-                        special_args[next(iter(Custom.DELAY_ARG_NAMES))] = _action.get_delay()
+                        delay = _action.get_delay()
                     self.add_transit(from_state=_from_state, to_state=_to_state, action=_action.name,
-                                     args=_action.args | special_args, ready=_action.ready,
-                                     act_id=None, msg=_action.msg_with_wildcards, avoid_changing_ready=True)
+                                     args=_action.args, ready=_action.ready, teleport=_action.is_teleport(),
+                                     act_id=None, msg=_action.msg_with_wildcards, avoid_changing_ready=True,
+                                     total_time=total_time, timeout=timeout, delay=delay)
 
         if make_a_copy:
             self.state = hsm.state
@@ -1331,7 +1365,7 @@ class HybridStateMachine:
                 act_ready = action_dict.get("ready", True)
                 total_time = action_dict.get("max_duration", 0.)
                 timeout = action_dict.get("retry_timeout", 0.)
-                delay = action_dict.get("wait_before_running", 0.)
+                delay = action_dict.get("time_to_wait_before_running", 0.)
 
                 self.add_transit(from_state, to_state,
                                  action=act_name, args=act_args, ready=act_ready, msg=msg,
@@ -1387,7 +1421,7 @@ class HybridStateMachine:
                     act_ready = action_dict.get("ready", True)
                     total_time = action_dict.get("max_duration", 0.)
                     timeout = action_dict.get("retry_timeout", 0.)
-                    delay = action_dict.get("wait_before_running", 0.)
+                    delay = action_dict.get("time_to_wait_before_running", 0.)
 
                     self.add_transit(from_state, to_state,
                                      action=act_name, args=act_args, ready=act_ready, msg=msg,
@@ -1515,25 +1549,33 @@ class HybridStateMachine:
         for from_state, to_states in self.transitions.items():
             for to_state, action_list in to_states.items():
                 for action in action_list:
-                    special_args = {}
-                    if isinstance(action.get_total_time(), str) or action.get_total_time() > 0:
-                        special_args[next(iter(Custom.SECONDS_ARG_NAMES))] = action.get_total_time()
-                    if isinstance(action.get_timeout(), str) or action.get_timeout() > 0:
-                        special_args[next(iter(Custom.TIMEOUT_ARG_NAMES))] = action.get_timeout()
-                    if isinstance(action.get_delay(), str) or action.get_delay() > 0:
-                        special_args[next(iter(Custom.DELAY_ARG_NAMES))] = action.get_delay()
-                    args = action.args | special_args
+                    args = action.args
                     s = "("
                     for i, (k, v) in enumerate(args.items()):
-                        if i >= len(action.args):
-                            s += ") ["
                         s += str(k) + "=" + (str(v) if not isinstance(v, str) else ("'" + str(v) + "'"))
                         if i < len(args) - 1:
                             s += ", "
+                    s += ")"
+
+                    special_args = {}
+                    if isinstance(action.get_total_time(), str) or action.get_total_time() > 0:
+                        total_time = action.get_total_time()
+                        special_args['max_duration'] = total_time
+                    if isinstance(action.get_timeout(), str) or action.get_timeout() > 0.:
+                        timeout = action.get_timeout()
+                        special_args['retry_timeout'] = timeout
+                    if isinstance(action.get_delay(), str) or action.get_delay() > 0.:
+                        delay = action.get_delay()
+                        special_args['delay'] = delay
+
                     if len(special_args) > 0:
+                        s += "\n["
+                        for i, (k, v) in enumerate(special_args.items()):
+                            s += str(k) + "=" + (str(v) if not isinstance(v, str) else ("'" + str(v) + "'"))
+                            if i < len(special_args) - 1:
+                                s += ", "
                         s += "]"
-                    else:
-                        s += ")"
+
                     label = action.name + s
                     if len(label) > 40:
                         tokens = label.split(" ")
