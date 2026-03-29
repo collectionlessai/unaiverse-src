@@ -187,8 +187,9 @@ class Action:
 
         # Deprecated (old-style) actions
         run_deprecated_completion_step = False
+        timed_out = interaction.is_timed_out() or interaction.is_expired()
         if self.deprecated:
-            if interaction.is_timed_out():
+            if timed_out:
                 if interaction.is_single_step():
                     return 2
 
@@ -200,7 +201,7 @@ class Action:
             # action  with no data at all) or that was timed out, but it did at last a step (of course,
             # multistep actions only): in those cases, the action is considered "completed in a correct way"
             run_deprecated_completion_step = (interaction.was_last_step_done() or
-                                              (interaction.is_timed_out() and interaction.was_at_least_one_step_done()))
+                                              (timed_out and interaction.was_at_least_one_step_done()))
 
             for p in self.param_list:
                 if p == '_requester':
