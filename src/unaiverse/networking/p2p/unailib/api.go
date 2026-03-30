@@ -37,6 +37,7 @@ import (
 	libp2p "github.com/libp2p/go-libp2p"                         
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
 	webrtc "github.com/libp2p/go-libp2p/p2p/transport/webrtc"
+	pwebrtc "github.com/pion/webrtc/v4"
 	p2pforge "github.com/ipshipyard/p2p-forge/client"
 	autorelay "github.com/libp2p/go-libp2p/p2p/host/autorelay"
 	webtransport "github.com/libp2p/go-libp2p/p2p/transport/webtransport"
@@ -125,6 +126,7 @@ func CreateNode(
 		persistentChatStreams: make(map[peer.ID]network.Stream),
 		disconnectionTimers:   make(map[peer.ID]context.CancelFunc),
 		messageStore:          newMessageStore(),
+		webrtcConnections:     make(map[peer.ID]*WebRTCConn),
 	}
 	ni.ctx, ni.cancel = context.WithCancel(context.Background())
 	isPublic := false
@@ -374,14 +376,26 @@ func CreateNode(
 			// This single option enables the node to act as a relay for others.
 			options = append(options, libp2p.EnableRelayService(rc.WithResources(resources)), libp2p.EnableNATService())
 		} else {
-			// In this case we want to use relays but not offer the service to others.
-			// If we are exploiting the DHT we can start an AutoRelay with PeerSource
-			if cfg.DHT.Keep {
-				// Enable AutoRelay. This uses the services above (DHT, AutoNAT)
-				// to find relays and bind to one if we are private.
-				options = append(options, libp2p.EnableAutoRelayWithPeerSource(ni.PeerSource, autorelay.WithBootDelay(time.Second*10)))
-				logger.Debugf("[GO]   - Instance %d: AutoRelay client ENABLED.\n", instanceIndex)
+			var defaultRelaysMaddrs []ma.Multiaddr
+			// Convert string addresses to Multiaddr
+			for _, s := range defaultRelays {
+					addr, _ := ma.NewMultiaddr(s)
+					defaultRelaysMaddrs = append(defaultRelaysMaddrs, addr)
 			}
+
+			// Convert to AddrInfo
+			defaultRelaysAddrInfo, err := peer.AddrInfosFromP2pAddrs(defaultRelaysMaddrs...)
+			if err != nil {
+				log.Fatal(err)
+			}
+			// In this case we want to use relays but not offer the service to others.
+			options = append(options, libp2p.EnableAutoRelayWithStaticRelays(
+				defaultRelaysAddrInfo,
+				autorelay.WithBootDelay(time.Second*10),
+				autorelay.WithMinCandidates(2),
+				autorelay.WithNumRelays(1),
+			))
+			logger.Debugf("[GO]   - Instance %d: AutoRelay client ENABLED.\n", instanceIndex)
 		}
 	}
 
@@ -489,6 +503,16 @@ func CreateNode(
 
 	setupDirectMessageHandler(ni)
 	logger.Debugf("[GO] ✅ Instance %d: Direct message handler set up.\n", instanceIndex)
+
+	// --- WebRTC Signaling Handler ---
+	if cfg.WebRTC.Enabled {
+		if cfg.WebRTC.ICEConfig != nil {
+			ni.iceConfig = cfg.WebRTC.ICEConfig
+		}
+		setupWebRTCSignalHandler(ni)
+		autoUpgradeWebRTC(ni)
+		logger.Debugf("[GO] ✅ Instance %d: WebRTC signaling handler registered.\n", instanceIndex)
+	}
 
 	// --- Close DHT if needed ---
 	if !cfg.DHT.Keep {
@@ -807,18 +831,42 @@ func DisconnectFrom(
 		return C.CString(jsonSuccessResponse("Cannot disconnect from self"))
 	}
 
-	// --- Close Persistent Outgoing Stream (if exists) for this instance ---
+	// --- Close WebRTC Connection (if exists) ---
+	ni.webrtcMutex.Lock()
+	wconn, hasWebRTC := ni.webrtcConnections[pid]
+	if hasWebRTC {
+		delete(ni.webrtcConnections, pid)
+	}
+	ni.webrtcMutex.Unlock()
+
+	if hasWebRTC {
+		logger.Debugf("[GO]   - Instance %d: Closing WebRTC connection to %s\n", ni.instanceIndex, pid)
+		if wconn.dc != nil {
+			wconn.dc.Close()
+		}
+		if wconn.pc != nil {
+			wconn.pc.Close()
+		}
+	}
+
+	// Clean up application-level map
 	ni.streamsMutex.Lock()
-	stream, exists := ni.persistentChatStreams[pid]
+	_, exists := ni.persistentChatStreams[pid]
 	if exists {
-		logger.Debugf("[GO]   ↳ Instance %d: Closing persistent outgoing stream to %s\n", ni.instanceIndex, pid)
-		_ = stream.Close() // Attempt graceful close
 		delete(ni.persistentChatStreams, pid)
 	}
-	ni.streamsMutex.Unlock() // Unlock before potentially blocking network call
+	ni.streamsMutex.Unlock()
 
-	// --- Close Network Connections ---
 	conns := ni.host.Network().ConnsToPeer(pid)
+
+	// Reset all underlying streams before dropping connections
+	for _, conn := range conns {
+		for _, s := range conn.GetStreams() {
+			_ = s.Reset()
+		}
+	}
+
+	// Close network connections
 	closedNetworkConn := false
 	if len(conns) > 0 {
 		logger.Debugf("[GO]   - Instance %d: Closing %d active network connection(s) to peer %s...\n", ni.instanceIndex, len(conns), pid)
@@ -884,7 +932,7 @@ func GetConnectedPeers(
 			peersList = append(peersList, peerInfo)
 		}
 
-	logger.Debugf("[GO] ℹ️ Instance %d: Reporting %d currently tracked and active peers.\n", ni.instanceIndex, len(peersList))
+	// logger.Debugf("[GO] ℹ️ Instance %d: Reporting %d currently tracked and active peers.\n", ni.instanceIndex, len(peersList))
 
 	// Return the list of active peers as a JSON success response.
 	return C.CString(jsonSuccessResponse(peersList)) // Caller frees.
@@ -984,6 +1032,38 @@ func GetNodeAddresses(
 	return C.CString(jsonSuccessResponse(addresses))
 }
 
+// GetWebRTCConnections returns a JSON array of all peers that currently have
+// an active WebRTC DataChannel with this node instance.
+//
+// Each element: {"peer_id": "...", "state": "open"|"other"}
+// The caller MUST free the returned string with FreeString.
+//
+//export GetWebRTCConnections
+func GetWebRTCConnections(instanceIndexC C.int) *C.char {
+	ni, err := getInstance(int(instanceIndexC))
+	if err != nil {
+		return C.CString(jsonErrorResponse("Invalid instance", err))
+	}
+
+	type entry struct {
+		PeerID string `json:"peer_id"`
+		State  string `json:"state"`
+	}
+
+	ni.webrtcMutex.RLock()
+	result := make([]entry, 0, len(ni.webrtcConnections))
+	for pid, conn := range ni.webrtcConnections {
+		stateStr := "other"
+		if conn.dc != nil && conn.dc.ReadyState() == pwebrtc.DataChannelStateOpen {
+			stateStr = "open"
+		}
+		result = append(result, entry{PeerID: pid.String(), State: stateStr})
+	}
+	ni.webrtcMutex.RUnlock()
+
+	return C.CString(jsonSuccessResponse(result))
+}
+
 // SendMessageToPeer sends a message either directly to a specific peer or broadcasts it via PubSub for a specific instance.
 // Parameters:
 //   - instanceIndexC (C.int): The index of the node instance.
@@ -1058,6 +1138,18 @@ func SendMessageToPeer(
 		if pid == ni.host.ID() {
 			// Attempt to send direct message to self
 			return C.CString(jsonErrorResponse("Attempt to send direct message to self is invalid", nil))
+		}
+
+		// --- WebRTC DataChannel path (preferred: direct, NAT-traversed) ---
+		ni.webrtcMutex.RLock()
+		wconn, hasWebRTC := ni.webrtcConnections[pid]
+		ni.webrtcMutex.RUnlock()
+		if hasWebRTC && wconn.dc != nil && wconn.dc.ReadyState() == pwebrtc.DataChannelStateOpen {
+			if err = writeToWebRTCDataChannel(wconn, goChannel, goData); err == nil {
+				logger.Infof("[GO] 📤 Instance %d: Sent to %s via WebRTC DataChannel\n", ni.instanceIndex, pid)
+				return C.CString(jsonSuccessResponse(fmt.Sprintf("Direct message sent to %s (WebRTC).", pid)))
+			}
+			logger.Warnf("[GO] ⚠️ Instance %d: WebRTC send to %s failed (%v), falling back to stream\n", ni.instanceIndex, pid, err)
 		}
 
 		ni.streamsMutex.Lock()

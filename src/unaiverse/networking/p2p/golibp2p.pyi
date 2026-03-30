@@ -18,27 +18,19 @@ class GoLibP2P:
         """
         ...
 
-    def ConnectTo(self, instance: int, multiaddrs_json: bytes) -> int:
+    def CloseNode(self, instance: int) -> int:
         """
-        ConnectTo(instance: int, multiaddrs_json: bytes) -> bytes
+        CloseNode(instance: int) -> bytes
 
-        Connects to a peer using the provided multiaddress. Returns a JSON string with the result.
-        """
-        ...
-
-    def ReserveOnRelay(self, instance: int, relay_peer_id: bytes) -> int:
-        """
-        ReserveOnRelay(instance: int, relay_peer_id: bytes) -> bytes
-
-        Reserves a relay port on the network. Returns a JSON result.
+        Closes the node and frees all resources.
         """
         ...
 
-    def DisconnectFrom(self, instance: int, peer_id: bytes) -> int:
+    def GetNodeAddresses(self, instance: int, arg: bytes) -> int:
         """
-        DisconnectFrom(instance: int, peer_id: bytes) -> bytes
+        GetNodeAddresses(instance: int, arg: bytes) -> bytes
 
-        Disconnects from the given peer id. Returns a JSON result.
+        Returns the node addresses in a JSON string.
         """
         ...
 
@@ -58,11 +50,19 @@ class GoLibP2P:
         """
         ...
 
-    def GetNodeAddresses(self, instance: int, arg: bytes) -> int:
+    def ConnectTo(self, instance: int, multiaddrs_json: bytes) -> int:
         """
-        GetNodeAddresses(instance: int, arg: bytes) -> bytes
+        ConnectTo(instance: int, multiaddrs_json: bytes) -> bytes
 
-        Returns the node addresses in a JSON string.
+        Connects to a peer using the provided multiaddress. Returns a JSON string with the result.
+        """
+        ...
+
+    def DisconnectFrom(self, instance: int, peer_id: bytes) -> int:
+        """
+        DisconnectFrom(instance: int, peer_id: bytes) -> bytes
+
+        Disconnects from the given peer id. Returns a JSON result.
         """
         ...
 
@@ -75,22 +75,6 @@ class GoLibP2P:
     ) -> int:
         """
         SendMessageToPeer(instance: int, channel: bytes, data: bytes, data_len: int) -> bytes
-        """
-        ...
-
-    def SubscribeToTopic(self, instance: int, topic_composite_key: bytes) -> int:
-        """
-        SubscribeToTopic(instance: int, topic_composite_key: bytes) -> bytes
-
-        Subscribes to a topic and returns a JSON string with the result.
-        """
-        ...
-    
-    def UnsubscribeFromTopic(self, instance: int, topic_composite_key: bytes) -> int:
-        """
-        UnsubscribeFromTopic(instance: int, topic_composite_key: bytes) -> bytes
-
-        Unsubscribe from a topic and returns a JSON string with the result.
         """
         ...
 
@@ -110,11 +94,35 @@ class GoLibP2P:
         """
         ...
 
-    def CloseNode(self, instance: int) -> int:
+    def SubscribeToTopic(self, instance: int, topic_composite_key: bytes) -> int:
         """
-        CloseNode(instance: int) -> bytes
+        SubscribeToTopic(instance: int, topic_composite_key: bytes) -> bytes
 
-        Closes the node and frees all resources.
+        Subscribes to a topic and returns a JSON string with the result.
+        """
+        ...
+    
+    def UnsubscribeFromTopic(self, instance: int, topic_composite_key: bytes) -> int:
+        """
+        UnsubscribeFromTopic(instance: int, topic_composite_key: bytes) -> bytes
+
+        Unsubscribe from a topic and returns a JSON string with the result.
+        """
+        ...
+
+    def ReserveOnRelay(self, instance: int, relay_peer_id: bytes) -> int:
+        """
+        ReserveOnRelay(instance: int, relay_peer_id: bytes) -> bytes
+
+        Reserves a relay port on the network. Returns a JSON result.
+        """
+        ...
+
+    def GetWebRTCConnections(self, instance: int) -> int:
+        """
+        GetWebRTCConnections(instance: int) -> bytes
+
+        Returns a list of all active WebRTC connections. Returns a JSON result.
         """
         ...
 

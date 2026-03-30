@@ -118,18 +118,18 @@ class P2P:
                 logger.setLevel(logging.INFO)
                 _log_config = {
                     'net/identify': 'info',
-                    'unailib': 'info',
+                    'unailib': 'debug',
                     # 'autotls': 'info',
                     # 'p2p-forge': 'info',
                     'nat': 'info',
                     'basichost': 'info',
-                    'p2p-circuit': 'info',
-                    'relay': 'info',
-                    'p2p-holepunch': 'info',
+                    'p2p-circuit': 'debug',
+                    'relay': 'debug',
+                    'p2p-holepunch': 'debug',
                     'tcp-tpt': 'info',
                     'connmgr': 'info',
                     'dht': 'info',
-                    'autorelay': 'info',
+                    'autorelay': 'debug',
                     'autonat': 'info',
                     # 'rcmgr': 'info',
                     'swarm2': 'info',
@@ -188,8 +188,11 @@ class P2P:
                  domain_name: Optional[str] = None,
                  tls_cert_path: Optional[str] = None,
                  tls_key_path: Optional[str] = None,
-                 dht_enabled: bool = False,
-                 dht_keep: bool = True,
+                 dht_enabled: bool = True,
+                 dht_keep: bool = False,
+                 webrtc_enabled: bool = True,
+                 ice_stun_servers: Optional[List[str]] = None,
+                 ice_turn_servers: Optional[List[Dict[str, Any]]] = None,
                  log_sub: str = "pub",
                  ) -> None:
         """
@@ -208,6 +211,12 @@ class P2P:
             domain_name: Optional domain name for TLS certificate (required if enable_tls is True).
             tls_cert_path: Optional path to a custom TLS certificate file (PEM format).
             tls_key_path: Optional path to a custom TLS private key file (PEM format).
+            webrtc_enabled: Enable the /unaiverse/webrtc-signal/1.0.0 protocol for
+                Go-to-browser NAT traversal via WebRTC DataChannels. Defaults to True.
+            ice_stun_servers: List of STUN server URIs (e.g. ["stun:stun.example.com:3478"]).
+                Defaults to Google public STUN when None.
+            ice_turn_servers: List of TURN server dicts, each with keys "urls", "username",
+                "credential". Optional; leave None if no TURN servers are needed.
 
         Raises:
             P2PError: If the node creation fails in the Go library.
@@ -272,7 +281,14 @@ class P2P:
             "dht": {
                 "enabled": dht_enabled,
                 "keep": dht_keep and dht_enabled,
-            }
+            },
+            "webrtc": {
+                "enabled": webrtc_enabled,
+                "ice_config": {
+                    "stun_servers": ice_stun_servers,
+                    "turn_servers": ice_turn_servers,
+                } if webrtc_enabled else None,
+            },
         }
 
         logger.info(f"🐍 Creating Node (Instance ID: {self._instance})...")
@@ -329,7 +345,6 @@ class P2P:
         logger.info("🎉 Node created successfully and background polling started.")
 
     # --- Core P2P Operations ---
-
     def connect_to(self, multiaddrs: list[str]) -> Dict[str, Any]:
         """
         Establishes a connection with a remote peer.
@@ -570,7 +585,6 @@ class P2P:
             raise P2PError(f"[Instance {self._instance}] Unexpected error during pop_message: {e}") from e
 
     # --- PubSub Operations ---
-
     def subscribe_to_topic(self, channel: str) -> None:
         """
         Subscribes to a PubSub topic to receive messages.
@@ -689,7 +703,6 @@ class P2P:
             raise P2PError(f"Reservation on {relay_peer_id} failed") from e
 
     # --- Node Information ---
-
     @property
     def peer_id(self) -> Optional[str]:
         """Returns the Peer ID of the local node."""
@@ -754,6 +767,32 @@ class P2P:
         except Exception as e:
             logger.error(f"❌ Failed to get addresses for {target}: {e}")
             raise P2PError(f"Failed to get addresses for {target}") from e
+
+    def get_webrtc_connections(self) -> List[Dict[str, Any]]:
+        """
+        Returns the list of peers that currently have an active WebRTC
+        DataChannel connection with this node.
+
+        Each entry is a dict with keys ``peer_id`` (str) and ``state`` (str,
+        ``"open"`` or ``"other"``).
+
+        Raises:
+            P2PError: If the Go call fails.
+        """
+        try:
+            result_ptr = P2P.libp2p.GetWebRTCConnections(
+                P2P._type_interface.to_go_int(self._instance),
+            )
+            result = P2P._type_interface.from_go_ptr_to_json(result_ptr)
+            if result is None:
+                raise P2PError("Null result from GetWebRTCConnections.")
+            if result.get('state') == "Error":
+                raise P2PError(f"GetWebRTCConnections failed: "
+                               f"{result.get('message', 'Unknown Go error')}")
+            return result.get('message', [])
+        except Exception as e:
+            logger.error(f"❌ GetWebRTCConnections failed: {e}")
+            raise P2PError("GetWebRTCConnections failed") from e
 
     def get_connected_peers_info(self) -> List[Dict[str, Any]]:
         """

@@ -30,14 +30,17 @@ from .golibp2p import GoLibP2P  # Your stub interface definition
 from .lib_types import TypeInterface  # Assuming TypeInterface handles the void* results
 
 
-def _get_file_hash(filepath):
-    """Calculates the SHA256 hash of a file, returning None if it doesn't exist."""
-    if not os.path.exists(filepath):
+def _get_dir_hash(dirpath):
+    """Calculates the SHA256 hash of all .go files in a directory."""
+    if not os.path.exists(dirpath):
         return None
+        
     sha256_hash = hashlib.sha256()
-    with open(filepath, "rb") as f:
-        for byte_block in iter(lambda: f.read(4096), b""):
-            sha256_hash.update(byte_block)
+    for filepath in sorted(glob.glob(os.path.join(dirpath, "*.go"))):
+        with open(filepath, "rb") as f:
+            for byte_block in iter(lambda: f.read(4096), b""):
+                sha256_hash.update(byte_block)
+                
     return sha256_hash.hexdigest()
 
 
@@ -46,13 +49,13 @@ def _developer_source_check():
     If source files are present (i.e., in a dev environment), check if the
     compiled library is in sync with the source code.
     """
-    go_source_file = os.path.join(_lib_dir, 'lib.go')
-    hash_file = go_source_file + '.sha256'
+    go_source_dir = os.path.join(_lib_dir, 'unailib')
+    hash_file = os.path.join(_lib_dir, 'unailib.sha256')
     
     # This check only runs if all dev files are present. For users who
     # installed from a wheel, these files won't exist, and this is skipped.
-    if os.path.exists(go_source_file) and os.path.exists(hash_file):
-        current_source_hash = _get_file_hash(go_source_file)
+    if os.path.exists(go_source_dir) and os.path.exists(hash_file):
+        current_source_hash = _get_dir_hash(go_source_dir)
 
         with open(hash_file, 'r') as f:
             stored_build_hash = f.read().strip()
@@ -61,7 +64,7 @@ def _developer_source_check():
             # Use warnings.warn for a standard, non-intrusive developer warning.
             warnings.warn(
                 "\033[93m" + "\n" + "="*80 +
-                "\nWARNING: The Go source file (lib.go) has been modified since the shared\n"
+                "\nWARNING: The Go source files in 'unailib/' have been modified since the shared\n"
                 "library was last compiled. Your running code may not reflect recent changes.\n\n"
                 "To fix this, run: pip install -e .\n" +
                 "="*80 + "\033[0m",
@@ -148,6 +151,10 @@ _shared_lib.UnsubscribeFromTopic.restype = ctypes.c_void_p  # Treat returned *C.
 # Relay Client
 _shared_lib.ReserveOnRelay.argtypes = [ctypes.c_int, ctypes.c_char_p]
 _shared_lib.ReserveOnRelay.restype = ctypes.c_void_p  # Treat returned *C.char as opaque pointer
+
+# WebRTC Signaling
+_shared_lib.GetWebRTCConnections.argtypes = [ctypes.c_int]
+_shared_lib.GetWebRTCConnections.restype = ctypes.c_void_p  # Treat returned *C.char as opaque pointer
 
 # Memory Management
 # FreeString now accepts the opaque pointer directly

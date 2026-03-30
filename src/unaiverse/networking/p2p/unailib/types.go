@@ -13,6 +13,7 @@ import (
 	dht "github.com/libp2p/go-libp2p-kad-dht"
 	golog "github.com/ipfs/go-log/v2"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
+	pwebrtc "github.com/pion/webrtc/v4"
 	p2pforge "github.com/ipshipyard/p2p-forge/client"
 )
 
@@ -22,6 +23,29 @@ import (
 const UnaiverseChatProtocol = "/unaiverse/chat/1.0.0"
 const UnaiverseUserAgent = "go-libp2p/example/autotls"
 const DisconnectionGracePeriod = 10 * time.Second
+
+// WebRTC signaling constants
+const UnaiverseWebRTCSignalProtocol = "/unaiverse/webrtc-signal/1.0.0"
+const WebRTCDataChannelLabel = "unaiverse-data"
+// Total budget for the entire signaling handshake (offer → answer → DC open).
+const WebRTCSignalingTimeout = 45 * time.Second
+
+// --- Create a package-level logger ---
+var logger = golog.Logger("unailib")
+
+// --- Multi-Instance State Management ---
+var (
+	// Set the libp2p configuration parameters.
+	maxInstances       int
+	maxChannelQueueLen int
+	maxUniqueChannels  int
+	MaxMessageSize     uint32
+
+	// A single slice to hold all our instances.
+	allInstances []*NodeInstance
+	// A SINGLE mutex to protect the allInstances slice itself (during create/close).
+	globalInstanceMutex sync.RWMutex
+)
 
 // ExtendedPeerInfo holds information about a connected peer.
 type ExtendedPeerInfo struct {
@@ -89,6 +113,15 @@ type NodeConfig struct {
 		Enabled bool `json:"enabled"`
 		Keep bool	`json:"keep"` // to keep it running after init
     } `json:"dht"`
+
+	// WebRTC signaling (application-level, not a libp2p transport)
+	WebRTC struct {
+		// Enabled activates the /unaiverse/webrtc-signal/1.0.0 protocol handler.
+		Enabled bool `json:"enabled"`
+		// ICEConfig overrides the default STUN/TURN server list. If nil, Google
+		// public STUN servers are used.
+		ICEConfig *ICEConfig `json:"ice_config,omitempty"`
+	} `json:"webrtc"`
 }
 
 // CreateNodeResponse defines the structure of our success message.
@@ -136,23 +169,68 @@ type NodeInstance struct {
 	rendezvousMutex sync.RWMutex
 	rendezvousState *RendezvousState
 
+	// WebRTC DataChannel connections (application-level, keyed by remote peer ID)
+	webrtcMutex       sync.RWMutex
+	webrtcConnections map[peer.ID]*WebRTCConn
+	iceConfig         *ICEConfig // nil → use defaults (Google STUN)
+
 	// a copy of its own index for logging
 	instanceIndex int
 }
 
-// --- Create a package-level logger ---
-var logger = golog.Logger("unailib")
+// ICEConfig holds STUN/TURN server configuration for WebRTC.
+type ICEConfig struct {
+	STUNServers []string     `json:"stun_servers"`
+	TURNServers []TURNServer `json:"turn_servers"`
+}
 
-// --- Multi-Instance State Management ---
-var (
-	// Set the libp2p configuration parameters.
-	maxInstances       int
-	maxChannelQueueLen int
-	maxUniqueChannels  int
-	MaxMessageSize     uint32
+// TURNServer holds credentials for a TURN relay server.
+type TURNServer struct {
+	URLs       []string `json:"urls"`
+	Username   string   `json:"username"`
+	Credential string   `json:"credential"`
+}
 
-	// A single slice to hold all our instances.
-	allInstances []*NodeInstance
-	// A SINGLE mutex to protect the allInstances slice itself (during create/close).
-	globalInstanceMutex sync.RWMutex
-)
+// SignalMessage is a single JSON-encoded signaling message carried over the
+// "/unaiverse/webrtc-signal/1.0.0" stream.
+//
+// Wire format (per message):
+//
+//	[4-byte big-endian uint32: JSON length][JSON payload]
+type SignalMessage struct {
+	Type    string `json:"type"`              // "offer" | "answer" | "error"
+	SDP     string `json:"sdp,omitempty"`     // full SDP (offer/answer; includes all ICE candidates)
+	Message string `json:"message,omitempty"` // human-readable error detail
+}
+
+// WebRTCConn holds the live state of an established WebRTC DataChannel connection
+// to a single remote peer.
+type WebRTCConn struct {
+	pc         *pwebrtc.PeerConnection
+	dc         *pwebrtc.DataChannel
+	remotePeer peer.ID
+}
+
+// Define the list of default STUN servers to use if none are provided in the config.
+var defaultSTUNServers = []string{
+	"stun:stun.l.google.com:19302",
+	"stun:global.stun.twilio.com:3478",
+	"stun:stun.cloudflare.com:3478",
+	"stun:stun.services.mozilla.com:3478",
+}
+
+// Define a list of curated public relay nodes to use as static relays for all nodes in the network.
+var defaultRelays = []string{
+	// Relay 1
+	"/ip4/193.205.7.181/tcp/30060/p2p/12D3KooWHT6ZzSeT7ZT85xRZo5ZMC6gcz7j3QuCQwEPHRqHJWVQK",
+	"/ip4/193.205.7.181/udp/30061/quic-v1/p2p/12D3KooWHT6ZzSeT7ZT85xRZo5ZMC6gcz7j3QuCQwEPHRqHJWVQK",
+	"/ip4/193.205.7.181/udp/30062/quic-v1/webtransport/certhash/uEiC5qpw6oFVU3bdo8zKpA6qs_l-poteC3DYULmiIT8ByFA/certhash/uEiAsazIfQKQXPyBwK-HaIzmjLv8McEUJ2FZrOp3hqU3MOw/p2p/12D3KooWHT6ZzSeT7ZT85xRZo5ZMC6gcz7j3QuCQwEPHRqHJWVQK",
+	"/dns4/multaiverse.diism.unisi.it/tcp/30060/tls/ws/p2p/12D3KooWHT6ZzSeT7ZT85xRZo5ZMC6gcz7j3QuCQwEPHRqHJWVQK",
+	"/ip4/193.205.7.181/udp/30063/webrtc-direct/certhash/uEiALPmyX41SN9z78dtVFDgO0JkfT-hFgZmTqp-DaFVbkiQ/p2p/12D3KooWHT6ZzSeT7ZT85xRZo5ZMC6gcz7j3QuCQwEPHRqHJWVQK",
+	// Relay 2
+	"/ip4/193.205.7.181/udp/30071/quic-v1/p2p/12D3KooWGatNmkeBMaKEiGcYoX6eBxYvpjQm7EWJWPPusbzieC1v",
+	"/ip4/193.205.7.181/udp/30072/quic-v1/webtransport/certhash/uEiBZMYxlAyA2I0AbkhCVdiq4nRpeG7v5FKQbdJQOFOtjCw/certhash/uEiAYsv1fcD6CM5ZU1EYRTMlnv-Rt_tpFiPK9_DoPnsgSUA/p2p/12D3KooWGatNmkeBMaKEiGcYoX6eBxYvpjQm7EWJWPPusbzieC1v",
+	"/ip4/193.205.7.181/tcp/30070/p2p/12D3KooWGatNmkeBMaKEiGcYoX6eBxYvpjQm7EWJWPPusbzieC1v",
+	"/ip4/193.205.7.181/udp/30073/webrtc-direct/certhash/uEiDsrIXLsgRTnum45qJgM2cEnRjaLnKE9rqayk4YlPx88w/p2p/12D3KooWGatNmkeBMaKEiGcYoX6eBxYvpjQm7EWJWPPusbzieC1v",
+	"/dns4/multaiverse.diism.unisi.it/tcp/30070/tls/ws/p2p/12D3KooWGatNmkeBMaKEiGcYoX6eBxYvpjQm7EWJWPPusbzieC1v",
+}

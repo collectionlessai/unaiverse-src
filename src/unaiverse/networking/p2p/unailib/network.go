@@ -15,6 +15,7 @@ import (
 	"github.com/libp2p/go-libp2p/core/network"
 	ma "github.com/multiformats/go-multiaddr"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
+	pwebrtc "github.com/pion/webrtc/v4"
 	p2pforge "github.com/ipshipyard/p2p-forge/client"
 )
 
@@ -148,6 +149,20 @@ func setupNotifiers(ni *NodeInstance) {
 
 			// Check if this is the LAST connection to this peer
 			if len(ni.host.Network().ConnsToPeer(remotePeerID)) == 0 {
+				// Check if the peer has an active WebRTC connection (they are handled separately).
+				ni.webrtcMutex.RLock()
+				wconn, hasWebRTC := ni.webrtcConnections[remotePeerID]
+				ni.webrtcMutex.RUnlock()
+
+				if hasWebRTC {
+					if wconn.dc != nil {
+						if wconn.dc.ReadyState() == pwebrtc.DataChannelStateOpen {
+							logger.Debugf("[GO] 🛡️ Instance %d: DisconnectedF: libp2p connection dropped, but WebRTC is alive for %s. Bypassing cleanup.\n", ni.instanceIndex, remotePeerID)
+							return
+						}
+					}
+				}
+
 				// If it's a friendlyPeer, wait for the grace period, otherwise close immediately
 				ni.peersMutex.RLock()
 				_, isFriendly := ni.friendlyPeers[remotePeerID]
@@ -231,7 +246,7 @@ func setupNotifiers(ni *NodeInstance) {
 					ni.streamsMutex.Unlock()
 					}
 			} else {
-				logger.Debugf("[GO]   Instance %d: DisconnectedF: Still have %d active connections to %s, not removing.\n", ni.instanceIndex, len(ni.host.Network().ConnsToPeer(remotePeerID)), remotePeerID)
+				logger.Debugf("[GO] 🛡️ Instance %d: DisconnectedF: Still have %d active connections to %s, not removing.\n", ni.instanceIndex, len(ni.host.Network().ConnsToPeer(remotePeerID)), remotePeerID)
 			}
 		},
 	})
@@ -289,6 +304,112 @@ func enforceProtocolCompliance(ni *NodeInstance) {
 	}()
 }
 
+// autoUpgradeWebRTC listens for newly identified peers. If a peer is connected
+// via a relay, it waits 20 seconds for native DCUtR to succeed. If it fails,
+// it initiates a WebRTC fallback.
+func autoUpgradeWebRTC(ni *NodeInstance) {
+	sub, err := ni.host.EventBus().Subscribe(new(event.EvtPeerIdentificationCompleted))
+	if err != nil {
+		logger.Errorf("[GO] ❌ Instance %d: Failed to subscribe to identification events for WebRTC auto-upgrade: %v", ni.instanceIndex, err)
+		return
+	}
+
+	go func() {
+		defer sub.Close()
+		for {
+			select {
+			case <-ni.ctx.Done():
+				return
+			case evt, ok := <-sub.Out():
+				if !ok {
+					return
+				}
+				idEvt := evt.(event.EvtPeerIdentificationCompleted)
+				remotePeer := idEvt.Peer
+
+				if remotePeer == ni.host.ID() {
+					continue
+				}
+
+				supportsWebRTC := false
+				for _, proto := range idEvt.Protocols {
+					if string(proto) == UnaiverseWebRTCSignalProtocol {
+						supportsWebRTC = true
+						break
+					}
+				}
+
+				if !supportsWebRTC {
+					continue
+				}
+
+				// Check if we are ONLY connected via relay
+				conns := ni.host.Network().ConnsToPeer(remotePeer)
+				if len(conns) == 0 {
+					continue
+				}
+
+				onlyRelay := true
+				isDialerOnCircuit := false
+				for _, c := range conns {
+					if strings.Contains(c.RemoteMultiaddr().String(), "/p2p-circuit") {
+						if c.Stat().Direction == network.DirOutbound {
+							isDialerOnCircuit = true
+						}
+					} else {
+						onlyRelay = false
+						break
+					}
+				}
+
+				if !onlyRelay {
+					continue // We already have a direct connection
+				}
+
+				// Tie-breaker: only the node that initiated the original relayed connection
+				// takes responsibility for initiating the WebRTC fallback.
+				if !isDialerOnCircuit {
+					logger.Debugf("[GO] ⏳ Instance %d: Relayed connection to %s is Inbound. Waiting for them to initiate WebRTC fallback if needed.", ni.instanceIndex, remotePeer)
+					continue
+				}
+
+				logger.Infof("[GO] ⏳ Instance %d: Peer %s is relayed. Waiting 20s for native DCUtR to succeed before WebRTC fallback...", ni.instanceIndex, remotePeer)
+				
+				// Fire the timeout and upgrade asynchronously so we don't block the event loop
+				go func(pid peer.ID) {
+					// Wait for native DCUtR holepunching to do its thing
+					select {
+					case <-time.After(20 * time.Second):
+					case <-ni.ctx.Done():
+						return
+					}
+
+					// Check connections again!
+					connsAfter := ni.host.Network().ConnsToPeer(pid)
+					stillOnlyRelay := true
+					for _, c := range connsAfter {
+						if !strings.Contains(c.RemoteMultiaddr().String(), "/p2p-circuit") {
+							stillOnlyRelay = false
+							break
+						}
+					}
+
+					if !stillOnlyRelay || len(connsAfter) == 0 {
+						logger.Debugf("[GO] ✅ Instance %d: Native DCUtR succeeded (or peer disconnected) for %s. No WebRTC fallback needed.", ni.instanceIndex, pid)
+						return
+					}
+
+					logger.Warnf("[GO] ⚠️ Instance %d: Native direct connection to %s failed after 20s. Initiating WebRTC fallback...", ni.instanceIndex, pid)
+					err := initiateWebRTCConnection(ni, pid)
+					if err != nil {
+						logger.Errorf("[GO] ❌ Instance %d: WebRTC fallback failed for %s: %v", ni.instanceIndex, pid, err)
+					}
+				}(remotePeer)
+			}
+		}
+	}()
+}
+
 // handleAddressUpdateEvents listens for libp2p address changes and updates the local cache.
 func handleAddressUpdateEvents(ni *NodeInstance, sub event.Subscription) {
 	defer sub.Close()
@@ -320,135 +441,6 @@ func handleAddressUpdateEvents(ni *NodeInstance, sub event.Subscription) {
 			logger.Infof("[GO] 🔄 Instance %d: Updated local addresses (updating cache). Addrs: %v", ni.instanceIndex, addrsStr)
 		}
 	}
-}
-
-// Helper to filter peers for PeerSource
-func (ni *NodeInstance) isSuitableForPeerSource(pid peer.ID) bool {
-	ps := ni.host.Peerstore()
-
-	// 1. Check for Relay Hop Protocol (NEEDED)
-	protocols, err := ps.GetProtocols(pid)
-	if err != nil {
-		return false
-	}
-	isRelay := false
-	for _, proto := range protocols {
-		if proto == "/libp2p/circuit/relay/0.2.0/hop" {
-			isRelay = true
-			break
-		}
-	}
-	if !isRelay {
-		return false
-	}
-
-	// Only accept wss-enabled nodes as relay
-	addrs := ps.Addrs(pid)
-	isSuitable := false
-	for _, addr := range addrs {
-		_, err = addr.ValueForProtocol(ma.P_WS) 
-		if err == nil {
-			_, err := addr.ValueForProtocol(ma.P_TLS) 
-			if err == nil {
-				isSuitable = true
-			}
-		}
-	}
-
-	return isSuitable
-}
-
-// PeerSource acts as the peer discovery backend for AutoRelay.
-// It combines a local cache lookup (fast/free) with a DHT random walk (slow/expensive).
-func (ni *NodeInstance) PeerSource(ctx context.Context, numPeers int) <-chan peer.AddrInfo {
-	out := make(chan peer.AddrInfo)
-
-	go func() {
-		defer close(out)
-		
-		// Safety checks: Ensure host and DHT are fully initialized
-		if ni.host == nil || ni.dht == nil {
-			return
-		}
-
-		// Keep track of peers we've already sent in this batch
-		sentPeers := make(map[peer.ID]struct{})
-		peersFound := 0
-
-		// --- PHASE 1: Scavenge Local Peerstore ---
-		localPeers := ni.host.Peerstore().Peers()
-		for _, pid := range localPeers {
-			if peersFound >= numPeers {
-				return
-			}
-			if pid == ni.host.ID() {
-				continue
-			}
-
-			// Add it if it meets our criteria
-			if ni.isSuitableForPeerSource(pid) {
-				info := ni.host.Peerstore().PeerInfo(pid)
-				if len(info.Addrs) == 0 {
-					continue
-				}
-
-				select {
-				case out <- info:
-					sentPeers[pid] = struct{}{}
-					peersFound++
-				case <-ctx.Done():
-					return
-				}
-			}
-		}
-
-		// --- PHASE 2: DHT Random Walk ---
-		if peersFound < numPeers {
-			logger.Debugf("[GO] ⚠️ Instance %d: Local peerstore insufficient (%d/%d). Starting DHT walk...",
-				ni.instanceIndex, peersFound, numPeers)
-
-			for peersFound < numPeers {
-				randomKey := make([]byte, 32)
-				rand.Read(randomKey)
-				randomKeyStr := string(randomKey)
-
-				candidatePIDs, err := ni.dht.GetClosestPeers(ctx, randomKeyStr)
-				if err != nil {
-					select {
-					case <-ctx.Done():
-						return
-					case <-time.After(2 * time.Second):
-						continue
-					}
-				}
-
-				for _, pid := range candidatePIDs {
-					if peersFound >= numPeers {
-						return
-					}
-					if pid == ni.host.ID() {
-						continue
-					}
-					if _, alreadySent := sentPeers[pid]; alreadySent {
-						continue
-					}
-
-					info := ni.host.Peerstore().PeerInfo(pid)
-					if len(info.Addrs) > 0 {
-						select {
-						case out <- info:
-							sentPeers[pid] = struct{}{}
-							peersFound++
-						case <-ctx.Done():
-							return
-						}
-					}
-				}
-			}
-		}
-	}()
-
-	return out
 }
 
 // goGetNodeAddresses is the internal Go function that performs the core logic
@@ -567,6 +559,23 @@ func (ni *NodeInstance) Close() error {
 		}
 		ni.dht = nil
 	}
+
+	// --- Close WebRTC DataChannel Connections ---
+	ni.webrtcMutex.Lock()
+	if len(ni.webrtcConnections) > 0 {
+		logger.Debugf("[GO]   - Instance %d: Closing %d WebRTC connections...\n", ni.instanceIndex, len(ni.webrtcConnections))
+		for pid, conn := range ni.webrtcConnections {
+			logger.Debugf("[GO]     - Instance %d: Closing WebRTC connection to %s\n", ni.instanceIndex, pid)
+			if conn.dc != nil {
+				conn.dc.Close()
+			}
+			if conn.pc != nil {
+				conn.pc.Close()
+			}
+		}
+	}
+	ni.webrtcConnections = make(map[peer.ID]*WebRTCConn)
+	ni.webrtcMutex.Unlock()
 
 	// --- Close Persistent Outgoing Streams ---
 	ni.streamsMutex.Lock()

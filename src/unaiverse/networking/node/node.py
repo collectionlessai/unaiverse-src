@@ -237,7 +237,10 @@ class Node:
             "tls_key_path": Custom.ENV_KEY_PATH,
             "dht_enabled": True,
             "dht_keep": True,
-            "log_sub": "pub"
+            "log_sub": "pub",
+            "webrtc_enabled": True,
+            "ice_stun_servers": None,
+            "ice_turn_servers": None,
         }
 
         p2p_w_config = {
@@ -255,7 +258,10 @@ class Node:
             "tls_key_path": Custom.ENV_KEY_PATH,
             "dht_enabled": True,
             "dht_keep": False,  # close it after autonat
-            "log_sub": "prv"
+            "log_sub": "prv",
+            "webrtc_enabled": True,
+            "ice_stun_servers": None,
+            "ice_turn_servers": None,
         }
 
         # 2. Prepare a dictionary to store results or exceptions
