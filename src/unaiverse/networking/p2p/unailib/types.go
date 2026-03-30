@@ -218,3 +218,19 @@ var defaultSTUNServers = []string{
 	"stun:stun.cloudflare.com:3478",
 	"stun:stun.services.mozilla.com:3478",
 }
+
+// Define a list of curated public relay nodes to use as static relays for all nodes in the network.
+var defaultRelays = []string{
+	// Relay 1
+	"/ip4/193.205.7.181/tcp/30060/p2p/12D3KooWHT6ZzSeT7ZT85xRZo5ZMC6gcz7j3QuCQwEPHRqHJWVQK",
+	"/ip4/193.205.7.181/udp/30061/quic-v1/p2p/12D3KooWHT6ZzSeT7ZT85xRZo5ZMC6gcz7j3QuCQwEPHRqHJWVQK",
+	"/ip4/193.205.7.181/udp/30062/quic-v1/webtransport/certhash/uEiC5qpw6oFVU3bdo8zKpA6qs_l-poteC3DYULmiIT8ByFA/certhash/uEiAsazIfQKQXPyBwK-HaIzmjLv8McEUJ2FZrOp3hqU3MOw/p2p/12D3KooWHT6ZzSeT7ZT85xRZo5ZMC6gcz7j3QuCQwEPHRqHJWVQK",
+	"/dns4/multaiverse.diism.unisi.it/tcp/30060/tls/ws/p2p/12D3KooWHT6ZzSeT7ZT85xRZo5ZMC6gcz7j3QuCQwEPHRqHJWVQK",
+	"/ip4/193.205.7.181/udp/30063/webrtc-direct/certhash/uEiALPmyX41SN9z78dtVFDgO0JkfT-hFgZmTqp-DaFVbkiQ/p2p/12D3KooWHT6ZzSeT7ZT85xRZo5ZMC6gcz7j3QuCQwEPHRqHJWVQK",
+	// Relay 2
+	"/ip4/193.205.7.181/udp/30071/quic-v1/p2p/12D3KooWGatNmkeBMaKEiGcYoX6eBxYvpjQm7EWJWPPusbzieC1v",
+	"/ip4/193.205.7.181/udp/30072/quic-v1/webtransport/certhash/uEiBZMYxlAyA2I0AbkhCVdiq4nRpeG7v5FKQbdJQOFOtjCw/certhash/uEiAYsv1fcD6CM5ZU1EYRTMlnv-Rt_tpFiPK9_DoPnsgSUA/p2p/12D3KooWGatNmkeBMaKEiGcYoX6eBxYvpjQm7EWJWPPusbzieC1v",
+	"/ip4/193.205.7.181/tcp/30070/p2p/12D3KooWGatNmkeBMaKEiGcYoX6eBxYvpjQm7EWJWPPusbzieC1v",
+	"/ip4/193.205.7.181/udp/30073/webrtc-direct/certhash/uEiDsrIXLsgRTnum45qJgM2cEnRjaLnKE9rqayk4YlPx88w/p2p/12D3KooWGatNmkeBMaKEiGcYoX6eBxYvpjQm7EWJWPPusbzieC1v",
+	"/dns4/multaiverse.diism.unisi.it/tcp/30070/tls/ws/p2p/12D3KooWGatNmkeBMaKEiGcYoX6eBxYvpjQm7EWJWPPusbzieC1v",
+}

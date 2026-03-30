@@ -376,14 +376,26 @@ func CreateNode(
 			// This single option enables the node to act as a relay for others.
 			options = append(options, libp2p.EnableRelayService(rc.WithResources(resources)), libp2p.EnableNATService())
 		} else {
-			// In this case we want to use relays but not offer the service to others.
-			// If we are exploiting the DHT we can start an AutoRelay with PeerSource
-			if cfg.DHT.Keep {
-				// Enable AutoRelay. This uses the services above (DHT, AutoNAT)
-				// to find relays and bind to one if we are private.
-				options = append(options, libp2p.EnableAutoRelayWithPeerSource(ni.PeerSource, autorelay.WithBootDelay(time.Second*10)))
-				logger.Debugf("[GO]   - Instance %d: AutoRelay client ENABLED.\n", instanceIndex)
+			var defaultRelaysMaddrs []ma.Multiaddr
+			// Convert string addresses to Multiaddr
+			for _, s := range defaultRelays {
+					addr, _ := ma.NewMultiaddr(s)
+					defaultRelaysMaddrs = append(defaultRelaysMaddrs, addr)
 			}
+
+			// Convert to AddrInfo
+			defaultRelaysAddrInfo, err := peer.AddrInfosFromP2pAddrs(defaultRelaysMaddrs...)
+			if err != nil {
+				log.Fatal(err)
+			}
+			// In this case we want to use relays but not offer the service to others.
+			options = append(options, libp2p.EnableAutoRelayWithStaticRelays(
+				defaultRelaysAddrInfo,
+				autorelay.WithBootDelay(time.Second*10),
+				autorelay.WithMinCandidates(2),
+				autorelay.WithNumRelays(1),
+			))
+			logger.Debugf("[GO]   - Instance %d: AutoRelay client ENABLED.\n", instanceIndex)
 		}
 	}
 
