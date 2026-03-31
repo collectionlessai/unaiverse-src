@@ -27,7 +27,7 @@ from unaiverse.hsm.action import Action
 from typing_extensions import deprecated
 from unaiverse.hsm.hsm import HybridStateMachine
 from unaiverse.networking.p2p.messages import Msg
-from unaiverse.streams.streamproxy import StreamProxy
+from unaiverse.streams.streamproxy import StreamProxy, StreamsProxyWithDefaults
 from unaiverse.networking.node.profile import NodeProfile
 from unaiverse.streams.streams import Stream, BufferedStream
 from unaiverse.streams.dataprops import DataProps, StreamType
@@ -112,7 +112,7 @@ class AgentBasics:
         self.proc_opts = proc_opts
         self.proc_last_inputs = None
         self.proc_last_outputs = None
-        self.proc_optional_inputs = None
+        self.proc_optional_inputs: list[dict] | None = None
         self.proc_net_hash: dict[str, None | str] = {'public': None, 'private': None}
         self.proc_in_net_hash: dict[str, None | str] = {'public': None, 'private': None}
         self.merge_flat_stream_labels = merge_flat_stream_labels
@@ -165,16 +165,6 @@ class AgentBasics:
         self.overridden_action_step = None
         self.locked_set_proc_input = False
 
-        # Interaction Manager, stdin/stdout
-        self.im = InteractionManager(self, max_interactions=Custom.MAX_INTERACTIONS)
-        self.stdin = StreamProxy()  # Variable binding
-        self.stdtar = StreamProxy()  # Variable binding
-        self.stdext = StreamProxy()  # Variable binding
-        self.stdout = StreamProxy()  # Fixed binding
-        self.stdin.bind(self.proc_in_streams_by_user_hash)
-        self.stdout.bind(self.proc_streams_by_user_hash)
-        self.stdext.bind(self.env_streams_by_user_hash)
-
         # Stats
         self.stats: Stats | None = None
         self.agent_stats_code = None
@@ -188,6 +178,14 @@ class AgentBasics:
         self._node_purge_fcn = None
         self._node_agents_waiting = None
         self._node_identity_dir = ''
+
+        # Utilities
+        self.__proc_in_streams_by_user_hash_pub = {}
+        self.__proc_streams_by_user_hash_pub = {}
+        self.__env_streams_by_user_hash_pub = {}
+        self.__proc_in_streams_by_user_hash_prv = {}
+        self.__proc_streams_by_user_hash_prv = {}
+        self.__env_streams_by_user_hash_prv = {}
 
         # Checking
         if not (self.proc is None or
@@ -205,6 +203,14 @@ class AgentBasics:
             if self.proc_inputs is not None else None
         self.compat_out_streams = [set() for _ in range(len(self.proc_outputs))] \
             if self.proc_outputs is not None else None
+
+        # Interaction Manager, stdin/stdout
+        self.im = InteractionManager(self, max_interactions=Custom.MAX_INTERACTIONS)
+        self.stdin = StreamsProxyWithDefaults(default_values=[item["default_value"] if item["has_default"] else None
+                                                              for item in self.proc_optional_inputs])
+        self.stdtar = StreamProxy()
+        self.stdext = StreamProxy()
+        self.stdout = StreamProxy()
 
         # Loading default public HSM
         if hasattr(self, "do_gen"):  # Trick to distinguish if this is an Agent or a World (both sons of this class)
@@ -360,8 +366,22 @@ class AgentBasics:
 
         return True
 
+    def set_default_stream_binding(self) -> None:
+        """Set default bindings for the stdin, stdtar, stdext, stdout stream proxies."""
+
+        if self.behaving_in_world():
+            self.stdin.bind(self.__proc_in_streams_by_user_hash_prv)
+            self.stdtar.bind({})
+            self.stdext.bind(self.__env_streams_by_user_hash_prv)
+            self.stdout.bind(self.__proc_streams_by_user_hash_prv)
+        else:
+            self.stdin.bind(self.__proc_in_streams_by_user_hash_pub)
+            self.stdtar.bind({})
+            self.stdext.bind(self.__env_streams_by_user_hash_pub)
+            self.stdout.bind(self.__proc_streams_by_user_hash_pub)
+
     def get_proc_output_net_hash(self, public: bool = True) -> str | None:
-        """Return the network hash of the processor output stream.
+        """Return the network hash of the processor output streams.
 
         Args:
             public: If True, returns the public net hash, otherwise the private one.
@@ -372,7 +392,7 @@ class AgentBasics:
         return self.proc_net_hash['public'] if public else self.proc_net_hash['private']
 
     def get_proc_input_net_hash(self, public: bool = True) -> str | None:
-        """Return the network hash of the processor input stream.
+        """Return the network hash of the processor input streams.
 
         Args:
             public: If True, returns the public net hash, otherwise the private one.
@@ -857,6 +877,10 @@ class AgentBasics:
                         self.proc_streams[net_hash] = {}
                     self.proc_streams[net_hash][stream.get_props().get_name()] = stream
                     self.proc_streams_by_user_hash[user_hash] = stream
+                    if stream.is_public():
+                        self.__proc_streams_by_user_hash_pub[user_hash] = stream
+                    else:
+                        self.__proc_streams_by_user_hash_prv[user_hash] = stream
                     is_proc_outputs_stream = True
 
             # Adding an 'owned' processor input stream (i.e., the stream entering OUR OWN processor)
@@ -869,6 +893,10 @@ class AgentBasics:
                         self.proc_in_streams[net_hash] = {}
                     self.proc_in_streams[net_hash][stream.get_props().get_name()] = stream
                     self.proc_in_streams_by_user_hash[user_hash] = stream
+                    if stream.is_public():
+                        self.__proc_in_streams_by_user_hash_pub[user_hash] = stream
+                    else:
+                        self.__proc_in_streams_by_user_hash_prv[user_hash] = stream
                     is_proc_inputs_stream = True
 
             if net_hash not in self.owned_streams:
@@ -881,6 +909,10 @@ class AgentBasics:
                     self.env_streams[net_hash] = {}
                 self.env_streams[net_hash][stream.get_props().get_name()] = stream
                 self.env_streams_by_user_hash[user_hash] = stream
+                if stream.is_public():
+                    self.__env_streams_by_user_hash_pub[user_hash] = stream
+                else:
+                    self.__env_streams_by_user_hash_prv[user_hash] = stream
 
         # If needed, merging descriptor labels (attribute labels) and sharing them with all streams
         if self.merge_flat_stream_labels:
@@ -1352,6 +1384,9 @@ class AgentBasics:
                 if self.behav_lone_wolf is not None:
                     self.behav_lone_wolf.enable(False)
                 self.behav.enable(True)
+                self.stdin.bind(self.__proc_in_streams_by_user_hash_prv)
+                self.stdout.bind(self.__proc_streams_by_user_hash_prv)
+                self.stdext.bind(self.__env_streams_by_user_hash_prv)
                 await self.behav.act()
                 self.behav.enable(False)
 
@@ -1363,6 +1398,9 @@ class AgentBasics:
             if self.behav is not None:
                 self.behav.enable(False)
             self.behav_lone_wolf.enable(True)
+            self.stdin.bind(self.__proc_in_streams_by_user_hash_pub)
+            self.stdout.bind(self.__proc_streams_by_user_hash_pub)
+            self.stdext.bind(self.__env_streams_by_user_hash_pub)
             await self.behav_lone_wolf.act()
             self.behav_lone_wolf.enable(False)
 
@@ -1713,7 +1751,7 @@ class AgentBasics:
                             continue
 
                     # Skipping system-triggered interactions
-                    if recipient == ["system"]:
+                    if recipient == [Custom.SYSTEM_INTERACTION_LABEL]:
                         continue
 
                     # Get data
@@ -2029,7 +2067,7 @@ class AgentBasics:
         for i, action in enumerate(actions_list):
             if action.is_ready(consider_interactions=False):
                 _selected_action_idx = i
-                _selected_interaction = action.system_interaction
+                _selected_interaction = None
                 return _selected_action_idx, _selected_interaction
         _selected_action_idx = -1
         _selected_interaction = None

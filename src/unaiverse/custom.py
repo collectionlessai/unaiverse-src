@@ -76,6 +76,7 @@ class Custom:
     # ============
     # INTERACTIONS
     # ============
+    SYSTEM_INTERACTION_LABEL = "system"
     MAX_INTERACTIONS = 100
     MAX_STREAM_DATA_WITHOUT_INTERACTIONS = 2
     DEFAULT_INTER_TIMEOUT = 60. * 5.  # Seconds

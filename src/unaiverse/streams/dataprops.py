@@ -929,7 +929,7 @@ class DataProps:
         else:
             return None
 
-    def check_and_preprocess(self, data: str | Image.Image | torch.Tensor,
+    def check_and_preprocess(self, data: str | Image.Image | torch.Tensor | None,
                              allow_class_ids: bool = False, targets: bool = False,
                              device: torch.device = torch.device("cpu")):
         """Prepares incoming data for a processor by validating its type and applying necessary transformations.
@@ -948,6 +948,9 @@ class DataProps:
         Returns:
             The preprocessed data, typically a tensor on the specified device.
         """
+        if data is None:
+            return data
+
         if self.is_tensor():
             if isinstance(data, torch.Tensor):
 
@@ -1033,7 +1036,7 @@ class DataProps:
         else:
             raise ValueError(f"Unexpected data type, {self.data_type}")
 
-    def check_and_postprocess(self, data: str | Image.Image | torch.Tensor):
+    def check_and_postprocess(self, data: str | Image.Image | torch.Tensor | None):
         """Takes a processor's output and validates it before converting it back into a stream-compatible format.
         It handles `torch.Tensor` data, applying a `proc_to_stream_transform` (if one exists) to convert the tensor
         into an appropriate format for the stream, such as a string for text or a PIL `Image` for images. It performs
@@ -1045,6 +1048,9 @@ class DataProps:
         Returns:
             The post-processed data, in a stream-compatible format (e.g., a string, image, or CPU tensor).
         """
+        if data is None:
+            return None
+
         if self.is_tensor():
             if isinstance(data, torch.Tensor):
                 if self.proc_to_stream_transforms is not None:

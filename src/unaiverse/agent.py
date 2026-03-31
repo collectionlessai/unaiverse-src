@@ -76,9 +76,9 @@ def action(func: Callable) -> Callable:
                 if isinstance(value, str):
                     resolved = self.resolve_stream_ref(value)
                     resolved_kwargs[key] = resolved if resolved is not None else value
-                elif isinstance(value, list | tuple):
+                elif isinstance(value, (list, tuple)):
                     _values = list(value)  # Shallow
-                    for i, _value in _values:
+                    for i, _value in enumerate(_values):
                         _resolved = self.resolve_stream_ref(_value)
                         if _resolved is not None:
                             _values[i] = _resolved
@@ -340,8 +340,8 @@ class Agent(AgentBasics):
 
         if first_run:
             target = self.__involved_agents(target)
-            sent_interaction = self._send(None, action_name, target, action_kwargs, streams,
-                                          data_samples, num_steps, max_time, from_state, to_state, uuid)
+            sent_interaction = await self._send(None, action_name, target, action_kwargs, streams,
+                                                data_samples, num_steps, max_time, from_state, to_state, uuid)
             if wait_completion:
                 system_interaction.action_ref.set_default_timeout()  # This will make the action pedantic
                 system_interaction.set_mark(sent_interaction)  # First run, Saving the interaction that was sent
@@ -357,22 +357,25 @@ class Agent(AgentBasics):
                 return False
 
     @action
-    async def process(self) -> bool:
+    async def process(self, interaction: Interaction | None = None) -> bool:
         """Runs one inference step: reads from stdin, calls the processor, and writes to stdout (async).
 
         Returns:
             True if the step ran successfully, False otherwise.
         """
 
-        # Getting input data from the input stream
-        input_data = self.stdin.get()
+        # Getting the UUID of the interaction
+        uuid = interaction.uuid
 
-        # Getting data tag
-        data_tag = self.stdin.get_tag()
+        # Getting input data from the input stream
+        input_data = self.stdin.get(uuid=uuid, requested_by="process")  # Use kwargs
 
         # Passing input data to the processor and getting output back
         if input_data is None:
             return False
+
+        # Getting data tag
+        data_tag = self.stdin.get_tag(uuid)
 
         # Customizable input hook
         try:
@@ -384,6 +387,9 @@ class Agent(AgentBasics):
         # Processing data
         try:
             output_data = self.proc(*input_data)
+
+            if not isinstance(output_data, tuple):
+                output_data = (output_data,)
         except Exception as e:
             log.error(f"Error running the processor: {e}")
             return False
@@ -396,11 +402,11 @@ class Agent(AgentBasics):
             return False
 
         # Pushing output data to the output stream
-        self.stdout.set(output_data, data_tag)
+        self.stdout.set(output_data, data_tag=data_tag, uuid=uuid)  # Use kwargs for data_tag and uuid
         return True
 
     @action
-    async def learn(self) -> bool:
+    async def learn(self, interaction: Interaction | None = None) -> bool:
         """Runs one learning step: first performs inference, then runs a backward pass (async).
 
         Returns:
@@ -413,10 +419,13 @@ class Agent(AgentBasics):
             return False
 
         # Inference first
-        if await self.process():
+        if await self.process(interaction):
+
+            # Getting the UUID of the interaction
+            uuid = interaction.uuid
 
             # Getting input data from the input stream
-            target_data = self.stdtar.get()
+            target_data = self.stdtar.get(uuid=uuid, requested_by="learn")  # Use kwargs
 
             # Learning from the last performed inference and the current targets
             try:
@@ -1867,21 +1876,22 @@ class Agent(AgentBasics):
             if isinstance(_requester, list):
                 for _r in _requester:
                     if self.behaving_in_world():
-                        if _r not in self.world_agents and _r not in self.world_masters and _r != "system":
+                        if (_r not in self.world_agents and _r not in self.world_masters and
+                                _r != Custom.SYSTEM_INTERACTION_LABEL):
                             log.error(f"Unknown agent: {_r} in list {_requester} (fully skipping generation)")
                             return False
                     else:
-                        if _r not in self.public_agents and _r != "system":
+                        if _r not in self.public_agents and _r != Custom.SYSTEM_INTERACTION_LABEL:
                             log.error(f"Unknown agent: {_r} in list {_requester} (fully skipping generation)")
                             return False
             else:
                 if self.behaving_in_world():
                     if (_requester not in self.world_agents and _requester not in self.world_masters
-                            and _requester != "system"):
+                            and _requester != Custom.SYSTEM_INTERACTION_LABEL):
                         log.error(f"Unknown agent: {_requester} (fully skipping generation)")
                         return False
                 else:
-                    if _requester not in self.public_agents and _requester != "system":
+                    if _requester not in self.public_agents and _requester != Custom.SYSTEM_INTERACTION_LABEL:
                         log.error(f"Unknown agent: {_requester} (fully skipping generation)")
                         return False
 

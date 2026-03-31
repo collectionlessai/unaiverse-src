@@ -58,6 +58,10 @@ class Data:
         """
         return "dt:" + ("no" if self.data is None else "ok") + "|" + str(self.data_tag)
 
+    def __str__(self) -> str:
+        """Return a compact string encoding the data availability and tag for debugging."""
+        return self.to_code_str()
+
 
 class Stream:
     """
@@ -344,7 +348,7 @@ class Stream:
             data: Data sample to set (tensor, PIL image, or string).
             data_tag: Custom data time tag >= 0 (Default: -1, meaning no tags).
             keep_existing_tag: Keep the data tag that is already in the stream, if the provided data_tag arg is -1.
-            uuid: UUID of the interaction storing this data (can be None, default None).
+            uuid: UUID of the interaction storing this data (can be None, meaning "generic UUID", default None).
 
         Returns:
             The updated Data struct if data was accepted based on time constraints, else None.

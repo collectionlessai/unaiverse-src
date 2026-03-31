@@ -323,7 +323,7 @@ class Interaction:
 
     def is_system(self) -> bool:
         """Return True if the interaction is a system-level interaction."""
-        return self.requester == "system"
+        return self.requester == Custom.SYSTEM_INTERACTION_LABEL
 
     def is_completed(self) -> bool:
         """Return True if the interaction status is COMPLETED."""
@@ -1105,7 +1105,22 @@ class InteractionManager:
         expanded_owned_streams = {'stdin': [], 'stdtar': [], 'stdext': [], None: []}
         for stream_dict in interaction.streams:
             stream_hash = stream_dict['stream_hash']
+
+            # Initial dirt check: the user might have specified a net hash with the syntax of a user hash.
+            # We normalize stream_hash to cope with this case.
+            peer_id = stream_hash.split(":")[0]
+            name_or_group = stream_hash.split(":")[-1]
+            net_hash_dm = DataProps.build_net_hash(peer_id, False, name_or_group)
+            net_hash_ps = DataProps.build_net_hash(peer_id, True, name_or_group)
+            if net_hash_dm in self.agent.known_streams:
+                stream_hash = net_hash_dm
+            elif net_hash_ps in self.agent.known_streams:
+                stream_hash = net_hash_ps
+
+            # Now we check stream_hash...
             if Stream.is_user_hash(stream_hash):
+
+                # If stream_hash is a user hash, we look for its net hash
                 peer_id = Stream.peer_id_from_user_hash(stream_hash)
                 name = Stream.name_from_user_hash(stream_hash)
                 net_hash_to_streams = self.agent.find_streams(peer_id=peer_id, name_or_group=name)
@@ -1122,6 +1137,8 @@ class InteractionManager:
                 if stream_dict['user_hash'] in self.agent.owned_streams_by_user_hash:
                     expanded_owned_streams[stream_dict['redirect']].append(stream_dict)
             elif Stream.is_net_hash(stream_hash):
+
+                # If stream_hash is a net hash, we expand into its inner streams
                 if stream_hash not in self.agent.known_streams:
                     return None, None
 
@@ -1267,21 +1284,24 @@ class InteractionManager:
             interaction: The Interaction to set as current.
         """
         self.current = interaction
+
+        # Default stream bindings (this also automatically switches from private to public and vice-versa)
+        self.agent.set_default_stream_binding()
+
         if interaction is not None:
             interaction.mark_running()
 
-            # Restart buffered streams and activate them if they were off
-            for stream in interaction.stream_proxy:
-                if isinstance(stream, BufferedStream):
-                    stream.restart(interaction.uuid)
+            if len(interaction.stream_proxy) > 0:
 
-            self.agent.stdin.bind(interaction.stdin_streams)
-            self.agent.stdtar.bind(interaction.stdtar_streams)
-            self.agent.stdext.bind(interaction.stdext_streams)
-        else:
-            self.agent.stdin.bind(self.agent.proc_in_streams_by_user_hash)
-            self.agent.stdtar.bind({})
-            self.agent.stdext.bind(self.agent.env_streams_by_user_hash)
+                # Restart buffered streams and activate them if they were off
+                for stream in interaction.stream_proxy:
+                    if isinstance(stream, BufferedStream):
+                        stream.restart(interaction.uuid)
+
+                # Every interaction with some-streams-specified forces the interaction-described bindings
+                self.agent.stdin.bind(interaction.stdin_streams)
+                self.agent.stdtar.bind(interaction.stdtar_streams)
+                self.agent.stdext.bind(interaction.stdext_streams)
 
     def has_data(self, interaction: 'Interaction') -> bool:
         """Return True if any owned stream has data available for the given interaction.

@@ -25,6 +25,7 @@ import types
 import asyncio
 import requests
 import threading
+import traceback
 from PIL import Image
 from typing import Any
 from datetime import timedelta
@@ -923,9 +924,6 @@ class Node:
             keyboard_queue = None
             keyboard_listener = None
             processor_img_stream = None
-            processor_text_stream = None
-            processor_whatever_stream = None
-            last_tags = {'text': -1, 'img': -1, 'whatever': -1}
             cap = None
             splash_text_shown = False
             interact_mode_opts: dict | None = None
@@ -952,24 +950,32 @@ class Node:
                 public_streams = "lone_wolf_peer_id" in interact_mode_opts
                 proc_streams = self.agent.owned_streams[self.agent.get_proc_input_net_hash(public=public_streams)]
                 for stream in proc_streams.values():
-                    if processor_text_stream is None and stream.props.is_text():
-                        processor_text_stream = stream
-                        processor_text_stream.disable()
                     if processor_img_stream is None and stream.props.is_img():
                         processor_img_stream = stream
-                        processor_img_stream.disable()
-                    if processor_whatever_stream is None and (not stream.props.is_img() and not stream.props.is_text()):
-                        processor_whatever_stream = stream
-                        processor_whatever_stream.disable()
 
-                if processor_text_stream is None:
-                    log.critical("Interactive mode requires a processor that generates a text stream")
+                def is_debug():
+                    return not (sys.gettrace() is None and
+                                not any(env in os.environ for env in ['DEBUGPY_RUNNING', 'PYCHARM_HOSTED']))
 
                 def keyboard_listener(k_queue):
+                    keyboard_msg = None
+                    prev_keyboard_msg = None
                     with (patch_stdout(raw=True)):  # type: ignore
                         while True:
                             webcam_shot = None
-                            keyboard_msg = prompt("\n👉 ")  # Get from keyboards
+                            if not is_debug():
+                                keyboard_msg = prompt("\n👉 ")  # Get from keyboards
+                            else:
+                                if keyboard_msg is None or len(keyboard_msg) == 0:
+                                    if os.path.exists("human_input.txt"):
+                                        with open("human_input.txt", 'r') as file:
+                                            keyboard_msg = file.read().strip()
+                                            if keyboard_msg == prev_keyboard_msg:
+                                                keyboard_msg = None
+                                    if keyboard_msg is None or len(keyboard_msg) == 0:
+                                        continue
+                                    else:
+                                        prev_keyboard_msg = keyboard_msg
                             if cap is not None:
                                 _ret, got_shot = cap.read()  # Get from webcam
                                 if _ret:
@@ -1120,23 +1126,7 @@ class Node:
                             else:
 
                                 # Putting message in the processor input stream
-                                processor_text_stream.enable()
-                                keep_tag = processor_text_stream.get_tag() != last_tags['text']
-                                processor_text_stream.set(msg, keep_existing_tag=keep_tag)
-                                last_tags['text'] = processor_text_stream.get_tag()
-                                processor_text_stream.disable()
-                                if processor_img_stream is not None:
-                                    processor_img_stream.enable()
-                                    keep_tag = processor_img_stream.get_tag() != last_tags['img']
-                                    processor_img_stream.set(image_pil, keep_existing_tag=keep_tag)
-                                    last_tags['img'] = processor_img_stream.get_tag()
-                                    processor_img_stream.disable()
-                                if processor_whatever_stream is not None:
-                                    processor_whatever_stream.enable()
-                                    keep_tag = processor_whatever_stream.get_tag() != last_tags['whatever']
-                                    processor_whatever_stream.set(whatever, keep_existing_tag=keep_tag)
-                                    last_tags['whatever'] = processor_whatever_stream.get_tag()
-                                    processor_whatever_stream.disable()
+                                self.agent.stdin.set([msg, image_pil, whatever])
                         except queue.Empty:
                             pass  # If nothing has been typed (+ enter)
 
@@ -1283,6 +1273,7 @@ class Node:
             raise
 
         except Exception as e:
+            traceback.print_exc()
             log.critical(f"An error occurred: {e}")
 
         finally:

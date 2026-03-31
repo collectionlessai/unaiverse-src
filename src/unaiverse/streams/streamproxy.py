@@ -13,6 +13,7 @@
                  Main Developers:    Stefano Melacci (Project Leader), Christian Di Maio, Tommaso Guidi
 """
 from itertools import islice
+from unaiverse.utils.logger import log
 from unaiverse.streams.streams import Stream
 from unaiverse.utils.misc import GenException
 from unaiverse.streams.dataprops import DataProps
@@ -66,7 +67,7 @@ class StreamProxy:
             The data from the requested stream, or None if no new data is available.
         """
         if len(self._stream_list) == 0:
-            raise GenException("No streams bound to this StreamIO")
+            raise GenException("No streams bound to this StreamIO (while trying to get data)")
 
         if key is None:
             found_at_least_one = False
@@ -156,7 +157,7 @@ class StreamProxy:
         if len(self._stream_list) == 0:
             raise GenException("No streams bound to this StreamIO")
 
-        if isinstance(key_or_data, list):
+        if isinstance(key_or_data, (list, tuple)):
             if len(key_or_data) != len(self._stream_list):
                 raise GenException(f"The list of stream values to set must have the same length of the stream list "
                                    f"({len(key_or_data)} != {len(self._stream_list)})")
@@ -204,9 +205,13 @@ class StreamProxy:
             for s in self._stream_list:
                 if isinstance(s, Stream):
                     data_tag = s.get_tag(uuid)
+                    if data_tag is None:
+                        return -1
                     ret.append(data_tag)
                 else:
                     ret.append(-1)
+            if len(ret) == 0:
+                return -1
             return max(ret)
         elif isinstance(key, int):
             if isinstance(self._stream_list[key], Stream):
@@ -289,3 +294,17 @@ class StreamProxy:
                                   for user, stream_names in grouped_by_user.items()]))
         else:
             return "no-streams"
+
+
+class StreamsProxyWithDefaults(StreamProxy):
+    def __init__(self, *args, default_values=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.default_values = default_values
+
+    def get(self, *args, **kwargs):
+        data_list = super().get(*args, **kwargs)
+        if data_list is not None and self.default_values is not None:
+            for i, data in enumerate(data_list):
+                if data is None:
+                    data_list[i] = self.default_values[i]
+        return data_list

@@ -122,8 +122,10 @@ class Action:
 
         # This must be done at the very end of the constructor!
         # This interaction is NOT registered
-        self.system_interaction = Interaction(requester="system", target="system",
-                                              action_name=self.name, action_kwargs=self.args)
+        self.system_interaction = Interaction(requester=Custom.SYSTEM_INTERACTION_LABEL,
+                                              target=Custom.SYSTEM_INTERACTION_LABEL,
+                                              action_name=self.name, action_kwargs=self.args,
+                                              uuid=None)
         self.system_interaction.set_action_ref(self)
 
     @property
@@ -241,7 +243,9 @@ class Action:
             # We start with  interaction.__step = -1, that here will become 0 - it will be run in the following code
         interaction.inc_step_idx()
 
-        log.debug(f"action: {self.name}, deprecated: {self.deprecated}, actual_args: {actual_args}, param_list: {self.param_list}")
+        args_to_print = {k: str(v) for k, v in actual_args.items()}
+        log.debug(f"action: {self.name}, deprecated: {self.deprecated}, actual_args: {args_to_print}, "
+                  f"param_list: {self.param_list}")
 
         # Calling the method here
         ret = await self.__fcn(**actual_args)
@@ -981,7 +985,6 @@ class ActionInteractionList:
             A string containing a formatted summary of the instance.
         """
         if len(self.by_insertion_order) > 0:
-            return ("Action interactions:\n   " +
-                    "\n   ".join([str(r.to_code_str(True)) for r in self.by_insertion_order]))
+            return "; ".join([str(r.to_code_str(True)) for r in self.by_insertion_order])
         else:
-            return "Action interaction: none"
+            return "empty"

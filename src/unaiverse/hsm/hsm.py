@@ -1010,6 +1010,11 @@ class HybridStateMachine:
                 self.limbo_state = self.state
                 self.state = None
                 self.__action = actions_list[_idx]
+
+                # Forcing system interaction if no external interactions were selected
+                if _interaction is None:
+                    _interaction = self.__action.system_interaction
+
                 _interaction.reset_state()  # Resetting
                 self.__cur_feasible_actions_status['selected_idx'] = _idx
                 self.__cur_feasible_actions_status['selected_interaction'] = _interaction
@@ -1021,7 +1026,8 @@ class HybridStateMachine:
 
             # If this action has an associated Interaction, set it as current on the IM
             # (this configures stdin/stdout for the action)
-            # If the Interaction is None, the stdin will be set back to the default streams
+            # If the Interaction is (1) None, or (2) a system interaction with no streams at all, or
+            # (3) a received interaction with no streams, then the stdin/stdout/... will be set back to default streams
             if self.actionable.im.current is None or self.actionable.im.current != interaction:
                 self.actionable.im.set_current(interaction)
 
@@ -1029,6 +1035,7 @@ class HybridStateMachine:
             if len(self.__action.get_list_of_interactions()) > 0:
                 log.statem(str(self.__action.get_list_of_interactions()))
 
+            # Calling action, getting back status.
             # Status can be one of these:
             # 0: action fully done;
             # 1: try again this action;
@@ -1655,7 +1662,7 @@ class HybridStateMachine:
         for i, action in enumerate(actions_list):
             if action.is_ready(consider_interactions=False):
                 _selected_action_idx = i
-                _selected_interaction = action.system_interaction
+                _selected_interaction = None
                 return _selected_action_idx, _selected_interaction
         _selected_action_idx = -1
         _selected_interaction = None
