@@ -750,6 +750,7 @@ class Node:
             self.profile.mark_change_in_connections()
 
             # Clearing all joining options
+            self.clear_world_related_data()
             self.joining_world_info = None
 
             if self.agent.__class__.__name__ == "WAgent":
