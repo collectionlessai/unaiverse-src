@@ -238,6 +238,9 @@ class Clock:
     def __init__(self):
         self.__instance = None
 
+    def set(self, existing_clock):
+        self.__instance = existing_clock
+
     def create(self, *args, **kwargs):
         self.__instance = _Clock(*args, **kwargs)
 
