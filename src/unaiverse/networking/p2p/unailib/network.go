@@ -343,37 +343,37 @@ func autoUpgradeWebRTC(ni *NodeInstance) {
 					continue
 				}
 
-				// // Check if we are ONLY connected via relay
-				// conns := ni.host.Network().ConnsToPeer(remotePeer)
-				// if len(conns) == 0 {
-				// 	continue
-				// }
+				// Check if we are ONLY connected via relay
+				conns := ni.host.Network().ConnsToPeer(remotePeer)
+				if len(conns) == 0 {
+					continue
+				}
 
-				// onlyRelay := true
-				// isDialerOnCircuit := false
-				// for _, c := range conns {
-				// 	if strings.Contains(c.RemoteMultiaddr().String(), "/p2p-circuit") {
-				// 		if c.Stat().Direction == network.DirOutbound {
-				// 			isDialerOnCircuit = true
-				// 		}
-				// 	} else {
-				// 		onlyRelay = false
-				// 		break
-				// 	}
-				// }
+				onlyRelay := true
+				isDialerOnCircuit := false
+				for _, c := range conns {
+					if strings.Contains(c.RemoteMultiaddr().String(), "/p2p-circuit") {
+						if c.Stat().Direction == network.DirOutbound {
+							isDialerOnCircuit = true
+						}
+					} else {
+						onlyRelay = false
+						break
+					}
+				}
 
-				// if !onlyRelay {
-				// 	continue // We already have a direct connection
-				// }
+				if !onlyRelay {
+					continue // We already have a direct connection
+				}
 
-				// // Tie-breaker: only the node that initiated the original relayed connection
-				// // takes responsibility for initiating the WebRTC fallback.
-				// if !isDialerOnCircuit {
-				// 	logger.Debugf("[GO] ⏳ Instance %d: Relayed connection to %s is Inbound. Waiting for them to initiate WebRTC fallback if needed.", ni.instanceIndex, remotePeer)
-				// 	continue
-				// }
+				// Tie-breaker: only the node that initiated the original relayed connection
+				// takes responsibility for initiating the WebRTC fallback.
+				if !isDialerOnCircuit {
+					logger.Debugf("[GO] ⏳ Instance %d: Relayed connection to %s is Inbound. Waiting for them to initiate WebRTC fallback if needed.", ni.instanceIndex, remotePeer)
+					continue
+				}
 
-				// logger.Infof("[GO] ⏳ Instance %d: Peer %s is relayed. Waiting 20s for native DCUtR to succeed before WebRTC fallback...", ni.instanceIndex, remotePeer)
+				logger.Infof("[GO] ⏳ Instance %d: Peer %s is relayed. Waiting 20s for native DCUtR to succeed before WebRTC fallback...", ni.instanceIndex, remotePeer)
 				
 				// Fire the timeout and upgrade asynchronously so we don't block the event loop
 				go func(pid peer.ID) {
@@ -384,20 +384,20 @@ func autoUpgradeWebRTC(ni *NodeInstance) {
 						return
 					}
 
-					// // Check connections again!
-					// connsAfter := ni.host.Network().ConnsToPeer(pid)
-					// stillOnlyRelay := true
-					// for _, c := range connsAfter {
-					// 	if !strings.Contains(c.RemoteMultiaddr().String(), "/p2p-circuit") {
-					// 		stillOnlyRelay = false
-					// 		break
-					// 	}
-					// }
+					// Check connections again!
+					connsAfter := ni.host.Network().ConnsToPeer(pid)
+					stillOnlyRelay := true
+					for _, c := range connsAfter {
+						if !strings.Contains(c.RemoteMultiaddr().String(), "/p2p-circuit") {
+							stillOnlyRelay = false
+							break
+						}
+					}
 
-					// if !stillOnlyRelay || len(connsAfter) == 0 {
-					// 	logger.Debugf("[GO] ✅ Instance %d: Native DCUtR succeeded (or peer disconnected) for %s. No WebRTC fallback needed.", ni.instanceIndex, pid)
-					// 	return
-					// }
+					if !stillOnlyRelay || len(connsAfter) == 0 {
+						logger.Debugf("[GO] ✅ Instance %d: Native DCUtR succeeded (or peer disconnected) for %s. No WebRTC fallback needed.", ni.instanceIndex, pid)
+						return
+					}
 
 					logger.Warnf("[GO] ⚠️ Instance %d: Native direct connection to %s failed after 20s. Initiating WebRTC fallback...", ni.instanceIndex, pid)
 					err := initiateWebRTCConnection(ni, pid)
