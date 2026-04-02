@@ -859,8 +859,8 @@ class NodeConn(ConnectionPools):
         public = p2p == self.p2p_public
 
         for c in connected_peer_infos:
-            inbound = c['direction'] == "incoming"
-            outbound = c['direction'] == "outgoing"
+            inbound = c['direction'] == "inbound"
+            outbound = c['direction'] == "outbound"
             peer_id = c['id']  # Other fields are: c['addrs'], c['connected_at']
 
             if public:

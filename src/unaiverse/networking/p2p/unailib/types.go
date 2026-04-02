@@ -30,6 +30,38 @@ const WebRTCDataChannelLabel = "unaiverse-data"
 // Total budget for the entire signaling handshake (offer → answer → DC open).
 const WebRTCSignalingTimeout = 45 * time.Second
 
+// WebRTC DataChannel chunking constants.
+// Browser SCTP implementations cap individual DataChannel messages at ~64KB.
+// We split large frames into chunks of at most WebRTCMaxChunkPayload bytes
+// and prefix each chunk with a 1-byte flags header.
+//
+// Chunk wire format: [1-byte flags][payload bytes]
+//
+// Flag bits:
+//
+//	Bit 7 (0x80): START – this is the first chunk of a message
+//	Bit 6 (0x40): END   – this is the last  chunk of a message
+//
+// Valid combinations:
+//
+//	0xC0  START+END  – complete message in a single chunk (fast path)
+//	0x80  START      – first chunk of a multi-chunk message
+//	0x00  (none)     – middle continuation chunk
+//	0x40  END        – final chunk of a multi-chunk message
+const (
+	webRTCChunkFlagStart    byte = 0x80
+	webRTCChunkFlagEnd      byte = 0x40
+	webRTCChunkFlagStartEnd byte = 0xC0 // START | END
+
+	// WebRTCMaxChunkSize is the maximum size of a single dc.Send() call
+	// (header byte included). Stays well under the 64 KB browser SCTP limit.
+	WebRTCMaxChunkSize = 60 * 1024
+
+	// webRTCMaxChunkPayload is the maximum payload bytes per chunk
+	// (total chunk size minus the 1-byte flags header).
+	webRTCMaxChunkPayload = WebRTCMaxChunkSize - 1
+)
+
 // --- Create a package-level logger ---
 var logger = golog.Logger("unailib")
 
@@ -209,6 +241,15 @@ type WebRTCConn struct {
 	pc         *pwebrtc.PeerConnection
 	dc         *pwebrtc.DataChannel
 	remotePeer peer.ID
+
+	// sendMu serializes the chunked-send loop so that concurrent callers cannot
+	// interleave their chunks on the wire (which would corrupt reassembly).
+	sendMu sync.Mutex
+
+	// reassemblyBuf accumulates inbound chunks between a START and an END chunk.
+	// Pion delivers OnMessage callbacks sequentially for a single DataChannel,
+	// so no mutex is needed here.
+	reassemblyBuf []byte
 }
 
 // Define the list of default STUN servers to use if none are provided in the config.

@@ -186,15 +186,80 @@ func registerWebRTCDataChannel(ni *NodeInstance, remotePeer peer.ID, dc *pwebrtc
 	logger.Infof("[GO] 🔗 Instance %d: WebRTC DataChannel open with %s (label=%s)",
 		ni.instanceIndex, remotePeer, dc.Label())
 
-	// Deliver incoming DataChannel messages into the shared message queue.
-	dc.OnMessage(func(msg pwebrtc.DataChannelMessage) {
-		ch, payload, err := parseDirectMessageFrame(msg.Data)
+	// deliverFrame parses and stores a complete reassembled DataChannel frame.
+	deliverFrame := func(frame []byte) {
+		ch, payload, err := parseDirectMessageFrame(frame)
 		if err != nil {
 			logger.Warnf("[GO] ⚠️ Instance %d: Bad DataChannel frame from %s: %v",
 				ni.instanceIndex, remotePeer, err)
 			return
 		}
 		storeReceivedMessage(ni, remotePeer, ch, payload)
+	}
+
+	// Deliver incoming DataChannel messages into the shared message queue.
+	// Chunks are reassembled transparently using the 1-byte flags header.
+	// Pion calls OnMessage sequentially for a single DataChannel, so conn.reassemblyBuf
+	// is accessed without a mutex.
+	dc.OnMessage(func(msg pwebrtc.DataChannelMessage) {
+		if len(msg.Data) < 1 {
+			logger.Warnf("[GO] ⚠️ Instance %d: Empty DataChannel message from %s, ignoring",
+				ni.instanceIndex, remotePeer)
+			return
+		}
+
+		flags := msg.Data[0]
+		chunkPayload := msg.Data[1:]
+
+		switch flags {
+		case webRTCChunkFlagStartEnd:
+			// 0xC0: complete message in a single chunk — fast path.
+			conn.reassemblyBuf = nil
+			deliverFrame(chunkPayload)
+
+		case webRTCChunkFlagStart:
+			// 0x80: first chunk of a multi-chunk message.
+			conn.reassemblyBuf = make([]byte, 0, len(chunkPayload)*2)
+			conn.reassemblyBuf = append(conn.reassemblyBuf, chunkPayload...)
+
+		case webRTCChunkFlagEnd:
+			// 0x40: final chunk — append, check size, deliver.
+			if conn.reassemblyBuf == nil {
+				logger.Warnf("[GO] ⚠️ Instance %d: Received END chunk without preceding START from %s, discarding",
+					ni.instanceIndex, remotePeer)
+				return
+			}
+			conn.reassemblyBuf = append(conn.reassemblyBuf, chunkPayload...)
+			if uint32(len(conn.reassemblyBuf)) > MaxMessageSize {
+				logger.Errorf("[GO] ❌ Instance %d: Reassembled message from %s exceeds MaxMessageSize (%d), discarding",
+					ni.instanceIndex, remotePeer, MaxMessageSize)
+				conn.reassemblyBuf = nil
+				return
+			}
+			frame := conn.reassemblyBuf
+			conn.reassemblyBuf = nil
+			deliverFrame(frame)
+
+		default:
+			// flags == 0x00: ambiguous — either a middle continuation chunk or a
+			// legacy unchunked frame sent before chunking was introduced.
+			//
+			// Disambiguate via reassembly state: if we are mid-reassembly the byte
+			// is a continuation chunk; otherwise it is a legacy frame whose first
+			// byte happens to be 0x00 (MSB of a big-endian uint32 length < 16 MB).
+			if conn.reassemblyBuf != nil {
+				conn.reassemblyBuf = append(conn.reassemblyBuf, chunkPayload...)
+				if uint32(len(conn.reassemblyBuf)) > MaxMessageSize {
+					logger.Errorf("[GO] ❌ Instance %d: In-progress reassembly from %s exceeds MaxMessageSize (%d), discarding",
+						ni.instanceIndex, remotePeer, MaxMessageSize)
+					conn.reassemblyBuf = nil
+				}
+			} else {
+				// Legacy unchunked frame — deliver msg.Data as-is (the 0x00 byte is
+				// the MSB of the 4-byte length field, not a header we introduced).
+				deliverFrame(msg.Data)
+			}
+		}
 	})
 
 	// Clean up when the peer connection dies.
@@ -234,12 +299,53 @@ func registerWebRTCDataChannel(ni *NodeInstance, remotePeer peer.ID, dc *pwebrtc
 }
 
 // writeToWebRTCDataChannel sends a framed message over an open DataChannel.
+// Large frames are transparently split into chunks of at most WebRTCMaxChunkSize
+// bytes (including the 1-byte flags header) so that every dc.Send() call stays
+// within the browser SCTP message-size limit (~64 KB).
+// The mutex ensures that concurrent callers cannot interleave their chunks.
 func writeToWebRTCDataChannel(conn *WebRTCConn, channel string, payload []byte) error {
 	frame, err := buildDirectMessageFrame(channel, payload)
 	if err != nil {
 		return err
 	}
-	return conn.dc.Send(frame)
+
+	conn.sendMu.Lock()
+	defer conn.sendMu.Unlock()
+
+	// Fast path: the whole frame fits in a single chunk.
+	if len(frame) <= webRTCMaxChunkPayload {
+		chunk := make([]byte, 1+len(frame))
+		chunk[0] = webRTCChunkFlagStartEnd
+		copy(chunk[1:], frame)
+		return conn.dc.Send(chunk)
+	}
+
+	// Slow path: split the frame across multiple chunks.
+	for offset := 0; offset < len(frame); {
+		end := offset + webRTCMaxChunkPayload
+		if end > len(frame) {
+			end = len(frame)
+		}
+
+		var flags byte
+		if offset == 0 {
+			flags |= webRTCChunkFlagStart
+		}
+		if end == len(frame) {
+			flags |= webRTCChunkFlagEnd
+		}
+		// else middle chunk uses flag 0x00 to indicate "continuation"
+
+		chunk := make([]byte, 1+(end-offset))
+		chunk[0] = flags
+		copy(chunk[1:], frame[offset:end])
+
+		if err := conn.dc.Send(chunk); err != nil {
+			return fmt.Errorf("chunk send failed at offset %d: %w", offset, err)
+		}
+		offset = end
+	}
+	return nil
 }
 
 // setupWebRTCSignalHandler registers the answerer-side stream handler for
