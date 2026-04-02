@@ -28,7 +28,26 @@ const DisconnectionGracePeriod = 10 * time.Second
 const UnaiverseWebRTCSignalProtocol = "/unaiverse/webrtc-signal/1.0.0"
 const WebRTCDataChannelLabel = "unaiverse-data"
 // Total budget for the entire signaling handshake (offer → answer → DC open).
-const WebRTCSignalingTimeout = 45 * time.Second
+const WebRTCSignalingTimeout = 60 * time.Second
+
+// WebRTCDCUtRWaitGoPeer is how long a Go node waits for native libp2p DCUtR/hole-punching
+// before falling back to our custom WebRTC signaling, when the remote is also a Go peer
+// (advertises only /webrtc-direct). Go↔Go DCUtR can succeed, so we give it time.
+const WebRTCDCUtRWaitGoPeer = 20 * time.Second
+
+// WebRTCDCUtRWaitJSPeer is the short wait used when the remote is a JS/browser peer
+// (advertises /webrtc multiaddrs). Go↔JS DCUtR can never succeed (incompatible transports),
+// so we skip straight to our custom signaling after a minimal delay.
+const WebRTCDCUtRWaitJSPeer = 3 * time.Second
+
+// PeerConnectionTimeout is the timeout for a single outbound connection attempt to a peer.
+const PeerConnectionTimeout = 30 * time.Second
+
+// RelayReservationTimeout is the timeout for reserving a slot on a relay node.
+const RelayReservationTimeout = 60 * time.Second
+
+// StreamCreationTimeout is the timeout for opening a new libp2p stream to a peer.
+const StreamCreationTimeout = 20 * time.Second
 
 // WebRTC DataChannel chunking constants.
 // Browser SCTP implementations cap individual DataChannel messages at ~64KB.
