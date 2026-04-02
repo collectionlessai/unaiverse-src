@@ -463,7 +463,7 @@ func CreateNode(
 		}
 		defer reachSub.Close()
 
-		timeoutCtx, timeoutCancel := context.WithTimeout(ni.ctx, 30*time.Second)
+		timeoutCtx, timeoutCancel := context.WithTimeout(ni.ctx, PeerConnectionTimeout)
 		defer timeoutCancel()
 		logger.Debugf("[GO] ⏳ Instance %d: Waiting for reachability update.", instanceIndex)
 		
@@ -613,8 +613,8 @@ func ConnectTo(
 
 	// --- 1. ESTABLISH CONNECTION ---
 	// Use a context with a timeout for the connection attempt to prevent blocking indefinitely.
-	connCtx, cancel := context.WithTimeout(ni.ctx, 30*time.Second) // 30-second timeout.
-	defer cancel()                                                      // Ensure context is cancelled eventually.
+	connCtx, cancel := context.WithTimeout(ni.ctx, PeerConnectionTimeout)
+	defer cancel()
 
 	// Add the peer's address(es) to the local peerstore for this instance. This helps libp2p find the peer.
 	// ConnectedAddrTTL suggests the address is likely valid for a short time after connection.
@@ -721,7 +721,7 @@ func ReserveOnRelay(
 
 	// --- Attempt Reservation ---
 	// Use a separate context with potentially longer timeout for the reservation itself.
-	resCtx, resCancel := context.WithTimeout(ni.ctx, 60*time.Second) // 60-second timeout for reservation.
+	resCtx, resCancel := context.WithTimeout(ni.ctx, RelayReservationTimeout)
 	defer resCancel()
 	// Call the circuitv2 client function to request a reservation.
 	// This performs the RPC communication with the relay.
@@ -1178,7 +1178,7 @@ func SendMessageToPeer(
 		} else {
 			// Stream does not exist, need to create a new one
 			logger.Debugf("[GO]   ↳ Instance %d: Creating NEW stream to %s...\n", ni.instanceIndex, pid)
-			streamCtx, cancel := context.WithTimeout(ni.ctx, 20*time.Second)
+			streamCtx, cancel := context.WithTimeout(ni.ctx, StreamCreationTimeout)
 			defer cancel()
 
 			newStream, err := ni.host.NewStream(

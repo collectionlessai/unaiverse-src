@@ -373,13 +373,31 @@ func autoUpgradeWebRTC(ni *NodeInstance) {
 					continue
 				}
 
-				logger.Infof("[GO] ⏳ Instance %d: Peer %s is relayed. Waiting 20s for native DCUtR to succeed before WebRTC fallback...", ni.instanceIndex, remotePeer)
-				
+				// Detect if the remote peer is a JS/browser node by checking whether
+				// any of its advertised listen addresses contain /webrtc (but not /webrtc-direct).
+				// JS peers have native /webrtc addresses; Go peers only have /webrtc-direct.
+				remoteHasNativeWebRTC := false
+				for _, addr := range idEvt.ListenAddrs {
+					addrStr := addr.String()
+					if strings.Contains(addrStr, "/webrtc") && !strings.Contains(addrStr, "/webrtc-direct") {
+						remoteHasNativeWebRTC = true
+						break
+					}
+				}
+
+				// Go↔Go: DCUtR can work, wait the full 20s.
+				// Go↔JS: DCUtR can never work, skip to WebRTC after 3s.
+				dcutrWait := WebRTCDCUtRWaitGoPeer
+				if remoteHasNativeWebRTC {
+					dcutrWait = WebRTCDCUtRWaitJSPeer
+				}
+				logger.Infof("[GO] ⏳ Instance %d: Peer %s is relayed. Waiting %v for native DCUtR (remote is JS peer: %v)...", ni.instanceIndex, remotePeer, dcutrWait, remoteHasNativeWebRTC)
+
 				// Fire the timeout and upgrade asynchronously so we don't block the event loop
-				go func(pid peer.ID) {
+				go func(pid peer.ID, wait time.Duration) {
 					// Wait for native DCUtR holepunching to do its thing
 					select {
-					case <-time.After(20 * time.Second):
+					case <-time.After(wait):
 					case <-ni.ctx.Done():
 						return
 					}
@@ -404,7 +422,7 @@ func autoUpgradeWebRTC(ni *NodeInstance) {
 					if err != nil {
 						logger.Errorf("[GO] ❌ Instance %d: WebRTC fallback failed for %s: %v", ni.instanceIndex, pid, err)
 					}
-				}(remotePeer)
+				}(remotePeer, dcutrWait)
 			}
 		}
 	}()

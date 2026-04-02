@@ -28,7 +28,58 @@ const DisconnectionGracePeriod = 10 * time.Second
 const UnaiverseWebRTCSignalProtocol = "/unaiverse/webrtc-signal/1.0.0"
 const WebRTCDataChannelLabel = "unaiverse-data"
 // Total budget for the entire signaling handshake (offer → answer → DC open).
-const WebRTCSignalingTimeout = 45 * time.Second
+const WebRTCSignalingTimeout = 60 * time.Second
+
+// WebRTCDCUtRWaitGoPeer is how long a Go node waits for native libp2p DCUtR/hole-punching
+// before falling back to our custom WebRTC signaling, when the remote is also a Go peer
+// (advertises only /webrtc-direct). Go↔Go DCUtR can succeed, so we give it time.
+const WebRTCDCUtRWaitGoPeer = 20 * time.Second
+
+// WebRTCDCUtRWaitJSPeer is the short wait used when the remote is a JS/browser peer
+// (advertises /webrtc multiaddrs). Go↔JS DCUtR can never succeed (incompatible transports),
+// so we skip straight to our custom signaling after a minimal delay.
+const WebRTCDCUtRWaitJSPeer = 3 * time.Second
+
+// PeerConnectionTimeout is the timeout for a single outbound connection attempt to a peer.
+const PeerConnectionTimeout = 30 * time.Second
+
+// RelayReservationTimeout is the timeout for reserving a slot on a relay node.
+const RelayReservationTimeout = 60 * time.Second
+
+// StreamCreationTimeout is the timeout for opening a new libp2p stream to a peer.
+const StreamCreationTimeout = 20 * time.Second
+
+// WebRTC DataChannel chunking constants.
+// Browser SCTP implementations cap individual DataChannel messages at ~64KB.
+// We split large frames into chunks of at most WebRTCMaxChunkPayload bytes
+// and prefix each chunk with a 1-byte flags header.
+//
+// Chunk wire format: [1-byte flags][payload bytes]
+//
+// Flag bits:
+//
+//	Bit 7 (0x80): START – this is the first chunk of a message
+//	Bit 6 (0x40): END   – this is the last  chunk of a message
+//
+// Valid combinations:
+//
+//	0xC0  START+END  – complete message in a single chunk (fast path)
+//	0x80  START      – first chunk of a multi-chunk message
+//	0x00  (none)     – middle continuation chunk
+//	0x40  END        – final chunk of a multi-chunk message
+const (
+	webRTCChunkFlagStart    byte = 0x80
+	webRTCChunkFlagEnd      byte = 0x40
+	webRTCChunkFlagStartEnd byte = 0xC0 // START | END
+
+	// WebRTCMaxChunkSize is the maximum size of a single dc.Send() call
+	// (header byte included). Stays well under the 64 KB browser SCTP limit.
+	WebRTCMaxChunkSize = 60 * 1024
+
+	// webRTCMaxChunkPayload is the maximum payload bytes per chunk
+	// (total chunk size minus the 1-byte flags header).
+	webRTCMaxChunkPayload = WebRTCMaxChunkSize - 1
+)
 
 // --- Create a package-level logger ---
 var logger = golog.Logger("unailib")
@@ -209,6 +260,15 @@ type WebRTCConn struct {
 	pc         *pwebrtc.PeerConnection
 	dc         *pwebrtc.DataChannel
 	remotePeer peer.ID
+
+	// sendMu serializes the chunked-send loop so that concurrent callers cannot
+	// interleave their chunks on the wire (which would corrupt reassembly).
+	sendMu sync.Mutex
+
+	// reassemblyBuf accumulates inbound chunks between a START and an END chunk.
+	// Pion delivers OnMessage callbacks sequentially for a single DataChannel,
+	// so no mutex is needed here.
+	reassemblyBuf []byte
 }
 
 // Define the list of default STUN servers to use if none are provided in the config.

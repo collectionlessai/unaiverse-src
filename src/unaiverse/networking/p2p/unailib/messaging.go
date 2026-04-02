@@ -186,9 +186,9 @@ func handleStream(ni *NodeInstance, s network.Stream) {
 	existingPeer, peerExists := ni.friendlyPeers[senderPeerID]
 
 	// 1. Gather fresh info (Addresses & Direction)
-	direction := "incoming"
+	direction := "inbound"
 	if s.Stat().Direction == network.DirOutbound {
-		direction = "outgoing"
+		direction = "outbound"
 	}
 	knownAddrs := ni.host.Peerstore().Addrs(senderPeerID)
 	if len(knownAddrs) == 0 {
