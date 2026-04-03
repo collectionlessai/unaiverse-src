@@ -365,7 +365,7 @@ class Agent(AgentBasics):
         """
 
         # Getting the UUID of the interaction
-        uuid = interaction.uuid
+        uuid = interaction.uuid if interaction is not None else None
 
         # Getting input data from the input stream
         input_data = self.stdin.get(uuid=uuid, requested_by="process")  # Use kwargs
@@ -439,6 +439,20 @@ class Agent(AgentBasics):
             return True
         else:
             return False
+
+    @action
+    async def show(self, interaction: Interaction | None = None):
+        """A generic action that exploit the information in the interaction object for printing purposes, commonly used
+        (by overriding it) to handle interaction-completion callbacks (async).
+
+        Args:
+            interaction: The interaction object that triggered this action.
+
+        Returns:
+            True all the times.
+        """
+        log.user(f"The following interaction was completed: {interaction}")
+        return True
 
     @action
     async def set_engaged_partner(self, agent: str | list[str] | set[str] | None, clear_found: bool = True) -> bool:

@@ -602,8 +602,8 @@ class Stream:
         if self.has_data(current_uuid):
             data = self.data_by_uuid[current_uuid]
             data.uuid = new_uuid
-            self.data_by_uuid[new_uuid] = data
             del self.data_by_uuid[current_uuid]  # Do not call remove_data here, since it will break buffered streams
+            self.data_by_uuid[new_uuid] = data
 
     def remove_interaction(self, interaction: object) -> None:
         """Remove an interaction from this stream.

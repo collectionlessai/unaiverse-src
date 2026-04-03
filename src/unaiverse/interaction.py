@@ -695,19 +695,26 @@ class Interaction:
             'data_tags': self.data_tags if len(self.data_tags) > 0 else None,
         }
 
-    def to_code_str(self, include_uuid: bool = False) -> str:
+    def to_code_str(self, include_uuid: bool = False, include_received_tags: bool = False) -> str:
         """Return a compact single-line representation for logs and debugging.
 
         Args:
             include_uuid: Prepend the interaction UUID to the output when True.
+            include_received_tags: Append the received data tags when True.
 
         Returns:
             A compact string describing the interaction.
         """
         s = ""
+        t = self.target
+
         if include_uuid:
             s = f"{self.uuid} => "
-        return s + (f"artss:{self.action_name}|{self.requester}|{self.target}|"
+        if include_received_tags:
+            t = ",".join(f"{tar}_{max(num for sublist in self.target_data_tags[i].values() for num in sublist)}"
+                         for i, tar in enumerate(self.target))
+
+        return s + (f"artss:{self.action_name}|{self.requester}|{t}|"
                     f"{self.stream_proxy}|{self.status.value[0:3]}" +
                     (("_" + self.completion_reason.value[0:3]) if self.completion_reason is not None else ""))
 
