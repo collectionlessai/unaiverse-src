@@ -706,13 +706,13 @@ class Interaction:
             A compact string describing the interaction.
         """
         s = ""
-        t = self.target
+        t: list[str] = self.target
 
         if include_uuid:
             s = f"{self.uuid} => "
         if include_received_tags:
-            t = ",".join(f"{tar}_{max(num for sublist in self.target_data_tags[i].values() for num in sublist)}"
-                         for i, tar in enumerate(self.target))
+            t: list[str] = [f"{tar}_{max(num for sublist in self.target_data_tags[i].values() for num in sublist)}"
+                            for i, tar in enumerate(self.target)]
 
         return s + (f"artss:{self.action_name}|{self.requester}|{t}|"
                     f"{self.stream_proxy}|{self.status.value[0:3]}" +
@@ -1352,9 +1352,10 @@ class InteractionManager:
             recipients = interaction.target  # This is always a list, even when with 1 element only
         return [x for x in recipients if x is not None]
 
-    def complete(self, interaction: 'Interaction', reason: 'CompletionReason',
-                 dest_state: str | None = None, target: str | None = None) -> None:
-        """Mark an interaction as completed and move it to the recently-completed set, removing it from its action.
+    async def complete(self, interaction: 'Interaction', reason: 'CompletionReason',
+                       dest_state: str | None = None, target: str | None = None) -> None:
+        """Mark an interaction as completed and move it to the recently-completed set, removing it from its action
+        (async).
 
         Args:
             interaction: The interaction to complete.
@@ -1382,16 +1383,16 @@ class InteractionManager:
                 # Running callback method, if any
                 if interaction.callback is not None:
                     callback_method = getattr(self.agent, interaction.callback)
-                    callback_method(interaction=interaction)  # "Calling callback!"
+                    await callback_method(interaction=interaction)  # "Calling callback!"
 
-    def complete_current(self, dest_state: str, reason: 'CompletionReason') -> None:
-        """Mark the current interaction as completed.
+    async def complete_current(self, dest_state: str, reason: 'CompletionReason') -> None:
+        """Mark the current interaction as completed (async).
 
         Args:
             dest_state: The destination state reached by completing this action.
             reason: The reason for completion.
         """
-        self.complete(self.current, dest_state=dest_state, reason=reason)
+        await self.complete(self.current, dest_state=dest_state, reason=reason)
         self.current = None
 
     def drain_completed(self) -> list[Interaction]:
@@ -1437,8 +1438,8 @@ class InteractionManager:
 
         return drained
 
-    def complete_expired(self) -> None:
-        """Remove expired interactions and return them for notification.
+    async def complete_expired(self) -> None:
+        """Remove expired interactions and return them for notification (async).
 
         Checks all received and sent interactions against the timeout.
         Expired interactions are marked as COMPLETED with TIMEOUT reason
@@ -1448,14 +1449,14 @@ class InteractionManager:
             if interaction.status == InteractionStatus.COMPLETED:
                 continue
             if interaction.is_expired(Custom.DEFAULT_INTER_TIMEOUT):
-                self.complete(interaction, reason=CompletionReason.TIMEOUT)
+                await self.complete(interaction, reason=CompletionReason.TIMEOUT)
             else:
                 if self.is_received(interaction) and interaction.requester not in self.agent.all_agents:
-                    self.complete(interaction, reason=CompletionReason.DISCONNECTED)
+                    await self.complete(interaction, reason=CompletionReason.DISCONNECTED)
                 if self.is_sent(interaction):
                     for target in interaction.target:
                         if target not in self.agent.all_agents:
-                            self.complete(interaction, reason=CompletionReason.DISCONNECTED, target=target)
+                            await self.complete(interaction, reason=CompletionReason.DISCONNECTED, target=target)
 
     def clear_expired_stream_data(self) -> None:
         """Purge stale buffered data from streams whose associated interaction is done or gone."""
@@ -1476,15 +1477,15 @@ class InteractionManager:
                     # This will also clear the associated (completed) interaction, if still there
                     stream.clear_expired_data(Custom.DEFAULT_INTER_TIMEOUT)
 
-    def update_sent_status(self, status_dict: dict) -> None:
-        """Update a previously sent interaction's status from a received status message.
+    async def update_sent_status(self, status_dict: dict) -> None:
+        """Update a previously sent interaction's status from a received status message (async).
 
         Args:
             status_dict: Dict from Interaction.to_status_dict().
         """
         sender = status_dict.get('status_generated_by')
-        uuid = status_dict.get('uuid')
-        if uuid and uuid in self.sent:
+        uuid = status_dict.get('uuid')  # UUID can be None (meaning generic UUID, still valid!), recall this
+        if uuid in self.sent:
 
             # Collecting data
             interaction = self.sent[uuid]
@@ -1503,8 +1504,8 @@ class InteractionManager:
 
             #  Mark the completion from the sender
             if interaction_status == InteractionStatus.COMPLETED:
-                self.complete(interaction, dest_state=interaction_destination_state, reason=completion_reason,
-                              target=sender)
+                await self.complete(interaction, dest_state=interaction_destination_state, reason=completion_reason,
+                                    target=sender)
 
     def is_received(self, interaction: Interaction) -> bool:
         """Return True if the interaction was received from another agent (active or recently completed).
@@ -1590,8 +1591,8 @@ class InteractionManager:
             interaction.add_lazy_stream(user_hash, stream_obj,
                                         is_owned=user_hash in self.agent.owned_streams_by_user_hash)
 
-    def remove_interactions_of_agent(self, agent: str) -> None:
-        """Complete and deregister all interactions that involve the given agent as requester or target.
+    async def remove_interactions_of_agent(self, agent: str) -> None:
+        """Complete and deregister all interactions that involve the given agent as requester or target (async).
 
         Args:
             agent: Peer ID of the agent being removed.
@@ -1600,9 +1601,9 @@ class InteractionManager:
         for interaction_dict in interaction_dicts:
             for uuid, inter in list(interaction_dict.items()):  # Do not remove list(...)
                 if inter.requester == agent:
-                    self.complete(inter, reason=CompletionReason.DISCONNECTED)
+                    await self.complete(inter, reason=CompletionReason.DISCONNECTED)
                 if agent in inter.target:
-                    self.complete(inter, reason=CompletionReason.DISCONNECTED, target=agent)
+                    await self.complete(inter, reason=CompletionReason.DISCONNECTED, target=agent)
 
     def __check_callback_method(self, interaction: Interaction) -> None:
         if interaction.callback is not None:

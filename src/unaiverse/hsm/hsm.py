@@ -1070,7 +1070,7 @@ class HybridStateMachine:
                 # Complete the associated Interaction (if any) via Interaction Manager (IM)
                 if interaction is not None:
                     # The IM on the actionable (agent) will handle the completion, also saving the destination state
-                    self.actionable.im.complete_current(self.state, CompletionReason.OK)
+                    await self.actionable.im.complete_current(self.state, CompletionReason.OK)
 
                 # Update status
                 self.__state_changed = self.state != self.prev_state  # Checking if we are on a self-loop or not

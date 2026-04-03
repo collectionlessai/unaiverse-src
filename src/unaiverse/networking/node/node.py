@@ -959,11 +959,11 @@ class Node:
                                 not any(env in os.environ for env in ['DEBUGPY_RUNNING', 'PYCHARM_HOSTED']))
 
                 def keyboard_listener(k_queue):
-                    keyboard_msg = None
                     prev_keyboard_msg = None
                     with (patch_stdout(raw=True)):  # type: ignore
                         while True:
                             webcam_shot = None
+                            keyboard_msg: str | None = None
                             if not is_debug():
                                 keyboard_msg = prompt("\n👉 ")  # Get from keyboards
                             else:
@@ -1843,7 +1843,7 @@ class Node:
 
                 if self.node_type is Node.AGENT:
                     if hasattr(self.agent, 'im'):
-                        self.agent.im.update_sent_status(msg.content)
+                        await self.agent.im.update_sent_status(msg.content)
 
             # (H) got role suggestion
             elif msg.content_type == Msg.ROLE_SUGGESTION:

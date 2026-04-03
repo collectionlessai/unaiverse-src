@@ -66,7 +66,20 @@
                 "goto": "self_generated"
             }
         ],
-        "generated": [],
+        "generated": [
+            {
+                "on": {
+                    "action": "nop",
+                    "action_kwargs": {},
+                    "msg": null,
+                    "ready": true,
+                    "max_duration": 0.0,
+                    "retry_timeout": 0.0,
+                    "time_to_wait_before_running": 0.0
+                },
+                "goto": "ready"
+            }
+        ],
         "self_generated": [
             {
                 "on": {
@@ -77,7 +90,8 @@
                         "streams": [
                             "<agent>:processor"
                         ],
-                        "uuid": null
+                        "uuid": null,
+                        "callback": "show"
                     },
                     "msg": null,
                     "ready": true,
@@ -86,12 +100,21 @@
                     "time_to_wait_before_running": 0.0
                 },
                 "goto": "asked"
+            },
+            {
+                "on": {
+                    "action": "nop",
+                    "action_kwargs": {},
+                    "msg": null,
+                    "ready": true,
+                    "max_duration": 0.0,
+                    "retry_timeout": 0.0,
+                    "time_to_wait_before_running": 0.0
+                },
+                "goto": "ready"
             }
         ],
-        "asked": []
-    },
-    "teleports": {
-        "all": [
+        "asked": [
             {
                 "on": {
                     "action": "nop",
@@ -105,5 +128,6 @@
                 "goto": "ready"
             }
         ]
-    }
+    },
+    "teleports": {}
 }

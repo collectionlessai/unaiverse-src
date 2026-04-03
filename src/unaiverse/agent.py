@@ -300,6 +300,7 @@ class Agent(AgentBasics):
                    max_time: float = -1.,
                    from_state: str | None = None,
                    to_state: str | None = None,
+                   callback: str | None = None,
                    uuid: str | None = "random",
                    wait_completion: bool = False,
                    interaction: Interaction | None = None) -> bool:
@@ -322,6 +323,7 @@ class Agent(AgentBasics):
             max_time: Maximum time for the interaction. Ignored when a pre-built Interaction is provided.
             from_state: Optional source state. Ignored when a pre-built Interaction provided.
             to_state: Optional destination state. Ignored when a pre-built Interaction provided.
+            callback: Callback action (will be called when the interaction completes).
             uuid: Optional UUID of the interaction. Ignored when a pre-built Interaction is provided.
             wait_completion: If True, this action returns True if and only if we get a feed of interaction completion
                 from all the involved agents (Default: False).
@@ -341,7 +343,7 @@ class Agent(AgentBasics):
         if first_run:
             target = self.__involved_agents(target)
             sent_interaction = await self._send(None, action_name, target, action_kwargs, streams,
-                                                data_samples, num_steps, max_time, from_state, to_state, uuid)
+                                                data_samples, num_steps, max_time, from_state, to_state, callback, uuid)
             if wait_completion:
                 system_interaction.action_ref.set_default_timeout()  # This will make the action pedantic
                 system_interaction.set_mark(sent_interaction)  # First run, Saving the interaction that was sent
@@ -451,7 +453,8 @@ class Agent(AgentBasics):
         Returns:
             True all the times.
         """
-        log.user(f"The following interaction was completed: {interaction}")
+        log.debug(f"The following interaction was completed: "
+                  f"{interaction.to_code_str(True, True)}")
         return True
 
     @action

@@ -781,7 +781,7 @@ class AgentBasics:
                 del self.last_buffered_peer_id_to_info[peer_id]  # Only if present
 
             # Clearing pending interactions
-            self.im.remove_interactions_of_agent(peer_id)
+            await self.im.remove_interactions_of_agent(peer_id)
 
             log.misc(f"Successfully removed agent with peer ID {peer_id}")
 
@@ -2159,7 +2159,7 @@ class AgentBasics:
         Returns:
             A multi-line string representation of the known streams.
         """
-        return "Streams:\n" + "\n".join([(("   *" if user_hash in self.owned_streams_by_user_hash else "   ") +
+        return "Streams:\n" + "\n".join([(("   @" if user_hash in self.owned_streams_by_user_hash else "   ") +
                                           DataProps.peer_id_from_user_hash(user_hash) + " => " +
                                           str(stream).replace("\n", "\n   "))
                                          for user_hash, stream in self.known_streams_by_user_hash.items()])
@@ -2295,6 +2295,7 @@ class AgentBasics:
                     max_time: float = -1.,
                     from_state: str | None = None,
                     to_state: str | None = None,
+                    callback: str | None = None,
                     uuid: str | None = "random") -> 'Interaction | None':
         """Send an interaction request to one or more target agents (async).
 
@@ -2316,6 +2317,7 @@ class AgentBasics:
             max_time: Maximum time for the interaction. Ignored when a pre-built Interaction is provided.
             from_state: Optional source state. Ignored when a pre-built Interaction provided.
             to_state: Optional destination state. Ignored when a pre-built Interaction provided.
+            callback: Callback action.
             uuid: Optional UUID of the interaction. Ignored when a pre-built Interaction is provided.
 
         Returns:
@@ -2328,7 +2330,7 @@ class AgentBasics:
                                       num_steps=num_steps,
                                       requester=self.get_peer_id(), target=target,
                                       from_state=from_state, to_state=to_state,
-                                      timeout=max_time, uuid=uuid)
+                                      timeout=max_time, callback=callback, uuid=uuid)
         else:
             # Ensure requester is set
             if interaction.requester is None:
