@@ -15,6 +15,8 @@
 import math
 import base64
 import binascii
+import time
+
 from unaiverse.utils.logger import log
 from unaiverse.networking.p2p.messages import Msg
 from unaiverse.networking.p2p.p2p import P2P, P2PError
@@ -113,6 +115,10 @@ class ConnectionPools:
             self.p2p_name_and_pool_name_to_pool_triple[p2p_name][pool_name] = (
                 pool_contents_max_con_and_p2p)
             self.p2p_to_pool_names[p2p].append(pool_name)
+
+        # Time markers
+        self.__last_sent_time = 0.
+        self.__last_recv_time = 0.
 
     def __str__(self) -> str:
         """Returns a human-readable string representation of the connection pools' status.
@@ -449,6 +455,10 @@ class ConnectionPools:
         byte_messages = p2p.pop_messages()  # Pop all messages
         # Process the list of message dictionaries
         processed_messages: list[Msg] = []
+
+        if len(byte_messages) > 0:
+            self.__last_recv_time = time.time()
+
         for i, msg_dict in enumerate(byte_messages):
             msg_dict: dict
             try:
@@ -514,6 +524,10 @@ class ConnectionPools:
                 continue  # Skip problematic message
 
         return processed_messages
+
+    def passed_time_since_last_communication(self):
+        passed = time.time() - max(self.__last_recv_time, self.__last_recv_time)
+        return 0. if passed < 0. else passed
 
     def get_added_after_updating(self, pool_name: str | None = None) -> set | dict:
         """Retrieves the peers that were added in the last update cycle.
@@ -614,6 +628,9 @@ class ConnectionPools:
         Returns:
             True if the message is sent successfully, otherwise False.
         """
+        if content_type not in [Msg.STATS_UPDATE, Msg.STATS_REQUEST, Msg.STATS_RESPONSE]:
+            self.__last_sent_time = time.time()
+
         # Getting the right p2p object
         if p2p is None:
             p2p = self.peer_id_to_p2p[peer_id] if peer_id in self.peer_id_to_p2p else None

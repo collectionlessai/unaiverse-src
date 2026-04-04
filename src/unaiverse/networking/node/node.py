@@ -1013,6 +1013,17 @@ class Node:
             while not must_quit:
                 log.set_sub("gen")
 
+                # Tuning clock speed
+                if (self.conn.passed_time_since_last_communication() >= Custom.SLOW_DOWN_CLOCK_AFTER and
+                        self.hosted.im.count_interactions() == 0):
+                    if not clock.is_slowed_down():
+                        log.misc("Reducing clock speed (idle)")
+                        clock.run_slower()
+                else:
+                    if clock.is_slowed_down():
+                        log.misc("Restoring original clock speed")
+                        clock.run_natural_speed()
+
                 # Sending alive message every "K" seconds
                 if clock.get_time() - self.last_alive_time >= Custom.SEND_ALIVE_EVERY:
                     was_alive = self.send_alive()

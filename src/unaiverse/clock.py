@@ -18,6 +18,7 @@ import bisect
 import socket
 import requests
 from ntplib import NTPException
+from unaiverse.custom import Custom
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 
@@ -39,6 +40,7 @@ class _Clock:
             current_time (float): Default -1. (meaning "not used"); it is a hard-way to force the time from the outside.
         """
         self.min_delta = min_delta  # Min-time passed between consecutive cycles (seconds) - if <=0, it is real-time
+        self.__original_min_delta = min_delta
         self.cycle = -1  # Internal index, not shared outside (the value -1 is only used at creation/reset time)
         self.__servers = [
             'pool.ntp.org',
@@ -57,6 +59,15 @@ class _Clock:
         self.__timestamps = []  # List to store timestamps for cycles
         self.__time2cycle_cache = 0  # Cached cycle value for optimization
         self.__last_monotonic_ms = -1
+
+    def run_slower(self):
+        self.min_delta = max(self.min_delta, Custom.SLOW_CLOCK_DELTA)  # slowed: 2-seconds clock
+
+    def run_natural_speed(self):
+        self.min_delta = self.__original_min_delta
+
+    def is_slowed_down(self):
+        return self.min_delta != self.__original_min_delta
 
     def __get_time_from_server(self) -> float:
         """Get the current time from an NTP server.
@@ -113,7 +124,7 @@ class _Clock:
 
         Args:
             timestamp (float): The timestamp to convert.
-            delta (float | None): The optional delta value for converting time to cycles.
+            delta (float | None): The optional constant delta value for converting time to cycles.
 
         Returns:
             int: The cycle index corresponding to the given timestamp.
@@ -130,7 +141,7 @@ class _Clock:
 
         Args:
             cycle (int): The cycle index to convert.
-            delta (float | None): The optional delta value for converting cycles to time.
+            delta (float | None): The optional constant delta value for converting cycles to time.
 
         Returns:
             float: The timestamp corresponding to the given cycle index.
