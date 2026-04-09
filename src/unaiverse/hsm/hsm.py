@@ -979,6 +979,10 @@ class HybridStateMachine:
                     try:
                         _idx_f, _interactions_f = self.policy_filter(_idx, _interaction,
                                                                      actions_list, self.policy_filter_opts)
+
+                        # Keep this part of code: needed to stabilize potential object duplicates (JS)
+                        if _interactions_f != _interaction and _interactions_f is not None:
+                            _interactions_f = self.actionable.im.get_interaction(uuid=_interactions_f.uuid)
                     except Exception as e:
                         log.statem.error(f"Skipping policy filter due to exception: {e}",
                                          state=self.get_state_name())

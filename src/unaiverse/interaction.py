@@ -711,8 +711,13 @@ class Interaction:
         if include_uuid:
             s = f"{self.uuid} => "
         if include_received_tags:
-            t: list[str] = [f"{tar}_{max(num for sublist in self.target_data_tags[i].values() for num in sublist)}"
-                            for i, tar in enumerate(self.target)]
+            t: list[str] = []
+            for i, tar in enumerate(self.target):
+                all_tags = [str(num) for sublist in self.target_data_tags[i].values() for num in sublist]
+                if all_tags:
+                    t.append(f"{tar}_(" + ",".join(all_tags) + ")")
+                else:
+                    t.append(f"{tar}")
 
         return s + (f"artss:{self.action_name}|{self.requester}|{t}|"
                     f"{self.stream_proxy}|{self.status.value[0:3]}" +
