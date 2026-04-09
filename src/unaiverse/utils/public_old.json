@@ -43,7 +43,7 @@
         "ready": [
             {
                 "on": {
-                    "action": "process",
+                    "action": "do_gen",
                     "action_kwargs": {},
                     "msg": null,
                     "ready": false,
@@ -55,8 +55,13 @@
             },
             {
                 "on": {
-                    "action": "process",
-                    "action_kwargs": {},
+                    "action": "do_gen",
+                    "action_kwargs": {
+                        "u_hashes": [
+                            "<agent>:processor_in"
+                        ],
+                        "samples": 1
+                    },
                     "msg": null,
                     "ready": true,
                     "max_duration": 0.0,
@@ -66,32 +71,18 @@
                 "goto": "self_generated"
             }
         ],
-        "generated": [
-            {
-                "on": {
-                    "action": "nop",
-                    "action_kwargs": {},
-                    "msg": null,
-                    "ready": true,
-                    "max_duration": 0.0,
-                    "retry_timeout": 0.0,
-                    "time_to_wait_before_running": 0.0
-                },
-                "goto": "ready"
-            }
-        ],
+        "generated": [],
         "self_generated": [
             {
                 "on": {
-                    "action": "send",
+                    "action": "ask_gen",
                     "action_kwargs": {
-                        "action_name": "process",
-                        "target": "<partner>",
-                        "streams": [
+                        "agent": "<partner>",
+                        "u_hashes": [
                             "<agent>:processor"
                         ],
-                        "uuid": null,
-                        "callback": "show"
+                        "samples": 1,
+                        "ignore_uuid": true
                     },
                     "msg": null,
                     "ready": true,
@@ -100,21 +91,12 @@
                     "time_to_wait_before_running": 0.0
                 },
                 "goto": "asked"
-            },
-            {
-                "on": {
-                    "action": "nop",
-                    "action_kwargs": {},
-                    "msg": null,
-                    "ready": true,
-                    "max_duration": 0.0,
-                    "retry_timeout": 0.0,
-                    "time_to_wait_before_running": 0.0
-                },
-                "goto": "ready"
             }
         ],
-        "asked": [
+        "asked": []
+    },
+    "teleports": {
+        "all": [
             {
                 "on": {
                     "action": "nop",
@@ -128,6 +110,5 @@
                 "goto": "ready"
             }
         ]
-    },
-    "teleports": {}
+    }
 }
