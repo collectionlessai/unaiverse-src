@@ -905,8 +905,11 @@ class Stats:
         """
         return self._stats
 
-    def get_payload_for_world(self) -> list[dict[str, Any]]:
+    def get_payload_for_world(self, clear_buffer: bool = True) -> list[dict[str, Any]]:
         """(Agent-only) Gathers, returns, and clears all pending stats to be sent to the world.
+
+        Args:
+            clear_buffer: Whether to clear the stats buffer after the get operation (default True).
 
         Returns:
             List of stat update dicts, each with ``'peer_id'``, ``'stat_name'``,
@@ -917,7 +920,8 @@ class Stats:
 
         # self._update_agent_static()  # Ensure static stats are fresh in the batch
         payload = self._update_batch
-        self._update_batch = []  # Clear after getting
+        if clear_buffer:
+            self._update_batch = []  # Clear after getting
         return payload
 
     # --- WORLD API ---

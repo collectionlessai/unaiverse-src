@@ -51,7 +51,7 @@ classifiers = [
 ]
 
 [tool.setuptools.package-data]
-"unaiverse" = ["utils/lone_wolf.json"]
+"unaiverse" = ["utils/public.json"]
 
 [project.urls]
 A-Homepage = "https://unaiverse.io"
