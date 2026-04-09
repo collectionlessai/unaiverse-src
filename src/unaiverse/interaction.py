@@ -1110,6 +1110,7 @@ class InteractionManager:
         # redirection, i.e., 'stdin', 'stdtar', 'stdext', None (meaning 'no suggestions').
         expanded_streams = {'stdin': [], 'stdtar': [], 'stdext': [], None: []}
         expanded_owned_streams = {'stdin': [], 'stdtar': [], 'stdext': [], None: []}
+
         for stream_dict in interaction.streams:
             stream_hash = stream_dict['stream_hash']
 
@@ -1154,7 +1155,7 @@ class InteractionManager:
                 stream_dict['group'] = DataProps.name_or_group_from_net_hash(stream_dict['net_hash'])
                 for stream_obj in streams.values():
                     _stream_dict = copy.deepcopy(stream_dict)
-                    _stream_dict['name'] = stream_obj.props.name
+                    _stream_dict['name'] = stream_obj.props.get_name()
                     _stream_dict['user_hash'] = DataProps.user_hash_from_net_hash(_stream_dict['net_hash'],
                                                                                   _stream_dict['name'])
                     _stream_dict['obj'] = stream_obj
@@ -1643,7 +1644,7 @@ class InteractionManager:
             if net_hash in self.agent.known_streams:
                 streams = self.agent.known_streams[net_hash]
                 for stream_obj in streams.values():
-                    name = stream_obj.props.name
+                    name = stream_obj.props.get_name()
                     user_hash = DataProps.user_hash_from_net_hash(net_hash, name)
                     user_hashes.append(user_hash)
         return user_hashes

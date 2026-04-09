@@ -411,6 +411,24 @@ class AgentBasics:
         """
         return _uuid.uuid4().hex[0:8]
 
+    def inject_received_interaction(self, sender: str, interaction_dict: dict):
+
+        # Creating the interaction object
+        interaction = Interaction.from_dict(interaction_dict)
+
+        # Also register with the HSM for action selection (backward compat bridge)
+        behav = self.behav_lone_wolf \
+            if sender in self.public_agents else self.behav
+        if not behav.request_action(interaction):
+            log.error(f"Cannot enqueue the interaction, incompatible action. "
+                      f"Interaction is: {interaction}")
+        else:
+            # Register with the InteractionManager
+            if hasattr(self, 'im'):
+                log.misc(f"Registering received interaction for action "
+                         f"{interaction.action_name}")
+                self.im.register_received(interaction)
+
     @staticmethod
     def build_augmented_roles_dictionaries(custom_roles: list[str] | set[str]) -> tuple[dict[int, str], dict[str, int]]:
         """Augment the custom roles (role1, role2, etc.) with the default ones (public, world_master, etc.), generating
@@ -1910,7 +1928,9 @@ class AgentBasics:
             data_tag = -1
             stream_dict = self.known_streams[net_hash]
             for stream_obj in stream_dict.values():
-                data_tag = max(data_tag, stream_obj.get_tag(uuid))
+                t = stream_obj.get_tag(uuid)
+                if t is not None:
+                    data_tag = max(data_tag, t)
             return data_tag
         return -1
 

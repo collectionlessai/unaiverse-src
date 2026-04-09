@@ -1823,26 +1823,12 @@ class Node:
                     if msg.sender not in self.agent.all_agents:
                         log.error("Unexpected interaction from unknown node: " + msg.sender)
                     else:
-                        interaction = Interaction.from_dict(msg.content)
-                        interaction.requester = msg.sender
-
                         room_for_registration = True
                         if hasattr(self.agent, 'im'):
                             room_for_registration = self.agent.im.room_for_registration()
 
-                        # Also register with the HSM for action selection (backward compat bridge)
                         if room_for_registration:
-                            behav = self.agent.behav_lone_wolf \
-                                if msg.sender in self.agent.public_agents else self.agent.behav
-                            if not behav.request_action(interaction):
-                                log.error(f"Cannot enqueue the interaction, incompatible action. "
-                                          f"Interaction is: {interaction}")
-                            else:
-                                # Register with the InteractionManager
-                                if hasattr(self.agent, 'im'):
-                                    log.misc(f"Registering received interaction for action "
-                                             f"{interaction.action_name}")
-                                    self.agent.im.register_received(interaction)
+                            self.agent.inject_received_interaction(msg.sender, msg.content)
 
                 elif self.node_type is Node.WORLD:
                     log.error("Unexpected interaction received by this world node, sent by: " + msg.sender)

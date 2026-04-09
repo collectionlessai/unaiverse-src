@@ -285,10 +285,15 @@ class StreamProxy:
         """
         grouped_by_user = {}
         for user_hash in self._streams.keys():
-            user = DataProps.peer_id_from_user_hash(user_hash)
+            if user_hash.startswith("<default"):
+                user = "owner"
+                name = user_hash
+            else:
+                user = DataProps.peer_id_from_user_hash(user_hash)
+                name = DataProps.name_from_user_hash(user_hash)
             if user not in grouped_by_user:
                 grouped_by_user[user] = []
-            grouped_by_user[user].append(DataProps.name_from_user_hash(user_hash))
+            grouped_by_user[user].append(name)
         if len(grouped_by_user) > 0:
             return str(", ".join([(user + ":" + ",".join(stream_names))
                                   for user, stream_names in grouped_by_user.items()]))
