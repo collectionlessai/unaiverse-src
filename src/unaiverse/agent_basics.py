@@ -1425,7 +1425,7 @@ class AgentBasics:
         log.set_sub("gen")
 
         # Clear expired interactions at every clock cycle and notify originators
-        self.im.complete_expired()
+        await self.im.complete_expired()
 
         # Also drain recently completed interactions for status notification
         completed = self.im.drain_completed()
