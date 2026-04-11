@@ -752,6 +752,7 @@ class ActionInteractionList:
         if interaction.uuid is None:
             existing_request_same_uuid = self.get_interaction_by_uuid(interaction.requester, interaction.uuid)
             if existing_request_same_uuid:
+                self.by_insertion_order[existing_request_same_uuid.by_insertion_order_id] = interaction
                 return
 
         if 0 < self.max_per_requester <= len(self.by_requester_and_by_insertion_order[interaction.requester]):

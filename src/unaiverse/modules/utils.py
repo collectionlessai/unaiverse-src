@@ -449,7 +449,8 @@ class ModuleWrapper(torch.nn.Module):
                  proc_inputs: list[StreamType] | None = None,
                  proc_outputs: list[StreamType] | None = None,
                  proc_opts: dict | None = None,
-                 seed: int = -1) -> None:
+                 seed: int = -1,
+                 agent: object = None) -> None:
         """Initialises the ModuleWrapper.
 
         Args:
@@ -458,6 +459,7 @@ class ModuleWrapper(torch.nn.Module):
             proc_outputs: List of Stream objects describing the output types (default: None).
             proc_opts: Dictionary with keys ``"optimizer"`` and ``"losses"`` (default: None).
             seed: Random seed to fix before instantiation; negative values are ignored (default: -1).
+            agent: The agent who owns this processor.
         """
         super(ModuleWrapper, self).__init__()
         self.device = None  # The device which is supposed to host the module
@@ -465,6 +467,7 @@ class ModuleWrapper(torch.nn.Module):
         self.proc_inputs = proc_inputs  # The list of Stream objects describing the input types of the module
         self.proc_outputs = proc_outputs  # The list of Stream objects describing the output types of the module
         self.proc_opts = proc_opts
+        self.agent = agent
 
         # Working
         set_seed(seed)
@@ -634,7 +637,8 @@ class AgentProcessorChecker:
                 self.proc_outputs = [StreamType(data_type="all", pubsub=False, private_only=False)]
             self.proc_opts = {'optimizer': None, 'losses': [None] * len(self.proc_outputs)}
             self.proc = ModuleWrapper(module=MultiIdentity(), proc_inputs=self.proc_inputs,
-                                      proc_outputs=self.proc_outputs, proc_opts=self.proc_opts)
+                                      proc_outputs=self.proc_outputs, proc_opts=self.proc_opts,
+                                      agent=processor_container)
             self.proc.device = torch.device("cpu")
         else:
 
@@ -645,13 +649,13 @@ class AgentProcessorChecker:
                 self.proc_outputs = [StreamType(data_type="text", pubsub=False, private_only=False),
                                      StreamType(data_type="img", pubsub=False, private_only=False)]
                 self.proc = ModuleWrapper(module=HumanModule(), proc_inputs=self.proc_inputs,
-                                          proc_outputs=self.proc_outputs)
+                                          proc_outputs=self.proc_outputs, agent=processor_container)
                 self.proc.device = torch.device("cpu")
 
             # Wrapping to have the basic attributes (device)
             elif not isinstance(self.proc, ModuleWrapper):
                 self.proc = ModuleWrapper(module=self.proc, proc_opts=self.proc_opts, proc_inputs=self.proc_inputs,
-                                          proc_outputs=self.proc_outputs)
+                                          proc_outputs=self.proc_outputs, agent=processor_container)
                 self.proc.device = torch.device("cpu")
 
         # Guessing inputs, fixing attributes

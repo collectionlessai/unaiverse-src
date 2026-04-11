@@ -83,6 +83,7 @@ class Custom:
     MAX_STREAM_DATA_WITHOUT_INTERACTIONS = 2
     DEFAULT_INTER_TIMEOUT = 60. * 5.  # Seconds
     DRAIN_TIMEOUT = 0.
+    FAKE_INTERACTION_UUID = "fake_uuid"
 
 
 class GenException(Exception):

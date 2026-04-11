@@ -33,7 +33,7 @@ from unaiverse.streams.streams import Stream, BufferedStream
 from unaiverse.streams.dataprops import DataProps, StreamType
 from unaiverse.networking.node.connpool import ConnectionPools
 from unaiverse.interaction import Interaction, InteractionManager
-from unaiverse.modules.utils import AgentProcessorChecker, ModuleWrapper
+from unaiverse.modules.utils import AgentProcessorChecker, ModuleWrapper, HumanModule
 from unaiverse.utils.misc import (GenException, FileTracker, collect_py_files, load_agent_in_memory, pack_py_files,
                                   unpack_py_files)
 
@@ -112,6 +112,7 @@ class AgentBasics:
         self.proc_opts = proc_opts
         self.proc_last_inputs = None
         self.proc_last_outputs = None
+        self.proc_human_peer_id_to_interaction = {}
         self.proc_optional_inputs: list[dict] | None = None
         self.proc_net_hash: dict[str, None | str] = {'public': None, 'private': None}
         self.proc_in_net_hash: dict[str, None | str] = {'public': None, 'private': None}
@@ -270,6 +271,10 @@ class AgentBasics:
         self._node_identity_dir = node_identity_dir
         self._node_agents_waiting = agents_waiting
 
+        # Checking if human, marking the node
+        if isinstance(self.proc.module, HumanModule):
+            self._node_profile.get_static_profile()["node_type"] = self.HUMAN
+
         # Adding peer_id information into the already existing stream data (if any)
         # (initially marked with generic wildcards like <public_peer_id>, ...)
         net_hashes = list(self.known_streams.keys())
@@ -366,19 +371,35 @@ class AgentBasics:
 
         return True
 
-    def set_default_stream_binding(self) -> None:
+    def set_default_stdin_binding(self, public: bool | None = None) -> None:
+        """Set default bindings for the stdin."""
+
+        if (public is not None and not public) or (public is None and self.behaving_in_world()):
+            self.stdin.bind(self.__proc_in_streams_by_user_hash_prv)
+
+        if (public is not None and public) or (public is None and not self.behaving_in_world()):
+            self.stdin.bind(self.__proc_in_streams_by_user_hash_pub)
+
+    def set_default_stream_binding(self, public: bool | None = None) -> None:
         """Set default bindings for the stdin, stdtar, stdext, stdout stream proxies."""
 
-        if self.behaving_in_world():
+        if (public is not None and not public) or (public is None and self.behaving_in_world()):
             self.stdin.bind(self.__proc_in_streams_by_user_hash_prv)
             self.stdtar.bind({})
             self.stdext.bind(self.__env_streams_by_user_hash_prv)
             self.stdout.bind(self.__proc_streams_by_user_hash_prv)
-        else:
+
+        if (public is not None and public) or (public is None and not self.behaving_in_world()):
             self.stdin.bind(self.__proc_in_streams_by_user_hash_pub)
             self.stdtar.bind({})
             self.stdext.bind(self.__env_streams_by_user_hash_pub)
             self.stdout.bind(self.__proc_streams_by_user_hash_pub)
+
+    def get_default_stream_bindings(self) -> tuple[dict, dict, dict, dict]:
+        """Returns the streams that are bind by default on the standard streams (stdin, stdtar, stdext, stdout)."""
+
+        return (self.__proc_in_streams_by_user_hash_prv, {},
+                self.__env_streams_by_user_hash_prv, self.__proc_streams_by_user_hash_prv)
 
     def get_proc_output_net_hash(self, public: bool = True) -> str | None:
         """Return the network hash of the processor output streams.
@@ -401,6 +422,18 @@ class AgentBasics:
             The network hash string, or None if not yet set.
         """
         return self.proc_in_net_hash['public'] if public else self.proc_in_net_hash['private']
+
+    def prepare_stdin_if_human(self, public: bool, peer_id: str | None = None):
+        self.set_default_stdin_binding(public)
+        if len(self.proc_human_peer_id_to_interaction) > 0:
+            if peer_id is not None and peer_id in self.proc_human_peer_id_to_interaction:
+                interaction = self.proc_human_peer_id_to_interaction[peer_id]
+            else:
+                interaction = next(iter(self.proc_human_peer_id_to_interaction.values()))
+            uuid = str(interaction.uuid) + "_" + interaction.requester
+        else:
+            uuid = str(None) + "_" + Custom.SYSTEM_INTERACTION_LABEL
+        return uuid
 
     @staticmethod
     def generate_uuid() -> str:
@@ -1547,6 +1580,17 @@ class AgentBasics:
             self.behav.set_role(base_role_str)
             self.set_policy_filter(self.policy_filter, public=False)
 
+    def is_human(self):
+        """Check if the agent is marked as human in its node.
+
+        Returns:
+            True if the agent is in a human, False otherwise.
+        """
+        if self._node_profile is not None:
+            return self._node_profile.get_static_profile()["node_type"] == self.HUMAN
+        else:
+            return False
+
     def in_world(self):
         """Check if the agent is currently operating within a 'world'.
 
@@ -1703,8 +1747,8 @@ class AgentBasics:
 
                 # If we decided to skip this sample...
                 else:
-                    log.misc(f"Skipping sample named {name} received in net hash {net_hash}, "
-                             f"tag={data_tag}, uuid={data_uuid}: {reason}")
+                    log.error(f"Skipping sample named {name} received in net hash {net_hash}, "
+                              f"tag={data_tag}, uuid={data_uuid}: {reason}")
 
                     if net_hash not in self.known_streams:
                         log.debug(f"[get_stream_sample] "
@@ -2359,6 +2403,10 @@ class AgentBasics:
         # Resolve target agent(s)
         if len(interaction.target) == 0:
             return None
+
+        # Updating stream UUID
+        for stream in interaction.owned_streams.values():
+            stream.edit_uuid_in_data(current_uuid=data_uuid, new_uuid=interaction.uuid)
 
         # Build the content for the interaction message
         content = interaction.to_dict()

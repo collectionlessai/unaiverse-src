@@ -216,6 +216,7 @@ class Interaction:
         self.__im = im
         self.timestamp_created = clock.get_time()
         self.cycle_created = clock.get_cycle()
+
         self.stdin_streams = stdin_streams
         self.stdtar_streams = stdtar_streams
         self.stdext_streams = stdext_streams
@@ -1430,17 +1431,19 @@ class InteractionManager:
                     to_remove.append(interaction)
                     drained.append(interaction)
             for interaction in to_remove:
+                self.sent_recently_completed.discard(interaction)
+                self.received_recently_completed.discard(interaction)
+                self.lazy_recently_completed.discard(interaction)
 
                 # Clearing from all the owned and not-owned streams (all), that might have been used for output purposes
                 # by the current agent or by others.
                 # In principle, only the processor streams should be involved, since it is the only one in which we plug
                 # this interaction in this class.
                 # However, the user might have added the interaction to other owned streams.
-                self.clear_from_all_streams(interaction)
-
-                self.sent_recently_completed.discard(interaction)
-                self.received_recently_completed.discard(interaction)
-                self.lazy_recently_completed.discard(interaction)
+                if not self.is_known(interaction):
+                    # If, meanwhile, another interaction with the same UUID (e.g., None) was received,
+                    # do not clear it from the streams
+                    self.clear_from_all_streams(interaction)
 
         return drained
 

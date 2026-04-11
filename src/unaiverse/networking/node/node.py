@@ -43,7 +43,7 @@ from unaiverse.networking.node.connpool import NodeConn
 from unaiverse.networking.node.profile import NodeProfile
 from unaiverse.streams.streams import DataProps, BufferedStream
 from unaiverse.utils.misc import (get_key_considering_multiple_sources, save_node_addresses_to_file,
-                                  PolicyFilterHuman, prepare_app_dir, load_agent_in_memory, unpack_py_files)
+                                  prepare_app_dir, load_agent_in_memory, unpack_py_files)
 
 
 class Node:
@@ -935,9 +935,6 @@ class Node:
 
                 if self.agent is None:
                     log.critical("Interactive mode is only valid for agents")
-                pf = PolicyFilterHuman()
-                self.agent.set_policy_filter(pf, public=True)
-                self.agent.set_policy_filter(pf, public=False)
                 interact_mode_opts = {
                     "ready_to_interact": False,
                 }
@@ -1097,11 +1094,14 @@ class Node:
                 # Trigger HSM of the agent
                 if self.node_type is Node.AGENT:
                     if interact_mode and interact_mode_opts['ready_to_interact']:
+                        public = "lone_wolf_peer_id" in interact_mode_opts
+                        target_peer_id = interact_mode_opts['lone_wolf_peer_id'] \
+                            if public else self.get_world_peer_id()
                         try:
                             if not splash_text_shown:
                                 log.disable_all_screen()  # Will disable all channels, except the default ones
                                 splash_text_shown = True
-                                if "lone_wolf_peer_id" in interact_mode_opts:
+                                if public:
                                     self.agent.behav_lone_wolf.update_wildcard(Custom.PARTNER_WILDCARD,
                                                                                interact_mode_opts['lone_wolf_peer_id'])
                                     self.agent.behav_lone_wolf.apply_wildcards()
@@ -1137,8 +1137,11 @@ class Node:
                                     not self.agent.behav.are_debug_messages_active())
                             else:
 
-                                # Putting message in the processor input stream
-                                self.agent.stdin.set([msg, image_pil, whatever])
+                                # Writing message in the agent's default-stdin (that is where the human process will
+                                # pick up data, no matter what is the actual stdin from the point of view of the
+                                # interaction)
+                                uuid = self.agent.prepare_stdin_if_human(public, peer_id=target_peer_id)
+                                self.agent.stdin.set([msg, image_pil, whatever], uuid=uuid)
                         except queue.Empty:
                             pass  # If nothing has been typed (+ enter)
 

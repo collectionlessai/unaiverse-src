@@ -365,23 +365,33 @@ class Agent(AgentBasics):
         Returns:
             True if the step ran successfully, False otherwise.
         """
-
-        # Getting the UUID of the interaction
+        # Getting UUID of the interaction
         uuid = interaction.uuid if interaction is not None else None
 
-        # Getting input data from the input stream
-        input_data = self.stdin.get(uuid=uuid, requested_by="process")  # Use kwargs
+        # Getting data tag
+        data_tag = self.stdin.get_tag(uuid=uuid)
 
-        # Passing input data to the processor and getting output back
+        if data_tag is None:
+            return False
+
+        # Re-getting UUID of the interaction (possibly re-binding stdin and re-getting UUID to cope with human proc)
+        _uuid = self.__hook_rebind_stdin_if_human(interaction)
+
+        # Getting input data from the input stream
+        input_data = self.stdin.get(uuid=_uuid, requested_by="process")  # Use kwargs
+
         if input_data is None:
             return False
 
-        # Getting data tag
-        data_tag = self.stdin.get_tag(uuid)
+        # Post get actions to finalize what started with the previous hook
+        # (do this only after having received valid data from stdin)
+        self.__hook_rebind_stdin_if_human_finalizer(interaction)
 
         # Customizable input hook
         try:
             input_data = self.hook_proc_tweak_inputs(input_data)
+            if input_data is None:
+                return False
         except Exception as e:
             log.error(f"Error tweaking the processor inputs: {e}")
             return False
@@ -1680,6 +1690,41 @@ class Agent(AgentBasics):
                 # From user specified hash to a net hash (e.g., peer_id:name_or_group to peer_id::ps:name_or_group)
                 net_hashes_copy.append(self.user_stream_hash_to_net_hash(net_hashes[i]))
         return net_hashes_copy
+
+    def __hook_rebind_stdin_if_human(self, interaction):
+
+        # Getting the original interaction UUID
+        uuid = interaction.uuid if interaction is not None else None
+
+        # If not human or no interaction provided, return the original UUID
+        if not self.is_human() or interaction is None:
+            return uuid
+
+        # If a dashed interaction exists, the system interaction must be blocked
+        # Whenever we get a system interaction, if we already have stored non-system ones, we kill the action
+        if interaction.is_system() and len(self.proc_human_peer_id_to_interaction) > 0:
+            return Custom.FAKE_INTERACTION_UUID  # Fake UUID, that will lead to a stdin.get(uuid) with no data
+
+        # Whenever we get a non-system interaction for a human, we store it in its own dictionary
+        if not interaction.is_system():
+            self.proc_human_peer_id_to_interaction[interaction.requester] = interaction
+
+        # Forcing default stdin binding (discarding the interaction-provided ones)
+        self.set_default_stdin_binding()
+
+        # Building the augmented UUID
+        uuid = str(uuid) + "_" + interaction.requester
+        return uuid
+
+    def __hook_rebind_stdin_if_human_finalizer(self, interaction: Interaction | None):
+
+        # If not human or no interaction provided, stop here
+        if not self.is_human() or interaction is None:
+            return
+
+        # Whenever we get a non-system interaction for a human, we clear it from the dictionary
+        if not interaction.is_system():
+            del self.proc_human_peer_id_to_interaction[interaction.requester]
 
     # ==================================================================================================================
     # BEGIN OF DEPRECATED METHODS
