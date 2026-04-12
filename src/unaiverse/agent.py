@@ -365,22 +365,22 @@ class Agent(AgentBasics):
         Returns:
             True if the step ran successfully, False otherwise.
         """
-        # Getting UUID of the interaction
+        # Getting UUID of the interaction (used for tags and stdout)
         uuid = interaction.uuid if interaction is not None else None
 
-        # Getting data tag
-        data_tag = self.stdin.get_tag(uuid=uuid)
-
-        if data_tag is None:
-            return False
-
-        # Re-getting UUID of the interaction (possibly re-binding stdin and re-getting UUID to cope with human proc)
+        # Getting UUID of the interaction for stdin (possibly re-binding stdin to cope with human proc)
         _uuid = self.__hook_rebind_stdin_if_human(interaction)
 
         # Getting input data from the input stream
         input_data = self.stdin.get(uuid=_uuid, requested_by="process")  # Use kwargs
 
         if input_data is None:
+            return False
+
+        # Getting data tag
+        data_tag = self.stdin.get_tag(uuid=uuid)
+
+        if data_tag is None:
             return False
 
         # Post get actions to finalize what started with the previous hook
