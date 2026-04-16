@@ -79,11 +79,12 @@ class Ch(str, Enum):
     P2P = "P2P"
 
 
-# Valid subdomain tags.  "gen" is the default (generic / not subdomain specific).
-_SUB_DEFAULT: str = "gen"
-
 # Channels that are unconditionally always active (cannot be disabled)
 _ALWAYS_ON: frozenset[Ch] = frozenset({Ch.CRITICAL, Ch.ERROR, Ch.USER})
+
+# All channels
+_ALL_CHANNELS: frozenset[Ch] = frozenset({Ch.CRITICAL, Ch.ERROR, Ch.USER, Ch.NETWORK, Ch.STREAMS, Ch.INTER,
+                                          Ch.MISC, Ch.DEBUG, Ch.STATEM, Ch.CPOOL, Ch.P2P})
 
 # ANSI color codes per channel
 _COLORS: dict[Ch, str] = {
@@ -104,6 +105,15 @@ _COLORS: dict[Ch, str] = {
 _RESET = "\033[0m"
 _BOLD = "\033[1m"
 _DIM = "\033[2m"  # Used for the info bracket on screen
+
+SUB_PRV = "prv"
+SUB_PUB = "pub"
+SUB_GEN = "gen"
+
+# Valid subdomain tags.  "gen" is the default (generic / not subdomain specific).
+_SUB_DEFAULT: str = SUB_GEN
+
+_ALL_SUBS: frozenset[str] = frozenset({SUB_PRV, SUB_PUB, SUB_GEN})
 
 
 class _Logger:
@@ -171,13 +181,14 @@ class _Logger:
         self._name = name
         self._no_color = no_color or not sys.stdout.isatty()
         self._verbose_screen = verbose_screen
+        self._force_plain_msg_only = False
         self._file_enabled = file_enabled
         self._cycle_idx: int = -1
         self._ctx: dict[str, Any] = {}
-        self._sub: str = ""  # sticky sub-domain tag (set via set_sub)
+        self._sub: str = ""  # sticky subdomain tag (set via set_sub)
         self._clock = None
-        self._print_fcn = print
-        self._print_fcn_supports_html = False
+        self._print_fcn = {ks: {k: print for k in _ALL_CHANNELS} for ks in _ALL_SUBS}
+        self._print_fcn_supports_html = {ks: {k: False for k in _ALL_CHANNELS} for ks in _ALL_SUBS}
 
         # Resolve active channels
         if active is None:
@@ -239,6 +250,9 @@ class _Logger:
 
     def inspector_enabled(self, true_or_false: bool) -> None:
         self.inspector_activated = true_or_false
+
+    def set_plain_msg_only(self, yes_or_no):
+        self._force_plain_msg_only = yes_or_no
 
     def set_verbose_screen(self, verbose: bool) -> None:
         """Toggle verbose screen output at runtime.
@@ -447,7 +461,7 @@ class _Logger:
         dim = "" if self._no_color else _DIM
 
         msg = record['msg']
-        if msg is not None and (ch == Ch.USER or ch.STATEM):
+        if msg is not None:
             must_print = False
 
             if "info" in record and "rep" in record["info"] and record["info"]["rep"] is True:
@@ -473,10 +487,16 @@ class _Logger:
                 # Replacing
                 record['msg'] = msg
 
+                sub = record.get("sub", "")
+
+                if self._force_plain_msg_only:
+                    self._print_fcn[sub][ch](f"{record['msg']}", file=sys.stdout, flush=True)
+                    return
+
                 # USER / ERROR / CRITICAL in non-verbose mode: just the message, no preamble.
                 # Full record for everything else, or when verbose_screen=True.
                 if not self._verbose_screen and ch in _ALWAYS_ON:
-                    self._print_fcn(f"{color}{record['msg']}{reset}", file=sys.stdout, flush=True)
+                    self._print_fcn[sub][ch](f"{color}{record['msg']}{reset}", file=sys.stdout, flush=True)
                     return
 
                 time_part = ts[11:23]  # HH:MM:SS.mmm
@@ -486,14 +506,14 @@ class _Logger:
                 ctx_str = (" | " + "  ".join(f"{k}={v}" for k, v in ctx.items())) if ctx else ""
 
                 # Subdomain tag: rendered as {pub} or {prv} in dim braces before the message
-                sub = record.get("sub", "")
                 sub_str = f"  {dim}{{{sub}}}{reset}{color}" if sub else ""
 
                 info = record.get("info", {})
                 info_str = (f"  {dim}[" + "  ".join(f"{k}={v}" for k, v in info.items()) + f"]{reset}{color}") if info else ""
 
                 prefix = f"{color}{bold}[{ch.value:^8}]{reset}{color} {time_part}  {cycle_str}{ctx_str}"
-                self._print_fcn(f"{prefix}{sub_str}  {record['msg']}{info_str}{reset}", file=sys.stdout, flush=True)
+                self._print_fcn[sub][ch](f"{prefix}{sub_str}  {record['msg']}{info_str}{reset}",
+                                         file=sys.stdout, flush=True)
 
     def __call__(self, msg: str, sub: str = "", **info: Any) -> None:
         """Log to MISC by calling the logger instance directly.
@@ -506,9 +526,20 @@ class _Logger:
         """
         self._log(Ch.MISC, msg, info, sub=sub)
 
-    def set_print_fcn(self, print_fcn, supports_html):
-        self._print_fcn = print_fcn
-        self._print_fcn_supports_html = supports_html
+    def set_print_fcn(self, print_fcn, ch, sub, supports_html):
+        if ch is None:
+            chs = _ALL_CHANNELS
+        else:
+            chs = [ch]
+        if sub is None:
+            subs = _ALL_SUBS
+        else:
+            subs = [sub]
+
+        for _sub in subs:
+            for _ch in chs:
+                self._print_fcn[_sub][_ch] = print_fcn
+                self._print_fcn_supports_html[_sub][_ch] = supports_html
 
     def close(self) -> None:
         """Flush and close the log file."""
@@ -545,9 +576,14 @@ class Logger:
     def create(self, *args, **kwargs):
         self.__instance = _Logger(*args, **kwargs)
 
+    def set_print_fcn(self, *args, **kwargs):
+        if self.__instance is None:
+            raise RuntimeError(f"Logger: Attempted to call set_print_fcn before log instance initialization.")
+        self.__instance.set_print_fcn(*args, **kwargs)
+
     def __getattr__(self, name):
         if self.__instance is None:
-            raise RuntimeError(f"Logger: Attempted to call '{name}' before initialization.")
+            raise RuntimeError(f"Logger: Attempted to call '{name}' before log instance initialization.")
         return getattr(self.__instance, name)
 
 

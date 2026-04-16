@@ -90,7 +90,8 @@
                         "streams": [
                             "<agent>:processor"
                         ],
-                        "uuid": null,
+                        "id": "pub",
+                        "copy_sys": true,
                         "callback": "show"
                     },
                     "msg": null,

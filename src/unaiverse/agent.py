@@ -90,7 +90,10 @@ def action(func: Callable) -> Callable:
                 resolved_kwargs[key] = value
 
         # Calling the action
-        ret = await func(self, *args, **resolved_kwargs)
+        try:
+            ret = await func(self, *args, **resolved_kwargs)
+        except Exception:
+            ret = False
         return ret
 
     wrapper._is_action = True
@@ -301,7 +304,9 @@ class Agent(AgentBasics):
                    from_state: str | None = None,
                    to_state: str | None = None,
                    callback: str | None = None,
-                   uuid: str | None = "random",
+                   forced_uuid: str | None = "do_not_force",
+                   id: str | None = "random",
+                   copy_sys: bool = False,
                    wait_completion: bool = False,
                    interaction: Interaction | None = None) -> bool:
         """Send an interaction request to one or more target agents (async).
@@ -324,7 +329,10 @@ class Agent(AgentBasics):
             from_state: Optional source state. Ignored when a pre-built Interaction provided.
             to_state: Optional destination state. Ignored when a pre-built Interaction provided.
             callback: Callback action (will be called when the interaction completes).
-            uuid: Optional UUID of the interaction. Ignored when a pre-built Interaction is provided.
+            forced_uuid: UUID of the interaction to explicitly force, use carefully.
+            id: Optional ID of the interaction. Ignored when a pre-built Interaction is provided.
+            copy_sys: True if the interaction must copy the last added stream data with system UUID
+                to prepare initial data form the current interaction.
             wait_completion: If True, this action returns True if and only if we get a feed of interaction completion
                 from all the involved agents (Default: False).
             interaction: The interaction triggered by the system to run this action (automatically set).
@@ -343,7 +351,8 @@ class Agent(AgentBasics):
         if first_run:
             target = self.__involved_agents(target)
             sent_interaction = await self._send(None, action_name, target, action_kwargs, streams,
-                                                data_samples, num_steps, max_time, from_state, to_state, callback, uuid)
+                                                data_samples, num_steps, max_time, from_state, to_state, callback,
+                                                forced_uuid, id, copy_sys)
             if wait_completion:
                 system_interaction.action_ref.set_default_timeout()  # This will make the action pedantic
                 system_interaction.set_mark(sent_interaction)  # First run, Saving the interaction that was sent
@@ -366,13 +375,14 @@ class Agent(AgentBasics):
             True if the step ran successfully, False otherwise.
         """
         # Getting UUID of the interaction (used for tags and stdout)
-        uuid = interaction.uuid if interaction is not None else None
+        uuid = interaction.uuid
 
-        # Getting UUID of the interaction for stdin (possibly re-binding stdin to cope with human proc)
-        _uuid = self.__hook_rebind_stdin_if_human(interaction)
+        # Possibly re-binding stdin to cope with human processor (it might also let the action fail, if needed)
+        if not self.__rebind_stdin_if_human(interaction):
+            return False
 
         # Getting input data from the input stream
-        input_data = self.stdin.get(uuid=_uuid, requested_by="process")  # Use kwargs
+        input_data = self.stdin.get(uuid=uuid, requested_by="process")  # Use kwargs
 
         if input_data is None:
             return False
@@ -383,9 +393,9 @@ class Agent(AgentBasics):
         if data_tag is None:
             return False
 
-        # Post get actions to finalize what started with the previous hook
+        # Post get actions to finalize what possibly started with the previous call to the rebind operation
         # (do this only after having received valid data from stdin)
-        self.__hook_rebind_stdin_if_human_finalizer(interaction)
+        self.__rebind_stdin_if_human_finalizer(interaction)
 
         # Customizable input hook
         try:
@@ -1691,19 +1701,34 @@ class Agent(AgentBasics):
                 net_hashes_copy.append(self.user_stream_hash_to_net_hash(net_hashes[i]))
         return net_hashes_copy
 
-    def __hook_rebind_stdin_if_human(self, interaction):
-
-        # Getting the original interaction UUID
-        uuid = interaction.uuid if interaction is not None else None
+    def __rebind_stdin_if_human(self, interaction):
 
         # If not human or no interaction provided, return the original UUID
         if not self.is_human() or interaction is None:
-            return uuid
+            return True
+
+        # First of clear, clearing residuals of interactions that were completed in the past
+        to_remove = []
+        for _peer_id, _interaction in self.proc_human_peer_id_to_interaction.items():
+            if _interaction.is_completed():
+                to_remove.append(_peer_id)
+        for _peer_id in to_remove:
+            del self.proc_human_peer_id_to_interaction[_peer_id]
+
+        # Then, we detect who is the current partner of the interaction, if and only if there exist a "partner"-like
+        # wildcard. This is important to detect system interactions triggering 'process', that will then be used to
+        # send a 'process' request to the partner.
+        wildcards = self.behav.get_wildcards() if self.behaving_in_world() else self.behav_lone_wolf.get_wildcards()
+        system_interaction_will_be_for = None
+        if Custom.PARTNER_WILDCARD in wildcards:
+            system_interaction_will_be_for = wildcards[Custom.PARTNER_WILDCARD]
 
         # If a dashed interaction exists, the system interaction must be blocked
         # Whenever we get a system interaction, if we already have stored non-system ones, we kill the action
-        if interaction.is_system() and len(self.proc_human_peer_id_to_interaction) > 0:
-            return Custom.FAKE_INTERACTION_UUID  # Fake UUID, that will lead to a stdin.get(uuid) with no data
+        if interaction.is_system():
+            if (system_interaction_will_be_for is not None and
+                    system_interaction_will_be_for in self.proc_human_peer_id_to_interaction):
+                return False
 
         # Whenever we get a non-system interaction for a human, we store it in its own dictionary
         if not interaction.is_system():
@@ -1711,20 +1736,21 @@ class Agent(AgentBasics):
 
         # Forcing default stdin binding (discarding the interaction-provided ones)
         self.set_default_stdin_binding()
+        return True
 
-        # Building the augmented UUID
-        uuid = str(uuid) + "_" + interaction.requester
-        return uuid
-
-    def __hook_rebind_stdin_if_human_finalizer(self, interaction: Interaction | None):
+    def __rebind_stdin_if_human_finalizer(self, interaction: Interaction | None):
 
         # If not human or no interaction provided, stop here
         if not self.is_human() or interaction is None:
             return
 
-        # Whenever we get a non-system interaction for a human, we clear it from the dictionary
-        if not interaction.is_system():
+        if interaction.requester in self.proc_human_peer_id_to_interaction:
             del self.proc_human_peer_id_to_interaction[interaction.requester]
+
+        # Clearing data from the stdin, to avoid garbage residuals
+        streams_by_user_hash = self.get_default_stdin_bindings()
+        for stream in streams_by_user_hash.values():
+            stream.clear_data(interaction.uuid)
 
     # ==================================================================================================================
     # BEGIN OF DEPRECATED METHODS
@@ -1739,11 +1765,11 @@ class Agent(AgentBasics):
 
         # Backward compatibility
         stream_dict = self.known_streams[net_hash]
-        ref_uuid = None
+        _id = None
         for stream_obj in stream_dict.values():
-            ref_uuid = stream_obj.get_uuid()
+            _id = stream_obj.get_uuid().split("_")[0]
             break  # Assuming UUID is the same on all the streams of the group (fine for backward compatibility)
-        interaction = Interaction(streams=[net_hash], uuid=ref_uuid)
+        interaction = Interaction(streams=[net_hash], id=_id)
         self.im.unregister(interaction)
 
     @deprecated("Use the interaction-based design")
@@ -1768,7 +1794,7 @@ class Agent(AgentBasics):
                                           (recipient if not isinstance(recipient, str) else [recipient]))
         else:
             interaction = Interaction(streams=[net_hash], num_steps=1, requester=self.get_peer_id(),
-                                      target=recipient, uuid=ref_uuid)
+                                      target=recipient, forced_uuid=ref_uuid)
             self.im.register_lazy(interaction)
 
     @deprecated("Use send")
@@ -1797,7 +1823,7 @@ class Agent(AgentBasics):
                                  action_kwargs=args,
                                  from_state=from_state,
                                  to_state=to_state,
-                                 uuid=ref_uuid)) is not None
+                                 forced_uuid=ref_uuid)) is not None
 
     @deprecated("Use interactions")
     async def ask_gen(self, agent: str | None = None, u_hashes: list[str] | None = None,
@@ -1839,7 +1865,7 @@ class Agent(AgentBasics):
         u_hashes_copy = self.__normalize_user_hash(u_hashes)
 
         # Generate a new UUID for this request
-        ref_uuid = AgentBasics.generate_uuid() if ask_uuid is None else ask_uuid
+        ref_uuid = AgentBasics.generate_id() if ask_uuid is None else ask_uuid
         if ignore_uuid:
             ref_uuid = None
 
@@ -2073,7 +2099,7 @@ class Agent(AgentBasics):
         yhat_hashes_copy = self.__normalize_user_hash(yhat_hashes)
 
         # Generate a new UUID for this request
-        ref_uuid = AgentBasics.generate_uuid() if ask_uuid is None else ask_uuid
+        ref_uuid = AgentBasics.generate_id() if ask_uuid is None else ask_uuid
         if ignore_uuid:
             ref_uuid = None
 
@@ -2318,7 +2344,7 @@ class Agent(AgentBasics):
                                  num_steps=samples,
                                  streams=u_hashes,
                                  from_state=from_state, to_state=to_state,
-                                 uuid=ref_uuid)
+                                 forced_uuid=ref_uuid)
             if interaction is not None and samples > 1:
                 for c in interaction.target:
                     self._agents_who_were_asked.add(c)
@@ -2333,7 +2359,7 @@ class Agent(AgentBasics):
                                  num_steps=samples,
                                  streams=u_hashes + yhat_hashes,
                                  from_state=from_state, to_state=to_state,
-                                 uuid=ref_uuid)
+                                 forced_uuid=ref_uuid)
 
             if interaction is not None and samples > 1:
                 for c in interaction.target:
@@ -2466,7 +2492,7 @@ class Agent(AgentBasics):
         # Confirming
         if send_back_confirmation:
             if await self._send(target=peer_id_who_asked, action_name="done_" + do_what, action_kwargs={},
-                                uuid=ref_uuid):
+                                forced_uuid=ref_uuid):
                 return True
             else:
                 log.error(f"Unable to confirm '{do_what}' to {peer_id_who_asked}")

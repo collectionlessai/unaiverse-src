@@ -78,12 +78,19 @@ class Custom:
     # ============
     # INTERACTIONS
     # ============
+    SYSTEM_INTERACTION_ID = "sys"
     SYSTEM_INTERACTION_LABEL = "system"
+    SYSTEM_INTERACTION_UUID = SYSTEM_INTERACTION_ID + "_" + SYSTEM_INTERACTION_LABEL
     MAX_INTERACTIONS = 100
-    MAX_STREAM_DATA_WITHOUT_INTERACTIONS = 2
+    MAX_STREAM_DATA_WITHOUT_INTERACTIONS = 10
     DEFAULT_INTER_TIMEOUT = 60. * 5.  # Seconds
     DRAIN_TIMEOUT = 0.
-    FAKE_INTERACTION_UUID = "fake_uuid"
+    FAKE_INTERACTION_UUID = "fake_system"
+
+    # ======================
+    # BACKWARD COMPATIBILITY
+    # ======================
+    IS_IN_DEPRECATED_WORLD = False  # Automatically set during execution, do not change it here
 
 
 class GenException(Exception):

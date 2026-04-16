@@ -847,9 +847,10 @@ class NodeConn(ConnectionPools):
         self.p2p_world = p2p_w
 
         # These are the list of all the possible agents that might try to connect when we are in world
-        self.world_agents_list = set()
-        self.world_masters_list = set()
-        self.world_agents_and_world_masters_list = set()
+        self.world_agents_set = set()
+        self.world_masters_set = set()
+        self.world_masters_first = None
+        self.world_agents_and_world_masters_set = set()
         self.world_node_peer_id = None
         self.inspector_peer_id = None
         self.role_to_peer_ids = {}
@@ -888,13 +889,13 @@ class NodeConn(ConnectionPools):
                 else:
                     log.critical(f"Connection direction is undefined: {c['direction']}", sub=p2p.log_sub)
             else:
-                is_world_agent = peer_id in self.world_agents_list
-                is_world_master = peer_id in self.world_masters_list
+                is_world_agent = peer_id in self.world_agents_set
+                is_world_master = peer_id in self.world_masters_set
                 is_world_node = self.world_node_peer_id is not None and peer_id == self.world_node_peer_id
                 is_inspector = self.inspector_peer_id is not None and peer_id == self.inspector_peer_id
                 if not is_world_node and not is_world_master and not is_world_agent and not is_inspector:
-                    log.cpool("World agents list:  " + str(self.world_agents_list), sub=p2p.log_sub)
-                    log.cpool("World masters list: " + str(self.world_masters_list), sub=p2p.log_sub)
+                    log.cpool("World agents list:  " + str(self.world_agents_set), sub=p2p.log_sub)
+                    log.cpool("World masters list: " + str(self.world_masters_set), sub=p2p.log_sub)
                     log.cpool("World node peer id: " + str(self.world_node_peer_id), sub=p2p.log_sub)
                     log.cpool("Inspector peer id: " + str(self.inspector_peer_id), sub=p2p.log_sub)
                     log.cpool(f"Unable to determine the peer type for {peer_id}: "
@@ -942,6 +943,9 @@ class NodeConn(ConnectionPools):
             The world node's peer ID.
         """
         return self.world_node_peer_id
+
+    def get_first_world_master(self) -> str | None:
+        return self.world_masters_first
 
     def set_addresses_in_peer_info(self, peer_id: str, addresses: list[str]) -> None:
         """Updates the list of addresses for a given peer.
@@ -1002,14 +1006,18 @@ class NodeConn(ConnectionPools):
 
         # Setting new information
         if world_agents_list_peer_infos is not None and len(world_agents_list_peer_infos) > 0:
-            self.world_agents_list = {x['id'] for x in world_agents_list_peer_infos}
+            self.world_agents_set = {x['id'] for x in world_agents_list_peer_infos}
             for x in world_agents_list_peer_infos:
                 self.peer_id_to_addrs[x['id']] = x['addrs']
                 self.set_role(x['id'], x['misc'])
         else:
-            self.world_agents_list = set()
+            self.world_agents_set = set()
 
-        self.world_agents_and_world_masters_list = self.world_agents_list | self.world_masters_list
+        self.world_agents_and_world_masters_set = self.world_agents_set | self.world_masters_set
+
+    def get_world_masters(self) -> set[str]:
+        """Returns the set of world masters."""
+        return self.world_masters_set
 
     def set_world_masters_list(self, world_masters_list_peer_infos: list[dict] | None) -> None:
         """Sets the list of all world masters based on a provided list of peer information.
@@ -1032,14 +1040,16 @@ class NodeConn(ConnectionPools):
 
         # Setting new information
         if world_masters_list_peer_infos is not None and len(world_masters_list_peer_infos) > 0:
-            self.world_masters_list = {x['id'] for x in world_masters_list_peer_infos}
+            self.world_masters_first = world_masters_list_peer_infos[0]['id']
+            self.world_masters_set = {x['id'] for x in world_masters_list_peer_infos}
             for x in world_masters_list_peer_infos:
                 self.peer_id_to_addrs[x['id']] = x['addrs']
                 self.set_role(x['id'], x['misc'])
         else:
-            self.world_masters_list = set()
+            self.world_masters_first = None
+            self.world_masters_set = set()
 
-        self.world_agents_and_world_masters_list = self.world_agents_list | self.world_masters_list
+        self.world_agents_and_world_masters_set = self.world_agents_set | self.world_masters_set
 
     def add_to_world_agents_list(self, peer_id: str, addrs: list[str], role: int = -1) -> None:
         """Adds a new world agent to the list.
@@ -1049,14 +1059,14 @@ class NodeConn(ConnectionPools):
             addrs: A list of addresses for the new agent.
             role: The role assigned to the agent.
         """
-        self.world_agents_list.add(peer_id)
+        self.world_agents_set.add(peer_id)
 
         # This assumes that the WORLD MASTER/AGENT BIT is the first one
         assert role & 1 == 1, "Expecting the first bit of the role to be 1 for world agents"
         assert role & 2 == 0, "Expecting the second bit of the role to be 0 for world agents"
         self.peer_id_to_addrs[peer_id] = addrs
         self.set_role(peer_id, role)
-        self.world_agents_and_world_masters_list = self.world_agents_list | self.world_masters_list
+        self.world_agents_and_world_masters_set = self.world_agents_set | self.world_masters_set
 
     def add_to_world_masters_list(self, peer_id: str, addrs: list[str], role: int = -1) -> None:
         """Adds a new world master to the list.
@@ -1066,14 +1076,17 @@ class NodeConn(ConnectionPools):
             addrs: A list of addresses for the new master.
             role: The role assigned to the master.
         """
-        self.world_masters_list.add(peer_id)
+        self.world_masters_set.add(peer_id)
+
+        if len(self.world_masters_set) == 1:
+            self.world_masters_first = peer_id
 
         # This assumes that the WORLD MASTER/AGENT BIT is the first one
         assert role & 1 == 1, "Expecting the first bit of the role to be 1 for world masters"
         assert role & 2 == 2, "Expecting the second bit of the role to be 1 for world masters"
         self.peer_id_to_addrs[peer_id] = addrs
         self.set_role(peer_id, role)
-        self.world_agents_and_world_masters_list = self.world_agents_list | self.world_masters_list
+        self.world_agents_and_world_masters_set = self.world_agents_set | self.world_masters_set
 
     def get_added_after_updating(self, pool_names: list[str] | None = None) -> dict[str, set]:
         """Retrieves the set of peers added after the last update cycle for specified pools.
@@ -1386,4 +1399,4 @@ class NodeConn(ConnectionPools):
         """
         assert allowed_not_connected_peers is None, "This param (allowed_not_connected_peers is ignored in NodeConn"
         return await super().get_messages(p2p_name,
-                                          allowed_not_connected_peers=self.world_agents_and_world_masters_list)
+                                          allowed_not_connected_peers=self.world_agents_and_world_masters_set)

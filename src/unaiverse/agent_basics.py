@@ -27,12 +27,12 @@ from unaiverse.hsm.action import Action
 from typing_extensions import deprecated
 from unaiverse.hsm.hsm import HybridStateMachine
 from unaiverse.networking.p2p.messages import Msg
-from unaiverse.streams.streamproxy import StreamProxy, StreamsProxyWithDefaults
+from unaiverse.networking.node.connpool import NodeConn
 from unaiverse.networking.node.profile import NodeProfile
 from unaiverse.streams.streams import Stream, BufferedStream
 from unaiverse.streams.dataprops import DataProps, StreamType
-from unaiverse.networking.node.connpool import ConnectionPools
 from unaiverse.interaction import Interaction, InteractionManager
+from unaiverse.streams.streamproxy import StreamProxy, StreamsProxyWithDefaults
 from unaiverse.modules.utils import AgentProcessorChecker, ModuleWrapper, HumanModule
 from unaiverse.utils.misc import (GenException, FileTracker, collect_py_files, load_agent_in_memory, pack_py_files,
                                   unpack_py_files)
@@ -245,7 +245,7 @@ class AgentBasics:
             if self.world_folder is None:
                 raise GenException("No world folder was indicated (world_folder argument)")
 
-    def set_node_info(self, conn: ConnectionPools, profile: NodeProfile,
+    def set_node_info(self, conn: NodeConn, profile: NodeProfile,
                       ask_to_get_in_touch_fcn: Callable, purge_fcn: Callable, node_identity_dir: str,
                       agents_waiting: dict) -> bool:
         """Set the required information from the node that hosts this agent.
@@ -371,6 +371,9 @@ class AgentBasics:
 
         return True
 
+    def get_connection_pool_manager(self) -> NodeConn:
+        return self._node_conn
+
     def set_default_stdin_binding(self, public: bool | None = None) -> None:
         """Set default bindings for the stdin."""
 
@@ -395,11 +398,23 @@ class AgentBasics:
             self.stdext.bind(self.__env_streams_by_user_hash_pub)
             self.stdout.bind(self.__proc_streams_by_user_hash_pub)
 
-    def get_default_stream_bindings(self) -> tuple[dict, dict, dict, dict]:
-        """Returns the streams that are bind by default on the standard streams (stdin, stdtar, stdext, stdout)."""
+    def get_default_stdin_bindings(self, public: bool | None = None) -> dict:
+        """Returns the streams that are bind by default on the stdin."""
+        if (public is not None and not public) or (public is None and self.behaving_in_world()):
+            return self.__proc_in_streams_by_user_hash_prv
 
-        return (self.__proc_in_streams_by_user_hash_prv, {},
-                self.__env_streams_by_user_hash_prv, self.__proc_streams_by_user_hash_prv)
+        if (public is not None and public) or (public is None and not self.behaving_in_world()):
+            return self.__proc_in_streams_by_user_hash_pub
+
+    def get_default_stream_bindings(self, public: bool | None = None) -> tuple[dict, dict, dict, dict]:
+        """Returns the streams that are bind by default on the standard streams (stdin, stdtar, stdext, stdout)."""
+        if (public is not None and not public) or (public is None and self.behaving_in_world()):
+            return (self.__proc_in_streams_by_user_hash_prv, {},
+                    self.__env_streams_by_user_hash_prv, self.__proc_streams_by_user_hash_prv)
+
+        if (public is not None and public) or (public is None and not self.behaving_in_world()):
+            return (self.__proc_in_streams_by_user_hash_pub, {},
+                    self.__env_streams_by_user_hash_pub, self.__proc_streams_by_user_hash_pub)
 
     def get_proc_output_net_hash(self, public: bool = True) -> str | None:
         """Return the network hash of the processor output streams.
@@ -423,21 +438,27 @@ class AgentBasics:
         """
         return self.proc_in_net_hash['public'] if public else self.proc_in_net_hash['private']
 
-    def prepare_stdin_if_human(self, public: bool, peer_id: str | None = None):
+    def prepare_stdin_if_human(self, public: bool, peer_id: str):
         self.set_default_stdin_binding(public)
-        if len(self.proc_human_peer_id_to_interaction) > 0:
-            if peer_id is not None and peer_id in self.proc_human_peer_id_to_interaction:
-                interaction = self.proc_human_peer_id_to_interaction[peer_id]
-            else:
-                interaction = next(iter(self.proc_human_peer_id_to_interaction.values()))
-            uuid = str(interaction.uuid) + "_" + interaction.requester
+
+        # First of clear, clearing residuals of interactions that were completed in the past
+        to_remove = []
+        for _peer_id, _interaction in self.proc_human_peer_id_to_interaction.items():
+            if _interaction.is_completed():
+                to_remove.append(_peer_id)
+        for _peer_id in to_remove:
+            del self.proc_human_peer_id_to_interaction[_peer_id]
+
+        # Getting existing interaction or defaulting to the system one
+        if peer_id in self.proc_human_peer_id_to_interaction:
+            interaction = self.proc_human_peer_id_to_interaction[peer_id]
+            return interaction.uuid
         else:
-            uuid = str(None) + "_" + Custom.SYSTEM_INTERACTION_LABEL
-        return uuid
+            return Custom.SYSTEM_INTERACTION_UUID
 
     @staticmethod
-    def generate_uuid() -> str:
-        """Generate a random 8-character hexadecimal UUID string.
+    def generate_id() -> str:
+        """Generate a random 8-character hexadecimal ID string.
 
         Returns:
             An 8-character hexadecimal string.
@@ -698,6 +719,28 @@ class AgentBasics:
                 The NodeProfile of this node.
         """
         return self._node_profile
+
+    def get_agents_by_role(self, role: str):
+        if role not in self.ROLE_STR_TO_BITS:
+            return []
+
+        ret = []
+        is_augmented = "~" in role
+        role_int = self.ROLE_STR_TO_BITS[role]
+        if not is_augmented:
+            searched_roles_int = set()
+            role_int = self.ROLE_STR_TO_BITS[role]
+            for role_prefix_int in {AgentBasics.ROLE_WORLD_AGENT, AgentBasics.ROLE_WORLD_MASTER}:
+                searched_roles_int.add(role_prefix_int | role_int)
+        else:
+            searched_roles_int = {role_int}
+
+        for agent in self.all_agents.keys():
+            agent_role_int = self._node_conn.get_role(agent)
+            if agent_role_int in searched_roles_int:
+                ret.append(agent)
+
+        return ret
 
     def get_current_role(self, return_int: bool = False, ignore_base_role: bool = True) -> str | int | None:
         """Returns the current role of the agent.
@@ -1079,6 +1122,13 @@ class AgentBasics:
             self.proc_streams_by_user_hash = {}
             self.proc_in_streams_by_user_hash = {}
         log.misc(f"Successfully removed all streams!")
+
+    def get_stream(self, peer_id: str, name: str) -> Stream | None:
+        user_hash = DataProps.build_user_hash(peer_id, name)
+        if user_hash in self.known_streams_by_user_hash:
+            return self.known_streams_by_user_hash[user_hash]
+        else:
+            return None
 
     def find_streams(self, peer_id: str, name_or_group: str | None = None, discard_owned: bool = False) \
             -> dict[str, dict[str, Stream]]:
@@ -1610,7 +1660,9 @@ class AgentBasics:
         """
         return self.behav.is_enabled()
 
-    def get_stream_sample(self, net_hash: str, sample_dict: dict[str, dict[str, torch.Tensor | None | int | str]]):
+    def get_stream_sample(self, net_hash: str,
+                          sample_dict: dict[str, dict[str, torch.Tensor | None | int | str]]) \
+            -> list[tuple[str, str]]:
         """Receive and process stream samples that were provided by another agent.
 
         Args:
@@ -1619,17 +1671,17 @@ class AgentBasics:
                          containing 'data', 'data_tag', and 'data_uuid' for each sample.
 
         Returns:
-            True if the stream samples were successfully processed and stored, False otherwise
-            (e.g., if the stream is unknown, not compatible, or data is None/stale).
+            The list of tuples (stream user hash, data UUID) for each added data sample.
         """
 
         # Let's be sure that the net hash is converted from the user's perspective to the one of the code here
         net_hash = DataProps.normalize_net_hash(net_hash)
+        added_data = []
 
         log.misc(f"Got a stream sample from {net_hash}...")
         if sample_dict is None:
             log.error(f"Invalid sample (expected a dictionary, got {type(sample_dict)})")
-            return False
+            return added_data
 
         if net_hash in self.known_streams:
             for name, data_and_tag_and_uuid in sample_dict.items():
@@ -1637,7 +1689,7 @@ class AgentBasics:
                         'data_tag' not in data_and_tag_and_uuid or
                         'data_uuid' not in data_and_tag_and_uuid):
                     log.error(f"Invalid sample in data stream named {name} (missing one or more keys)")
-                    return False
+                    continue
 
                 data, data_tag, data_uuid = (data_and_tag_and_uuid['data'],
                                              data_and_tag_and_uuid['data_tag'],
@@ -1677,8 +1729,10 @@ class AgentBasics:
                              (": it is a new UUID" if not has_data else ""))
 
                     # Saving the data sample on the known stream objects
-                    log.debug(f"data={self.known_streams[net_hash][name].props.to_text(data)}")
                     self.known_streams[net_hash][name].set(data, data_tag, uuid=data_uuid)
+
+                    # Data to return
+                    added_data.append((DataProps.user_hash_from_net_hash(net_hash, name), data_uuid))
 
                     # Buffering data, if it was requested and if this sample comes from somebody's processor
                     if (self.buffer_generated_by_others != "none" and
@@ -1760,12 +1814,12 @@ class AgentBasics:
                         else:
                             log.debug(f"[get_stream_sample] "
                                       f"data={self.known_streams[net_hash][name].props.to_text(data)}")
-            return True
+            return added_data
 
         # If this stream is not known at all...
         else:
             log.misc(f"Skipping sample from {net_hash} (data stream is unknown)")
-            return False
+            return added_data
 
     async def send_stream_samples(self):
         """Collect and send stream samples from all owned streams to appropriate recipients (async)."""
@@ -2360,7 +2414,9 @@ class AgentBasics:
                     from_state: str | None = None,
                     to_state: str | None = None,
                     callback: str | None = None,
-                    uuid: str | None = "random") -> 'Interaction | None':
+                    forced_uuid: str | None = "do_not_force",
+                    id: str | None = "random",
+                    copy_sys: bool = False) -> 'Interaction | None':
         """Send an interaction request to one or more target agents (async).
 
         Accepts either a pre-built :class:`Interaction` object *or* raw arguments from which one will be created.
@@ -2382,7 +2438,11 @@ class AgentBasics:
             from_state: Optional source state. Ignored when a pre-built Interaction provided.
             to_state: Optional destination state. Ignored when a pre-built Interaction provided.
             callback: Callback action.
-            uuid: Optional UUID of the interaction. Ignored when a pre-built Interaction is provided.
+            forced_uuid: A very custom option to force a specific UUID, that is by default a mixture of the id (below)
+                and the target fields. To be used only in very special cases. Defaults to None, meaning "don't force".
+            id: Optional ID of the interaction. Ignored when a pre-built Interaction is provided.
+            copy_sys: True if the interaction must copy the last added stream data (with system UUID)
+                to prepare initial data form the current interaction.
 
         Returns:
             The Interaction on success, ``None`` on failure.
@@ -2394,7 +2454,7 @@ class AgentBasics:
                                       num_steps=num_steps,
                                       requester=self.get_peer_id(), target=target,
                                       from_state=from_state, to_state=to_state,
-                                      timeout=max_time, callback=callback, uuid=uuid)
+                                      timeout=max_time, callback=callback, forced_uuid=forced_uuid, id=id)
         else:
             # Ensure requester is set
             if interaction.requester is None:
@@ -2403,10 +2463,6 @@ class AgentBasics:
         # Resolve target agent(s)
         if len(interaction.target) == 0:
             return None
-
-        # Updating stream UUID
-        for stream in interaction.owned_streams.values():
-            stream.edit_uuid_in_data(current_uuid=data_uuid, new_uuid=interaction.uuid)
 
         # Build the content for the interaction message
         content = interaction.to_dict()
@@ -2430,6 +2486,15 @@ class AgentBasics:
             if not self.im.register_sent(interaction):
                 return None
             else:
+
+                # If we asked to copy the last-added stream data by a system interaction,
+                # then we copy it using the current interaction UUID
+                if copy_sys:
+                    for stream in interaction.owned_streams.values():
+                        last_stream_data = stream.get(uuid=Custom.SYSTEM_INTERACTION_UUID)
+                        if last_stream_data is not None:
+                            stream.set(last_stream_data, uuid=interaction.uuid)
+
                 return interaction
         else:
             return None

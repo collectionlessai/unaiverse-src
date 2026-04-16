@@ -125,7 +125,7 @@ class Action:
         self.system_interaction = Interaction(requester=Custom.SYSTEM_INTERACTION_LABEL,
                                               target=Custom.SYSTEM_INTERACTION_LABEL,
                                               action_name=self.name, action_kwargs=self.args,
-                                              uuid=None)
+                                              id=Custom.SYSTEM_INTERACTION_ID)
         self.system_interaction.set_action_ref(self)
 
     @property
@@ -748,12 +748,14 @@ class ActionInteractionList:
         if interaction.requester not in self.by_requester_and_by_insertion_order:
             self.by_requester_and_by_insertion_order[interaction.requester] = []
 
-        # Searching for UUID = None, if already there - do not accumulate multiple requests with UUID None
-        if interaction.uuid is None:
-            existing_request_same_uuid = self.get_interaction_by_uuid(interaction.requester, interaction.uuid)
-            if existing_request_same_uuid:
-                self.by_insertion_order[existing_request_same_uuid.by_insertion_order_id] = interaction
-                return
+        # Searching for already existing interactions with this UUID
+        # If already there - do not accumulate multiple requests with same UUID (useful also for system interactions)
+        existing_request_same_uuid = self.get_interaction_by_uuid(interaction.requester, interaction.uuid)
+        if existing_request_same_uuid:
+            self.by_insertion_order[existing_request_same_uuid.by_insertion_order_id] = interaction
+            interaction.by_insertion_order_id = existing_request_same_uuid.by_insertion_order_id
+            interaction.by_requester_insertion_order_id = existing_request_same_uuid.by_requester_insertion_order_id
+            return
 
         if 0 < self.max_per_requester <= len(self.by_requester_and_by_insertion_order[interaction.requester]):
             self.remove(self.get_oldest_interaction(interaction.requester))
@@ -823,12 +825,15 @@ class ActionInteractionList:
         Args:
             interaction: The Interaction object to reposition.
         """
-        if interaction.is_valid():
+        log.error(f"[moving to back] NEUTRAL (len is {len(self.by_insertion_order)}), list is {self}, interaction is valid? {interaction.is_valid()}")
+        if len(self.by_insertion_order) > 1 and interaction.is_valid():
             try:
+                log.error(f"[moving to back] BEFORE {self}")
                 entering_time = self.by_insertion_order_entering_time[interaction.by_insertion_order_id]
                 self.remove(interaction)
                 self.add(interaction)
                 self.by_insertion_order_entering_time[interaction.by_insertion_order_id] = entering_time
+                log.error(f"[moving to back] AFTER {self}")
             except Exception as e:
                 raise e
 

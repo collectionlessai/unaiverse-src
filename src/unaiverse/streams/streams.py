@@ -134,6 +134,7 @@ class Stream:
         self.data_by_uuid = {}
         self.interactions_by_uuid = {}  # Interactions tracking
         self.enabled = True
+        self._last_set_uuid = None  # Utility
 
     @staticmethod
     def create(stream: 'Stream', name: str | None = None, group: str = 'none',
@@ -355,11 +356,16 @@ class Stream:
         if not self.enabled:
             return None
 
+        # Backward compatibility
+        if Custom.IS_IN_DEPRECATED_WORLD and uuid is None and self._last_set_uuid is not None:
+            uuid = self._last_set_uuid
+
         first = False
         if uuid not in self.data_by_uuid:
             first = True
             self.limit_data_without_interactions()
             self.data_by_uuid[uuid] = Data(uuid=uuid)
+            self._last_set_uuid = uuid  # Backward compatibility
 
         # This is the data sample (with tag and so on)
         data_struct = self.data_by_uuid[uuid]
@@ -393,6 +399,10 @@ class Stream:
         Returns:
             True if data exists for that UUID, False otherwise.
         """
+        # Backward compatibility
+        if Custom.IS_IN_DEPRECATED_WORLD and uuid is None and self._last_set_uuid is not None:
+            uuid = self._last_set_uuid
+
         return uuid in self.data_by_uuid
 
     def has_data_and_interaction(self, uuid: str | None) -> bool:
@@ -451,16 +461,33 @@ class Stream:
         """
         return self.interactions_by_uuid.keys()
 
-    def get(self, requested_by: str | None = None, uuid: str | None = None) -> str | Image | torch.Tensor | None:
+    def get(self, requested_by: str | None = None, uuid: str | None = None, all_uuids: bool = False) \
+            -> str | Image | torch.Tensor | None | list[str | Image | torch.Tensor | None]:
         """Get the most recent data sample from the stream (i.e., the last one that was "set").
 
         Args:
             requested_by: Identifier of the caller; when provided, each caller receives each sample at most once.
-            uuid: UUID of the interaction whose data to retrieve (defaults to the last set UUID).
+            uuid: UUID of the interaction whose data to retrieve (it can be None for backward compatibility;
+                in "deprecated worlds" defaults to the last set UUID).
+            all_uuids: Whether to return a list with all the data samples for all the existing UUIDs (default: False).
+                In this case, the uuid argument is ignored.
 
         Returns:
             The most recent data sample if available and not already returned to this caller, else None.
+            If all_uuids is True, then it returns a list of data samples, each with the just mentioned properties.
         """
+
+        # Backward compatibility
+        if Custom.IS_IN_DEPRECATED_WORLD and uuid is None and self._last_set_uuid is not None:
+            uuid = self._last_set_uuid
+
+        if all_uuids:
+            samples = []
+            for _uuid in self.get_data_uuids():
+                sample = self.get(requested_by, _uuid)
+                samples.append(sample)
+            return samples
+
         if uuid not in self.data_by_uuid:
             return None
 
@@ -489,6 +516,10 @@ class Stream:
         Returns:
             The data timestamp as a float, or None if no data exists for that UUID.
         """
+        # Backward compatibility
+        if Custom.IS_IN_DEPRECATED_WORLD and uuid is None and self._last_set_uuid is not None:
+            uuid = self._last_set_uuid
+
         if uuid not in self.data_by_uuid:
             return None
 
@@ -503,6 +534,10 @@ class Stream:
         Returns:
             The integer data tag, or None if no data exists for that UUID.
         """
+        # Backward compatibility
+        if Custom.IS_IN_DEPRECATED_WORLD and uuid is None and self._last_set_uuid is not None:
+            uuid = self._last_set_uuid
+
         if uuid not in self.data_by_uuid:
             return None
 
@@ -515,6 +550,10 @@ class Stream:
             data_tag: The new integer tag value.
             uuid: The UUID to update (defaults to the last set UUID).
         """
+        # Backward compatibility
+        if Custom.IS_IN_DEPRECATED_WORLD and uuid is None and self._last_set_uuid is not None:
+            uuid = self._last_set_uuid
+
         if uuid not in self.data_by_uuid:
             return
 
@@ -563,6 +602,7 @@ class Stream:
             return
         uuid = interaction.uuid
         self.interactions_by_uuid[uuid] = interaction
+        self._last_set_uuid = interaction.uuid
 
     def edit_uuid_in_data(self, current_uuid: str, new_uuid: str) -> None:
         """Rename a UUID in the data store (used when a temporary UUID is replaced by a permanent one).
@@ -692,6 +732,32 @@ class Stream:
         """
         return self.to_code_str()
 
+    # ==================================================================================================================
+    # BEGIN OF DEPRECATED METHODS
+    # ==================================================================================================================
+    def get_uuid(self, expected: bool = False) -> str | None:
+        """DEPRECATED"""
+        return self._last_set_uuid
+
+    def set_uuid(self, ref_uuid: str | None, expected: bool = False) -> None:
+        """DEPRECATED"""
+        if not expected:
+            self._last_set_uuid = ref_uuid
+
+    def clear_uuid_if_marked_as_clearable(self) -> None:
+        """DEPRECATED"""
+        self.clear_uuid()
+
+    def clear_uuid(self) -> bool:
+        """DEPRECATED"""
+        self._last_set_uuid = None
+        self.clear_all_interactions()
+        self.clear_all_data()
+        return True
+    # ==================================================================================================================
+    # END OF DEPRECATED METHODS
+    # ==================================================================================================================
+
 
 class BufferedStream(Stream):
     """
@@ -775,6 +841,9 @@ class BufferedStream(Stream):
         Returns:
             The current buffered sample, or None if no new data is available for this caller.
         """
+        if Custom.IS_IN_DEPRECATED_WORLD and uuid is None and self._last_set_uuid is not None:
+            uuid = self._last_set_uuid
+
         if (requested_by is not None and uuid in self.restart_before_next_get_by_uuid and
                 requested_by in self.restart_before_next_get_by_uuid[uuid]):
             self.restart_before_next_get_by_uuid[uuid].remove(requested_by)

@@ -47,7 +47,8 @@ class Interaction:
                  to_state: str | None = None,
                  timeout: float = -1.,
                  callback: str | None = None,
-                 uuid: str | None = "random"):
+                 forced_uuid: str | None = "do_not_force",
+                 id: str | None = "random"):
         """Create a new Interaction.
 
         Args:
@@ -64,10 +65,28 @@ class Interaction:
                 will override this with its internal timeout valid for all actions).
             callback: Name of the method to call on the agent (the InteractionManager will do it) when this
                 interaction finishes (it must be a method with a single argument, which is the interaction object).
-            uuid: Unique identifier string; ``"random"`` generates one automatically, ``None`` leaves it unset.
+            forced_uuid: A very custom option to force a specific UUID (None is a valid UUID here), that is by default
+                a mixture of the id (below) and the target fields. To be used only in very special cases.
+                Defaults to "do_not_force".
+            id: Identifier string (might not be unique); ``"random"`` generates one automatically (default).
+                When set to None, it defaults to the UUID of a system interaction. The requester will be appended to
+                it (separated by "_") to get the final UUID, that is the "unique" identification of the interaction.
         """
+        # Participants
+        self.requester: str | None = requester
+        self.target: list[str | None] = target if isinstance(target, list) else [target]
+
         # Identity
-        self.uuid: str = _uuid.uuid4().hex[0:8] if (uuid is not None and uuid == 'random') else uuid
+        self.id: str = _uuid.uuid4().hex[0:8] if (id is not None and id == 'random') else id \
+            if id is not None else Custom.SYSTEM_INTERACTION_UUID
+
+        # Indexing string (the actual unique identifier of the interaction, that also involves the requester)
+        self.uuid: str = Interaction.build_uuid(self.id, str(self.requester))
+
+        # Forcing a specific UUID (if needed)
+        if forced_uuid != "do_not_force":
+            self.id = None
+            self.uuid = forced_uuid
 
         # Action requested
         self.action_name: str = action_name
@@ -110,10 +129,6 @@ class Interaction:
         self.data_sent_after_completion = False
         self.buffered_stream_restarted = False
         self.send_status = True
-
-        # Participants
-        self.requester: str | None = requester
-        self.target: list[str | None] = target if isinstance(target, list) else [target]
 
         # Pointers
         self.action_ref: Callable[Interaction] | None = None  # Reference to the actual Action object
@@ -159,6 +174,18 @@ class Interaction:
         # Callback method name
         self.callback = callback
 
+    @staticmethod
+    def build_uuid(id: str | None, requester: str | None = None) -> str:
+        if id is None:
+            id = Custom.SYSTEM_INTERACTION_ID
+        if requester is None:
+            requester = Custom.SYSTEM_INTERACTION_LABEL
+        return id + "_" + requester
+
+    @staticmethod
+    def get_id_from_uuid(uuid: str) -> str:
+        return uuid.split("_")[0]
+
     @property
     def created(self) -> bool:
         """True when the interaction has just been created and not yet requested or received."""
@@ -173,6 +200,11 @@ class Interaction:
     def running(self) -> bool:
         """True when the interaction is currently running."""
         return self.status == InteractionStatus.RUNNING
+
+    @property
+    def paused(self) -> bool:
+        """True when the interaction is currently paused."""
+        return self.status == InteractionStatus.PAUSED
 
     @property
     def registered_as_sent(self) -> bool:
@@ -464,8 +496,13 @@ class Interaction:
     def mark_running(self) -> None:
         """Mark this interaction as currently running."""
         self.status = InteractionStatus.RUNNING
-        self.timestamp_started = clock.get_time()
-        self.cycle_started = clock.get_cycle()
+        if self.timestamp_started <= 0:
+            self.timestamp_started = clock.get_time()
+            self.cycle_started = clock.get_cycle()
+
+    def mark_paused(self) -> None:
+        """Mark this interaction as currently paused."""
+        self.status = InteractionStatus.PAUSED
 
     def mark_completed(self, reason: 'CompletionReason', dest_state: str | None = None,
                        target: str | None = None) -> None:
@@ -633,6 +670,7 @@ class Interaction:
             A dictionary representation of this interaction.
         """
         return {
+            'id': self.id,
             'uuid': self.uuid,
             'action_name': self.action_name,
             'requester': self.requester,
@@ -660,6 +698,7 @@ class Interaction:
             A new Interaction instance.
         """
         interaction = cls(
+            id=d['id'],
             action_name=d['action_name'],
             action_kwargs=d.get('action_kwargs', {}),
             streams=d.get('streams', []),
@@ -696,11 +735,11 @@ class Interaction:
             'data_tags': self.data_tags if len(self.data_tags) > 0 else None,
         }
 
-    def to_code_str(self, include_uuid: bool = False, include_received_tags: bool = False) -> str:
+    def to_code_str(self, include_id: bool = False, include_received_tags: bool = False) -> str:
         """Return a compact single-line representation for logs and debugging.
 
         Args:
-            include_uuid: Prepend the interaction UUID to the output when True.
+            include_id: Prepend the interaction UUID to the output when True.
             include_received_tags: Append the received data tags when True.
 
         Returns:
@@ -709,7 +748,7 @@ class Interaction:
         s = ""
         t: list[str] = self.target
 
-        if include_uuid:
+        if include_id:
             s = f"{self.uuid} => "
         if include_received_tags:
             t: list[str] = []
@@ -1288,6 +1327,12 @@ class InteractionManager:
         """Return the most recently registered interaction, or None if none have been registered."""
         return self.last_registered
 
+    def set_current_as_paused(self) -> None:
+        """Set the current interaction as something that was started but now must be paused because some other
+        interactions are handled."""
+        if self.current is not None:
+            self.current.mark_paused()
+
     def set_current(self, interaction: Interaction | None) -> None:
         """Set the given interaction as the currently executing one.
 
@@ -1386,6 +1431,9 @@ class InteractionManager:
                         interaction.requester == self.lazy[interaction.uuid].requester):  # Distinguish chained
                     self.lazy_recently_completed.add(interaction)
                     del self.lazy[interaction.uuid]
+
+                    # Clearing the human module related case, if needed
+                    self.agent.clear_stdin_backlog_if_human(interaction.requester)
 
                 # Running callback method, if any
                 if interaction.callback is not None:
@@ -1683,6 +1731,7 @@ class InteractionStatus(Enum):
     LAZY = "lazy"
     RECEIVED = "received"
     RUNNING = "running"
+    PAUSED = "paused"
     COMPLETED = "completed"
 
 

@@ -14,7 +14,6 @@
 """
 import os
 import sys
-import ast
 import cv2
 import copy
 import json
@@ -43,7 +42,7 @@ from unaiverse.networking.node.connpool import NodeConn
 from unaiverse.networking.node.profile import NodeProfile
 from unaiverse.streams.streams import DataProps, BufferedStream
 from unaiverse.utils.misc import (get_key_considering_multiple_sources, save_node_addresses_to_file,
-                                  prepare_app_dir, load_agent_in_memory, unpack_py_files)
+                                  prepare_app_dir, load_agent_in_memory, unpack_py_files, analyze_code)
 
 
 class Node:
@@ -109,7 +108,7 @@ class Node:
 
         # Logging: we create a new logger and will share it with the agent/world as well
         log.create(name=os.path.basename(sys.argv[0]), log_dir=os.path.dirname(os.path.abspath(sys.argv[0])),
-                   active=None if Custom.PRINT_LEVEL <= 1 else
+                   active=None if Custom.PRINT_LEVEL < 1 else
                    {Ch.STATEM, Ch.NETWORK, Ch.STREAMS, Ch.MISC, Ch.INTER, Ch.P2P, Ch.DEBUG},
                    no_color=False, file_enabled=Custom.LOG_TO_FILE)
         log.set_clock(clock)  # Wiring the clock
@@ -750,7 +749,7 @@ class Node:
             self.profile.mark_change_in_connections()
 
             # Clearing all joining options
-            self.clear_world_related_data()
+            await self.agent.clear_world_related_data()
             self.joining_world_info = None
 
             if self.agent.__class__.__name__ == "WAgent":
@@ -1608,7 +1607,7 @@ class Node:
                                         "Failed to send world approval, removing (disconnecting) " + msg.sender)
                                     await self.__purge(msg.sender)
                                 else:
-                                    # update role also in the profile held by the world
+                                    # Update role also in the profile held by the world
                                     dynamic_profile['connections']['role'] = self.world.ROLE_BITS_TO_STR[role]
                                     private_peer_id = profile.get_dynamic_profile()['private_peer_id']
                                     private_addr = profile.get_dynamic_profile()['private_peer_addresses']
@@ -1752,19 +1751,22 @@ class Node:
                 log.misc("Received a stream sample...")
 
                 if self.node_type is Node.AGENT:  # Handling the received samples
-                    self.agent.get_stream_sample(net_hash=msg.channel, sample_dict=msg.content)
+                    added_data = self.agent.get_stream_sample(net_hash=msg.channel, sample_dict=msg.content)
 
                     # Printing messages to screen, if needed (useful when chatting with lone wolves)
                     if interact_mode:
                         net_hash = DataProps.normalize_net_hash(msg.channel)
                         if net_hash in self.agent.known_streams:
-                            stream_dict = self.agent.known_streams[net_hash]
                             peer_id = DataProps.peer_id_from_net_hash(net_hash)
                             group = DataProps.name_or_group_from_net_hash(net_hash)
                             owner_account = self.agent.all_agents[peer_id].get_static_profile()['email']
                             agent_name = self.agent.all_agents[peer_id].get_static_profile()['node_name']
-                            for name, stream_obj in stream_dict.items():
-                                data = stream_obj.get(requested_by="print")
+                            for (user_hash, uuid) in added_data:
+                                if user_hash not in self.agent.known_streams_by_user_hash:
+                                    continue
+                                stream_obj = self.agent.known_streams_by_user_hash[user_hash]
+                                data = stream_obj.get(requested_by="print", uuid=uuid)
+                                name = stream_obj.props.get_name()
                                 if data is None:
                                     continue
                                 if stream_obj.props.is_text():
@@ -2051,7 +2053,7 @@ class Node:
             if agent_stats_code is not None and len(agent_stats_code) > 0:
 
                 # Checking stats code
-                if not Node.__analyze_code({"stats.py": agent_stats_code}):
+                if not analyze_code({"stats.py": agent_stats_code}):
                     log.error("Invalid agent stats code (syntax errors or unsafe code) was provided by the world, "
                               "blocking the join operation")
                     return False
@@ -2096,14 +2098,16 @@ class Node:
             # Getting agent files
             try:
                 agent_files = unpack_py_files(packed_agent_files)
+                Custom.IS_IN_DEPRECATED_WORLD = False
             except Exception:
 
                 # Backward compatibility (single agent.py for all roles)
+                Custom.IS_IN_DEPRECATED_WORLD = True
                 roles = profile.get_dynamic_profile()['world_roles_fsm'].keys()
                 agent_files = {f"{k}.py": packed_agent_files for k in roles}
 
             # Checking files
-            if not Node.__analyze_code(agent_files):
+            if not analyze_code(agent_files):
                 log.error(
                     f"Invalid agent-related code (syntax errors or unsafe code) was provided by "
                     f"the world, blocking the join operation")
@@ -2172,8 +2176,8 @@ class Node:
         """
 
         # If the peer_id is not in the same world were we are, we early stop the interview process
-        if (not self.conn.is_public(peer_id) and peer_id not in self.conn.world_agents_list and
-                peer_id not in self.conn.world_masters_list and peer_id != self.conn.world_node_peer_id):
+        if (not self.conn.is_public(peer_id) and peer_id not in self.conn.world_agents_set and
+                peer_id not in self.conn.world_masters_set and peer_id != self.conn.world_node_peer_id):
             log.error(f"Interview failed: "
                       f"peer ID {peer_id} is not in the world agents/masters list, and it is not the world node")
             return False
@@ -2403,71 +2407,6 @@ class Node:
                 log.critical(f"Request {api} failed with status code {response.status_code}")
         except Exception as e:
             log.critical(f"An error occurred while making the POST request: {e}")
-
-    @staticmethod
-    def __analyze_code(files_in_memory: dict[str, str]) -> bool:
-        """Analyzes a string of Python code for dangerous or unsafe functions and modules.
-
-        Args:
-            files_in_memory: The dict "file name to code string with contents".
-
-        Returns:
-            True if the code is considered safe, otherwise False.
-        """
-        dangerous_functions = {"eval", "exec", "compile", "system", "__import__", "input"}
-        dangerous_modules = {"subprocess"}
-
-        def is_suspicious(ast_node):
-
-            # Detect bare function calls like eval(...)
-            if isinstance(ast_node, ast.Call):
-                # case: eval(...)  (ast.Name)
-                if isinstance(ast_node.func, ast.Name):
-                    return ast_node.func.id in dangerous_functions
-                # case: something.eval(...)  (ast.Attribute)
-                elif isinstance(ast_node.func, ast.Attribute):
-                    attr_name = ast_node.func.attr
-                    # 1) If attribute name is one of the dangerous_functions, only flag it
-                    #    if the object is a suspicious module (os, subprocess, etc.)
-                    if attr_name in dangerous_functions:
-                        value = ast_node.func.value
-                        # example: os.system(...)  => ast.Name(id='os')
-                        if isinstance(value, ast.Name):
-                            if value.id in dangerous_modules:
-                                return True
-                        # example: package.subpackage.func(...) => ast.Attribute
-                        # check top-level name if possible: walk down to the leftmost Name
-                        left = value
-                        while isinstance(left, ast.Attribute):
-                            left = left.value
-                        if isinstance(left, ast.Name) and left.id in dangerous_modules:
-                            return True
-                    # 2) Also catch explicit module imports used directly:
-                    #    subprocess.run(...), os.system(...), etc.
-                    if isinstance(ast_node.func.value, ast.Name):
-                        if ast_node.func.value.id in dangerous_modules:
-                            # if the module is suspicious, any attribute call is risky
-                            return True
-
-            # Detect imports
-            if isinstance(ast_node, (ast.Import, ast.ImportFrom)):
-                for alias in ast_node.names:
-                    if alias.name.split('.')[0] in dangerous_modules:
-                        return True
-
-            return False
-
-        for file_in_memory in files_in_memory.values():
-            try:
-                tree = ast.parse(file_in_memory)
-            except SyntaxError:
-                return False
-
-            for _ast_node in ast.walk(tree):
-                if is_suspicious(_ast_node):
-                    return False
-
-        return True
 
     def __replace_agent_instance_by_role(self, role: int,
                                          world_peer_id: str | None = None,

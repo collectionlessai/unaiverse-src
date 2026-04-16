@@ -16,6 +16,8 @@ import io
 import os
 import json
 import html
+import time
+
 import graphviz
 import importlib.resources
 from unaiverse.custom import Custom
@@ -84,17 +86,6 @@ class HybridStateMachine:
         self.__debug_messages_active = False
 
         self.set_actionable(actionable)
-
-    # Backward compatibility
-    def set_print_fcn(self, print_fcn: Callable, supports_html: bool) -> None:
-        """Backward-compatibility hook to redirect log output to a custom print function.
-
-        Args:
-            print_fcn: The callable to use for printing log messages.
-            supports_html: Whether the print function can render HTML formatting.
-        """
-        if log is not None:
-            log.set_print_fcn(print_fcn, supports_html)
 
     def show_ticks_in_action_messages(self, do_it: bool = True) -> None:
         """Enables or disables tick symbols appended to action log messages upon completion."""
@@ -951,12 +942,14 @@ class HybridStateMachine:
             # It there was an already selected action (for example a multistep action), then continue with it,
             # otherwise, select a new one following a certain policy (actually, first-come first-served)
             if self.__action is None:
-                log.statem(f"List of action to choose from:\n   " +
+                log.statem(f"List of actions to choose from:\n   " +
                            "\n   ".join([a.to_code_str().replace("\n", "\n   ")
                                          for a in actions_list]), state=self.get_state_name())
 
                 # Naive policy: take the first action that is ready
                 _idx, _interaction = self.policy(actions_list)
+
+                time.sleep(0.002)
 
                 if _idx < 0:
                     log.statem(f"Selected no actions", state=self.get_state_name())
@@ -1139,10 +1132,12 @@ class HybridStateMachine:
                 if interaction is None or attempts_to_serve_an_interaction_list[idx] >= len(self.__action.interactions):
                     del actions_list[idx]
                     del to_state_list[idx]
+                    del attempts_to_serve_an_interaction_list[idx]
 
                 # Update status
                 self.__state_changed = False
                 interaction.reset_state()
+                self.actionable.im.set_current_as_paused()
                 self.__action = None  # Clearing
 
                 continue  # Move to the next action
@@ -1154,14 +1149,19 @@ class HybridStateMachine:
         self.__state_changed = False
         return -1
 
-    async def act(self) -> None:
+    async def act(self) -> bool:
         """A high-level method that combines `act_states` and `act_transitions` to run the state machine. It repeatedly
         processes states and transitions until a blocking state is reached or all feasible actions have been tried,
         thus ensuring a complete processing cycle in one call (async).
+
+        Returns:
+            True if, during this whole 'act', the state changed at least once.
         """
 
         # It keeps processing states and actions, until all the current feasible actions fail
         # (also when a step of a multistep action is executed) or a blocking state is reached
+        changed_state = False
+        starting_state = self.state
         while True:
             if self.welcome_msg is not None and self.state is not None and self.state == self.initial_state:
                 log.user(self.welcome_msg)
@@ -1169,8 +1169,11 @@ class HybridStateMachine:
 
             await self.act_states()
             ret = await self.act_transitions(self.must_wait())
+            if self.state != starting_state:
+                changed_state = True
             if ret != 0 or (self.state is not None and self.states[self.state].blocking):
                 break
+        return changed_state
 
     def get_state_changed(self) -> bool:
         """Returns an internal flag that indicates if a state transition has occurred in the last execution cycle.
@@ -1203,7 +1206,8 @@ class HybridStateMachine:
                 requester=kwargs.get('signature', None),
                 target="self",
                 timeout=-1.,
-                uuid=kwargs.get('uuid', "random"))
+                forced_uuid=kwargs.get('forced_uuid', "do_not_force"),
+                id=kwargs.get('id', "random"))
 
         log.statem(f"Received an action request with this interaction: {interaction}", state=self.get_state_name())
 

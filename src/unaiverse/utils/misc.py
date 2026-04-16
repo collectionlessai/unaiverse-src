@@ -738,3 +738,68 @@ class MultiPartLimitedDict(dict):
 
         # 4. Set the actual value
         super().__setitem__(key, value)
+
+
+def analyze_code(files_in_memory: dict[str, str]) -> bool:
+    """Analyzes a string of Python code for dangerous or unsafe functions and modules.
+
+        Args:
+            files_in_memory: The dict "file name to code string with contents".
+
+        Returns:
+            True if the code is considered safe, otherwise False.
+        """
+    dangerous_functions = {"eval", "exec", "compile", "system", "__import__", "input"}
+    dangerous_modules = {"subprocess"}
+
+    def is_suspicious(ast_node):
+
+        # Detect bare function calls like eval(...)
+        if isinstance(ast_node, ast.Call):
+            # case: eval(...)  (ast.Name)
+            if isinstance(ast_node.func, ast.Name):
+                return ast_node.func.id in dangerous_functions
+            # case: something.eval(...)  (ast.Attribute)
+            elif isinstance(ast_node.func, ast.Attribute):
+                attr_name = ast_node.func.attr
+                # 1) If attribute name is one of the dangerous_functions, only flag it
+                #    if the object is a suspicious module (os, subprocess, etc.)
+                if attr_name in dangerous_functions:
+                    value = ast_node.func.value
+                    # example: os.system(...)  => ast.Name(id='os')
+                    if isinstance(value, ast.Name):
+                        if value.id in dangerous_modules:
+                            return True
+                    # example: package.subpackage.func(...) => ast.Attribute
+                    # check top-level name if possible: walk down to the leftmost Name
+                    left = value
+                    while isinstance(left, ast.Attribute):
+                        left = left.value
+                    if isinstance(left, ast.Name) and left.id in dangerous_modules:
+                        return True
+                # 2) Also catch explicit module imports used directly:
+                #    subprocess.run(...), os.system(...), etc.
+                if isinstance(ast_node.func.value, ast.Name):
+                    if ast_node.func.value.id in dangerous_modules:
+                        # if the module is suspicious, any attribute call is risky
+                        return True
+
+        # Detect imports
+        if isinstance(ast_node, (ast.Import, ast.ImportFrom)):
+            for alias in ast_node.names:
+                if alias.name.split('.')[0] in dangerous_modules:
+                    return True
+
+        return False
+
+    for file_in_memory in files_in_memory.values():
+        try:
+            tree = ast.parse(file_in_memory)
+        except SyntaxError:
+            return False
+
+        for _ast_node in ast.walk(tree):
+            if is_suspicious(_ast_node):
+                return False
+
+    return True
