@@ -21,7 +21,6 @@ from typing import Optional, List, Dict, Any, TYPE_CHECKING
 # FdCapture and Logger are optional — gracefully degrade if not present
 try:
     from unaiverse.utils.os_fd_capture import FdCapture
-    from unaiverse.utils.logger import Logger as _UnaLogger, Ch as _Ch
     _CAPTURE_AVAILABLE = True
 except ImportError:
     _CAPTURE_AVAILABLE = False

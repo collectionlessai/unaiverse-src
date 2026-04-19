@@ -350,6 +350,9 @@ class _Logger:
         """Log a user-facing application message."""
         self._log(Ch.USER, msg, info, sub=sub)
 
+    def print_instance(self):
+        print(f"LOG OBJECT INSTANCE: {self}")
+
     def statem(self, msg: str, sub: str = "", **info: Any) -> None:
         """Log an app state message (e.g. a per-cycle snapshot summary).
 
@@ -571,19 +574,20 @@ class _Logger:
 
 class Logger:
     def __init__(self):
-        self.__instance = None
+
+        # Default instance, expected to be overwritten by calling create(...) when the application has enough info
+        # to decide how to set up the logger
+        self.__instance = None  # _Logger(name="logger", file_enabled=False)
 
     def create(self, *args, **kwargs):
         self.__instance = _Logger(*args, **kwargs)
 
     def set_print_fcn(self, *args, **kwargs):
-        if self.__instance is None:
-            raise RuntimeError(f"Logger: Attempted to call set_print_fcn before log instance initialization.")
         self.__instance.set_print_fcn(*args, **kwargs)
 
     def __getattr__(self, name):
         if self.__instance is None:
-            raise RuntimeError(f"Logger: Attempted to call '{name}' before log instance initialization.")
+            return print
         return getattr(self.__instance, name)
 
 

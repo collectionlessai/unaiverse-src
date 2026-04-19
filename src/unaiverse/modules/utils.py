@@ -657,6 +657,8 @@ class AgentProcessorChecker:
                 self.proc = ModuleWrapper(module=self.proc, proc_opts=self.proc_opts, proc_inputs=self.proc_inputs,
                                           proc_outputs=self.proc_outputs, agent=processor_container)
                 self.proc.device = torch.device("cpu")
+            else:
+                self.proc.agent = processor_container
 
         # Guessing inputs, fixing attributes
         if self.proc_inputs is None:

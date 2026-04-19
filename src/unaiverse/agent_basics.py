@@ -272,7 +272,7 @@ class AgentBasics:
         self._node_agents_waiting = agents_waiting
 
         # Checking if human, marking the node
-        if isinstance(self.proc.module, HumanModule):
+        if self.proc is not None and isinstance(self.proc.module, HumanModule):
             self._node_profile.get_static_profile()["node_type"] = self.HUMAN
 
         # Adding peer_id information into the already existing stream data (if any)
@@ -378,25 +378,25 @@ class AgentBasics:
         """Set default bindings for the stdin."""
 
         if (public is not None and not public) or (public is None and self.behaving_in_world()):
-            self.stdin.bind(self.__proc_in_streams_by_user_hash_prv)
+            self.stdin.bind(self.__proc_in_streams_by_user_hash_prv, uuid=Custom.SYSTEM_INTERACTION_UUID)
 
         if (public is not None and public) or (public is None and not self.behaving_in_world()):
-            self.stdin.bind(self.__proc_in_streams_by_user_hash_pub)
+            self.stdin.bind(self.__proc_in_streams_by_user_hash_pub, uuid=Custom.SYSTEM_INTERACTION_UUID)
 
     def set_default_stream_binding(self, public: bool | None = None) -> None:
         """Set default bindings for the stdin, stdtar, stdext, stdout stream proxies."""
 
         if (public is not None and not public) or (public is None and self.behaving_in_world()):
-            self.stdin.bind(self.__proc_in_streams_by_user_hash_prv)
-            self.stdtar.bind({})
-            self.stdext.bind(self.__env_streams_by_user_hash_prv)
-            self.stdout.bind(self.__proc_streams_by_user_hash_prv)
+            self.stdin.bind(self.__proc_in_streams_by_user_hash_prv, uuid=Custom.SYSTEM_INTERACTION_UUID)
+            self.stdtar.bind({}, uuid=Custom.SYSTEM_INTERACTION_UUID)
+            self.stdext.bind(self.__env_streams_by_user_hash_prv, uuid=Custom.SYSTEM_INTERACTION_UUID)
+            self.stdout.bind(self.__proc_streams_by_user_hash_prv, uuid=Custom.SYSTEM_INTERACTION_UUID)
 
         if (public is not None and public) or (public is None and not self.behaving_in_world()):
-            self.stdin.bind(self.__proc_in_streams_by_user_hash_pub)
-            self.stdtar.bind({})
-            self.stdext.bind(self.__env_streams_by_user_hash_pub)
-            self.stdout.bind(self.__proc_streams_by_user_hash_pub)
+            self.stdin.bind(self.__proc_in_streams_by_user_hash_pub, uuid=Custom.SYSTEM_INTERACTION_UUID)
+            self.stdtar.bind({}, uuid=Custom.SYSTEM_INTERACTION_UUID)
+            self.stdext.bind(self.__env_streams_by_user_hash_pub, uuid=Custom.SYSTEM_INTERACTION_UUID)
+            self.stdout.bind(self.__proc_streams_by_user_hash_pub, uuid=Custom.SYSTEM_INTERACTION_UUID)
 
     def get_default_stdin_bindings(self, public: bool | None = None) -> dict:
         """Returns the streams that are bind by default on the stdin."""
@@ -720,27 +720,35 @@ class AgentBasics:
         """
         return self._node_profile
 
-    def get_agents_by_role(self, role: str):
-        if role not in self.ROLE_STR_TO_BITS:
-            return []
+    def get_role(self, agent: str) -> str | None:
+        role_int = self._node_conn.get_role(agent)
+        return self.ROLE_STR_TO_BITS[role_int] if role_int in self.ROLE_STR_TO_BITS[role_int] else None
 
-        ret = []
-        is_augmented = "~" in role
-        role_int = self.ROLE_STR_TO_BITS[role]
-        if not is_augmented:
-            searched_roles_int = set()
+    def get_agents_by_role(self, role: str | list[str], handshake_completed: bool = True):
+        role_list = role if isinstance(role, list) else [role]
+        searched_roles_int = set()
+
+        for role in role_list:
+            is_augmented = "~" in role
             role_int = self.ROLE_STR_TO_BITS[role]
-            for role_prefix_int in {AgentBasics.ROLE_WORLD_AGENT, AgentBasics.ROLE_WORLD_MASTER}:
-                searched_roles_int.add(role_prefix_int | role_int)
-        else:
-            searched_roles_int = {role_int}
+            if not is_augmented:
+                role_int = self.ROLE_STR_TO_BITS[role]
+                for role_prefix_int in {AgentBasics.ROLE_WORLD_AGENT, AgentBasics.ROLE_WORLD_MASTER}:
+                    searched_roles_int.add(role_prefix_int | role_int)
+            else:
+                searched_roles_int = {role_int}
 
-        for agent in self.all_agents.keys():
-            agent_role_int = self._node_conn.get_role(agent)
-            if agent_role_int in searched_roles_int:
-                ret.append(agent)
+        found_agents = []
+        for role_int in searched_roles_int:
+            _, _found_connected_peer_ids = self._node_conn.find_addrs_by_role(role_int, return_peer_ids_too=True)
+            if handshake_completed:
+                for agent in _found_connected_peer_ids:
+                    if agent in self.all_agents:
+                        found_agents.append(agent)
+            else:
+                found_agents += _found_connected_peer_ids
 
-        return ret
+        return found_agents
 
     def get_current_role(self, return_int: bool = False, ignore_base_role: bool = True) -> str | int | None:
         """Returns the current role of the agent.
@@ -763,12 +771,20 @@ class AgentBasics:
         else:
             return None
 
-    async def add_agent(self, peer_id: str, profile: NodeProfile) -> bool:
+    async def add_agent(self, peer_id: str, profile: NodeProfile,
+                        add_proc_streams: bool = True,
+                        add_env_streams: bool = True,
+                        add_pubsub_streams: bool = True) -> bool:
         """Add a new known agent (async).
 
         Args:
             peer_id: The unique identifier of the peer.
             profile: The NodeProfile object containing the peer's/agent's information.
+            add_proc_streams: True if the processor's streams of the peer must be added to the list of known streams,
+                if compatible.
+            add_env_streams: True if the environmental streams of the peer must be added to the list of known streams,
+                if compatible.
+            add_pubsub_streams: True if pubsub streams must be added/subscribed.
 
         Returns:
             True if the agent was successfully added, False otherwise.
@@ -804,18 +820,20 @@ class AgentBasics:
 
             # Check compatibility of the environmental streams of the agent we are adding with our-agent's processor
             environmental_streams = profile.get_dynamic_profile()['streams']
-            if (environmental_streams is not None and
+            if (add_env_streams and environmental_streams is not None and
                     not (await self.add_compatible_streams(peer_id, environmental_streams,
                                                            buffered=False,
-                                                           public=public))):  # This will also "add" the stream
+                                                           public=public,
+                                                           skip_pubsub=not add_pubsub_streams))):
                 return False
 
             # Check compatibility of the generated streams of the agent we are adding with our-agent's processor
             proc_streams = profile.get_dynamic_profile()['proc_outputs']
-            if (proc_streams is not None and
+            if (add_proc_streams and proc_streams is not None and
                     not (await self.add_compatible_streams(peer_id, profile.get_dynamic_profile()['proc_outputs'],
                                                            buffered=False,
-                                                           public=public))):  # This will also "add" the stream
+                                                           public=public,
+                                                           skip_pubsub=not add_pubsub_streams))):
                 return False
 
         log.misc(f"Successfully added agent {profile.get_static_profile()['node_name']} "
@@ -1073,7 +1091,8 @@ class AgentBasics:
             if DataProps.is_pubsub_from_net_hash(net_hash):
                 if peer_id != "<private_peer_id>" and peer_id != "<public_peer_id>":
                     if not (await self._node_conn.unsubscribe(peer_id, channel=net_hash)):
-                        log.error(f"Failed in unsubscribing from pubsub, peer_id: {peer_id}, channel: {net_hash}")
+                        # log.error(f"Failed in unsubscribing from pubsub, peer_id: {peer_id}, channel: {net_hash}")
+                        pass
                     else:
                         log.misc(f"Successfully unsubscribed from pubsub, peer_id: {peer_id}, channel: {net_hash}")
 
@@ -1123,12 +1142,39 @@ class AgentBasics:
             self.proc_in_streams_by_user_hash = {}
         log.misc(f"Successfully removed all streams!")
 
-    def get_stream(self, peer_id: str, name: str) -> Stream | None:
-        user_hash = DataProps.build_user_hash(peer_id, name)
+    def get_stream(self, name_or_group: str, peer_id: str | None = None, data_type: str | None = None) -> Stream | None:
+        if peer_id is None:
+            peer_id = self.get_peer_id()
+        user_hash = DataProps.build_user_hash(peer_id, name_or_group)
         if user_hash in self.known_streams_by_user_hash:
             return self.known_streams_by_user_hash[user_hash]
         else:
-            return None
+            streams = self.get_streams(group_name=name_or_group, peer_id=peer_id)
+            if streams is not None and len(streams) > 0:
+                if data_type is not None:
+                    for stream in streams:
+                        if stream.props.data_type == data_type:
+                            return stream
+                    return None
+                elif len(streams) == 1:
+                    return streams[0]
+                else:
+                    return None  # Ambiguous case
+            else:
+                return None
+
+    def get_streams(self, group_name: str, peer_id: str | None = None) -> list[Stream] | None:
+        if peer_id is None:
+            peer_id = self.get_peer_id()
+        net_hash_ps = DataProps.build_net_hash(peer_id, pubsub=True, name_or_group=group_name)
+        if net_hash_ps in self.known_streams:
+            return self.known_streams_by_user_hash[net_hash_ps]
+        else:
+            net_hash_dm = DataProps.build_net_hash(peer_id, pubsub=False, name_or_group=group_name)
+            if net_hash_dm in self.known_streams:
+                return self.known_streams_by_user_hash[net_hash_dm]
+            else:
+                return None
 
     def find_streams(self, peer_id: str, name_or_group: str | None = None, discard_owned: bool = False) \
             -> dict[str, dict[str, Stream]]:
@@ -1313,7 +1359,7 @@ class AgentBasics:
 
     async def add_compatible_streams(self, peer_id: str,
                                      streams_in_profile: list[dict], buffered: bool = False,
-                                     add_all: bool = False, public: bool = True) -> bool:
+                                     add_all: bool = False, public: bool = True, skip_pubsub: bool = False) -> bool:
         """Add to the list of processor-compatible-streams those streams provided as arguments that are actually
         found to be compatible with the processor (if they are pubsub, it also subscribes to them) (async).
 
@@ -1323,6 +1369,7 @@ class AgentBasics:
             buffered: If True, the added streams will be of type BufferedStream.
             add_all: If True, all streams from the profile are added, regardless of processor compatibility.
             public: Consider public streams only (or private streams only).
+            skip_pubsub: Skip pubsub streams.
 
         Returns:
             True if compatible streams were successfully added and subscribed to, False otherwise.
@@ -1334,7 +1381,8 @@ class AgentBasics:
             # This is the case in which we add all streams, storing all pairs (DataProps, net_hash)
             for j in streams_in_profile:
                 jj = DataProps.from_dict(j)
-                if public == jj.is_public():
+                if (public == jj.is_public()
+                        and (not jj.is_pubsub() or not skip_pubsub)):
                     net_hash = jj.net_hash(peer_id)
                     added_streams.append((jj, net_hash))
         else:
@@ -1347,7 +1395,8 @@ class AgentBasics:
             for i, in_proc in enumerate(self.proc_inputs):
                 for j in streams_in_profile:
                     jj = DataProps.from_dict(j)
-                    if public == jj.is_public() and in_proc.is_compatible(jj):
+                    if (public == jj.is_public() and in_proc.is_compatible(jj)
+                            and (not jj.is_pubsub() or not skip_pubsub)):
                         net_hash = jj.net_hash(peer_id)
 
                         if net_hash not in added_net_hash_to_prop_name:
@@ -1374,8 +1423,9 @@ class AgentBasics:
             for i, out_proc in enumerate(self.proc_outputs):
                 for j in streams_in_profile:
                     jj = DataProps.from_dict(j)
-                    if (public == jj.is_public() and
-                            (out_proc.is_compatible(jj) or (jj.is_tensor_target_id() and has_cross_entropy[i]))):
+                    if ((public == jj.is_public() and
+                            (out_proc.is_compatible(jj) or (jj.is_tensor_target_id() and has_cross_entropy[i])))
+                            and (not jj.is_pubsub() or not skip_pubsub)):
                         net_hash = jj.net_hash(peer_id)
 
                         if net_hash not in added_net_hash_to_prop_name:
@@ -1488,6 +1538,7 @@ class AgentBasics:
                 self.stdin.bind(self.__proc_in_streams_by_user_hash_prv)
                 self.stdout.bind(self.__proc_streams_by_user_hash_prv)
                 self.stdext.bind(self.__env_streams_by_user_hash_prv)
+                self.on_tick()
                 await self.behav.act()
                 self.behav.enable(False)
 
@@ -1499,9 +1550,9 @@ class AgentBasics:
             if self.behav is not None:
                 self.behav.enable(False)
             self.behav_lone_wolf.enable(True)
-            self.stdin.bind(self.__proc_in_streams_by_user_hash_pub)
-            self.stdout.bind(self.__proc_streams_by_user_hash_pub)
-            self.stdext.bind(self.__env_streams_by_user_hash_pub)
+            self.stdin.bind(self.__proc_in_streams_by_user_hash_pub, uuid=Custom.SYSTEM_INTERACTION_UUID)
+            self.stdout.bind(self.__proc_streams_by_user_hash_pub, uuid=Custom.SYSTEM_INTERACTION_UUID)
+            self.stdext.bind(self.__env_streams_by_user_hash_pub, uuid=Custom.SYSTEM_INTERACTION_UUID)
             await self.behav_lone_wolf.act()
             self.behav_lone_wolf.enable(False)
 
@@ -1545,6 +1596,9 @@ class AgentBasics:
         Returns:
             None in the base implementation; subclasses are expected to return state-related feedback.
         """
+        pass
+
+    def on_tick(self):
         pass
 
     def get_peer_id(self) -> str:
@@ -2045,6 +2099,9 @@ class AgentBasics:
             for stream_obj in stream_dict.values():
                 stream_obj.set_tag(data_tag, uuid=uuid)
 
+    def get_current_interaction(self):
+        return self.im.get_current()
+
     def force_action_step(self, step: int):
         """Override the current action step index used in the active behavior.
 
@@ -2408,7 +2465,8 @@ class AgentBasics:
                     target: str | list[str] | None = None,
                     action_kwargs: dict | None = None,
                     streams: tuple[list[str], int] | list[str] | None = None,
-                    data_samples: list[str | Image | torch.Tensor] | None = None,
+                    data_samples: list[str | Image | torch.Tensor] | dict[
+                        str, str | Image | torch.Tensor] | None = None,
                     num_steps: int = -1,
                     max_time: float = -1.,
                     from_state: str | None = None,
@@ -2416,7 +2474,7 @@ class AgentBasics:
                     callback: str | None = None,
                     forced_uuid: str | None = "do_not_force",
                     id: str | None = "random",
-                    copy_sys: bool = False) -> 'Interaction | None':
+                    copy_sys: bool = False) -> Interaction | None:
         """Send an interaction request to one or more target agents (async).
 
         Accepts either a pre-built :class:`Interaction` object *or* raw arguments from which one will be created.
@@ -2432,6 +2490,8 @@ class AgentBasics:
             streams: List of ``(stream_user_hash, num_samples)`` tuples (or just stream_user_hash if num_samples = 1).
                 Ignored when a pre-built Interaction is provided.
             data_samples: List of actual data samples. Ignored when a pre-built Interaction is provided.
+                It can also be a dictionary stream user hash -> data sample, to actually send the samples as if they
+                were produced by a stream.
             num_steps: Number of steps the interaction spans (used when building from raw args).
                 Ignored when a pre-built Interaction is provided.
             max_time: Maximum time for the interaction. Ignored when a pre-built Interaction is provided.
@@ -2455,6 +2515,28 @@ class AgentBasics:
                                       requester=self.get_peer_id(), target=target,
                                       from_state=from_state, to_state=to_state,
                                       timeout=max_time, callback=callback, forced_uuid=forced_uuid, id=id)
+
+            # Moving data samples to streams, if needed (when data_samples is a dictionary)
+            # In this case, "streams" must be None (if not None, then the data_samples field is ignored)
+            if isinstance(interaction.data_samples, dict):
+
+                # This is already an empty list (otherwise the data_samples field would not be there), but better
+                # be extra safe
+                interaction.streams.clear()
+                streams = list(interaction.data_samples.keys())
+
+                for stream_user_hash, data_sample in interaction.data_samples.items():
+                    if stream_user_hash not in self.known_streams_by_user_hash:
+                        return None
+                    stream = self.known_streams_by_user_hash[stream_user_hash]
+                    stream.set(data_sample, uuid=interaction.uuid)
+
+                    # Appending the stream to the interaction, that now looks like a stream-based interaction
+                    streams.append(stream_user_hash)
+
+                # Purging
+                interaction.data_samples.clear()
+                interaction.parse_streams(streams)  # Rebuilding the stream dictionaries, with a specific structure
         else:
             # Ensure requester is set
             if interaction.requester is None:

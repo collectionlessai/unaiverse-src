@@ -462,7 +462,7 @@ class Stream:
         return self.interactions_by_uuid.keys()
 
     def get(self, requested_by: str | None = None, uuid: str | None = None, all_uuids: bool = False) \
-            -> str | Image | torch.Tensor | None | list[str | Image | torch.Tensor | None]:
+            -> str | Image | torch.Tensor | None | list[tuple[str | Image | torch.Tensor | None, int]]:
         """Get the most recent data sample from the stream (i.e., the last one that was "set").
 
         Args:
@@ -473,8 +473,9 @@ class Stream:
                 In this case, the uuid argument is ignored.
 
         Returns:
-            The most recent data sample if available and not already returned to this caller, else None.
-            If all_uuids is True, then it returns a list of data samples, each with the just mentioned properties.
+            The most recent data_sample if available and not already returned to this caller, else None.
+            If all_uuids is True, then it returns a list of tuples (data_sample, tag), where each data_sample has
+                the just mentioned properties.
         """
 
         # Backward compatibility
@@ -485,7 +486,8 @@ class Stream:
             samples = []
             for _uuid in self.get_data_uuids():
                 sample = self.get(requested_by, _uuid)
-                samples.append(sample)
+                tag = self.get_tag(_uuid)
+                samples.append((sample, tag))
             return samples
 
         if uuid not in self.data_by_uuid:

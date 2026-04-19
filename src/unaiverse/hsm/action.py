@@ -317,11 +317,14 @@ class Action:
 
     def set_as_ready(self) -> None:
         """Sets the action's ready flag to `True`, indicating it can now be executed."""
+        self.outer = False  # For the moment, I prefer to avoid "solid" actions to also take requests from the outside
         self.inner = True
 
     def set_as_not_ready(self) -> None:
-        """Sets the action's ready flag to `False`, preventing it from being executed."""
+        """Sets the action's ready flag to `False`, preventing it from being executed
+            (unless requested from the outside)."""
         self.inner = False
+        self.outer = True
 
     def set_msg(self, msg: str | None) -> None:
         """Sets the message associated to this Custom."""
@@ -825,15 +828,12 @@ class ActionInteractionList:
         Args:
             interaction: The Interaction object to reposition.
         """
-        log.error(f"[moving to back] NEUTRAL (len is {len(self.by_insertion_order)}), list is {self}, interaction is valid? {interaction.is_valid()}")
         if len(self.by_insertion_order) > 1 and interaction.is_valid():
             try:
-                log.error(f"[moving to back] BEFORE {self}")
                 entering_time = self.by_insertion_order_entering_time[interaction.by_insertion_order_id]
                 self.remove(interaction)
                 self.add(interaction)
                 self.by_insertion_order_entering_time[interaction.by_insertion_order_id] = entering_time
-                log.error(f"[moving to back] AFTER {self}")
             except Exception as e:
                 raise e
 

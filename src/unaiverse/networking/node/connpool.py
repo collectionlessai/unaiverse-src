@@ -1228,7 +1228,10 @@ class NodeConn(ConnectionPools):
         Returns:
             A list of addresses for the peer.
         """
-        return self.peer_id_to_addrs.get(peer_id)
+        if peer_id in self.peer_id_to_addrs:
+            return self.peer_id_to_addrs.get(peer_id)
+        else:
+            return None
 
     def in_connection_queues(self, peer_id: str) -> bool:
         """Checks if a peer ID exists in any connection pool.
@@ -1241,12 +1244,14 @@ class NodeConn(ConnectionPools):
         """
         return peer_id in self.peer_id_to_pool_name
 
-    def find_addrs_by_role(self, role: int, return_peer_ids_too: bool = False) -> list | tuple[list, list]:
+    def find_addrs_by_role(self, role: int, return_peer_ids_too: bool = False,
+                           discard_yourself: bool = False) -> list | tuple[list, list]:
         """Finds all addresses of peers with a specific role.
 
         Args:
             role: The integer role to search for.
             return_peer_ids_too: A boolean to also return the peer IDs.
+            discard_yourself: True to avoid reporting your info on the returned data.
 
         Returns:
             A list of lists of addresses, and optionally a list of peer IDs.
@@ -1261,6 +1266,8 @@ class NodeConn(ConnectionPools):
         ret_addrs = []
         ret_peer_ids = []
         for peer_id in peer_ids:
+            if discard_yourself and (peer_id == self.p2p_public.peer_id or peer_id == self.p2p_world.peer_id):
+                continue
             addrs = self.get_addrs(peer_id)
             if addrs is not None:
                 ret_addrs.append(addrs)
@@ -1368,6 +1375,8 @@ class NodeConn(ConnectionPools):
             if peer_id in self.peer_id_to_addrs:
                 del self.peer_id_to_addrs[peer_id]
             for role, peer_ids in self.role_to_peer_ids.items():
+                if peer_id not in peer_ids:
+                    continue
                 if role & 1 == 1:
                     peer_ids.remove(peer_id)
 

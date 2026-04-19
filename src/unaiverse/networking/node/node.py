@@ -636,7 +636,7 @@ class Node:
             return None
 
         # Connecting
-        log.user("Connecting to another agent/world...")
+        log.misc("Connecting to another agent/world...")
         peer_id, through_relay = await self.conn.connect(addresses,
                                                          p2p_name=NodeConn.P2P_PUBLIC if public else NodeConn.P2P_WORLD)
 
@@ -1811,7 +1811,7 @@ class Node:
                             requester=msg.sender,
                             target="self",
                             timeout=-1.,
-                            uuid=msg.content['uuid'])
+                            forced_uuid=msg.content['uuid'])
 
                         if not behav.request_action(interaction):
                             log.error("Cannot enqueue the request, incompatible action")
@@ -2433,15 +2433,15 @@ class Node:
                 new_agent, new_agent_memory_finder = load_agent_in_memory(self.world_agent_files,
                                                                           base_role_str,
                                                                           proc=None)
-
-                # Saving new roles from the world ("custom roles") and building the augmented sets
-                new_agent.CUSTOM_ROLES.clear()
-                for r in world_roles:
-                    new_agent.CUSTOM_ROLES.append(r)
-                new_agent.augment_roles(role_bits_to_str, role_str_to_bits)
             else:
                 new_agent = self.agent
                 new_agent_memory_finder = None
+
+            # Saving new roles from the world ("custom roles") and building the augmented sets
+            new_agent.CUSTOM_ROLES.clear()
+            for r in world_roles:
+                new_agent.CUSTOM_ROLES.append(r)
+            new_agent.augment_roles(role_bits_to_str, role_str_to_bits)
 
             # Cloning attributes of the existing agent
             for key, value in self.agent.__dict__.items():

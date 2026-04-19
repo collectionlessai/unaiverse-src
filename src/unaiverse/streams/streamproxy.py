@@ -13,7 +13,6 @@
                  Main Developers:    Stefano Melacci (Project Leader), Christian Di Maio, Tommaso Guidi
 """
 from itertools import islice
-from unaiverse.utils.logger import log
 from unaiverse.streams.streams import Stream
 from unaiverse.utils.misc import GenException
 from unaiverse.streams.dataprops import DataProps
@@ -34,15 +33,19 @@ class StreamProxy:
         """
         self._streams: dict[str, Stream | object] = streams if streams is not None else {}
         self._stream_list: list = list(self._streams.values())
+        self._uuid: str | None = None
 
-    def bind(self, streams: dict[str, Stream | object]):
+    def bind(self, streams: dict[str, Stream | object], uuid: str | None = None):
         """Rebind this proxy to a different set of streams (different from the ones used when building it).
 
         Args:
             streams: Dict mapping stream name to stream object.
+            uuid: The default UUID to look for when doing get/set.
         """
         self._streams = streams.copy()  # Shallow copy
         self._stream_list = list(streams.values())
+        if uuid is not None:
+            self._uuid = uuid
 
     def add_new_bind(self, stream_hash: str, stream: Stream) -> None:
         """Register an additional stream under the given hash, if not already bound.
@@ -55,26 +58,43 @@ class StreamProxy:
             self._streams[stream_hash] = stream
             self._stream_list.append(stream)
 
-    def get(self, key: str | int | None = None, requested_by: str | None = None, uuid: str | None = None):
+    def get(self, key: str | int | None = None, requested_by: str | None = None, uuid: str | None = None,
+            all_uuids: bool = False, data_type: str | None = None):
         """Get data from a stream.
 
         Args:
             key: Stream name (str), index (int), or None to retrieve from all streams.
             requested_by: The identifier of who requests access to the stream data (default: None).
-            uuid: UUID of the interaction to retrieve data for (default: None).
+            uuid: UUID of the interaction to retrieve data for (default: None, that will use the default-bind UUID).
+            all_uuids: If True, data from all the existing UUIDs (no matter what) are returned.
+                It is valid if and only if paired with the selection of a specific data_type or of key.
+            data_type: The string name of the data type of interest. If multiple streams with the same data_type
+                are bind, the first found one is returned.
 
         Returns:
             The data from the requested stream, or None if no new data is available.
         """
         if len(self._stream_list) == 0:
-            raise GenException("No streams bound to this StreamIO (while trying to get data)")
+            return None
+
+        if uuid is None:
+            uuid = self._uuid
+
+        if all_uuids and (not data_type and not not key):
+            raise GenException("You can only ask for all UUIDs if you also also specify a "
+                               "stream name (key) or a data type")
+
+        if key and data_type:
+            raise GenException("You can only specify a stream name (key) or a data type, not both")
 
         if key is None:
             found_at_least_one = False
             ret = []
             for s in self._stream_list:
                 if isinstance(s, Stream):
-                    data = s.get(requested_by, uuid)  # This might will be None if requested multiple times
+                    if data_type and s.props.data_type != data_type:
+                        continue
+                    data = s.get(requested_by, uuid, all_uuids)  # This might will be None if requested multiple times
                     if data is not None:
                         found_at_least_one = True
                     ret.append(data)
@@ -83,12 +103,12 @@ class StreamProxy:
             return ret if found_at_least_one else None
         elif isinstance(key, int):
             if isinstance(self._stream_list[key], Stream):
-                return self._stream_list[key].get(requested_by, uuid)
+                return self._stream_list[key].get(requested_by, uuid, all_uuids)
             else:
                 return self._stream_list[key]  # Default value
         elif key in self._streams:
             if self._streams[key] is not None:
-                return self._streams[key].get(requested_by, uuid)
+                return self._streams[key].get(requested_by, uuid, all_uuids)
             else:
                 return self._streams[key]  # Default value
         else:
@@ -152,10 +172,14 @@ class StreamProxy:
                 for the single-stream case, or a list of values to set on all streams at once.
             data: The data to set (when ``key_or_data`` is a name/index).
             data_tag: Custom integer tag for the sample (default: -1, meaning auto-tag).
-            uuid: UUID of the interaction for which data is being set (default: None).
+            uuid: UUID of the interaction for which data is being set (default: None, that will use the
+                default-bind UUID)
         """
         if len(self._stream_list) == 0:
             raise GenException("No streams bound to this StreamIO")
+
+        if uuid is None:
+            uuid = self._uuid
 
         if isinstance(key_or_data, (list, tuple)):
             if len(key_or_data) != len(self._stream_list):
@@ -189,7 +213,7 @@ class StreamProxy:
 
         Args:
             key: Stream name (str), index (int), or None to return the max tag across all streams.
-            uuid: UUID of the interaction to query (default: None).
+            uuid: UUID of the interaction to query (default: None, that will use the default-bind UUID).
 
         Returns:
             The integer data tag, or -1 if not applicable.
@@ -199,6 +223,9 @@ class StreamProxy:
         """
         if len(self._stream_list) == 0:
             raise GenException("No streams bound to this StreamIO")
+
+        if uuid is None:
+            uuid = self._uuid
 
         if key is None:
             ret = []

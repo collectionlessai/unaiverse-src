@@ -14,7 +14,5 @@
 """
 from . import misc
 from . import sandbox
-from . import logger
 from . import os_fd_capture
-from .logger import Logger, Ch
 from .os_fd_capture import FdCapture

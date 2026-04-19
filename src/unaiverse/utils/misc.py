@@ -617,21 +617,22 @@ def get_key_considering_multiple_sources(key_variable: str | None) -> str:
         return key
 
 
-class PolicyFilterSelfGen:
+class PolicyFilterDelayAction:
     """Policy filter that delays self-generation or learning actions by a configurable wait time."""
 
-    def __init__(self, wait: float, add_random_up_to: float = 0.) -> None:
+    def __init__(self, action_names: set[str], wait: float, add_random_up_to: float = 0.) -> None:
         """Initialises the PolicyFilterSelfGen.
 
         Args:
-            wait: Minimum number of seconds to wait before allowing a ``do_gen`` or
-                ``do_learn`` action to proceed.
+            action_names: The name of the actions to delay (set).
+            wait: Minimum number of seconds to wait before allowing ``action_name`` action to proceed.
             add_random_up_to: Upper bound of an additional random delay in seconds
                 added to ``wait`` (default: 0.0; negative values are clamped to 0.0).
 
         Raises:
             GenException: If ``wait`` is not greater than zero.
         """
+        self.action_names = action_names
         self.wait = wait
         self.add_random_up_to = max(add_random_up_to, 0.)
         if wait <= 0.:
@@ -670,7 +671,7 @@ class PolicyFilterSelfGen:
         action_name = action.name
 
         # We want to handle as an exception the case of "do_gen" with "u_hashes=[...processor_in]" (self-generation)
-        if action_name == "do_gen" or action_name == "do_learn":
+        if action_name in self.action_names:
 
             # Saving the time when the action we were looking for was actually selected by the policy
             if _first_t < 0:

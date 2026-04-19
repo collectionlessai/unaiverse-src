@@ -92,7 +92,8 @@ def action(func: Callable) -> Callable:
         # Calling the action
         try:
             ret = await func(self, *args, **resolved_kwargs)
-        except Exception:
+        except Exception as e:
+            raise e  # debug
             ret = False
         return ret
 
@@ -298,7 +299,8 @@ class Agent(AgentBasics):
                    target: str | list[str] | None = None,
                    action_kwargs: dict | None = None,
                    streams: tuple[list[str], int] | list[str] | None = None,
-                   data_samples: list[str | Image | torch.Tensor] | None = None,
+                   data_samples: list[str | Image | torch.Tensor] | dict[
+                       str, str | Image | torch.Tensor] | None = None,
                    num_steps: int = -1,
                    max_time: float = -1.,
                    from_state: str | None = None,
@@ -323,6 +325,8 @@ class Agent(AgentBasics):
             streams: List of ``(stream_user_hash, num_samples)`` tuples (or just stream_user_hash if num_samples = 1).
                 Ignored when a pre-built Interaction is provided.
             data_samples: List of actual data samples. Ignored when a pre-built Interaction is provided.
+                It can also be a dictionary stream user hash -> data sample, to actually send the samples as if they
+                were produced by a stream.
             num_steps: Number of steps the interaction spans (used when building from raw args).
                 Ignored when a pre-built Interaction is provided.
             max_time: Maximum time for the interaction. Ignored when a pre-built Interaction is provided.
@@ -341,12 +345,15 @@ class Agent(AgentBasics):
             True if at least of the target agents was reached.
         """
 
-        # This action can only be triggered by the system, no ways
-        if not interaction.is_system():
+        # This action can only be triggered by the system or by the developer, no ways
+        if interaction is not None and not interaction.is_system():
             return False
 
-        system_interaction = interaction
-        first_run = system_interaction.get_mark() is None
+        first_run = True
+        system_interaction = None
+        if interaction is not None:
+            system_interaction = interaction
+            first_run = system_interaction.get_mark() is None
 
         if first_run:
             target = self.__involved_agents(target)
@@ -358,7 +365,8 @@ class Agent(AgentBasics):
                 system_interaction.set_mark(sent_interaction)  # First run, Saving the interaction that was sent
                 return False
             else:
-                system_interaction.action_ref.set_timeout(-1.)  # Clear timeouts to ensure it is not pedantic
+                if system_interaction:
+                    system_interaction.action_ref.set_timeout(-1.)  # Clear timeouts to ensure it is not pedantic
                 return sent_interaction is not None
         else:
             sent_interaction = system_interaction.get_mark()  # Loading the interaction that was sent at the first run
@@ -1075,6 +1083,20 @@ class Agent(AgentBasics):
         return True
 
     @action
+    async def connect_to(self, peer_id: str):
+        addresses = self._node_conn.get_addrs(peer_id)
+        if not self._node_conn.is_connected(peer_id):
+            log.error(f"Asking to get in touch with {peer_id}...")
+            peer_id = await self._node_ask_to_get_in_touch_fcn(addresses=addresses, public=False)
+        else:
+            log.error(f"Not-asking to get in touch with {peer_id}, "
+                      f"since I am already connected to the corresponding peer...")
+        if peer_id is not None:
+            return True
+        else:
+            return False
+
+    @action
     async def connect_by_role(self, role: str | list[str], filter_fcn: str | None = None) -> bool:
         """Finds and attempts to connect with agents whose profiles match a specific role. It can be optionally
         filtered by a custom function. It returns True if at least one valid agent is found (async).
@@ -1088,45 +1110,44 @@ class Agent(AgentBasics):
         """
         log.misc(f"Asking to get in touch with all agents whose role is {role}")
 
-        if self.get_action_step() == 0:
-            role_list = role if isinstance(role, list) else [role]
-            self._found_agents.clear()
-            at_least_one_is_valid = False
+        self._found_agents.clear()
+        role_list = role if isinstance(role, list) else [role]
+        at_least_one_is_valid = False
 
-            for role in role_list:
-                role = self.ROLE_STR_TO_BITS[role]
+        for role in role_list:
+            role = self.ROLE_STR_TO_BITS[role]
 
-                found_addresses1, found_peer_ids1 = self._node_conn.find_addrs_by_role(Agent.ROLE_WORLD_MASTER | role,
-                                                                                       return_peer_ids_too=True)
-                found_addresses2, found_peer_ids2 = self._node_conn.find_addrs_by_role(Agent.ROLE_WORLD_AGENT | role,
-                                                                                       return_peer_ids_too=True)
-                found_addresses = found_addresses1 + found_addresses2
-                found_peer_ids = found_peer_ids1 + found_peer_ids2
+            found_addresses1, found_peer_ids1 = self._node_conn.find_addrs_by_role(Agent.ROLE_WORLD_MASTER | role,
+                                                                                   return_peer_ids_too=True,
+                                                                                   discard_yourself=True)
+            found_addresses2, found_peer_ids2 = self._node_conn.find_addrs_by_role(Agent.ROLE_WORLD_AGENT | role,
+                                                                                   return_peer_ids_too=True,
+                                                                                   discard_yourself=True)
+            found_addresses = found_addresses1 + found_addresses2
+            found_peer_ids = found_peer_ids1 + found_peer_ids2
 
-                if filter_fcn is not None:
-                    if hasattr(self, filter_fcn):
-                        filter_fcn = getattr(self, filter_fcn)
-                        if callable(filter_fcn):
-                            found_addresses, found_peer_ids = filter_fcn(found_addresses, found_peer_ids)
-                    else:
-                        log.error(f"Filter function not found: {filter_fcn}")
+            if filter_fcn is not None:
+                if hasattr(self, filter_fcn):
+                    filter_fcn = getattr(self, filter_fcn)
+                    if callable(filter_fcn):
+                        found_addresses, found_peer_ids = filter_fcn(found_addresses, found_peer_ids)
+                else:
+                    log.error(f"Filter function not found: {filter_fcn}")
 
-                log.misc(f"Found addresses ({len(found_addresses)}) with role: {role}")
-                for f_addr, f_peer_id in zip(found_addresses, found_peer_ids):
-                    if not self._node_conn.is_connected(f_peer_id):
-                        log.misc(f"Asking to get in touch with {f_addr}...")
-                        peer_id = await self._node_ask_to_get_in_touch_fcn(addresses=f_addr, public=False)
-                    else:
-                        log.misc(f"Not-asking to get in touch with {f_addr}, "
-                                 f"since I am already connected to the corresponding peer...")
-                        peer_id = f_peer_id
-                    if peer_id is not None:
-                        at_least_one_is_valid = True
-                        self._found_agents.add(peer_id)
-                    log.misc(f"...returned {peer_id}")
-            return at_least_one_is_valid
-        else:
-            return True
+            log.misc(f"Found addresses ({len(found_addresses)}) with role: {role}")
+            for f_addr, f_peer_id in zip(found_addresses, found_peer_ids):
+                if not self._node_conn.is_connected(f_peer_id):
+                    log.error(f"Asking to get in touch with {f_peer_id}...")
+                    peer_id = await self._node_ask_to_get_in_touch_fcn(addresses=f_addr, public=False)
+                else:
+                    log.misc(f"Not-asking to get in touch with {f_addr}, "
+                             f"since I am already connected to the corresponding peer...")
+                    peer_id = f_peer_id
+                if peer_id is not None:
+                    at_least_one_is_valid = True
+                    self._found_agents.add(peer_id)
+                log.misc(f"...returned {peer_id}")
+        return at_least_one_is_valid
 
     @action
     async def find_agents(self, role: str | list[str], engage: bool = False, handshake_completed: bool = False) -> bool:
@@ -1142,21 +1163,8 @@ class Agent(AgentBasics):
             True if at least one agent is found, False otherwise.
         """
         log.misc(f"Finding an available agent whose role is {role}")
-        role_list = role if isinstance(role, list) else [role]
-        self._found_agents = set()
-
-        for role_str in role_list:
-            role_int = self.ROLE_STR_TO_BITS[role_str]
-
-            _, found_peer_ids1 = self._node_conn.find_addrs_by_role(Agent.ROLE_WORLD_MASTER | role_int,
-                                                                    return_peer_ids_too=True)
-            _, found_peer_ids2 = self._node_conn.find_addrs_by_role(Agent.ROLE_WORLD_AGENT | role_int,
-                                                                    return_peer_ids_too=True)
-            found_peer_ids = found_peer_ids1 + found_peer_ids2
-
-            for peer_id in found_peer_ids:
-                if not handshake_completed or peer_id in self.all_agents:
-                    self._found_agents.add(peer_id)  # Peer IDs here
+        self._found_agents.clear()
+        self._found_agents.update(self.get_agents_by_role(role, handshake_completed=handshake_completed))
 
         log.debug(f"[find_agents] Found these agents: {self._found_agents}")
         if engage:

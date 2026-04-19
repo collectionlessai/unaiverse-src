@@ -39,7 +39,7 @@ class Interaction:
                  action_name: str | None = None,
                  action_kwargs: dict | None = None,
                  streams: tuple[list[str], int] | list[str] | None = None,
-                 data_samples: list | None = None,
+                 data_samples: list | dict | None = None,
                  num_steps: int = -1,
                  requester: str | None = None,
                  target: str | list[str] | None = None,
@@ -55,7 +55,8 @@ class Interaction:
             action_name: The name of the action being requested (e.g. "process", "learn").
             action_kwargs: Action arguments (dict, no streams).
             streams: List of (stream_name - a.k.a. stream user hash, num_samples) tuples specifying expected data.
-            data_samples: List of actual data samples (alternative to samples specification).
+            data_samples: List of actual data samples (alternative to samples specification). It can also be a dict
+                stream user hash -> data sample, that will load samples on the indicated stream hashes.
             num_steps: Total number of steps for this interaction (-1 means no data-based steps).
             requester: Peer ID of the agent originating this interaction.
             target: Peer ID of the target agent or list of peer IDs.
@@ -112,9 +113,7 @@ class Interaction:
 
         # Stream-based specification
         if streams is not None and len(streams) > 0:
-            self.streams = Interaction.__parse_streams(streams)
-            if self.num_steps == -1:
-                self.num_steps = max([stream_dict['num_samples'] for stream_dict in self.streams])
+            self.parse_streams(streams)  # This will create a specific stream structure and also set self.num_steps
 
         # Actual data (alternative to samples above)
         if streams is None and data_samples is not None:
@@ -256,7 +255,7 @@ class Interaction:
         data_samples_dict = {"<data_sample_" + str(i) + ">": self.data_samples[i]
                              for i in range(0, len(self.data_samples))}
         self.stream_proxy.bind(self.stdin_streams | self.stdtar_streams | self.stdext_streams | self.owned_streams |
-                               data_samples_dict)
+                               data_samples_dict, uuid=self.uuid)
 
     def reset_state(self):
         """Resets the state, including the step counter and timing metrics, allowing it to be re-run from the
@@ -662,6 +661,11 @@ class Interaction:
             return True
         else:
             return False
+
+    def parse_streams(self, streams: list):
+        self.streams = Interaction.__parse_streams(streams)
+        if self.num_steps == -1:
+            self.num_steps = max([stream_dict['num_samples'] for stream_dict in self.streams])
 
     def to_dict(self) -> dict:
         """Serialize this interaction for network transmission.
@@ -1358,9 +1362,10 @@ class InteractionManager:
                         stream.restart(interaction.uuid)
 
                 # Every interaction with some-streams-specified forces the interaction-described bindings
-                self.agent.stdin.bind(interaction.stdin_streams)
-                self.agent.stdtar.bind(interaction.stdtar_streams)
-                self.agent.stdext.bind(interaction.stdext_streams)
+                log.error(interaction.stream_proxy)
+                self.agent.stdin.bind(interaction.stdin_streams, uuid=interaction.uuid)
+                self.agent.stdtar.bind(interaction.stdtar_streams, uuid=interaction.uuid)
+                self.agent.stdext.bind(interaction.stdext_streams, uuid=interaction.uuid)
 
     def has_data(self, interaction: 'Interaction') -> bool:
         """Return True if any owned stream has data available for the given interaction.
@@ -1496,7 +1501,7 @@ class InteractionManager:
         return drained
 
     async def complete_expired(self) -> None:
-        """Remove expired interactions and return them for notification (async).
+        """Remove expired (or no-action-based) interactions and return them for notification (async).
 
         Checks all received and sent interactions against the timeout.
         Expired interactions are marked as COMPLETED with TIMEOUT reason
@@ -1505,7 +1510,7 @@ class InteractionManager:
         for interaction in list(self.sent.values()) + list(self.received.values()) + list(self.lazy.values()):
             if interaction.status == InteractionStatus.COMPLETED:
                 continue
-            if interaction.is_expired(Custom.DEFAULT_INTER_TIMEOUT):
+            if interaction.is_expired(Custom.DEFAULT_INTER_TIMEOUT) or interaction.action_name is None:
                 await self.complete(interaction, reason=CompletionReason.TIMEOUT)
             else:
                 if self.is_received(interaction) and interaction.requester not in self.agent.all_agents:

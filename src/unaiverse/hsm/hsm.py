@@ -949,8 +949,6 @@ class HybridStateMachine:
                 # Naive policy: take the first action that is ready
                 _idx, _interaction = self.policy(actions_list)
 
-                time.sleep(0.002)
-
                 if _idx < 0:
                     log.statem(f"Selected no actions", state=self.get_state_name())
 
@@ -1562,6 +1560,7 @@ class HybridStateMachine:
             graph.node(state, state + suffix, _attributes={'id': "node" + str(state_obj.id)})
 
         for from_state, to_states in self.transitions.items():
+            j = 1
             for to_state, action_list in to_states.items():
                 for action in action_list:
                     args = action.args
@@ -1591,7 +1590,8 @@ class HybridStateMachine:
                                 s += ", "
                         s += "]"
 
-                    label = action.name + s
+                    label = str(j) + "." + action.name + s
+                    j += 1
                     if len(label) > 40:
                         tokens = label.split(" ")
                         z = ""
