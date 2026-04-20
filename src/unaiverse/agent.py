@@ -93,6 +93,7 @@ def action(func: Callable) -> Callable:
         try:
             ret = await func(self, *args, **resolved_kwargs)
         except Exception as e:
+            print(func.__name__)
             raise e  # debug
             ret = False
         return ret
@@ -298,7 +299,7 @@ class Agent(AgentBasics):
     async def send(self, action_name: str | None = None,
                    target: str | list[str] | None = None,
                    action_kwargs: dict | None = None,
-                   streams: tuple[list[str], int] | list[str] | None = None,
+                   streams: list[tuple[str,int]] | list[str] | None = None,
                    data_samples: list[str | Image | torch.Tensor] | dict[
                        str, str | Image | torch.Tensor] | None = None,
                    num_steps: int = -1,
@@ -322,8 +323,10 @@ class Agent(AgentBasics):
                 agent. It can be a list of agents. Ignored when a pre-built Interaction is provided.
             action_kwargs: Action arguments dict.  Ignored when a pre-built Interaction
                 is provided.
-            streams: List of ``(stream_user_hash, num_samples)`` tuples (or just stream_user_hash if num_samples = 1).
-                Ignored when a pre-built Interaction is provided.
+            streams: List of ``(stream_hash, num_samples)`` tuples (or just stream_hash if num_samples = 1).
+                Ignored when a pre-built Interaction is provided. A lot of freedom here: stream_hash can be a net hash
+                or a user hash. It is also fine to specify just the stream name or the stream
+                group, then the user hash or the net hash will be automatically estimated.
             data_samples: List of actual data samples. Ignored when a pre-built Interaction is provided.
                 It can also be a dictionary stream user hash -> data sample, to actually send the samples as if they
                 were produced by a stream.
@@ -360,6 +363,7 @@ class Agent(AgentBasics):
             sent_interaction = await self._send(None, action_name, target, action_kwargs, streams,
                                                 data_samples, num_steps, max_time, from_state, to_state, callback,
                                                 forced_uuid, id, copy_sys)
+            log.error(sent_interaction)
             if wait_completion:
                 system_interaction.action_ref.set_default_timeout()  # This will make the action pedantic
                 system_interaction.set_mark(sent_interaction)  # First run, Saving the interaction that was sent
@@ -1088,13 +1092,14 @@ class Agent(AgentBasics):
         if not self._node_conn.is_connected(peer_id):
             log.error(f"Asking to get in touch with {peer_id}...")
             peer_id = await self._node_ask_to_get_in_touch_fcn(addresses=addresses, public=False)
+            if peer_id is not None:
+                return True
+            else:
+                return False
         else:
             log.error(f"Not-asking to get in touch with {peer_id}, "
                       f"since I am already connected to the corresponding peer...")
-        if peer_id is not None:
             return True
-        else:
-            return False
 
     @action
     async def connect_by_role(self, role: str | list[str], filter_fcn: str | None = None) -> bool:
@@ -1106,7 +1111,7 @@ class Agent(AgentBasics):
             filter_fcn: The name of an optional filter function.
 
         Returns:
-            True if at least one agent is found and a connection request is made, False otherwise.
+            True if at least one agent is found and a NEW connection request is made, False otherwise.
         """
         log.misc(f"Asking to get in touch with all agents whose role is {role}")
 
@@ -1139,13 +1144,13 @@ class Agent(AgentBasics):
                 if not self._node_conn.is_connected(f_peer_id):
                     log.error(f"Asking to get in touch with {f_peer_id}...")
                     peer_id = await self._node_ask_to_get_in_touch_fcn(addresses=f_addr, public=False)
+                    if peer_id is not None:
+                        at_least_one_is_valid = True
+                        self._found_agents.add(peer_id)
                 else:
                     log.misc(f"Not-asking to get in touch with {f_addr}, "
                              f"since I am already connected to the corresponding peer...")
                     peer_id = f_peer_id
-                if peer_id is not None:
-                    at_least_one_is_valid = True
-                    self._found_agents.add(peer_id)
                 log.misc(f"...returned {peer_id}")
         return at_least_one_is_valid
 

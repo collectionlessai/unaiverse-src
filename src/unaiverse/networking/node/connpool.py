@@ -1321,6 +1321,8 @@ class NodeConn(ConnectionPools):
 
                 log.cpool(f"Rendezvous peer infos (tag: {tag}, peers: "
                           f"{len(rendezvous_peer_infos)} peers)", sub=self.p2p_world.log_sub)
+                log.cpool(f"Rendezvous message included peer IDs: "
+                          f"{[p['id'] for p in rendezvous_peer_infos]})", sub="prv")
 
                 for c in rendezvous_peer_infos:
                     if c['addrs'] is None:

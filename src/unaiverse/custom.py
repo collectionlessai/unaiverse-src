@@ -22,8 +22,9 @@ class Custom:
     # =====================
     # ENVIRONMENT VARIABLES
     # =====================
-    PRINT_LEVEL = int(os.getenv("NODE_PRINT", "0"))  # 0, 1, 2
+    PRINT_LEVEL = int(os.getenv("NODE_PRINT", "0"))  # 0, 1
     LOG_TO_FILE = int(os.getenv("NODE_LOG", "0")) == 1  # 0, 1
+    PRINT_SCREEN_BASIC_ONLY = int(os.getenv("NODE_SCREEN_BASIC_PRINT", "0")) == 1  # 0, 1
     SKIP_WAS_ALIVE_CHECK = os.getenv("NODE_IGNORE_ALIVE", "0") == "1"
     LIBP2PLOG = os.getenv("NODE_LIBP2PLOG", "0") == "1"
     ENV_IS_ISOLATED = os.getenv("NODE_IS_ISOLATED", "0") == "1"

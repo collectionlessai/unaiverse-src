@@ -33,6 +33,11 @@ class StreamProxy:
         """
         self._streams: dict[str, Stream | object] = streams if streams is not None else {}
         self._stream_list: list = list(self._streams.values())
+        self._streams_by_name_only: dict[str, Stream | object] = {}
+        for stream_hash, stream_obj in self._streams.items():
+            name_only = DataProps.name_from_user_hash(stream_hash)
+            if name_only not in self._streams_by_name_only:  # In case of collision, the first name wins
+                self._streams_by_name_only[DataProps.name_from_user_hash(stream_hash)] = stream_obj
         self._uuid: str | None = None
 
     def bind(self, streams: dict[str, Stream | object], uuid: str | None = None):
@@ -44,6 +49,11 @@ class StreamProxy:
         """
         self._streams = streams.copy()  # Shallow copy
         self._stream_list = list(streams.values())
+        self._streams_by_name_only = {}
+        for stream_hash, stream_obj in self._streams.items():
+            name_only = DataProps.name_from_user_hash(stream_hash)
+            if name_only not in self._streams_by_name_only:  # In case of collision, the first name wins
+                self._streams_by_name_only[DataProps.name_from_user_hash(stream_hash)] = stream_obj
         if uuid is not None:
             self._uuid = uuid
 
@@ -57,6 +67,9 @@ class StreamProxy:
         if stream_hash not in self._streams:
             self._streams[stream_hash] = stream
             self._stream_list.append(stream)
+            name_only = DataProps.name_from_user_hash(stream_hash)
+            if name_only not in self._streams_by_name_only:  # In case of collision, the first name wins
+                self._streams_by_name_only[DataProps.name_from_user_hash(stream_hash)] = stream
 
     def get(self, key: str | int | None = None, requested_by: str | None = None, uuid: str | None = None,
             all_uuids: bool = False, data_type: str | None = None):
@@ -73,6 +86,7 @@ class StreamProxy:
 
         Returns:
             The data from the requested stream, or None if no new data is available.
+            If all_uuids is True, returns a list of tuples, (data, data_tag).
         """
         if len(self._stream_list) == 0:
             return None
@@ -80,7 +94,7 @@ class StreamProxy:
         if uuid is None:
             uuid = self._uuid
 
-        if all_uuids and (not data_type and not not key):
+        if all_uuids and (not data_type and not key):
             raise GenException("You can only ask for all UUIDs if you also also specify a "
                                "stream name (key) or a data type")
 
@@ -111,8 +125,13 @@ class StreamProxy:
                 return self._streams[key].get(requested_by, uuid, all_uuids)
             else:
                 return self._streams[key]  # Default value
+        elif key in self._streams_by_name_only:
+            if self._streams_by_name_only[key] is not None:
+                return self._streams_by_name_only[key].get(requested_by, uuid, all_uuids)
+            else:
+                return self._streams_by_name_only[key]  # Default value
         else:
-            raise GenException(f"Unknown stream: {key}")
+            raise GenException(f"Unknown stream/key: {key}")
 
     def add_interaction(self, interaction) -> None:
         """Register an interaction on all bound streams.

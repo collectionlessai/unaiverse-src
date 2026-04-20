@@ -568,7 +568,7 @@ class Action:
             elif param_name in defaults:
                 actual_params[param_name] = defaults[param_name]
             else:
-                log.statem.error(f"Getting actual params for {self.name}; missing param: {param_name}")
+                log.error(f"Getting actual params for {self.name}; missing param: {param_name}")
                 return None
         return actual_params
 

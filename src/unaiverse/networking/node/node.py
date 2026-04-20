@@ -33,11 +33,11 @@ from unaiverse.world import World
 from unaiverse.agent import Agent
 from collections.abc import Callable
 from datetime import datetime, timezone
-from unaiverse.utils.logger import Ch, log
 from unaiverse.interaction import Interaction
 from unaiverse.networking.p2p.messages import Msg
 from unaiverse.custom import Custom, GenException
 from unaiverse.networking.p2p import P2P, P2PError
+from unaiverse.utils.logger import Ch, log, ALWAYS_ON
 from unaiverse.networking.node.connpool import NodeConn
 from unaiverse.networking.node.profile import NodeProfile
 from unaiverse.streams.streams import DataProps, BufferedStream
@@ -107,9 +107,11 @@ class Node:
                          current_time=datetime.now(timezone.utc).timestamp())  # Node clock (not synced at all!)
 
         # Logging: we create a new logger and will share it with the agent/world as well
+        log_active_channels = None if Custom.PRINT_LEVEL < 1 else \
+            {Ch.STATEM, Ch.NETWORK, Ch.STREAMS, Ch.MISC, Ch.INTER, Ch.P2P, Ch.DEBUG}
         log.create(name=os.path.basename(sys.argv[0]), log_dir=os.path.dirname(os.path.abspath(sys.argv[0])),
-                   active=None if Custom.PRINT_LEVEL < 1 else
-                   {Ch.STATEM, Ch.NETWORK, Ch.STREAMS, Ch.MISC, Ch.INTER, Ch.P2P, Ch.DEBUG},
+                   active=log_active_channels,
+                   screen=ALWAYS_ON if Custom.PRINT_SCREEN_BASIC_ONLY else log_active_channels,
                    no_color=False, file_enabled=Custom.LOG_TO_FILE)
         log.set_clock(clock)  # Wiring the clock
 
@@ -1466,6 +1468,8 @@ class Node:
                     self.last_rendezvous_time = clock.get_time()
                     log.misc(f"Rendezvous messages just published "
                              f"(tag: {clock.get_cycle()}, peers: {len(world_all_peer_infos)})", sub="prv")
+                    log.misc(f"Rendezvous message included peer IDs: "
+                             f"{[p['id'] for p in world_all_peer_infos]})", sub="prv")
 
                     # Clearing
                     self.world.role_changed_by_world = False
@@ -2135,6 +2139,16 @@ class Node:
                 log.misc(f"Rendezvous from profile (tag: {rendezvous_tag}), world agents: {num_world_agents}")
                 self.conn.set_world_masters_list(dynamic_profile['world_summary']['world_masters'])
                 self.conn.set_world_agents_list(dynamic_profile['world_summary']['world_agents'])
+
+                masters = dynamic_profile['world_summary']['world_masters']
+                if masters is None:
+                    masters = []
+                agents = dynamic_profile['world_summary']['world_agents']
+                if agents is None:
+                    agents = []
+                world_all_peer_ids = ([p['id'] for p in masters] + [p['id'] for p in agents])
+                log.misc(f"Rendezvous from profile included peer IDs: "
+                         f"{world_all_peer_ids})", sub="prv")
 
             # Updating our profile to set the world we are in
             self.profile.get_dynamic_profile()['connections']['world_peer_id'] = peer_id

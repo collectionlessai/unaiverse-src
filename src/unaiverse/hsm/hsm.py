@@ -1038,7 +1038,7 @@ class HybridStateMachine:
             status = await action(interaction=interaction)
 
             if status == 0:
-                log.statem(f"+++ ACTION {self.__action.name} correctly completed", state=self.get_state_name(True))
+                log.error(f"+++ ACTION {self.__action.name} correctly completed", state=self.get_state_name(True))
             elif status == 1:
                 log.statem(f"~~~ ACTION {self.__action.name} will be run again", state=self.get_state_name(True))
             else:

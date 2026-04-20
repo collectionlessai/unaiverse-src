@@ -80,11 +80,11 @@ class Ch(str, Enum):
 
 
 # Channels that are unconditionally always active (cannot be disabled)
-_ALWAYS_ON: frozenset[Ch] = frozenset({Ch.CRITICAL, Ch.ERROR, Ch.USER})
+ALWAYS_ON: frozenset[Ch] = frozenset({Ch.CRITICAL, Ch.ERROR, Ch.USER})
 
 # All channels
-_ALL_CHANNELS: frozenset[Ch] = frozenset({Ch.CRITICAL, Ch.ERROR, Ch.USER, Ch.NETWORK, Ch.STREAMS, Ch.INTER,
-                                          Ch.MISC, Ch.DEBUG, Ch.STATEM, Ch.CPOOL, Ch.P2P})
+ALL_CHANNELS: frozenset[Ch] = frozenset({Ch.CRITICAL, Ch.ERROR, Ch.USER, Ch.NETWORK, Ch.STREAMS, Ch.INTER,
+                                         Ch.MISC, Ch.DEBUG, Ch.STATEM, Ch.CPOOL, Ch.P2P})
 
 # ANSI color codes per channel
 _COLORS: dict[Ch, str] = {
@@ -187,19 +187,19 @@ class _Logger:
         self._ctx: dict[str, Any] = {}
         self._sub: str = ""  # sticky subdomain tag (set via set_sub)
         self._clock = None
-        self._print_fcn = {ks: {k: print for k in _ALL_CHANNELS} for ks in _ALL_SUBS}
-        self._print_fcn_supports_html = {ks: {k: False for k in _ALL_CHANNELS} for ks in _ALL_SUBS}
+        self._print_fcn = {ks: {k: print for k in ALL_CHANNELS} for ks in _ALL_SUBS}
+        self._print_fcn_supports_html = {ks: {k: False for k in ALL_CHANNELS} for ks in _ALL_SUBS}
 
         # Resolve active channels
         if active is None:
-            active = _ALWAYS_ON
-        self._active: frozenset[Ch] = frozenset(active) | _ALWAYS_ON
+            active = ALWAYS_ON
+        self._active: frozenset[Ch] = frozenset(active) | ALWAYS_ON
 
         # Resolve screen channels (default: all active)
         if screen is None:
             self._screen: frozenset[Ch] = self._active
         else:
-            self._screen = (frozenset(screen) | _ALWAYS_ON) & self._active
+            self._screen = (frozenset(screen) | ALWAYS_ON) & self._active
 
         # File setup — single append log
         log_dir = Path(log_dir).expanduser()
@@ -231,7 +231,7 @@ class _Logger:
     def disable(self, *channels: Ch) -> None:
         """Disable one or more channels at runtime. Some channels cannot be disabled."""
         with self._lock:
-            self._active = (self._active - frozenset(channels)) | _ALWAYS_ON
+            self._active = (self._active - frozenset(channels)) | ALWAYS_ON
 
     def enable_screen(self, *channels: Ch) -> None:
         """Enable screen output for one or more channels."""
@@ -241,12 +241,12 @@ class _Logger:
     def disable_screen(self, *channels: Ch) -> None:
         """Suppress screen output for one or more channels. Some channels cannot be suppressed."""
         with self._lock:
-            self._screen = (self._screen - frozenset(channels)) | _ALWAYS_ON
+            self._screen = (self._screen - frozenset(channels)) | ALWAYS_ON
 
     def disable_all_screen(self) -> None:
         """Suppress screen output for all channels. Some channels cannot be suppressed."""
         with self._lock:
-            self._screen = _ALWAYS_ON
+            self._screen = ALWAYS_ON
 
     def inspector_enabled(self, true_or_false: bool) -> None:
         self.inspector_activated = true_or_false
@@ -450,7 +450,7 @@ class _Logger:
             if ch in self._screen:
                 self._print_record(ch, ts, record)
 
-            if ch in _ALWAYS_ON and self.inspector_activated:
+            if ch in ALWAYS_ON and self.inspector_activated:
                 last_id = self._output_messages_ids[self._output_messages_last_pos]
                 self._output_messages_last_pos = (self._output_messages_last_pos + 1) % len(self._output_messages)
                 self._output_messages_count = min(self._output_messages_count + 1, len(self._output_messages))
@@ -498,7 +498,7 @@ class _Logger:
 
                 # USER / ERROR / CRITICAL in non-verbose mode: just the message, no preamble.
                 # Full record for everything else, or when verbose_screen=True.
-                if not self._verbose_screen and ch in _ALWAYS_ON:
+                if not self._verbose_screen and ch in ALWAYS_ON:
                     self._print_fcn[sub][ch](f"{color}{record['msg']}{reset}", file=sys.stdout, flush=True)
                     return
 
@@ -531,7 +531,7 @@ class _Logger:
 
     def set_print_fcn(self, print_fcn, ch, sub, supports_html):
         if ch is None:
-            chs = _ALL_CHANNELS
+            chs = ALL_CHANNELS
         else:
             chs = [ch]
         if sub is None:

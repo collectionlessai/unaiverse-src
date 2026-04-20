@@ -1000,7 +1000,7 @@ class InteractionManager:
         #  Ensuring all the streams mentioned in the interaction are known, and normalizing them
         _, expanded_owned_streams = self.expand_and_normalize_streams(interaction)
         if expanded_owned_streams is None:
-            log.error(f"Invalid stream in interaction: {interaction}")
+            log.error(f"Invalid stream field in interaction: {interaction}")
             return False
 
         # Converting format for owned streams (no matter what the matching routine decided)
@@ -1044,9 +1044,10 @@ class InteractionManager:
             log.error(f"No more room for interactions (limit: {self.max_interactions})")
             return False
 
-        #  Ensuring all the streams mentioned in the interaction are known, and normalizing them
+        # Ensuring all the streams mentioned in the interaction are known, and normalizing them
         expanded_streams, expanded_owned_streams = self.expand_and_normalize_streams(interaction)
         if expanded_streams is None:
+            log.error(f"Invalid stream field in interaction: {interaction}")
             return False
 
         # 1. Filling the missing field of the different stream dictionaries, and assigning streams to stdin or stdext,
@@ -1134,6 +1135,30 @@ class InteractionManager:
         interaction.status = InteractionStatus.LAZY
         interaction.type = InteractionType.LAZY
         self.last_registered = interaction
+        return True
+
+    def resolve_streams_and_targets(self, interaction: Interaction) -> bool:
+        target = interaction.target
+        streams = interaction.streams
+
+        if target is not None:
+            for i, _target in enumerate(target):
+                _target = self.agent.resolve_agent_ref(_target)
+                if _target is not None:
+                    target[i] = _target
+                else:
+                    log.error(f"Unknown target specified while sending an interaction ({_target}")
+                    return False
+
+        if streams is not None:
+            for i, stream in enumerate(streams):
+                stream: dict
+                stream_hash = self.agent.resolve_stream_ref(stream['stream_hash'])
+                if stream_hash:
+                    stream['stream_hash'] = stream_hash
+                else:
+                    log.error(f"Unknown stream specified while sending an interaction ({stream['stream_hash']}")
+                    return False
         return True
 
     def expand_and_normalize_streams(self, interaction: Interaction) -> (
@@ -1362,7 +1387,6 @@ class InteractionManager:
                         stream.restart(interaction.uuid)
 
                 # Every interaction with some-streams-specified forces the interaction-described bindings
-                log.error(interaction.stream_proxy)
                 self.agent.stdin.bind(interaction.stdin_streams, uuid=interaction.uuid)
                 self.agent.stdtar.bind(interaction.stdtar_streams, uuid=interaction.uuid)
                 self.agent.stdext.bind(interaction.stdext_streams, uuid=interaction.uuid)

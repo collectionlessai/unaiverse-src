@@ -670,19 +670,19 @@ class AgentBasics:
         for peer_id, profile in self.all_agents.items():
             static_profile = profile.get_static_profile() if hasattr(profile, 'get_static_profile') else {}
             if isinstance(static_profile, dict):
-                if static_profile.get('email') + '@' + static_profile.get('node_name') == ref:
+                if (static_profile.get('email') + '@' + static_profile.get('node_name')) == ref:
                     return peer_id
 
         return None
 
     def resolve_stream_ref(self, ref: str) -> str | None:
-        """Resolve a stream name to a stream user hash (heuristic, gives priority to owned streams).
+        """Resolve a stream name to a stream user or net hash (heuristic, gives priority to owned streams).
 
         Args:
             ref: A stream name, without peer IDs, just the name.
 
         Returns:
-            The stream user hash if found, None otherwise.
+            The stream user hash or net hash if found, None otherwise.
         """
 
         # If already a valid user hash
@@ -693,11 +693,17 @@ class AgentBasics:
         for user_hash, stream_obj in self.owned_streams_by_user_hash.items():
             if ref == Stream.name_from_user_hash(user_hash):
                 return user_hash
+        for net_hash, stream_dict in self.owned_streams.items():
+            if ref == Stream.name_or_group_from_net_hash(net_hash):
+                return net_hash
 
         # Search all streams then
         for user_hash, stream_obj in self.known_streams_by_user_hash.items():
             if ref == Stream.name_from_user_hash(user_hash):
                 return user_hash
+        for net_hash, stream_dict in self.known_streams.items():
+            if ref == Stream.name_or_group_from_net_hash(net_hash):
+                return net_hash
 
         return None
 
@@ -722,7 +728,8 @@ class AgentBasics:
 
     def get_role(self, agent: str) -> str | None:
         role_int = self._node_conn.get_role(agent)
-        return self.ROLE_STR_TO_BITS[role_int] if role_int in self.ROLE_STR_TO_BITS[role_int] else None
+        base_role_int = (role_int >> 2) << 2
+        return self.ROLE_BITS_TO_STR[base_role_int] if base_role_int in self.ROLE_BITS_TO_STR else None
 
     def get_agents_by_role(self, role: str | list[str], handshake_completed: bool = True):
         role_list = role if isinstance(role, list) else [role]
@@ -1168,11 +1175,11 @@ class AgentBasics:
             peer_id = self.get_peer_id()
         net_hash_ps = DataProps.build_net_hash(peer_id, pubsub=True, name_or_group=group_name)
         if net_hash_ps in self.known_streams:
-            return self.known_streams_by_user_hash[net_hash_ps]
+            return list(self.known_streams[net_hash_ps].values())
         else:
             net_hash_dm = DataProps.build_net_hash(peer_id, pubsub=False, name_or_group=group_name)
             if net_hash_dm in self.known_streams:
-                return self.known_streams_by_user_hash[net_hash_dm]
+                return list(self.known_streams[net_hash_dm].values())
             else:
                 return None
 
@@ -2464,7 +2471,7 @@ class AgentBasics:
                     action_name: str | None = None,
                     target: str | list[str] | None = None,
                     action_kwargs: dict | None = None,
-                    streams: tuple[list[str], int] | list[str] | None = None,
+                    streams: list[tuple[str, int]] | list[str] | None = None,
                     data_samples: list[str | Image | torch.Tensor] | dict[
                         str, str | Image | torch.Tensor] | None = None,
                     num_steps: int = -1,
@@ -2487,8 +2494,10 @@ class AgentBasics:
                 agent. It can be a list of agents. Ignored when a pre-built Interaction is provided.
             action_kwargs: Action arguments dict.  Ignored when a pre-built Interaction
                 is provided.
-            streams: List of ``(stream_user_hash, num_samples)`` tuples (or just stream_user_hash if num_samples = 1).
-                Ignored when a pre-built Interaction is provided.
+            streams: List of ``(stream_hash, num_samples)`` tuples (or just stream_hash if num_samples = 1).
+                Ignored when a pre-built Interaction is provided. A lot of freedom here: stream_hash can be a net hash
+                or a user hash. It is also fine to specify just the stream name or the stream
+                group, then the user hash or the net hash will be automatically estimated.
             data_samples: List of actual data samples. Ignored when a pre-built Interaction is provided.
                 It can also be a dictionary stream user hash -> data sample, to actually send the samples as if they
                 were produced by a stream.
@@ -2523,10 +2532,11 @@ class AgentBasics:
                 # This is already an empty list (otherwise the data_samples field would not be there), but better
                 # be extra safe
                 interaction.streams.clear()
-                streams = list(interaction.data_samples.keys())
+                streams = []
 
                 for stream_user_hash, data_sample in interaction.data_samples.items():
-                    if stream_user_hash not in self.known_streams_by_user_hash:
+                    stream_user_hash = self.resolve_stream_ref(stream_user_hash)
+                    if stream_user_hash is None:
                         return None
                     stream = self.known_streams_by_user_hash[stream_user_hash]
                     stream.set(data_sample, uuid=interaction.uuid)
@@ -2537,6 +2547,10 @@ class AgentBasics:
                 # Purging
                 interaction.data_samples.clear()
                 interaction.parse_streams(streams)  # Rebuilding the stream dictionaries, with a specific structure
+            else:
+                # Resolving streams
+                if not self.im.resolve_streams_and_targets(interaction):
+                    return None
         else:
             # Ensure requester is set
             if interaction.requester is None:
