@@ -190,6 +190,7 @@ class P2P:
                  dht_enabled: bool = True,
                  dht_keep: bool = False,
                  webrtc_enabled: bool = True,
+                 flood_sub: bool = False,
                  ice_stun_servers: Optional[List[str]] = None,
                  ice_turn_servers: Optional[List[Dict[str, Any]]] = None,
                  log_sub: str = "pub",
@@ -212,6 +213,7 @@ class P2P:
             tls_key_path: Optional path to a custom TLS private key file (PEM format).
             webrtc_enabled: Enable the /unaiverse/webrtc-signal/1.0.0 protocol for
                 Go-to-browser NAT traversal via WebRTC DataChannels. Defaults to True.
+            flood_sub: Enable flood sub. Defaults to False.
             ice_stun_servers: List of STUN server URIs (e.g. ["stun:stun.example.com:3478"]).
                 Defaults to Google public STUN when None.
             ice_turn_servers: List of TURN server dicts, each with keys "urls", "username",
@@ -276,6 +278,7 @@ class P2P:
             "network": {
                 "isolated": is_isolated,
                 "force_public": knows_is_public,
+                "flood_sub": flood_sub,
             },
             "dht": {
                 "enabled": dht_enabled,

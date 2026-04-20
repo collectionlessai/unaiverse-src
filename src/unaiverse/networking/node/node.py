@@ -656,6 +656,7 @@ class Node:
                                          content={"ping": "pong", "public": public},
                                          p2p=self.conn.p2p_name_to_p2p[
                                              NodeConn.P2P_PUBLIC if public else NodeConn.P2P_WORLD])):
+                log.error("Sending ping-pong failed!")
                 if run_count < 2:
                     return await self.ask_to_get_in_touch(addresses=addresses, public=public,
                                                           before_updating_pools_fcn=before_updating_pools_fcn,
@@ -1397,6 +1398,7 @@ class Node:
 
                         # Adding the new agent to the world object
                         if not (await self.world.add_agent(peer_id=peer_id, profile=profile)):
+                            log.error("self.world.add_agent")
                             await self.__purge(peer_id)
                             continue
 
@@ -1411,6 +1413,7 @@ class Node:
 
                         # This agent tried to connect to a world "directly", without passing through the
                         # public handshake
+                        log.error("peer_id not in self.agents_to_interview!")
                         await self.__purge(peer_id)
                         continue
 
@@ -1899,17 +1902,20 @@ class Node:
                         log.error("Invalid format of ping-pong package")
                         await self.__purge(msg.sender)
                     else:
-                        if msg.sender not in self.agents_that_provided_ping_pong:
 
-                            # First, expected, ping-pong
-                            self.agents_that_provided_ping_pong.add(msg.sender)
-                        else:
-
-                            # Not expected ping-pong from an already fully connected (i.e., handshake done) agent
-                            await self.__purge(msg.sender, keep_connection=True)
+                        # Not expected ping-pong from an already fully connected (i.e., handshake done) agent
+                        if msg.sender in self.agents_that_provided_ping_pong:
+                            if not is_private_message:
+                                await self.__purge(msg.sender, keep_connection=True, clear_agents_to_interview=True)
+                                log.misc(f"Reconnection detected for peer {msg.sender} in public network: "
+                                         f"will start handshake again")
+                            else:
+                                await self.__purge(msg.sender, keep_connection=True, clear_agents_to_interview=False)
+                                log.misc(f"Reconnection detected for peer {msg.sender} in private network")
                             self.reconnected.add(msg.sender)
-                            log.misc(f"Reconnection detected for peer {msg.sender}, will start handshake again")
-                            self.agents_that_provided_ping_pong.discard(msg.sender)
+                        else:
+                            # In all cases (private or public), let's remember that we already got a ping-pong
+                            self.agents_that_provided_ping_pong.add(msg.sender)
 
             # (K) got a request to re-download the CV from the root server
             elif msg.content_type == Msg.GET_CV_FROM_ROOT:
@@ -2341,12 +2347,13 @@ class Node:
                      f"{connection_dict['args_of_ask_to_get_in_touch']}")
             await self.ask_to_get_in_touch(**connection_dict["args_of_ask_to_get_in_touch"])  # Trying again
 
-    async def __purge(self, peer_id: str, keep_connection: bool = False) -> None:
+    async def __purge(self, peer_id: str, keep_connection: bool = False, clear_agents_to_interview: bool = True) -> None:
         """Removes a peer from all relevant connection lists and queues. (async)
 
         Args:
             peer_id: The peer ID of the node to purge.
             keep_connection: If True, the underlying P2P connection is preserved (only queues are cleared).
+            clear_agents_to_interview: If True, removes the peer profile from the list of agents to interview.
         """
         await self.hosted.remove_agent(peer_id)
 
@@ -2354,8 +2361,9 @@ class Node:
             await self.conn.remove(peer_id)
 
         # Clearing also the contents of the list of interviews
-        if peer_id in self.agents_to_interview:
-            del self.agents_to_interview[peer_id]
+        if clear_agents_to_interview:
+            if peer_id in self.agents_to_interview:
+                del self.agents_to_interview[peer_id]
 
         # Clearing the temporary list of connected agents
         if peer_id in self.agents_expected_to_send_ack:
