@@ -492,7 +492,7 @@ func CreateNode(
 	}
 
 	// --- PubSub Initialization ---
-	if err := setupPubSub(ni); err != nil {
+	if err := setupPubSub(ni, cfg.Network.FloodSub); err != nil {
 		return C.CString(jsonErrorResponse(fmt.Sprintf("Instance %d: Failed to create PubSub", instanceIndex), err))
 	}
 	logger.Debugf("[GO] ✅ Instance %d: PubSub (GossipSub) initialized.\n", instanceIndex)

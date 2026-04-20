@@ -157,6 +157,7 @@ type NodeConfig struct {
     Network struct {
         Isolated bool `json:"isolated"` // only allows connections with friendly peers
 		ForcePublic bool `json:"force_public"` // Replaces knowsIsPublic
+		FloodSub bool `json:"flood_sub"` // whether to use floodsub instead of gossipsub
     } `json:"network"`
 
 	// Group DHT logic

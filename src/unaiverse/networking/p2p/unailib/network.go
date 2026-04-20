@@ -109,12 +109,22 @@ func getListenAddrs(ips []string, tcpPort int, tlsMode string) ([]ma.Multiaddr, 
 	return listenAddrs, nil
 }
 
-func setupPubSub(ni *NodeInstance) error {
+func setupPubSub(ni *NodeInstance, floodSub bool) error {
 	psOptions := []pubsub.Option{
 		// pubsub.WithFloodPublish(true),
 		pubsub.WithMaxMessageSize(int(MaxMessageSize)),
 	}
-	ps, err := pubsub.NewGossipSub(ni.ctx, ni.host, psOptions...)
+
+	var ps *pubsub.PubSub
+    var err error
+    if floodSub {
+        // // Strip out the cryptographic overhead for the closed star network
+        // psOptions = append(psOptions, pubsub.WithMessageSignaturePolicy(pubsub.StrictNoSign))
+        ps, err = pubsub.NewFloodSub(ni.ctx, ni.host, psOptions...)
+    } else {
+        ps, err = pubsub.NewGossipSub(ni.ctx, ni.host, psOptions...)
+    }
+
 	if err != nil {
 		return err
 	}
@@ -283,7 +293,7 @@ func enforceProtocolCompliance(ni *NodeInstance) {
 
 				isCompliant := false
 				for _, proto := range idEvt.Protocols {
-					if string(proto) == UnaiverseChatProtocol {
+					if string(proto) == UnaiverseChatProtocol || string(proto) == UnaiverseWebRTCSignalProtocol {
 						isCompliant = true
 						break
 					}

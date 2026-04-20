@@ -753,7 +753,7 @@ class ConnectionPools:
         if p2p is None:
             return False
 
-        log.network(f">>> PUBLISHING {content_type} to {p2p.peer_id}", sub=p2p.log_sub)
+        log.network(f">>> PUBLISHING {content_type} to {channel}", sub=p2p.log_sub)
 
         # Adding sender info here
         msg = Msg(sender=p2p.peer_id,

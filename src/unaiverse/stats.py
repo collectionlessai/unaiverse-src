@@ -24,37 +24,55 @@ from sortedcontainers import SortedDict
 from typing_extensions import deprecated
 
 # A fixed palette for consistent coloring
-THEME = {
-    # Main structural colors (Dark Mode optimized)
-    'bg_paper': 'rgba(0,0,0,0)',  # Transparent to blend with container
-    'bg_plot': 'rgba(0,0,0,0)',  # Transparent plot area
-    'text_main': '#7e7e7e',  # Primary text color
-    'text_light': '#7e7e7e',  # Secondary/Axis text color
-
-    # UI Element specific
-    'grid': '#333333',  # Grid lines
-    'edge': '#666666',  # Graph edges
-    'node_border': '#ffffff',  # Node borders
-
-    # Main Accents
-    'main': '#636EFA',  # Primary accent (Blue)
-    'main_light': '#aab1ff',  # Lighter shade of primary
-
-    # Table Styling
-    'table': {
-        'header_bg': '#2c2c2c',
-        'header_txt': '#ffffff',
-        'cell_bg': '#1a1a1a',
-        'cell_txt': '#dddddd',
-        'line': '#444444'
+THEMES = {
+    "dark": {
+        "bg_paper": "rgba(0,0,0,0)",
+        "bg_plot": "rgba(0,0,0,0)",
+        "text_main": "#C8CDD3",
+        "text_light": "#677385",
+        "grid": "#222A36",
+        "edge": "#495464",
+        "node_border": "#F5F6F8",
+        "main": "#1A5CFF",
+        "main_light": "#4D7FFF",
+        "table": {
+            "header_bg": "#16171C",
+            "header_txt": "#F5F6F8",
+            "cell_bg": "#0E0F14",
+            "cell_txt": "#C8CDD3",
+            "line": "#222A36",
+        },
+        "peers": [
+            "#1A5CFF", "#FF3B30", "#00D4AA", "#FFB347", "#4D7FFF",
+            "#00B391", "#FF6692", "#33EABD", "#FFD080", "#6B9BFF",
+        ],
     },
-
-    # Data Categorical Palette (Plotly default set)
-    'peers': [
-        '#636EFA', '#EF553B', '#00CC96', '#AB63FA', '#FFA15A',
-        '#19D3F3', '#FF6692', '#B6E880', '#FF97FF', '#FECB52'
-    ]
+    "light": {
+        "bg_paper": "rgba(255,255,255,0)",
+        "bg_plot": "rgba(255,255,255,0)",
+        "text_main": "#0A1628",
+        "text_light": "#677385",
+        "grid": "#DBE1EB",
+        "edge": "#909CB0",
+        "node_border": "#0A1628",
+        "main": "#1A5CFF",
+        "main_light": "#4D7FFF",
+        "table": {
+            "header_bg": "#F6F8FA",
+            "header_txt": "#0A1628",
+            "cell_bg": "#FFFFFF",
+            "cell_txt": "#0A1628",
+            "line": "#C0C8D6",
+        },
+        "peers": [
+            "#1A5CFF", "#FF3B30", "#00D4AA", "#FFB347", "#4D7FFF",
+            "#00B391", "#FF6692", "#33EABD", "#FFD080", "#6B9BFF",
+        ],
+    },
 }
+
+# Backward-compatible flat alias
+THEME = THEMES["dark"]
 
 
 class UIPlot:
