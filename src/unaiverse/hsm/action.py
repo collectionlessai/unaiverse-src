@@ -244,8 +244,6 @@ class Action:
         interaction.inc_step_idx()
 
         args_to_print = {k: str(v) for k, v in actual_args.items()}
-        log.debug(f"action: {self.name}, deprecated: {self.deprecated}, actual_args: {args_to_print}, "
-                  f"param_list: {self.param_list}")
 
         # Calling the method here
         ret = await self.__fcn(**actual_args)

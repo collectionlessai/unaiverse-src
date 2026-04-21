@@ -474,7 +474,7 @@ class ConnectionPools:
                 # and that Msg objects store sender, type, channel intrinsically or can be set.
                 msg_obj = Msg.from_bytes(decoded_data)
 
-                log.network(f"<<< RECEIVED {msg_obj.content_type} from {msg_obj.channel}", sub=p2p.log_sub)
+                log.network(f"<<< RECEIVED {msg_obj.content_type} through channel {msg_obj.channel}", sub=p2p.log_sub)
 
                 # --- CRITICAL SECURITY CHECK ---
                 # Verify that the sender claimed inside the message payload

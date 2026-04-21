@@ -53,7 +53,7 @@ class StreamProxy:
         for stream_hash, stream_obj in self._streams.items():
             name_only = DataProps.name_from_user_hash(stream_hash)
             if name_only not in self._streams_by_name_only:  # In case of collision, the first name wins
-                self._streams_by_name_only[DataProps.name_from_user_hash(stream_hash)] = stream_obj
+                self._streams_by_name_only[name_only] = stream_obj
         if uuid is not None:
             self._uuid = uuid
 
@@ -69,7 +69,7 @@ class StreamProxy:
             self._stream_list.append(stream)
             name_only = DataProps.name_from_user_hash(stream_hash)
             if name_only not in self._streams_by_name_only:  # In case of collision, the first name wins
-                self._streams_by_name_only[DataProps.name_from_user_hash(stream_hash)] = stream
+                self._streams_by_name_only[name_only] = stream
 
     def get(self, key: str | int | None = None, requested_by: str | None = None, uuid: str | None = None,
             all_uuids: bool = False, data_type: str | None = None):
@@ -131,7 +131,8 @@ class StreamProxy:
             else:
                 return self._streams_by_name_only[key]  # Default value
         else:
-            raise GenException(f"Unknown stream/key: {key}")
+            raise GenException(f"Unknown stream/key: {key}"
+                               f"\n{self._stream_list}\n{self._streams}\n{self._streams_by_name_only}")  # TODO remove
 
     def add_interaction(self, interaction) -> None:
         """Register an interaction on all bound streams.
@@ -306,7 +307,7 @@ class StreamProxy:
             True if ``key`` is a bound stream name, False otherwise.
         """
         if isinstance(key, str):
-            return key in self._streams
+            return key in self._streams or key in self._streams_by_name_only
         return False
 
     def items(self):

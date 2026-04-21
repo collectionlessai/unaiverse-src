@@ -462,7 +462,7 @@ class Stream:
         return self.interactions_by_uuid.keys()
 
     def get(self, requested_by: str | None = None, uuid: str | None = None, all_uuids: bool = False) \
-            -> str | Image | torch.Tensor | None | list[tuple[str | Image | torch.Tensor | None, int]]:
+            -> str | Image | torch.Tensor | None | list[tuple[str | Image | torch.Tensor | None, int, float]]:
         """Get the most recent data sample from the stream (i.e., the last one that was "set").
 
         Args:
@@ -474,8 +474,8 @@ class Stream:
 
         Returns:
             The most recent data_sample if available and not already returned to this caller, else None.
-            If all_uuids is True, then it returns a list of tuples (data_sample, tag), where each data_sample has
-                the just mentioned properties.
+            If all_uuids is True, then it returns a list of tuples (data_sample, tag, timestamp),
+                where each data_sample has the just mentioned properties.
         """
 
         # Backward compatibility
@@ -486,8 +486,11 @@ class Stream:
             samples = []
             for _uuid in self.get_data_uuids():
                 sample = self.get(requested_by, _uuid)
+                if sample is None:
+                    continue
                 tag = self.get_tag(_uuid)
-                samples.append((sample, tag))
+                timestamp = self.get_timestamp(_uuid)
+                samples.append((sample, tag, timestamp))
             return samples
 
         if uuid not in self.data_by_uuid:
@@ -833,7 +836,8 @@ class BufferedStream(Stream):
         if uuid not in self.buffered_data_index_by_uuid:
             self.buffered_data_index_by_uuid[uuid] = -1  # Keep it to -1, it will be incremented then used
 
-    def get(self, requested_by: str | None = None, uuid: str | None = None) -> str | Image | torch.Tensor | None:
+    def get(self, requested_by: str | None = None, uuid: str | None = None, **kwargs) \
+            -> str | Image | torch.Tensor | None:
         """Get the current data sample based on cycle and buffer.
 
         Args:
@@ -843,6 +847,9 @@ class BufferedStream(Stream):
         Returns:
             The current buffered sample, or None if no new data is available for this caller.
         """
+        if len(kwargs) > 0:
+            raise GenException(f"Unsupported arguments in calling 'get' for BufferedStreams: {kwargs}")
+
         if Custom.IS_IN_DEPRECATED_WORLD and uuid is None and self._last_set_uuid is not None:
             uuid = self._last_set_uuid
 

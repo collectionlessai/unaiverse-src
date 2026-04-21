@@ -38,7 +38,7 @@ class Interaction:
     def __init__(self,
                  action_name: str | None = None,
                  action_kwargs: dict | None = None,
-                 streams: tuple[list[str], int] | list[str] | None = None,
+                 streams: dict[str, str] | list[str] | None = None,
                  data_samples: list | dict | None = None,
                  num_steps: int = -1,
                  requester: str | None = None,
@@ -107,13 +107,13 @@ class Interaction:
         self.to_state: str | None = to_state
 
         # Samples specification: list of (stream_name, num_samples)
-        self.streams: list = []
+        self.streams: dict = {}
         self.data_samples: list = []
         self.num_steps: int = num_steps  # Generic not-data-based interactions have -1 here
 
         # Stream-based specification
         if streams is not None and len(streams) > 0:
-            self.parse_streams(streams)  # This will create a specific stream structure and also set self.num_steps
+            self.parse_streams(streams)  # This will create a specific stream structure
 
         # Actual data (alternative to samples above)
         if streams is None and data_samples is not None:
@@ -662,11 +662,6 @@ class Interaction:
         else:
             return False
 
-    def parse_streams(self, streams: list):
-        self.streams = Interaction.__parse_streams(streams)
-        if self.num_steps == -1:
-            self.num_steps = max([stream_dict['num_samples'] for stream_dict in self.streams])
-
     def to_dict(self) -> dict:
         """Serialize this interaction for network transmission.
 
@@ -705,7 +700,7 @@ class Interaction:
             id=d['id'],
             action_name=d['action_name'],
             action_kwargs=d.get('action_kwargs', {}),
-            streams=d.get('streams', []),
+            streams=d.get('streams', {}),
             data_samples=d.get('data_samples', None),
             num_steps=d.get('num_steps'),
             requester=d.get('requester'),
@@ -775,135 +770,45 @@ class Interaction:
         """
         return json.dumps([self.requester, self.action_kwargs, self.timestamp_created, self.uuid])
 
-    @staticmethod
-    def __parse_streams(streams: list):
-        """Parse the list of streams provided by the user, standardizing its format.
+    def parse_streams(self, streams: list | dict):
+        """Parse the list of streams provided by the user, standardizing its format and saving it.
 
-        The user can specify streams in these 4 ways:
-            (1) [stream_hash_1 (str), ... , stream_hash_N (str)]: 1 sample per stream
-            (2) [stream_hash_1 (str), ... , stream_hash_N (str), Z (int)]: Z samples each stream
-            (3) [stream_hash_1 (str), Z_1 (int), ... , stream_hash_N (str), Z_N (int)]: Z_i samples for the i-th stream
-            (4) [... , {'stream_hash': stream_hash_i (str),
-                        'num_samples' (optional): Z_i (int),
-                        'redirect' (optional): 'stdin' or 'stdext' (str)}, ...]
+        The user can specify streams in these two ways, where "stream_hash_j" can be just the stream name, the stream
+        group, the net hash, or the user hash.
+            (1) [..., stream_hash_j (str), ...]
+            (2) {
+                    "stdin": [..., stream_hash_j (str), ...],
+                    "stdtar": [..., stream_hash_k (str), ...],
+                    "stdext": [..., stream_hash_z (str), ...],
+                    "stdunk": [..., stream_hash_z (str), ...],
+                }
 
-            The last one (4) means Z_i samples for the i-th stream (or 1 if not provided), and it also optionally
-            specifies if the stream is expected to become an input of the processor ('stdin') or not ('stdext').
+            The last one (2) optionally specifies if the stream is expected to become an input of the processor
+            ('stdin'), a target ('stdtar'), and extra stream ('stdext'), or no preferences (None).
             Notice that this choice could be re-arranged by the Interaction Manager, in function of the actual
             capabilities of the processor.
 
         Args:
-            streams (list): The list of streams (see the example above).
-
-        Returns:
-            The standardized list of streams, i.e., a list of dictionaries in this format:
-                {
-                    'stream_hash': stream_hash,  # the hash that was provided (whatever that is)
-                    'num_samples': num_samples,  # the number of samples for this stream (auto-computed if not provided)
-                    'redirect': None or 'stdin' or 'stdext'  # computed by the Interaction Manager if None
-                    'user_hash': None,  # it will be computed by the Interaction Manager
-                    'net_hash': None,  # it will be computed by the Interaction Manager
-                    'name': None,  # it will be computed by the Interaction Manager
-                    'group': None,  # it will be computed by the Interaction Manager
-                }
+            streams (list | dict): The list or dict of streams (see the example above).
         """
+        invalid_msg = f'Invalid syntax for streams involved in an interaction: {streams}'
+        self.streams = {"stdin": [], "stdtar": [], "stdext": [], "stdunk": []}
 
-        # Possible ways of providing streams
-        format_types = {'hashes_only', 'hashes_and_global_num_samples', 'hashes_and_num_samples_per_stream', 'detailed'}
-
-        # Detecting format type
-        format_type = set(format_types)
-        for i, s in enumerate(streams):
-            if not isinstance(s, str) and not isinstance(s, int) and not isinstance(s, dict):
-                format_type.clear()
-                break
-            if not isinstance(s, str):
-                format_type.discard('hashes_only')
-            if not isinstance(s, dict):
-                format_type.discard('detailed')
-            if isinstance(s, int) and i != len(streams) - 1:
-                format_type.discard('hashes_only')
-                format_type.discard('hashes_and_global_num_samples')
-                format_type.discard('detailed')
-            if isinstance(s, dict):
-                format_type.discard('hashes_only')
-                format_type.discard('hashes_and_global_num_samples')
-                format_type.discard('hashes_and_num_samples_per_stream')
-                for k in s.keys():
-                    if k not in {'stream_hash', 'num_samples', 'redirect', 'user_hash', 'net_hash', 'name', 'group'}:
-                        format_type.discard('detailed')
-                    if (k == 'stream_hash' and not isinstance(s[k], int)
-                            and not (Stream.is_user_hash(s[k]) or Stream.is_net_hash(s[k]))):
-                        format_type.discard('detailed')
-                        break
-                    if k == 'num_samples' and (not isinstance(s[k], int) or s[k] <= 0):
-                        format_type.discard('detailed')
-                        break
-                    if (k == 'redirect' and s[k] is not None and
-                            (not isinstance(s[k], str) or s[k] not in {'stdin', 'stdext', 'stdtar'})):
-                        format_type.discard('detailed')
-                        break
-        if (len(format_type) == 3 and
-                'hashes_and_global_num_samples' in format_type and 'hashes_and_num_samples_per_stream' in format_type):
-            for i, s in enumerate(streams):
-                if len(streams) < 2 or i % 2 == 0 and not isinstance(s, str) or i % 2 == 1 and not isinstance(s, int):
-                    format_type.discard('hashes_and_num_samples_per_stream')
-                if i < len(streams) - 1 and not isinstance(s, str) or i == len(streams) - 1 and not isinstance(s, int):
-                    format_type.discard('hashes_and_global_num_samples')
-        if len(format_type) > 1:
-            raise GenException(f'Invalid syntax for streams involved in an interaction: {streams} '
-                               f'(unknown format in {format_type})')
-        if len(format_type) == 0:
-            raise GenException(f'Invalid syntax for streams involved in an interaction: {streams} '
-                               f'(no valid format detected)')
-
-        # Converting all not-dict-based format to 'hashes_and_num_samples_per_stream'
-        format_type = next(iter(format_type))
-        if format_type == 'hashes_only':
-            _streams = []
-            for s in streams:
-                _streams.append(s)
-                _streams.append(1)
-            streams = _streams
-            format_type = 'hashes_and_num_samples_per_stream'
-        elif format_type == 'hashes_and_global_num_samples':
-            _streams = []
-            for i in range(0, len(streams) - 1):
-                _streams.append(streams[i])
-                _streams.append(streams[-1])
-            streams = _streams
-            format_type = 'hashes_and_num_samples_per_stream'
-
-        # Creating the detailed representation, from the not-dict-based one 'hashes_and_num_samples_per_stream'
-        _streams = []
-        if format_type == 'hashes_and_num_samples_per_stream':
-            for i in range(0, len(streams), 2):
-                stream_hash = streams[i]
-                num_samples = streams[i + 1]
-                _streams.append({
-                    'stream_hash': stream_hash,  # the hash that was provided (whatever that is)
-                    'num_samples': num_samples,
-                    'redirect': None,  # computed by the Interaction Manager
-                    'user_hash': None,  # computed by the Interaction Manager
-                    'net_hash': None,  # computed by the Interaction Manager
-                    'name': None,  # computed by the Interaction Manager
-                    'group': None,  # computed by the Interaction Manager
-                })
-        elif format_type == 'detailed':
-            for i in range(0, len(streams)):
-                stream_dict = streams[i]
-                _streams.append({
-                    'stream_hash': stream_dict.get('stream_hash'),  # the hash that was provided (whatever that is)
-                    'num_samples': stream_dict.get('num_samples', 1),
-                    'redirect': stream_dict.get('redirect', None),  # computed by the Interaction Manager, if not given
-                    'user_hash': None,  # computed by the Interaction Manager
-                    'net_hash': None,  # computed by the Interaction Manager
-                    'name': None,  # computed by the Interaction Manager
-                    'group': None,  # computed by the Interaction Manager
-                })
+        if isinstance(streams, list):
+            for stream in streams:
+                if not isinstance(stream, str):
+                    raise GenException(invalid_msg)
+                self.streams["stdunk"].append(stream)
+        elif isinstance(streams, dict):
+            for redirect, streams_list in streams.items():
+                if redirect not in self.streams:
+                    raise GenException(invalid_msg)
+                for stream in streams_list:
+                    if not isinstance(stream, str):
+                        raise GenException(invalid_msg)
+                self.streams[redirect] = streams_list
         else:
-            raise GenException(f'Unexpected format type: {format_type}')
-        return _streams
+            raise GenException(invalid_msg)
 
     def __str__(self) -> str:
         """Return a compact string representation of this Interaction."""
@@ -997,6 +902,9 @@ class InteractionManager:
             log.error(f"No more room for interactions (limit: {self.max_interactions})")
             return False
 
+        # This will resolve target names, data samples, stream names
+        self.resolve(interaction)
+
         #  Ensuring all the streams mentioned in the interaction are known, and normalizing them
         _, expanded_owned_streams = self.expand_and_normalize_streams(interaction)
         if expanded_owned_streams is None:
@@ -1004,9 +912,9 @@ class InteractionManager:
             return False
 
         # Converting format for owned streams (no matter what the matching routine decided)
-        owned_user_hashes_to_stream_objs = {_stream_dict['user_hash']: _stream_dict['obj']
-                                            for _stream_dicts in expanded_owned_streams.values()
-                                            for _stream_dict in _stream_dicts}
+        owned_user_hashes_to_stream_objs = {_stream_user_hash: self.agent.known_streams_by_user_hash[_stream_user_hash]
+                                            for _streams_list in expanded_owned_streams.values()
+                                            for _stream_user_hash in _streams_list}
 
         for stream_obj in owned_user_hashes_to_stream_objs.values():
             stream_obj.add_interaction(interaction)
@@ -1030,8 +938,8 @@ class InteractionManager:
         self.last_registered = interaction
         return True
 
-    def register_received(self, interaction: Interaction) -> bool:
-        """Register an interaction received from another agent.
+    def __register_received_or_lazy(self, interaction: Interaction) -> bool:
+        """Register an interaction received from another agent or auto-created (lazy).
 
         Args:
             interaction: The Interaction to register.
@@ -1044,6 +952,9 @@ class InteractionManager:
             log.error(f"No more room for interactions (limit: {self.max_interactions})")
             return False
 
+        # This will resolve target names, data samples, stream names
+        self.resolve(interaction, resolve_target=False)  # You are the target, no need to further resolve it
+
         # Ensuring all the streams mentioned in the interaction are known, and normalizing them
         expanded_streams, expanded_owned_streams = self.expand_and_normalize_streams(interaction)
         if expanded_streams is None:
@@ -1054,14 +965,9 @@ class InteractionManager:
         # following the suggestions provided in 'redirect', when possible
         # 2. Returning False if there were no ways to fill the processor input arguments.
         (valid, stdin_user_hashes_to_stream_objs, stdtar_user_hashes_to_stream_objs,
-         stdext_user_hashes_to_stream_objs) = self.match_streams(expanded_streams)
+         stdext_user_hashes_to_stream_objs, owned_user_hashes_to_stream_objs) = self.match_streams(expanded_streams)
         if not valid:
             return False
-
-        # Converting format for owned streams (no matter what the matching routine decided)
-        owned_user_hashes_to_stream_objs = {_stream_dict['user_hash']: _stream_dict['obj']
-                                            for _stream_dicts in expanded_owned_streams.values()
-                                            for _stream_dict in _stream_dicts}
 
         # Updating the interaction object with the decisions from the manager
         interaction.set_manager(self,
@@ -1093,12 +999,26 @@ class InteractionManager:
             stream.add_interaction(interaction)
 
         # Registering
-        self.received[interaction.uuid] = interaction
-
-        interaction.status = InteractionStatus.RECEIVED
-        interaction.type = InteractionType.RECEIVED
         self.last_registered = interaction
         return True
+
+    def register_received(self, interaction: Interaction) -> bool:
+        """Register an interaction received from another agent.
+
+        Args:
+            interaction: The Interaction to register.
+
+        Returns:
+            True if registration succeeded; False if there is no room, streams are invalid, or matching failed.
+        """
+        if self.__register_received_or_lazy(interaction):
+            self.received[interaction.uuid] = interaction
+
+            interaction.status = InteractionStatus.RECEIVED
+            interaction.type = InteractionType.RECEIVED
+            return True
+        else:
+            return False
 
     def register_lazy(self, interaction: Interaction) -> bool:
         """Register an interaction that you manually generated within this agent.
@@ -1109,60 +1029,65 @@ class InteractionManager:
         Returns:
             True if registration succeeded; False if there is no room or the streams are invalid.
         """
-        self.__check_callback_method(interaction)
-        if not self.room_for_registration():
-            log.error(f"No more room for interactions (limit: {self.max_interactions})")
+        if self.__register_received_or_lazy(interaction):
+            self.lazy[interaction.uuid] = interaction
+
+            interaction.status = InteractionStatus.LAZY
+            interaction.type = InteractionType.LAZY
+            return True
+        else:
             return False
 
-        #  Ensuring all the streams mentioned in the interaction are known, and normalizing them
-        _, expanded_owned_streams = self.expand_and_normalize_streams(interaction)
-        if expanded_owned_streams is None:
-            log.error(f"Invalid stream in interaction: {interaction}")
-            return False
+    def resolve(self, interaction: Interaction, resolve_target: bool = True) -> bool:
 
-        # Converting format for owned streams (no matter what the matching routine decided)
-        owned_user_hashes_to_stream_objs = {_stream_dict['user_hash']: _stream_dict['obj']
-                                            for _stream_dicts in expanded_owned_streams.values()
-                                            for _stream_dict in _stream_dicts}
+        # A. Resolving targets
+        if resolve_target:
+            target = interaction.target
+            if target is not None:
+                for i, _target in enumerate(target):
+                    _target = self.agent.resolve_agent_ref(_target)
+                    if _target is not None:
+                        target[i] = _target
+                    else:
+                        log.error(f"Unknown target specified in an interaction ({_target})")
+                        return False
 
-        for stream_obj in owned_user_hashes_to_stream_objs.values():
-            stream_obj.add_interaction(interaction)
+        # B. Moving data samples to streams, if needed (when data_samples is a dictionary)
+        # In this case, "streams" must be None (if not None, then the data_samples field is ignored)
+        if isinstance(interaction.data_samples, dict):
 
-        interaction.set_manager(self, stdin_streams={}, stdtar_streams={}, stdext_streams={},
-                                owned_streams=owned_user_hashes_to_stream_objs)
-        self.lazy[interaction.uuid] = interaction
+            # This is already an empty list (otherwise the data_samples field would not be there), but better
+            # be extra safe
+            streams = []
+            for stream_user_hash, data_sample in interaction.data_samples.items():
+                stream_user_hash = self.agent.resolve_stream_ref(stream_user_hash)
+                if stream_user_hash is None:
+                    log.error(f"Unknown stream hash specified in an interaction ({stream_user_hash}")
+                    return False
+                stream: Stream = self.agent.known_streams_by_user_hash[stream_user_hash]
+                stream.set(data_sample, uuid=interaction.uuid)
 
-        interaction.status = InteractionStatus.LAZY
-        interaction.type = InteractionType.LAZY
-        self.last_registered = interaction
-        return True
+                # Appending the stream to the interaction, that now looks like a stream-based interaction
+                streams.append(stream_user_hash)
 
-    def resolve_streams_and_targets(self, interaction: Interaction) -> bool:
-        target = interaction.target
+            # Purging
+            interaction.data_samples.clear()
+            interaction.parse_streams(streams)  # Rebuilding the stream dictionaries
+
+        # C. Resolving streams
         streams = interaction.streams
-
-        if target is not None:
-            for i, _target in enumerate(target):
-                _target = self.agent.resolve_agent_ref(_target)
-                if _target is not None:
-                    target[i] = _target
-                else:
-                    log.error(f"Unknown target specified while sending an interaction ({_target}")
-                    return False
-
         if streams is not None:
-            for i, stream in enumerate(streams):
-                stream: dict
-                stream_hash = self.agent.resolve_stream_ref(stream['stream_hash'])
-                if stream_hash:
-                    stream['stream_hash'] = stream_hash
-                else:
-                    log.error(f"Unknown stream specified while sending an interaction ({stream['stream_hash']}")
-                    return False
+            for redirect, streams_list in streams.items():
+                for j, stream in enumerate(streams_list):
+                    stream_user_hash = self.agent.resolve_stream_ref(stream)
+                    if stream_user_hash is None:
+                        log.error(f"Unknown stream hash specified in an interaction ({stream_user_hash}")
+                        return False
+                    streams_list[j] = stream_user_hash
         return True
 
     def expand_and_normalize_streams(self, interaction: Interaction) -> (
-            tuple[dict[str | None, list], dict[str | None, list]] | tuple[None, None]):
+            tuple)[dict[str | None, list[str]], dict[str | None, list[str]]]:
         """Resolve all stream references in an interaction to fully-populated stream dicts.
 
         Translates user-level and net-level hashes into detailed dicts containing ``user_hash``,
@@ -1182,63 +1107,31 @@ class InteractionManager:
         # Guessing net hash and specific name af each stream: if the name was not provided, then all the streams of the
         # group are considered. Generating a full list of streams, distinguishing them in function of their suggested
         # redirection, i.e., 'stdin', 'stdtar', 'stdext', None (meaning 'no suggestions').
-        expanded_streams = {'stdin': [], 'stdtar': [], 'stdext': [], None: []}
-        expanded_owned_streams = {'stdin': [], 'stdtar': [], 'stdext': [], None: []}
+        expanded_streams = {'stdin': [], 'stdtar': [], 'stdext': [], "stdunk": []}
+        expanded_owned_streams = {'stdin': [], 'stdtar': [], 'stdext': [], "stdunk": []}
 
-        for stream_dict in interaction.streams:
-            stream_hash = stream_dict['stream_hash']
+        # Checking
+        if len(interaction.streams) == 0:
+            return expanded_streams, expanded_owned_streams
 
-            # Initial dirt check: the user might have specified a net hash with the syntax of a user hash.
-            # We normalize stream_hash to cope with this case.
-            peer_id = stream_hash.split(":")[0]
-            name_or_group = stream_hash.split(":")[-1]
-            net_hash_dm = DataProps.build_net_hash(peer_id, False, name_or_group)
-            net_hash_ps = DataProps.build_net_hash(peer_id, True, name_or_group)
-            if net_hash_dm in self.agent.known_streams:
-                stream_hash = net_hash_dm
-            elif net_hash_ps in self.agent.known_streams:
-                stream_hash = net_hash_ps
+        for redirect, streams_list in interaction.streams.items():
+            for stream_hash in streams_list:
 
-            # Now we check stream_hash...
-            if Stream.is_user_hash(stream_hash):
+                if Stream.is_user_hash(stream_hash):
+                    expanded_streams[redirect].append(stream_hash)
+                    if stream_hash in self.agent.owned_streams_by_user_hash:
+                        expanded_owned_streams[redirect].append(stream_hash)
 
-                # If stream_hash is a user hash, we look for its net hash
-                peer_id = Stream.peer_id_from_user_hash(stream_hash)
-                name = Stream.name_from_user_hash(stream_hash)
-                net_hash_to_streams = self.agent.find_streams(peer_id=peer_id, name_or_group=name)
-                if net_hash_to_streams is None or len(net_hash_to_streams) == 0:
-                    return None, None
-
-                stream_dict['user_hash'] = stream_hash
-                stream_dict['net_hash'] = next(iter(net_hash_to_streams.keys()))
-                stream_dict['name'] = name
-                stream_dict['group'] = DataProps.name_or_group_from_net_hash(stream_dict['net_hash'])
-                stream_dict['obj'] = self.agent.known_streams_by_user_hash[stream_dict['user_hash']]
-                expanded_streams[stream_dict['redirect']].append(stream_dict)
-
-                if stream_dict['user_hash'] in self.agent.owned_streams_by_user_hash:
-                    expanded_owned_streams[stream_dict['redirect']].append(stream_dict)
-            elif Stream.is_net_hash(stream_hash):
-
-                # If stream_hash is a net hash, we expand into its inner streams
-                if stream_hash not in self.agent.known_streams:
-                    return None, None
-
-                streams = self.agent.known_streams[stream_hash]
-                stream_dict['net_hash'] = stream_hash
-                stream_dict['group'] = DataProps.name_or_group_from_net_hash(stream_dict['net_hash'])
-                for stream_obj in streams.values():
-                    _stream_dict = copy.deepcopy(stream_dict)
-                    _stream_dict['name'] = stream_obj.props.get_name()
-                    _stream_dict['user_hash'] = DataProps.user_hash_from_net_hash(_stream_dict['net_hash'],
-                                                                                  _stream_dict['name'])
-                    _stream_dict['obj'] = stream_obj
-                    expanded_streams[stream_dict['redirect']].append(_stream_dict)
-                    if _stream_dict['user_hash'] in self.agent.owned_streams_by_user_hash:
-                        expanded_owned_streams[_stream_dict['redirect']].append(_stream_dict)
+                elif Stream.is_net_hash(stream_hash):
+                    streams = self.agent.known_streams[stream_hash]
+                    for stream_obj in streams.values():
+                        _stream_hash = DataProps.user_hash_from_net_hash(stream_hash, stream_obj.props.get_name())
+                        expanded_streams[redirect].append(_stream_hash)
+                        if _stream_hash in self.agent.owned_streams_by_user_hash:
+                            expanded_owned_streams[redirect].append(_stream_hash)
         return expanded_streams, expanded_owned_streams
 
-    def match_streams(self, expanded_streams: dict) -> tuple[bool, dict, dict, dict]:
+    def match_streams(self, expanded_streams: dict) -> tuple[bool, dict, dict, dict, dict]:
         """Assign expanded stream dicts to stdin, stdtar, or stdext based on processor compatibility.
 
         Attempts to match streams to the processor's input and output argument slots, following any
@@ -1257,28 +1150,40 @@ class InteractionManager:
 
         # Assigning streams to 'stdin' or 'stdext', following the given suggestions, when possible, and being a bit
         # heuristic for all the not-well-defined cases
-        processor_will_be_used = len(expanded_streams['stdin']) > 0 or len(expanded_streams[None]) > 0
+        processor_will_be_used = len(expanded_streams['stdin']) > 0 or len(expanded_streams["stdunk"]) > 0
         stdin_streams = {}
         stdtar_streams = {}
-        stdext_streams = {
-            stream_dict_inter['user_hash']: self.agent.known_streams_by_user_hash[stream_dict_inter['user_hash']] for
-            stream_dict_inter in expanded_streams['stdext']}
+        stdext_streams = {}
+        owned_streams = {}
+
+        for user_hash in expanded_streams['stdext']:
+            if user_hash not in self.agent.known_streams_by_user_hash:
+                return False, {}, {}, {}, {}
+            stdext_streams[user_hash] = self.agent.known_streams_by_user_hash[user_hash]
+            if user_hash in self.agent.owned_streams_by_user_hash:
+                owned_streams[user_hash] = stdext_streams[user_hash]
 
         # We try to match the 'stdin' suggestions with the different input arguments of the processors.
         # We also consider the streams with no specific suggestions (lower priority).
         if processor_will_be_used:
-            sources = ['stdin', None]
+            sources = ['stdin', 'stdunk']
             pos_stdin_streams = [None] * len(self.agent.proc_inputs)
             for i in range(len(self.agent.proc_inputs)):
                 found_match = -1
                 for source in sources:
-                    for j, stream_dict_inter in enumerate(expanded_streams[source]):
-                        net_hash = stream_dict_inter['net_hash']
-                        name = stream_dict_inter['name']
+                    for j, user_hash in enumerate(expanded_streams[source]):
+                        if user_hash not in self.agent.known_streams_by_user_hash:
+                            return False, {}, {}, {}, {}
+                        stream_obj = self.agent.known_streams_by_user_hash[user_hash]
+                        net_hash = DataProps.build_net_hash(DataProps.peer_id_from_user_hash(user_hash),
+                                                            stream_obj.is_pubsub(),
+                                                            stream_obj.props.name_or_group())
+
+                        name = stream_obj.props.get_name()
 
                         # If the current input stream is compatible with the i-th input slot...
                         if (net_hash, name) in self.agent.compat_in_streams[i]:
-                            pos_stdin_streams[i] = stream_dict_inter['user_hash']
+                            pos_stdin_streams[i] = user_hash
                             found_match = j
                             break
 
@@ -1290,26 +1195,34 @@ class InteractionManager:
             for i in range(len(self.agent.proc_inputs)):
                 if pos_stdin_streams[i] is None:
                     if not self.agent.proc_optional_inputs[i]["has_default"]:
-                        return False, {}, {}, {}
+                        return False, {}, {}, {}, {}
                     else:
                         stdin_streams["<default_input_pos_" + str(i) + ">"] = (
                             self.agent.proc_optional_inputs)[i]["default_value"]
                 else:
                     stdin_streams[pos_stdin_streams[i]] = self.agent.known_streams_by_user_hash[pos_stdin_streams[i]]
+                    if pos_stdin_streams[i] in self.agent.owned_streams_by_user_hash:
+                        owned_streams[pos_stdin_streams[i]] = stdin_streams[pos_stdin_streams[i]]
 
             # Matching targets
-            sources = ['stdtar', None]
+            sources = ['stdtar', 'stdunk']
             pos_stdtar_streams = [None] * len(self.agent.proc_outputs)
             for i in range(len(self.agent.proc_outputs)):
                 found_match = -1
                 for source in sources:
-                    for j, stream_dict_inter in enumerate(expanded_streams[source]):
-                        net_hash = stream_dict_inter['net_hash']
-                        name = stream_dict_inter['name']
+                    for j, user_hash in enumerate(expanded_streams[source]):
+                        if user_hash not in self.agent.known_streams_by_user_hash:
+                            return False, {}, {}, {}, {}
+                        stream_obj = self.agent.known_streams_by_user_hash[user_hash]
+                        net_hash = DataProps.build_net_hash(DataProps.peer_id_from_user_hash(user_hash),
+                                                            stream_obj.is_pubsub(),
+                                                            stream_obj.props.get_group())
+
+                        name = stream_obj.props.get_name()
 
                         # If the current input stream is compatible with the i-th input slot...
                         if (net_hash, name) in self.agent.compat_out_streams[i]:
-                            pos_stdtar_streams[i] = stream_dict_inter['user_hash']
+                            pos_stdtar_streams[i] = user_hash
                             found_match = j
                             break
 
@@ -1321,15 +1234,21 @@ class InteractionManager:
             for i in range(len(self.agent.proc_outputs)):
                 if pos_stdtar_streams[i] is not None:
                     stdtar_streams[pos_stdtar_streams[i]] = self.agent.known_streams_by_user_hash[pos_stdtar_streams[i]]
+                    if pos_stdtar_streams[i] in self.agent.owned_streams_by_user_hash:
+                        owned_streams[pos_stdtar_streams[i]] = stdtar_streams[pos_stdtar_streams[i]]
 
         # We add to 'stdext' all the streams that did not fit the processor (both coming from suggestions in 'stdin' or
         # not suggested at all)
-        sources = ['stdin', 'stdtar', None]
+        sources = ['stdin', 'stdtar', 'stdunk']
         for source in sources:
-            for stream_dict_inter in expanded_streams[source]:
-                stdext_streams[stream_dict_inter['user_hash']] = (
-                    self.agent.known_streams_by_user_hash)[stream_dict_inter['user_hash']]
-        return True, stdin_streams, stdtar_streams, stdext_streams
+            for user_hash in expanded_streams[source]:
+                if user_hash not in self.agent.known_streams_by_user_hash:
+                    return False, {}, {}, {}, {}
+                stdext_streams[user_hash] = self.agent.known_streams_by_user_hash[user_hash]
+                if user_hash in self.agent.owned_streams_by_user_hash:
+                    owned_streams[user_hash] = stdext_streams[user_hash]
+
+        return True, stdin_streams, stdtar_streams, stdext_streams, owned_streams
 
     def check_if_doable(self, interaction: Interaction) -> bool:
         """Return True if the given interaction can be executed right now.

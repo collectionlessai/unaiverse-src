@@ -1145,6 +1145,7 @@ class HybridStateMachine:
         # No actions were applied
         self.__cur_feasible_actions_status = None
         self.__state_changed = False
+        self.states[self.state].reset()  # Reset starting time (to restart delay counting)
         return -1
 
     async def act(self) -> bool:

@@ -37,10 +37,10 @@ from unaiverse.interaction import Interaction
 from unaiverse.networking.p2p.messages import Msg
 from unaiverse.custom import Custom, GenException
 from unaiverse.networking.p2p import P2P, P2PError
-from unaiverse.utils.logger import Ch, log, ALWAYS_ON
 from unaiverse.networking.node.connpool import NodeConn
 from unaiverse.networking.node.profile import NodeProfile
 from unaiverse.streams.streams import DataProps, BufferedStream
+from unaiverse.utils.logger import log, ALWAYS_ON_CHANNELS, ALL_CHANNELS
 from unaiverse.utils.misc import (get_key_considering_multiple_sources, save_node_addresses_to_file,
                                   prepare_app_dir, load_agent_in_memory, unpack_py_files, analyze_code)
 
@@ -107,11 +107,9 @@ class Node:
                          current_time=datetime.now(timezone.utc).timestamp())  # Node clock (not synced at all!)
 
         # Logging: we create a new logger and will share it with the agent/world as well
-        log_active_channels = None if Custom.PRINT_LEVEL < 1 else \
-            {Ch.STATEM, Ch.NETWORK, Ch.STREAMS, Ch.MISC, Ch.INTER, Ch.P2P, Ch.DEBUG}
         log.create(name=os.path.basename(sys.argv[0]), log_dir=os.path.dirname(os.path.abspath(sys.argv[0])),
-                   active=log_active_channels,
-                   screen=ALWAYS_ON if Custom.PRINT_SCREEN_BASIC_ONLY else log_active_channels,
+                   active=ALWAYS_ON_CHANNELS if Custom.PRINT_LEVEL < 1 else ALL_CHANNELS,
+                   screen=ALWAYS_ON_CHANNELS if Custom.PRINT_SCREEN_BASIC_ONLY else ALL_CHANNELS,
                    no_color=False, file_enabled=Custom.LOG_TO_FILE)
         log.set_clock(clock)  # Wiring the clock
 

@@ -2525,39 +2525,16 @@ class AgentBasics:
                                       from_state=from_state, to_state=to_state,
                                       timeout=max_time, callback=callback, forced_uuid=forced_uuid, id=id)
 
-            # Moving data samples to streams, if needed (when data_samples is a dictionary)
-            # In this case, "streams" must be None (if not None, then the data_samples field is ignored)
-            if isinstance(interaction.data_samples, dict):
-
-                # This is already an empty list (otherwise the data_samples field would not be there), but better
-                # be extra safe
-                interaction.streams.clear()
-                streams = []
-
-                for stream_user_hash, data_sample in interaction.data_samples.items():
-                    stream_user_hash = self.resolve_stream_ref(stream_user_hash)
-                    if stream_user_hash is None:
-                        return None
-                    stream = self.known_streams_by_user_hash[stream_user_hash]
-                    stream.set(data_sample, uuid=interaction.uuid)
-
-                    # Appending the stream to the interaction, that now looks like a stream-based interaction
-                    streams.append(stream_user_hash)
-
-                # Purging
-                interaction.data_samples.clear()
-                interaction.parse_streams(streams)  # Rebuilding the stream dictionaries, with a specific structure
-            else:
-                # Resolving streams
-                if not self.im.resolve_streams_and_targets(interaction):
-                    return None
-        else:
-            # Ensure requester is set
-            if interaction.requester is None:
-                interaction.requester = self.get_peer_id()
-
         # Resolve target agent(s)
         if len(interaction.target) == 0:
+            return None
+
+        # Ensure requester is set
+        if interaction.requester is None:
+            interaction.requester = self.get_peer_id()
+
+        # Registering
+        if not self.im.register_sent(interaction):
             return None
 
         # Build the content for the interaction message
@@ -2578,21 +2555,17 @@ class AgentBasics:
             # Updating targets with the list of actually contacted agents
             interaction.update_target(correctly_contacted)
 
-            # Register with the Interaction Manager
-            if not self.im.register_sent(interaction):
-                return None
-            else:
+            # If we asked to copy the last-added stream data by a system interaction,
+            # then we copy it using the current interaction UUID
+            if copy_sys:
+                for stream in interaction.owned_streams.values():
+                    last_stream_data = stream.get(uuid=Custom.SYSTEM_INTERACTION_UUID)
+                    if last_stream_data is not None:
+                        stream.set(last_stream_data, uuid=interaction.uuid)
 
-                # If we asked to copy the last-added stream data by a system interaction,
-                # then we copy it using the current interaction UUID
-                if copy_sys:
-                    for stream in interaction.owned_streams.values():
-                        last_stream_data = stream.get(uuid=Custom.SYSTEM_INTERACTION_UUID)
-                        if last_stream_data is not None:
-                            stream.set(last_stream_data, uuid=interaction.uuid)
-
-                return interaction
+            return interaction
         else:
+            self.im.unregister(interaction)
             return None
 
     def __str__(self):
