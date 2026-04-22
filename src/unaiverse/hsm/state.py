@@ -75,7 +75,7 @@ class State:
 
             # Print the state message only when we enter this state: for example, do not print it if we run an action,
             # it fails, and then the callable state function is executed again.
-            if self.msg is not None:
+            if not self.msg_printed and self.msg is not None:
                 if self.state_machine is not None and self.state_machine.show_blocking_states:
                     if self.blocking:
                         msg = self.msg + " 🔴"
