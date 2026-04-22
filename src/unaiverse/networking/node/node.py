@@ -2499,8 +2499,10 @@ class Node:
                 log.misc("Replacing default stats with custom WStats from world.")
                 old_agent.stats = stats_class(is_world=False)
 
-        # inject the stats history
-        if initial_stats is not None:
+        # Inject the stats history
+        # If initial_stats is a string of an already generated HTML file, for example, we have to skip this part,
+        # that's why we check if initial_stats is an instance of dict.
+        if initial_stats is not None and isinstance(initial_stats, dict):
             self.agent.update_stats_view(initial_stats, overwrite=True)
 
         # Saving the world profile

@@ -180,12 +180,15 @@ class Agent(AgentBasics):
             log.error("Failed to send stats update to world.")
 
         # Ask the updates to the world (no overwrite required)
-        log.misc(f"Requesting stats update from world {world_peer_id}...")
-        if not (await self._node_conn.send(world_peer_id,
-                                           channel_trail=None,
-                                           content={'time_range': self.stats.max_seen_timestamp},
-                                           content_type=Msg.STATS_REQUEST)):
-            log.error("Failed to request stats to world.")
+        if self.is_human():
+            # TODO check with Christian if he is already sending a Msg.STATS_REQUEST in a different way
+            # TODO if so, remove this part below
+            log.misc(f"Requesting stats update from world {world_peer_id}...")
+            if not (await self._node_conn.send(world_peer_id,
+                                               channel_trail=None,
+                                               content={'time_range': self.stats.max_seen_timestamp},
+                                               content_type=Msg.STATS_REQUEST)):
+                log.error("Failed to request stats to world.")
 
     def update_stats_view(self, received_view: dict, overwrite: bool = False) -> None:
         """Updates the stats view with the data received from the world.
