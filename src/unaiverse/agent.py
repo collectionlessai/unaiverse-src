@@ -93,8 +93,8 @@ def action(func: Callable) -> Callable:
         try:
             ret = await func(self, *args, **resolved_kwargs)
         except Exception as e:
-            print(func.__name__)
-            raise e  # debug
+            log.error(f"Action '{func.__name__}' failed since it raised an exception: {e}")
+            # raise e  # debug
             ret = False
         return ret
 
@@ -363,7 +363,6 @@ class Agent(AgentBasics):
             sent_interaction = await self._send(None, action_name, target, action_kwargs, streams,
                                                 data_samples, num_steps, max_time, from_state, to_state, callback,
                                                 forced_uuid, id, copy_sys)
-            log.error(sent_interaction)
             if wait_completion:
                 system_interaction.action_ref.set_default_timeout()  # This will make the action pedantic
                 system_interaction.set_mark(sent_interaction)  # First run, Saving the interaction that was sent
@@ -1090,14 +1089,14 @@ class Agent(AgentBasics):
     async def connect_to(self, peer_id: str):
         addresses = self._node_conn.get_addrs(peer_id)
         if not self._node_conn.is_connected(peer_id):
-            log.error(f"Asking to get in touch with {peer_id}...")
+            log.misc(f"Asking to get in touch with {peer_id}...")
             peer_id = await self._node_ask_to_get_in_touch_fcn(addresses=addresses, public=False)
             if peer_id is not None:
                 return True
             else:
                 return False
         else:
-            log.error(f"Not-asking to get in touch with {peer_id}, "
+            log.misc(f"Not-asking to get in touch with {peer_id}, "
                       f"since I am already connected to the corresponding peer...")
             return True
 
@@ -1142,7 +1141,7 @@ class Agent(AgentBasics):
             log.misc(f"Found addresses ({len(found_addresses)}) with role: {role}")
             for f_addr, f_peer_id in zip(found_addresses, found_peer_ids):
                 if not self._node_conn.is_connected(f_peer_id):
-                    log.error(f"Asking to get in touch with {f_peer_id}...")
+                    log.misc(f"Asking to get in touch with {f_peer_id}...")
                     peer_id = await self._node_ask_to_get_in_touch_fcn(addresses=f_addr, public=False)
                     if peer_id is not None:
                         at_least_one_is_valid = True

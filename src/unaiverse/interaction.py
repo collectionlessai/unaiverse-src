@@ -903,7 +903,8 @@ class InteractionManager:
             return False
 
         # This will resolve target names, data samples, stream names
-        self.resolve(interaction)
+        if not self.resolve(interaction):
+            return False
 
         #  Ensuring all the streams mentioned in the interaction are known, and normalizing them
         _, expanded_owned_streams = self.expand_and_normalize_streams(interaction)
@@ -952,8 +953,14 @@ class InteractionManager:
             log.error(f"No more room for interactions (limit: {self.max_interactions})")
             return False
 
+        if interaction.requester not in self.agent.all_agents:
+            log.error(f"Unexpected interaction from an unknown agent: {interaction.requester}. "
+                      f"Interaction is: {interaction}")
+            return False
+
         # This will resolve target names, data samples, stream names
-        self.resolve(interaction, resolve_target=False)  # You are the target, no need to further resolve it
+        if not self.resolve(interaction, resolve_target=False):  # You are the target, no need to further resolve it
+            return False
 
         # Ensuring all the streams mentioned in the interaction are known, and normalizing them
         expanded_streams, expanded_owned_streams = self.expand_and_normalize_streams(interaction)
@@ -994,8 +1001,6 @@ class InteractionManager:
             elif interaction.requester in self.agent.all_agents:
                 if stream.props.is_public():
                     continue
-            else:
-                log.critical(f"Unexpected interaction from an unknown agent: {interaction.requester}")
             stream.add_interaction(interaction)
 
         # Registering
@@ -1386,7 +1391,19 @@ class InteractionManager:
                 # Running callback method, if any
                 if interaction.callback is not None:
                     callback_method = getattr(self.agent, interaction.callback)
-                    await callback_method(interaction=interaction)  # "Calling callback!"
+
+                    self.agent.behav_lone_wolf.enable(False)
+                    self.agent.behav.enable(False)
+                    if interaction.requester in self.agent.public_agents:
+                        self.agent.behav_lone_wolf.enable(True)
+                    else:
+                        if self.agent.in_world():
+                            self.agent.behav.enable(True)
+
+                            await callback_method(interaction=interaction)  # "Calling callback!"
+
+                    self.agent.behav_lone_wolf.enable(False)
+                    self.agent.behav.enable(False)
 
     async def complete_current(self, dest_state: str, reason: 'CompletionReason') -> None:
         """Mark the current interaction as completed (async).
@@ -1621,7 +1638,7 @@ class InteractionManager:
                     if name not in Custom.INTERACTION_ARG_NAMES
                 )
                 if not all_have_defaults_with_the_exception_of_interaction_if_needed:
-                    log.critical(f"Invalid callback method {interaction.callback}: it must have default values"
+                    log.critical(f"Invalid callback method {interaction.callback}: it must have default values "
                                  f"for all parameters (the interaction argument might not have a default, if needed)")
                 found_args = [name for name in sig.parameters if name in Custom.INTERACTION_ARG_NAMES]
                 if len(found_args) != 1:

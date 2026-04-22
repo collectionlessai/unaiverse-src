@@ -42,6 +42,7 @@ class State:
         self.starting_time = 0.
         self.blocking = blocking
         self.msg = msg  # Human-readable message associated to this instance of state
+        self.msg_printed = False
         self.state_machine = None
 
         # Fix UNICODE chars
@@ -83,6 +84,7 @@ class State:
                 else:
                     msg = self.msg
                 log.user(msg)
+                self.msg_printed = True
 
         # The state action is executed when we enter the state AND whenever we further run the state callable function
         if self.action is not None:
@@ -169,11 +171,13 @@ class State:
         """
         return self.starting_time
 
-    def reset(self) -> None:
+    def reset(self, reset_message_printing: bool = True) -> None:
         """Resets the state's internal counters. This method is typically called when re-entering a state. It sets the
         `starting_time` to zero and also resets the associated action's step counter if an action exists.
         """
         self.starting_time = 0.
+        if reset_message_printing:
+            self.msg_printed = False
         if self.action is not None:
             self.action.system_interaction.reset_state()
 
@@ -211,3 +215,6 @@ class State:
 
         if self.action is not None:
             self.action.apply_wildcards()
+
+    def get_time_passed(self):
+        return (time.perf_counter() - self.starting_time) if self.starting_time > 0 else -1.

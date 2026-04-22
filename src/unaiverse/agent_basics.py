@@ -1545,7 +1545,7 @@ class AgentBasics:
                 self.stdin.bind(self.__proc_in_streams_by_user_hash_prv)
                 self.stdout.bind(self.__proc_streams_by_user_hash_prv)
                 self.stdext.bind(self.__env_streams_by_user_hash_prv)
-                self.on_tick()
+                await self.on_tick()
                 await self.behav.act()
                 self.behav.enable(False)
 
@@ -1605,7 +1605,7 @@ class AgentBasics:
         """
         pass
 
-    def on_tick(self):
+    async def on_tick(self):
         pass
 
     def get_peer_id(self) -> str:

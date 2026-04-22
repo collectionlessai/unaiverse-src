@@ -540,6 +540,7 @@ class HybridStateMachine:
             state: The name of the state to transition to.
         """
         if state in self.transitions or state in self.states:
+            self.limbo_state = None
             self.prev_state = self.state
             self.state = state
             if self.__action is not None:
@@ -869,6 +870,35 @@ class HybridStateMachine:
         if self.state is not None:  # When in the middle of an action, the state is Nones
             await self.states[self.state]()  # Run the action (if any)
 
+    async def act_ghost_transition(self, to_state: str) -> int:
+
+        # Forcing to go back to current state if in the middle of a multistep action
+        from_state = self.state
+        if from_state is None:
+            from_state = self.limbo_state
+        self.set_state(from_state)  # This will also reset the current interaction (if any)
+
+        # Setting up the ghost action (nop) as only possible action from the current state
+        original_transitions = self.transitions[from_state]
+        self.transitions[from_state] = \
+            {to_state: [Action(name="nop", args={}, actionable=self.actionable, ready=True, teleport=True)]}
+
+        # Acting the ghost action (nop)
+        ret = await self.act_transitions()
+
+        # Restoring original transitions
+        self.transitions[from_state] = original_transitions
+        return ret
+
+    def get_time_spent_in_current_state(self):
+        state = self.state
+        if state is None:
+            state = self.limbo_state
+        if state is None:
+            return -1.
+        else:
+            return self.states[self.state].get_time_passed()
+
     async def act_transitions(self, only_the_ones_with_interactions: bool = False) -> int:
         """This is the core execution loop for transitions. It finds all feasible actions from the current state and,
         using a policy, selects and executes one. It handles single-step and multistep actions, managing state changes,
@@ -1038,7 +1068,7 @@ class HybridStateMachine:
             status = await action(interaction=interaction)
 
             if status == 0:
-                log.error(f"+++ ACTION {self.__action.name} correctly completed", state=self.get_state_name(True))
+                log.statem(f"+++ ACTION {self.__action.name} correctly completed", state=self.get_state_name(True))
             elif status == 1:
                 log.statem(f"~~~ ACTION {self.__action.name} will be run again", state=self.get_state_name(True))
             else:
@@ -1095,8 +1125,8 @@ class HybridStateMachine:
                     #    print(f"Reached state {self.state}, "
                     #          f"propagated these requests taken from {self.__action.name}, and
                     #          now starting from here {propagated_requests}")
-                    self.states[self.prev_state].reset()  # Reset starting time (only if state changed!)
 
+                self.states[self.prev_state].reset(self.__state_changed)  # Reset starting time
                 interaction.reset_state()
                 self.__action = None  # Clearing
                 self.__cur_feasible_actions_status = None
@@ -1110,8 +1140,8 @@ class HybridStateMachine:
 
                 # Update status
                 self.__state_changed = False
-                if self.prev_state is not None:
-                    self.states[self.prev_state].reset()  # Reset starting time
+                # if self.prev_state is not None:
+                #    self.states[self.prev_state].reset()  # Reset starting time
 
                 return 1  # Transition not-done: no need to check other actions, the current one will be run again
 
@@ -1145,7 +1175,6 @@ class HybridStateMachine:
         # No actions were applied
         self.__cur_feasible_actions_status = None
         self.__state_changed = False
-        self.states[self.state].reset()  # Reset starting time (to restart delay counting)
         return -1
 
     async def act(self) -> bool:

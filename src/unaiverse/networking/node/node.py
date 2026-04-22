@@ -615,9 +615,12 @@ class Node:
         del all_args['self']
 
         # Checking arguments
-        if (node_name is None and addresses is None and node_id is None) or \
-                (sum(x is not None for x in [node_name, addresses, node_id]) > 1):
-            log.critical("Cannot specify more than one of node_name, addresses, or node_id, check your code!")
+        if node_name is None and addresses is None and node_id is None:
+            return None
+        if sum(x is not None for x in [node_name, addresses, node_id]) > 1:
+            log.error(f"Cannot specify more than one of node_name ({node_name}), addresses, or node_id ({node_id}), "
+                      f"check your code!")
+            return None
 
         # Getting addresses, if needed
         if addresses is None:
@@ -1355,6 +1358,7 @@ class Node:
 
                 # Check if the world disconnected: in that case, disconnect all the other agents in the world and leave
                 if self.node_type is Node.AGENT and pool_name in self.conn.WORLD_NODE:
+                    log.error("The world node disconnected")
                     await self.leave_world()
 
                 # Checking if the inspector disconnected
@@ -1396,7 +1400,6 @@ class Node:
 
                         # Adding the new agent to the world object
                         if not (await self.world.add_agent(peer_id=peer_id, profile=profile)):
-                            log.error("self.world.add_agent")
                             await self.__purge(peer_id)
                             continue
 
@@ -1411,7 +1414,6 @@ class Node:
 
                         # This agent tried to connect to a world "directly", without passing through the
                         # public handshake
-                        log.error("peer_id not in self.agents_to_interview!")
                         await self.__purge(peer_id)
                         continue
 
@@ -2173,7 +2175,7 @@ class Node:
         Returns:
             True if the agent is successfully added, otherwise False.
         """
-        log.user("Adding a new known agent " + peer_id)
+        log.misc("Adding a new known agent " + peer_id)
         if not (await self.agent.add_agent(peer_id=peer_id, profile=profile)):
             await self.__purge(peer_id)
             return False
