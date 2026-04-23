@@ -2256,6 +2256,7 @@ class AgentBasics:
                 _selected_action_idx = i
                 _selected_interaction = _list_of_requests.get_oldest_interaction() \
                     if len(_list_of_requests) > 0 else None
+                log.error(f"Selecting high priority action {action.name}")
                 return _selected_action_idx, _selected_interaction
         for i, action in enumerate(actions_list):
             _list_of_requests = action.get_list_of_interactions()
