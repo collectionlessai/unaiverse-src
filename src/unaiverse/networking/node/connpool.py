@@ -644,7 +644,7 @@ class ConnectionPools:
         else:
             channel = f"{p2p.peer_id}::dm:{peer_id}-{content_type}"
 
-        log.network(f">>> SENDING {content_type} to {peer_id}", sub=p2p.log_sub)
+        log.error(f">>> SENDING {content_type} to {peer_id}", sub=p2p.log_sub)
 
         # Adding sender info here
         msg = Msg(sender=p2p.peer_id,
