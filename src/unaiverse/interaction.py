@@ -564,10 +564,6 @@ class Interaction:
             True if the interaction is older than timeout_secs.
         """
 
-        # Volatile interactions immediately expire
-        #if self.volatile:
-        #    return True
-
         # Deciding the real value of timeout_specs, also in function of the interaction-specific timeout (if given)
         if timeout_secs is not None and timeout_secs > 0. and self.timeout is not None and self.timeout > 0.:
             timeout_secs = min(timeout_secs, self.timeout)
@@ -1491,7 +1487,8 @@ class InteractionManager:
         for interaction in list(self.sent.values()) + list(self.received.values()) + list(self.lazy.values()):
             if interaction.status == InteractionStatus.COMPLETED:
                 continue
-            if interaction.is_expired(Custom.DEFAULT_INTER_TIMEOUT) or interaction.action_name is None:
+            if (interaction.is_expired(Custom.DEFAULT_INTER_TIMEOUT) or interaction.action_name is None or
+                    interaction.volatile):
                 await self.complete(interaction, reason=CompletionReason.TIMEOUT)
             else:
                 if self.is_received(interaction) and interaction.requester not in self.agent.all_agents:
