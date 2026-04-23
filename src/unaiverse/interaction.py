@@ -565,8 +565,8 @@ class Interaction:
         """
 
         # Volatile interactions immediately expire
-        if self.volatile:
-            return True
+        #if self.volatile:
+        #    return True
 
         # Deciding the real value of timeout_specs, also in function of the interaction-specific timeout (if given)
         if timeout_secs is not None and timeout_secs > 0. and self.timeout is not None and self.timeout > 0.:
