@@ -143,6 +143,9 @@ class Action:
         self.state_machine = hsm
         self.set_wildcards(hsm.get_wildcards())
 
+    def get_name(self) -> str:
+        return self.name
+
     def set_mark(self, mark: object) -> None:
         """Store an arbitrary marker object on the action."""
         self.__mark = mark

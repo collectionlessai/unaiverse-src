@@ -1212,6 +1212,15 @@ class HybridStateMachine:
         """
         return self.__state_changed
 
+    def transition_exists(self, name: str, only_ready: bool = True) -> bool:
+        state = self.state if self.state is not None else self.limbo_state
+        trans = self.transitions[state]
+        for _, action_list in trans.items():
+            for action in action_list:
+                if (not only_ready or action.is_ready()) and action.name == name:
+                    return True
+        return False
+
     def request_action(self, interaction: Interaction | None = None, **kwargs) -> bool:
         """Allows an external entity to request a specific action. The request is validated by a signature checker
         (if one exists) and then queued on the corresponding action. This method enables dynamic, external triggers for
