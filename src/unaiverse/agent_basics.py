@@ -2481,7 +2481,7 @@ class AgentBasics:
                     action_name: str | None = None,
                     target: str | list[str] | None = None,
                     action_kwargs: dict | None = None,
-                    streams: list[tuple[str, int]] | list[str] | None = None,
+                    streams: dict[str, str] | list[str] | None = None,
                     data_samples: list[str | Image | torch.Tensor] | dict[
                         str, str | Image | torch.Tensor] | None = None,
                     num_steps: int = -1,
