@@ -865,6 +865,12 @@ class InteractionManager:
             if stream_obj.has_interaction(interaction.uuid):
                 stream_obj.remove_interaction(interaction)
 
+    def unregister_all(self):
+        """Deregister all current interactions"""
+        all_interactions = (set(self.sent.values()) | set(self.received) | set(self.lazy))
+        for interaction in all_interactions:
+            self.unregister(interaction)
+
     def unregister(self, interaction: Interaction) -> bool:
         """Deregister an interaction from all tracking dicts and dissociate it from streams and actions.
 
@@ -874,6 +880,9 @@ class InteractionManager:
         Returns:
             True if the interaction was found and removed from at least one tracking dict.
         """
+        if interaction.status == InteractionStatus.RUNNING:  # Avoid de-registering a currently running interaction
+            return False
+
         interaction.clear_from_action()
         self.clear_from_all_streams(interaction)
         found = False
