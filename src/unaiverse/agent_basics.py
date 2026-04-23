@@ -2251,8 +2251,15 @@ class AgentBasics:
                 arguments, time, and UUID), or -1 and None if no action is selected.
         """
         for i, action in enumerate(actions_list):
+            if action.is_high_priority:
+                _list_of_requests = action.get_list_of_interactions()
+                _selected_action_idx = i
+                _selected_interaction = _list_of_requests.get_oldest_interaction() \
+                    if len(_list_of_requests) > 0 else None
+                return _selected_action_idx, _selected_interaction
+        for i, action in enumerate(actions_list):
             _list_of_requests = action.get_list_of_interactions()
-            if action.name == 'process' or len(_list_of_requests) > 0:
+            if len(_list_of_requests) > 0:  # The process action has more priority
                 _selected_action_idx = i
                 _selected_interaction = _list_of_requests.get_oldest_interaction()
                 return _selected_action_idx, _selected_interaction

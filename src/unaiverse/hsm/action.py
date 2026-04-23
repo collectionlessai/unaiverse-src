@@ -32,6 +32,7 @@ class Action:
                  msg: str | None = None,
                  avoid_changing_ready: bool = False,
                  teleport: bool = False,
+                 high_priority: bool = False,
                  total_time: float | str = 0.,
                  timeout: float | str = 0,
                  delay: float | str = 0):
@@ -51,6 +52,7 @@ class Action:
             avoid_changing_ready: A boolean indicating that the selected ready state should not be changed by
                 internal rules.
             teleport: A boolean indicating that this action must be hidden when drawing the state machine ('teleport').
+            high_priority: A boolean indicating that this action must be preferred over others by the policy.
             total_time: The number of seconds representing the max duration of this action (from the moment it stars).
                 When <= 0., then no limits. It can be a wildcard (str).
             timeout: The number of seconds representing the max time we keep try running this action before giving up.
@@ -69,6 +71,7 @@ class Action:
         self.outer = True
         self.state_machine = None
         self.teleport = teleport
+        self.high_priority = high_priority
         self.__mark = None
 
         # Fix UNICODE chars
@@ -137,6 +140,14 @@ class Action:
     def has_completion_step(self) -> bool:
         """Returns whether the action has a dedicated completion step (deprecated actions only)."""
         return self.deprecated_has_completion
+
+    @property
+    def is_high_priority(self) -> bool:
+        """Returns whether the action is a high priority one."""
+        return self.high_priority
+
+    def set_high_priority(self) -> None:
+        self.high_priority = True
 
     def set_state_machine(self, hsm: object) -> None:
         """Registers the parent state machine that owns this action."""
@@ -422,6 +433,7 @@ class Action:
             "msg": self.msg.encode("ascii",
                                    "xmlcharrefreplace").decode("ascii") if self.msg is not None else None,
             "ready": self.inner,
+            "high_priority": self.is_high_priority,
             "max_duration": self.__total_time,
             "retry_timeout": self.__timeout,
             "time_to_wait_before_running": self.__delay

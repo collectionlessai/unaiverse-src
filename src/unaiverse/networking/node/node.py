@@ -1920,8 +1920,8 @@ class Node:
                                                  f"the agent is known, so we allow it to join the world again")
 
                                         # If an agent is known, then we avoid it from going back to the public net
+                                        profile = self.world.all_agents[msg.sender]  # Get profile before purging
                                         await self.__purge(msg.sender, keep_connection=True)
-                                        profile = self.world.all_agents[msg.sender]
 
                                         # The interview list is used to authorize a switching public-to-private
                                         # connection, and it is filled right after having sent a world approval.

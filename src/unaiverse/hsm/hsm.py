@@ -631,18 +631,20 @@ class HybridStateMachine:
     def add_global_teleport(self, to_state: str,
                             action: str, args: dict | None = None, ready: bool = True,
                             msg: str | None = None,
+                            high_priority: bool = False,
                             total_time: float | str = 0., timeout: float | str = 0., delay: float | str = 0., ) -> None:
         self.add_teleport(from_state=Custom.ALL_STATES_NAME, to_state=to_state, action=action, args=args,
-                          ready=ready, act_id=None,
+                          ready=ready, act_id=None, high_priority=high_priority,
                           msg=msg, total_time=total_time, timeout=timeout, delay=delay)
 
     def add_teleport(self, from_state: str, to_state: str,
                      action: str, args: dict | None = None, ready: bool = True,
                      act_id: int | None = None, msg: str | None = None, avoid_changing_ready: bool = False,
+                     high_priority: bool = False,
                      total_time: float | str = 0., timeout: float | str = 0., delay: float | str = 0., ) -> None:
         self.add_transit(from_state=from_state, to_state=to_state, action=action, args=args,
                          ready=ready, act_id=act_id, avoid_changing_ready=avoid_changing_ready,
-                         msg=msg, teleport=True,
+                         msg=msg, teleport=True, high_priority=high_priority,
                          total_time=total_time, timeout=timeout, delay=delay)
 
     def add_transit(self, from_state: str, to_state: str,
@@ -650,6 +652,7 @@ class HybridStateMachine:
                     act_id: int | None = None, msg: str | None = None,
                     avoid_changing_ready: bool = False,
                     teleport: bool = False,
+                    high_priority: bool = False,
                     total_time: float | str = 0., timeout: float | str = 0., delay: float | str = 0.,) -> None:
         """Defines a transition between two states with an associated action. This method is central to building the
         state machine's logic. It can also handle loading and integrating a complete state machine from a file,
@@ -666,6 +669,7 @@ class HybridStateMachine:
             avoid_changing_ready: A boolean indicating that the selected ready state should not be changed by
                 internal rules.
             teleport: A boolean indicating that this transition must be hidden when drawing the machine ('teleport').
+            high_priority: A boolean indicating that this transition must be preferred by the policy over others.
             total_time: The number of seconds representing the max duration of this transition (from when it stars).
                 When <= 0., then no limits.
             timeout: The number of seconds representing the max time we keep try running this transition before
@@ -683,7 +687,7 @@ class HybridStateMachine:
                 # Adding a transition to the dest state
                 self.add_transit(from_state=from_state_obj.name, to_state=to_state, action=action, args=args,
                                  ready=ready, act_id=None, avoid_changing_ready=avoid_changing_ready,
-                                 msg=msg, teleport=teleport,
+                                 msg=msg, teleport=teleport, high_priority=high_priority,
                                  total_time=total_time, timeout=timeout, delay=delay)
             return
 
@@ -735,7 +739,7 @@ class HybridStateMachine:
 
             # Adding a transition to the initial state of the given HSM
             self.add_transit(from_state=from_state, to_state=hsm.initial_state, action=action, args=args,
-                             ready=ready, act_id=None, msg=msg, teleport=teleport,
+                             ready=ready, act_id=None, msg=msg, teleport=teleport, high_priority=high_priority,
                              total_time=total_time, timeout=timeout, delay=delay)
 
             # Restoring
@@ -771,7 +775,7 @@ class HybridStateMachine:
         # Adding the new action
         new_action = Action(name=action, args=args, idx=act_id, actionable=self.actionable, ready=ready, msg=msg,
                             avoid_changing_ready=avoid_changing_ready,
-                            teleport=teleport,
+                            teleport=teleport, high_priority=high_priority,
                             total_time=total_time, timeout=timeout, delay=delay)
         self.transitions[from_state][to_state].append(new_action)
         self.__id_to_action.append(new_action)
@@ -819,6 +823,7 @@ class HybridStateMachine:
                         delay = _action.get_delay()
                     self.add_transit(from_state=_from_state, to_state=_to_state, action=_action.name,
                                      args=_action.args, ready=_action.ready, teleport=_action.is_teleport(),
+                                     high_priority=_action.is_high_priority,
                                      act_id=None, msg=_action.msg_with_wildcards, avoid_changing_ready=True,
                                      total_time=total_time, timeout=timeout, delay=delay)
 
@@ -1415,6 +1420,7 @@ class HybridStateMachine:
                 act_args = action_dict.get("action_kwargs", {})
                 msg = action_dict.get("msg", None)
                 act_ready = action_dict.get("ready", True)
+                high_priority = action_dict.get("high_priority", False)
                 total_time = action_dict.get("max_duration", 0.)
                 timeout = action_dict.get("retry_timeout", 0.)
                 delay = action_dict.get("time_to_wait_before_running", 0.)
@@ -1422,6 +1428,7 @@ class HybridStateMachine:
                 self.add_transit(from_state, to_state,
                                  action=act_name, args=act_args, ready=act_ready, msg=msg,
                                  avoid_changing_ready="ready" in action_dict, total_time=total_time,
+                                 high_priority=high_priority,
                                  timeout=timeout, delay=delay)
 
         # Getting teleports (do it after getting ordinary transitions, so teleports will have lower priority)
@@ -1439,6 +1446,7 @@ class HybridStateMachine:
                     act_args = action_dict.get("action_kwargs", {})
                     msg = action_dict.get("msg", None)
                     act_ready = action_dict.get("ready", True)
+                    high_priority = action_dict.get("high_priority", False)
                     total_time = action_dict.get("max_duration", 0.)
                     timeout = action_dict.get("retry_timeout", 0.)
                     delay = action_dict.get("time_to_wait_before_running", 0.)
@@ -1454,6 +1462,7 @@ class HybridStateMachine:
                         self.add_transit(from_state, to_state,
                                          action=act_name, args=act_args, ready=act_ready, msg=msg,
                                          avoid_changing_ready="ready" in action_dict, teleport=True,
+                                         high_priority=high_priority,
                                          total_time=total_time, timeout=timeout, delay=delay)
 
             # Handling all the ordinary teleports
@@ -1471,6 +1480,7 @@ class HybridStateMachine:
                     act_args = action_dict.get("action_kwargs", {})
                     msg = action_dict.get("msg", None)
                     act_ready = action_dict.get("ready", True)
+                    high_priority = action_dict.get("high_priority", False)
                     total_time = action_dict.get("max_duration", 0.)
                     timeout = action_dict.get("retry_timeout", 0.)
                     delay = action_dict.get("time_to_wait_before_running", 0.)
@@ -1478,6 +1488,7 @@ class HybridStateMachine:
                     self.add_transit(from_state, to_state,
                                      action=act_name, args=act_args, ready=act_ready, msg=msg,
                                      avoid_changing_ready="ready" in action_dict, teleport=True,
+                                     high_priority=high_priority,
                                      total_time=total_time, timeout=timeout, delay=delay)
 
         return self
@@ -1700,6 +1711,13 @@ class HybridStateMachine:
             The index of the selected action and the ActionRequest object with the requester details (object,
                 arguments, time, and UUID), or -1 and the None if no action is selected.
         """
+        for i, action in enumerate(actions_list):
+            if action.is_high_priority:
+                _list_of_requests = action.get_list_of_interactions()
+                _selected_action_idx = i
+                _selected_interaction = _list_of_requests.get_oldest_interaction() \
+                    if len(_list_of_requests) > 0 else None
+                return _selected_action_idx, _selected_interaction
         for i, action in enumerate(actions_list):
             _list_of_interactions = action.get_list_of_interactions()
             if len(_list_of_interactions) > 0:
