@@ -2568,7 +2568,7 @@ class AgentBasics:
             if ret:
                 correctly_contacted.append(_peer_id)
                 at_least_one_completed = at_least_one_completed or ret
-                log.debug(f"[send] Sent interaction {interaction.uuid} "
+                log.error(f"[send] Sent interaction {interaction.uuid} "
                           f"(action={interaction.action_name}) to {_peer_id}, result={ret}")
 
         if at_least_one_completed:
