@@ -564,6 +564,10 @@ class Interaction:
             True if the interaction is older than timeout_secs.
         """
 
+        # Volatile interactions immediately expire
+        if self.volatile:
+            return True
+
         # Deciding the real value of timeout_specs, also in function of the interaction-specific timeout (if given)
         if timeout_secs is not None and timeout_secs > 0. and self.timeout is not None and self.timeout > 0.:
             timeout_secs = min(timeout_secs, self.timeout)
@@ -835,7 +839,7 @@ class InteractionManager:
     - Waits for all involved streams to have sent data before marking action ready
     """
 
-    def __init__(self, agent: object, max_interactions: int = Custom.MAX_INTERACTIONS):
+    def __init__(self, agent: object, max_interactions: int = -1):
         """Create an InteractionManager.
 
         Args:
@@ -843,7 +847,7 @@ class InteractionManager:
             max_interactions: Maximum number of simultaneously tracked interactions (sent + received + lazy).
         """
         self.agent = agent
-        self.max_interactions = max_interactions
+        self.max_interactions = max_interactions if max_interactions > 0 else Custom.MAX_INTERACTIONS
         self.sent: dict[str, Interaction] = {}       # uuid -> Interaction (sent by this agent)
         self.received: dict[str, Interaction] = {}   # uuid -> Interaction (received from others)
         self.lazy: dict[str, Interaction] = {}   # uuid -> Interaction (added by you)
