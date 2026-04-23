@@ -867,7 +867,7 @@ class InteractionManager:
 
     def unregister_all(self):
         """Deregister all current interactions"""
-        all_interactions = (set(self.sent.values()) | set(self.received) | set(self.lazy))
+        all_interactions = (set(self.sent.values()) | set(self.received.values()) | set(self.lazy.values()))
         for interaction in all_interactions:
             self.unregister(interaction)
 
