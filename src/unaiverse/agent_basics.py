@@ -12,7 +12,6 @@
                  Code Repositories:  https://github.com/collectionlessai/
                  Main Developers:    Stefano Melacci (Project Leader), Christian Di Maio, Tommaso Guidi
 """
-import asyncio
 import os
 import torch
 import pickle
@@ -2553,11 +2552,8 @@ class AgentBasics:
         at_least_one_completed = False
         correctly_contacted = []
         for _peer_id in interaction.target:
-            # ret = await self._node_conn.send(_peer_id, channel_trail=None,
-            #                                 content=content, content_type=Msg.INTERACTION)
-            ret = asyncio.create_task(asyncio.to_thread(self._node_conn.send,
-                                                        _peer_id, channel_trail=None,
-                                                        content=content, content_type=Msg.INTERACTION))
+            ret = await self._node_conn.send(_peer_id, channel_trail=None,
+                                             content=content, content_type=Msg.INTERACTION)
             if ret:
                 correctly_contacted.append(_peer_id)
                 at_least_one_completed = at_least_one_completed or ret
