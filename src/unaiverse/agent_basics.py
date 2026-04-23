@@ -2553,12 +2553,10 @@ class AgentBasics:
         at_least_one_completed = False
         correctly_contacted = []
         for _peer_id in interaction.target:
-            # ret = await self._node_conn.send(_peer_id, channel_trail=None,
-            #                                 content=content, content_type=Msg.INTERACTION)
-            task = asyncio.create_task(asyncio.to_thread(self._node_conn.send,
-                                                         _peer_id, channel_trail=None,
-                                                         content=content, content_type=Msg.INTERACTION))
-            ret = True
+            ret = asyncio.create_task(
+                await self._node_conn.send(_peer_id, channel_trail=None,
+                                           content=content, content_type=Msg.INTERACTION, fire_and_forget=True)
+            )
             if ret:
                 correctly_contacted.append(_peer_id)
                 at_least_one_completed = at_least_one_completed or ret
