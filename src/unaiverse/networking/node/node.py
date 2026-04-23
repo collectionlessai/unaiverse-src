@@ -1720,8 +1720,8 @@ class Node:
                 # if this is not a world or not, we only send profile to agents who are involved in the handshake
                 if ((self.node_type is Node.WORLD and not self.conn.is_public(peer_id=msg.sender)) or
                         (msg.sender not in self.agents_expected_to_send_ack)):
-                    log.error("Unexpected profile request, removing (disconnecting) " + msg.sender)
-                    await self.__purge(msg.sender)
+                    log.error("Unexpected profile request (ignoring it): " + msg.sender)
+                    # await self.__purge(msg.sender)
                 else:
 
                     # If a preference was defined, we temporarily add it to the profile

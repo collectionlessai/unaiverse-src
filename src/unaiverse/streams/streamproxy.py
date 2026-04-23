@@ -52,7 +52,9 @@ class StreamProxy:
         self._stream_list = list(streams.values())
         self._streams_by_name_only = {}
         for stream_hash, stream_obj in self._streams.items():
-            name_only = DataProps.name_from_user_hash(stream_hash)
+
+            # Warning: 'stream_hash' could be user hash or <default_pos...>
+            name_only = DataProps.name_from_user_hash(stream_hash) if Stream.is_user_hash(stream_hash) else stream_hash
             if name_only not in self._streams_by_name_only:  # In case of collision, the first name wins
                 self._streams_by_name_only[name_only] = stream_obj
         if uuid is not None:
