@@ -167,11 +167,11 @@ class Stream:
         return stream
 
     def enable(self) -> None:
-        """Enable the stream, allowing data to be retrieved."""
+        """Enable the stream, allowing data to be set."""
         self.enabled = True
 
     def disable(self) -> None:
-        """Disable the stream, preventing data from being retrieved."""
+        """Disable the stream, preventing data from being set."""
         self.enabled = False
 
     def get_props(self) -> DataProps:

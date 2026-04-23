@@ -34,16 +34,9 @@ def action(func: Callable) -> Callable:
     """Decorator (@action) that standardizes action method arguments.
 
     Applied to action methods to:
-    - Resolve agent references from name to peer_id
-    - Mark the function as an action (sets ``_is_action = True``)
-
-    Example usage::
-
-        @action
-        async def process(self, interaction, arg1, arg2):
-            x, y = interaction.get()
-            ...
-            interaction.set(result)
+    - Resolve agent references from name to peer_id.
+    - Mark the function as an action (sets ``_is_action = True``).
+    - Handle unexpected exceptions.
 
     Args:
         func: The action method to decorate.

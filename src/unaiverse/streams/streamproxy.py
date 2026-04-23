@@ -71,6 +71,28 @@ class StreamProxy:
             if name_only not in self._streams_by_name_only:  # In case of collision, the first name wins
                 self._streams_by_name_only[name_only] = stream
 
+    def clear_data(self, uuid: str | None):
+        """Remove all the currently existing data from the bind streams (not the interactions)."""
+
+        for stream_obj in self._stream_list:
+            stream_obj.clear_data(uuid=uuid)
+
+    def clear_all_data(self):
+        """Remove all the currently existing data from the bind streams (not the interactions)."""
+
+        for stream_obj in self._stream_list:
+            stream_obj.clear_all_data()
+
+    def enable(self) -> None:
+        """Enable all streams in this proxy stream, allowing data to be set."""
+        for stream_obj in self._stream_list:
+            stream_obj.enable()
+
+    def disable(self) -> None:
+        """Disable all streams in this proxy, preventing data from being set."""
+        for stream_obj in self._stream_list:
+            stream_obj.disable()
+
     def get(self, key: str | int | None = None, requested_by: str | None = None, uuid: str | None = None,
             all_uuids: bool = False, data_type: str | None = None):
         """Get data from a stream.
