@@ -20,7 +20,7 @@ from typing import Callable
 from PIL.Image import Image
 from unaiverse.stats import Stats
 from unaiverse.clock import clock
-from unaiverse.custom import Custom
+from unaiverse.custom import Custom, GenException
 from unaiverse.utils.logger import log
 from typing_extensions import deprecated
 from unaiverse.streams.dataprops import DataProps
@@ -296,6 +296,7 @@ class Agent(AgentBasics):
                    id: str | None = "random",
                    copy_sys: bool = False,
                    wait_completion: bool = False,
+                   volatile: bool = False,
                    interaction: Interaction | None = None) -> bool:
         """Send an interaction request to one or more target agents (async).
 
@@ -327,6 +328,8 @@ class Agent(AgentBasics):
                 to prepare initial data form the current interaction.
             wait_completion: If True, this action returns True if and only if we get a feed of interaction completion
                 from all the involved agents (Default: False).
+            volatile: If True, it is marked so that the recipient is asked to not
+                send back any status about its completion.
             interaction: The interaction triggered by the system to run this action (automatically set).
 
         Returns:
@@ -336,6 +339,9 @@ class Agent(AgentBasics):
         # This action can only be triggered by the system or by the developer, no ways
         if interaction is not None and not interaction.is_system():
             return False
+
+        if wait_completion and volatile:
+            raise GenException("You cannot wait for completion a volatile interaction (it will not return any updates)")
 
         first_run = True
         system_interaction = None
@@ -347,7 +353,7 @@ class Agent(AgentBasics):
             target = self.__involved_agents(target)
             sent_interaction = await self._send(None, action_name, target, action_kwargs, streams,
                                                 data_samples, num_steps, max_time, from_state, to_state, callback,
-                                                forced_uuid, id, copy_sys)
+                                                forced_uuid, id, copy_sys, volatile)
             if wait_completion:
                 system_interaction.action_ref.set_default_timeout()  # This will make the action pedantic
                 system_interaction.set_mark(sent_interaction)  # First run, Saving the interaction that was sent

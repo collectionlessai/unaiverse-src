@@ -12,7 +12,6 @@
                  Code Repositories:  https://github.com/collectionlessai/
                  Main Developers:    Stefano Melacci (Project Leader), Christian Di Maio, Tommaso Guidi
 """
-import copy
 import time
 import json
 import inspect
@@ -47,6 +46,7 @@ class Interaction:
                  to_state: str | None = None,
                  timeout: float = -1.,
                  callback: str | None = None,
+                 volatile: bool = False,
                  forced_uuid: str | None = "do_not_force",
                  id: str | None = "random"):
         """Create a new Interaction.
@@ -66,6 +66,8 @@ class Interaction:
                 will override this with its internal timeout valid for all actions).
             callback: Name of the method to call on the agent (the InteractionManager will do it) when this
                 interaction finishes (it must be a method with a single argument, which is the interaction object).
+            volatile: If True, it is marked so that the recipient is asked to not
+                send back any status about its completion.
             forced_uuid: A very custom option to force a specific UUID (None is a valid UUID here), that is by default
                 a mixture of the id (below) and the target fields. To be used only in very special cases.
                 Defaults to "do_not_force".
@@ -127,7 +129,7 @@ class Interaction:
         self.status: InteractionStatus = InteractionStatus.CREATED
         self.data_sent_after_completion = False
         self.buffered_stream_restarted = False
-        self.send_status = True
+        self.volatile = volatile
 
         # Pointers
         self.action_ref: Callable[Interaction] | None = None  # Reference to the actual Action object
@@ -172,6 +174,10 @@ class Interaction:
 
         # Callback method name
         self.callback = callback
+
+        # Checking
+        if self.callback is not None and self.volatile:
+            raise GenException("You cannot set a callback on a volatile interaction")
 
     @staticmethod
     def build_uuid(id: str | None, requester: str | None = None) -> str:
@@ -683,6 +689,7 @@ class Interaction:
             'from_state': self.from_state,
             'to_state': self.to_state,
             'timeout': self.timeout,
+            'volatile': self.volatile,
             'status': self.status.value
         }
 
@@ -707,6 +714,7 @@ class Interaction:
             target=d.get('target'),
             from_state=d.get('from_state'),
             to_state=d.get('to_state'),
+            volatile=d.get('volatile'),
             timeout=d.get('timeout', -1.),
         )
         interaction.uuid = d['uuid']

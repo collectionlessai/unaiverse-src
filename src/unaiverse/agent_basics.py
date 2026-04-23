@@ -1585,7 +1585,7 @@ class AgentBasics:
         self.im.clear_expired_stream_data()
 
         for interaction in completed:
-            if (interaction.requester is not None and interaction.send_status and
+            if (interaction.requester is not None and not interaction.volatile and
                     interaction.requester in self.all_agents):
                 log.inter(f"Communicating completion of interaction {interaction.to_code_str(True)}")
                 my_public_peer_id, my_private_peer_id = self.get_peer_ids()
@@ -2491,7 +2491,8 @@ class AgentBasics:
                     callback: str | None = None,
                     forced_uuid: str | None = "do_not_force",
                     id: str | None = "random",
-                    copy_sys: bool = False) -> Interaction | None:
+                    copy_sys: bool = False,
+                    volatile: bool = False) -> Interaction | None:
         """Send an interaction request to one or more target agents (async).
 
         Accepts either a pre-built :class:`Interaction` object *or* raw arguments from which one will be created.
@@ -2522,6 +2523,8 @@ class AgentBasics:
             id: Optional ID of the interaction. Ignored when a pre-built Interaction is provided.
             copy_sys: True if the interaction must copy the last added stream data (with system UUID)
                 to prepare initial data form the current interaction.
+            volatile: If True, it is marked so that the recipient is asked to not
+                send back any status about its completion.
 
         Returns:
             The Interaction on success, ``None`` on failure.
@@ -2533,7 +2536,8 @@ class AgentBasics:
                                       num_steps=num_steps,
                                       requester=self.get_peer_id(), target=target,
                                       from_state=from_state, to_state=to_state,
-                                      timeout=max_time, callback=callback, forced_uuid=forced_uuid, id=id)
+                                      timeout=max_time, callback=callback, forced_uuid=forced_uuid, id=id,
+                                      volatile=volatile)
 
         # Resolve target agent(s)
         if len(interaction.target) == 0:
