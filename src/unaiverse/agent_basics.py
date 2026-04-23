@@ -2554,8 +2554,8 @@ class AgentBasics:
         correctly_contacted = []
         for _peer_id in interaction.target:
             ret = asyncio.create_task(
-                await self._node_conn.send(_peer_id, channel_trail=None,
-                                           content=content, content_type=Msg.INTERACTION, fire_and_forget=True)
+                self._node_conn.send(_peer_id, channel_trail=None,
+                                     content=content, content_type=Msg.INTERACTION, fire_and_forget=True)
             )
             if ret:
                 correctly_contacted.append(_peer_id)
