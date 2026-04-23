@@ -1414,6 +1414,8 @@ class Node:
 
                         # This agent tried to connect to a world "directly", without passing through the
                         # public handshake
+                        log.error(f"An agent tried to connect to the private network without passing through the "
+                                  f"public one first ({peer_id}), disconnecting it", sub="prv")
                         await self.__purge(peer_id)
                         continue
 
@@ -1906,11 +1908,39 @@ class Node:
                         # Not expected ping-pong from an already fully connected (i.e., handshake done) agent
                         if msg.sender in self.agents_that_provided_ping_pong:
                             if not is_private_message:
-                                await self.__purge(msg.sender, keep_connection=True, clear_agents_to_interview=True)
+
+                                # We must re-interview the agent, so we keep the connection on and clear the rest
+                                await self.__purge(msg.sender, keep_connection=True)
                                 log.misc(f"Reconnection detected for peer {msg.sender} in public network: "
                                          f"will start handshake again")
                             else:
-                                await self.__purge(msg.sender, keep_connection=True, clear_agents_to_interview=False)
+                                if self.node_type is Node.WORLD:
+                                    if msg.sender in self.world.all_agents:
+                                        log.misc(f"Reconnection detected for peer {msg.sender} in private network: "
+                                                 f"the agent is known, so we allow it to join the world again")
+
+                                        # If an agent is known, then we avoid it from going back to the public net
+                                        await self.__purge(msg.sender, keep_connection=True)
+                                        profile = self.world.all_agents[msg.sender]
+
+                                        # The interview list is used to authorize a switching public-to-private
+                                        # connection, and it is filled right after having sent a world approval.
+                                        # We refill it to allow the agent to be re-added to the world and its
+                                        # addresses to be refreshed in the connection pools.
+                                        self.agents_to_interview[msg.sender] = [clock.get_time(), profile]
+                                    else:
+                                        log.misc(f"Reconnection detected for peer {msg.sender} in private network: "
+                                                 f"the agent is not known, we cannot accept this reconnection")
+
+                                        # If an agent is not known at all, the connection must be re-established by
+                                        # the public network, so we have to kill the connection
+                                        await self.__purge(msg.sender, keep_connection=False)
+                                else:
+                                    log.misc(f"Reconnection detected for peer {msg.sender} in private network: "
+                                             f"will start handshake again")
+
+                                    # We must re-interview the agent, so we keep the connection on and clear the rest
+                                    await self.__purge(msg.sender, keep_connection=True)
                                 log.misc(f"Reconnection detected for peer {msg.sender} in private network")
                             self.reconnected.add(msg.sender)
                         else:
