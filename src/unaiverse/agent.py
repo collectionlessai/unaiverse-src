@@ -1726,7 +1726,8 @@ class Agent(AgentBasics):
         # Then, we detect who is the current partner of the interaction, if and only if there exist a "partner"-like
         # wildcard. This is important to detect system interactions triggering 'process', that will then be used to
         # send a 'process' request to the partner.
-        wildcards = self.behav.get_wildcards() if self.behaving_in_world() else self.behav_lone_wolf.get_wildcards()
+        in_world = self.behaving_in_world()
+        wildcards = self.behav.get_wildcards() if in_world else self.behav_lone_wolf.get_wildcards()
         system_interaction_will_be_for = None
         if Custom.PARTNER_WILDCARD in wildcards:
             system_interaction_will_be_for = wildcards[Custom.PARTNER_WILDCARD]
@@ -1740,7 +1741,10 @@ class Agent(AgentBasics):
 
         # Whenever we get a non-system interaction for a human, we store it in its own dictionary
         if not interaction.is_system():
-            self.proc_human_peer_id_to_interaction[interaction.requester] = interaction
+
+            # If we are in a world, the reference peer ID is the one of the world, no matter who sent the interaction
+            peer_id = interaction.requester if not in_world else self.get_connection_pool_manager().get_world_peer_id()
+            self.proc_human_peer_id_to_interaction[peer_id] = interaction
 
         # Forcing default stdin binding (discarding the interaction-provided ones)
         self.set_default_stdin_binding()

@@ -341,7 +341,7 @@ class Stream:
 
     def set(self,
             data: torch.Tensor | Image | str, data_tag: int = -1, keep_existing_tag: bool = False,
-            uuid: str | None = None) -> Data | None:
+            uuid: str | None = None, force: bool = False) -> Data | None:
         """Set a new data sample into the stream, that will be provided when calling "get()".
 
         Args:
@@ -349,11 +349,12 @@ class Stream:
             data_tag: Custom data time tag >= 0 (Default: -1, meaning no tags).
             keep_existing_tag: Keep the data tag that is already in the stream, if the provided data_tag arg is -1.
             uuid: UUID of the interaction storing this data (can be None, meaning "generic UUID", default None).
+            force: Boolean flag to force the set operation also if the stream is disabled.
 
         Returns:
             The updated Data struct if data was accepted based on time constraints, else None.
         """
-        if not self.enabled:
+        if not self.enabled and not force:
             return None
 
         # Backward compatibility
@@ -900,7 +901,8 @@ class BufferedStream(Stream):
         return super().get(requested_by, uuid)
 
     def set(self, data: torch.Tensor | Image | str,
-            data_tag: int = -1, keep_existing_tag: bool = False, uuid: str | None = None) -> Data | None:
+            data_tag: int = -1, keep_existing_tag: bool = False, uuid: str | None = None, force: bool = False) \
+            -> Data | None:
         """Store a new data sample into the buffer.
 
         Args:
@@ -908,20 +910,21 @@ class BufferedStream(Stream):
             data_tag: Custom data time tag >= 0 (Default: -1, meaning no tags).
             keep_existing_tag: Keep the data tag that is already in the stream, if the provided data_tag arg is -1.
             uuid: UUID of the data.
+            force: Boolean flag to force the set operation also if the stream is disabled.
 
         Returns:
             The updated Data struct if the data was buffered, else None.
         """
-        if not self.enabled:
+        if not self.enabled and not force:
             return None
 
         if self.is_read_only:
             return None
 
         if self.is_queue and data is None:
-            return None  # TODO Turing issue? Here I was returning True
+            return None
 
-        data_struct = super().set(data, data_tag, keep_existing_tag, uuid)
+        data_struct = super().set(data, data_tag, keep_existing_tag, uuid, force)
 
         if data_struct:
             if uuid not in self.data_buffer_by_uuid:

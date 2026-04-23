@@ -431,7 +431,6 @@ class LoggerModule(torch.nn.Module):
         self._logger.info("-------------------------------------------------------------------------------")
         self._logger.info(f"[INPUT] text={text if text is not None else None}, "
                           f"img={img.size if img is not None else None}")
-        # text = random.choice(objects)
         text = f"{self._idx}_{self._objects[self._idx]}"
         self._idx = (self._idx + 1) % len(self._objects)
         img = None

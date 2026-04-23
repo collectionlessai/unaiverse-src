@@ -14,6 +14,7 @@
 """
 from itertools import islice
 from unaiverse.streams.streams import Stream
+from unaiverse.utils.logger import log
 from unaiverse.utils.misc import GenException
 from unaiverse.streams.dataprops import DataProps
 
@@ -201,7 +202,7 @@ class StreamProxy:
                 return interaction  # This will happen at the 1st iteration for the way "has_interaction" is implemented
         return None  # This will never happen, since we already ensured that it "has_interaction"
 
-    def set(self, key_or_data, data=None, data_tag: int = -1, uuid: str | None = None):
+    def set(self, key_or_data, data=None, data_tag: int = -1, uuid: str | None = None, force: bool = False):
         """Set data on a stream.
 
         Usage (example for stdin - it could be other StreamIO):
@@ -216,6 +217,7 @@ class StreamProxy:
             data_tag: Custom integer tag for the sample (default: -1, meaning auto-tag).
             uuid: UUID of the interaction for which data is being set (default: None, that will use the
                 default-bind UUID)
+            force: Boolean flag to force the set operation also on disabled streams
         """
         if len(self._stream_list) == 0:
             raise GenException("No streams bound to this StreamIO")
@@ -230,7 +232,7 @@ class StreamProxy:
             for i, data in enumerate(key_or_data):
                 s = self._stream_list[i]
                 if isinstance(s, Stream):
-                    s.set(data, data_tag, uuid=uuid)
+                    s.set(data, data_tag, uuid=uuid, force=force)
                 else:
                     self._stream_list[i] = data
                     key_at_index = next(islice(self._streams, i, None))
@@ -238,13 +240,13 @@ class StreamProxy:
         elif isinstance(key_or_data, int):
             s = self._stream_list[key_or_data]
             if isinstance(s, Stream):
-                s.set(data, uuid=uuid)
+                s.set(data, uuid=uuid, force=force)
             else:
                 self._stream_list[key_or_data] = data
         elif key_or_data in self._streams:
             s = self._streams[key_or_data]
             if isinstance(s, Stream):
-                s.set(data, data_tag, uuid=uuid)
+                s.set(data, data_tag, uuid=uuid, force=force)
             else:
                 self._streams[key_or_data] = data
         else:

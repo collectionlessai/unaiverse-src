@@ -33,7 +33,7 @@ from unaiverse.streams.streams import Stream, BufferedStream
 from unaiverse.streams.dataprops import DataProps, StreamType
 from unaiverse.interaction import Interaction, InteractionManager
 from unaiverse.streams.streamproxy import StreamProxy, StreamsProxyWithDefaults
-from unaiverse.modules.utils import AgentProcessorChecker, ModuleWrapper, HumanModule
+from unaiverse.modules.utils import AgentProcessorChecker, ModuleWrapper, HumanModule, has_human_processor
 from unaiverse.utils.misc import (GenException, FileTracker, collect_py_files, load_agent_in_memory, pack_py_files,
                                   unpack_py_files)
 
@@ -369,6 +369,13 @@ class AgentBasics:
         # Updating node profile by indicating the processor-related streams
         self.update_streams_in_profile()
 
+        # Blocking stdin for humans
+        if has_human_processor(self):
+            self.set_default_stdin_binding(public=True)
+            self.stdin.disable()
+            self.set_default_stdin_binding(public=False)
+            self.stdin.disable()
+
         return True
 
     def get_connection_pool_manager(self) -> NodeConn:
@@ -441,7 +448,10 @@ class AgentBasics:
     def prepare_stdin_if_human(self, public: bool, peer_id: str):
         self.set_default_stdin_binding(public)
 
-        # First of clear, clearing residuals of interactions that were completed in the past
+        # Zero-step: if we are in a world, the peer ID used for indexing the interaction cache is the world peer ID
+        peer_id = peer_id if public else self._node_conn.get_world_peer_id()
+
+        # First of all, clearing residuals of interactions that were completed in the past
         to_remove = []
         for _peer_id, _interaction in self.proc_human_peer_id_to_interaction.items():
             if _interaction.is_completed():
