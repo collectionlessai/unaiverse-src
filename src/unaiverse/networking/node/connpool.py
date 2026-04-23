@@ -615,8 +615,7 @@ class ConnectionPools:
             return c
 
     async def send(self, peer_id: str, channel_trail: str | None,
-                   content_type: str, content: bytes | dict | None = None, p2p: P2P | None = None,
-                   fire_and_forget: bool = False) -> bool:
+                   content_type: str, content: bytes | dict | None = None, p2p: P2P | None = None) -> bool:
         """Sends a direct message to a specific peer (async).
 
         Args:
@@ -625,8 +624,6 @@ class ConnectionPools:
             content_type: The type of content in the message.
             content: The message content.
             p2p: An optional P2P object to use for sending. If None, it is derived from the peer_id.
-            fire_and_forget: If True, the send routine is offloaded to a thread. No guarantees that send order will
-                always follow the order in which send is called.
 
         Returns:
             True if the message is sent successfully, otherwise False.
@@ -656,29 +653,13 @@ class ConnectionPools:
                   channel=channel,
                   piggyback=self.__token + "0")  # Adding inspector-mode bit (dummy bit here)
 
-        # Sending direct message
-        if not fire_and_forget:
-            try:
-                p2p.send_message_to_peer(channel, msg_bytes=msg.to_bytes())
-
-                # If the line above executes without raising an error, it was successful.
-                return True
-            except P2PError as e:
-
-                # If send_message_to_peer fails, it will raise a P2PError. We catch it here.
-                log.error("Sending error is: " + str(e), sub=p2p.log_sub)
-                return False
-        else:
-            try:
-                await asyncio.to_thread(p2p.send_message_to_peer, channel, msg.to_bytes())
-
-                # If the line above executes without raising an error, it was successful.
-                return True
-            except P2PError as e:
-
-                # If send_message_to_peer fails, it will raise a P2PError. We catch it here.
-                log.error("Sending error is: " + str(e), sub=p2p.log_sub)
-                return False
+        # Sending direct message (offloaded to a thread so the event loop stays unblocked)
+        try:
+            await asyncio.to_thread(p2p.send_message_to_peer, channel, msg_bytes=msg.to_bytes())
+            return True
+        except P2PError as e:
+            log.error("Sending error is: " + str(e), sub=p2p.log_sub)
+            return False
 
     async def subscribe(self, peer_id: str, channel: str, default_p2p_name: str | None = None) -> bool:
         """Subscribes to a topic/channel on a P2P network (async).
