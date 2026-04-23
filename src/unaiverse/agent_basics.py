@@ -2250,7 +2250,9 @@ class AgentBasics:
             The index of the selected action and an ActionRequest object with the requester details (requester,
                 arguments, time, and UUID), or -1 and None if no action is selected.
         """
+        log.error("-----")
         for i, action in enumerate(actions_list):
+            log.error(f"{action.name}, {action.is_high_priority}")
             if action.is_high_priority:
                 _list_of_requests = action.get_list_of_interactions()
                 _selected_action_idx = i
