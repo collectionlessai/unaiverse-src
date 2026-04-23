@@ -998,7 +998,7 @@ class Node:
                                 k_queue.put((keyboard_msg, webcam_shot, "whatever"))  # Store in the asynch queue
 
                             if (keyboard_msg is not None and
-                                    (keyboard_msg.strip() == "exit" or keyboard_msg.strip() == "quit")):
+                                    (keyboard_msg.strip() == "exit()" or keyboard_msg.strip() == "quit()")):
                                 break
 
                 keyboard_queue = queue.Queue()  # Create a thread-safe queue for communication
@@ -1123,7 +1123,7 @@ class Node:
                             msg, image_pil, whatever = keyboard_queue.get_nowait()
                             msg = msg.strip()
 
-                            if msg.lower() == "exit" or msg.lower() == "quit":
+                            if msg.lower() == "exit()" or msg.lower() == "quit()":
 
                                 # Quit?
                                 must_quit = True
