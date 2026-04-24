@@ -1017,9 +1017,7 @@ class HybridStateMachine:
                         _interactions_f = _interaction
 
                     if _idx_f != _idx or _interactions_f != _interaction:
-                        _idx = _idx_f
-                        _interaction = _interactions_f
-                        if _idx < 0:
+                        if _idx_f < 0:
                             log.error(f"Filter selected no actions among {[a.name for a in actions_list]}")  # TODO statem
 
                             # No actions were applied
@@ -1028,6 +1026,9 @@ class HybridStateMachine:
                             # return -1  # Early stop
                             skip_action_due_to_filter = True
                         else:
+                            _idx = _idx_f
+                            _interaction = _interactions_f
+
                             if _interaction is not None:
                                 log.statem(
                                     f"Filter selected {actions_list[_idx].to_code_str()}, {_interaction.__str__()}",
