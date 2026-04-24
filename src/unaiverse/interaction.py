@@ -1455,7 +1455,7 @@ class InteractionManager:
                 if (interaction.completion_reason == CompletionReason.DISCONNECTED or
                         (interaction.cycle_completed < cur_clock_cycle and
                          (cur_time - interaction.timestamp_completed) > Custom.DRAIN_TIMEOUT)):
-                    log.error(
+                    log.inter(
                         f"Draining {interaction.to_code_str(True)} "
                         f"(cycle_completed={interaction.cycle_completed})")
                     to_remove.append(interaction)
@@ -1487,8 +1487,9 @@ class InteractionManager:
         for interaction in list(self.sent.values()) + list(self.received.values()) + list(self.lazy.values()):
             if interaction.status == InteractionStatus.COMPLETED:
                 continue
-            if (interaction.is_expired(Custom.DEFAULT_INTER_TIMEOUT) or interaction.action_name is None or
-                    interaction.volatile):
+            elif interaction.is_expired(Custom.DEFAULT_INTER_TIMEOUT) or interaction.action_name is None:
+                await self.complete(interaction, reason=CompletionReason.TIMEOUT)
+            elif interaction.volatile and self.is_sent(interaction):
                 await self.complete(interaction, reason=CompletionReason.TIMEOUT)
             else:
                 if self.is_received(interaction) and interaction.requester not in self.agent.all_agents:
