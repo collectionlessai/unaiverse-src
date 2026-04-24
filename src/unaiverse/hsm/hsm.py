@@ -1019,7 +1019,7 @@ class HybridStateMachine:
                         _idx = _idx_f
                         _interaction = _interactions_f
                         if _idx < 0:
-                            log.error(f"Filter selected no actions")  # TODO statem
+                            log.error(f"Filter selected no actions among {[a.name for a in actions_list]}")  # TODO statem
 
                             # No actions were applied
                             self.__cur_feasible_actions_status = None
@@ -1040,6 +1040,7 @@ class HybridStateMachine:
                 self.limbo_state = self.state
                 self.state = None
                 self.__action = actions_list[_idx]
+                log.error(f"Running action {self.__action.name}, chosen among {[a.name for a in actions_list]}")
 
                 # Forcing system interaction if no external interactions were selected
                 if _interaction is None:
