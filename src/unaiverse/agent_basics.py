@@ -686,7 +686,7 @@ class AgentBasics:
 
         return None
 
-    def resolve_stream_ref(self, ref: str, public: bool) -> str | None:
+    def resolve_stream_ref(self, ref: str) -> str | None:
         """Resolve a stream name to a stream user or net hash (heuristic, gives priority to owned streams).
 
         Args:
@@ -699,6 +699,8 @@ class AgentBasics:
         # If already a valid user hash
         if ref in self.known_streams_by_user_hash:
             return ref
+
+        public = not self.behaving_in_world()
 
         # Search your own streams first (priority)
         for user_hash, stream_obj in self.owned_streams_by_user_hash.items():
