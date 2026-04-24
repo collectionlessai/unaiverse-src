@@ -426,6 +426,7 @@ class Agent(AgentBasics):
             return False
 
         # Pushing output data to the output stream
+        log.error(f"[process] stdout.set({output_data}, {data_tag}, {uuid})")
         self.stdout.set(output_data, data_tag=data_tag, uuid=uuid)  # Use kwargs for data_tag and uuid
         return True
 
