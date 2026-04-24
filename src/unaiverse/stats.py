@@ -470,7 +470,7 @@ class Stats:
     CUSTOM_OUTER_STATS_DYNAMIC_SCHEMA: dict[str, tuple[type, Any]] = {}
 
     # Key for grouping stats in the _stats dictionary (both world and agent)
-    GROUP_KEY = 'peer_stats'  # _BY_PEER stats are grouped under this key
+    GROUP_KEY = 'peer_stats'  # grouped stats are stored under this key
 
     # Deprecated
     DEBUG = False
@@ -622,7 +622,7 @@ class Stats:
             else:
                 self._stats.setdefault(key, self._stat_defaults[key])  # e.g., 'graph'
 
-        # Grouped keys are initialized on-demand by _get_peer_stat_cache
+        # Grouped keys are initialized on-demand by _get_group_stat_cache
         # But we must ensure existing loaded peers have their structures
         for _, peer_data in self._stats[self.GROUP_KEY].items():
             for key in self.world_grouped_keys:
@@ -631,12 +631,12 @@ class Stats:
                     # It will be populated by _hydrate_dynamic_caches_from_db
                     peer_data.setdefault(key, SortedDict())
 
-    def _get_peer_stat_cache(self, peer_id: str, stat_name: str) -> SortedDict | dict | None:
-        """(World-only) Helper to get or create the cache structure for a peer stat on demand.
+    def _get_group_stat_cache(self, group_key: str, stat_name: str) -> SortedDict | dict | None:
+        """(World-only) Helper to get or create the cache structure for a grouped stat on demand.
 
         Args:
-            peer_id: Identifier of the peer whose cache entry is retrieved or created.
-            stat_name: Name of the statistic to look up within the peer's cache.
+            group_key: Group key whose cache entry is retrieved or created.
+            stat_name: Name of the statistic to look up within the group's cache.
 
         Returns:
             A ``SortedDict`` for dynamic stats, a plain ``dict`` (or scalar default) for
@@ -645,7 +645,7 @@ class Stats:
         if not self.is_world:
             return
 
-        peer_cache = self._stats[self.GROUP_KEY].setdefault(peer_id, {})
+        peer_cache = self._stats[self.GROUP_KEY].setdefault(group_key, {})
         if stat_name not in peer_cache:
             if stat_name in self.all_dynamic_keys:
                 peer_cache[stat_name] = SortedDict()
@@ -655,13 +655,14 @@ class Stats:
         return peer_cache.get(stat_name)
 
     # --- SHARED API ---
-    def store_stat(self, stat_name: str, value: Any, peer_id: str, timestamp: int):
+    def store_stat(self, stat_name: str, value: Any, group_key: str, timestamp: int):
         """Unified API to store a stat. Dispatches to static or dynamic storage.
 
         Args:
             stat_name: Name of the statistic as defined in one of the schema dicts.
             value: Value to store. Type-validated and cast according to the schema.
-            peer_id: Identifier of the peer this stat belongs to.
+            group_key: Grouping key for this stat (e.g. the sender's peer id, or any
+                arbitrary identifier used to bucket related records together).
             timestamp: Millisecond Unix timestamp associated with the measurement.
         """
         if stat_name not in self.all_keys:
@@ -670,9 +671,9 @@ class Stats:
 
         # disambiguate between static and dynamic stats
         if stat_name in self.all_static_keys:
-            self._store_static(stat_name, value, peer_id, timestamp)
+            self._store_static(stat_name, value, group_key, timestamp)
         else:
-            self._store_dynamic(stat_name, value, peer_id, timestamp)
+            self._store_dynamic(stat_name, value, group_key, timestamp)
 
     def _validate_type(self, stat_name: str, value: Any) -> Any:
         """Validates and casts ``value`` to the type declared in the schema.
@@ -731,7 +732,7 @@ class Stats:
         # Base case: value is fine as-is
         return value
 
-    def _store_static(self, stat_name: str, value: Any, peer_id: str, timestamp: int):
+    def _store_static(self, stat_name: str, value: Any, group_key: str, timestamp: int):
         """Stores a static (single-value) stat.
 
         On Agent: de-duplicates and appends to the network send buffer.
@@ -740,7 +741,7 @@ class Stats:
         Args:
             stat_name: Name of the static statistic.
             value: New value for the stat. Type-validated before storage.
-            peer_id: Identifier of the peer this stat belongs to.
+            group_key: Grouping key for this stat.
             timestamp: Millisecond Unix timestamp of the measurement.
         """
         value = self._validate_type(stat_name, value)
@@ -752,27 +753,27 @@ class Stats:
             if stat_name in self.world_ungrouped_keys:
                 self._stats[stat_name] = value
             else:
-                peer_cache = self._stats[self.GROUP_KEY].setdefault(peer_id, {})
+                peer_cache = self._stats[self.GROUP_KEY].setdefault(group_key, {})
                 peer_cache[stat_name] = value
 
             # 2. Add to DB buffer (key, value_json)
             serializable_value = self._make_json_serializable(value)
-            self._static_db_buffer.append((peer_id, stat_name, json.dumps(serializable_value), timestamp))
+            self._static_db_buffer.append((group_key, stat_name, json.dumps(serializable_value), timestamp))
         else:
             # --- AGENT LOGIC ---
-            # De-duplicate logic: remove previous static value for this peer/stat
+            # De-duplicate logic: remove previous static value for this group_key/stat
             self._update_batch = [u for u in self._update_batch
-                                  if not (u['peer_id'] == peer_id and u['stat_name'] == stat_name)]
+                                  if not (u['group_key'] == group_key and u['stat_name'] == stat_name)]
 
             # 2. Add to batch
             self._update_batch.append({
-                'peer_id': peer_id,
+                'group_key': group_key,
                 'stat_name': stat_name,
                 'timestamp': timestamp,
                 'value': value
             })
 
-    def _store_dynamic(self, stat_name: str, value: Any, peer_id: str, timestamp: int):
+    def _store_dynamic(self, stat_name: str, value: Any, group_key: str, timestamp: int):
         """Stores a dynamic (time-series) stat.
 
         On Agent: appends to the network send buffer.
@@ -782,7 +783,7 @@ class Stats:
         Args:
             stat_name: Name of the dynamic statistic.
             value: New measurement value. Type-validated before storage.
-            peer_id: Identifier of the peer this stat belongs to.
+            group_key: Grouping key for this stat.
             timestamp: Millisecond Unix timestamp used as the time-series key.
         """
         value = self._validate_type(stat_name, value)
@@ -795,7 +796,7 @@ class Stats:
             if stat_name in self.world_ungrouped_keys:
                 cache = self._stats.get(stat_name)
             else:
-                cache = self._get_peer_stat_cache(peer_id, stat_name)
+                cache = self._get_group_stat_cache(group_key, stat_name)
 
             # Verify we have a valid SortedDict to work with
             if isinstance(cache, SortedDict):
@@ -811,11 +812,11 @@ class Stats:
             # always create the json-serialized as fallback
             serializable_value = self._make_json_serializable(value)
             val_json = json.dumps(serializable_value)
-            self._dynamic_db_buffer.append((timestamp, peer_id, stat_name, val_num, val_str, val_json))
+            self._dynamic_db_buffer.append((timestamp, group_key, stat_name, val_num, val_str, val_json))
         else:
             # --- AGENT LOGIC ---
             self._update_batch.append({
-                'peer_id': peer_id,
+                'group_key': group_key,
                 'stat_name': stat_name,
                 'timestamp': timestamp,
                 'value': value
@@ -1016,32 +1017,32 @@ class Stats:
             # Static value: return as is (assuming it's serializable)
             return self._make_json_serializable(value)
 
-    def get_last_value(self, stat_name: str, peer_id: str | None = None) -> Any | None:
+    def get_last_value(self, stat_name: str, group_key: str | None = None) -> Any | None:
         """Returns the most recent value of any stat, whether static or dynamic.
 
         Args:
             stat_name: Name of the statistic to retrieve.
-            peer_id: When ``None``, looks up an ungrouped (world-level) stat. When
-                provided, looks up a peer-grouped stat for that peer.
+            group_key: When ``None``, looks up an ungrouped (world-level) stat. When
+                provided, looks up the grouped stat under that key.
 
         Returns:
             The most recent value, or ``None`` if the stat is unknown or has no data.
         """
         if stat_name in self.all_static_keys:
-            return self._get_last_static_value(stat_name, peer_id)
+            return self._get_last_static_value(stat_name, group_key)
         elif stat_name in self.all_dynamic_keys:
-            return self._get_last_dynamic_value(stat_name, peer_id)
+            return self._get_last_dynamic_value(stat_name, group_key)
         else:
             log.error(f'get_last_value: Unknown stat_name "{stat_name}"')
             return None
 
-    def _get_last_dynamic_value(self, stat_name: str, peer_id: str | None = None) -> Any | None:
+    def _get_last_dynamic_value(self, stat_name: str, group_key: str | None = None) -> Any | None:
         """Returns the most recent value of a dynamic stat from the hot cache.
 
         Args:
             stat_name: Name of the dynamic statistic.
-            peer_id: When ``None``, searches for an ungrouped (world-level) stat. When
-                provided, searches for a peer-grouped stat for that peer.
+            group_key: When ``None``, searches for an ungrouped (world-level) stat. When
+                provided, searches for the grouped stat under that key.
 
         Returns:
             The most recently recorded value, or ``None`` if the stat is not found, the
@@ -1052,14 +1053,14 @@ class Stats:
 
         cache: SortedDict | None = None
 
-        if peer_id is None:
+        if group_key is None:
             # --- This is an ungrouped (world) stat ---
             if stat_name in self.world_ungrouped_keys:
                 cache = self._stats.get(stat_name)
         else:
-            # --- This is a grouped (peer) stat ---
+            # --- This is a grouped stat ---
             if stat_name in self.world_grouped_keys:
-                peer_cache = self._stats.get(self.GROUP_KEY, {}).get(peer_id)
+                peer_cache = self._stats.get(self.GROUP_KEY, {}).get(group_key)
                 if peer_cache:
                     cache = peer_cache.get(stat_name)
 
@@ -1069,13 +1070,13 @@ class Stats:
 
         return None  # Stat not found or no values
 
-    def _get_last_static_value(self, stat_name: str, peer_id: str | None = None) -> Any | None:
+    def _get_last_static_value(self, stat_name: str, group_key: str | None = None) -> Any | None:
         """Returns the current value of a static stat from the hot cache.
 
         Args:
             stat_name: Name of the static statistic.
-            peer_id: When ``None``, searches for an ungrouped (world-level) stat. When
-                provided, searches for a peer-grouped stat for that peer.
+            group_key: When ``None``, searches for an ungrouped (world-level) stat. When
+                provided, searches for the grouped stat under that key.
 
         Returns:
             The current cached value, or ``None`` if the stat is not found or this
@@ -1085,14 +1086,14 @@ class Stats:
             return None  # Agents don't have this cache
 
         value: Any | None = None
-        if peer_id is None:
+        if group_key is None:
             # --- This is an ungrouped (world) stat ---
             if stat_name in self.world_ungrouped_keys:
                 value = self._stats.get(stat_name)
         else:
-            # --- This is a grouped (peer) stat ---
+            # --- This is a grouped stat ---
             if stat_name in self.world_grouped_keys:
-                peer_cache = self._stats.get(self.GROUP_KEY, {}).get(peer_id)
+                peer_cache = self._stats.get(self.GROUP_KEY, {}).get(group_key)
                 if peer_cache:
                     value = peer_cache.get(stat_name)
         return value
@@ -1233,11 +1234,11 @@ class Stats:
             """, (cutoff_t_ms,))
 
             count = 0
-            for ts, peer_id, stat_name, _, _, val_json in cursor:
+            for ts, group_key, stat_name, _, _, val_json in cursor:
                 ts = int(ts)
                 # we just need the val_json that will be cast to the exact type by _validate_type
                 value = json.loads(val_json)
-                self._store_dynamic(stat_name, value, peer_id, ts)
+                self._store_dynamic(stat_name, value, group_key, ts)
                 count += 1
 
             # Clear the buffer generated by hydrating
@@ -1254,7 +1255,7 @@ class Stats:
     # --- WORLD API (QUERYING) ---
     def query_history(self,
                       stat_names: list[str] | None = None,
-                      peer_ids: list[str] | None = None,
+                      group_keys: list[str] | None = None,
                       time_range: tuple[int, int] | int | None = None,
                       value_range: tuple[float, float] | None = None,
                       limit: int | None = None) -> dict[str, Any]:
@@ -1267,8 +1268,8 @@ class Stats:
         Args:
             stat_names: Restrict results to these stat names. Pass ``None`` or ``[]``
                 to include all stats.
-            peer_ids: Restrict results to these peer IDs. Pass ``None`` or ``[]`` to
-                include all peers.
+            group_keys: Restrict results to these group keys. Pass ``None`` or ``[]``
+                to include all groups.
             time_range: Time filter for dynamic stats. An ``int`` is treated as a
                 "since X" lower bound; a ``(start, end)`` tuple filters to the closed
                 interval ``[start, end]``. Pass ``None`` for no time filter.
@@ -1282,8 +1283,8 @@ class Stats:
         """
         if stat_names is None:
             stat_names = []
-        if peer_ids is None:
-            peer_ids = []
+        if group_keys is None:
+            group_keys = []
         if not self.is_world or not self._db_conn:
             return {}
 
@@ -1304,13 +1305,13 @@ class Stats:
             where_added = True
             query_static.append(f"stat_name IN ({','.join(['?'] * len(stat_names))})")
             params_static.extend(stat_names)
-        if peer_ids:
+        if group_keys:
             if not where_added:
                 query_static.append("WHERE")
             else:
                 query_static.append(f"AND")
-            query_static.append(f"peer_id IN ({','.join(['?'] * len(peer_ids))})")
-            params_static.extend(peer_ids)
+            query_static.append(f"peer_id IN ({','.join(['?'] * len(group_keys))})")
+            params_static.extend(group_keys)
 
         try:
             cursor = self._db_conn.execute(' '.join(query_static), params_static)
@@ -1352,14 +1353,14 @@ class Stats:
             query_dyn.append(f"stat_name IN ({','.join(['?'] * len(stat_names))})")
             params_dyn.extend(stat_names)
 
-        # 2. Peer IDs
-        if peer_ids:
+        # 2. Group Keys
+        if group_keys:
             if not where_added:
                 query_static.append("WHERE")
             else:
                 query_static.append(f"AND")
-            query_dyn.append(f"peer_id IN ({','.join(['?'] * len(peer_ids))})")
-            params_dyn.extend(peer_ids)
+            query_dyn.append(f"peer_id IN ({','.join(['?'] * len(group_keys))})")
+            params_dyn.extend(group_keys)
 
         if time_range is not None:
             if isinstance(time_range, int):
@@ -1515,10 +1516,11 @@ class Stats:
 
     # --- PLOTTING INTERFACE ---
     def plot(self, since_timestamp: int = 0) -> str | None:
-        """Builds and returns the default 2x2 dashboard JSON.
+        """Builds and returns the default 2x2 dashboard as a self-contained HTML document.
 
         Visualizes core stats: network topology, agent-count history, state distribution,
-        and last-action distribution.
+        and last-action distribution. Plotly.js is loaded from CDN; Python never imports
+        the plotly package.
 
         Args:
             since_timestamp: Millisecond Unix timestamp. Only dynamic data points newer
@@ -1526,9 +1528,11 @@ class Stats:
                 include all cached data.
 
         Returns:
-            JSON string representing the Plotly dashboard, or ``None`` if no view data
+            HTML string (``<!DOCTYPE html>`` document), or ``None`` if no view data
             is available.
         """
+        from .stats_html_renderer import render_plotly_html
+
         # 1. Get Data view
         view = self.get_view(since_timestamp) if self.is_world else self._world_view
         if not view:
@@ -1539,8 +1543,6 @@ class Stats:
         # --- Panel 1: Network Topology (Top Left) ---
         p1 = UIPlot(title="World Topology")
         self._populate_graph(p1, view, "graph")
-        # p1.set_layout_opt('xaxis', {'visible': False})
-        # p1.set_layout_opt('yaxis', {'visible': False})
         clean_axis = {'showgrid': False, 'showticklabels': False, 'zeroline': False}
         p1.set_layout_opt('xaxis', clean_axis)
         p1.set_layout_opt('yaxis', clean_axis)
@@ -1562,17 +1564,13 @@ class Stats:
                 color_override=color,
                 title_override=label
             )
-        # p2.set_layout_opt('xaxis', {'title': None, 'visible': False})
         p2.set_layout_opt('xaxis', {'title': None, 'showticklabels': False})
         p2.set_layout_opt('yaxis', {'title': None})
         dash.add_panel(p2, "top_right")
 
         # --- Panel 3: State Distribution (Bar) ---
         p3 = UIPlot(title="State Distribution")
-        # self._populate_distribution(p3, view, "state")
         self._populate_graph(p3, view, "graph")
-        # p1.set_layout_opt('xaxis', {'visible': False})
-        # p1.set_layout_opt('yaxis', {'visible': False})
         clean_axis = {'showgrid': False, 'showticklabels': False, 'zeroline': False}
         p3.set_layout_opt('xaxis', clean_axis)
         p3.set_layout_opt('yaxis', clean_axis)
@@ -1585,7 +1583,7 @@ class Stats:
         p4.set_layout_opt("xaxis", {"title": None})
         dash.add_panel(p4, "bot_right")
 
-        return dash.to_json()
+        return render_plotly_html(dash.to_json())
 
     def _populate_time_series(self, panel: 'UIPlot', view: dict[str, Any], stat_name: str,
                               peer_ids: list[str] | None = None, color_override: str | None = None,

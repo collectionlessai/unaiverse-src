@@ -249,8 +249,7 @@ class World(AgentBasics):
         def store_if_changed(stat_name: str, new_value: object) -> None:
             last_value = self.stats.get_last_value(stat_name)
             if last_value != new_value:
-                # Note: We pass the world's *own* peer_id for its *own* stats
-                self.stats.store_stat(stat_name, new_value, peer_id=own_private_pid, timestamp=t)
+                self.stats.store_stat(stat_name, new_value, group_key=own_private_pid, timestamp=t)
 
         try:
             store_if_changed("world_masters", len(self.world_masters))
@@ -261,13 +260,13 @@ class World(AgentBasics):
             log.error(f"[Stats] Error updating own world stats: {e}")
 
     def _process_custom_stat(self, stat_name: str, value: object,
-                             peer_id: str, timestamp: int) -> bool:
+                             group_key: str, timestamp: int) -> bool:
         """Hook for subclasses to intercept and handle a custom stat before default processing.
 
         Args:
             stat_name: The name of the incoming statistic.
             value: The value of the statistic.
-            peer_id: The peer ID of the agent that sent the stat.
+            group_key: The group key under which the stat is stored.
             timestamp: The timestamp of the stat in milliseconds.
 
         Returns:
@@ -306,8 +305,8 @@ class World(AgentBasics):
             'Role': dynamic_profile.get('connections', {}).get('role', 'unknown').split('~')[-1],
             'Type': static_profile.get('node_type', '~'),
             'Number of Badges': len(cv),
-            'Current Action': self.stats.get_last_value('action', peer_id=peer_id) or '~',
-            'Current State': self.stats.get_last_value('state', peer_id=peer_id) or '~',
+            'Current Action': self.stats.get_last_value('action', group_key=peer_id) or '~',
+            'Current State': self.stats.get_last_value('state', group_key=peer_id) or '~',
         }
 
     def _update_graph(self, peer_id: str, connected_peers_list: list[str], timestamp: int) -> None:
@@ -356,7 +355,7 @@ class World(AgentBasics):
 
         # 4. Store
         world_peer_id = self.get_peer_ids()[1]
-        self.stats.store_stat('graph', graph_stat, peer_id=world_peer_id, timestamp=timestamp)
+        self.stats.store_stat('graph', graph_stat, group_key=world_peer_id, timestamp=timestamp)
 
     def _prune_graph(self) -> None:
         """Removes nodes that are no longer connected to the World."""
@@ -407,7 +406,7 @@ class World(AgentBasics):
         connected_peers = []
         for update in peer_stats_batch:
             try:
-                p_id = update['peer_id']
+                p_id = update['group_key']
                 if p_id != sender_peer_id:
                     # TODO: decide if we want to filter the stats
                     pass
@@ -428,7 +427,7 @@ class World(AgentBasics):
 
                 # 3. Push to the "dumb" Stats recorder
                 if stat_name in self.stats.all_keys:
-                    self.stats.store_stat(stat_name, v, peer_id=p_id, timestamp=t)
+                    self.stats.store_stat(stat_name, v, group_key=p_id, timestamp=t)
                 else:
                     log.error(f"[World] Unknown stat received: {stat_name}")
 
@@ -444,9 +443,13 @@ class World(AgentBasics):
 
     def debug_stats_dashboard(self) -> None:
         """Helper to verify the dashboard looks correct during development."""
-        import plotly.io as pio
+        import tempfile
+        import webbrowser
 
         log.debug("Rendering Dashboard...")
-        json_str = self.stats.plot()
-        if json_str:
-            pio.from_json(json_str).show()
+        html = self.stats.plot()
+        if html:
+            tmp = tempfile.NamedTemporaryFile(suffix=".html", delete=False, mode="w", encoding="utf-8")
+            tmp.write(html)
+            tmp.close()
+            webbrowser.open(f"file://{tmp.name}")

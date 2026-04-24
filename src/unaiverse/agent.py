@@ -134,16 +134,16 @@ class Agent(AgentBasics):
         try:
             info = self._node_conn['p2p_world'].get_connected_peers_info()
             peers_list = [i['id'] for i in info]
-            self.stats.store_stat('connected_peers', peers_list, own_private_pid, t)
+            self.stats.store_stat('connected_peers', peers_list, group_key=own_private_pid, timestamp=t)
         except Exception as e:
-            self.stats.store_stat('connected_peers', [], own_private_pid, t)
+            self.stats.store_stat('connected_peers', [], group_key=own_private_pid, timestamp=t)
             log.error(f"[Stats] Error collecting and storing own stats, clearing: {e}")
 
         try:
             behav = self.behav
-            self.stats.store_stat('state', behav.get_state_name(), own_private_pid, t)
-            self.stats.store_stat('action', behav.get_action_name(), own_private_pid, t)
-            self.stats.store_stat('last_action', behav.get_last_completed_action_name(), own_private_pid, t)
+            self.stats.store_stat('state', behav.get_state_name(), group_key=own_private_pid, timestamp=t)
+            self.stats.store_stat('action', behav.get_action_name(), group_key=own_private_pid, timestamp=t)
+            self.stats.store_stat('last_action', behav.get_last_completed_action_name(), group_key=own_private_pid, timestamp=t)
         except Exception as e:
             log.error(f"[Stats] Error storing HSM stats: {e}")
 
