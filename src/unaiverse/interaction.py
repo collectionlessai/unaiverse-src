@@ -875,7 +875,6 @@ class InteractionManager:
 
     def unregister_all(self):
         """Deregister all current interactions"""
-        log.error("[fava] unregister all")
         all_interactions = (set(self.sent.values()) | set(self.received.values()) | set(self.lazy.values()))
         for interaction in all_interactions:
             self.unregister(interaction)
@@ -1020,7 +1019,6 @@ class InteractionManager:
                 if stream.props.is_public():
                     continue
             stream.add_interaction(interaction)
-            log.error(f"----> [register received] {stream.props.name}, {stream.is_public()}, interactions: {stream.interactions_by_uuid.keys()}")
 
         # Registering
         self.last_registered = interaction

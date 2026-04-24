@@ -700,6 +700,7 @@ class AgentBasics:
         if ref in self.known_streams_by_user_hash:
             return ref
 
+        # Resolving in the public/private network
         public = not self.behaving_in_world()
 
         # Search your own streams first (priority)
