@@ -1146,6 +1146,7 @@ class Node:
                                 # pick up data, no matter what is the actual stdin from the point of view of the
                                 # interaction)
                                 uuid = self.agent.prepare_stdin_if_human(public, peer_id=target_peer_id)
+                                log.error(f"@@@ PUBLIC: {public}, uuid={uuid}")
                                 self.agent.stdin.set([msg, image_pil, whatever], uuid=uuid, force=True)
                         except queue.Empty:
                             pass  # If nothing has been typed (+ enter)
