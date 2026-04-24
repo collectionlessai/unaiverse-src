@@ -321,7 +321,7 @@ class Msg:
         
         for update_dict in payload_list:
             update_pb = batch_pb.updates.add()
-            update_pb.peer_id = update_dict['peer_id']
+            update_pb.peer_id = update_dict['group_key']
             update_pb.stat_name = update_dict['stat_name']
             update_pb.timestamp = int(update_dict['timestamp'])  # Ensure int
             
@@ -354,7 +354,7 @@ class Msg:
         
         for update_pb in batch_pb.updates:
             py_list.append({
-                "peer_id": update_pb.peer_id,
+                "group_key": update_pb.peer_id,
                 "stat_name": update_pb.stat_name,
                 "timestamp": update_pb.timestamp,
                 "value": self._proto_value_to_py_value(update_pb.value)
