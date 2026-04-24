@@ -1457,7 +1457,7 @@ class InteractionManager:
                 if (interaction.completion_reason == CompletionReason.DISCONNECTED or
                         (interaction.cycle_completed < cur_clock_cycle and
                          (cur_time - interaction.timestamp_completed) > Custom.DRAIN_TIMEOUT)):
-                    log.error(  # TODO
+                    log.inter(
                         f"Draining {interaction.to_code_str(True)} "
                         f"(cycle_completed={interaction.cycle_completed})")
                     to_remove.append(interaction)
