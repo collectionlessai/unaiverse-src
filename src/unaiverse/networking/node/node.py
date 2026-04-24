@@ -1610,8 +1610,8 @@ class Node:
                                                                  'agent_stats_code': self.world.agent_stats_code,
                                                                  # 'initial_stats': self.world.stats.get_view()
                                                                  # if is_human else None,
-                                                                 'initial_stats': None # self.world.stats.plot()
-                                                                 #if is_human else None,
+                                                                 'initial_stats': self.world.stats.plot()
+                                                                 if is_human else None,
                                                              },
                                                              content_type=Msg.WORLD_APPROVAL)):
                                     log.error(
