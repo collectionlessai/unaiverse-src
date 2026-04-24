@@ -32,10 +32,9 @@ import importlib.machinery
 from datetime import datetime
 from collections import deque
 from unaiverse.custom import GenException
-from unaiverse.networking.node.profile import NodeProfile
 
 
-def build_unaid(profile: NodeProfile):
+def build_unaid(profile):
     return profile.get_static_profile()['email'] + '/' + profile.get_static_profile()['node_name']
 
 
