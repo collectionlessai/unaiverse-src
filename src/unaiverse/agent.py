@@ -428,6 +428,11 @@ class Agent(AgentBasics):
         # Pushing output data to the output stream
         log.error(f"[process] stdout.set({output_data}, {data_tag}, {uuid})")
         self.stdout.set(output_data, data_tag=data_tag, uuid=uuid)  # Use kwargs for data_tag and uuid
+        for s in self.stdout:
+            log.error("--- int uuids ---")
+            log.error(s.interactions_by_uuid.keys())
+            log.error("--- data uuids ---")
+            log.error(s.data_by_uuid.keys())
         return True
 
     @action
@@ -1757,8 +1762,8 @@ class Agent(AgentBasics):
 
         # Clearing data from the stdin, to avoid garbage residuals
         streams_by_user_hash = self.get_default_stdin_bindings()
-        #for stream in streams_by_user_hash.values():
-        #    stream.clear_data(interaction.uuid)
+        for stream in streams_by_user_hash.values():
+            stream.clear_data(interaction.uuid)
 
     # ==================================================================================================================
     # BEGIN OF DEPRECATED METHODS
