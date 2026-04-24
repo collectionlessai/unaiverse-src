@@ -1757,8 +1757,8 @@ class Agent(AgentBasics):
 
         # Clearing data from the stdin, to avoid garbage residuals
         streams_by_user_hash = self.get_default_stdin_bindings()
-        for stream in streams_by_user_hash.values():
-            stream.clear_data(interaction.uuid)
+        #for stream in streams_by_user_hash.values():
+        #    stream.clear_data(interaction.uuid)
 
     # ==================================================================================================================
     # BEGIN OF DEPRECATED METHODS
