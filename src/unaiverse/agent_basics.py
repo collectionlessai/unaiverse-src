@@ -394,9 +394,19 @@ class AgentBasics:
         """Set default bindings for the stdin, stdtar, stdext, stdout stream proxies."""
 
         if (public is not None and not public) or (public is None and self.behaving_in_world()):
+            errr = False
             for s in self.__proc_streams_by_user_hash_prv.values():
+                if s.is_public():
+                    log.error(f"PUBLIC, expected private, {s.props.name}")
+                    errr = True
+            for s in self.__proc_streams_by_user_hash_pub.values():
                 if not s.is_public():
-                    dfsgsdgsdgsgsdg
+                    log.error(f"PRIVATE, expected public, {s.props.name}")
+                    errr = True
+            if errr:
+                log.error(public)
+                log.error(self.behaving_in_world())
+                dgsdg
             self.stdin.bind(self.__proc_in_streams_by_user_hash_prv, uuid=Custom.SYSTEM_INTERACTION_UUID)
             self.stdtar.bind({}, uuid=Custom.SYSTEM_INTERACTION_UUID)
             self.stdext.bind(self.__env_streams_by_user_hash_prv, uuid=Custom.SYSTEM_INTERACTION_UUID)
