@@ -973,6 +973,7 @@ class HybridStateMachine:
 
         # Using the selected policy to decide what action to apply
         while len(actions_list) > 0:
+            skip_action_due_to_filter = False
 
             # It there was an already selected action (for example a multistep action), then continue with it,
             # otherwise, select a new one following a certain policy (actually, first-come first-served)
@@ -1022,9 +1023,10 @@ class HybridStateMachine:
                             log.error(f"Filter selected no actions among {[a.name for a in actions_list]}")  # TODO statem
 
                             # No actions were applied
-                            self.__cur_feasible_actions_status = None
-                            self.__state_changed = False
-                            return 2  # Move to the next action
+                            # self.__cur_feasible_actions_status = None
+                            # self.__state_changed = False
+                            # return -1  # Early stop
+                            skip_action_due_to_filter = True
                         else:
                             if _interaction is not None:
                                 log.statem(
@@ -1071,7 +1073,7 @@ class HybridStateMachine:
             # 0: action fully done;
             # 1: try again this action;
             # 2: failed, move to another action.
-            status = await action(interaction=interaction)
+            status = await action(interaction=interaction) if not skip_action_due_to_filter else 2
 
             if status == 0:
                 log.statem(f"+++ ACTION {self.__action.name} correctly completed", state=self.get_state_name(True))
