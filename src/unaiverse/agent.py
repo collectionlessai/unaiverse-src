@@ -379,7 +379,7 @@ class Agent(AgentBasics):
         # Getting UUID of the interaction (used for tags and stdout)
         log.error(f"[process] uuid={interaction.uuid}")
         for s in self.stdout:
-            log.error(f"[process]          {s.props.name} interactions: {list(s.interactions_by_uuid.keys())}")
+            log.error(f"[process]          {s.props.name}, {s.is_public()}, interactions: {list(s.interactions_by_uuid.keys())}")
         uuid = interaction.uuid
 
         # Possibly re-binding stdin to cope with human processor (it might also let the action fail, if needed)
