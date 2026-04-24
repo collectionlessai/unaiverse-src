@@ -1947,8 +1947,8 @@ class AgentBasics:
                     data_tag = stream.get_tag(uuid=uuid)
 
                     if data is not None:
-                        log.debug(f"[send_stream_samples] Found something in stream {stream.props.get_name()} "
-                                  f"uuid={uuid}, data_tag={data_tag}, recipient={recipient}")
+                        log.error(f"[send_stream_samples] Found something in stream {stream.props.get_name()} "
+                                  f"uuid={uuid}, data_tag={data_tag}, recipient={recipient}")  # TODO
 
                         # Prepare data structures the first time we meet a new recipient
                         if uuid not in contents_by_uuid:
@@ -1991,7 +1991,7 @@ class AgentBasics:
                     content_data = contents_data_by_uuid[uuid]
 
                     for recipient in recipients:
-                        log.debug(f"[send_stream_samples] "
+                        log.error(f"[send_stream_samples] "  # TODO
                                   f"Sending samples of {net_hash} by direct message to {recipient}...")
                         for name in content.keys():
                             content[name]['data'] = self.hook_before_sending_sample(content_data[name],
