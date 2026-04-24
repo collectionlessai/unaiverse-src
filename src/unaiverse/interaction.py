@@ -1020,7 +1020,7 @@ class InteractionManager:
                 if stream.props.is_public():
                     continue
             stream.add_interaction(interaction)
-            log.error(f"----> [register received] {stream.props.name}, interactions: {stream.interactions_by_uuid.keys()}")
+            log.error(f"----> [register received] {stream.props.name}, {stream.is_public()}, interactions: {stream.interactions_by_uuid.keys()}")
 
         # Registering
         self.last_registered = interaction
