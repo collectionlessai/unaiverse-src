@@ -2002,7 +2002,7 @@ class AgentBasics:
                     content_data = contents_data_by_uuid[uuid]
 
                     for recipient in recipients:
-                        log.error(f"[send_stream_samples] " 
+                        log.debug(f"[send_stream_samples] " 
                                   f"Sending samples of {net_hash} by direct message to {recipient}...")
                         for name in content.keys():
                             content[name]['data'] = self.hook_before_sending_sample(content_data[name],
