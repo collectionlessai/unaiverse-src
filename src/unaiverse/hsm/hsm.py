@@ -1019,7 +1019,7 @@ class HybridStateMachine:
                         _idx = _idx_f
                         _interaction = _interactions_f
                         if _idx < 0:
-                            log.statem(f"Filter selected no actions")
+                            log.error(f"Filter selected no actions")  # TODO statem
 
                             # No actions were applied
                             self.__cur_feasible_actions_status = None
