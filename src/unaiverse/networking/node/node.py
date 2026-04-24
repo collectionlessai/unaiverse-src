@@ -1252,6 +1252,7 @@ class Node:
                             last_stats_send_time = clock.get_time()
                             await self.agent.send_stats_to_world()
                         except Exception as e:
+                            raise e
                             log.error(f"Error while sending stats to the world (trying to go ahead...) [{e}]")
 
                 # Save stats to disk if this is the world node
