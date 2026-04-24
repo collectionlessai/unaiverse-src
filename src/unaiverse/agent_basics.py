@@ -394,19 +394,6 @@ class AgentBasics:
         """Set default bindings for the stdin, stdtar, stdext, stdout stream proxies."""
 
         if (public is not None and not public) or (public is None and self.behaving_in_world()):
-            errr = False
-            for s in self.__proc_streams_by_user_hash_prv.values():
-                if s.is_public():
-                    log.error(f"PUBLIC, expected private, {s.props.name}")
-                    errr = True
-            for s in self.__proc_streams_by_user_hash_pub.values():
-                if not s.is_public():
-                    log.error(f"PRIVATE, expected public, {s.props.name}")
-                    errr = True
-            if errr:
-                log.error(public)
-                log.error(self.behaving_in_world())
-                dgsdg
             self.stdin.bind(self.__proc_in_streams_by_user_hash_prv, uuid=Custom.SYSTEM_INTERACTION_UUID)
             self.stdtar.bind({}, uuid=Custom.SYSTEM_INTERACTION_UUID)
             self.stdext.bind(self.__env_streams_by_user_hash_prv, uuid=Custom.SYSTEM_INTERACTION_UUID)
@@ -699,7 +686,7 @@ class AgentBasics:
 
         return None
 
-    def resolve_stream_ref(self, ref: str) -> str | None:
+    def resolve_stream_ref(self, ref: str, public: bool) -> str | None:
         """Resolve a stream name to a stream user or net hash (heuristic, gives priority to owned streams).
 
         Args:
@@ -715,17 +702,25 @@ class AgentBasics:
 
         # Search your own streams first (priority)
         for user_hash, stream_obj in self.owned_streams_by_user_hash.items():
+            if public and not stream_obj.is_public():
+                continue
             if ref == Stream.name_from_user_hash(user_hash):
                 return user_hash
         for net_hash, stream_dict in self.owned_streams.items():
+            if public and not next(iter(stream_dict.values())).is_public():
+                continue
             if ref == Stream.name_or_group_from_net_hash(net_hash):
                 return net_hash
 
         # Search all streams then
         for user_hash, stream_obj in self.known_streams_by_user_hash.items():
+            if public and not stream_obj.is_public():
+                continue
             if ref == Stream.name_from_user_hash(user_hash):
                 return user_hash
         for net_hash, stream_dict in self.known_streams.items():
+            if public and not next(iter(stream_dict.values())).is_public():
+                continue
             if ref == Stream.name_or_group_from_net_hash(net_hash):
                 return net_hash
 
