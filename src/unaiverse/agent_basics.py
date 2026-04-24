@@ -483,7 +483,8 @@ class AgentBasics:
         # Also register with the HSM for action selection (backward compat bridge)
         behav = self.behav_lone_wolf \
             if sender in self.public_agents else self.behav
-        if not behav.request_action(interaction):
+        if (interaction.action_name is not None and len(interaction.action_name) > 0 and
+                not behav.request_action(interaction)):
             log.error(f"Cannot enqueue the interaction, incompatible action. "
                       f"Interaction is: {interaction}")
         else:
