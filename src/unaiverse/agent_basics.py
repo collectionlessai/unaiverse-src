@@ -394,6 +394,9 @@ class AgentBasics:
         """Set default bindings for the stdin, stdtar, stdext, stdout stream proxies."""
 
         if (public is not None and not public) or (public is None and self.behaving_in_world()):
+            for s in self.__proc_streams_by_user_hash_prv.values():
+                if not s.is_public():
+                    dfsgsdgsdgsgsdg
             self.stdin.bind(self.__proc_in_streams_by_user_hash_prv, uuid=Custom.SYSTEM_INTERACTION_UUID)
             self.stdtar.bind({}, uuid=Custom.SYSTEM_INTERACTION_UUID)
             self.stdext.bind(self.__env_streams_by_user_hash_prv, uuid=Custom.SYSTEM_INTERACTION_UUID)
