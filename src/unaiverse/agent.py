@@ -379,6 +379,12 @@ class Agent(AgentBasics):
         # Getting UUID of the interaction (used for tags and stdout)
         uuid = interaction.uuid
 
+        for s in self.stdout:
+            log.error("--- bint uuids ---")
+            log.error(s.interactions_by_uuid.keys())
+            log.error("--- bdata uuids ---")
+            log.error(s.data_by_uuid.keys())
+
         # Possibly re-binding stdin to cope with human processor (it might also let the action fail, if needed)
         if not self.__rebind_stdin_if_human(interaction):
             return False
