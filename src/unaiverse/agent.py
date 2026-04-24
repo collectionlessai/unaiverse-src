@@ -377,28 +377,22 @@ class Agent(AgentBasics):
             True if the step ran successfully, False otherwise.
         """
         # Getting UUID of the interaction (used for tags and stdout)
-        log.error(f"[process] uuid={interaction.uuid}")
-        for s in self.stdout:
-            log.error(f"[process]          {s.props.name}, {s.is_public()}, interactions: {list(s.interactions_by_uuid.keys())}")
         uuid = interaction.uuid
 
         # Possibly re-binding stdin to cope with human processor (it might also let the action fail, if needed)
         if not self.__rebind_stdin_if_human(interaction):
-            log.error(f"[process] rebinding and failing")
             return False
 
         # Getting input data from the input stream
         input_data = self.stdin.get(uuid=uuid, requested_by="process")  # Use kwargs
 
         if input_data is None:
-            log.error(f"[process] no data, failing")
             return False
 
         # Getting data tag
         data_tag = self.stdin.get_tag(uuid=uuid)
 
         if data_tag is None:
-            log.error(f"[process] no data tag, failing")
             return False
 
         # Post get actions to finalize what possibly started with the previous call to the rebind operation
@@ -432,13 +426,7 @@ class Agent(AgentBasics):
             return False
 
         # Pushing output data to the output stream
-        log.error(f"[process] stdout.set({output_data}, {data_tag}, {uuid})")
         self.stdout.set(output_data, data_tag=data_tag, uuid=uuid)  # Use kwargs for data_tag and uuid
-        for s in self.stdout:
-            log.error("--- int uuids ---")
-            log.error(s.interactions_by_uuid.keys())
-            log.error("--- data uuids ---")
-            log.error(s.data_by_uuid.keys())
         return True
 
     @action
