@@ -1024,7 +1024,7 @@ class HybridStateMachine:
                             # No actions were applied
                             self.__cur_feasible_actions_status = None
                             self.__state_changed = False
-                            return -1  # Early stop
+                            return 2  # Move to the next action
                         else:
                             if _interaction is not None:
                                 log.statem(
