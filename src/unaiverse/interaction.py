@@ -875,6 +875,7 @@ class InteractionManager:
 
     def unregister_all(self):
         """Deregister all current interactions"""
+        log.error("[fava] unregister all")
         all_interactions = (set(self.sent.values()) | set(self.received.values()) | set(self.lazy.values()))
         for interaction in all_interactions:
             self.unregister(interaction)
@@ -1455,7 +1456,7 @@ class InteractionManager:
                 if (interaction.completion_reason == CompletionReason.DISCONNECTED or
                         (interaction.cycle_completed < cur_clock_cycle and
                          (cur_time - interaction.timestamp_completed) > Custom.DRAIN_TIMEOUT)):
-                    log.inter(
+                    log.error(  # TODO
                         f"Draining {interaction.to_code_str(True)} "
                         f"(cycle_completed={interaction.cycle_completed})")
                     to_remove.append(interaction)
