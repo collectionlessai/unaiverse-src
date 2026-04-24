@@ -385,7 +385,7 @@ class HumanModule(torch.nn.Module):
 class LoggerModule(torch.nn.Module):
     """A module that logs inputs and outputs to a file and cycles through a vocabulary of dummy responses."""
 
-    def __init__(self, log_file: str = "app_log.txt") -> None:
+    def __init__(self, log_file: str | None = None) -> None:
         """Initialises the LoggerModule.
 
         Args:
@@ -426,17 +426,21 @@ class LoggerModule(torch.nn.Module):
             A tuple ``(response_text, None)`` where ``response_text`` is the next item from
             the internal word cycle.
         """
-        if not self._initialized:
-            self.__setup_logger()
-        self._logger.info("-------------------------------------------------------------------------------")
-        self._logger.info(f"[INPUT] text={text if text is not None else None}, "
-                          f"img={img.size if img is not None else None}")
+        if self.log_file is not None:
+            if not self._initialized:
+                self.__setup_logger()
+            self._logger.info("-------------------------------------------------------------------------------")
+            self._logger.info(f"[INPUT] text={text if text is not None else None}, "
+                              f"img={img.size if img is not None else None}")
+
         text = f"{self._idx}_{self._objects[self._idx]}"
         self._idx = (self._idx + 1) % len(self._objects)
         img = None
-        self._logger.info(f"[OUTPUT] text={text}, img={None}")
-        self._logger.info("-------------------------------------------------------------------------------")
-        self.__handler.flush()
+
+        if self.log_file is not None:
+            self._logger.info(f"[OUTPUT] text={text}, img={None}")
+            self._logger.info("-------------------------------------------------------------------------------")
+            self.__handler.flush()
         return text, img
 
 
