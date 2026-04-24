@@ -32,6 +32,11 @@ import importlib.machinery
 from datetime import datetime
 from collections import deque
 from unaiverse.custom import GenException
+from unaiverse.networking.node.profile import NodeProfile
+
+
+def build_unaid(profile: NodeProfile):
+    return profile.get_static_profile()['email'] + '/' + profile.get_static_profile()['node_name']
 
 
 def save_node_addresses_to_file(node: object, dir_path: str, public: bool,
