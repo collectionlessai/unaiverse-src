@@ -2505,6 +2505,10 @@ class Node:
                     else:
                         setattr(new_agent, key, value)
 
+            # Fixing internal references to agent
+            new_agent.im.agent = new_agent
+            new_agent.proc.agent = new_agent
+
             # Telling the FSM that actions are related to this new agent
             # (the world FSM here is an empty FSM, keep it here to ensure its link with the new agent, in case of
             # a no-role world)
