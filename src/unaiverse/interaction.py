@@ -905,11 +905,12 @@ class InteractionManager:
             found = True
         return found
 
-    def register_sent(self, interaction: Interaction) -> bool:
+    def register_sent(self, interaction: Interaction, public: bool) -> bool:
         """Register an interaction that this agent has sent.
 
         Args:
             interaction: The Interaction to register.
+            public: Whether the interaction is about a public agent or a private/world one.
 
         Returns:
             True if registration succeeded; False if there is no room or the streams are invalid.
@@ -920,7 +921,7 @@ class InteractionManager:
             return False
 
         # This will resolve target names, data samples, stream names
-        if not self.resolve(interaction):
+        if not self.resolve(interaction, public):
             return False
 
         #  Ensuring all the streams mentioned in the interaction are known, and normalizing them
@@ -956,11 +957,12 @@ class InteractionManager:
         self.last_registered = interaction
         return True
 
-    def __register_received_or_lazy(self, interaction: Interaction) -> bool:
+    def __register_received_or_lazy(self, interaction: Interaction, public: bool) -> bool:
         """Register an interaction received from another agent or auto-created (lazy).
 
         Args:
             interaction: The Interaction to register.
+            public: Whether the interaction is about a public agent or a private/world one.
 
         Returns:
             True if registration succeeded; False if there is no room, streams are invalid, or matching failed.
@@ -975,8 +977,8 @@ class InteractionManager:
                       f"Interaction is: {interaction}")
             return False
 
-        # This will resolve target names, data samples, stream names
-        if not self.resolve(interaction, resolve_target=False):  # You are the target, no need to further resolve it
+        # This will resolve data samples, stream names (not needed for received interactions, but needed for lazy ones)
+        if not self.resolve(interaction, public, resolve_target=False):  # You are the target, no need to resolve it
             return False
 
         # Ensuring all the streams mentioned in the interaction are known, and normalizing them
@@ -1012,28 +1014,25 @@ class InteractionManager:
         # No matter what the interaction does: the processor output streams must be aware of the possibility that this
         # interaction might yield new data, that will be sent (if any) to the author of this interaction
         for stream in self.agent.proc_streams_by_user_hash.values():
-            if interaction.requester in self.agent.public_agents:
-                if not stream.props.is_public():
-                    continue
-            elif interaction.requester in self.agent.all_agents:
-                if stream.props.is_public():
-                    continue
+            if public != stream.props.is_public():
+                continue
             stream.add_interaction(interaction)
 
         # Registering
         self.last_registered = interaction
         return True
 
-    def register_received(self, interaction: Interaction) -> bool:
+    def register_received(self, interaction: Interaction, public: bool) -> bool:
         """Register an interaction received from another agent.
 
         Args:
             interaction: The Interaction to register.
+            public: Whether the interaction is about a public agent or a private/world one.
 
         Returns:
             True if registration succeeded; False if there is no room, streams are invalid, or matching failed.
         """
-        if self.__register_received_or_lazy(interaction):
+        if self.__register_received_or_lazy(interaction, public):
             self.received[interaction.uuid] = interaction
 
             interaction.status = InteractionStatus.RECEIVED
@@ -1042,16 +1041,17 @@ class InteractionManager:
         else:
             return False
 
-    def register_lazy(self, interaction: Interaction) -> bool:
+    def register_lazy(self, interaction: Interaction, public: bool) -> bool:
         """Register an interaction that you manually generated within this agent.
 
         Args:
             interaction: The Interaction to register.
+            public: Whether the interaction is about a public agent or a private/world one.
 
         Returns:
             True if registration succeeded; False if there is no room or the streams are invalid.
         """
-        if self.__register_received_or_lazy(interaction):
+        if self.__register_received_or_lazy(interaction, public):
             self.lazy[interaction.uuid] = interaction
 
             interaction.status = InteractionStatus.LAZY
@@ -1060,7 +1060,7 @@ class InteractionManager:
         else:
             return False
 
-    def resolve(self, interaction: Interaction, resolve_target: bool = True) -> bool:
+    def resolve(self, interaction: Interaction, public: bool, resolve_target: bool = True) -> bool:
 
         # A. Resolving targets
         if resolve_target:
@@ -1076,13 +1076,14 @@ class InteractionManager:
 
         # B. Moving data samples to streams, if needed (when data_samples is a dictionary)
         # In this case, "streams" must be None (if not None, then the data_samples field is ignored)
+        already_resolved = False
         if isinstance(interaction.data_samples, dict):
 
             # This is already an empty list (otherwise the data_samples field would not be there), but better
             # be extra safe
             streams = []
             for stream_user_hash, data_sample in interaction.data_samples.items():
-                stream_user_hash = self.agent.resolve_stream_ref(stream_user_hash)
+                stream_user_hash = self.agent.resolve_stream_ref(stream_user_hash, public)
                 if stream_user_hash is None:
                     log.error(f"Unknown stream hash specified in an interaction ({stream_user_hash}")
                     return False
@@ -1095,13 +1096,14 @@ class InteractionManager:
             # Purging
             interaction.data_samples.clear()
             interaction.parse_streams(streams)  # Rebuilding the stream dictionaries
+            already_resolved = True
 
         # C. Resolving streams
         streams = interaction.streams
-        if streams is not None:
+        if streams is not None and not already_resolved:
             for redirect, streams_list in streams.items():
                 for j, stream in enumerate(streams_list):
-                    stream_user_hash = self.agent.resolve_stream_ref(stream)
+                    stream_user_hash = self.agent.resolve_stream_ref(stream, public)
                     if stream_user_hash is None:
                         log.error(f"Unknown stream hash specified in an interaction ({stream_user_hash}")
                         return False

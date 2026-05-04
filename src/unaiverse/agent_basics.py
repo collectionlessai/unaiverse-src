@@ -480,9 +480,11 @@ class AgentBasics:
         # Creating the interaction object
         interaction = Interaction.from_dict(interaction_dict)
 
+        # Marking
+        public = sender in self.public_agents
+
         # Also register with the HSM for action selection (backward compat bridge)
-        behav = self.behav_lone_wolf \
-            if sender in self.public_agents else self.behav
+        behav = self.behav_lone_wolf if public else self.behav
         if (interaction.action_name is not None and len(interaction.action_name) > 0 and
                 not behav.request_action(interaction)):
             log.error(f"Cannot enqueue the interaction, incompatible action. "
@@ -492,7 +494,7 @@ class AgentBasics:
             if hasattr(self, 'im'):
                 log.misc(f"Registering received interaction for action "
                          f"{interaction.action_name}")
-                self.im.register_received(interaction)
+                self.im.register_received(interaction, public)
 
     @staticmethod
     def build_augmented_roles_dictionaries(custom_roles: list[str] | set[str]) -> tuple[dict[int, str], dict[str, int]]:
@@ -686,11 +688,13 @@ class AgentBasics:
 
         return None
 
-    def resolve_stream_ref(self, ref: str) -> str | None:
+    def resolve_stream_ref(self, ref: str, public: bool) -> str | None:
         """Resolve a stream name to a stream user or net hash (heuristic, gives priority to owned streams).
 
         Args:
             ref: A stream name, without peer IDs, just the name.
+            public: A boolean to inform the resolve procedure whether it must look for streams among public agents
+                (True) or world-related agents (False).
 
         Returns:
             The stream user hash or net hash if found, None otherwise.
@@ -699,9 +703,6 @@ class AgentBasics:
         # If already a valid user hash
         if ref in self.known_streams_by_user_hash:
             return ref
-
-        # Resolving in the public/private network
-        public = not self.behaving_in_world()
 
         # Search your own streams first (priority)
         for user_hash, stream_obj in self.owned_streams_by_user_hash.items():
@@ -1564,9 +1565,9 @@ class AgentBasics:
                 if self.behav_lone_wolf is not None:
                     self.behav_lone_wolf.enable(False)
                 self.behav.enable(True)
-                self.stdin.bind(self.__proc_in_streams_by_user_hash_prv)
-                self.stdout.bind(self.__proc_streams_by_user_hash_prv)
-                self.stdext.bind(self.__env_streams_by_user_hash_prv)
+                self.stdin.bind(self.__proc_in_streams_by_user_hash_prv, uuid=Custom.SYSTEM_INTERACTION_UUID)
+                self.stdout.bind(self.__proc_streams_by_user_hash_prv, uuid=Custom.SYSTEM_INTERACTION_UUID)
+                self.stdext.bind(self.__env_streams_by_user_hash_prv, uuid=Custom.SYSTEM_INTERACTION_UUID)
                 await self.on_tick()
                 await self.behav.act()
                 self.behav.enable(False)
@@ -2567,7 +2568,7 @@ class AgentBasics:
             interaction.requester = self.get_peer_id()
 
         # Registering
-        if not self.im.register_sent(interaction):
+        if not self.im.register_sent(interaction, public=not self.behaving_in_world()):
             return None
 
         # Build the content for the interaction message
