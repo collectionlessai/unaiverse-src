@@ -1083,9 +1083,13 @@ class InteractionManager:
             # be extra safe
             streams = []
             for stream_user_hash, data_sample in interaction.data_samples.items():
-                stream_user_hash = self.agent.resolve_stream_ref(stream_user_hash, public)
+                original_ref = stream_user_hash
+                stream_user_hash = self.agent.resolve_stream_ref(stream_user_hash)
                 if stream_user_hash is None:
-                    log.error(f"Unknown stream hash specified in an interaction ({stream_user_hash}")
+                    log.error(f"Unknown stream hash specified in an interaction "
+                              f"(original_ref={original_ref!r}, "
+                              f"known={list(self.agent.known_streams_by_user_hash.keys())}, "
+                              f"owned={list(self.agent.owned_streams_by_user_hash.keys())})")
                     return False
                 stream: Stream = self.agent.known_streams_by_user_hash[stream_user_hash]
                 stream.set(data_sample, uuid=interaction.uuid)
@@ -1103,9 +1107,13 @@ class InteractionManager:
         if streams is not None and not already_resolved:
             for redirect, streams_list in streams.items():
                 for j, stream in enumerate(streams_list):
-                    stream_user_hash = self.agent.resolve_stream_ref(stream, public)
+                    original_ref = stream
+                    stream_user_hash = self.agent.resolve_stream_ref(stream)
                     if stream_user_hash is None:
-                        log.error(f"Unknown stream hash specified in an interaction ({stream_user_hash}")
+                        log.error(f"Unknown stream hash specified in an interaction "
+                                  f"(original_ref={original_ref!r}, redirect={redirect!r}, "
+                                  f"known={list(self.agent.known_streams_by_user_hash.keys())}, "
+                                  f"owned={list(self.agent.owned_streams_by_user_hash.keys())})")
                         return False
                     streams_list[j] = stream_user_hash
         return True

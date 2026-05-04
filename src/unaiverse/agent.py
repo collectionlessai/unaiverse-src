@@ -66,14 +66,13 @@ def action(func: Callable) -> Callable:
                     resolved_kwargs[key] = value
 
             elif key in Custom.STREAM_ARG_NAMES:
-                public = not self.behaving_in_world()
                 if isinstance(value, str):
-                    resolved = self.resolve_stream_ref(value, public)
+                    resolved = self.resolve_stream_ref(value)
                     resolved_kwargs[key] = resolved if resolved is not None else value
                 elif isinstance(value, (list, tuple)):
                     _values = list(value)  # Shallow
                     for i, _value in enumerate(_values):
-                        _resolved = self.resolve_stream_ref(_value, public)
+                        _resolved = self.resolve_stream_ref(_value)
                         if _resolved is not None:
                             _values[i] = _resolved
                     resolved_kwargs[key] = _values
