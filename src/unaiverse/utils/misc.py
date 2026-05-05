@@ -74,6 +74,8 @@ def get_node_addresses_from_file(dir_path: str, filename: str = "addresses.txt")
     ret = {}
     with open(os.path.join(dir_path, filename)) as file:
         lines = file.readlines()
+        if not lines or len(lines) == 0:
+            return ret
 
         # Old file format
         if lines[0].strip() == "/":
