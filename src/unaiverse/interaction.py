@@ -1082,11 +1082,16 @@ class InteractionManager:
             # This is already an empty list (otherwise the data_samples field would not be there), but better
             # be extra safe
             streams = []
-            for stream_user_hash, data_sample in interaction.data_samples.items():
-                stream_user_hash = self.agent.resolve_stream_ref(stream_user_hash, public)
-                if stream_user_hash is None:
-                    log.error(f"Unknown stream hash specified in an interaction ({stream_user_hash}")
+            for stream_hash, data_sample in interaction.data_samples.items():
+                stream_user_hash_or_net_hash = self.agent.resolve_stream_ref(stream_hash, public)
+                if Stream.is_net_hash(stream_user_hash_or_net_hash):
+                    log.error("When using a stream name in the data sample field of an interaction, "
+                              "it MUST be provided in the form of a stream hash or something that can be unambiguously "
+                              "resolved to a stream hash")
+                if stream_user_hash_or_net_hash is None:
+                    log.error(f"Unknown stream hash specified in an interaction ({stream_hash})")
                     return False
+                stream_user_hash = stream_user_hash_or_net_hash
                 stream: Stream = self.agent.known_streams_by_user_hash[stream_user_hash]
                 stream.set(data_sample, uuid=interaction.uuid)
 
@@ -1102,12 +1107,12 @@ class InteractionManager:
         streams = interaction.streams
         if streams is not None and not already_resolved:
             for redirect, streams_list in streams.items():
-                for j, stream in enumerate(streams_list):
-                    stream_user_hash = self.agent.resolve_stream_ref(stream, public)
-                    if stream_user_hash is None:
-                        log.error(f"Unknown stream hash specified in an interaction ({stream_user_hash}")
+                for j, stream_hash in enumerate(streams_list):
+                    stream_user_hash_or_net_hash = self.agent.resolve_stream_ref(stream_hash, public)
+                    if stream_user_hash_or_net_hash is None:
+                        log.error(f"Unknown stream hash specified in an interaction ({stream_hash})")
                         return False
-                    streams_list[j] = stream_user_hash
+                    streams_list[j] = stream_user_hash_or_net_hash  # If it is a net hash, it will be expanded later
         return True
 
     def expand_and_normalize_streams(self, interaction: Interaction) -> (

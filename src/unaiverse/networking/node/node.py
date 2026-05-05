@@ -437,8 +437,12 @@ class Node:
                     log.critical(f"Error while registering node named {node_name} in server! [{e}]")
         return node_ids, were_alive
 
-    def send_alive(self) -> bool:
+    def send_alive(self, alive: bool = True) -> bool:
         """Send an alive message to the root server.
+
+        Args:
+            alive (bool): Whether to communicate that the node is alive (i.e., if this is False, it means the
+                node is simpy not alive anymore (dead).
 
         Returns:
             A boolean flag indicating whether the node was already live before sending this.
@@ -446,7 +450,8 @@ class Node:
         try:
             response = self.__root("/account/node/alive",
                                    payload={"node_id": self.node_id,
-                                            "account_token": self.unaiverse_key})
+                                            "account_token": self.unaiverse_key,
+                                            "alive": alive})
             return response["was_alive"]
         except Exception as e:
             log.error(f"Error while sending alive message to server! [{e}]")
@@ -1005,9 +1010,12 @@ class Node:
                 keyboard_listener = threading.Thread(target=keyboard_listener, args=(keyboard_queue,), daemon=True)
 
             if clock.get_cycle() == -1:
-                log.user("Running " + ("agent node" if self.agent else "world node") + " " +
-                         self.hosted.get_name() + " "
-                         + f"(public: {self.get_public_peer_id()}, private: {self.get_world_peer_id()})...")
+                log.user("\nRunning " + ("agent" if self.agent else "world") + " '" +
+                         self.hosted.get_name() + "' ..."
+                         + f"\n- Owner:           {self.profile.get_static_profile()['email']}"
+                         + f"\n- Node ID:         {self.node_id}"
+                         + f"\n- Public peer ID:  {self.get_public_peer_id()}"
+                         + f"\n- Private peer ID: {self.get_world_peer_id()}")
 
             # Main loop
             must_quit = False
@@ -1297,6 +1305,10 @@ class Node:
             log.critical(f"An error occurred: {e}")
 
         finally:
+            try:
+                self.send_alive(alive=False)
+            except Exception as e:
+                log.error(f"Error telling the node is not alive anymore: {e}")
 
             try:
                 if Custom.SAVE_CHECKPOINT_EVERY > 0.:

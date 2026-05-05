@@ -704,29 +704,52 @@ class AgentBasics:
         if ref in self.known_streams_by_user_hash:
             return ref
 
+        # If already a valid net hash
+        if ref in self.known_streams:
+            return ref
+
+        # If it is formatted as a net hash, but was not found, then nothing to do
+        if Stream.is_net_hash(ref):
+            return None
+
+        # By default, we will try to resolve by looking at owned (first) and other (then) streams
+        search_owned_streams = True
+        search_other_streams = True
+
+        # If it looks like a user hash but was not found in the code above, then it could be a stream group
+        # represented as a user hash, so we clear it, and we keep the group name only. Moreover, since it will also
+        # contain a peer ID, we immediately know where to look
+        if Stream.is_user_hash(ref):
+            peer_id = DataProps.peer_id_from_user_hash(ref)
+            ref = DataProps.name_from_user_hash(ref)
+            search_owned_streams = peer_id == self.get_peer_id()
+            search_other_streams = not search_owned_streams
+
         # Search your own streams first (priority)
-        for user_hash, stream_obj in self.owned_streams_by_user_hash.items():
-            if public and not stream_obj.is_public():
-                continue
-            if ref == Stream.name_from_user_hash(user_hash):
-                return user_hash
-        for net_hash, stream_dict in self.owned_streams.items():
-            if public and not next(iter(stream_dict.values())).is_public():
-                continue
-            if ref == Stream.name_or_group_from_net_hash(net_hash):
-                return net_hash
+        if search_owned_streams:
+            for user_hash, stream_obj in self.owned_streams_by_user_hash.items():
+                if public and not stream_obj.is_public():
+                    continue
+                if ref == Stream.name_from_user_hash(user_hash):
+                    return user_hash
+            for net_hash, stream_dict in self.owned_streams.items():
+                if public and not next(iter(stream_dict.values())).is_public():
+                    continue
+                if ref == Stream.name_or_group_from_net_hash(net_hash):
+                    return net_hash
 
         # Search all streams then
-        for user_hash, stream_obj in self.known_streams_by_user_hash.items():
-            if public and not stream_obj.is_public():
-                continue
-            if ref == Stream.name_from_user_hash(user_hash):
-                return user_hash
-        for net_hash, stream_dict in self.known_streams.items():
-            if public and not next(iter(stream_dict.values())).is_public():
-                continue
-            if ref == Stream.name_or_group_from_net_hash(net_hash):
-                return net_hash
+        if search_other_streams:
+            for user_hash, stream_obj in self.known_streams_by_user_hash.items():
+                if public and not stream_obj.is_public():
+                    continue
+                if ref == Stream.name_from_user_hash(user_hash):
+                    return user_hash
+            for net_hash, stream_dict in self.known_streams.items():
+                if public and not next(iter(stream_dict.values())).is_public():
+                    continue
+                if ref == Stream.name_or_group_from_net_hash(net_hash):
+                    return net_hash
 
         return None
 
