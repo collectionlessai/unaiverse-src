@@ -1837,7 +1837,11 @@ class Node:
                             forced_uuid=msg.content['uuid'])
 
                         if not behav.request_action(interaction):
-                            log.error("Cannot enqueue the request, incompatible action")
+                            log.error(f"Cannot enqueue the request, incompatible action "
+                                      f"(action_name: {msg.content['action_name']}, "
+                                      f"action_kwargs: {msg.content['args']}, "
+                                      f"from_state: {msg.content.get('from_state', None)}, "
+                                      f"to_state: {msg.content.get('to_state', None)})")
 
                 elif self.node_type is Node.WORLD:
                     log.error("Unexpected action request received by this world node, sent by: " + msg.sender)
