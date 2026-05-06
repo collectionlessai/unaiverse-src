@@ -487,8 +487,10 @@ class AgentBasics:
         behav = self.behav_lone_wolf if public else self.behav
         if (interaction.action_name is not None and len(interaction.action_name) > 0 and
                 not behav.request_action(interaction)):
-            log.error(f"Cannot enqueue the interaction, incompatible action. "
-                      f"Interaction is: {interaction}")
+            log.error(f"Cannot enqueue a received interaction, the requested action is not compatible given "
+                      f"the current state ({behav.state if behav.state is not None else behav.limbo_state}). "
+                      f"Details: action={interaction.action_name}, from_state={interaction.from_state}, "
+                      f"to_state={interaction.to_state}, interaction: {interaction}, ")
         else:
             # Register with the InteractionManager
             if hasattr(self, 'im'):
