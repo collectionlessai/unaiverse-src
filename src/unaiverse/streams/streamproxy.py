@@ -230,6 +230,7 @@ class StreamProxy:
         if isinstance(key_or_data, (list, tuple)):
             if len(key_or_data) != len(self._stream_list):
                 raise GenException(f"The list of stream values to set must have the same length of the stream list "
+                                   f"in this proxy "
                                    f"({len(key_or_data)} != {len(self._stream_list)})")
             for i, data in enumerate(key_or_data):
                 s = self._stream_list[i]

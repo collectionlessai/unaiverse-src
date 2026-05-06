@@ -144,7 +144,8 @@ class Agent(AgentBasics):
             behav = self.behav
             self.stats.store_stat('state', behav.get_state_name(), group_key=own_private_pid, timestamp=t)
             self.stats.store_stat('action', behav.get_action_name(), group_key=own_private_pid, timestamp=t)
-            self.stats.store_stat('last_action', behav.get_last_completed_action_name(), group_key=own_private_pid, timestamp=t)
+            self.stats.store_stat('last_action', behav.get_last_completed_action_name(),
+                                  group_key=own_private_pid, timestamp=t)
         except Exception as e:
             log.error(f"[Stats] Error storing HSM stats: {e}")
 
@@ -285,7 +286,7 @@ class Agent(AgentBasics):
     async def send(self, action_name: str | None = None,
                    target: str | list[str] | None = None,
                    action_kwargs: dict | None = None,
-                   streams: list[tuple[str,int]] | list[str] | None = None,
+                   streams: list[tuple[str, int]] | list[str] | None = None,
                    data_samples: list[str | Image | torch.Tensor] | dict[
                        str, str | Image | torch.Tensor] | None = None,
                    num_steps: int = -1,
@@ -1092,7 +1093,7 @@ class Agent(AgentBasics):
                 return False
         else:
             log.misc(f"Not-asking to get in touch with {peer_id}, "
-                      f"since I am already connected to the corresponding peer...")
+                     f"since I am already connected to the corresponding peer...")
             return True
 
     @action
@@ -1784,25 +1785,27 @@ class Agent(AgentBasics):
         self.im.unregister(interaction)
 
     @deprecated("Use the interaction-based design")
-    def add_recipient(self, net_hash: str, recipient: list[str] | str) -> None:
+    def add_recipient(self, net_hash: str, recipient: list[str] | str, ref_uuid: str | None = None) -> None:
         """DEPRECATED: Registers a recipient for a stream, creating a lazy interaction if needed.
 
         Args:
             net_hash: The network hash of the stream.
             recipient: The peer ID (or list of peer IDs) to register as a recipient.
+            ref_uuid: The UUID of the request.
         """
 
         # Backward compatibility
         stream_dict = self.known_streams[net_hash]
-        ref_uuid = None
-        for stream_obj in stream_dict.values():
-            ref_uuid = stream_obj.get_uuid()
-            break  # Assuming UUID is the same on all the streams of the group (fine for backward compatibility)
+        if ref_uuid is None:
+            for stream_obj in stream_dict.values():
+                ref_uuid = stream_obj.get_uuid()
+                break  # Assuming UUID is the same on all the streams of the group (fine for backward compatibility)
         interaction = self.im.get_interaction(uuid=ref_uuid)
+        recipient = recipient if not isinstance(recipient, str) else [recipient]
         if interaction is not None:
-            if recipient not in interaction.target:
-                interaction.update_target(interaction.target +
-                                          (recipient if not isinstance(recipient, str) else [recipient]))
+            for r in recipient:
+                if r not in interaction.target:
+                    interaction.update_target(interaction.target + [r])
         else:
             interaction = Interaction(streams=[net_hash], num_steps=1, requester=self.get_peer_id(),
                                       target=recipient, forced_uuid=ref_uuid)

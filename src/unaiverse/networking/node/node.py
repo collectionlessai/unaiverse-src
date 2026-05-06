@@ -1154,7 +1154,11 @@ class Node:
                                 # pick up data, no matter what is the actual stdin from the point of view of the
                                 # interaction)
                                 uuid = self.agent.prepare_stdin_if_human(public, peer_id=target_peer_id)
-                                self.agent.stdin.set([msg, image_pil, whatever], uuid=uuid, force=True)
+
+                                if len(self.agent.proc_inputs) == 1:
+                                    self.agent.stdin.set([msg], uuid=uuid, force=True)
+                                else:
+                                    self.agent.stdin.set([msg, image_pil, whatever], uuid=uuid, force=True)
                         except queue.Empty:
                             pass  # If nothing has been typed (+ enter)
 
@@ -2084,7 +2088,7 @@ class Node:
         """
         addresses = profile.get_dynamic_profile()['private_peer_addresses']
         world_public_peer_id = profile.get_dynamic_profile()['peer_id']
-        log.user(f"Actually joining world, role will be {role}")
+        log.user(f"\nActually joining world, role ID will be '{role}'")
 
         # Connecting to the world (private)
         # notice that we also communicate the world node private peer ID to the connection manager,
