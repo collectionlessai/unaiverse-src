@@ -1806,7 +1806,7 @@ class Agent(AgentBasics):
         else:
             interaction = Interaction(streams=[net_hash], num_steps=1, requester=self.get_peer_id(),
                                       target=recipient, forced_uuid=ref_uuid)
-            self.im.register_lazy(interaction)
+            self.im.register_lazy(interaction, public=not self.behaving_in_world())
 
     @deprecated("Use send")
     async def set_next_action(self, agent: str | None, action: str, args: dict | None = None,
