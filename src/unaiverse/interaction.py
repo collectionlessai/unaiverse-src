@@ -863,15 +863,18 @@ class InteractionManager:
                 len(self.sent_recently_completed) + len(self.received_recently_completed) +
                 len(self.lazy_recently_completed))
 
-    def clear_from_all_streams(self, interaction: Interaction) -> None:
+    def clear_from_all_streams(self, interaction: Interaction, clear_data: bool = False) -> None:
         """Remove the given interaction from every stream that references it.
 
         Args:
             interaction: The interaction to deregister from all the known streams.
+            clear_data: Default False. Forces the removal of the stream data associated to this interaction.
         """
         for stream_obj in self.agent.known_streams_by_user_hash.values():
             if stream_obj.has_interaction(interaction.uuid):
                 stream_obj.remove_interaction(interaction)
+                if clear_data:
+                    stream_obj.remove_data(interaction.uuid)
 
     def unregister_all(self):
         """Deregister all current interactions"""
