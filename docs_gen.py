@@ -41,6 +41,9 @@ PACKAGE_DESCRIPTIONS = {
         "Root package of the UNaIVERSE framework — "
         "a Collectionless AI system for autonomous agents."
     ),
+    ("unaiverse", "hsm"): (
+        "Hybrid state machine: actions, states, policites."
+    ),
     ("unaiverse", "modules"): (
         "Neural-network modules: CNU layers, high-level utilities, "
         "and shared network building blocks."
@@ -64,7 +67,7 @@ PACKAGE_DESCRIPTIONS = {
         "Low-level P2P transport built on Go-libp2p: "
         "message serialisation, protocol types, and the P2P driver."
     ),
-    ("unaiverse", "streamlib"): (
+    ("unaiverse", "streams"): (
         "Stream library internals for data-stream processing."
     ),
     ("unaiverse", "utils"): (
@@ -76,11 +79,15 @@ MODULE_DESCRIPTIONS = {
     ("unaiverse", "agent"): "Main Agent class implementing autonomous agent behavior and lifecycle management.",
     ("unaiverse", "agent_basics"): "Foundational agent components and basic agent functionality.",
     ("unaiverse", "clock"): "Timing and clock management for agent synchronization.",
-    ("unaiverse", "dataprops"): "Data properties and structured data handling for agents.",
-    ("unaiverse", "hsm"): "Hierarchical State Machine (HSM) implementation for agent state management.",
+    ("unaiverse", "custom"): "Global options (some of them loaded using environment variables).",
+    ("unaiverse", "interaction"): "Interaction management.",
     ("unaiverse", "stats"): "Statistical tracking and metrics collection for agents.",
-    ("unaiverse", "streams"): "Stream processing and data flow management.",
+    ("unaiverse", "stats_html_renderer"): "Converter to dump stat metrics to HTML.",
     ("unaiverse", "world"): "World simulation environment and world state management.",
+
+    ("unaiverse", "hsm", "action"): "Action in a Hybrid State Machine (HSM).",
+    ("unaiverse", "hsm", "has"): "Hybrid State Machine (HSM) implementation for agent state management.",
+    ("unaiverse", "hsm", "state"): "State in a Hybrid State Machine (HSM).",
     
     ("unaiverse", "networking", "node", "node"): (
         "Core Node class providing the main interface for peer-to-peer networking, "
@@ -124,7 +131,24 @@ MODULE_DESCRIPTIONS = {
     ("unaiverse", "modules", "utils"): (
         "Utility functions for neural network training, evaluation, and data processing."
     ),
-    
+    ("unaiverse", "streams", "dataprops"): (
+        "Data properties and structured data handling for streams."
+    ),
+    ("unaiverse", "streams", "streamlib"): (
+        "Pre-designed streams of different types."
+    ),
+    ("unaiverse", "streams", "streamproxy"): (
+        "A proxy object that binds multiple streams."
+    ),
+    ("unaiverse", "streams", "streams"): (
+        "Streams and Buffered Streams."
+    ),
+    ("unaiverse", "utils", "logger"): (
+        "Main logger class, used in the whole project."
+    ),
+    ("unaiverse", "utils", "os_fd_capture"): (
+        "Helper for the main logger class, used to capture external loggings."
+    ),
     ("unaiverse", "utils", "sandbox"): (
         "Docker-based sandboxing utilities for running UNaIVERSE nodes in isolated containers "
         "with configurable read-only and writable mount paths."
