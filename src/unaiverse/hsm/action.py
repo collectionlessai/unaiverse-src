@@ -189,7 +189,7 @@ class Action:
         interaction_args = self.__apply_wildcards_to_args(interaction.action_kwargs, in_place=False)
         actual_args = self.get_actual_params(additional_args=interaction_args)
 
-        if self.msg is not None and interaction.get_step_idx() <= 0:
+        if self.msg is not None and interaction.get_step_idx() < 0:
             if self.state_machine.show_action_request_info and interaction is not None:
                 msg = self.msg + (f" (requester: {interaction.requester}, interaction uuid: {interaction.uuid}, "
                                   f"#interactions: {len(self.get_list_of_interactions())})")
