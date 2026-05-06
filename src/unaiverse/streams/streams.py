@@ -1305,8 +1305,8 @@ class ImageFileStream(BufferedStream):
         self.first_cycle_by_uuid[None] = self.last_cycle_by_uuid[None] - len(self.image_paths) + 1
 
         # Possibly print to screen the "clickable" list of images
-        #if show_images:
-        #    show_images_grid(self.image_paths)
+        if show_images:
+            show_images_grid(self.image_paths)
 
     def __len__(self):
         """Return the number of images in the dataset.
