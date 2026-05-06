@@ -748,12 +748,13 @@ class Agent(AgentBasics):
         return all_disconnected
 
     @action
-    async def received_some_asked_data(self, processing_fcn: str | None = None) -> bool:
+    async def received_some_asked_data(self, processing_fcn: str | None = None, data_type: str | None = None) -> bool:
         """Checks if any of the agents that were previously asked for data (e.g., via `ask_gen`) have sent a stream
         sample back. Optionally, it can process the received data with a specified function (async).
 
         Args:
             processing_fcn: The name of a function to process the received data.
+            data_type: Optional. A string with the type of data to consider (discarding the rest).
 
         Returns:
             True if at least one data sample was received, False otherwise.
@@ -776,6 +777,8 @@ class Agent(AgentBasics):
                 net_hash_to_stream_dict = self.find_streams(agent, "processor", discard_owned=True)
                 for stream_dict in net_hash_to_stream_dict.values():
                     for stream_obj in stream_dict.values():
+                        if data_type is not None and stream_obj.props.data_type != data_type:
+                            continue
                         if not stream_obj.props.is_public():
                             data = stream_obj.get("received_some_asked_data", uuid=uuid)
                             data_tag = stream_obj.get_tag(uuid=uuid)
@@ -1292,7 +1295,7 @@ class Agent(AgentBasics):
             net_hash = self.user_stream_hash_to_net_hash(stream_hash)
 
         self._eval_results = {}
-        log.debug(f"[eval] Agents returning streams: {self._agents_who_completed_what_they_were_asked}")
+        log.debug(f"[evaluate] Agents returning streams: {self._agents_who_completed_what_they_were_asked}")
         for peer_id in self._agents_who_completed_what_they_were_asked:
             if peer_id not in self.last_buffered_peer_id_to_info:
                 log.error(f"Missing buffered stream for {peer_id}, cannot evaluate!")
@@ -2433,7 +2436,8 @@ class Agent(AgentBasics):
         # Learn
         if learn:
             log.debug(f"[__process_streams] learning, step {k}")
-            loss_values, data_tags_from_targets = self.learn_generate(outputs=outputs, targets_net_hashes=yhat_hashes)
+            loss_values, data_tags_from_targets = self.learn_generate(outputs=outputs, targets_net_hashes=yhat_hashes,
+                                                                      ref_uuid=ref_uuid)
             log.debug(f"[__process_streams] data_tags_from_targets: {data_tags_from_targets}")
             if loss_values is None or data_tags_from_targets is None:
                 return False

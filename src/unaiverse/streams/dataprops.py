@@ -850,11 +850,12 @@ class DataProps:
         """
         return self.tensor_labels is not None and len(self.tensor_labels) > 0
 
-    def to_text(self, data: torch.Tensor | str):
+    def to_text(self, data: torch.Tensor | str, ignore_raw_tensors: bool = False):
         """Converts the tensor data into a text-based representation exploiting the given labels and the labeling rule.
 
         Args:
             data (torch.Tensor or str): The data tensor to convert into text (if a string, then pass-through only).
+            ignore_raw_tensors (bool): Default False. If True, only tensor with labels will be considered.
 
         Returns:
             str or None: The corresponding text representation of the data.
@@ -869,6 +870,8 @@ class DataProps:
 
         if self.is_tensor():
             if not self.has_tensor_labels():
+                if ignore_raw_tensors:
+                    return None
                 str_rep = f"{'x'.join(map(str, data.shape))} tensor ({data.dtype})\n{data.detach().cpu().numpy()}"
                 if len(str_rep) > 110:
                     str_rep = str_rep[0:(110-3)] + "..."

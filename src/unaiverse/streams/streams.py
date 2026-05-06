@@ -1305,8 +1305,8 @@ class ImageFileStream(BufferedStream):
         self.first_cycle_by_uuid[None] = self.last_cycle_by_uuid[None] - len(self.image_paths) + 1
 
         # Possibly print to screen the "clickable" list of images
-        if show_images:
-            show_images_grid(self.image_paths)
+        #if show_images:
+        #    show_images_grid(self.image_paths)
 
     def __len__(self):
         """Return the number of images in the dataset.
@@ -1325,7 +1325,7 @@ class ImageFileStream(BufferedStream):
         Returns:
             tuple: A tuple of tensors (image, label) for the specified cycle.
         """
-        idx, _ = idx_and_uuid
+        idx, uuid = idx_and_uuid
         if self.circular:
             idx %= self.__len__()
         else:
@@ -1333,7 +1333,7 @@ class ImageFileStream(BufferedStream):
                 return None, -1
 
         image = PIL.Image.open(self.image_paths[idx])
-        return image, clock.get_cycle() - self.first_cycle_by_uuid[None]
+        return image, clock.get_cycle() - self.first_cycle_by_uuid[uuid]
 
 
 class LabelStream(BufferedStream):
@@ -1418,7 +1418,7 @@ class LabelStream(BufferedStream):
         Returns:
             tuple: A tuple of tensors (image, label) for the specified cycle.
         """
-        idx, _ = idx_and_uuid
+        idx, uuid = idx_and_uuid
         if self.circular:
             idx %= self.__len__()
         else:
@@ -1426,7 +1426,7 @@ class LabelStream(BufferedStream):
                 return None, -1
 
         label = self.labels[idx].to(self.device)  # Multi-label vector for the label
-        return self.props.adapt_tensor_to_tensor_labels(label), clock.get_cycle() - self.first_cycle_by_uuid[None]
+        return self.props.adapt_tensor_to_tensor_labels(label), clock.get_cycle() - self.first_cycle_by_uuid[uuid]
 
 
 class TokensStream(BufferedStream):
