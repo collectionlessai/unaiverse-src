@@ -36,10 +36,16 @@ class StreamProxy:
         self._stream_list: list = list(self._streams.values())
         self._streams_by_name_only: dict[str, Stream | object] = {}
         for stream_hash, stream_obj in self._streams.items():
-            name_only = DataProps.name_from_user_hash(stream_hash)
+            name_only = StreamProxy.__get_name_only(stream_hash)
             if name_only not in self._streams_by_name_only:  # In case of collision, the first name wins
-                self._streams_by_name_only[DataProps.name_from_user_hash(stream_hash)] = stream_obj
+                self._streams_by_name_only[name_only] = stream_obj
         self._uuid: str | None = None
+
+    @staticmethod
+    def __get_name_only(stream_hash: str):
+
+        # Warning: 'stream_hash' could be user hash or <default_pos...>
+        return DataProps.name_from_user_hash(stream_hash) if Stream.is_user_hash(stream_hash) else stream_hash
 
     def bind(self, streams: dict[str, Stream | object], uuid: str | None = None):
         """Rebind this proxy to a different set of streams (different from the ones used when building it).
@@ -52,9 +58,7 @@ class StreamProxy:
         self._stream_list = list(streams.values())
         self._streams_by_name_only = {}
         for stream_hash, stream_obj in self._streams.items():
-
-            # Warning: 'stream_hash' could be user hash or <default_pos...>
-            name_only = DataProps.name_from_user_hash(stream_hash) if Stream.is_user_hash(stream_hash) else stream_hash
+            name_only = StreamProxy.__get_name_only(stream_hash)
             if name_only not in self._streams_by_name_only:  # In case of collision, the first name wins
                 self._streams_by_name_only[name_only] = stream_obj
         if uuid is not None:
@@ -70,7 +74,7 @@ class StreamProxy:
         if stream_hash not in self._streams:
             self._streams[stream_hash] = stream
             self._stream_list.append(stream)
-            name_only = DataProps.name_from_user_hash(stream_hash)
+            name_only = StreamProxy.__get_name_only(stream_hash)
             if name_only not in self._streams_by_name_only:  # In case of collision, the first name wins
                 self._streams_by_name_only[name_only] = stream
 
@@ -146,12 +150,12 @@ class StreamProxy:
             else:
                 return self._stream_list[key]  # Default value
         elif key in self._streams:
-            if self._streams[key] is not None:
+            if isinstance(self._stream_list[key], Stream):
                 return self._streams[key].get(requested_by, uuid, all_uuids)
             else:
                 return self._streams[key]  # Default value
         elif key in self._streams_by_name_only:
-            if self._streams_by_name_only[key] is not None:
+            if isinstance(self._streams_by_name_only[key], Stream):
                 return self._streams_by_name_only[key].get(requested_by, uuid, all_uuids)
             else:
                 return self._streams_by_name_only[key]  # Default value
@@ -240,18 +244,40 @@ class StreamProxy:
                     self._stream_list[i] = data
                     key_at_index = next(islice(self._streams, i, None))
                     self._streams[key_at_index] = data
+                    name_only = StreamProxy.__get_name_only(key_at_index)
+                    self._streams_by_name_only[name_only] = data
         elif isinstance(key_or_data, int):
             s = self._stream_list[key_or_data]
             if isinstance(s, Stream):
                 s.set(data, uuid=uuid, force=force)
             else:
                 self._stream_list[key_or_data] = data
+                key_at_index = next(islice(self._streams, key_or_data, None))
+                self._streams[key_at_index] = data
+                name_only = StreamProxy.__get_name_only(key_at_index)
+                self._streams_by_name_only[name_only] = data
         elif key_or_data in self._streams:
             s = self._streams[key_or_data]
             if isinstance(s, Stream):
                 s.set(data, data_tag, uuid=uuid, force=force)
             else:
                 self._streams[key_or_data] = data
+
+                # We need to keep this fresh in the other data structures
+                key_to_pos_in_stream_list = {k: i for i, k in enumerate(self._streams)}
+                p = key_to_pos_in_stream_list[key_or_data]
+                self._stream_list[p] = data
+                name_only = StreamProxy.__get_name_only(key_or_data)
+                self._streams_by_name_only[name_only] = data
+        elif key_or_data in self._streams_by_name_only:
+            if isinstance(self._streams_by_name_only[key_or_data], Stream):
+                return self._streams_by_name_only[key_or_data].set(data, data_tag, uuid=uuid, force=force)
+            else:
+                # We guess the full name and call set again using it
+                for i, full_name in enumerate(self._streams.keys()):
+                    name_only = StreamProxy.__get_name_only(full_name)
+                    if name_only == key_or_data:
+                        return self.set(full_name, data, data_tag, uuid, force)
         else:
             raise GenException(f"Unknown stream: {key_or_data}")
 
