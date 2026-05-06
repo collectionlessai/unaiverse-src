@@ -189,7 +189,7 @@ class Action:
         interaction_args = self.__apply_wildcards_to_args(interaction.action_kwargs, in_place=False)
         actual_args = self.get_actual_params(additional_args=interaction_args)
 
-        if self.msg is not None:
+        if self.msg is not None and interaction.get_step_idx() <= 0:
             if self.state_machine.show_action_request_info and interaction is not None:
                 msg = self.msg + (f" (requester: {interaction.requester}, interaction uuid: {interaction.uuid}, "
                                   f"#interactions: {len(self.get_list_of_interactions())})")
@@ -256,8 +256,6 @@ class Action:
             # This is a step index, so interaction.__step == 0 means "doing/done 1 step"
             # We start with  interaction.__step = -1, that here will become 0 - it will be run in the following code
         interaction.inc_step_idx()
-
-        args_to_print = {k: str(v) for k, v in actual_args.items()}
 
         # Calling the method here
         ret = await self.__fcn(**actual_args)
