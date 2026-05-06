@@ -379,7 +379,10 @@ class Agent(AgentBasics):
             True if the step ran successfully, False otherwise.
         """
         # Getting UUID of the interaction (used for tags and stdout)
-        uuid = interaction.uuid
+        if interaction is not None:
+            uuid = interaction.uuid
+        else:
+            uuid = Custom.SYSTEM_INTERACTION_UUID
 
         # Possibly re-binding stdin to cope with human processor (it might also let the action fail, if needed)
         if not self.__rebind_stdin_if_human(interaction):
