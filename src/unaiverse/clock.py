@@ -257,7 +257,7 @@ class Clock:
 
     def __getattr__(self, name):
         if self.__instance is None:
-            raise RuntimeError(f"Clock: Attempted to call '{name}' before initialization.")
+            self.create(current_time=datetime.now(timezone.utc).timestamp())
         return getattr(self.__instance, name)
 
 
