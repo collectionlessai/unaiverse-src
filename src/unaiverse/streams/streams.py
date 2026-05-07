@@ -1027,7 +1027,6 @@ class BufferedStream(Stream):
             uuid: UUID of the data to restart (defaults to the global/no-UUID slot).
         """
         if uuid in self.buffered_data_index_by_uuid:
-            log.debug(f"[restart] Restarting stream {self.props.name}, UUID {uuid}")
             self.set_first_cycle(max(clock.get_cycle(), 0), uuid)
             self.buffered_data_index_by_uuid[uuid] = -1
             self.last_get_cycle_by_uuid[uuid] = -2
