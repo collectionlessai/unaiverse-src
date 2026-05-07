@@ -766,6 +766,12 @@ class ActionInteractionList:
         # If already there - do not accumulate multiple requests with same UUID (useful also for system interactions)
         existing_request_same_uuid = self.get_interaction_by_uuid(interaction.requester, interaction.uuid)
         if existing_request_same_uuid:
+            log.error(f"existing_request_same_uuid: {existing_request_same_uuid}")
+            log.error(f"existing_request_same_uuid.by_insertion_order_id: {existing_request_same_uuid.by_insertion_order_id}")
+            log.error(f"self.by_insertion_order: {self.by_insertion_order}")
+            log.error(f"len(self.by_insertion_order): {len(self.by_insertion_order)}")
+            log.error(f"self.by_requester_and_by_insertion_order: {self.by_requester_and_by_insertion_order}")
+            log.error(f"len(self.by_requester_and_by_insertion_order): {len(self.by_requester_and_by_insertion_order)}")
             self.by_insertion_order[existing_request_same_uuid.by_insertion_order_id] = interaction
             interaction.by_insertion_order_id = existing_request_same_uuid.by_insertion_order_id
             interaction.by_requester_insertion_order_id = existing_request_same_uuid.by_requester_insertion_order_id
