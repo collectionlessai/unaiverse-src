@@ -469,6 +469,9 @@ class Stats:
     CUSTOM_OUTER_STATS_STATIC_SCHEMA: dict[str, tuple[type, Any]] = {}
     CUSTOM_OUTER_STATS_DYNAMIC_SCHEMA: dict[str, tuple[type, Any]] = {}
 
+    # Whether to avoid storing repeated values in dynamic stats
+    STORE_DYNAMIC_IF_CHANGED = False
+
     # Key for grouping stats in the _stats dictionary (both world and agent)
     GROUP_KEY = 'peer_stats'  # grouped stats are stored under this key
 
@@ -787,6 +790,10 @@ class Stats:
             timestamp: Millisecond Unix timestamp used as the time-series key.
         """
         value = self._validate_type(stat_name, value)
+        last_value = self.get_last_value(stat_name)
+        if self.STORE_DYNAMIC_IF_CHANGED and last_value == value:
+            return
+
         if self.is_world:
             # --- WORLD LOGIC ---
             if timestamp > self.max_seen_timestamp:
@@ -1049,7 +1056,11 @@ class Stats:
             cache is empty, or this instance is not the World.
         """
         if not self.is_world:
-            return None  # Agents don't have this cache
+            # Agents look in their local cache
+            for _update_batch in reversed(self._update_batch):
+                if _update_batch['stat_name'] == stat_name and _update_batch['group_key'] == group_key:
+                    return _update_batch['value']
+            return None
 
         cache: SortedDict | None = None
 

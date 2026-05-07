@@ -199,12 +199,20 @@ class World(AgentBasics):
         """
         self.agent_badges = {}
 
-    async def add_agent(self, peer_id: str, profile: NodeProfile) -> bool:
+    async def add_agent(self, peer_id: str, profile: NodeProfile,
+                        add_proc_streams: bool = True,
+                        add_env_streams: bool = True,
+                        add_pubsub_streams: bool = True) -> bool:
         """Registers a new agent in the world and records the public-to-private peer ID mapping (async).
 
         Args:
-            peer_id: The private peer ID of the new agent.
-            profile: The NodeProfile of the new agent.
+            peer_id: The unique identifier of the peer.
+            profile: The NodeProfile object containing the peer's/agent's information.
+            add_proc_streams: True if the processor's streams of the peer must be added to the list of known streams,
+                if compatible (ignored in worlds).
+            add_env_streams: True if the environmental streams of the peer must be added to the list of known streams,
+                if compatible (ignored in worlds).
+            add_pubsub_streams: True if pubsub streams must be added/subscribed (ignored in worlds).
 
         Returns:
             True if the agent was successfully added by the parent class, False otherwise.
@@ -245,17 +253,15 @@ class World(AgentBasics):
         t = clock.get_time_ms()
         _, own_private_pid = self.get_peer_ids()
 
-        # Helper to add if value changed
-        def store_if_changed(stat_name: str, new_value: object) -> None:
-            last_value = self.stats.get_last_value(stat_name)
-            if last_value != new_value:
-                self.stats.store_stat(stat_name, new_value, group_key=own_private_pid, timestamp=t)
-
         try:
-            store_if_changed("world_masters", len(self.world_masters))
-            store_if_changed("world_agents", len(self.world_agents))
-            store_if_changed("human_agents", len(self.human_agents))
-            store_if_changed("artificial_agents", len(self.artificial_agents))
+            self.stats.store_stat("world_masters", len(self.world_masters), group_key=own_private_pid,
+                                  timestamp=t)
+            self.stats.store_stat("world_agents", len(self.world_agents), group_key=own_private_pid,
+                                  timestamp=t)
+            self.stats.store_stat("human_agents", len(self.human_agents), group_key=own_private_pid,
+                                  timestamp=t)
+            self.stats.store_stat("artificial_agents", len(self.artificial_agents), group_key=own_private_pid,
+                                  timestamp=t)
         except Exception as e:
             log.error(f"[Stats] Error updating own world stats: {e}")
 

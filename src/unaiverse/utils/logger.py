@@ -278,7 +278,7 @@ class _Logger:
                 self._log_file = open(self._log_path, "w", encoding="utf-8", buffering=1)
             self._file_enabled = enabled
 
-    def set_clock(self, clock: 'Clock') -> None:
+    def set_clock(self, clock) -> None:
         """Update the current clock object."""
         with self._lock:
             self._clock = clock
@@ -515,7 +515,8 @@ class _Logger:
                 sub_str = f"  {dim}{{{sub}}}{reset}{color}" if sub else ""
 
                 info = record.get("info", {})
-                info_str = (f"  {dim}[" + "  ".join(f"{k}={v}" for k, v in info.items()) + f"]{reset}{color}") if info else ""
+                info_str = (f"  {dim}[" + "  ".join(f"{k}={v}" for k, v in info.items()) + f"]{reset}{color}") \
+                    if info else ""
 
                 prefix = f"{color}{bold}[{ch.value:^8}]{reset}{color} {time_part}  {cycle_str}{ctx_str}"
                 self._print_fcn[sub][ch](f"{prefix}{sub_str}  {record['msg']}{info_str}{reset}",
@@ -553,7 +554,7 @@ class _Logger:
             self._log_file.flush()
             self._log_file.close()
 
-    def __enter__(self) -> "Logger":
+    def __enter__(self) -> "_Logger":
         return self
 
     def __exit__(self, *_: Any) -> None:
