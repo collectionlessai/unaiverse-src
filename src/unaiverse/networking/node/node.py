@@ -1855,8 +1855,8 @@ class Node:
             elif msg.content_type == Msg.INTERACTION:
                 log.error(f"Received an interaction request... cycle={self.clock.get_cycle()}")
                 log.error(f"Private? {is_private_message}")
-                log.misc("**** Got " + str(len(public_messages)) + " messages from the public net", sub="pub")
-                log.misc("**** Got " + str(len(world_messages)) + " messages from the world/private net", sub="prv")
+                log.error("**** Got " + str(len(public_messages)) + " messages from the public net", sub="pub")
+                log.error("**** Got " + str(len(world_messages)) + " messages from the world/private net", sub="prv")
 
                 if self.node_type is Node.AGENT:
                     if msg.sender not in self.agent.all_agents:
