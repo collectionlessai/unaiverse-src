@@ -1254,7 +1254,7 @@ class HybridStateMachine:
                 forced_uuid=kwargs.get('forced_uuid', "do_not_force"),
                 id=kwargs.get('id', "random"))
 
-        log.error(f"Received an action request with this interaction: {interaction}", state=self.get_state_name())
+        log.misc(f"Received an action request with this interaction: {interaction}", state=self.get_state_name())
 
         # Getting data
         action_name = interaction.action_name
@@ -1267,28 +1267,23 @@ class HybridStateMachine:
             from_state = self.state if self.state is not None else self.limbo_state
         if from_state not in self.transitions:
             log.error(f"Request not accepted: not valid source state ({from_state})",
-                       state=self.get_state_name())
+                      state=self.get_state_name())
             return False
 
         # If the destination state is not provided, all the possible destination from the current state are considered
         to_state = interaction.to_state
         if to_state is not None and to_state not in self.transitions[from_state]:
             log.error(f"Request not accepted: not valid destination state ({to_state})",
-                       state=self.get_state_name())
+                      state=self.get_state_name())
             return False
         to_states = self.transitions[from_state].keys() if to_state is None else [to_state]
 
-        log.error("to_states="+str(to_states))
-
         for to_state in to_states:
             action_list = self.transitions[from_state][to_state]
-            log.error("action_list=" + str(action_list))
             for i, action in enumerate(action_list):
-                log.error("action=" + str(action))
-                log.error("action_name=" + str(action_name) + ", args=" + str(args))
                 if action.same_as(name=action_name, args=args):
-                    log.error(f"Requested action found in state {from_state}, adding interaction to the queue",
-                               state=self.get_state_name())
+                    log.misc(f"Requested action found in state {from_state}, adding interaction to the queue",
+                             state=self.get_state_name())
 
                     # Action found, let's save the suggestion
                     if action.add_interaction(interaction):
@@ -1296,10 +1291,8 @@ class HybridStateMachine:
                     else:
                         log.error("Requested action does not allow interactions")
                         return False  # If the action does not support interactions
-                log.error("NOT THE SAME!")
 
         # If the action was not found
-        print(str(self))
         log.error("Requested action not found", state=self.get_state_name())
         return False
 
