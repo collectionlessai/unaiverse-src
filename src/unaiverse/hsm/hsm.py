@@ -1278,9 +1278,14 @@ class HybridStateMachine:
             return False
         to_states = self.transitions[from_state].keys() if to_state is None else [to_state]
 
+        log.errror("to_states="+str(to_states))
+
         for to_state in to_states:
             action_list = self.transitions[from_state][to_state]
+            log.errror("action_list=" + str(action_list))
             for i, action in enumerate(action_list):
+                log.errror("action=" + str(action))
+                log.errror("action_name=" + str(action_name) + ", args=" + str(args))
                 if action.same_as(name=action_name, args=args):
                     log.error(f"Requested action found in state {from_state}, adding interaction to the queue",
                                state=self.get_state_name())
@@ -1291,6 +1296,7 @@ class HybridStateMachine:
                     else:
                         log.error("Requested action does not allow interactions")
                         return False  # If the action does not support interactions
+                log.error("NOT THE SAME!")
 
         # If the action was not found
         print(str(self))
