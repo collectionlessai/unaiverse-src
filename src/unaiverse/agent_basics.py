@@ -1907,8 +1907,8 @@ class AgentBasics:
 
                 # If we decided to skip this sample...
                 else:
-                    log.error(f"Skipping sample named {name} received in net hash {net_hash}, "
-                              f"tag={data_tag}, uuid={data_uuid}: {reason}")
+                    log.misc(f"Skipping sample named {name} received in net hash {net_hash}, "
+                             f"tag={data_tag}, uuid={data_uuid}: {reason}")
 
                     if net_hash not in self.known_streams:
                         log.debug(f"[get_stream_sample] "
