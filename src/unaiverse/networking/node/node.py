@@ -1853,7 +1853,8 @@ class Node:
 
             # (G2) got interaction request (new-style, replaces ACTION_REQUEST for new agents)
             elif msg.content_type == Msg.INTERACTION:
-                log.misc("Received an interaction request...")
+                log.error("Received an interaction request...")
+                log.error(f"Private? {is_private_message}")
 
                 if self.node_type is Node.AGENT:
                     if msg.sender not in self.agent.all_agents:
@@ -1864,6 +1865,7 @@ class Node:
                             room_for_registration = self.agent.im.room_for_registration()
 
                         if room_for_registration:
+                            log.error("Injecting!")
                             self.agent.inject_received_interaction(msg.sender, msg.content)
 
                 elif self.node_type is Node.WORLD:
