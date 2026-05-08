@@ -1293,6 +1293,7 @@ class HybridStateMachine:
                         return False  # If the action does not support interactions
 
         # If the action was not found
+        print(str(self))
         log.error("Requested action not found", state=self.get_state_name())
         return False
 
