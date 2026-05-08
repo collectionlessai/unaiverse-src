@@ -1278,11 +1278,11 @@ class HybridStateMachine:
             return False
         to_states = self.transitions[from_state].keys() if to_state is None else [to_state]
 
-        log.errror("to_states="+str(to_states))
+        log.error("to_states="+str(to_states))
 
         for to_state in to_states:
             action_list = self.transitions[from_state][to_state]
-            log.errror("action_list=" + str(action_list))
+            log.error("action_list=" + str(action_list))
             for i, action in enumerate(action_list):
                 log.error("action=" + str(action))
                 log.error("action_name=" + str(action_name) + ", args=" + str(args))
