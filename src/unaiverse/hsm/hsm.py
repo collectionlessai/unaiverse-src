@@ -1254,7 +1254,7 @@ class HybridStateMachine:
                 forced_uuid=kwargs.get('forced_uuid', "do_not_force"),
                 id=kwargs.get('id', "random"))
 
-        log.statem(f"Received an action request with this interaction: {interaction}", state=self.get_state_name())
+        log.error(f"Received an action request with this interaction: {interaction}", state=self.get_state_name())
 
         # Getting data
         action_name = interaction.action_name
@@ -1266,14 +1266,14 @@ class HybridStateMachine:
             # If the request arrives in the middle of a multistep action, we need to check limbo state
             from_state = self.state if self.state is not None else self.limbo_state
         if from_state not in self.transitions:
-            log.statem(f"Request not accepted: not valid source state ({from_state})",
+            log.error(f"Request not accepted: not valid source state ({from_state})",
                        state=self.get_state_name())
             return False
 
         # If the destination state is not provided, all the possible destination from the current state are considered
         to_state = interaction.to_state
         if to_state is not None and to_state not in self.transitions[from_state]:
-            log.statem(f"Request not accepted: not valid destination state ({to_state})",
+            log.error(f"Request not accepted: not valid destination state ({to_state})",
                        state=self.get_state_name())
             return False
         to_states = self.transitions[from_state].keys() if to_state is None else [to_state]
@@ -1282,17 +1282,18 @@ class HybridStateMachine:
             action_list = self.transitions[from_state][to_state]
             for i, action in enumerate(action_list):
                 if action.same_as(name=action_name, args=args):
-                    log.statem(f"Requested action found in state {from_state}, adding interaction to the queue",
+                    log.error(f"Requested action found in state {from_state}, adding interaction to the queue",
                                state=self.get_state_name())
 
                     # Action found, let's save the suggestion
                     if action.add_interaction(interaction):
                         return True
                     else:
+                        log.error("Requested action does not allow interactions")
                         return False  # If the action does not support interactions
 
         # If the action was not found
-        log.statem("Requested action not found", state=self.get_state_name())
+        log.error("Requested action not found", state=self.get_state_name())
         return False
 
     def wait_for_all_actions_that_start_with(self, prefix: str) -> None:
