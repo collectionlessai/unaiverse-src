@@ -764,13 +764,9 @@ class ActionInteractionList:
         if existing_request_same_uuid:
 
             # We skip this request if we are already taking care (running) of another one with the same UUID
-            if existing_request_same_uuid.running:
-                cur_requester = interaction.requester
-                prev_requester = existing_request_same_uuid.requester  # This is expected to be the same as above
-
+            if existing_request_same_uuid.running:  # This means the HSM is taking care of it, don't mess up things!
                 log.error(f"Tried to add an interaction with the UUID of an already existing one that was in "
-                          f"'running' state, skipping (new requester: {cur_requester}, existing requester: "
-                          f"{prev_requester}")
+                          f"'running' state, skipping (requester: {interaction.requester}")
                 return
 
             # Since we know the requester is the same, we just "refresh" the existing interaction object,
