@@ -758,35 +758,31 @@ class ActionInteractionList:
             interaction: The Interaction object to add.
         """
 
-        # Searching for already existing interactions with this UUID
+        # Searching for already existing interactions with this UUID, FROM THE SAME REQUESTER
         # If already there - do not accumulate multiple requests with same UUID (useful also for system interactions)
         existing_request_same_uuid = self.get_interaction_by_uuid(interaction.requester, interaction.uuid)
         if existing_request_same_uuid:
 
             # We skip this request if we are already taking care (running) of another one with the same UUID
             if existing_request_same_uuid.running:
+                cur_requester = interaction.requester
+                prev_requester = existing_request_same_uuid.requester  # This is expected to be the same as above
+
+                log.error(f"Tried to add an interaction with the UUID of an already existing one that was in "
+                          f"'running' state, skipping (new requester: {cur_requester}, existing requester: "
+                          f"{prev_requester}")
                 return
 
-            cur_requester = interaction.requester
-            prev_requester = existing_request_same_uuid.requester
+            # Since we know the requester is the same, we just "refresh" the existing interaction object,
+            # without altering its position in the list
+            self.by_insertion_order[existing_request_same_uuid.by_insertion_order_id] = interaction
+            interaction.by_insertion_order_id = existing_request_same_uuid.by_insertion_order_id
 
-            if cur_requester == prev_requester:
-
-                # If the requester was the same, we just "refresh" the existing interaction object, without altering
-                # its position in the list
-                self.by_insertion_order[existing_request_same_uuid.by_insertion_order_id] = interaction
-                interaction.by_insertion_order_id = existing_request_same_uuid.by_insertion_order_id
-
-                self.by_requester_and_by_insertion_order[
-                    cur_requester][existing_request_same_uuid.by_requester_insertion_order_id] = (
-                    interaction)
-                interaction.by_requester_insertion_order_id = existing_request_same_uuid.by_requester_insertion_order_id
-                return  # We stop here in this case, no need to do any other things
-            else:
-
-                # If the requester was not the same (even if the UUID was the same), then we remove the interaction
-                # and add it again (hence its position in the list will change)
-                self.remove(existing_request_same_uuid)  # It continues below
+            self.by_requester_and_by_insertion_order[
+                interaction.requester][existing_request_same_uuid.by_requester_insertion_order_id] = (
+                interaction)
+            interaction.by_requester_insertion_order_id = existing_request_same_uuid.by_requester_insertion_order_id
+            return  # We stop here in this case, no need to do any other things
 
         # Updating by-requester index
         if interaction.requester not in self.by_requester_and_by_insertion_order:
