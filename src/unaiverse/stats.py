@@ -532,7 +532,6 @@ class Stats:
         else:
             # --- Agent Initialization (Simple Buffer) ---
             self._world_view: dict[str, Any] = {}
-            self.min_window_duration = timedelta(hours=3.0)  # cache for the _world_view
             self._update_batch: list[dict[str, Any]] = []
 
     def _initialize_key_sets(self):
@@ -1114,7 +1113,7 @@ class Stats:
         """(World-only) Saves the static snapshot and dynamic buffer to SQLite."""
         if not self.is_world or not self._db_conn:
             return
-        log.debug(f'Saving world stats to DB...')
+        log.debug('Saving world stats to DB...')
         try:
             self._save_static_to_db()
             self._save_dynamic_to_db()
@@ -1122,7 +1121,7 @@ class Stats:
             self._prune_db()
 
             self._db_conn.commit()
-            log.debug(f'Save complete.')
+            log.debug('Save complete.')
         except Exception as e:
             log.error(f'CRITICAL: Save_to_disk failed: {e}')
             if self._db_conn:
@@ -1369,7 +1368,7 @@ class Stats:
             if not where_added:
                 query_static.append("WHERE")
             else:
-                query_static.append(f"AND")
+                query_static.append("AND")
             query_dyn.append(f"peer_id IN ({','.join(['?'] * len(group_keys))})")
             params_dyn.extend(group_keys)
 
@@ -1379,7 +1378,7 @@ class Stats:
                 if not where_added:
                     query_static.append("WHERE")
                 else:
-                    query_static.append(f"AND")
+                    query_static.append("AND")
                 query_dyn.append("timestamp >= ?")
                 params_dyn.append(time_range)
             elif isinstance(time_range, (tuple, list)) and len(time_range) == 2:
@@ -1387,7 +1386,7 @@ class Stats:
                 if not where_added:
                     query_static.append("WHERE")
                 else:
-                    query_static.append(f"AND")
+                    query_static.append("AND")
                 query_dyn.append("timestamp >= ? AND timestamp <= ?")
                 params_dyn.extend([time_range[0], time_range[1]])
 
@@ -1396,7 +1395,7 @@ class Stats:
             if not where_added:
                 query_static.append("WHERE")
             else:
-                query_static.append(f"AND")
+                query_static.append("AND")
             query_dyn.append("val_num IS NOT NULL AND val_num >= ? AND val_num <= ?")
             params_dyn.extend([value_range[0], value_range[1]])
 
