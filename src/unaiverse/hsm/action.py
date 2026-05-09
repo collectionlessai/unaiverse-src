@@ -550,7 +550,7 @@ class Action:
             self.interactions.remove(req)
 
     def get_list_of_interactions(self) -> 'ActionInteractionList':
-        """Retrieves the list of pending interactions.
+        """Retrieves the list of pending interactions (ActionInteractionList object).
 
         Returns:
             The list of pending interactions, i.e., an object of type ActionInteractionList.
@@ -758,21 +758,34 @@ class ActionInteractionList:
             interaction: The Interaction object to add.
         """
 
-        # Updating by-requester index
-        if interaction.requester not in self.by_requester_and_by_insertion_order:
-            self.by_requester_and_by_insertion_order[interaction.requester] = []
-
         # Searching for already existing interactions with this UUID
         # If already there - do not accumulate multiple requests with same UUID (useful also for system interactions)
         existing_request_same_uuid = self.get_interaction_by_uuid(interaction.requester, interaction.uuid)
         if existing_request_same_uuid:
-            self.by_insertion_order[existing_request_same_uuid.by_insertion_order_id] = interaction
-            self.by_requester_and_by_insertion_order[
-                existing_request_same_uuid.requester][existing_request_same_uuid.by_requester_insertion_order_id] = (
-                interaction)
-            interaction.by_insertion_order_id = existing_request_same_uuid.by_insertion_order_id
-            interaction.by_requester_insertion_order_id = existing_request_same_uuid.by_requester_insertion_order_id
-            return
+            cur_requester = interaction.requester
+            prev_requester = existing_request_same_uuid.requester
+
+            if cur_requester == prev_requester:
+
+                # If the requester was the same, we just "refresh" the existing interaction object, without altering
+                # its position in the list
+                self.by_insertion_order[existing_request_same_uuid.by_insertion_order_id] = interaction
+                interaction.by_insertion_order_id = existing_request_same_uuid.by_insertion_order_id
+
+                self.by_requester_and_by_insertion_order[
+                    cur_requester][existing_request_same_uuid.by_requester_insertion_order_id] = (
+                    interaction)
+                interaction.by_requester_insertion_order_id = existing_request_same_uuid.by_requester_insertion_order_id
+                return  # We stop here in this case, no need to do any other things
+            else:
+
+                # If the requester was not the same (even if the UUID was the same), then we remove the interaction
+                # and add it again (hence its position in the list will change)
+                self.remove(existing_request_same_uuid)  # It continues below
+
+        # Updating by-requester index
+        if interaction.requester not in self.by_requester_and_by_insertion_order:
+            self.by_requester_and_by_insertion_order[interaction.requester] = []
 
         if 0 < self.max_per_requester <= len(self.by_requester_and_by_insertion_order[interaction.requester]):
             self.remove(self.get_oldest_interaction(interaction.requester))
@@ -890,27 +903,53 @@ class ActionInteractionList:
             return self.by_requester_and_by_insertion_order[requester][req_order_id] \
                 if req_order_id < len(self.by_requester_and_by_insertion_order[requester]) else None
 
-    def get_oldest_interaction(self, requester: str | None = None) -> Interaction | None:
+    def get_oldest_interaction(self, requester: str | None = None, ignore_completed: bool = False) \
+            -> Interaction | None:
         """Returns the oldest (first-added) interaction, optionally scoped to a specific requester.
 
         Args:
             requester: If provided, scopes the lookup to the sub-list of this requester.
+            ignore_completed: If True, completed interactions will be ignored/skipped.
 
         Returns:
             The oldest Interaction, or None if the list is empty.
         """
-        return self.get_interaction(0, requester)
+        if not ignore_completed:
+            return self.get_interaction(0, requester)
+        else:
+            req = self.get_interaction(0, requester)
+            i = 1
+            while req.completed:
+                if i < len(self):
+                    req = self.get_interaction(i, requester)
+                    i += 1
+                else:
+                    return None
+            return req
 
-    def get_most_recent_interaction(self, requester: str | None = None) -> Interaction | None:
+    def get_most_recent_interaction(self, requester: str | None = None, ignore_completed: bool = False) \
+            -> Interaction | None:
         """Returns the most recently added interaction, optionally scoped to a specific requester.
 
         Args:
             requester: If provided, scopes the lookup to the sub-list of this requester.
+            ignore_completed: If True, completed interactions will be ignored/skipped.
 
         Returns:
             The most recent Interaction, or None if the list is empty.
         """
-        return self.get_interaction(-1, requester)
+        if not ignore_completed:
+            return self.get_interaction(-1, requester)
+        else:
+            req = self.get_interaction(-1, requester)
+            i = len(self) - 2
+            while req.completed:
+                if i >= 0:
+                    req = self.get_interaction(i, requester)
+                    i -= 1
+                else:
+                    return None
+            return req
 
     def get_interaction_by_uuid(self, requester: str, uuid: str | None) -> Interaction | None:
         """Finds the first interaction for a given requester that matches the specified UUID.
@@ -930,13 +969,23 @@ class ActionInteractionList:
             if req.uuid == uuid:
                 return req
 
-    def keep_only_the_most_recent_interaction(self) -> None:
-        """Discards all interactions except the most recently added one, preserving its entering time."""
-        req = self.get_most_recent_interaction()
-        entering_time = self.by_insertion_order_entering_time[req.by_insertion_order_id]
-        self.clear()
-        self.add(req)
-        self.by_insertion_order_entering_time[req.by_insertion_order_id] = entering_time
+    def keep_only_the_most_recent_interaction(self, ignore_completed: bool = False) -> None:
+        """Discards all interactions except the most recently added one, preserving its entering time.
+
+        Args:
+            ignore_completed: If True, completed interactions will be ignored/skipped.
+
+        Returns:
+            None
+        """
+        req = self.get_most_recent_interaction(ignore_completed=ignore_completed)
+        if req is not None:
+            entering_time = self.by_insertion_order_entering_time[req.by_insertion_order_id]
+            self.clear()
+            self.add(req)
+            self.by_insertion_order_entering_time[req.by_insertion_order_id] = entering_time
+        else:
+            self.clear()
 
     def get_interactions(self, requester: str | None = None, to_str: bool = False,
                          doable_only: bool = False) -> list[Interaction] | str:
@@ -953,7 +1002,7 @@ class ActionInteractionList:
         if requester is None:
             reqs = self.by_insertion_order
             if doable_only:
-                reqs = [req for req in reqs if req.check_if_doable()]
+                reqs = [req for req in reqs if req.check_if_doable()]  # This excludes completed too
             if not to_str:
                 return reqs
             else:

@@ -16,8 +16,6 @@ import io
 import os
 import json
 import html
-import time
-
 import graphviz
 import importlib.resources
 from unaiverse.custom import Custom
@@ -957,20 +955,6 @@ class HybridStateMachine:
             attempts_to_serve_an_interaction_list = (
                 self.__cur_feasible_actions_status)['attempts_to_serve_an_interaction_list']
 
-            # Pruning interactions that were completed, meanwhile (due to some timeouts), if any
-            idx_to_remove = []
-            for i, action in enumerate(actions_list):
-                if len(action.interactions) > 0:
-                    action.interactions.remove_completed()
-                    if len(action.interactions) == 0:
-                        idx_to_remove.append(i)
-                        if self.__action is not None and self.__action == action:
-                            self.__action = None
-            for i in idx_to_remove:
-                del actions_list[i]
-                del to_state_list[i]
-                del attempts_to_serve_an_interaction_list[i]
-
         # Using the selected policy to decide what action to apply
         while len(actions_list) > 0:
             skip_action_due_to_filter = False
@@ -1090,10 +1074,6 @@ class HybridStateMachine:
 
                 # Memorizing tags of data used in this action call
                 interaction.record_data_tags()
-
-                # Clearing request
-                if interaction != self.__action.system_interaction:
-                    self.__action.get_list_of_interactions().remove(interaction)
 
                 # State transition
                 self.prev_state = self.limbo_state
@@ -1723,10 +1703,10 @@ class HybridStateMachine:
                     if len(_list_of_requests) > 0 else None
                 return _selected_action_idx, _selected_interaction
         for i, action in enumerate(actions_list):
-            _list_of_interactions = action.get_list_of_interactions()
-            if len(_list_of_interactions) > 0:
+            _list_of_requests = action.get_list_of_interactions()
+            if len(_list_of_requests) > 0:  # The process action has more priority
                 _selected_action_idx = i
-                _selected_interaction = _list_of_interactions.get_oldest_interaction()
+                _selected_interaction = _list_of_requests.get_oldest_interaction()
                 return _selected_action_idx, _selected_interaction
         for i, action in enumerate(actions_list):
             if action.is_ready(consider_interactions=False):
