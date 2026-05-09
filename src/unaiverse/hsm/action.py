@@ -762,6 +762,11 @@ class ActionInteractionList:
         # If already there - do not accumulate multiple requests with same UUID (useful also for system interactions)
         existing_request_same_uuid = self.get_interaction_by_uuid(interaction.requester, interaction.uuid)
         if existing_request_same_uuid:
+
+            # We skip this request if we are already taking care (running) of another one with the same UUID
+            if existing_request_same_uuid.running:
+                return
+
             cur_requester = interaction.requester
             prev_requester = existing_request_same_uuid.requester
 
