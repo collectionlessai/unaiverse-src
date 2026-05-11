@@ -144,12 +144,12 @@ class AgentBasics:
         self.compat_out_streams = set()  # Streams compatible with the processor output (dynamically set)
 
         # Agents, world masters, expected world masters
-        self.all_agents = {}  # ID -> profile (all types of agent)
-        self.public_agents = {}  # ID -> profile of lone wolves talking to this world in a public manner (profile)
-        self.world_agents = {}  # ID -> profile of all agents living in this world (profile)
-        self.world_masters = {}  # ID -> profile of all master-agents living in this world (profile)
-        self.human_agents = {}  # ID -> profile (human agents)
-        self.artificial_agents = {}  # ID -> profile (artificial agent)
+        self.all_agents: dict[str, NodeProfile] = {}  # ID -> profile (all types of agent)
+        self.public_agents: dict[str, NodeProfile] = {}  # ID -> profile of agents talking in public manner
+        self.world_agents: dict[str, NodeProfile] = {}  # ID -> profile of all agents living in this world
+        self.world_masters: dict[str, NodeProfile] = {}  # ID -> profile of all master-agents living in this world
+        self.human_agents: dict[str, NodeProfile] = {}  # ID -> profile (human agents)
+        self.artificial_agents: dict[str, NodeProfile] = {}  # ID -> profile (artificial agent)
         self.world_profile = None
         self.is_world = False  # If this instance is about a world: it will be discovered at creation time
 
