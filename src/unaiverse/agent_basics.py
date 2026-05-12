@@ -382,13 +382,15 @@ class AgentBasics:
             self.stdin.disable()
 
         log.error("[__proc_streams_by_user_hash_pub] BEGIN")
-        for p in self.__proc_streams_by_user_hash_pub:
-            log.error(str(p.props))
+        for h, s in self.__proc_streams_by_user_hash_pub.items():
+            log.error(h)
+            log.error(str(s.props))
         log.error("[__proc_streams_by_user_hash_pub] END")
 
         log.error("[__proc_streams_by_user_hash_prv] BEGIN")
-        for p in self.__proc_streams_by_user_hash_prv:
-            log.error(str(p.props))
+        for h, s in self.__proc_streams_by_user_hash_prv.items():
+            log.error(h)
+            log.error(str(s.props))
         log.error("[__proc_streams_by_user_hash_prv] END")
 
         return True
