@@ -447,7 +447,7 @@ class Agent(AgentBasics):
         self.stdout.set(output_data, data_tag=data_tag, uuid=uuid)  # Use kwargs for data_tag and uuid
         log.error(f"[process] printing 'self.stdout' = {str(self.stdout)}")
         log.error(f"[process] tried to get what I just set on stdout: {self.stdout.get(uuid=uuid)}")
-        log.error(f"[process] tried to get what I just set on stdout, all uuids: {self.stdout.get(all_uuids=True)}")
+        log.error(f"[process] tried to get what I just set on stdout, all uuids: {self.stdout.get('proc_output_0', all_uuids=True)}")
         return True
 
     @action
