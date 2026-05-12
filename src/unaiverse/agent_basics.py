@@ -397,6 +397,7 @@ class AgentBasics:
             log.error(h)
             log.error(str(s.props.to_string()))
         log.error("[_proc_streams_by_user_hash_prv] END")
+
     def get_connection_pool_manager(self) -> NodeConn:
         return self._node_conn
 
