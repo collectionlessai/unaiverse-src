@@ -381,6 +381,11 @@ class AgentBasics:
             self.set_default_stdin_binding(public=False)
             self.stdin.disable()
 
+        self.tmp_print()
+
+        return True
+
+    def tmp_print(self):
         log.error("[_proc_streams_by_user_hash_pub] BEGIN")
         for h, s in self._proc_streams_by_user_hash_pub.items():
             log.error(h)
@@ -392,9 +397,6 @@ class AgentBasics:
             log.error(h)
             log.error(str(s.props.to_string()))
         log.error("[_proc_streams_by_user_hash_prv] END")
-
-        return True
-
     def get_connection_pool_manager(self) -> NodeConn:
         return self._node_conn
 
@@ -412,14 +414,14 @@ class AgentBasics:
         log.error(f"[set_default_stream_binding] public={public}")
 
         if (public is not None and not public) or (public is None and self.behaving_in_world()):
-            log.error(f"[set_default_stream_binding] BINDING PUBLIC!!!")
+            log.error(f"[set_default_stream_binding] BINDING PUBLIC!!! [gatto]")
             self.stdin.bind(self._proc_in_streams_by_user_hash_prv, uuid=Custom.SYSTEM_INTERACTION_UUID)
             self.stdtar.bind({}, uuid=Custom.SYSTEM_INTERACTION_UUID)
             self.stdext.bind(self._env_streams_by_user_hash_prv, uuid=Custom.SYSTEM_INTERACTION_UUID)
             self.stdout.bind(self._proc_streams_by_user_hash_prv, uuid=Custom.SYSTEM_INTERACTION_UUID)
 
         if (public is not None and public) or (public is None and not self.behaving_in_world()):
-            log.error(f"[set_default_stream_binding] BINDING PRIVATE!!!")
+            log.error(f"[set_default_stream_binding] BINDING PRIVATE!!! [gatto]")
             self.stdin.bind(self._proc_in_streams_by_user_hash_pub, uuid=Custom.SYSTEM_INTERACTION_UUID)
             self.stdtar.bind({}, uuid=Custom.SYSTEM_INTERACTION_UUID)
             self.stdext.bind(self._env_streams_by_user_hash_pub, uuid=Custom.SYSTEM_INTERACTION_UUID)
@@ -1607,7 +1609,7 @@ class AgentBasics:
                 if self.behav_lone_wolf is not None:
                     self.behav_lone_wolf.enable(False)
                 self.behav.enable(True)
-                log.error("[behave] BINDING PRIVATE @@@@")
+                log.error("[behave] BINDING PRIVATE @@@@ [gatto]")
                 self.stdin.bind(self._proc_in_streams_by_user_hash_prv, uuid=Custom.SYSTEM_INTERACTION_UUID)
                 self.stdout.bind(self._proc_streams_by_user_hash_prv, uuid=Custom.SYSTEM_INTERACTION_UUID)
                 self.stdext.bind(self._env_streams_by_user_hash_prv, uuid=Custom.SYSTEM_INTERACTION_UUID)
@@ -1623,7 +1625,7 @@ class AgentBasics:
             if self.behav is not None:
                 self.behav.enable(False)
             self.behav_lone_wolf.enable(True)
-            log.error("[behave] BINDING PUBLIC @@@@")
+            log.error("[behave] BINDING PUBLIC @@@@ [gatto]")
             self.stdin.bind(self._proc_in_streams_by_user_hash_pub, uuid=Custom.SYSTEM_INTERACTION_UUID)
             self.stdout.bind(self._proc_streams_by_user_hash_pub, uuid=Custom.SYSTEM_INTERACTION_UUID)
             self.stdext.bind(self._env_streams_by_user_hash_pub, uuid=Custom.SYSTEM_INTERACTION_UUID)
