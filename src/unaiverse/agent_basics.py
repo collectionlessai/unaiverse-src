@@ -1980,8 +1980,10 @@ class AgentBasics:
                     data = stream.get(requested_by="send_stream_samples", uuid=uuid)
                     data_tag = stream.get_tag(uuid=uuid)
 
+                    log.error(f"[send_stream_sample] data from stream {stream.props.get_name()} = {data}")
+
                     if data is not None:
-                        log.debug(f"[send_stream_samples] Found something in stream {stream.props.get_name()} "
+                        log.error(f"[send_stream_samples] Found something in stream {stream.props.get_name()} "
                                   f"uuid={uuid}, data_tag={data_tag}, recipient={recipient}")
 
                         # Prepare data structures the first time we meet a new recipient
@@ -1999,7 +2001,7 @@ class AgentBasics:
                         contents_data_by_uuid[uuid][name] = data
                         valid_samples_count[uuid] += 1
                     else:
-                        log.debug(
+                        log.error(
                             f"[send_stream_samples] None data in stream {stream.props.get_name()} uuid={uuid}")
 
             # Remove recipients of not-net-hash-full-of-contents messages
@@ -2007,7 +2009,7 @@ class AgentBasics:
             for uuid, count in valid_samples_count.items():
                 if count != len(streams_dict):
                     uuid_to_remove.append(uuid)
-                    log.debug(f"[send_stream_samples] Cannot send data for {net_hash}, uuid {uuid}, "
+                    log.error(f"[send_stream_samples] Cannot send data for {net_hash}, uuid {uuid}, "
                               f"since it is incomplete ({valid_samples_count[uuid]} vs {len(streams_dict)})")
             for uuid in uuid_to_remove:
                 del interactions_by_uuid[uuid]
@@ -2025,13 +2027,13 @@ class AgentBasics:
                     content_data = contents_data_by_uuid[uuid]
 
                     for recipient in recipients:
-                        log.debug(f"[send_stream_samples] " 
+                        log.error(f"[send_stream_samples] " 
                                   f"Sending samples of {net_hash} by direct message to {recipient}...")
                         for name in content.keys():
                             content[name]['data'] = self.hook_before_sending_sample(content_data[name],
                                                                                     content[name]['data_tag'],
                                                                                     net_hash, name, recipient)
-                            log.debug(f"[send_stream_samples] "
+                            log.error(f"[send_stream_samples] "
                                       f"(data_tag={content[name]['data_tag']}, data_uuid={uuid}, "
                                       f"data is None?={content[name]['data'] is None})")
 
@@ -2039,12 +2041,12 @@ class AgentBasics:
                                                          content_type=Msg.STREAM_SAMPLE,
                                                          content=content)
 
-                        log.debug(f"[send_stream_samples] Sending returned: " + str(ret))
+                        log.error(f"[send_stream_samples] Sending returned: " + str(ret))
 
             # If pubsub...
             if Stream.is_pubsub_from_net_hash(net_hash):
                 for uuid, recipients in recipients_by_uuid.items():
-                    log.debug(f"[send_stream_samples] Sending stream samples of the whole {net_hash} by pubsub...")
+                    log.error(f"[send_stream_samples] Sending stream samples of the whole {net_hash} by pubsub...")
 
                     content = contents_by_uuid[uuid]
                     content_data = contents_data_by_uuid[uuid]
@@ -2053,7 +2055,7 @@ class AgentBasics:
                         content[name]['data'] = self.hook_before_sending_sample(content_data[name],
                                                                                 content[name]['data_tag'],
                                                                                 net_hash, name, None)
-                        log.debug(
+                        log.error(
                             f"[send_stream_samples] (data_tag={content[name]['data_tag']}, data_uuid={uuid}, "
                             f"data is None?={content[name]['data'] is None}")
 
@@ -2062,7 +2064,7 @@ class AgentBasics:
                                                         content_type=Msg.STREAM_SAMPLE,
                                                         content=content)
 
-                    log.debug(f"[send_stream_samples] Sending returned: " + str(ret))
+                    log.error(f"[send_stream_samples] Sending returned: " + str(ret))
 
     def disable_proc_input(self, public: bool):
         """Disable the processor input stream of this agent.
