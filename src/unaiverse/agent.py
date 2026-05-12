@@ -379,10 +379,12 @@ class Agent(AgentBasics):
             True if the step ran successfully, False otherwise.
         """
         # Getting UUID of the interaction (used for tags and stdout)
+        log.error("[process] process called")
         if interaction is not None:
             uuid = interaction.uuid
         else:
             uuid = Custom.SYSTEM_INTERACTION_UUID
+        log.error(f"[process] uuid={uuid}")
 
         # Possibly re-binding stdin to cope with human processor (it might also let the action fail, if needed)
         if not self.__rebind_stdin_if_human(interaction):
@@ -391,13 +393,19 @@ class Agent(AgentBasics):
         # Getting input data from the input stream
         input_data = self.stdin.get(uuid=uuid, requested_by="process")  # Use kwargs
 
+        log.error(f"[process] input_data={input_data}")
+
         if input_data is None:
+            log.error(f"[process] *** no input data!")
             return False
 
         # Getting data tag
         data_tag = self.stdin.get_tag(uuid=uuid)
 
+        log.error(f"[process] data_tag={data_tag}")
+
         if data_tag is None:
+            log.error(f"[process] *** no data data!")
             return False
 
         # Post get actions to finalize what possibly started with the previous call to the rebind operation
@@ -407,6 +415,7 @@ class Agent(AgentBasics):
         # Customizable input hook
         try:
             input_data = self.hook_proc_tweak_inputs(input_data)
+            log.error(f"[process] tweaked input data={input_data}")
             if input_data is None:
                 return False
         except Exception as e:
@@ -416,9 +425,11 @@ class Agent(AgentBasics):
         # Processing data
         try:
             output_data = self.proc(*input_data)
+            log.error(f"[process] processor has done! output_data={output_data}")
 
             if not isinstance(output_data, tuple):
                 output_data = (output_data,)
+                log.error(f"[process] processor has done! output_data as tuple={output_data}")
         except Exception as e:
             log.error(f"Error running the processor: {e}")
             return False
@@ -426,11 +437,13 @@ class Agent(AgentBasics):
         # Customizable output hook
         try:
             output_data = self.hook_proc_tweak_outputs(output_data)
+            log.error(f"[process] output_data after final tweak={output_data}")
         except Exception as e:
             log.error(f"Error tweaking the processor outputs: {e}")
             return False
 
         # Pushing output data to the output stream
+        log.error(f"[process] output_data that is set on stdout: output_data={output_data}, data_tag={data_tag}, uuid={uuid}")
         self.stdout.set(output_data, data_tag=data_tag, uuid=uuid)  # Use kwargs for data_tag and uuid
         return True
 
