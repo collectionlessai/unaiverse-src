@@ -379,7 +379,7 @@ class Agent(AgentBasics):
             True if the step ran successfully, False otherwise.
         """
         # Getting UUID of the interaction (used for tags and stdout)
-        log.error("[process] process called")
+        log.error(f"[process] process called (in world? {self.behaving_in_world()})")
         if interaction is not None:
             uuid = interaction.uuid
         else:
@@ -445,6 +445,7 @@ class Agent(AgentBasics):
         # Pushing output data to the output stream
         log.error(f"[process] output_data that is set on stdout: output_data={output_data}, data_tag={data_tag}, uuid={uuid}")
         self.stdout.set(output_data, data_tag=data_tag, uuid=uuid)  # Use kwargs for data_tag and uuid
+        log.error(f"[process] in world? {self.behaving_in_world()}, your peer id={self.get_peer_id()}")
         log.error(f"[process] printing 'self.stdout' = {str(self.stdout)}")
         log.error(f"[process] tried to get what I just set on stdout: {self.stdout.get(uuid=uuid)}")
         log.error(f"[process] tried to get what I just set on stdout, all uuids: {self.stdout.get('proc_output_0', all_uuids=True)}")
