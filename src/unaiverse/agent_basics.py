@@ -384,13 +384,13 @@ class AgentBasics:
         log.error("[__proc_streams_by_user_hash_pub] BEGIN")
         for h, s in self.__proc_streams_by_user_hash_pub.items():
             log.error(h)
-            log.error(str(s.props))
+            log.error(str(s.props.to_string()))
         log.error("[__proc_streams_by_user_hash_pub] END")
 
         log.error("[__proc_streams_by_user_hash_prv] BEGIN")
         for h, s in self.__proc_streams_by_user_hash_prv.items():
             log.error(h)
-            log.error(str(s.props))
+            log.error(str(s.props.to_string()))
         log.error("[__proc_streams_by_user_hash_prv] END")
 
         return True
