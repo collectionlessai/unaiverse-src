@@ -611,7 +611,7 @@ class AgentProcessorChecker:
                                                         (len(proc_outputs) > 0 and
                                                          isinstance_fcn(proc_outputs[0],
                                                                         (StreamType, str))))))):
-            raise GenException("Invalid proc_inputs: it must be None or a list of Stream/str")
+            raise GenException("Invalid proc_outputs: it must be None or a list of Stream/str")
         if not (proc_opts is None or isinstance_fcn(proc_opts, dict)):
             raise GenException("Invalid proc_opts: it must be None or a dictionary")
 
@@ -626,7 +626,7 @@ class AgentProcessorChecker:
                         raise GenException(f"Invalid stream type {p}: {e}")
             proc_inputs = proc_inputs_copy
 
-        # From strings to StreamType (proc_outpus)
+        # From strings to StreamType (proc_outputs)
         if proc_outputs is not None:
             proc_outputs_copy = proc_outputs.copy()
             for i, p in enumerate(proc_outputs_copy):

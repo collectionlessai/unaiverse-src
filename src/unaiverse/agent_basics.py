@@ -213,6 +213,11 @@ class AgentBasics:
         self.stdext = StreamProxy()
         self.stdout = StreamProxy()
 
+        log.error("[proc_outputs] BEGIN")
+        for p in self.proc_outputs:
+            log.error(str(p))
+        log.error("[proc_outputs] END")
+
         # Loading default public HSM
         if hasattr(self, "do_gen"):  # Trick to distinguish if this is an Agent or a World (both sons of this class)
             self.is_world = False
