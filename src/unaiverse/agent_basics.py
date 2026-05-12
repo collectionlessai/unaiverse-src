@@ -250,16 +250,6 @@ class AgentBasics:
             if self.world_folder is None:
                 raise GenException("No world folder was indicated (world_folder argument)")
 
-        log.error("[__proc_streams_by_user_hash_pub] BEGIN")
-        for p in self.__proc_streams_by_user_hash_pub:
-            log.error(str(p.props))
-        log.error("[__proc_streams_by_user_hash_pub] END")
-
-        log.error("[__proc_streams_by_user_hash_prv] BEGIN")
-        for p in self.__proc_streams_by_user_hash_prv:
-            log.error(str(p.props))
-        log.error("[__proc_streams_by_user_hash_prv] END")
-
     def set_node_info(self, conn: NodeConn, profile: NodeProfile,
                       ask_to_get_in_touch_fcn: Callable, purge_fcn: Callable, node_identity_dir: str,
                       agents_waiting: dict) -> bool:
@@ -390,6 +380,16 @@ class AgentBasics:
             self.stdin.disable()
             self.set_default_stdin_binding(public=False)
             self.stdin.disable()
+
+        log.error("[__proc_streams_by_user_hash_pub] BEGIN")
+        for p in self.__proc_streams_by_user_hash_pub:
+            log.error(str(p.props))
+        log.error("[__proc_streams_by_user_hash_pub] END")
+
+        log.error("[__proc_streams_by_user_hash_prv] BEGIN")
+        for p in self.__proc_streams_by_user_hash_prv:
+            log.error(str(p.props))
+        log.error("[__proc_streams_by_user_hash_prv] END")
 
         return True
 
