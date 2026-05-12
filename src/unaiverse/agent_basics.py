@@ -213,11 +213,6 @@ class AgentBasics:
         self.stdext = StreamProxy()
         self.stdout = StreamProxy()
 
-        log.error("[proc_outputs] BEGIN")
-        for p in self.proc_outputs:
-            log.error(str(p))
-        log.error("[proc_outputs] END")
-
         # Loading default public HSM
         if hasattr(self, "do_gen"):  # Trick to distinguish if this is an Agent or a World (both sons of this class)
             self.is_world = False
@@ -381,22 +376,7 @@ class AgentBasics:
             self.set_default_stdin_binding(public=False)
             self.stdin.disable()
 
-        self.tmp_print()
-
         return True
-
-    def tmp_print(self):
-        log.error("[_proc_streams_by_user_hash_pub] BEGIN")
-        for h, s in self._proc_streams_by_user_hash_pub.items():
-            log.error(h)
-            log.error(str(s.props.to_string()))
-        log.error("[_proc_streams_by_user_hash_pub] END")
-
-        log.error("[_proc_streams_by_user_hash_prv] BEGIN")
-        for h, s in self._proc_streams_by_user_hash_prv.items():
-            log.error(h)
-            log.error(str(s.props.to_string()))
-        log.error("[_proc_streams_by_user_hash_prv] END")
 
     def get_connection_pool_manager(self) -> NodeConn:
         return self._node_conn
@@ -412,17 +392,14 @@ class AgentBasics:
 
     def set_default_stream_binding(self, public: bool | None = None) -> None:
         """Set default bindings for the stdin, stdtar, stdext, stdout stream proxies."""
-        log.error(f"[set_default_stream_binding] public={public}")
 
         if (public is not None and not public) or (public is None and self.behaving_in_world()):
-            log.error(f"[set_default_stream_binding] BINDING PUBLIC!!! [gatto]")
             self.stdin.bind(self._proc_in_streams_by_user_hash_prv, uuid=Custom.SYSTEM_INTERACTION_UUID)
             self.stdtar.bind({}, uuid=Custom.SYSTEM_INTERACTION_UUID)
             self.stdext.bind(self._env_streams_by_user_hash_prv, uuid=Custom.SYSTEM_INTERACTION_UUID)
             self.stdout.bind(self._proc_streams_by_user_hash_prv, uuid=Custom.SYSTEM_INTERACTION_UUID)
 
         if (public is not None and public) or (public is None and not self.behaving_in_world()):
-            log.error(f"[set_default_stream_binding] BINDING PRIVATE!!! [gatto]")
             self.stdin.bind(self._proc_in_streams_by_user_hash_pub, uuid=Custom.SYSTEM_INTERACTION_UUID)
             self.stdtar.bind({}, uuid=Custom.SYSTEM_INTERACTION_UUID)
             self.stdext.bind(self._env_streams_by_user_hash_pub, uuid=Custom.SYSTEM_INTERACTION_UUID)
@@ -1610,7 +1587,6 @@ class AgentBasics:
                 if self.behav_lone_wolf is not None:
                     self.behav_lone_wolf.enable(False)
                 self.behav.enable(True)
-                log.error("[behave] BINDING PRIVATE @@@@ [gatto]")
                 self.stdin.bind(self._proc_in_streams_by_user_hash_prv, uuid=Custom.SYSTEM_INTERACTION_UUID)
                 self.stdout.bind(self._proc_streams_by_user_hash_prv, uuid=Custom.SYSTEM_INTERACTION_UUID)
                 self.stdext.bind(self._env_streams_by_user_hash_prv, uuid=Custom.SYSTEM_INTERACTION_UUID)
@@ -1626,7 +1602,6 @@ class AgentBasics:
             if self.behav is not None:
                 self.behav.enable(False)
             self.behav_lone_wolf.enable(True)
-            log.error("[behave] BINDING PUBLIC @@@@ [gatto]")
             self.stdin.bind(self._proc_in_streams_by_user_hash_pub, uuid=Custom.SYSTEM_INTERACTION_UUID)
             self.stdout.bind(self._proc_streams_by_user_hash_pub, uuid=Custom.SYSTEM_INTERACTION_UUID)
             self.stdext.bind(self._env_streams_by_user_hash_pub, uuid=Custom.SYSTEM_INTERACTION_UUID)
@@ -2005,10 +1980,10 @@ class AgentBasics:
                     data = stream.get(requested_by="send_stream_samples", uuid=uuid)
                     data_tag = stream.get_tag(uuid=uuid)
 
-                    log.error(f"[send_stream_sample] data from stream {stream.props.get_name()} = {data}")
+                    log.debug(f"[send_stream_sample] data from stream {stream.props.get_name()} = {data}")
 
                     if data is not None:
-                        log.error(f"[send_stream_samples] Found something in stream {stream.props.get_name()} "
+                        log.debug(f"[send_stream_samples] Found something in stream {stream.props.get_name()} "
                                   f"uuid={uuid}, data_tag={data_tag}, recipient={recipient}")
 
                         # Prepare data structures the first time we meet a new recipient
@@ -2026,7 +2001,7 @@ class AgentBasics:
                         contents_data_by_uuid[uuid][name] = data
                         valid_samples_count[uuid] += 1
                     else:
-                        log.error(
+                        log.debug(
                             f"[send_stream_samples] None data in stream {stream.props.get_name()} uuid={uuid}")
 
             # Remove recipients of not-net-hash-full-of-contents messages
@@ -2034,7 +2009,7 @@ class AgentBasics:
             for uuid, count in valid_samples_count.items():
                 if count != len(streams_dict):
                     uuid_to_remove.append(uuid)
-                    log.error(f"[send_stream_samples] Cannot send data for {net_hash}, uuid {uuid}, "
+                    log.debug(f"[send_stream_samples] Cannot send data for {net_hash}, uuid {uuid}, "
                               f"since it is incomplete ({valid_samples_count[uuid]} vs {len(streams_dict)})")
             for uuid in uuid_to_remove:
                 del interactions_by_uuid[uuid]
@@ -2052,13 +2027,13 @@ class AgentBasics:
                     content_data = contents_data_by_uuid[uuid]
 
                     for recipient in recipients:
-                        log.error(f"[send_stream_samples] " 
+                        log.debug(f"[send_stream_samples] " 
                                   f"Sending samples of {net_hash} by direct message to {recipient}...")
                         for name in content.keys():
                             content[name]['data'] = self.hook_before_sending_sample(content_data[name],
                                                                                     content[name]['data_tag'],
                                                                                     net_hash, name, recipient)
-                            log.error(f"[send_stream_samples] "
+                            log.debug(f"[send_stream_samples] "
                                       f"(data_tag={content[name]['data_tag']}, data_uuid={uuid}, "
                                       f"data is None?={content[name]['data'] is None})")
 
@@ -2066,12 +2041,12 @@ class AgentBasics:
                                                          content_type=Msg.STREAM_SAMPLE,
                                                          content=content)
 
-                        log.error(f"[send_stream_samples] Sending returned: " + str(ret))
+                        log.debug(f"[send_stream_samples] Sending returned: " + str(ret))
 
             # If pubsub...
             if Stream.is_pubsub_from_net_hash(net_hash):
                 for uuid, recipients in recipients_by_uuid.items():
-                    log.error(f"[send_stream_samples] Sending stream samples of the whole {net_hash} by pubsub...")
+                    log.debug(f"[send_stream_samples] Sending stream samples of the whole {net_hash} by pubsub...")
 
                     content = contents_by_uuid[uuid]
                     content_data = contents_data_by_uuid[uuid]
@@ -2080,7 +2055,7 @@ class AgentBasics:
                         content[name]['data'] = self.hook_before_sending_sample(content_data[name],
                                                                                 content[name]['data_tag'],
                                                                                 net_hash, name, None)
-                        log.error(
+                        log.debug(
                             f"[send_stream_samples] (data_tag={content[name]['data_tag']}, data_uuid={uuid}, "
                             f"data is None?={content[name]['data'] is None}")
 
@@ -2089,7 +2064,7 @@ class AgentBasics:
                                                         content_type=Msg.STREAM_SAMPLE,
                                                         content=content)
 
-                    log.error(f"[send_stream_samples] Sending returned: " + str(ret))
+                    log.debug(f"[send_stream_samples] Sending returned: " + str(ret))
 
     def disable_proc_input(self, public: bool):
         """Disable the processor input stream of this agent.
