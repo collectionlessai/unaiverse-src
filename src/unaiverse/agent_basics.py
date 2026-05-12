@@ -181,12 +181,12 @@ class AgentBasics:
         self._node_identity_dir = ''
 
         # Utilities
-        self.__proc_in_streams_by_user_hash_pub = {}
-        self.__proc_streams_by_user_hash_pub = {}
-        self.__env_streams_by_user_hash_pub = {}
-        self.__proc_in_streams_by_user_hash_prv = {}
-        self.__proc_streams_by_user_hash_prv = {}
-        self.__env_streams_by_user_hash_prv = {}
+        self._proc_in_streams_by_user_hash_pub = {}
+        self._proc_streams_by_user_hash_pub = {}
+        self._env_streams_by_user_hash_pub = {}
+        self._proc_in_streams_by_user_hash_prv = {}
+        self._proc_streams_by_user_hash_prv = {}
+        self._env_streams_by_user_hash_prv = {}
 
         # Checking
         if not (self.proc is None or
@@ -381,17 +381,17 @@ class AgentBasics:
             self.set_default_stdin_binding(public=False)
             self.stdin.disable()
 
-        log.error("[__proc_streams_by_user_hash_pub] BEGIN")
-        for h, s in self.__proc_streams_by_user_hash_pub.items():
+        log.error("[_proc_streams_by_user_hash_pub] BEGIN")
+        for h, s in self._proc_streams_by_user_hash_pub.items():
             log.error(h)
             log.error(str(s.props.to_string()))
-        log.error("[__proc_streams_by_user_hash_pub] END")
+        log.error("[_proc_streams_by_user_hash_pub] END")
 
-        log.error("[__proc_streams_by_user_hash_prv] BEGIN")
-        for h, s in self.__proc_streams_by_user_hash_prv.items():
+        log.error("[_proc_streams_by_user_hash_prv] BEGIN")
+        for h, s in self._proc_streams_by_user_hash_prv.items():
             log.error(h)
             log.error(str(s.props.to_string()))
-        log.error("[__proc_streams_by_user_hash_prv] END")
+        log.error("[_proc_streams_by_user_hash_prv] END")
 
         return True
 
@@ -402,43 +402,46 @@ class AgentBasics:
         """Set default bindings for the stdin."""
 
         if (public is not None and not public) or (public is None and self.behaving_in_world()):
-            self.stdin.bind(self.__proc_in_streams_by_user_hash_prv, uuid=Custom.SYSTEM_INTERACTION_UUID)
+            self.stdin.bind(self._proc_in_streams_by_user_hash_prv, uuid=Custom.SYSTEM_INTERACTION_UUID)
 
         if (public is not None and public) or (public is None and not self.behaving_in_world()):
-            self.stdin.bind(self.__proc_in_streams_by_user_hash_pub, uuid=Custom.SYSTEM_INTERACTION_UUID)
+            self.stdin.bind(self._proc_in_streams_by_user_hash_pub, uuid=Custom.SYSTEM_INTERACTION_UUID)
 
     def set_default_stream_binding(self, public: bool | None = None) -> None:
         """Set default bindings for the stdin, stdtar, stdext, stdout stream proxies."""
+        log.error(f"[set_default_stream_binding] public={public}")
 
         if (public is not None and not public) or (public is None and self.behaving_in_world()):
-            self.stdin.bind(self.__proc_in_streams_by_user_hash_prv, uuid=Custom.SYSTEM_INTERACTION_UUID)
+            log.error(f"[set_default_stream_binding] BINDING PUBLIC!!!")
+            self.stdin.bind(self._proc_in_streams_by_user_hash_prv, uuid=Custom.SYSTEM_INTERACTION_UUID)
             self.stdtar.bind({}, uuid=Custom.SYSTEM_INTERACTION_UUID)
-            self.stdext.bind(self.__env_streams_by_user_hash_prv, uuid=Custom.SYSTEM_INTERACTION_UUID)
-            self.stdout.bind(self.__proc_streams_by_user_hash_prv, uuid=Custom.SYSTEM_INTERACTION_UUID)
+            self.stdext.bind(self._env_streams_by_user_hash_prv, uuid=Custom.SYSTEM_INTERACTION_UUID)
+            self.stdout.bind(self._proc_streams_by_user_hash_prv, uuid=Custom.SYSTEM_INTERACTION_UUID)
 
         if (public is not None and public) or (public is None and not self.behaving_in_world()):
-            self.stdin.bind(self.__proc_in_streams_by_user_hash_pub, uuid=Custom.SYSTEM_INTERACTION_UUID)
+            log.error(f"[set_default_stream_binding] BINDING PRIVATE!!!")
+            self.stdin.bind(self._proc_in_streams_by_user_hash_pub, uuid=Custom.SYSTEM_INTERACTION_UUID)
             self.stdtar.bind({}, uuid=Custom.SYSTEM_INTERACTION_UUID)
-            self.stdext.bind(self.__env_streams_by_user_hash_pub, uuid=Custom.SYSTEM_INTERACTION_UUID)
-            self.stdout.bind(self.__proc_streams_by_user_hash_pub, uuid=Custom.SYSTEM_INTERACTION_UUID)
+            self.stdext.bind(self._env_streams_by_user_hash_pub, uuid=Custom.SYSTEM_INTERACTION_UUID)
+            self.stdout.bind(self._proc_streams_by_user_hash_pub, uuid=Custom.SYSTEM_INTERACTION_UUID)
 
     def get_default_stdin_bindings(self, public: bool | None = None) -> dict:
         """Returns the streams that are bind by default on the stdin."""
         if (public is not None and not public) or (public is None and self.behaving_in_world()):
-            return self.__proc_in_streams_by_user_hash_prv
+            return self._proc_in_streams_by_user_hash_prv
 
         if (public is not None and public) or (public is None and not self.behaving_in_world()):
-            return self.__proc_in_streams_by_user_hash_pub
+            return self._proc_in_streams_by_user_hash_pub
 
     def get_default_stream_bindings(self, public: bool | None = None) -> tuple[dict, dict, dict, dict]:
         """Returns the streams that are bind by default on the standard streams (stdin, stdtar, stdext, stdout)."""
         if (public is not None and not public) or (public is None and self.behaving_in_world()):
-            return (self.__proc_in_streams_by_user_hash_prv, {},
-                    self.__env_streams_by_user_hash_prv, self.__proc_streams_by_user_hash_prv)
+            return (self._proc_in_streams_by_user_hash_prv, {},
+                    self._env_streams_by_user_hash_prv, self._proc_streams_by_user_hash_prv)
 
         if (public is not None and public) or (public is None and not self.behaving_in_world()):
-            return (self.__proc_in_streams_by_user_hash_pub, {},
-                    self.__env_streams_by_user_hash_pub, self.__proc_streams_by_user_hash_pub)
+            return (self._proc_in_streams_by_user_hash_pub, {},
+                    self._env_streams_by_user_hash_pub, self._proc_streams_by_user_hash_pub)
 
     def get_proc_output_net_hash(self, public: bool = True) -> str | None:
         """Return the network hash of the processor output streams.
@@ -1059,9 +1062,9 @@ class AgentBasics:
                     self.proc_streams[net_hash][stream.get_props().get_name()] = stream
                     self.proc_streams_by_user_hash[user_hash] = stream
                     if stream.is_public():
-                        self.__proc_streams_by_user_hash_pub[user_hash] = stream
+                        self._proc_streams_by_user_hash_pub[user_hash] = stream
                     else:
-                        self.__proc_streams_by_user_hash_prv[user_hash] = stream
+                        self._proc_streams_by_user_hash_prv[user_hash] = stream
                     is_proc_outputs_stream = True
 
             # Adding an 'owned' processor input stream (i.e., the stream entering OUR OWN processor)
@@ -1075,9 +1078,9 @@ class AgentBasics:
                     self.proc_in_streams[net_hash][stream.get_props().get_name()] = stream
                     self.proc_in_streams_by_user_hash[user_hash] = stream
                     if stream.is_public():
-                        self.__proc_in_streams_by_user_hash_pub[user_hash] = stream
+                        self._proc_in_streams_by_user_hash_pub[user_hash] = stream
                     else:
-                        self.__proc_in_streams_by_user_hash_prv[user_hash] = stream
+                        self._proc_in_streams_by_user_hash_prv[user_hash] = stream
                     is_proc_inputs_stream = True
 
             if net_hash not in self.owned_streams:
@@ -1091,9 +1094,9 @@ class AgentBasics:
                 self.env_streams[net_hash][stream.get_props().get_name()] = stream
                 self.env_streams_by_user_hash[user_hash] = stream
                 if stream.is_public():
-                    self.__env_streams_by_user_hash_pub[user_hash] = stream
+                    self._env_streams_by_user_hash_pub[user_hash] = stream
                 else:
-                    self.__env_streams_by_user_hash_prv[user_hash] = stream
+                    self._env_streams_by_user_hash_prv[user_hash] = stream
 
         # If needed, merging descriptor labels (attribute labels) and sharing them with all streams
         if self.merge_flat_stream_labels:
@@ -1604,9 +1607,9 @@ class AgentBasics:
                 if self.behav_lone_wolf is not None:
                     self.behav_lone_wolf.enable(False)
                 self.behav.enable(True)
-                self.stdin.bind(self.__proc_in_streams_by_user_hash_prv, uuid=Custom.SYSTEM_INTERACTION_UUID)
-                self.stdout.bind(self.__proc_streams_by_user_hash_prv, uuid=Custom.SYSTEM_INTERACTION_UUID)
-                self.stdext.bind(self.__env_streams_by_user_hash_prv, uuid=Custom.SYSTEM_INTERACTION_UUID)
+                self.stdin.bind(self._proc_in_streams_by_user_hash_prv, uuid=Custom.SYSTEM_INTERACTION_UUID)
+                self.stdout.bind(self._proc_streams_by_user_hash_prv, uuid=Custom.SYSTEM_INTERACTION_UUID)
+                self.stdext.bind(self._env_streams_by_user_hash_prv, uuid=Custom.SYSTEM_INTERACTION_UUID)
                 await self.on_tick()
                 await self.behav.act()
                 self.behav.enable(False)
@@ -1619,9 +1622,9 @@ class AgentBasics:
             if self.behav is not None:
                 self.behav.enable(False)
             self.behav_lone_wolf.enable(True)
-            self.stdin.bind(self.__proc_in_streams_by_user_hash_pub, uuid=Custom.SYSTEM_INTERACTION_UUID)
-            self.stdout.bind(self.__proc_streams_by_user_hash_pub, uuid=Custom.SYSTEM_INTERACTION_UUID)
-            self.stdext.bind(self.__env_streams_by_user_hash_pub, uuid=Custom.SYSTEM_INTERACTION_UUID)
+            self.stdin.bind(self._proc_in_streams_by_user_hash_pub, uuid=Custom.SYSTEM_INTERACTION_UUID)
+            self.stdout.bind(self._proc_streams_by_user_hash_pub, uuid=Custom.SYSTEM_INTERACTION_UUID)
+            self.stdext.bind(self._env_streams_by_user_hash_pub, uuid=Custom.SYSTEM_INTERACTION_UUID)
             await self.behav_lone_wolf.act()
             self.behav_lone_wolf.enable(False)
 
