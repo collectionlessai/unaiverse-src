@@ -12,9 +12,10 @@
                  Code Repositories:  https://github.com/collectionlessai/
                  Main Developers:    Stefano Melacci (Project Leader), Christian Di Maio, Tommaso Guidi
 """
+import traceback
 from itertools import islice
-from unaiverse.streams.streams import Stream
 from unaiverse.utils.logger import log
+from unaiverse.streams.streams import Stream
 from unaiverse.utils.misc import GenException
 from unaiverse.streams.dataprops import DataProps
 
@@ -226,6 +227,8 @@ class StreamProxy:
             force: Boolean flag to force the set operation also on disabled streams
         """
         if len(self._stream_list) == 0:
+            stack_str = '\n'.join(traceback.format_stack())
+            log.error(stack_str)
             raise GenException("No streams bound to this StreamIO")
 
         if uuid is None:
