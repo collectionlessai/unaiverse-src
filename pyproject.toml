@@ -8,8 +8,6 @@ version = "0.1.16"
 requires-python = ">3.10"
 dependencies = [
     "opencv-python",
-    "Flask",
-    "flask_cors",
     "graphviz",
     "ntplib",
     "numpy",
@@ -24,7 +22,9 @@ dependencies = [
     "transformers",
     "sortedcontainers",
     "plotly",
-    "prompt_toolkit"
+    "prompt_toolkit",
+    "tqdm",
+    "typing_extensions"
 ]
 license-files = ["LICENSE"]
 keywords = ["UNaIVERSE", "Collectionless AI", "AI", "Agentic AI", "Agents", "Machine Learning", "Learning Over Time"]
