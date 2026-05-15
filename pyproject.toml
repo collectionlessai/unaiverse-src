@@ -54,12 +54,13 @@ classifiers = [
 "unaiverse" = ["utils/public.json"]
 
 [project.urls]
-A-Homepage = "https://unaiverse.io"
-B-CollectionlessAI = "https://collectionless.ai"
-C-Source = "https://github.com/collectionlessai/unaiverse-src"
-D-Starting = "https://github.com/collectionlessai/unaiverse-src/blob/main/README.md"
-E-Examples = "https://github.com/collectionlessai/unaiverse-examples"
-F-Documentation = "https://github.com/collectionlessai/unaiverse-src/blob/main/README.md"
+A-ProjectHomepage = "https://unaiverse.io"
+B-Company = "https://unaiverse.ai"
+C-CollectionlessAI = "https://collectionless.ai"
+D-Source = "https://github.com/collectionlessai/unaiverse-src"
+E-Starting = "https://github.com/collectionlessai/unaiverse-src/blob/main/README.md"
+F-Examples = "https://github.com/collectionlessai/unaiverse-examples"
+G-Documentation = "https://github.com/collectionlessai/unaiverse-src/blob/main/README.md"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
