@@ -1413,9 +1413,6 @@ class InteractionManager:
                     self.lazy_recently_completed.add(interaction)
                     del self.lazy[interaction.uuid]
 
-                # Clearing the human module related case, if needed
-                self.agent.clear_stdin_backlog_if_human(interaction.requester)
-
                 # Running callback method, if any
                 if interaction.callback is not None:
                     callback_method = getattr(self.agent, interaction.callback)
