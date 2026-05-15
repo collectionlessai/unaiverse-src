@@ -1091,6 +1091,7 @@ class InteractionManager:
                     log.error("When using a stream name in the data sample field of an interaction, "
                               "it MUST be provided in the form of a stream hash or something that can be unambiguously "
                               "resolved to a stream hash")
+                    return False
                 if stream_user_hash_or_net_hash is None:
                     log.error(f"Unknown stream hash specified in an interaction ({stream_hash})")
                     return False
@@ -1412,8 +1413,8 @@ class InteractionManager:
                     self.lazy_recently_completed.add(interaction)
                     del self.lazy[interaction.uuid]
 
-                    # Clearing the human module related case, if needed
-                    self.agent.clear_stdin_backlog_if_human(interaction.requester)
+                # Clearing the human module related case, if needed
+                self.agent.clear_stdin_backlog_if_human(interaction.requester)
 
                 # Running callback method, if any
                 if interaction.callback is not None:

@@ -187,7 +187,8 @@ class TypeInterface:
         """
 
         if not c_void_ptr_val:  # Check if the address is NULL (0)
-            raise print("Received a NULL pointer from Go function")
+            print("Received a NULL pointer from Go function")
+            raise Exception("Received a NULL pointer from Go function")
 
         try:
 
@@ -267,6 +268,7 @@ class TypeInterface:
                         # Add before calling free
                         try:
                             self.libp2p.FreeString(c_void_ptr_val)  # Pass the original void* value
+                            # self.__freed_pointers_lock.add(c_void_ptr_val)  # TODO do we still need this?
                             logger.info(f"✅ FINALLY: FreeString successful for {hex(c_void_ptr_val)}.")
                         except Exception as free_err:
 

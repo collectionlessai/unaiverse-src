@@ -650,7 +650,7 @@ class DataProps:
         Returns:
             A string representing the peer ID.
         """
-        return user_hash.split(":")[0]
+        return user_hash.rsplit(":", 1)[0]
 
     @staticmethod
     def name_or_group_from_net_hash(net_hash: str) -> str:
@@ -674,7 +674,7 @@ class DataProps:
         Returns:
             A string representing the name or group.
         """
-        return user_hash.split(":")[1]
+        return user_hash.rsplit(":", 1)[1]
 
     @staticmethod
     def is_pubsub_from_net_hash(net_hash: str) -> bool:

@@ -86,6 +86,10 @@ def action(func: Callable) -> Callable:
         # Calling the action
         try:
             ret = await func(self, *args, **resolved_kwargs)
+            if ret is None:
+                log.critical(f"Invalid action '{func.__name__}' detected, it must return True/False "
+                             "(it is tolerated to return non-None stuff and interpreted as True, "
+                             "but not if it returns None, as happens here)")
         except Exception as e:
             log.error(f"Action '{func.__name__}' failed since it raised an exception: {e}")
             # raise e  # debug
