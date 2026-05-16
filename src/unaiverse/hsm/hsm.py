@@ -995,8 +995,8 @@ class HybridStateMachine:
                         if _interactions_f != _interaction and _interactions_f is not None:
                             _interactions_f = self.actionable.im.get_interaction(uuid=_interactions_f.uuid)
                     except Exception as e:
-                        log.statem.error(f"Skipping policy filter due to exception: {e}",
-                                         state=self.get_state_name())
+                        log.error(f"Skipping policy filter due to exception: {e}",
+                                  state=self.get_state_name())
                         _idx_f = _idx
                         _interactions_f = _interaction
 

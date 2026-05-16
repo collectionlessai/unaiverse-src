@@ -683,12 +683,14 @@ class PolicyFilterDelayAction:
             if _first_t < 0:
                 _first_t = time.monotonic()
                 policy_filter_opts['first_t'] = _first_t
+                policy_filter_opts['random_offset'] = random.uniform(0, self.add_random_up_to)
 
             # Don't generate, don't do anything, if it passed less than 5 seconds from when we decided to generate
-            if time.monotonic() - _first_t < (self.wait + random.uniform(0, self.add_random_up_to)):
+            if (time.monotonic() - _first_t) < (self.wait + policy_filter_opts['random_offset']):
                 return -1, None
             else:
                 policy_filter_opts['first_t'] = -1  # Clearing
+                policy_filter_opts['random_offset'] = random.uniform(0, self.add_random_up_to)  # Resetting
 
         # Returning the revised policy decision
         return action_id, request
