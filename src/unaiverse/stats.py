@@ -809,8 +809,11 @@ class Stats:
                 # Insert new value and prune outdated ones
                 cache[timestamp] = value
                 cutoff = timestamp - int(self.min_window_duration.total_seconds() * 1000)
-                while cache and cache.peekitem(0)[0] < cutoff:
-                    cache.popitem(0)
+                if stat_name in self.world_ungrouped_keys:
+                    self._prune_ungrouped_timeseries(cache, cutoff)
+                else:
+                    while cache and cache.peekitem(0)[0] < cutoff:
+                        cache.popitem(0)
 
             # 2. Add to DB buffer depending on the type (value was already cast to the type defined in the schema)
             val_num = value if isinstance(value, (int, float)) and not isinstance(value, bool) else None
@@ -1159,6 +1162,18 @@ class Stats:
         if not self._db_conn:
             return
         pass
+    
+    def _prune_ungrouped_timeseries(self, cache: SortedDict, cutoff: int):
+        # For ungrouped dynamic stats we always keep a value on the cutoff line
+        last_popped_val = None
+        popped = False
+        
+        while cache and cache.peekitem(0)[0] < cutoff:
+            last_popped_val = cache.popitem(0)[1]
+            popped = True
+            
+        if popped:
+            cache[cutoff] = last_popped_val
 
     def _prune_cache(self):
         """
@@ -1178,10 +1193,8 @@ class Stats:
         # 1. Prune Ungrouped Stats (World Stats)
         for key in self.world_ungrouped_keys:
             cache = self._stats.get(key)
-            if isinstance(cache, SortedDict):  # only true for dynamic stats
-                # Remove items older than cutoff
-                while cache and cache.peekitem(0)[0] < cutoff:
-                    cache.popitem(0)
+            if isinstance(cache, SortedDict):
+                self._prune_ungrouped_timeseries(cache, cutoff)
 
         # 2. Prune Grouped Stats (Peer Stats)
         peer_groups = self._stats.get(self.GROUP_KEY, {})
