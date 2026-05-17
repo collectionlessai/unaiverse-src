@@ -1080,6 +1080,9 @@ class HybridStateMachine:
                 self.state = to_state_list[idx]
                 self.limbo_state = None
 
+                # Clearing if human
+                self.actionable.reset_prepared_map_if_human()
+
                 # Complete the associated Interaction (if any) via Interaction Manager (IM)
                 if interaction is not None:
                     # The IM on the actionable (agent) will handle the completion, also saving the destination state
