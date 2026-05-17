@@ -699,8 +699,9 @@ class PolicyFilterDelayAction:
 class PolicyHumanLikeDelay:
     """Policy filter that delays actions with human-like variable timing.
 
-    Uses a log-normal distribution (which naturally models human reaction times) so that
-    each delay is different: sometimes fast, sometimes slow, never periodic.
+    Uses a log-normal distribution (which naturally models human reaction times) combined
+    with momentum (bursts of fast/slow behavior) and occasional distraction spikes.
+    All internal dynamics are derived from the three constructor parameters.
     """
 
     def __init__(self, action_names: set[str], median_delay: float = 5.0, variability: float = 0.6) -> None:
@@ -711,6 +712,7 @@ class PolicyHumanLikeDelay:
             median_delay: Median delay in seconds (the "typical" human response time).
             variability: How spread out the delays are (0.0 = nearly constant,
                 1.0+ = very erratic). Values around 0.4-0.8 are realistic.
+                Also controls momentum strength and distraction probability internally.
 
         Raises:
             GenException: If ``median_delay`` is not greater than zero.
@@ -720,6 +722,25 @@ class PolicyHumanLikeDelay:
         self.action_names = action_names
         self._mu = math.log(median_delay)
         self._sigma = max(variability, 0.)
+        # Derived internals: momentum blends prev delay into the next one (more variability = more momentum)
+        self._momentum = min(self._sigma * 0.4, 0.6)
+        # Distraction: rare long pauses (probability scales with variability)
+        self._distraction_prob = min(self._sigma * 0.08, 0.12)
+        self._distraction_mult = 2.0 + self._sigma
+
+    def _sample_delay(self, prev_delay: float) -> float:
+        """Samples the next delay with momentum and distraction dynamics."""
+        raw = random.lognormvariate(self._mu, self._sigma)
+
+        # Momentum: if prev was fast, next tends to be fast too (and vice versa)
+        if prev_delay > 0:
+            raw = self._momentum * prev_delay + (1.0 - self._momentum) * raw
+
+        # Occasional distraction spike
+        if random.random() < self._distraction_prob:
+            raw *= self._distraction_mult
+
+        return raw
 
     def __call__(self, action_id: int, request: object, all_actions: object,
                  policy_filter_opts: dict) -> tuple[int, object]:
@@ -737,6 +758,8 @@ class PolicyHumanLikeDelay:
         """
         if 'first_t' not in policy_filter_opts:
             policy_filter_opts['first_t'] = -1
+        if 'prev_delay' not in policy_filter_opts:
+            policy_filter_opts['prev_delay'] = 0.0
 
         _first_t = policy_filter_opts['first_t']
         action = all_actions[action_id]
@@ -745,12 +768,13 @@ class PolicyHumanLikeDelay:
 
             if _first_t < 0:
                 policy_filter_opts['first_t'] = time.monotonic()
-                policy_filter_opts['current_delay'] = random.lognormvariate(self._mu, self._sigma)
+                policy_filter_opts['current_delay'] = self._sample_delay(policy_filter_opts['prev_delay'])
                 return -1, None
 
             if (time.monotonic() - _first_t) < policy_filter_opts['current_delay']:
                 return -1, None
             else:
+                policy_filter_opts['prev_delay'] = policy_filter_opts['current_delay']
                 policy_filter_opts['first_t'] = -1
 
         return action_id, request
