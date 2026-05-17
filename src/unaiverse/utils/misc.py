@@ -696,6 +696,66 @@ class PolicyFilterDelayAction:
         return action_id, request
 
 
+class PolicyHumanLikeDelay:
+    """Policy filter that delays actions with human-like variable timing.
+
+    Uses a log-normal distribution (which naturally models human reaction times) so that
+    each delay is different: sometimes fast, sometimes slow, never periodic.
+    """
+
+    def __init__(self, action_names: set[str], median_delay: float = 5.0, variability: float = 0.6) -> None:
+        """Initialises the PolicyHumanLikeDelay.
+
+        Args:
+            action_names: The name of the actions to delay (set).
+            median_delay: Median delay in seconds (the "typical" human response time).
+            variability: How spread out the delays are (0.0 = nearly constant,
+                1.0+ = very erratic). Values around 0.4-0.8 are realistic.
+
+        Raises:
+            GenException: If ``median_delay`` is not greater than zero.
+        """
+        if median_delay <= 0.:
+            raise GenException("Invalid median_delay (must be > 0)")
+        self.action_names = action_names
+        self._mu = math.log(median_delay)
+        self._sigma = max(variability, 0.)
+
+    def __call__(self, action_id: int, request: object, all_actions: object,
+                 policy_filter_opts: dict) -> tuple[int, object]:
+        """Applies human-like timing filter to the selected policy action.
+
+        Args:
+            action_id: Index of the action selected by the policy.
+            request: The request object associated with the action, or None.
+            all_actions: The collection of all available actions (indexed by ``action_id``).
+            policy_filter_opts: A mutable dictionary carrying per-agent filter state;
+                must contain an ``"agent"`` key.
+
+        Returns:
+            A tuple ``(action_id, request)`` or ``(-1, None)`` to skip this cycle.
+        """
+        if 'first_t' not in policy_filter_opts:
+            policy_filter_opts['first_t'] = -1
+
+        _first_t = policy_filter_opts['first_t']
+        action = all_actions[action_id]
+
+        if action.name in self.action_names:
+
+            if _first_t < 0:
+                policy_filter_opts['first_t'] = time.monotonic()
+                policy_filter_opts['current_delay'] = random.lognormvariate(self._mu, self._sigma)
+                return -1, None
+
+            if (time.monotonic() - _first_t) < policy_filter_opts['current_delay']:
+                return -1, None
+            else:
+                policy_filter_opts['first_t'] = -1
+
+        return action_id, request
+
+
 class MultiPartLimitedDict(dict):
     """A dict subclass that keeps at most a configurable number of entries per named partition."""
 
