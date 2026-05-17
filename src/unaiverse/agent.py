@@ -1735,7 +1735,7 @@ class Agent(AgentBasics):
             # we have likely stored them while in other states).
             # Warning: there could be an issue if the same "process" supports both system and user interactions
             # (both solid and dashed)
-            if _interaction.is_completed() or (_peer_id == world_peer_id and in_world and interaction.is_system):
+            if _interaction.is_completed() or (_peer_id == world_peer_id and in_world and interaction.is_system()):
                 to_remove.append(_peer_id)
         for _peer_id in to_remove:
             del self.proc_human_peer_id_to_interaction[_peer_id]
