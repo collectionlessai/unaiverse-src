@@ -1724,8 +1724,18 @@ class Agent(AgentBasics):
 
         # First of clear, clearing residuals of interactions that were completed in the past
         to_remove = []
+
+        in_world = self.behaving_in_world()
+        world_peer_id = self.get_connection_pool_manager().get_world_peer_id()
+
         for _peer_id, _interaction in self.proc_human_peer_id_to_interaction.items():
-            if _interaction.is_completed():
+
+            # If an interaction is completed, we clear if from the internal map.
+            # If we get a system interaction while in a world, then we clear the previously stored requests (since
+            # we have likely stored them while in other states).
+            # Warning: there could be an issue if the same "process" supports both system and user interactions
+            # (both solid and dashed)
+            if _interaction.is_completed() or (_peer_id == world_peer_id and in_world and interaction.is_system):
                 to_remove.append(_peer_id)
         for _peer_id in to_remove:
             del self.proc_human_peer_id_to_interaction[_peer_id]
@@ -1733,7 +1743,6 @@ class Agent(AgentBasics):
         # Then, we detect who is the current partner of the interaction, if and only if there exist a "partner"-like
         # wildcard. This is important to detect system interactions triggering 'process', that will then be used to
         # send a 'process' request to the partner.
-        in_world = self.behaving_in_world()
         wildcards = self.behav.get_wildcards() if in_world else self.behav_lone_wolf.get_wildcards()
         system_interaction_will_be_for = None
         if Custom.PARTNER_WILDCARD in wildcards:
