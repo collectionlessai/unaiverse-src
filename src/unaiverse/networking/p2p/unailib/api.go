@@ -123,7 +123,7 @@ func CreateNode(
 		topics:                make(map[string]*pubsub.Topic),
 		subscriptions:         make(map[string]*pubsub.Subscription),
 		friendlyPeers:         make(map[peer.ID]ExtendedPeerInfo),
-		persistentChatStreams: make(map[peer.ID]network.Stream),
+		persistentChatStreams: make(map[peer.ID]*persistentStream),
 		disconnectionTimers:   make(map[peer.ID]context.CancelFunc),
 		messageStore:          newMessageStore(),
 		webrtcConnections:     make(map[peer.ID]*WebRTCConn),
@@ -1153,30 +1153,32 @@ func SendMessageToPeer(
 		}
 
 		ni.streamsMutex.Lock()
-		stream, streamExists := ni.persistentChatStreams[pid]
+		ps, streamExists := ni.persistentChatStreams[pid]
 		ni.streamsMutex.Unlock()
 
-		// If stream exists, try writing to it
+		// If stream exists, try writing to it.
+		// Lock ps.sendMu BEFORE streamsMutex (see lock-ordering in persistentStream doc).
 		if streamExists {
-			logger.Debugf("[GO]   ↳ Instance %d: Reusing stream %s to %s\n", ni.instanceIndex, stream.ID(), pid)
-			err = writeDirectMessageFrame(stream, goChannel, goData)
+			logger.Debugf("[GO]   ↳ Instance %d: Reusing stream %s to %s\n", ni.instanceIndex, ps.s.ID(), pid)
+			ps.sendMu.Lock()
+			err = writeDirectMessageFrame(ps.s, goChannel, goData)
+			ps.sendMu.Unlock()
 			if err == nil {
-				logger.Infof("[GO] 📤 Instance %d: Sent to %s via Stream %s (Reused)\n", ni.instanceIndex, pid, stream.ID())
+				logger.Infof("[GO] 📤 Instance %d: Sent to %s via Stream %s (Reused)\n", ni.instanceIndex, pid, ps.s.ID())
 				return C.CString(jsonSuccessResponse(fmt.Sprintf("Direct message sent to %s (reused stream).", pid)))
 			}
-			
-			// Write failed? Now we lock to remove the broken stream.
-			logger.Warnf("[GO] ⚠️ Instance %d: Write failed on Stream %s to %s: %v. Removing.\n", ni.instanceIndex, stream.ID(), pid, err)
+
+			// Write failed? Lock streamsMutex to remove the broken entry.
+			logger.Warnf("[GO] ⚠️ Instance %d: Write failed on Stream %s to %s: %v. Removing.\n", ni.instanceIndex, ps.s.ID(), pid, err)
 			ni.streamsMutex.Lock()
-			// Check if the stream in the map is still the broken one before deleting
-			if s, ok := ni.persistentChatStreams[pid]; ok && s == stream {
+			if cur, ok := ni.persistentChatStreams[pid]; ok && cur == ps {
 				delete(ni.persistentChatStreams, pid)
 			}
 			ni.streamsMutex.Unlock()
-			_ = stream.Close() // Close the broken stream
+			_ = ps.s.Close()
 			return C.CString(jsonErrorResponse(fmt.Sprintf("Failed to write to stream %s (closed).", pid), err))
 		} else {
-			// Stream does not exist, need to create a new one
+			// Stream does not exist, need to create a new one.
 			logger.Debugf("[GO]   ↳ Instance %d: Creating NEW stream to %s...\n", ni.instanceIndex, pid)
 			streamCtx, cancel := context.WithTimeout(ni.ctx, StreamCreationTimeout)
 			defer cancel()
@@ -1192,35 +1194,37 @@ func SendMessageToPeer(
 			}
 
 			// --- RACE CONDITION HANDLING ---
-			// Double-check if another goroutine created a stream while we were unlocked
+			// Double-check if another goroutine created a stream while we were opening ours.
 			ni.streamsMutex.Lock()
-			existingStream, existsNow := ni.persistentChatStreams[pid]
+			existingPS, existsNow := ni.persistentChatStreams[pid]
 			if existsNow {
-				logger.Warnf("[GO] ⚠️ Instance %d: Race detected. Using existing stream %s, closing our new %s.\n", ni.instanceIndex, existingStream.ID(), newStream.ID())
-				_ = newStream.Close() // Close the redundant stream we just created.
-				stream = existingStream
+				logger.Warnf("[GO] ⚠️ Instance %d: Race detected. Using existing stream %s, closing our new %s.\n", ni.instanceIndex, existingPS.s.ID(), newStream.ID())
+				_ = newStream.Close()
+				ps = existingPS
 			} else {
+				ps = &persistentStream{s: newStream}
 				logger.Debugf("[GO] ✅ Instance %d: Opened and stored new persistent stream %s to %s\n", ni.instanceIndex, newStream.ID(), pid)
-				ni.persistentChatStreams[pid] = newStream
-				stream = newStream
+				ni.persistentChatStreams[pid] = ps
 				go handleStream(ni, newStream)
 			}
 			ni.streamsMutex.Unlock()
 
 			// --- Write message to the determined stream ---
-			err = writeDirectMessageFrame(stream, goChannel, goData)
+			ps.sendMu.Lock()
+			err = writeDirectMessageFrame(ps.s, goChannel, goData)
+			ps.sendMu.Unlock()
 			if err != nil {
-				logger.Errorf("[GO] ❌ Instance %d: Write failed on NEW stream %s to %s: %v.\n", ni.instanceIndex, stream.ID(), pid, err)
-				_ = stream.Close()
+				logger.Errorf("[GO] ❌ Instance %d: Write failed on NEW stream %s to %s: %v.\n", ni.instanceIndex, ps.s.ID(), pid, err)
+				_ = ps.s.Close()
 				ni.streamsMutex.Lock()
-				if s, ok := ni.persistentChatStreams[pid]; ok && s == stream {
+				if cur, ok := ni.persistentChatStreams[pid]; ok && cur == ps {
 					delete(ni.persistentChatStreams, pid)
 				}
 				ni.streamsMutex.Unlock()
 				return C.CString(jsonErrorResponse(fmt.Sprintf("Failed to write to new stream to '%s' (needs reconnect).", pid), err))
 			}
 
-			logger.Infof("[GO] 📤 Instance %d: Sent to %s via Stream %s (New)\n", ni.instanceIndex, pid, stream.ID())
+			logger.Infof("[GO] 📤 Instance %d: Sent to %s via Stream %s (New)\n", ni.instanceIndex, ps.s.ID(), pid)
 			return C.CString(jsonSuccessResponse(fmt.Sprintf("Direct message sent to %s (new stream).", pid)))
 		}
 	} else {

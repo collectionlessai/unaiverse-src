@@ -235,9 +235,9 @@ func setupNotifiers(ni *NodeInstance) {
 
 						// 4. Clean up persistent streams
 						ni.streamsMutex.Lock()
-						if stream, ok := ni.persistentChatStreams[remotePeerID]; ok {
+						if ps, ok := ni.persistentChatStreams[remotePeerID]; ok {
 							logger.Debugf("[GO]   Instance %d: Cleaning up persistent stream for %s.\n", ni.instanceIndex, remotePeerID)
-							_ = stream.Close() 
+							_ = ps.s.Close()
 							delete(ni.persistentChatStreams, remotePeerID)
 						}
 						ni.streamsMutex.Unlock()
@@ -248,9 +248,9 @@ func setupNotifiers(ni *NodeInstance) {
 
 					// Also clean up persistent stream if one existed for this peer
 					ni.streamsMutex.Lock()
-					if stream, ok := ni.persistentChatStreams[remotePeerID]; ok {
+					if ps, ok := ni.persistentChatStreams[remotePeerID]; ok {
 						logger.Debugf("[GO]   Instance %d: Cleaning up persistent stream for disconnected peer %s via DisconnectedF notifier.\n", ni.instanceIndex, remotePeerID)
-						_ = stream.Close() // Attempt graceful close
+						_ = ps.s.Close()
 						delete(ni.persistentChatStreams, remotePeerID)
 					}
 					ni.streamsMutex.Unlock()
@@ -609,12 +609,12 @@ func (ni *NodeInstance) Close() error {
 	ni.streamsMutex.Lock()
 	if len(ni.persistentChatStreams) > 0 {
 		logger.Debugf("[GO]   - Instance %d: Closing %d persistent outgoing streams...\n", ni.instanceIndex, len(ni.persistentChatStreams))
-		for pid, stream := range ni.persistentChatStreams {
+		for pid, ps := range ni.persistentChatStreams {
 			logger.Debugf("[GO]     - Instance %d: Closing stream to %s\n", ni.instanceIndex, pid)
-			_ = stream.Close() // Attempt graceful close
+			_ = ps.s.Close()
 		}
 	}
-	ni.persistentChatStreams = make(map[peer.ID]network.Stream) // Clear the map
+	ni.persistentChatStreams = make(map[peer.ID]*persistentStream) // Clear the map
 	ni.streamsMutex.Unlock()
 
 	// --- Clean Up PubSub State ---

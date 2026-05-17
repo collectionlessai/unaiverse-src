@@ -216,15 +216,16 @@ func handleStream(ni *NodeInstance, s network.Stream) {
 	logger.Debugf("[GO] 📥 Instance %d: Accepted INCOMING stream %s from %s. Storing for duplex use.\n", ni.instanceIndex, streamID, senderPeerID)
 
 	// Store the newly accepted stream so we can use it to send messages back to this peer.
+	incomingPS := &persistentStream{s: s}
 	ni.streamsMutex.Lock()
-	ni.persistentChatStreams[senderPeerID] = s
+	ni.persistentChatStreams[senderPeerID] = incomingPS
 	ni.streamsMutex.Unlock()
 
 	// This defer block ensures cleanup happens when the stream is closed by either side.
 	defer func() {
 		logger.Debugf("[GO] 🧹 Instance %d: Stream %s with %s closed. Removing from map.\n", ni.instanceIndex, streamID, senderPeerID)
 		ni.streamsMutex.Lock()
-		if current, ok := ni.persistentChatStreams[senderPeerID]; ok && current == s {
+		if current, ok := ni.persistentChatStreams[senderPeerID]; ok && current == incomingPS {
 			delete(ni.persistentChatStreams, senderPeerID)
 		}
 		ni.streamsMutex.Unlock()

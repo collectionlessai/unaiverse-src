@@ -211,7 +211,7 @@ type NodeInstance struct {
 
 	// Stream State
 	streamsMutex          sync.Mutex
-	persistentChatStreams map[peer.ID]network.Stream
+	persistentChatStreams map[peer.ID]*persistentStream
 
 	// Disconnection Grace Period State
     disconnectionMutex  sync.Mutex
@@ -253,6 +253,18 @@ type SignalMessage struct {
 	Type    string `json:"type"`              // "offer" | "answer" | "error"
 	SDP     string `json:"sdp,omitempty"`     // full SDP (offer/answer; includes all ICE candidates)
 	Message string `json:"message,omitempty"` // human-readable error detail
+}
+
+// persistentStream wraps a libp2p direct-chat stream with a per-stream write
+// mutex. libp2p streams are not safe for concurrent writes; sendMu serializes
+// writeDirectMessageFrame calls so concurrent senders cannot interleave frame
+// bytes on the wire (mirrors WebRTCConn.sendMu for the libp2p path).
+//
+// Lock ordering: sendMu is always acquired and released BEFORE streamsMutex.
+// Never hold both at the same time.
+type persistentStream struct {
+	s      network.Stream
+	sendMu sync.Mutex
 }
 
 // WebRTCConn holds the live state of an established WebRTC DataChannel connection

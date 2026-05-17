@@ -284,8 +284,8 @@ func registerWebRTCDataChannel(ni *NodeInstance, remotePeer peer.ID, dc *pwebrtc
 					ni.peersMutex.Unlock()
 
 					ni.streamsMutex.Lock()
-					if stream, ok := ni.persistentChatStreams[remotePeer]; ok {
-						_ = stream.Close()
+					if ps, ok := ni.persistentChatStreams[remotePeer]; ok {
+						_ = ps.s.Close()
 						delete(ni.persistentChatStreams, remotePeer)
 					}
 					ni.streamsMutex.Unlock()
