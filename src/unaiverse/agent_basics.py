@@ -466,13 +466,6 @@ class AgentBasics:
         else:
             return Custom.SYSTEM_INTERACTION_UUID
 
-    def reset_prepared_map_if_human(self):
-        in_world = self.behaving_in_world()
-        world_peer_id = self.get_connection_pool_manager().get_world_peer_id()
-        if in_world:
-            if world_peer_id in self.proc_human_peer_id_to_interaction:
-                del self.proc_human_peer_id_to_interaction[world_peer_id]
-
     @staticmethod
     def generate_id() -> str:
         """Generate a random 8-character hexadecimal ID string.
