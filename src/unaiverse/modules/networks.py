@@ -1537,7 +1537,8 @@ class FeatherlessAPI(ModuleWrapper):
     """
 
     def __init__(self, model: str | None = None, cost: int = 1, system_prompt: str = "",
-                 process_id: str | None = None, connect_timeout: float = 15.0):
+                 process_id: str | None = None, max_generated_tokens: int = -1, temperature: float = -1.,
+                 connect_timeout: float = 15.0):
         """Create a FeatherlessAPI handle and connect it to the shared gateway.
 
         Args:
@@ -1545,14 +1546,21 @@ class FeatherlessAPI(ModuleWrapper):
             cost: The unit cost charged for every call (one of VALID_COSTS) (Default: 1).
             system_prompt: The system prompt prepended to every call ("" means no system prompt) (Default: "").
             process_id: Identifier used for round-robin fairness; defaults to this process's PID.
+            max_generated_tokens: Maximum number of tokens to generate per call (-1 means no limit) (Default: -1).
+            temperature: Sampling temperature for every call (negative lets the API use its default) (Default: -1.).
             connect_timeout: Maximum seconds to wait for the gateway server to come up (Default: 15.0).
         """
-        super(FeatherlessAPI, self).__init__()
+        super(FeatherlessAPI, self).__init__(
+            proc_inputs=[StreamType(data_type="text", pubsub=False, private_only=False)],
+            proc_outputs=[StreamType(data_type="text", pubsub=False, private_only=False)]
+        )
         if cost not in APIGatewayServer.VALID_COSTS:
             log.critical(f"Invalid cost {cost}: it must be one of {APIGatewayServer.VALID_COSTS}")
-        self.model: str | None = model
+        self.model_name: str | None = model
         self.cost: int = cost
         self.system_prompt: str = system_prompt
+        self.max_generated_tokens = max_generated_tokens
+        self.temperature = temperature
 
         # Round-robin fairness is per process, so the default ID is the PID
         self.process_id: str = str(process_id if process_id is not None else os.getpid())
@@ -1582,7 +1590,8 @@ class FeatherlessAPI(ModuleWrapper):
         if not isinstance(prompt, str):
             log.critical(f"Invalid prompt: it must be a str, got {type(prompt).__name__}")
         msg = json.dumps({"op": "generate", "process_id": self.process_id, "sys_prompt": self.system_prompt,
-                          "prompt": prompt, "cost": self.cost, "model": self.model}) + "\n"
+                          "prompt": prompt, "cost": self.cost, "model": self.model_name,
+                          "max_tokens": self.max_generated_tokens, "temperature": self.temperature}) + "\n"
         self._req.sendall(msg.encode())
         line = self._rf.readline()
         if not line:
@@ -1621,10 +1630,13 @@ class FeatherlessAPI(ModuleWrapper):
         import subprocess
 
         # start_new_session=True puts the server in its own session/process group: it is not killed when we die, and
-        # does not receive our Ctrl-C / SIGINT. The server lives in unaiverse.modules.utils, so launch that module
-        # with -m (robust to the file location and to absolute imports inside the package).
+        # does not receive our Ctrl-C / SIGINT. The server lives in unaiverse.modules.utils; we call its
+        # serve_api_gateway() function via -c rather than running the module with -m, because importing the parent
+        # package already imports utils, so -m/runpy would execute a second copy of it under __main__ (RuntimeWarning
+        # + duplicate classes).
+        cmd = [sys.executable, "-c", "from unaiverse.modules.utils import serve_api_gateway; serve_api_gateway()"]
         subprocess.Popen(
-            [sys.executable, "-m", "unaiverse.modules.utils", "--serve"],
+            cmd,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             stdin=subprocess.DEVNULL,

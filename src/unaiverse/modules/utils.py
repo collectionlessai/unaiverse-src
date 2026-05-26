@@ -683,6 +683,13 @@ class AgentProcessorChecker:
                                           proc_outputs=self.proc_outputs, agent=processor_container)
                 self.proc.device = torch.device("cpu")
             else:
+
+                # If it is already a ModuleWrapper, we force the reference to the agent and the references to the
+                # types of inputs and outputs: actually, the inputs/outpus might have been already defined by the
+                # wrapper creator, but we give priority to the user options
+                self.proc.proc_inputs = self.proc_inputs
+                self.proc.proc_outputs = self.proc_outputs
+                self.proc.proc_opts = self.proc_opts
                 self.proc.agent = processor_container
 
         # Guessing inputs, fixing attributes
@@ -1039,12 +1046,15 @@ class AgentProcessorChecker:
             i += 1
 
 
-async def featherless_call(sys_prompt: str, prompt: str, model: str | None = None) -> str | None:
+async def featherless_call(sys_prompt: str, prompt: str, max_tokens: int = -1,
+                           temperature: float = -1., model: str | None = None) -> str | None:
     """Perform the actual call to the Featherless API and return the generated text.
 
     Args:
         sys_prompt: The system prompt, if any (can be empty).
         prompt: The prompt string to send to the model.
+        max_tokens: The maximum number of tokens to send to the model (-1, default, means no limits).
+        temperature: The sampling temperature (negative, default, lets the API use its own default).
         model: The model identifier to use; if None, falls back to the MODEL_ID environment variable.
 
     Returns:
@@ -1057,23 +1067,37 @@ async def featherless_call(sys_prompt: str, prompt: str, model: str | None = Non
 
     # Retry with exponential backoff, keeping the last error so a final failure reports its cause
     last_err = None
-    msgs = [
-        {"role": "system", "content": sys_prompt},
-        {"role": "user", "content": prompt}
-    ] if sys_prompt else [
-        {"role": "user", "content": prompt}
-    ]
 
-    for attempt in range(5):
+    for attempt in range(3):
         try:
-            resp = await client.chat.completions.create(
-                model=model,
-                messages=msgs  # type: ignore
-            )
-            return resp.choices[0].message.content
+            # Always use chat completions; include the system message only when a system prompt is given
+            msgs = [{"role": "system", "content": sys_prompt}] if sys_prompt else []
+            msgs.append({"role": "user", "content": prompt})
+
+            # Only send optional sampling params when explicitly set, so the API default is used otherwise
+            kwargs = {"model": model, "messages": msgs}
+            if max_tokens > 0:
+                kwargs["max_tokens"] = str(max_tokens)
+            if temperature >= 0.:
+                kwargs["temperature"] = str(temperature)
+
+            resp = await client.chat.completions.create(**kwargs)  # type: ignore
+
+            # Return the first choice that carries non-empty text (content may be None)
+            for choice in resp.choices:
+                content = choice.message.content
+                if content is not None and content.strip():
+                    return content
+
+            # Empty/blank content: treat it as a transient failure so the loop retries instead of returning ""
+            finish = resp.choices[0].finish_reason if resp.choices else "n/a"
+            last_err = RuntimeError(f"Empty content from model (finish_reason={finish})")
         except Exception as e:
             last_err = e
-            await asyncio.sleep(2 ** attempt)
+
+        # Retry on either an exception or empty content
+        await asyncio.sleep(2 ** attempt)
+
     log.critical(f"Featherless AI call failed after retries: {last_err!r}")  # This will raise an exception
     return ""  # Never reached
 
@@ -1091,7 +1115,7 @@ class APIGatewayServer:
     server tracks the set of live registrations and, once it empties, shuts itself down.
     """
     HOST: str = os.environ.get("GW_HOST", "127.0.0.1")
-    PORT: int = int(os.environ.get("GW_PORT", "8765"))
+    PORT: int = int(os.environ.get("GW_PORT", "11321"))
     TOTAL_UNITS = int(os.environ.get("GW_UNITS", "8"))
     VALID_COSTS = tuple(int(x) for x in os.environ.get("GW_VALID_COSTS", "1,2,4").split(","))
     LOCKFILE: str = os.environ.get("GW_LOCKFILE", os.path.join(tempfile.gettempdir(), "llm_api_gateway.lock"))
@@ -1139,11 +1163,14 @@ class APIGatewayServer:
                     prompt = msg["prompt"]
                     cost = int(msg.get("cost", 1))
                     model = msg.get("model")
+                    max_tokens = msg.get("max_tokens", -1)
+                    temperature = msg.get("temperature", -1.)
                     if cost not in APIGatewayServer.VALID_COSTS:
                         out = {"ok": False, "error": f"bad cost {cost}"}
                     else:
                         try:
-                            result = await self.sched.submit(pid, sys_prompt, prompt, cost, model)
+                            result = await self.sched.submit(pid, sys_prompt, prompt, cost, model,
+                                                             max_tokens, temperature)
                             out = {"ok": True, "result": result}
                         except Exception as e:
                             out = {"ok": False, "error": str(e)}
@@ -1225,7 +1252,8 @@ class APIGatewayScheduler:
             self.queues[pid] = asyncio.Queue()
         return self.queues[pid]
 
-    async def submit(self, pid: str, sys_prompt: str, prompt: str, cost: int, model: str | None) -> str:
+    async def submit(self, pid: str, sys_prompt: str, prompt: str, cost: int, model: str | None,
+                     max_tokens: int = -1, temperature: float = -1.) -> str:
         """Enqueue a query for a process and wait until the dispatcher runs it.
 
         Args:
@@ -1234,18 +1262,21 @@ class APIGatewayScheduler:
             prompt: The prompt string to send to the model.
             cost: The query's unit cost (one of VALID_COSTS).
             model: The model identifier to use (None lets the call fall back to its own default).
+            max_tokens: Max number of tokens in the response (-1 means no limit).
+            temperature: Sampling temperature (negative means use the API default).
 
         Returns:
             The model's textual result.
         """
         fut: asyncio.Future = asyncio.get_running_loop().create_future()
-        await self._queue(pid).put((sys_prompt, prompt, cost, model, fut))
+        await self._queue(pid).put((sys_prompt, prompt, cost, model, max_tokens, temperature, fut))
         async with self.cond:
             self.cond.notify_all()  # Wake the dispatcher: there is new work
         return await fut
 
     async def _run_job(self, sys_prompt: str, prompt: str,
-                       cost: int, model: str | None, fut: asyncio.Future, call: Callable) -> None:
+                       cost: int, model: str | None, max_tokens: int, temperature: float,
+                       fut: asyncio.Future, call: Callable) -> None:
         """Run a single query to completion, then return its units to the budget.
 
         Args:
@@ -1253,11 +1284,13 @@ class APIGatewayScheduler:
             prompt: The prompt string to send to the model.
             cost: The query's unit cost, returned to the budget once the job finishes.
             model: The model identifier to use.
+            max_tokens: Max number of tokens in the response (-1 means no limit).
+            temperature: Sampling temperature (negative means use the API default).
             fut: The future awaited by the submitter, resolved with the result or the exception.
             call: The asynchronous function performing the actual model call.
         """
         try:
-            result = await call(sys_prompt, prompt, model)
+            result = await call(sys_prompt, prompt, max_tokens, temperature, model)
             fut.set_result(result)
         except Exception as e:
             fut.set_exception(e)
@@ -1288,9 +1321,9 @@ class APIGatewayScheduler:
 
                 # Determine this process's current head: either the one we are holding, or the next one off its queue
                 if pid in held:
-                    sys_prompt, prompt, cost, model, fut = held[pid]
+                    sys_prompt, prompt, cost, model, max_tokens, temperature, fut = held[pid]
                 elif not q.empty():
-                    sys_prompt, prompt, cost, model, fut = q.get_nowait()
+                    sys_prompt, prompt, cost, model, max_tokens, temperature, fut = q.get_nowait()
                 else:
 
                     # The current process has nothing: advance the turn. If nobody has work at all, wait; otherwise
@@ -1303,14 +1336,15 @@ class APIGatewayScheduler:
                 if self.available >= cost:
                     self.available -= cost
                     held.pop(pid, None)
-                    asyncio.create_task(self._run_job(sys_prompt, prompt, cost, model, fut, call))
+                    asyncio.create_task(
+                        self._run_job(sys_prompt, prompt, cost, model, max_tokens, temperature, fut, call))
                     self.rr = (self.rr + 1) % len(pids)
                     continue
                 else:
 
                     # Strict hold: it is this process's turn and its head does not fit. Hold the head and wait for units
                     # to free up. Do NOT advance the cursor and do NOT serve anyone else.
-                    held[pid] = (sys_prompt, prompt, cost, model, fut)
+                    held[pid] = (sys_prompt, prompt, cost, model, max_tokens, temperature, fut)
                     await self._wait_locked()
                     continue
 
@@ -1322,20 +1356,23 @@ class APIGatewayScheduler:
         await self.cond.wait()
 
 
-if __name__ == "__main__":
+def serve_api_gateway() -> None:
     """Process entrypoint for the detached gateway server (see the APIGatewayServer class).
 
-    Spawned by the client via ``python -m unaiverse.modules.utils --serve``.
+    Spawned by the client via
+    ``python -c "from unaiverse.modules.utils import serve_api_gateway; serve_api_gateway()"``. We deliberately do
+    NOT use ``python -m unaiverse.modules.utils`` here: importing the parent package ``unaiverse.modules`` already
+    imports this module, so running it again via ``runpy`` would execute a second copy of it under the name
+    ``__main__`` (RuntimeWarning, and two distinct APIGatewayServer classes). Calling this function avoids that.
     """
 
-    if "--serve" in sys.argv:
-        async def _main():
+    async def _main():
 
-            # Construct the server INSIDE the running loop: the scheduler builds an asyncio.Condition, which binds to
-            # the current loop at creation. Building it before asyncio.run() would bind it to the wrong loop.
-            await APIGatewayServer(call=featherless_call).run()
+        # Construct the server INSIDE the running loop: the scheduler builds an asyncio.Condition, which binds to
+        # the current loop at creation. Building it before asyncio.run() would bind it to the wrong loop.
+        await APIGatewayServer(call=featherless_call).run()
 
-        try:
-            asyncio.run(_main())
-        except OSError:
-            pass  # Port already bound: another process beat us to it, just exit
+    try:
+        asyncio.run(_main())
+    except OSError:
+        pass  # Port already bound: another process beat us to it, just exit
