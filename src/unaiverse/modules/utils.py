@@ -1335,7 +1335,6 @@ if __name__ == "__main__":
             # the current loop at creation. Building it before asyncio.run() would bind it to the wrong loop.
             await APIGatewayServer(call=featherless_call).run()
 
-
         try:
             asyncio.run(_main())
         except OSError:
