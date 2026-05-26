@@ -12,20 +12,25 @@
                  Code Repositories:  https://github.com/collectionlessai/
                  Main Developers:    Stefano Melacci (Project Leader), Christian Di Maio, Tommaso Guidi
 """
+import json
 import os
+import sys
+import time
 import torch
 import shutil
+import socket
 import numpy as np
 import torchvision
 from PIL import Image
 import urllib.request
 from typing import Callable
 import torch.nn.functional as F
+from unaiverse.utils.logger import log
 from unaiverse.modules.cnu.cnus import CNUs
 from unaiverse.modules.cnu.layers import LinearCNU
 from unaiverse.streams.dataprops import StreamType
 from transformers import pipeline, AutoProcessor, AutoModelForCausalLM, AutoTokenizer
-from unaiverse.modules.utils import get_proc_inputs_and_proc_outputs_for_image_classification
+from unaiverse.modules.utils import get_proc_inputs_and_proc_outputs_for_image_classification, APIGatewayServer
 from unaiverse.modules.utils import ModuleWrapper, transforms_factory, get_proc_inputs_and_proc_outputs_for_rnn
 
 
@@ -457,7 +462,8 @@ class CTE(ModuleWrapper):
     def handle_inputs(du, u):
         return du, u
 
-    def forward(self, u: torch.Tensor, du: torch.Tensor, first: bool = True, last: bool = False) -> torch.Tensor:
+    def forward(self, u: torch.Tensor | None, du: torch.Tensor | None, first: bool = True, last: bool = False) \
+            -> torch.Tensor:
         """Forward pass through the system dynamics.
 
         Args:
@@ -579,7 +585,7 @@ class CTB(ModuleWrapper):
         alpha: Dissipation added on the diagonal (also controls the eigenvalue projections method)
     """
 
-    def __init__(self, u_shape: tuple[int], d_dim: int, y_dim: int, h_dim: int, delta: float = None,
+    def __init__(self, u_shape: tuple[int], d_dim: int, y_dim: int, h_dim: int, delta: float | None = None,
                  alpha: float = 0., sigma: Callable = lambda x: x, project_every: int = 0, local: bool = False,
                  batch_size: int = 1, seed: int = -1):
         super(CTB, self).__init__(seed=seed)
@@ -1159,19 +1165,20 @@ class EfficientNet(ModuleWrapper):
 
 class FasterRCNN(ModuleWrapper):
     def __init__(self, seed: int = -1):
-        self.labels = ['__background__', 'person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus',
-                       'train', 'truck', 'boat', 'traffic light', 'fire hydrant', 'N/A', 'stop sign',
-                       'parking meter', 'bench', 'bird', 'cat', 'dog', 'horse', 'sheep', 'cow',
-                       'elephant', 'bear', 'zebra', 'giraffe', 'N/A', 'backpack', 'umbrella', 'N/A', 'N/A',
-                       'handbag', 'tie', 'suitcase', 'frisbee', 'skis', 'snowboard', 'sports ball',
-                       'kite', 'baseball bat', 'baseball glove', 'skateboard', 'surfboard', 'tennis racket',
-                       'bottle', 'N/A', 'wine glass', 'cup', 'fork', 'knife', 'spoon', 'bowl',
-                       'banana', 'apple', 'sandwich', 'orange', 'broccoli', 'carrot', 'hot dog', 'pizza',
-                       'donut', 'cake', 'chair', 'couch', 'potted plant', 'bed', 'N/A', 'dining table',
-                       'N/A', 'N/A', 'toilet', 'N/A', 'tv', 'laptop', 'mouse', 'remote', 'keyboard', 'cell phone',
-                       'microwave', 'oven', 'toaster', 'sink', 'refrigerator', 'N/A', 'book',
-                       'clock', 'vase', 'scissors', 'teddy bear', 'hair drier', 'toothbrush'
-                       ]
+        self.labels: list[str] = ['__background__', 'person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus',
+                                  'train', 'truck', 'boat', 'traffic light', 'fire hydrant', 'N/A', 'stop sign',
+                                  'parking meter', 'bench', 'bird', 'cat', 'dog', 'horse', 'sheep', 'cow',
+                                  'elephant', 'bear', 'zebra', 'giraffe', 'N/A', 'backpack', 'umbrella', 'N/A', 'N/A',
+                                  'handbag', 'tie', 'suitcase', 'frisbee', 'skis', 'snowboard', 'sports ball',
+                                  'kite', 'baseball bat', 'baseball glove', 'skateboard', 'surfboard', 'tennis racket',
+                                  'bottle', 'N/A', 'wine glass', 'cup', 'fork', 'knife', 'spoon', 'bowl',
+                                  'banana', 'apple', 'sandwich', 'orange', 'broccoli', 'carrot', 'hot dog', 'pizza',
+                                  'donut', 'cake', 'chair', 'couch', 'potted plant', 'bed', 'N/A', 'dining table',
+                                  'N/A', 'N/A', 'toilet', 'N/A', 'tv', 'laptop', 'mouse', 'remote', 'keyboard',
+                                  'cell phone',
+                                  'microwave', 'oven', 'toaster', 'sink', 'refrigerator', 'N/A', 'book',
+                                  'clock', 'vase', 'scissors', 'teddy bear', 'hair drier', 'toothbrush'
+                                  ]
 
         weights = torchvision.models.detection.FasterRCNN_ResNet50_FPN_Weights.DEFAULT
         faster_rcnn = torchvision.models.detection.fasterrcnn_resnet50_fpn(weights=weights)
@@ -1201,10 +1208,10 @@ class FasterRCNN(ModuleWrapper):
         found_class_boxes = o[0]['boxes']
         valid = found_class_scores > 0.8
 
-        found_class_indices = found_class_indices[valid]
+        found_class_indices: torch.Tensor = found_class_indices[valid]
         found_class_scores = found_class_scores[valid]
         found_class_boxes = found_class_boxes[valid]
-        found_class_names = [self.labels[i.item()] for i in found_class_indices]
+        found_class_names: list[str] = [self.labels[int(i.item())] for i in found_class_indices]
 
         return found_class_indices, found_class_scores, found_class_boxes, ", ".join(found_class_names)
 
@@ -1298,7 +1305,7 @@ class LangSegmentAnything(ModuleWrapper):
         position = ((64 - text_width) // 2, (64 - text_height) // 2)
         draw.text(position, text, fill="black", font=font)
 
-    def forward(self, image_pil: Image, msg: str, first: bool = False, last: bool = False):
+    def forward(self, image_pil: Image.Image, msg: str, first: bool = False, last: bool = False):
         try:
             image_pil = image_pil.convert("RGB") if image_pil.mode != "RGB" else image_pil  # Forcing RGB
             out = self.module.predict([image_pil], [msg])
@@ -1308,7 +1315,7 @@ class LangSegmentAnything(ModuleWrapper):
                 return image_pil
             else:
                 return LangSegmentAnything.__highlight_masks_on_image(image_pil, out[0]['masks'])
-        except Exception as e:
+        except Exception:
             return self.error_img
 
     @staticmethod
@@ -1362,7 +1369,7 @@ class SmolVLM(ModuleWrapper):
                                                                   device_map=self.device)
         self.module = self.module.to(self.device)
 
-    def forward(self, image_pil: Image, msg: str = "what is this?", first: bool = False, last: bool = False):
+    def forward(self, image_pil: Image.Image, msg: str = "what is this?", first: bool = False, last: bool = False):
         image_pil = image_pil.convert("RGB") if image_pil.mode != "RGB" else image_pil  # Forcing RGB
 
         msg_struct = [{"role": "user", "content": [{"type": "text", "text": f"{msg}"},
@@ -1473,6 +1480,7 @@ class SiteRAG(ModuleWrapper):
 
                 soup = BeautifulSoup(r.text, "html.parser")
                 for link in soup.find_all("a", href=True):
+                    link: dict
                     full_url = urljoin(url, link["href"])
                     if full_url.startswith(self.site_url) and full_url not in visited:
                         to_visit.append(full_url)
@@ -1508,3 +1516,172 @@ class SiteRAG(ModuleWrapper):
 
         chroma_db = Chroma.from_documents(split_docs, self.embedder, persist_directory=self.db_folder)
         chroma_db.persist()
+
+
+class FeatherlessAPI(ModuleWrapper):
+    """Callable handle onto the shared Featherless gateway.
+
+    Typical usage::
+
+        api = FeatherlessAPI(model="some-model-id", cost=2)
+        text = api("write me a haiku")  # Routed through the gateway
+
+    One instance per logical caller. The model and unit cost are fixed at construction, so the callable takes only the
+    prompt string. Construction bootstraps the shared server if needed (self-spawning, race-safe) and opens this
+    caller's persistent registration socket: the liveness token whose lifetime equals this object's interest in the
+    gateway. Closing the instance (or letting the process die) releases it; when the last instance goes away the server
+    shuts itself down.
+
+    The whole client lifecycle (bootstrap, registration, request round-trip) is self-contained here; callers never
+    touch the server internals.
+    """
+
+    def __init__(self, model: str | None = None, cost: int = 1, system_prompt: str = "",
+                 process_id: str | None = None, connect_timeout: float = 15.0):
+        """Create a FeatherlessAPI handle and connect it to the shared gateway.
+
+        Args:
+            model: The model identifier used for every call (None lets the server fall back to its MODEL_ID default).
+            cost: The unit cost charged for every call (one of VALID_COSTS) (Default: 1).
+            system_prompt: The system prompt prepended to every call ("" means no system prompt) (Default: "").
+            process_id: Identifier used for round-robin fairness; defaults to this process's PID.
+            connect_timeout: Maximum seconds to wait for the gateway server to come up (Default: 15.0).
+        """
+        super(FeatherlessAPI, self).__init__()
+        if cost not in APIGatewayServer.VALID_COSTS:
+            log.critical(f"Invalid cost {cost}: it must be one of {APIGatewayServer.VALID_COSTS}")
+        self.model: str | None = model
+        self.cost: int = cost
+        self.system_prompt: str = system_prompt
+
+        # Round-robin fairness is per process, so the default ID is the PID
+        self.process_id: str = str(process_id if process_id is not None else os.getpid())
+        self._ensure_server(connect_timeout)
+
+        # Persistent registration socket: its lifetime equals this caller's interest in the gateway
+        self._reg: socket.socket = socket.create_connection((APIGatewayServer.HOST, APIGatewayServer.PORT))
+        self._reg.sendall(b'{"op":"hello"}\n')
+
+        # Separate request socket (one in-flight request per instance, since this client is synchronous)
+        self._req: socket.socket = socket.create_connection((APIGatewayServer.HOST, APIGatewayServer.PORT))
+        self._rf = self._req.makefile("r")
+
+    def forward(self, prompt: str, first: bool = False, last: bool = False) -> str:
+        """Send a prompt through the gateway and return the model's generated text.
+
+        The model and unit cost are fixed by the constructor; this takes only the prompt.
+
+        Args:
+            prompt: The prompt string to send to the model.
+            first: Flag indicating the first step (unused; present for processor-interface compatibility).
+            last: Flag indicating the last step (unused; present for processor-interface compatibility).
+
+        Returns:
+            The text generated by the model.
+        """
+        if not isinstance(prompt, str):
+            log.critical(f"Invalid prompt: it must be a str, got {type(prompt).__name__}")
+        msg = json.dumps({"op": "generate", "process_id": self.process_id, "sys_prompt": self.system_prompt,
+                          "prompt": prompt, "cost": self.cost, "model": self.model}) + "\n"
+        self._req.sendall(msg.encode())
+        line = self._rf.readline()
+        if not line:
+            log.critical("Gateway closed the connection")
+        resp = json.loads(line)
+        if not resp.get("ok"):
+            log.critical(f"Gateway returned an error: {resp.get('error', 'unknown error')}")
+        return resp["result"]
+
+    def close(self) -> None:
+        """Close both the request and the persistent registration socket, releasing this caller's interest."""
+        for s in (self._req, self._reg):
+            try:
+                s.close()
+            except OSError:
+                pass
+
+    def __enter__(self) -> 'FeatherlessAPI':
+        """Enter the context manager, returning this handle."""
+        return self
+
+    def __exit__(self, *exc) -> None:
+        """Exit the context manager, closing the handle."""
+        self.close()
+
+    @staticmethod
+    def _server_is_up() -> bool:
+        """Return True if a gateway server is already listening on the configured host/port."""
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.settimeout(0.25)
+            return s.connect_ex((APIGatewayServer.HOST, APIGatewayServer.PORT)) == 0
+
+    @staticmethod
+    def _spawn_detached_server() -> None:
+        """Launch the gateway server as a fully independent, detached process."""
+        import subprocess
+
+        # start_new_session=True puts the server in its own session/process group: it is not killed when we die, and
+        # does not receive our Ctrl-C / SIGINT. The server lives in unaiverse.modules.utils, so launch that module
+        # with -m (robust to the file location and to absolute imports inside the package).
+        subprocess.Popen(
+            [sys.executable, "-m", "unaiverse.modules.utils", "--serve"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL,
+            start_new_session=True,
+            close_fds=True,
+        )
+
+    @classmethod
+    def _ensure_server(cls, timeout: float = 15.0) -> None:
+        """Ensure exactly one gateway server is running, racing safely across processes.
+
+        Fast path: if the port is already up, return immediately. Slow path: acquire a flock-based mutex (held only
+        during the short spawn-and-wait critical section). The single holder re-checks the port and, if still down,
+        spawns the detached server and waits for it to bind. Other processes block on the flock; by the time they
+        acquire it the port is up, so they spawn nothing. A starter that crashes mid-spawn releases the flock
+        automatically (it is OS-released on death), so there are no stale locks to clean.
+
+        Args:
+            timeout: Maximum seconds to wait for the server to become reachable (Default: 15.0).
+        """
+        import fcntl
+
+        if cls._server_is_up():
+            return
+
+        deadline = time.time() + timeout
+
+        # Open (not O_EXCL): the file is a mutex, not an election token
+        lock_fd = os.open(APIGatewayServer.LOCKFILE, os.O_CREAT | os.O_RDWR)
+        try:
+
+            # Block until we hold the lock (or time out via the loop below)
+            while True:
+                try:
+                    fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    if cls._server_is_up():
+                        return  # Someone else's spawn already succeeded
+                    if time.time() > deadline:
+                        log.critical("Timed out waiting for the gateway server to start up")
+                    time.sleep(0.05)
+
+            # We hold the mutex: re-check under the lock, since another holder may have just brought the server up
+            if cls._server_is_up():
+                return
+
+            cls._spawn_detached_server()
+
+            while time.time() < deadline:
+                if cls._server_is_up():
+                    return
+                time.sleep(0.05)
+            log.critical("Gateway server did not come up")
+        finally:
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_UN)
+            except OSError:
+                pass
+            os.close(lock_fd)
