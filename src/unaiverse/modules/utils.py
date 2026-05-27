@@ -13,15 +13,13 @@
                  Main Developers:    Stefano Melacci (Project Leader), Christian Di Maio, Tommaso Guidi
 """
 import os
-import sys
 import json
-import tempfile
-
 import torch
 import random
 import asyncio
 import inspect
 import logging
+import tempfile
 import numpy as np
 from PIL import Image
 from typing import Callable
@@ -50,14 +48,14 @@ def transforms_factory(trans_type: str, add_batch_dim: bool = True,
 
     Args:
         trans_type: A string identifying the desired transform.  Supported values are
-            ``"rgb<N>"`` / ``"gray<N>"`` (resize + center-crop to ``<N>`` pixels, with normalisation),
-            ``"rgb-no_norm<N>"`` / ``"gray-no_norm<N>"`` (resize + center-crop, no normalisation),
-            ``"rgb"`` / ``"gray"`` (full-image with normalisation),
-            ``"rgb-no_norm"`` / ``"gray-no_norm"`` (full-image, no normalisation), and
+            ``"rgb<N>"`` / ``"gray<N>"`` (resize + center-crop to ``<N>`` pixels, with normalization),
+            ``"rgb-no_norm<N>"`` / ``"gray-no_norm<N>"`` (resize + center-crop, no normalization),
+            ``"rgb"`` / ``"gray"`` (full-image with normalization),
+            ``"rgb-no_norm"`` / ``"gray-no_norm"`` (full-image, no normalization), and
             ``"gray_mnist"`` (MNIST-specific 28×28 grayscale pipeline).
         add_batch_dim: If True, appends an ``unsqueeze(0)`` step to the forward transform and
             inserts a ``squeeze(0)`` step at the start of the inverse transform (default: True).
-        return_inverse: If True, returns the inverse (de-normalisation) transform instead of the
+        return_inverse: If True, returns the inverse (de-normalization) transform instead of the
             forward transform (default: False).
 
     Returns:
@@ -393,7 +391,7 @@ class LoggerModule(torch.nn.Module):
     """A module that logs inputs and outputs to a file and cycles through a vocabulary of dummy responses."""
 
     def __init__(self, log_file: str | None = None) -> None:
-        """Initialises the LoggerModule.
+        """Initializes the LoggerModule.
 
         Args:
             log_file: Path to the log file that records inputs and outputs (default: ``"app_log.txt"``).
@@ -414,7 +412,7 @@ class LoggerModule(torch.nn.Module):
         random.shuffle(self._objects)
 
     def __setup_logger(self) -> None:
-        """Creates the output directory and initialises the file-based logger handler."""
+        """Creates the output directory and Initializes the file-based logger handler."""
         os.makedirs(os.path.abspath(os.path.dirname(self.log_file)), exist_ok=True)
         self.__handler = logging.FileHandler(self.log_file, mode='w')  # 'w' mode overwrites the file
         formatter = logging.Formatter('%(message)s')
@@ -461,7 +459,7 @@ class ModuleWrapper(torch.nn.Module):
                  proc_opts: dict | None = None,
                  seed: int = -1,
                  agent: object = None) -> None:
-        """Initialises the ModuleWrapper.
+        """Initializes the ModuleWrapper.
 
         Args:
             module: The torch.nn.Module to wrap (default: None).
@@ -525,7 +523,7 @@ class ModuleWrapper(torch.nn.Module):
         return tuple(outputs)
 
     def learn_backward(self, targets: list | None = None) -> list | bool:
-        """Runs a supervised or unsupervised backward pass and optimiser step.
+        """Runs a supervised or unsupervised backward pass and optimizer step.
 
         Args:
             targets: Optional list of target tensors, one per processor output.  Individual
@@ -533,7 +531,7 @@ class ModuleWrapper(torch.nn.Module):
 
         Returns:
             A list of per-output loss values if a backward pass was performed, or ``False``
-            if ``proc_opts`` contains no optimiser or losses.
+            if ``proc_opts`` contains no optimizer or losses.
         """
         if (self.proc_opts is None or len(self.proc_opts) == 0 or
                 ('losses' not in self.proc_opts and 'optimizer' not in self.proc_opts)):
@@ -574,10 +572,10 @@ class ModuleWrapper(torch.nn.Module):
 
 
 class AgentProcessorChecker:
-    """Validates and normalises the processor-related attributes of an agent-like container object."""
+    """Validates and normalizes the processor-related attributes of an agent-like container object."""
 
     def __init__(self, processor_container: object) -> None:
-        """Validates and normalises processor attributes on the given container.
+        """Validates and normalizes processor attributes on the given container.
 
         Checks that ``processor_container`` exposes the required processor attributes, performs
         type validation, auto-wraps plain ``torch.nn.Module`` objects in ``ModuleWrapper``,
@@ -949,7 +947,7 @@ class AgentProcessorChecker:
                                                 private_only=True))
 
     def __guess_proc_opts(self) -> None:
-        """Fills in missing optimiser and loss entries in ``proc_opts``."""
+        """Fills in missing optimizer and loss entries in ``proc_opts``."""
         if self.proc_opts is None:
             if isinstance(self.proc.module, MultiIdentity) or len(list(self.proc.parameters())) == 0:
                 self.proc_opts = {"optimizer": None,
@@ -964,7 +962,7 @@ class AgentProcessorChecker:
                 self.proc_opts["losses"] = [None] * len(self.proc_outputs)
 
     def __fix_proc_opts(self) -> None:
-        """Normalises ``proc_opts`` to always contain the canonical ``"optimizer"`` and ``"losses"`` keys."""
+        """normalizes ``proc_opts`` to always contain the canonical ``"optimizer"`` and ``"losses"`` keys."""
         opts = {}
         found_optimizer = False
         found_loss = False
@@ -1046,6 +1044,32 @@ class AgentProcessorChecker:
             i += 1
 
 
+# Process-wide Featherless client, created once on first use (see _get_featherless_client). Reused for every call so
+# HTTP keep-alive avoids a fresh TLS handshake per query; this does NOT change how many requests hit Featherless in
+# parallel, which is governed solely by the scheduler's unit budget.
+_featherless_client = None
+
+
+def _get_featherless_client():
+    """Return the shared Featherless ``AsyncOpenAI`` client, creating it lazily on first use.
+
+    It must be created inside the running event loop (the server's), so it binds to the right loop. Idle keep-alive
+    connections expire on their own; the client object stays valid for the whole process lifetime and transparently
+    reopens a connection on the next call.
+
+    Returns:
+        The process-wide ``AsyncOpenAI`` client instance.
+    """
+    key = os.environ.get("FEATHERLESS_API_KEY", "KEY")
+    if key == "KEY":
+        log.critical("FEATHERLESS_API_KEY environment variable was not set!")
+    global _featherless_client
+    if _featherless_client is None:
+        from openai import AsyncOpenAI
+        _featherless_client = AsyncOpenAI(base_url="https://api.featherless.ai/v1", api_key=key)
+    return _featherless_client
+
+
 async def featherless_call(sys_prompt: str, prompt: str, max_tokens: int = -1,
                            temperature: float = -1., model: str | None = None) -> str | None:
     """Perform the actual call to the Featherless API and return the generated text.
@@ -1060,10 +1084,12 @@ async def featherless_call(sys_prompt: str, prompt: str, max_tokens: int = -1,
     Returns:
         The text generated by the model.
     """
-    from openai import AsyncOpenAI
-    client = AsyncOpenAI(base_url="https://api.featherless.ai/v1",
-                         api_key=os.environ.get("FEATHERLESS_API_KEY", "KEY"))
-    model = model or os.environ.get("MODEL_ID", "your-model-id")
+    client = _get_featherless_client()
+    model = model or os.environ.get("MODEL_ID", "MOD")
+
+    if model == "MOD":
+        log.critical("Calling Featherless API: the model argument was not set; "
+                     "the MODEL_ID environment variable was not set!")
 
     # Retry with exponential backoff, keeping the last error so a final failure reports its cause
     last_err = None
@@ -1074,12 +1100,13 @@ async def featherless_call(sys_prompt: str, prompt: str, max_tokens: int = -1,
             msgs = [{"role": "system", "content": sys_prompt}] if sys_prompt else []
             msgs.append({"role": "user", "content": prompt})
 
-            # Only send optional sampling params when explicitly set, so the API default is used otherwise
-            kwargs = {"model": model, "messages": msgs}
+            # Only send optional sampling params when explicitly set, so the API default is used otherwise. The dict is
+            # typed dict[str, object] so PyCharm accepts the mixed value types (str / list / int / float)
+            kwargs: dict[str, object] = {"model": model, "messages": msgs}
             if max_tokens > 0:
-                kwargs["max_tokens"] = str(max_tokens)
+                kwargs["max_tokens"] = max_tokens
             if temperature >= 0.:
-                kwargs["temperature"] = str(temperature)
+                kwargs["temperature"] = temperature
 
             resp = await client.chat.completions.create(**kwargs)  # type: ignore
 
@@ -1096,6 +1123,8 @@ async def featherless_call(sys_prompt: str, prompt: str, max_tokens: int = -1,
             last_err = e
 
         # Retry on either an exception or empty content
+        log.error(f"Empty response or exception! (prompt={prompt}, attempt={attempt + 1}, last_err={last_err!r}), "
+                  f"waiting {2 ** attempt} seconds before trying again...")
         await asyncio.sleep(2 ** attempt)
 
     log.critical(f"Featherless AI call failed after retries: {last_err!r}")  # This will raise an exception
