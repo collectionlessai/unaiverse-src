@@ -1637,9 +1637,9 @@ class FeatherlessAPI(ModuleWrapper):
         cmd = [sys.executable, "-c", "from unaiverse.modules.utils import serve_api_gateway; serve_api_gateway()"]
         subprocess.Popen(
             cmd,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            stdin=subprocess.DEVNULL,
+            #stdout=subprocess.DEVNULL,
+            #stderr=subprocess.DEVNULL,
+            #stdin=subprocess.DEVNULL,
             start_new_session=True,
             close_fds=True,
         )
