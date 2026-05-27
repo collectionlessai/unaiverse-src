@@ -1537,7 +1537,7 @@ class FeatherlessAPI(ModuleWrapper):
     """
 
     def __init__(self, model: str | None = None, cost: int = 1, system_prompt: str = "",
-                 process_id: str | None = None, max_generated_tokens: int = -1, temperature: float = -1.,
+                 process_id: str | None = None, max_tokens: int = -1, temperature: float = -1.,
                  top_p: float = -1., top_k: int = -1, frequency_penalty: float | None = None,
                  presence_penalty: float | None = None, repetition_penalty: float | None = None,
                  min_p: float | None = None, sampler: dict | None = None, connect_timeout: float = 15.0):
@@ -1548,7 +1548,7 @@ class FeatherlessAPI(ModuleWrapper):
             cost: The unit cost charged for every call (one of VALID_COSTS) (Default: 1).
             system_prompt: The system prompt prepended to every call ("" means no system prompt) (Default: "").
             process_id: Identifier used for round-robin fairness; defaults to this process's PID.
-            max_generated_tokens: Maximum number of tokens to generate per call (-1 means no limit) (Default: -1).
+            max_tokens: Maximum number of tokens to generate per call (-1 means no limit) (Default: -1).
             temperature: Sampling temperature for every call (negative lets the API use its default) (Default: -1.).
             top_p: Nucleus-sampling probability (negative lets the API use its default) (Default: -1.).
             top_k: Top-k sampling cutoff (negative lets the API use its default) (Default: -1).
@@ -1572,8 +1572,8 @@ class FeatherlessAPI(ModuleWrapper):
         # Assemble the per-call sampler dict once: include each knob only when explicitly set, so anything left at its
         # sentinel falls back to the API default. The free-form `sampler` arg is merged last and overrides.
         self.sampler: dict = {}
-        if max_generated_tokens > 0:
-            self.sampler["max_tokens"] = max_generated_tokens
+        if max_tokens > 0:
+            self.sampler["max_tokens"] = max_tokens
         if temperature >= 0.:
             self.sampler["temperature"] = temperature
         if top_p >= 0.:

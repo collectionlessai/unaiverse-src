@@ -14,6 +14,7 @@
 """
 import os
 import json
+import time
 import torch
 import random
 import asyncio
@@ -1120,7 +1121,19 @@ async def featherless_call(sys_prompt: str, prompt: str, sampler: dict | None = 
             if extra_body:
                 kwargs["extra_body"] = extra_body
 
+            t0 = time.perf_counter()
             resp = await client.chat.completions.create(**kwargs)  # type: ignore
+            elapsed = time.perf_counter() - t0
+
+            # Diagnostics: wall time, throughput, completion length + stop reason. A large completion_tokens count
+            # suggests thinking is still on; a low tokens/sec on a warm model points at a slow/cold API replica.
+            usage = getattr(resp, "usage", None)
+            c_toks = getattr(usage, "completion_tokens", 0)
+            finish_reason = resp.choices[0].finish_reason if resp.choices else "n/a"
+            tps = f"{c_toks / elapsed:.1f}" if (c_toks and elapsed > 0) else "n/a"
+            log.user(f"[featherless_call] model={model} finish_reason={finish_reason} "
+                     f"completion_tokens={c_toks if c_toks is not None else 'n/a'} "
+                     f"elapsed={elapsed:.2f}s tokens/sec={tps}")
 
             # Return the first choice that carries non-empty text (content may be None)
             for choice in resp.choices:
