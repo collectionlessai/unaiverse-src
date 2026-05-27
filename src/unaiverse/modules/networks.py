@@ -1538,7 +1538,9 @@ class FeatherlessAPI(ModuleWrapper):
 
     def __init__(self, model: str | None = None, cost: int = 1, system_prompt: str = "",
                  process_id: str | None = None, max_generated_tokens: int = -1, temperature: float = -1.,
-                 connect_timeout: float = 15.0):
+                 top_p: float = -1., top_k: int = -1, frequency_penalty: float | None = None,
+                 presence_penalty: float | None = None, repetition_penalty: float | None = None,
+                 min_p: float | None = None, sampler: dict | None = None, connect_timeout: float = 15.0):
         """Create a FeatherlessAPI handle and connect it to the shared gateway.
 
         Args:
@@ -1548,6 +1550,13 @@ class FeatherlessAPI(ModuleWrapper):
             process_id: Identifier used for round-robin fairness; defaults to this process's PID.
             max_generated_tokens: Maximum number of tokens to generate per call (-1 means no limit) (Default: -1).
             temperature: Sampling temperature for every call (negative lets the API use its default) (Default: -1.).
+            top_p: Nucleus-sampling probability (negative lets the API use its default) (Default: -1.).
+            top_k: Top-k sampling cutoff (negative lets the API use its default) (Default: -1).
+            frequency_penalty: Frequency penalty (None lets the API use its default) (Default: None).
+            presence_penalty: Presence penalty (None lets the API use its default) (Default: None).
+            repetition_penalty: Repetition penalty, a vLLM/Featherless extension (None uses the default) (Default: None).
+            min_p: Minimum-probability cutoff, a vLLM/Featherless extension (None uses the default) (Default: None).
+            sampler: Extra sampler params merged last (its keys win); use it for any knob not covered above.
             connect_timeout: Maximum seconds to wait for the gateway server to come up (Default: 15.0).
         """
         super(FeatherlessAPI, self).__init__(
@@ -1559,8 +1568,28 @@ class FeatherlessAPI(ModuleWrapper):
         self.model_name: str | None = model
         self.cost: int = cost
         self.system_prompt: str = system_prompt
-        self.max_generated_tokens = max_generated_tokens
-        self.temperature = temperature
+
+        # Assemble the per-call sampler dict once: include each knob only when explicitly set, so anything left at its
+        # sentinel falls back to the API default. The free-form `sampler` arg is merged last and overrides.
+        self.sampler: dict = {}
+        if max_generated_tokens > 0:
+            self.sampler["max_tokens"] = max_generated_tokens
+        if temperature >= 0.:
+            self.sampler["temperature"] = temperature
+        if top_p >= 0.:
+            self.sampler["top_p"] = top_p
+        if top_k >= 0:
+            self.sampler["top_k"] = top_k
+        if frequency_penalty is not None:
+            self.sampler["frequency_penalty"] = frequency_penalty
+        if presence_penalty is not None:
+            self.sampler["presence_penalty"] = presence_penalty
+        if repetition_penalty is not None:
+            self.sampler["repetition_penalty"] = repetition_penalty
+        if min_p is not None:
+            self.sampler["min_p"] = min_p
+        if sampler:
+            self.sampler.update(sampler)
 
         # Round-robin fairness is per process, so the default ID is the PID
         self.process_id: str = str(process_id if process_id is not None else os.getpid())
@@ -1591,7 +1620,7 @@ class FeatherlessAPI(ModuleWrapper):
             log.critical(f"Invalid prompt: it must be a str, got {type(prompt).__name__}")
         msg = json.dumps({"op": "generate", "process_id": self.process_id, "sys_prompt": self.system_prompt,
                           "prompt": prompt, "cost": self.cost, "model": self.model_name,
-                          "max_tokens": self.max_generated_tokens, "temperature": self.temperature}) + "\n"
+                          "sampler": self.sampler}) + "\n"
         self._req.sendall(msg.encode())
         line = self._rf.readline()
         if not line:
@@ -1637,9 +1666,9 @@ class FeatherlessAPI(ModuleWrapper):
         cmd = [sys.executable, "-c", "from unaiverse.modules.utils import serve_api_gateway; serve_api_gateway()"]
         subprocess.Popen(
             cmd,
-            #stdout=subprocess.DEVNULL,
-            #stderr=subprocess.DEVNULL,
-            #stdin=subprocess.DEVNULL,
+            # stdout=subprocess.DEVNULL,
+            # stderr=subprocess.DEVNULL,
+            # stdin=subprocess.DEVNULL,
             start_new_session=True,
             close_fds=True,
         )

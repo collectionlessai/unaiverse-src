@@ -1070,15 +1070,25 @@ def _get_featherless_client():
     return _featherless_client
 
 
-async def featherless_call(sys_prompt: str, prompt: str, max_tokens: int = -1,
-                           temperature: float = -1., model: str | None = None) -> str | None:
+# Sampling parameters that the OpenAI chat-completions API accepts as top-level fields. Everything else in a sampler
+# dict (e.g. top_k, repetition_penalty, min_p) is a vLLM/Featherless-only extension and must be forwarded via
+# extra_body, otherwise the OpenAI SDK rejects it as an unexpected argument.
+OPENAI_NATIVE_SAMPLER_PARAMS: frozenset[str] = frozenset({
+    "max_tokens", "temperature", "top_p", "frequency_penalty", "presence_penalty",
+    "stop", "seed", "n", "logit_bias", "logprobs", "top_logprobs", "response_format",
+})
+
+
+async def featherless_call(sys_prompt: str, prompt: str, sampler: dict | None = None,
+                           model: str | None = None) -> str | None:
     """Perform the actual call to the Featherless API and return the generated text.
 
     Args:
         sys_prompt: The system prompt, if any (can be empty).
         prompt: The prompt string to send to the model.
-        max_tokens: The maximum number of tokens to send to the model (-1, default, means no limits).
-        temperature: The sampling temperature (negative, default, lets the API use its own default).
+        sampler: Sampling parameters to send (e.g. ``temperature``, ``max_tokens``, ``top_p``, ``top_k``,
+            ``frequency_penalty``, ``presence_penalty``, ``repetition_penalty``, ``min_p``). OpenAI-native keys are
+            passed as top-level fields; any other key is forwarded via ``extra_body``. None/empty uses API defaults.
         model: The model identifier to use; if None, falls back to the MODEL_ID environment variable.
 
     Returns:
@@ -1091,6 +1101,11 @@ async def featherless_call(sys_prompt: str, prompt: str, max_tokens: int = -1,
         log.critical("Calling Featherless API: the model argument was not set; "
                      "the MODEL_ID environment variable was not set!")
 
+    # Split the requested sampler params: OpenAI-native ones go top-level, the rest ride along in extra_body
+    sampler = sampler or {}
+    extra_body = {k: v for k, v in sampler.items() if k not in OPENAI_NATIVE_SAMPLER_PARAMS}
+    native = {k: v for k, v in sampler.items() if k in OPENAI_NATIVE_SAMPLER_PARAMS}
+
     # Retry with exponential backoff, keeping the last error so a final failure reports its cause
     last_err = None
 
@@ -1100,13 +1115,10 @@ async def featherless_call(sys_prompt: str, prompt: str, max_tokens: int = -1,
             msgs = [{"role": "system", "content": sys_prompt}] if sys_prompt else []
             msgs.append({"role": "user", "content": prompt})
 
-            # Only send optional sampling params when explicitly set, so the API default is used otherwise. The dict is
-            # typed dict[str, object] so PyCharm accepts the mixed value types (str / list / int / float)
-            kwargs: dict[str, object] = {"model": model, "messages": msgs}
-            if max_tokens > 0:
-                kwargs["max_tokens"] = max_tokens
-            if temperature >= 0.:
-                kwargs["temperature"] = temperature
+            # The dict is typed dict[str, object] so PyCharm accepts the mixed value types (str / list / int / float)
+            kwargs: dict[str, object] = {"model": model, "messages": msgs, **native}
+            if extra_body:
+                kwargs["extra_body"] = extra_body
 
             resp = await client.chat.completions.create(**kwargs)  # type: ignore
 
@@ -1192,14 +1204,12 @@ class APIGatewayServer:
                     prompt = msg["prompt"]
                     cost = int(msg.get("cost", 1))
                     model = msg.get("model")
-                    max_tokens = msg.get("max_tokens", -1)
-                    temperature = msg.get("temperature", -1.)
+                    sampler = msg.get("sampler") or {}
                     if cost not in APIGatewayServer.VALID_COSTS:
                         out = {"ok": False, "error": f"bad cost {cost}"}
                     else:
                         try:
-                            result = await self.sched.submit(pid, sys_prompt, prompt, cost, model,
-                                                             max_tokens, temperature)
+                            result = await self.sched.submit(pid, sys_prompt, prompt, cost, model, sampler)
                             out = {"ok": True, "result": result}
                         except Exception as e:
                             out = {"ok": False, "error": str(e)}
@@ -1282,7 +1292,7 @@ class APIGatewayScheduler:
         return self.queues[pid]
 
     async def submit(self, pid: str, sys_prompt: str, prompt: str, cost: int, model: str | None,
-                     max_tokens: int = -1, temperature: float = -1.) -> str:
+                     sampler: dict | None = None) -> str:
         """Enqueue a query for a process and wait until the dispatcher runs it.
 
         Args:
@@ -1291,20 +1301,19 @@ class APIGatewayScheduler:
             prompt: The prompt string to send to the model.
             cost: The query's unit cost (one of VALID_COSTS).
             model: The model identifier to use (None lets the call fall back to its own default).
-            max_tokens: Max number of tokens in the response (-1 means no limit).
-            temperature: Sampling temperature (negative means use the API default).
+            sampler: Sampling parameters to forward to the model call (None means use API defaults).
 
         Returns:
             The model's textual result.
         """
         fut: asyncio.Future = asyncio.get_running_loop().create_future()
-        await self._queue(pid).put((sys_prompt, prompt, cost, model, max_tokens, temperature, fut))
+        await self._queue(pid).put((sys_prompt, prompt, cost, model, sampler, fut))
         async with self.cond:
             self.cond.notify_all()  # Wake the dispatcher: there is new work
         return await fut
 
     async def _run_job(self, sys_prompt: str, prompt: str,
-                       cost: int, model: str | None, max_tokens: int, temperature: float,
+                       cost: int, model: str | None, sampler: dict | None,
                        fut: asyncio.Future, call: Callable) -> None:
         """Run a single query to completion, then return its units to the budget.
 
@@ -1313,13 +1322,12 @@ class APIGatewayScheduler:
             prompt: The prompt string to send to the model.
             cost: The query's unit cost, returned to the budget once the job finishes.
             model: The model identifier to use.
-            max_tokens: Max number of tokens in the response (-1 means no limit).
-            temperature: Sampling temperature (negative means use the API default).
+            sampler: Sampling parameters to forward to the model call (None means use API defaults).
             fut: The future awaited by the submitter, resolved with the result or the exception.
             call: The asynchronous function performing the actual model call.
         """
         try:
-            result = await call(sys_prompt, prompt, max_tokens, temperature, model)
+            result = await call(sys_prompt, prompt, sampler, model)
             fut.set_result(result)
         except Exception as e:
             fut.set_exception(e)
@@ -1350,9 +1358,9 @@ class APIGatewayScheduler:
 
                 # Determine this process's current head: either the one we are holding, or the next one off its queue
                 if pid in held:
-                    sys_prompt, prompt, cost, model, max_tokens, temperature, fut = held[pid]
+                    sys_prompt, prompt, cost, model, sampler, fut = held[pid]
                 elif not q.empty():
-                    sys_prompt, prompt, cost, model, max_tokens, temperature, fut = q.get_nowait()
+                    sys_prompt, prompt, cost, model, sampler, fut = q.get_nowait()
                 else:
 
                     # The current process has nothing: advance the turn. If nobody has work at all, wait; otherwise
@@ -1366,14 +1374,14 @@ class APIGatewayScheduler:
                     self.available -= cost
                     held.pop(pid, None)
                     asyncio.create_task(
-                        self._run_job(sys_prompt, prompt, cost, model, max_tokens, temperature, fut, call))
+                        self._run_job(sys_prompt, prompt, cost, model, sampler, fut, call))
                     self.rr = (self.rr + 1) % len(pids)
                     continue
                 else:
 
                     # Strict hold: it is this process's turn and its head does not fit. Hold the head and wait for units
                     # to free up. Do NOT advance the cursor and do NOT serve anyone else.
-                    held[pid] = (sys_prompt, prompt, cost, model, max_tokens, temperature, fut)
+                    held[pid] = (sys_prompt, prompt, cost, model, sampler, fut)
                     await self._wait_locked()
                     continue
 
