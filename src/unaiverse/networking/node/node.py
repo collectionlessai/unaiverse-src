@@ -135,6 +135,9 @@ class Node:
         self.agent: Agent | None = hosted if isinstance(hosted, Agent) else None
         self.world: World | None = hosted if isinstance(hosted, World) else None
         self.conn: NodeConn  # Manages the network operations in the P2P network
+        self._sm_public = None  # SessionManager for p2p_public, built in __init__ after self.conn
+        self._sm_world = None   # SessionManager for p2p_world, built in __init__ after self.conn
+        self._session_established_waiters: dict[str, asyncio.Event] = {}
         self.memory_finder = None
         self.world_agent_files = None
         self.talk_to_relay_based_nodes = talk_to_relay_based_nodes
@@ -360,6 +363,27 @@ class Node:
                              is_world_node=self.node_type is Node.WORLD,
                              public_key=self.public_key,
                              token=self.node_token)
+
+        # Per-instance SessionManagers — own the FSM for every per-peer Session on
+        # their P2P instance. SignedPeerRecord-for-the-other-peer-id is generated
+        # on demand (cross-binds the two libp2p peer-ids of this agent).
+        from unaiverse.networking.session import SessionManager
+        self._sm_public = SessionManager(
+            conn=self.conn,
+            p2p_name=NodeConn.P2P_PUBLIC,
+            local_peer_id=p2p_u.peer_id,
+            local_node_id=self.node_id,
+            local_profile_factory=lambda: (self.profile.get_all_profile() if self.profile is not None else {}),
+            local_spr_other_factory=lambda: p2p_w.generate_signed_peer_record(),
+        )
+        self._sm_world = SessionManager(
+            conn=self.conn,
+            p2p_name=NodeConn.P2P_WORLD,
+            local_peer_id=p2p_w.peer_id,
+            local_node_id=self.node_id,
+            local_profile_factory=lambda: (self.profile.get_all_profile() if self.profile is not None else {}),
+            local_spr_other_factory=lambda: p2p_u.generate_signed_peer_record(),
+        )
 
         # Get CV
         cv = self.get_cv()
@@ -1179,7 +1203,7 @@ class Node:
                                 log.misc("Inspector is not active/connected anymore, resuming...")
                                 break
 
-                            public_messages = await self.conn.get_messages(p2p_name=NodeConn.P2P_PUBLIC)
+                            public_messages, _ = await self.conn.get_messages(p2p_name=NodeConn.P2P_PUBLIC)
                             for msg in public_messages:
                                 if msg.content_type == Msg.INSPECT_CMD:
 
@@ -1521,6 +1545,12 @@ class Node:
                 log.misc("Removing a not-connected-anymore peer, "
                          "pool_name: " + pool_name + ", peer_id: " + peer_id + "...",
                          sub="prv" if pool_name in self.conn.WORLD or pool_name in self.conn.WORLD_NODE else "pub")
+                # Inform SessionManagers — ESTABLISHED → RECONNECTING (grace),
+                # in-handshake states → FAILED immediately.
+                for ev in await self._sm_public.on_peer_disconnected(peer_id):
+                    await self._dispatch_session_event(ev)
+                for ev in await self._sm_world.on_peer_disconnected(peer_id):
+                    await self._dispatch_session_event(ev)
                 await self.__purge(peer_id)
 
                 # Checking if we removed an agent from this world
@@ -1547,6 +1577,12 @@ class Node:
         an_agent_joined_the_world = False
         added_peers = False
         for r in self.reconnected:
+            # Tell SessionManagers — RECONNECTING → ESTABLISHED if grace period
+            # hasn't expired yet (otherwise no-op, the session is gone).
+            for ev in await self._sm_public.on_peer_reconnected(r):
+                await self._dispatch_session_event(ev)
+            for ev in await self._sm_world.on_peer_reconnected(r):
+                await self._dispatch_session_event(ev)
             pool_name = self.conn.get_pool_of(r)
             if pool_name is None:
                 continue
@@ -1685,13 +1721,33 @@ class Node:
         Args:
             interact_mode_opts: A dictionary of options for interactive mode, or None if not in interactive mode.
         """
-        # Fetching all messages,
-        public_messages = await self.conn.get_messages(p2p_name=NodeConn.P2P_PUBLIC)
-        world_messages = await self.conn.get_messages(p2p_name=NodeConn.P2P_WORLD)
+        # Fetching all messages — get_messages now returns (chat, session) tuples.
+        public_messages, public_session_inbound = await self.conn.get_messages(p2p_name=NodeConn.P2P_PUBLIC)
+        world_messages, world_session_inbound = await self.conn.get_messages(p2p_name=NodeConn.P2P_WORLD)
         interact_mode = interact_mode_opts is not None
 
         log.misc("Got " + str(len(public_messages)) + " messages from the public net", sub="pub")
         log.misc("Got " + str(len(world_messages)) + " messages from the world/private net", sub="prv")
+
+        # ── Route per-stage Session messages through SessionManagers ──────────
+        # SessionInbound items skip Msg.from_bytes / JWT verify; identity is
+        # established cryptographically by sig_a / sig_b inside the handshake.
+        for inb in public_session_inbound:
+            events = await self._sm_public.deliver(inb.peer_id, inb.protocol_id, inb.data)
+            for ev in events:
+                await self._dispatch_session_event(ev)
+        for inb in world_session_inbound:
+            events = await self._sm_world.deliver(inb.peer_id, inb.protocol_id, inb.data)
+            for ev in events:
+                await self._dispatch_session_event(ev)
+
+        # ── Per-cycle SessionManager tick: timeouts + /ipfs/ping keep-alive ───
+        import time as _time
+        _now = _time.monotonic()
+        for ev in await self._sm_public.tick(_now):
+            await self._dispatch_session_event(ev)
+        for ev in await self._sm_world.tick(_now):
+            await self._dispatch_session_event(ev)
 
         # Sorting messages
         public_messages = self.__sort_messages_by_priority(public_messages)
@@ -2549,6 +2605,88 @@ class Node:
             log.misc(f"Retrying to connect to {peer_id} with args "
                      f"{connection_dict['args_of_ask_to_get_in_touch']}")
             await self.ask_to_get_in_touch(**connection_dict["args_of_ask_to_get_in_touch"])  # Trying again
+
+    async def _dispatch_session_event(self, ev) -> None:
+        """Translate a SessionEvent into existing node bookkeeping. For v1 we
+        only handle the events that materially affect the rest of node.py —
+        ESTABLISHED, FAILED, LOST, CLOSED. RECONNECTING and RESUMED are logged
+        but don't touch the legacy data structures (the existing __purge /
+        ack-queue flow is unaffected, so a transient transport drop just sits
+        as a no-op at this layer for v1)."""
+        from unaiverse.networking.session import SessionEventType
+        try:
+            log.misc(f"[session] {ev.type.value} peer={ev.peer_id[:12]}… session={ev.session_id[:8]}… "
+                     f"role={ev.role.value} p2p={ev.p2p_name} data={ev.data}",
+                     sub="prv" if "world" in ev.p2p_name else "pub")
+        except Exception:
+            pass
+
+        if ev.type == SessionEventType.ESTABLISHED:
+            # Wake any ask_to_get_in_touch / connect_via_session waiter blocked on
+            # this peer.
+            waiter = self._session_established_waiters.get(ev.peer_id)
+            if waiter is not None:
+                waiter.set()
+            # NOTE: the legacy bookkeeping in agents_to_interview /
+            # agents_that_provided_ping_pong is still driven by the old
+            # ask_to_get_in_touch flow; once that is migrated to SessionManager
+            # this is the right place to populate those structures with
+            # `ev.data["profile_b"]`. For v1 we leave the legacy flow alone.
+        elif ev.type == SessionEventType.FAILED:
+            waiter = self._session_established_waiters.get(ev.peer_id)
+            if waiter is not None:
+                waiter.set()
+        elif ev.type in (SessionEventType.LOST, SessionEventType.CLOSED):
+            # Treat like a disconnect for the legacy purge path.
+            try:
+                await self.__purge(ev.peer_id)
+            except Exception as e:
+                log.error(f"[session] dispatch LOST/CLOSED purge failed for {ev.peer_id[:12]}…: {e}")
+
+    async def connect_via_session(
+        self,
+        peer_id: str,
+        addresses: list[str],
+        p2p_name: str = NodeConn.P2P_PUBLIC,
+        is_world_join: bool = False,
+        remote_other_peer_id_hint: str | None = None,
+        remote_node_id_hint: str | None = None,
+        timeout_s: float = 35.0,
+    ) -> bool:
+        """Open a Session to `peer_id` using SessionManager (new path).
+
+        Blocks until ESTABLISHED or terminal FAILED, with `timeout_s` upper bound.
+        Returns True on ESTABLISHED.
+
+        This is the new public surface — `ask_to_get_in_touch` / `ask_to_join_world`
+        still use the legacy ping-pong handshake for v1. Switch call sites over
+        incrementally once Sessions verify end-to-end against both Python and JS
+        peers.
+        """
+        sm = self._sm_public if p2p_name == NodeConn.P2P_PUBLIC else self._sm_world
+        waiter = asyncio.Event()
+        self._session_established_waiters[peer_id] = waiter
+        try:
+            events = await sm.initiate(
+                peer_id=peer_id,
+                addresses=addresses,
+                is_world_join=is_world_join,
+                remote_other_peer_id_hint=remote_other_peer_id_hint,
+                remote_node_id_hint=remote_node_id_hint,
+            )
+            # Drain any immediate events (e.g. fast-fail on quarantine).
+            for ev in events:
+                await self._dispatch_session_event(ev)
+
+            try:
+                await asyncio.wait_for(waiter.wait(), timeout=timeout_s)
+            except asyncio.TimeoutError:
+                log.warning(f"connect_via_session({peer_id[:12]}…) timed out after {timeout_s}s")
+                return False
+
+            return sm.is_established(peer_id)
+        finally:
+            self._session_established_waiters.pop(peer_id, None)
 
     async def __purge(self, peer_id: str, keep_connection: bool = False,
                       clear_agents_to_interview: bool = True) -> None:

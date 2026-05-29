@@ -17,10 +17,26 @@ import time
 import math
 import base64
 import binascii
+from collections import namedtuple
 from unaiverse.utils.logger import log
 from unaiverse.networking.p2p.messages import Msg
 from unaiverse.networking.p2p.p2p import P2P, P2PError
 from unaiverse.networking.node.tokens import TokenVerifier
+
+
+# A SessionInbound is a per-stage Session message lifted off the inbound queue
+# without going through Msg.from_bytes or JWT verification. Identity is established
+# inside Stage-2 of the Session handshake (sig_a + signed_peer_record), not here.
+SessionInbound = namedtuple("SessionInbound", ["peer_id", "protocol_id", "data"])
+
+# libp2p protocol IDs that belong to the Session abstraction. Keep in sync with
+# session/session.py SESSION_PROTOCOL_IDS and unailib/types.go Session*Protocol.
+SESSION_PROTOCOL_IDS = frozenset({
+    "/unaiverse/session/hello/1.0.0",
+    "/unaiverse/session/profile/1.0.0",
+    "/unaiverse/session/world/1.0.0",
+    "/unaiverse/session/control/1.0.0",
+})
 
 
 class ConnectionPools:
@@ -450,22 +466,34 @@ class ConnectionPools:
 
         return self.pool_name_to_added_in_last_update, self.pool_name_to_removed_in_last_update
 
-    async def get_messages(self, p2p_name: str, allowed_not_connected_peers: set | None = None) -> list[Msg]:
+    async def get_messages(
+        self,
+        p2p_name: str,
+        allowed_not_connected_peers: set | None = None,
+    ) -> tuple[list[Msg], list[SessionInbound]]:
         """Retrieves and verifies all messages from a specified P2P network (async).
+
+        Returns a tuple `(chat_messages, session_messages)`:
+          * `chat_messages` are decoded `Msg` objects whose `piggyback` JWT has been
+            verified (the existing chat / pubsub flow, unchanged).
+          * `session_messages` are raw per-stage Session payloads delivered on one of
+            the SESSION_PROTOCOL_IDS — these skip Msg decoding and JWT verification
+            because identity is established cryptographically inside the Session
+            handshake (sig_b / sig_a / signed_peer_record).
 
         Args:
             p2p_name: The name of the P2P network to fetch messages from.
-            allowed_not_connected_peers: An optional set of peer IDs to allow messages from, even if they are not
-                in the pools.
-
-        Returns:
-            A list of verified and processed message objects.
+            allowed_not_connected_peers: An optional set of peer IDs to allow chat
+                messages from even if they are not yet in the pools. Session messages
+                are never gated on pool membership — the handshake itself is what
+                enrols a peer.
         """
         # Pop all messages
         p2p = self[p2p_name]
         byte_messages = p2p.pop_messages()  # Pop all messages
         # Process the list of message dictionaries
         processed_messages: list[Msg] = []
+        session_messages: list[SessionInbound] = []
 
         if len(byte_messages) > 0:
             self.__last_recv_time = time.time()
@@ -474,13 +502,26 @@ class ConnectionPools:
             msg_dict: dict
             try:
                 # Extract and validate required fields from the Go message structure
-                # Go structure: {"from":"Qm...", "data":"BASE64_ENCODED_DATA"}
+                # Go structure: {"from":"Qm...", "data":"BASE64_ENCODED_DATA", "protocol":"..."}
                 verified_sender_id = msg_dict.get("from")
                 base64_data = msg_dict.get("data")
+                protocol_id = msg_dict.get("protocol") or ""
 
                 # Decode data
                 decoded_data = base64.b64decode(base64_data)  # noqa
 
+                # ── Session-protocol fast path ────────────────────────────────
+                # Bypass Msg.from_bytes + JWT verify; Session handshake establishes
+                # identity itself in Stage-2 (sig_a + signed_peer_record).
+                if protocol_id in SESSION_PROTOCOL_IDS:
+                    session_messages.append(SessionInbound(
+                        peer_id=verified_sender_id,
+                        protocol_id=protocol_id,
+                        data=decoded_data,
+                    ))
+                    continue
+
+                # ── Legacy chat path ─────────────────────────────────────────
                 # Attempt to create the higher-level Msg object
                 # This assumes Msg.from_bytes can parse your message protocol from decoded_data
                 # and that Msg objects store sender, type, channel intrinsically or can be set.
@@ -534,7 +575,24 @@ class ConnectionPools:
                           f"Message dict: {msg_dict}", sub=p2p.log_sub)
                 continue  # Skip problematic message
 
-        return processed_messages
+        return processed_messages, session_messages
+
+    async def send_session(self, peer_id: str, protocol_id: str, payload: bytes,
+                           p2p: P2P) -> bool:
+        """Open a fresh outbound libp2p stream on `protocol_id` to `peer_id`, write a
+        single length-prefixed protobuf payload, close the stream. Returns True on
+        send success.
+
+        Identity is bound by the Session handshake (sig + signed_peer_record), so no
+        JWT piggyback is inserted here — the Session protocols deliberately skip it.
+        """
+        if protocol_id not in SESSION_PROTOCOL_IDS:
+            raise ValueError(f"send_session: protocol_id '{protocol_id}' is not a Session protocol")
+        try:
+            return p2p.send_on_protocol(peer_id, protocol_id, payload)
+        except Exception as e:
+            log.error(f"send_session({peer_id[:12]}…, {protocol_id}) failed: {e}", sub=p2p.log_sub)
+            return False
 
     def passed_time_since_last_communication(self):
         passed = time.time() - max(self.__last_recv_time, self.__last_sent_time)

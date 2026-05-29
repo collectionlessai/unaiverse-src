@@ -15,6 +15,7 @@ import (
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
 	pwebrtc "github.com/pion/webrtc/v4"
 	p2pforge "github.com/ipshipyard/p2p-forge/client"
+	ping "github.com/libp2p/go-libp2p/p2p/protocol/ping"
 )
 
 // ChatProtocol defines the protocol ID string used for direct peer-to-peer messaging streams.
@@ -23,6 +24,19 @@ import (
 const UnaiverseChatProtocol = "/unaiverse/chat/1.0.0"
 const UnaiverseUserAgent = "go-libp2p/example/autotls"
 const DisconnectionGracePeriod = 10 * time.Second
+
+// Session abstraction protocol IDs. Each stage of the Session handshake gets its own
+// libp2p protocol so timeouts / cancellation / version negotiation are independent.
+// One protobuf message per stream (no per-stream channel header), length-prefixed by
+// a single uint32. See p2p/session.proto for the message types and session/session.py
+// for the FSM that drives them. Keep these strings in sync with SESSION_*_PROTOCOL
+// in session/session.py.
+const (
+	SessionHelloProtocol   = "/unaiverse/session/hello/1.0.0"
+	SessionProfileProtocol = "/unaiverse/session/profile/1.0.0"
+	SessionWorldProtocol   = "/unaiverse/session/world/1.0.0"
+	SessionControlProtocol = "/unaiverse/session/control/1.0.0"
+)
 
 // WebRTC signaling constants
 const UnaiverseWebRTCSignalProtocol = "/unaiverse/webrtc-signal/1.0.0"
@@ -120,9 +134,15 @@ type RendezvousState struct {
 // This lightweight version stores the binary payload in the `Data` field,
 // while the `From` field contains the Peer ID of the sender for security reasons.
 // It has to match with the 'sender' field in the ProtoBuf payload of the message.
+//
+// Protocol is set to the libp2p protocol ID for session-protocol messages (one of the
+// Session*Protocol constants) and is empty for chat / pubsub messages — that's how
+// Python's connpool decoder decides whether to feed a message through Msg.from_bytes
+// (chat) or hand it raw to SessionManager.deliver (session).
 type QueuedMessage struct {
-	From peer.ID `json:"from"` // The VERIFIED peer ID of the sender from the network layer.
-	Data []byte  `json:"-"`    // The raw data payload (Protobuf encoded).
+	From     peer.ID `json:"from"`     // The VERIFIED peer ID of the sender from the network layer.
+	Data     []byte  `json:"-"`        // The raw data payload (Protobuf encoded).
+	Protocol string  `json:"protocol"` // libp2p protocol ID or "" for chat/pubsub.
 }
 
 // MessageStore holds the QueuedMessages for each channel in separate FIFO queues.
@@ -226,6 +246,9 @@ type NodeInstance struct {
 	webrtcConnections map[peer.ID]*WebRTCConn
 	iceConfigMu       sync.RWMutex  // protects iceConfig swaps
 	iceConfig         *ICEConfig // nil → use defaults (Google STUN)
+
+	// libp2p ping service for Session liveness keep-alive (called from Python).
+	pingService *ping.PingService
 
 	// a copy of its own index for logging
 	instanceIndex int

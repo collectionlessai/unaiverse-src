@@ -156,6 +156,44 @@ _shared_lib.ReserveOnRelay.restype = ctypes.c_void_p  # Treat returned *C.char a
 _shared_lib.GetWebRTCConnections.argtypes = [ctypes.c_int]
 _shared_lib.GetWebRTCConnections.restype = ctypes.c_void_p  # Treat returned *C.char as opaque pointer
 
+# Session abstraction (per-stage handshake protocols + ping liveness +
+# signed peer record). See unailib/session_api.go.
+_shared_lib.SendOnProtocol.argtypes = [
+    ctypes.c_int,      # instanceIndex
+    ctypes.c_char_p,   # peerID
+    ctypes.c_char_p,   # protocolID
+    ctypes.c_char_p,   # payload
+    ctypes.c_int,      # payloadLen
+]
+_shared_lib.SendOnProtocol.restype = ctypes.c_void_p
+
+_shared_lib.PingPeer.argtypes = [
+    ctypes.c_int,      # instanceIndex
+    ctypes.c_char_p,   # peerID
+    ctypes.c_int,      # timeoutMs
+]
+_shared_lib.PingPeer.restype = ctypes.c_void_p
+
+_shared_lib.GenerateSignedPeerRecord.argtypes = [ctypes.c_int]
+_shared_lib.GenerateSignedPeerRecord.restype = ctypes.c_void_p
+
+_shared_lib.VerifySignedPeerRecord.argtypes = [ctypes.c_char_p, ctypes.c_char_p]
+_shared_lib.VerifySignedPeerRecord.restype = ctypes.c_void_p
+
+_shared_lib.SignWithHostKey.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int]
+_shared_lib.SignWithHostKey.restype = ctypes.c_void_p
+
+_shared_lib.VerifyPeerSignature.argtypes = [
+    ctypes.c_char_p,   # peerID
+    ctypes.c_char_p,   # data
+    ctypes.c_int,      # dataLen
+    ctypes.c_char_p,   # sigB64
+]
+_shared_lib.VerifyPeerSignature.restype = ctypes.c_void_p
+
+_shared_lib.VerifySignedPeerRecord.argtypes = [ctypes.c_char_p, ctypes.c_char_p]
+_shared_lib.VerifySignedPeerRecord.restype = ctypes.c_void_p
+
 # Memory Management
 # FreeString now accepts the opaque pointer directly
 _shared_lib.FreeString.argtypes = [ctypes.c_void_p]

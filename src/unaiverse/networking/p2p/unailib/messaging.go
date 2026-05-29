@@ -16,6 +16,7 @@ import (
 	"google.golang.org/protobuf/proto"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/core/network"
+	libp2pproto "github.com/libp2p/go-libp2p/core/protocol"
 	ma "github.com/multiformats/go-multiaddr"
 	pg "unailib/proto-go"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
@@ -29,6 +30,19 @@ func storeReceivedMessage(
 	channel string,
 	data []byte,
 ) {
+	storeReceivedMessageWithProtocol(ni, from, channel, "", data)
+}
+
+// storeReceivedMessageWithProtocol is the protocol-aware variant used by session
+// stream handlers — the libp2p protocol ID is preserved on the queued message so
+// Python can route by protocol instead of by content_type.
+func storeReceivedMessageWithProtocol(
+	ni *NodeInstance,
+	from peer.ID,
+	channel string,
+	protocolID string,
+	data []byte,
+) {
 	// Get the message store for this instance
 	store := ni.messageStore
 	if store == nil {
@@ -38,8 +52,9 @@ func storeReceivedMessage(
 
 	// Create the minimal message envelope.
 	newMessage := &QueuedMessage{
-		From: from,
-		Data: data,
+		From:     from,
+		Data:     data,
+		Protocol: protocolID,
 	}
 
 	// Lock the store mutex before accessing the shared maps.
@@ -300,6 +315,79 @@ func setupDirectMessageHandler(
 	ni.host.SetStreamHandler(UnaiverseChatProtocol, func(s network.Stream) {
 		handleStream(ni, s)
 	})
+
+	// Per-stage Session protocol handlers — one protobuf message per stream, no channel
+	// header in the framing (unlike chat which multiplexes channels over a persistent
+	// stream). See handleSessionStream below.
+	for _, proto := range []string{
+		SessionHelloProtocol,
+		SessionProfileProtocol,
+		SessionWorldProtocol,
+		SessionControlProtocol,
+	} {
+		protoCopy := proto // capture loop variable
+		ni.host.SetStreamHandler(libp2pproto.ID(protoCopy), func(s network.Stream) {
+			handleSessionStream(ni, s, protoCopy)
+		})
+	}
+}
+
+// handleSessionStream reads a single length-prefixed protobuf payload from a Session
+// stream and enqueues it for Python with the protocol ID attached. Unlike handleStream
+// (chat), each Session stream carries exactly one message and is closed after read —
+// no persistent stream, no per-stream channel header. Framing: 4-byte big-endian
+// uint32 length, then the protobuf payload.
+func handleSessionStream(ni *NodeInstance, s network.Stream, protocolID string) {
+	senderPeerID := s.Conn().RemotePeer()
+	streamID := s.ID()
+	defer s.Close()
+
+	// Per-stream read budget — keeps a slow / malicious peer from holding the stream
+	// open indefinitely. The Session FSM enforces its own per-stage timeouts on the
+	// Python side; this is just a transport-level safety net.
+	if err := s.SetReadDeadline(time.Now().Add(StreamCreationTimeout)); err != nil {
+		logger.Warnf("[GO] ⚠️ Instance %d: SetReadDeadline failed on session stream %s: %v\n", ni.instanceIndex, streamID, err)
+	}
+
+	var payloadLen uint32
+	if err := binary.Read(s, binary.BigEndian, &payloadLen); err != nil {
+		if err != io.EOF {
+			logger.Warnf("[GO] ⚠️ Instance %d: session stream %s (%s) read-length failed: %v\n", ni.instanceIndex, streamID, protocolID, err)
+		}
+		return
+	}
+	if payloadLen == 0 || payloadLen > MaxMessageSize {
+		logger.Errorf("[GO] ❌ Instance %d: session stream %s (%s) bad payload length %d\n", ni.instanceIndex, streamID, protocolID, payloadLen)
+		s.Reset()
+		return
+	}
+	payload := make([]byte, payloadLen)
+	if _, err := io.ReadFull(s, payload); err != nil {
+		logger.Warnf("[GO] ⚠️ Instance %d: session stream %s (%s) read-payload failed: %v\n", ni.instanceIndex, streamID, protocolID, err)
+		return
+	}
+	logger.Infof("[GO] 📨 Instance %d: Session %s from %s (%d bytes)\n", ni.instanceIndex, protocolID, senderPeerID, payloadLen)
+
+	// Use the protocol ID as the channel key so messages are queued per-protocol.
+	// Python's connpool decoder treats any channel matching a session protocol ID
+	// as a session message and routes it to the SessionManager.
+	storeReceivedMessageWithProtocol(ni, senderPeerID, protocolID, protocolID, payload)
+}
+
+// writeSessionFrame writes a single length-prefixed session payload onto a stream:
+// 4-byte big-endian uint32 length, then the protobuf bytes. Returns the number of
+// bytes actually written (header + payload) on success.
+func writeSessionFrame(w io.Writer, payload []byte) error {
+	if uint32(len(payload)) > MaxMessageSize {
+		return fmt.Errorf("session payload size (%d) exceeds limit (%d)", len(payload), MaxMessageSize)
+	}
+	if err := binary.Write(w, binary.BigEndian, uint32(len(payload))); err != nil {
+		return fmt.Errorf("failed to write session length prefix: %w", err)
+	}
+	if _, err := w.Write(payload); err != nil {
+		return fmt.Errorf("failed to write session payload: %w", err)
+	}
+	return nil
 }
 
 // This function constructs and writes a message using our new framing protocol for direct messages.

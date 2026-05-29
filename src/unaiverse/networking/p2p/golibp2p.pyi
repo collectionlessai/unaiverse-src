@@ -149,3 +149,53 @@ class GoLibP2P:
         Frees an integer previously allocated by the shared library.
         """
         ...
+
+    def SendOnProtocol(self, instance: int, peer_id: bytes, protocol_id: bytes, payload: bytes, payload_len: bytes) -> int:
+        """
+        SendOnProtocol(instance: int, peer_id: bytes, protocol_id: bytes, payload: bytes, payload_len: bytes) -> int
+
+        Open a fresh outbound stream on `protocol_id` to `peer_id`, write a single
+        length-prefixed protobuf payload, and close the stream.
+        """
+        ...
+
+    def PingPeer(self, instance: int, peer_id: bytes, timeout_ms: int) -> int:
+        """
+        PingPeer(instance: int, peer_id: bytes, timeout_ms: int) -> int
+
+        Run a single /ipfs/ping/1.0.0 round-trip against `peer_id`.
+        """
+        ...
+
+    def GenerateSignedPeerRecord(self, instance: int) -> int:
+        """
+        GenerateSignedPeerRecord(self, instance: int) -> int
+
+        Build a libp2p SignedPeerRecord over the host's current listen addresses,
+        sealed under the host private key.
+        """
+        ...
+
+    def SignWithHostKey(self, instance:int, data: bytes, len_data: int) -> int:
+        """
+        SignWithHostKey(self, instance:int, data: bytes, len_data: int) -> int
+
+        Sign `data` with the host's libp2p private key (Ed25519 by default).
+        """
+        ...
+
+    def VerifyPeerSignature(self, peer_id: bytes, data: bytes, len_data: int, signature: bytes) -> int:
+        """
+        VerifyPeerSignature(self, peer_id: bytes, data: bytes, len_data: int, signature: bytes) -> int
+
+        Verify that `signature` over `data` is valid under the public key derivable from `peer_id`.
+        """
+        ...
+
+    def VerifySignedPeerRecord(self, envelope_bytes: bytes, expected_peer_id: bytes) -> int:
+        """
+        VerifySignedPeerRecord(self, envelope_bytes: bytes, expected_peer_id: bytes) -> int
+
+        Verify a SignedPeerRecord envelope and assert that its inner PeerRecord names `expected_peer_id`.
+        """
+        ...

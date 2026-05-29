@@ -1,0 +1,113 @@
+// Session handshake messages — per-stage libp2p protocols.
+// One message per libp2p stream; length-prefixed framing identical to
+// the existing chat protocol (handleStream / handleSessionStream).
+//
+// Stage 1: /unaiverse/session/hello/1.0.0     -> HelloRequest / HelloResponse
+// Stage 2: /unaiverse/session/profile/1.0.0   -> ProfileOffer / ProfileDecision
+// Stage 3: /unaiverse/session/world/1.0.0     -> WorldGrant / WorldGrantAck, PrivateJoin / PrivateJoinAck
+// Control: /unaiverse/session/control/1.0.0   -> Goaway / GoawayAck
+
+syntax = "proto3";
+
+package unaiverse.session.v1;
+
+option go_package = "./proto-go";
+
+enum ReasonCode {
+  OK                       = 0;
+  VERSION_UNSUPPORTED      = 1;
+  OVERLOADED               = 2;
+  NOT_AUTHORIZED           = 3;
+  NOT_IN_ALLOW_LIST        = 4;
+  CV_HASH_MISMATCH         = 5;
+  ROLE_INCOMPATIBLE        = 6;
+  WORLD_BUSY               = 7;
+  HOSTED_REJECTED          = 8;
+  GRACEFUL_SHUTDOWN        = 9;
+  WORLD_DISENGAGEMENT      = 10;
+  WORLD_HANDOFF_COMPLETE   = 11;
+  ROLE_REVOKED             = 12;
+  TOKEN_REVOKED            = 13;
+  KICKED_BY_HOST           = 14;
+  LOCAL_ERROR              = 15;
+  GRANT_EXPIRED            = 16;
+  SIMULTANEOUS_OPEN_LOSS   = 17;
+}
+
+// ── Stage 1 ──────────────────────────────────────────────────────────────────
+
+message HelloRequest {
+  bytes session_id          = 1;  // 16 bytes chosen by initiator
+  bytes nonce_a             = 2;  // 32 bytes random
+  repeated string protocol_versions = 3;
+  uint32 capabilities       = 4;  // bitmask
+  string client_id          = 5;
+}
+
+message HelloResponse {
+  string chosen_version     = 1;
+  uint32 capabilities       = 2;
+  bytes nonce_b             = 3;  // 32 bytes random
+  bytes sig_b               = 4;  // Ed25519(local_key, nonce_a || session_id)
+  ReasonCode reason_code    = 5;
+}
+
+// ── Stage 2 ──────────────────────────────────────────────────────────────────
+
+message ProfileOffer {
+  bytes profile             = 1;  // serialized NodeProfile JSON
+  bytes sig_a               = 2;  // Ed25519(local_key, nonce_b || session_id)
+  bytes signed_peer_record  = 3;  // libp2p SignedPeerRecord (other peer-id)
+  bytes session_id          = 4;
+}
+
+message ProfileDecision {
+  bool accepted             = 1;
+  bytes profile_b           = 2;  // serialized NodeProfile JSON (required when accepted)
+  ReasonCode reason_code    = 3;
+  repeated string hint_addrs = 4;
+  uint32 retry_after_ms     = 5;
+  bytes session_id          = 6;
+}
+
+// ── Stage 3 (world join) ────────────────────────────────────────────────────
+
+message WorldGrant {
+  bytes grant_id            = 1;  // 32 bytes random
+  bytes grant_sig           = 2;  // Ed25519(world_key, grant_id || joiner_node_id || expiry_unix_ms)
+  uint64 expiry_unix_ms     = 3;
+  bytes world_profile       = 4;  // serialized WorldProfile JSON
+  bytes world_private_peer_record = 5;  // SignedPeerRecord for the world p2p_world peer-id
+  uint32 role               = 6;  // role bitmask
+  bytes code_bundle         = 7;  // optional
+  bytes initial_stats       = 8;  // optional
+  uint64 rendezvous_tag     = 9;
+}
+
+message WorldGrantAck {
+  bool received             = 1;
+}
+
+message PrivateJoin {
+  bytes grant_id            = 1;
+  bytes sig_init            = 2;  // Ed25519(joiner_world_key, grant_id)
+  string joiner_node_id     = 3;
+}
+
+message PrivateJoinAck {
+  bool accepted             = 1;
+  ReasonCode reason_code    = 2;
+  string rendezvous_topic   = 3;
+}
+
+// ── Control ──────────────────────────────────────────────────────────────────
+
+message Goaway {
+  ReasonCode reason         = 1;
+  uint32 drain_window_ms    = 2;
+  bytes session_id          = 3;
+}
+
+message GoawayAck {
+  bool received             = 1;
+}

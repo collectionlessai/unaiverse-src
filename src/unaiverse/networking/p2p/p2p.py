@@ -659,6 +659,169 @@ class P2P:
             logger.error(f"❌ Unsubscription from {channel} failed: {e}")
             raise P2PError(f"Unsubscription from {channel} failed") from e
 
+    # --- Session abstraction (per-stage handshake / liveness / signed peer record) ---
+
+    def send_on_protocol(self, peer_id: str, protocol_id: str, payload: bytes) -> bool:
+        """
+        Open a fresh outbound stream on `protocol_id` to `peer_id`, write a single
+        length-prefixed protobuf payload, and close the stream. Returns True on
+        send success, False on transport failure.
+
+        The response (if any) is delivered asynchronously as a pop_messages entry
+        whose `protocol` field equals `protocol_id`.
+        """
+        if not peer_id or not isinstance(peer_id, str):
+            raise ValueError("send_on_protocol: peer_id must be a non-empty string")
+        if not protocol_id or not isinstance(protocol_id, str):
+            raise ValueError("send_on_protocol: protocol_id must be a non-empty string")
+        if not isinstance(payload, (bytes, bytearray)):
+            raise TypeError("send_on_protocol: payload must be bytes")
+
+        try:
+            result_ptr = P2P.libp2p.SendOnProtocol(
+                P2P._type_interface.to_go_int(self._instance),
+                P2P._type_interface.to_go_string(peer_id),
+                P2P._type_interface.to_go_string(protocol_id),
+                P2P._type_interface.to_go_bytes(bytes(payload)),
+                P2P._type_interface.to_go_int(len(payload)),
+            )
+            result = P2P._type_interface.from_go_ptr_to_json(result_ptr)
+            if result is None or result.get('state') == 'Error':
+                logger.warning(f"send_on_protocol({peer_id[:12]}…, {protocol_id}) failed: "
+                               f"{result.get('message') if result else 'null result'}")
+                return False
+            return True
+        except Exception as e:
+            logger.error(f"send_on_protocol({peer_id[:12]}…, {protocol_id}) exception: {e}")
+            return False
+
+    def ping_peer(self, peer_id: str, timeout_ms: int = 5000) -> Optional[int]:
+        """
+        Run a single /ipfs/ping/1.0.0 round-trip against `peer_id`. Returns the
+        measured RTT in milliseconds on success, or None on timeout / error.
+        Called by the Session keep-alive (every 15s on ESTABLISHED sessions).
+        """
+        if not peer_id or not isinstance(peer_id, str):
+            raise ValueError("ping_peer: peer_id must be a non-empty string")
+        try:
+            result_ptr = P2P.libp2p.PingPeer(
+                P2P._type_interface.to_go_int(self._instance),
+                P2P._type_interface.to_go_string(peer_id),
+                P2P._type_interface.to_go_int(int(timeout_ms)),
+            )
+            result = P2P._type_interface.from_go_ptr_to_json(result_ptr)
+            if result is None or result.get('state') == 'Error':
+                return None
+            try:
+                return int(result.get('message', '0'))
+            except (TypeError, ValueError):
+                return None
+        except Exception as e:
+            logger.error(f"ping_peer({peer_id[:12]}…) exception: {e}")
+            return None
+
+    def generate_signed_peer_record(self) -> Optional[bytes]:
+        """
+        Build a libp2p SignedPeerRecord over the host's current listen addresses,
+        sealed under the host private key. Returns the raw envelope bytes (the
+        Go side returns it base64-encoded; we decode to bytes here).
+
+        Session includes this in PROFILE_OFFER so the responder can cryptographically
+        bind the agent's *other* peer-id (p2p_world key when the handshake runs on
+        p2p_public, and vice-versa).
+        """
+        import base64
+        try:
+            result_ptr = P2P.libp2p.GenerateSignedPeerRecord(
+                P2P._type_interface.to_go_int(self._instance),
+            )
+            result = P2P._type_interface.from_go_ptr_to_json(result_ptr)
+            if result is None or result.get('state') == 'Error':
+                logger.warning(f"generate_signed_peer_record failed: "
+                               f"{result.get('message') if result else 'null result'}")
+                return None
+            b64 = result.get('message', '')
+            if not b64:
+                return None
+            try:
+                return base64.b64decode(b64)
+            except Exception as e:
+                logger.error(f"generate_signed_peer_record: bad base64 from Go: {e}")
+                return None
+        except Exception as e:
+            logger.error(f"generate_signed_peer_record exception: {e}")
+            return None
+
+    def sign_with_host_key(self, data: bytes) -> Optional[bytes]:
+        """Sign `data` with the host's libp2p private key (Ed25519 by default).
+        Returns the raw signature bytes, or None on error. Used by Session to
+        produce sig_a / sig_b over (nonce || session_id) for replay defence."""
+        import base64
+        if not isinstance(data, (bytes, bytearray)):
+            raise TypeError("sign_with_host_key: data must be bytes")
+        try:
+            result_ptr = P2P.libp2p.SignWithHostKey(
+                P2P._type_interface.to_go_int(self._instance),
+                P2P._type_interface.to_go_bytes(bytes(data)),
+                P2P._type_interface.to_go_int(len(data)),
+            )
+            result = P2P._type_interface.from_go_ptr_to_json(result_ptr)
+            if result is None or result.get('state') == 'Error':
+                return None
+            b64 = result.get('message', '')
+            return base64.b64decode(b64) if b64 else None
+        except Exception as e:
+            logger.error(f"sign_with_host_key exception: {e}")
+            return None
+
+    def verify_peer_signature(self, peer_id: str, data: bytes, signature: bytes) -> bool:
+        """Verify that `signature` over `data` is valid under the public key derivable
+        from `peer_id`. Works for Ed25519 peer-ids (libp2p default — pubkey is
+        embedded in the id); fails for RSA peer-ids."""
+        import base64
+        if not isinstance(data, (bytes, bytearray)):
+            raise TypeError("verify_peer_signature: data must be bytes")
+        if not isinstance(signature, (bytes, bytearray)):
+            raise TypeError("verify_peer_signature: signature must be bytes")
+        try:
+            sig_b64 = base64.b64encode(bytes(signature)).decode("ascii")
+            result_ptr = P2P.libp2p.VerifyPeerSignature(
+                P2P._type_interface.to_go_string(peer_id),
+                P2P._type_interface.to_go_bytes(bytes(data)),
+                P2P._type_interface.to_go_int(len(data)),
+                P2P._type_interface.to_go_string(sig_b64),
+            )
+            result = P2P._type_interface.from_go_ptr_to_json(result_ptr)
+            return bool(result) and result.get('state') == 'Success'
+        except Exception as e:
+            logger.error(f"verify_peer_signature exception: {e}")
+            return False
+
+    def verify_signed_peer_record(self, envelope_bytes: bytes, expected_peer_id: str) -> bool:
+        """
+        Verify a SignedPeerRecord envelope and assert that its inner PeerRecord
+        names `expected_peer_id`. Used by the Session responder to validate the
+        `signed_peer_record` field of an incoming PROFILE_OFFER.
+        """
+        import base64
+        if not isinstance(envelope_bytes, (bytes, bytearray)):
+            raise TypeError("verify_signed_peer_record: envelope_bytes must be bytes")
+        if not expected_peer_id or not isinstance(expected_peer_id, str):
+            raise ValueError("verify_signed_peer_record: expected_peer_id must be a non-empty string")
+        try:
+            b64 = base64.b64encode(bytes(envelope_bytes)).decode("ascii")
+            result_ptr = P2P.libp2p.VerifySignedPeerRecord(
+                P2P._type_interface.to_go_string(b64),
+                P2P._type_interface.to_go_string(expected_peer_id),
+            )
+            result = P2P._type_interface.from_go_ptr_to_json(result_ptr)
+            if result is None or result.get('state') == 'Error':
+                return False
+            return True
+        except Exception as e:
+            logger.error(f"verify_signed_peer_record exception: {e}")
+            return False
+
     # --- Relay Operations ---
     def reserve_on_relay(self, relay_peer_id: str) -> str:
         """

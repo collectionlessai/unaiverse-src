@@ -24,7 +24,8 @@ dependencies = [
     "plotly",
     "prompt_toolkit",
     "tqdm",
-    "typing_extensions"
+    "typing_extensions",
+    "pytest>=9.0.3",
 ]
 license-files = ["LICENSE"]
 keywords = ["UNaIVERSE", "Collectionless AI", "AI", "Agentic AI", "Agents", "Machine Learning", "Learning Over Time"]
@@ -109,3 +110,9 @@ environment = { PATH = "$(brew --prefix go@1.24)/bin:$PATH" }
 # On Windows, choco handles the PATH modification automatically,
 # so we just need to install it once.
 before-all = "choco install golang --version 1.24.5 -y"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "p2p: integration tests that start real libp2p nodes (slow, opt-in with -m p2p)",
+]

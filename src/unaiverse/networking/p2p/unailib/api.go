@@ -34,8 +34,9 @@ import (
 	golog "github.com/ipfs/go-log/v2"
 	manet "github.com/multiformats/go-multiaddr/net"
 	rcmgr "github.com/libp2p/go-libp2p/p2p/host/resource-manager"
-	libp2p "github.com/libp2p/go-libp2p"                         
+	libp2p "github.com/libp2p/go-libp2p"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
+	ping "github.com/libp2p/go-libp2p/p2p/protocol/ping"
 	webrtc "github.com/libp2p/go-libp2p/p2p/transport/webrtc"
 	pwebrtc "github.com/pion/webrtc/v4"
 	p2pforge "github.com/ipshipyard/p2p-forge/client"
@@ -411,6 +412,11 @@ func CreateNode(
 	}
 	ni.host = host
 	logger.Infof("[GO] ✅ Instance %d: Host created with ID: %s\n", instanceIndex, ni.host.ID())
+
+	// Construct the libp2p ping service so the Session keep-alive (Python-side) can
+	// run /ipfs/ping/1.0.0 round-trips on demand. Registers the inbound handler too,
+	// so peers we don't initiate against can still ping us.
+	ni.pingService = ping.NewPingService(ni.host)
 
 	if cfg.Network.Isolated {
         // Turn on the "Protocol Police"
@@ -1585,8 +1591,9 @@ func PopMessages(
 	payloads := make([]map[string]interface{}, len(poppedMessages))
 	for i, msg := range poppedMessages {
 		payloads[i] = map[string]interface{}{
-			"from": msg.From,
-			"data": base64.StdEncoding.EncodeToString(msg.Data),
+			"from":     msg.From,
+			"data":     base64.StdEncoding.EncodeToString(msg.Data),
+			"protocol": msg.Protocol,
 		}
 	}
 
