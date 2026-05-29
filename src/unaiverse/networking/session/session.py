@@ -11,12 +11,23 @@ The FSM is *synchronous* with async send helpers: ``process_inbound()`` and
 ``check_timeout()`` are called from the polling loop (Node's
 ``__handle_network_messages`` / main loop) and advance state immediately.
 ``process_inbound()`` is async only because some transitions need to
-``await conn.send_session()``.
+``await conn.send_session()`` / ``await conn.<crypto>()``.
 
 No asyncio.Queue, no background Task for the FSM — the polling loop drives it.
 The single exception is the keep-alive ping, which runs in a fire-and-forget
 ``asyncio.create_task`` and posts its result back into a tiny single-writer
 queue drained on the next ``tick_keepalive()`` call.
+
+Portability (CPython + Pyodide)
+-------------------------------
+This module is **protobuf-free** and never holds a Python ``P2P`` handle: it
+speaks ``SessMsg`` value objects and reaches the transport/crypto only through
+the async ``conn`` interface (``send_session`` / ``sign_with_host_key`` /
+``verify_peer_signature`` / ``verify_signed_peer_record`` / ``ping_peer`` /
+``generate_signed_peer_record``), all keyed by ``p2p_name`` (a string). That is
+exactly the surface a JS ``NodeConn`` mirror exposes, so this file runs unchanged
+in Pyodide. The wire (de)serialization lives in the conn layer (``connpool.py``
+in CPython; ``session_pb.js`` in the browser).
 
 Each stage runs on its own libp2p protocol:
   /unaiverse/session/hello/1.0.0     -- HelloRequest / HelloResponse
@@ -25,10 +36,9 @@ Each stage runs on its own libp2p protocol:
                                         PrivateJoin / PrivateJoinAck
   /unaiverse/session/control/1.0.0   -- Goaway / GoawayAck
 
-Payloads are protobuf messages from p2p/session.proto. Identity is bound by
-``sig_b`` (Stage-1, responder over ``nonce_a||session_id``), ``sig_a`` (Stage-2,
-initiator over ``nonce_b||session_id``), and the libp2p SignedPeerRecord
-(Stage-2, binding the agent's *other* peer-id to its addresses). No per-message
+Identity is bound by ``sig_b`` (Stage-1, responder over ``nonce_a||session_id``),
+``sig_a`` (Stage-2, initiator over ``nonce_b||session_id``), and the libp2p
+SignedPeerRecord (Stage-2, binding the agent's *other* peer-id). No per-message
 JWT piggyback for session protocols.
 """
 
@@ -39,15 +49,19 @@ import secrets
 import asyncio
 import logging
 import time
+import random
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Optional, Dict, Any, List, TYPE_CHECKING
+from typing import Optional, Dict, Any, List, Callable, Awaitable, TYPE_CHECKING
 
-from unaiverse.networking.p2p import session_pb2 as spb
+from unaiverse.networking.session.sess_msg import (
+    SessMsg, reason_name, ProfileDecisionResult, WorldGrantSpec,
+    OK, VERSION_UNSUPPORTED, NOT_AUTHORIZED, LOCAL_ERROR, GRACEFUL_SHUTDOWN,
+    SIMULTANEOUS_OPEN_LOSS,
+)
 
 if TYPE_CHECKING:
     from unaiverse.networking.node.connpool import ConnectionPools
-    from unaiverse.networking.p2p.p2p import P2P
 
 log = logging.getLogger("Session")
 
@@ -85,6 +99,7 @@ _KEEPALIVE_FAIL_THRESHOLD = 2
 # ── Misc ─────────────────────────────────────────────────────────────────────
 _SESSION_ID_BYTES = 16
 _NONCE_BYTES = 32
+_GRANT_ID_BYTES = 32
 
 
 # ── State / Role / Event enums ────────────────────────────────────────────────
@@ -97,6 +112,7 @@ class SessionState(str, Enum):
     PROFILE_SENT = "profile_sent"       # initiator: PROFILE_OFFER out, awaiting PROFILE_DECISION
     AWAITING_WORLD_GRANT = "awaiting_world_grant"  # initiator: world joiner expecting WORLD_GRANT
     AWAITING_PRIVATE_JOIN = "awaiting_private_join"  # responder world: WORLD_GRANT out, awaiting PRIVATE_JOIN
+    PRIVATE_JOIN_SENT = "private_join_sent"  # initiator on p2p_world: PRIVATE_JOIN out, awaiting ACK
     ESTABLISHED = "established"
     RECONNECTING = "reconnecting"       # link dropped, within grace period
     CLOSING = "closing"                 # sent GOAWAY, awaiting GOAWAY_ACK
@@ -129,11 +145,20 @@ class SessionEvent:
     data: Dict[str, Any] = field(default_factory=dict)
 
 
+# Type alias for the responder decision hook (see SessionManager).
+DecisionHook = Callable[[str, Optional[str], dict, str], Awaitable[ProfileDecisionResult]]
+
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _sign_payload(nonce: bytes, session_id: bytes) -> bytes:
     """Canonical sign-payload for sig_a / sig_b: ``nonce || session_id``."""
     return bytes(nonce) + bytes(session_id)
+
+
+def _grant_sign_payload(grant_id: bytes, joiner_node_id: str, expiry_unix_ms: int) -> bytes:
+    """Canonical sign-payload for grant_sig: ``grant_id || joiner_node_id || expiry_be``."""
+    return bytes(grant_id) + joiner_node_id.encode("utf-8") + int(expiry_unix_ms).to_bytes(8, "big")
 
 
 # ── Session ───────────────────────────────────────────────────────────────────
@@ -149,31 +174,35 @@ class Session:
         p2p_name: str,
         local_peer_id: str,
         local_node_id: str,
-        local_profile_factory,
-        local_spr_other: Optional[bytes],
+        local_profile_factory: Callable[[], dict],
         remote_node_id_hint: Optional[str] = None,
         remote_other_peer_id_hint: Optional[str] = None,
         addresses: Optional[List[str]] = None,
         is_world_join: bool = False,
+        decision_hook: Optional[DecisionHook] = None,
+        grant: Optional[dict] = None,
     ):
         """
         Args:
             peer_id: libp2p peer-id of the remote (on this p2p instance).
             role: INITIATOR or RESPONDER.
-            conn: the ConnectionPools instance.
+            conn: the ConnectionPools instance (or a JS NodeConn mirror in Pyodide).
             p2p_name: the P2P instance this Session lives on.
             local_peer_id: our libp2p peer-id on `p2p_name`.
             local_node_id: our application-level node-id (the JWT-bound identity).
-            local_profile_factory: zero-arg callable that returns the current NodeProfile dict.
-            local_spr_other: serialized SignedPeerRecord for our *other* peer-id
-                (the p2p_world key when this Session runs on p2p_public). May be
-                None if we don't have a second peer-id yet — Stage-2 then ships
-                an empty signed_peer_record and responders that require it reject.
-            remote_node_id_hint: optional; if known, used to bind the JWT identity.
-            remote_other_peer_id_hint: optional; the remote's *other* peer-id,
-                needed to verify the inbound SignedPeerRecord.
+            local_profile_factory: zero-arg callable returning the current NodeProfile
+                dict (must be plain JSON-serializable — sampled fresh at offer time).
+            remote_node_id_hint: optional; the remote's application node-id when known.
+            remote_other_peer_id_hint: optional; the remote's *other* peer-id, needed
+                to verify the inbound SignedPeerRecord / a world PRIVATE_JOIN sig.
             addresses: initiator only — peer multiaddrs from root server / cache.
-            is_world_join: initiator only — if True, also drive Stage-3 (world handoff).
+            is_world_join: initiator only — if True on a public Session, expect a
+                WORLD_GRANT (Stage-3) after PROFILE_DECISION.
+            decision_hook: responder only — async callback to accept/reject an offer
+                and (for a world host) produce the WorldGrant spec.
+            grant: initiator only, world Session — the grant blob obtained on the
+                public Session; when present this Session redeems it via PRIVATE_JOIN
+                after the normal HELLO+PROFILE handshake on p2p_world.
         """
         self.peer_id = peer_id
         self.role = role
@@ -182,14 +211,12 @@ class Session:
         self.local_peer_id = local_peer_id
         self.local_node_id = local_node_id
         self._local_profile_factory = local_profile_factory
-        self._local_spr_other = local_spr_other or b""
         self.remote_node_id_hint = remote_node_id_hint
         self.remote_other_peer_id_hint = remote_other_peer_id_hint
         self.addresses = list(addresses or [])
         self.is_world_join = is_world_join
-
-        # Resolved once; avoids repeated dict look-up in hot path.
-        self._p2p: "P2P" = conn.p2p_name_to_p2p[p2p_name]
+        self._decision_hook = decision_hook
+        self._grant = grant  # initiator world Session: redeem this after PROFILE
 
         # Session identity. Initiator chooses; responder adopts from HELLO.
         self.session_id: bytes = secrets.token_bytes(_SESSION_ID_BYTES)
@@ -215,7 +242,7 @@ class Session:
         # Single-producer, drained on tick_keepalive.
         self._pending_keepalive_results: List[Optional[int]] = []
 
-        # World-join specifics (initiator only).
+        # World-join specifics.
         self.grant_id: bytes = b""
         self.grant_sig: bytes = b""
         self.grant_expiry_unix_ms: int = 0
@@ -249,7 +276,6 @@ class Session:
 
         if peer_id is None:
             if self._dial_attempts < _MAX_DIAL_ATTEMPTS:
-                import random
                 delay = min(
                     random.uniform(0, _RETRY_BASE_S * (2 ** (self._dial_attempts - 1))),
                     _RETRY_CAP_S,
@@ -268,25 +294,16 @@ class Session:
 
         return await self._send_hello()
 
-    async def send_hello(self):
-        self.conn._send_hello()
-
     async def _send_hello(self) -> List[SessionEvent]:
         self.nonce_a = secrets.token_bytes(_NONCE_BYTES)
-        msg = spb.HelloRequest(
-            session_id=self.session_id,
-            nonce_a=self.nonce_a,
-            protocol_versions=["1.0"],
-            capabilities=0,
-            client_id="python/1.0",
-        )
-        ok = await self.conn.send_session(
-            peer_id=self.peer_id,
-            protocol_id=SESSION_HELLO_PROTOCOL,
-            payload=msg.SerializeToString(),
-            p2p=self._p2p,
-        )
-        if not ok:
+        msg = SessMsg(SessMsg.KIND_HELLO_REQ, {
+            "session_id": self.session_id,
+            "nonce_a": self.nonce_a,
+            "protocol_versions": ["1.0"],
+            "capabilities": 0,
+            "client_id": "python/1.0",
+        })
+        if not await self._send_payload(SESSION_HELLO_PROTOCOL, msg):
             return [self._fail("hello_send_failed")]
         self._set_state(SessionState.HELLO_SENT, _TIMEOUT_HELLO_S)
         log.info(f"{self!r} HELLO sent")
@@ -294,19 +311,19 @@ class Session:
 
     # ── Inbound dispatch ──────────────────────────────────────────────────────
 
-    async def process_inbound(self, protocol_id: str, payload: bytes) -> List[SessionEvent]:
-        """Route an inbound session-protocol payload through the FSM. Called by
+    async def process_inbound(self, protocol_id: str, sess_msg: SessMsg) -> List[SessionEvent]:
+        """Route an inbound session message through the FSM. Called by
         SessionManager.deliver for every SessionInbound."""
         events: List[SessionEvent] = []
         try:
             if protocol_id == SESSION_HELLO_PROTOCOL:
-                events += await self._on_hello_protocol(payload)
+                events += await self._on_hello_protocol(sess_msg)
             elif protocol_id == SESSION_PROFILE_PROTOCOL:
-                events += await self._on_profile_protocol(payload)
+                events += await self._on_profile_protocol(sess_msg)
             elif protocol_id == SESSION_WORLD_PROTOCOL:
-                events += await self._on_world_protocol(payload)
+                events += await self._on_world_protocol(sess_msg)
             elif protocol_id == SESSION_CONTROL_PROTOCOL:
-                events += await self._on_control_protocol(payload)
+                events += await self._on_control_protocol(sess_msg)
             else:
                 log.debug(f"{self!r} unknown protocol {protocol_id}")
         except Exception as e:
@@ -316,245 +333,347 @@ class Session:
 
     # ── Stage-1: HELLO ────────────────────────────────────────────────────────
 
-    async def _on_hello_protocol(self, payload: bytes) -> List[SessionEvent]:
-        # Two distinguishable wire messages on the hello protocol:
-        # responder receives HelloRequest; initiator receives HelloResponse.
-        if self.role == SessionRole.RESPONDER and self.state == SessionState.INIT:
-            req = spb.HelloRequest()
-            req.ParseFromString(payload)
-            return await self._responder_on_hello(req)
+    async def _on_hello_protocol(self, msg: SessMsg) -> List[SessionEvent]:
+        if (msg.kind == SessMsg.KIND_HELLO_REQ and
+                self.role == SessionRole.RESPONDER and self.state == SessionState.INIT):
+            return await self._responder_on_hello(msg)
 
-        if self.role == SessionRole.INITIATOR and self.state == SessionState.HELLO_SENT:
-            resp = spb.HelloResponse()
-            resp.ParseFromString(payload)
-            return await self._initiator_on_hello_ack(resp)
+        if (msg.kind == SessMsg.KIND_HELLO_RESP and
+                self.role == SessionRole.INITIATOR and self.state == SessionState.HELLO_SENT):
+            return await self._initiator_on_hello_ack(msg)
 
-        log.debug(f"{self!r} ignored HELLO-protocol payload in state {self.state.value}")
+        log.debug(f"{self!r} ignored HELLO-protocol {msg.kind} in state {self.state.value}")
         return []
 
-    async def _responder_on_hello(self, req: "spb.HelloRequest") -> List[SessionEvent]:
-        if not req.session_id:
+    async def _responder_on_hello(self, req: SessMsg) -> List[SessionEvent]:
+        session_id = req.get("session_id") or b""
+        if not session_id:
             return [self._fail("hello_missing_session_id")]
-        self.session_id = bytes(req.session_id)
+        self.session_id = bytes(session_id)
         self.session_id_hex = self.session_id.hex()
-        self.nonce_a = bytes(req.nonce_a)
+        self.nonce_a = bytes(req.get("nonce_a") or b"")
 
         # Version negotiation — single supported version for v1.
-        chosen = "1.0" if "1.0" in list(req.protocol_versions) else ""
+        chosen = "1.0" if "1.0" in list(req.get("protocol_versions") or []) else ""
         if not chosen:
-            resp = spb.HelloResponse(
-                chosen_version="",
-                capabilities=0,
-                nonce_b=b"",
-                sig_b=b"",
-                reason_code=spb.VERSION_UNSUPPORTED,
-            )
-            await self._send_payload(SESSION_HELLO_PROTOCOL, resp)
+            await self._send_payload(SESSION_HELLO_PROTOCOL, SessMsg(SessMsg.KIND_HELLO_RESP, {
+                "chosen_version": "", "capabilities": 0, "nonce_b": b"",
+                "sig_b": b"", "reason_code": VERSION_UNSUPPORTED,
+            }))
             return [self._fail("version_unsupported")]
 
         self.nonce_b = secrets.token_bytes(_NONCE_BYTES)
-        sig_b = self._p2p.sign_with_host_key(_sign_payload(self.nonce_a, self.session_id))
+        sig_b = await self.conn.sign_with_host_key(self.p2p_name, _sign_payload(self.nonce_a, self.session_id))
         if sig_b is None:
             return [self._fail("hello_sign_failed")]
 
-        resp = spb.HelloResponse(
-            chosen_version=chosen,
-            capabilities=0,
-            nonce_b=self.nonce_b,
-            sig_b=sig_b,
-            reason_code=spb.OK,
-        )
+        resp = SessMsg(SessMsg.KIND_HELLO_RESP, {
+            "chosen_version": chosen, "capabilities": 0, "nonce_b": self.nonce_b,
+            "sig_b": sig_b, "reason_code": OK,
+        })
         if not await self._send_payload(SESSION_HELLO_PROTOCOL, resp):
             return [self._fail("hello_ack_send_failed")]
         self._set_state(SessionState.HELLO_ACK_SENT, _TIMEOUT_PROFILE_S)
         log.info(f"{self!r} HELLO_ACK sent")
         return []
 
-    async def _initiator_on_hello_ack(self, resp: "spb.HelloResponse") -> List[SessionEvent]:
-        if resp.reason_code != spb.OK:
-            return [self._fail(f"hello_ack_rejected:{spb.ReasonCode.Name(resp.reason_code)}")]
-        if resp.chosen_version != "1.0":
-            return [self._fail(f"hello_ack_bad_version:{resp.chosen_version}")]
+    async def _initiator_on_hello_ack(self, resp: SessMsg) -> List[SessionEvent]:
+        reason_code = resp.get("reason_code", OK)
+        if reason_code != OK:
+            return [self._fail(f"hello_ack_rejected:{reason_name(reason_code)}")]
+        if resp.get("chosen_version") != "1.0":
+            return [self._fail(f"hello_ack_bad_version:{resp.get('chosen_version')}")]
 
         # Verify sig_b under the responder's peer-id (libp2p host key).
-        if not self._p2p.verify_peer_signature(
-            self.peer_id,
-            _sign_payload(bytes(self.nonce_a), self.session_id),
-            bytes(resp.sig_b),
+        if not await self.conn.verify_peer_signature(
+            self.p2p_name, self.peer_id,
+            _sign_payload(bytes(self.nonce_a), self.session_id), bytes(resp.get("sig_b") or b""),
         ):
             return [self._fail("hello_ack_bad_sig_b")]
 
-        self.nonce_b = bytes(resp.nonce_b)
+        self.nonce_b = bytes(resp.get("nonce_b") or b"")
         return await self._initiator_send_profile_offer()
 
     # ── Stage-2: PROFILE ──────────────────────────────────────────────────────
 
     async def _initiator_send_profile_offer(self) -> List[SessionEvent]:
-        sig_a = self._p2p.sign_with_host_key(_sign_payload(self.nonce_b, self.session_id))
+        sig_a = await self.conn.sign_with_host_key(self.p2p_name, _sign_payload(self.nonce_b, self.session_id))
         if sig_a is None:
             return [self._fail("profile_offer_sign_failed")]
+        # SignedPeerRecord for our *other* peer-id, fetched lazily/async at offer
+        # time (sealed over current addresses; must not be precomputed sync).
+        spr_other = await self.conn.generate_signed_peer_record(self._other_p2p_name()) or b""
         profile_bytes = json.dumps(self._local_profile_factory()).encode("utf-8")
-        offer = spb.ProfileOffer(
-            profile=profile_bytes,
-            sig_a=sig_a,
-            signed_peer_record=self._local_spr_other,
-            session_id=self.session_id,
-        )
+        offer = SessMsg(SessMsg.KIND_PROFILE_OFFER, {
+            "profile": profile_bytes,
+            "sig_a": sig_a,
+            "signed_peer_record": spr_other,
+            "session_id": self.session_id,
+        })
         if not await self._send_payload(SESSION_PROFILE_PROTOCOL, offer):
             return [self._fail("profile_offer_send_failed")]
         self._set_state(SessionState.PROFILE_SENT, _TIMEOUT_PROFILE_S)
         log.info(f"{self!r} PROFILE_OFFER sent")
         return []
 
-    async def _on_profile_protocol(self, payload: bytes) -> List[SessionEvent]:
-        if self.role == SessionRole.RESPONDER and self.state == SessionState.HELLO_ACK_SENT:
-            offer = spb.ProfileOffer()
-            offer.ParseFromString(payload)
-            return await self._responder_on_profile_offer(offer)
+    async def _on_profile_protocol(self, msg: SessMsg) -> List[SessionEvent]:
+        if (msg.kind == SessMsg.KIND_PROFILE_OFFER and
+                self.role == SessionRole.RESPONDER and self.state == SessionState.HELLO_ACK_SENT):
+            return await self._responder_on_profile_offer(msg)
 
-        if self.role == SessionRole.INITIATOR and self.state == SessionState.PROFILE_SENT:
-            decision = spb.ProfileDecision()
-            decision.ParseFromString(payload)
-            return self._initiator_on_profile_decision(decision)
+        if (msg.kind == SessMsg.KIND_PROFILE_DECISION and
+                self.role == SessionRole.INITIATOR and self.state == SessionState.PROFILE_SENT):
+            return await self._initiator_on_profile_decision(msg)
 
-        log.debug(f"{self!r} ignored PROFILE-protocol payload in state {self.state.value}")
+        log.debug(f"{self!r} ignored PROFILE-protocol {msg.kind} in state {self.state.value}")
         return []
 
-    async def _responder_on_profile_offer(self, offer: "spb.ProfileOffer") -> List[SessionEvent]:
+    async def _responder_on_profile_offer(self, offer: SessMsg) -> List[SessionEvent]:
         # Verify sig_a under the initiator's peer-id.
-        if not self._p2p.verify_peer_signature(
-            self.peer_id,
-            _sign_payload(bytes(self.nonce_b), self.session_id),
-            bytes(offer.sig_a),
+        if not await self.conn.verify_peer_signature(
+            self.p2p_name, self.peer_id,
+            _sign_payload(bytes(self.nonce_b), self.session_id), bytes(offer.get("sig_a") or b""),
         ):
-            return await self._reject_profile(spb.NOT_AUTHORIZED, "bad_sig_a")
+            return await self._reject_profile(NOT_AUTHORIZED, "bad_sig_a")
 
         # If we know the initiator's other peer-id, verify the signed peer record
-        # binds those bytes to that id. If we don't have a hint, we skip — the
-        # other side may not be a dual-key agent.
-        if self.remote_other_peer_id_hint and offer.signed_peer_record:
-            if not self._p2p.verify_signed_peer_record(
-                bytes(offer.signed_peer_record),
-                self.remote_other_peer_id_hint,
+        # binds those bytes to that id. If we don't have a hint, skip — the other
+        # side may not be a dual-key agent.
+        spr = offer.get("signed_peer_record") or b""
+        if self.remote_other_peer_id_hint and spr:
+            if not await self.conn.verify_signed_peer_record(
+                self.p2p_name, bytes(spr), self.remote_other_peer_id_hint,
             ):
-                return await self._reject_profile(spb.NOT_AUTHORIZED, "bad_signed_peer_record")
+                return await self._reject_profile(NOT_AUTHORIZED, "bad_signed_peer_record")
 
         try:
-            self.remote_profile = json.loads(bytes(offer.profile).decode("utf-8"))
+            self.remote_profile = json.loads(bytes(offer.get("profile") or b"").decode("utf-8"))
         except Exception as e:
-            return await self._reject_profile(spb.LOCAL_ERROR, f"bad_profile_json:{e}")
+            return await self._reject_profile(LOCAL_ERROR, f"bad_profile_json:{e}")
 
-        # v1: always accept. Future: call hosted validation hook here (allow-list,
-        # cv_hash, role compatibility, rate-limit).
-        decision = spb.ProfileDecision(
-            accepted=True,
-            profile_b=json.dumps(self._local_profile_factory()).encode("utf-8"),
-            reason_code=spb.OK,
-            session_id=self.session_id,
-        )
-        if not await self._send_payload(SESSION_PROFILE_PROTOCOL, decision):
+        # Application decision: accept/reject + (world host) the grant spec. When no
+        # hook is injected we accept (preserves the v1 agent happy-path default).
+        if self._decision_hook is not None:
+            try:
+                decision = await self._decision_hook(
+                    self.peer_id, self.remote_node_id_hint, self.remote_profile, self.p2p_name)
+            except Exception as e:
+                log.error(f"{self!r} decision_hook raised: {e}", exc_info=True)
+                return await self._reject_profile(LOCAL_ERROR, f"decision_hook_error:{e}")
+        else:
+            decision = ProfileDecisionResult(accepted=True)
+
+        if not decision.accepted:
+            return await self._reject_profile(decision.reason_code, "decision_rejected")
+
+        # Send the (positive) decision carrying our profile.
+        dec_msg = SessMsg(SessMsg.KIND_PROFILE_DECISION, {
+            "accepted": True,
+            "profile_b": json.dumps(self._local_profile_factory()).encode("utf-8"),
+            "reason_code": OK,
+            "session_id": self.session_id,
+        })
+        if not await self._send_payload(SESSION_PROFILE_PROTOCOL, dec_msg):
             return [self._fail("profile_decision_send_failed")]
 
+        # World host on its PUBLIC instance: issue a WORLD_GRANT. The joiner will
+        # redeem it on a *separate* world Session; this public Session stays as the
+        # grant carrier (no ESTABLISHED) until the joiner GOAWAYs it post-handoff.
+        if decision.world_grant is not None:
+            return await self._responder_issue_world_grant(decision.world_grant)
+
+        # World host on its WORLD instance: the peer is redeeming a grant. Do not
+        # ESTABLISH yet — wait for the PRIVATE_JOIN that follows on this Session.
+        if decision.await_private_join:
+            self._set_state(SessionState.AWAITING_PRIVATE_JOIN, _TIMEOUT_WORLD_S)
+            log.info(f"{self!r} PROFILE accepted, awaiting PRIVATE_JOIN (world responder)")
+            return []
+
+        # Agent host: established immediately.
         self._set_state(SessionState.ESTABLISHED, None)
         log.info(f"{self!r} ESTABLISHED (responder)")
         self._last_ping_at = time.monotonic()
         return [self._emit(SessionEventType.ESTABLISHED, {"profile_b": self.remote_profile})]
 
     async def _reject_profile(self, reason_code: int, log_reason: str) -> List[SessionEvent]:
-        decision = spb.ProfileDecision(
-            accepted=False,
-            reason_code=reason_code,
-            session_id=self.session_id,
-        )
-        await self._send_payload(SESSION_PROFILE_PROTOCOL, decision)
+        await self._send_payload(SESSION_PROFILE_PROTOCOL, SessMsg(SessMsg.KIND_PROFILE_DECISION, {
+            "accepted": False, "reason_code": reason_code, "session_id": self.session_id,
+        }))
         return [self._fail(f"rejected_offer:{log_reason}")]
 
-    def _initiator_on_profile_decision(self, decision: "spb.ProfileDecision") -> List[SessionEvent]:
-        if not decision.accepted:
-            reason = spb.ReasonCode.Name(decision.reason_code) if decision.reason_code else "unspecified"
+    async def _initiator_on_profile_decision(self, decision: SessMsg) -> List[SessionEvent]:
+        if not decision.get("accepted"):
+            reason = reason_name(decision.get("reason_code", 0))
             return [self._fail(f"profile_rejected:{reason}")]
         try:
-            self.remote_profile = json.loads(bytes(decision.profile_b).decode("utf-8"))
+            self.remote_profile = json.loads(bytes(decision.get("profile_b") or b"").decode("utf-8"))
         except Exception as e:
             return [self._fail(f"profile_decision_bad_profile_b:{e}")]
 
+        # World joiner on the PUBLIC Session: expect a WORLD_GRANT next.
         if self.is_world_join:
             self._set_state(SessionState.AWAITING_WORLD_GRANT, _TIMEOUT_WORLD_S)
             log.info(f"{self!r} PROFILE accepted, awaiting WORLD_GRANT")
-            return []  # Stage-3 inbound triggers ESTABLISHED for the world Session
+            return []
+
+        # World joiner on the WORLD Session (carries a grant): redeem it via
+        # PRIVATE_JOIN instead of going ESTABLISHED now.
+        if self._grant is not None:
+            return await self._initiator_send_private_join()
 
         self._set_state(SessionState.ESTABLISHED, None)
         log.info(f"{self!r} ESTABLISHED (initiator)")
         self._last_ping_at = time.monotonic()
         return [self._emit(SessionEventType.ESTABLISHED, {"profile_b": self.remote_profile})]
 
-    # ── Stage-3: WORLD (initiator side only for v1 — responder/world hosting
-    # uses the same protocol but its driving logic lives in node.py's world
-    # role handler, which calls Session._send_world_grant directly) ──────────
+    # ── Stage-3: WORLD ────────────────────────────────────────────────────────
 
-    async def _on_world_protocol(self, payload: bytes) -> List[SessionEvent]:
-        if (self.role == SessionRole.INITIATOR and
-                self.state == SessionState.AWAITING_WORLD_GRANT):
-            grant = spb.WorldGrant()
-            grant.ParseFromString(payload)
-            return await self._initiator_on_world_grant(grant)
+    async def _responder_issue_world_grant(self, spec: WorldGrantSpec) -> List[SessionEvent]:
+        """World host (on its PUBLIC Session): mint and send a WORLD_GRANT, then
+        wait for the joiner to redeem it on the world Session. The grant is signed
+        with the WORLD-side key so the joiner can bind it to the private identity
+        it will actually connect to."""
+        self.grant_id = secrets.token_bytes(_GRANT_ID_BYTES)
+        self.grant_expiry_unix_ms = int(time.time() * 1000) + int(spec.grant_ttl_ms)
+        joiner_node_id = self.remote_node_id_hint or ""
+        grant_sig = await self.conn.sign_with_host_key(
+            self._other_p2p_name(),
+            _grant_sign_payload(self.grant_id, joiner_node_id, self.grant_expiry_unix_ms),
+        )
+        if grant_sig is None:
+            return [self._fail("world_grant_sign_failed")]
+        world_spr = await self.conn.generate_signed_peer_record(self._other_p2p_name()) or b""
 
-        if (self.role == SessionRole.RESPONDER and
-                self.state == SessionState.AWAITING_PRIVATE_JOIN):
-            join = spb.PrivateJoin()
-            join.ParseFromString(payload)
-            return await self._responder_on_private_join(join)
-
-        log.debug(f"{self!r} ignored WORLD-protocol payload in state {self.state.value}")
+        grant = SessMsg(SessMsg.KIND_WORLD_GRANT, {
+            "grant_id": self.grant_id,
+            "grant_sig": grant_sig,
+            "expiry_unix_ms": self.grant_expiry_unix_ms,
+            "world_profile": spec.world_profile_bytes,
+            "world_private_peer_record": world_spr,
+            "role": spec.role,
+            "code_bundle": spec.code_bundle,
+            "initial_stats": spec.initial_stats,
+            "rendezvous_tag": spec.rendezvous_tag,
+        })
+        if not await self._send_payload(SESSION_WORLD_PROTOCOL, grant):
+            return [self._fail("world_grant_send_failed")]
+        self._set_state(SessionState.AWAITING_PRIVATE_JOIN, _TIMEOUT_WORLD_S)
+        log.info(f"{self!r} WORLD_GRANT sent, awaiting PRIVATE_JOIN")
         return []
 
-    async def _initiator_on_world_grant(self, grant: "spb.WorldGrant") -> List[SessionEvent]:
-        if not grant.grant_id:
+    async def _on_world_protocol(self, msg: SessMsg) -> List[SessionEvent]:
+        if (msg.kind == SessMsg.KIND_WORLD_GRANT and
+                self.role == SessionRole.INITIATOR and self.state == SessionState.AWAITING_WORLD_GRANT):
+            return await self._initiator_on_world_grant(msg)
+
+        if (msg.kind == SessMsg.KIND_PRIVATE_JOIN and
+                self.role == SessionRole.RESPONDER and self.state == SessionState.AWAITING_PRIVATE_JOIN):
+            return await self._responder_on_private_join(msg)
+
+        if (msg.kind == SessMsg.KIND_PRIVATE_JOIN_ACK and
+                self.role == SessionRole.INITIATOR and self.state == SessionState.PRIVATE_JOIN_SENT):
+            return await self._initiator_on_private_join_ack(msg)
+
+        log.debug(f"{self!r} ignored WORLD-protocol {msg.kind} in state {self.state.value}")
+        return []
+
+    async def _initiator_on_world_grant(self, grant: SessMsg) -> List[SessionEvent]:
+        grant_id = grant.get("grant_id") or b""
+        if not grant_id:
             return [self._fail("world_grant_missing_id")]
-        if grant.expiry_unix_ms < int(time.time() * 1000):
+        expiry = int(grant.get("expiry_unix_ms", 0))
+        if expiry < int(time.time() * 1000):
             return [self._fail("world_grant_expired")]
 
-        self.grant_id = bytes(grant.grant_id)
-        self.grant_sig = bytes(grant.grant_sig)
-        self.grant_expiry_unix_ms = grant.expiry_unix_ms
+        world_spr = bytes(grant.get("world_private_peer_record") or b"")
+        # Verify grant_sig against the world's WORLD-side identity. That identity is
+        # carried in world_private_peer_record; require the hint to match it.
+        if self.remote_other_peer_id_hint and world_spr:
+            if not await self.conn.verify_signed_peer_record(
+                self.p2p_name, world_spr, self.remote_other_peer_id_hint,
+            ):
+                return [self._fail("world_grant_bad_spr")]
+            grant_sig = bytes(grant.get("grant_sig") or b"")
+            if not await self.conn.verify_peer_signature(
+                self.p2p_name, self.remote_other_peer_id_hint,
+                _grant_sign_payload(grant_id, self.local_node_id, expiry), grant_sig,
+            ):
+                return [self._fail("world_grant_bad_sig")]
 
-        ack = spb.WorldGrantAck(received=True)
-        await self._send_payload(SESSION_WORLD_PROTOCOL, ack)
+        self.grant_id = bytes(grant_id)
+        self.grant_sig = bytes(grant.get("grant_sig") or b"")
+        self.grant_expiry_unix_ms = expiry
 
-        # The public Session stays ESTABLISHED until the *world* Session reports
-        # ESTABLISHED — node.py owns that orchestration and will then call
-        # Session.close(WORLD_HANDOFF_COMPLETE) on this Session.
+        await self._send_payload(SESSION_WORLD_PROTOCOL, SessMsg(SessMsg.KIND_WORLD_GRANT_ACK,
+                                                                 {"received": True}))
+
+        # The public Session reaches ESTABLISHED carrying the grant blob; node.py
+        # reacts by opening the world Session and, once it is ESTABLISHED, GOAWAYs
+        # this public Session (WORLD_HANDOFF_COMPLETE).
         self._set_state(SessionState.ESTABLISHED, None)
         self._last_ping_at = time.monotonic()
-        log.info(f"{self!r} WORLD_GRANT received, public session ESTABLISHED (world handoff pending)")
+        log.info(f"{self!r} WORLD_GRANT received, public session ESTABLISHED (handoff pending)")
         return [self._emit(SessionEventType.ESTABLISHED, {
             "profile_b": self.remote_profile,
             "world_grant": {
                 "grant_id": self.grant_id.hex(),
                 "grant_sig": self.grant_sig.hex(),
                 "expiry_unix_ms": self.grant_expiry_unix_ms,
-                "world_profile_bytes": bytes(grant.world_profile),
-                "role": grant.role,
-                "rendezvous_tag": grant.rendezvous_tag,
-                "world_private_peer_record": bytes(grant.world_private_peer_record),
+                "world_profile_bytes": bytes(grant.get("world_profile") or b""),
+                "role": int(grant.get("role", 0)),
+                "rendezvous_tag": int(grant.get("rendezvous_tag", 0)),
+                "world_private_peer_record": world_spr,
+                "code_bundle": bytes(grant.get("code_bundle") or b""),
+                "initial_stats": bytes(grant.get("initial_stats") or b""),
             },
         })]
 
-    async def _responder_on_private_join(self, join: "spb.PrivateJoin") -> List[SessionEvent]:
-        # Verify sig_init under the joiner's world-side peer-id (this responder
-        # IS the world, running on p2p_world; the joiner's hint was captured by
-        # SessionManager when it scaffolded this Session).
-        if self.remote_other_peer_id_hint and not self._p2p.verify_peer_signature(
-            self.remote_other_peer_id_hint,
-            bytes(join.grant_id),
-            bytes(join.sig_init),
+    async def _initiator_send_private_join(self) -> List[SessionEvent]:
+        """World Session initiator: after PROFILE_DECISION, redeem the grant."""
+        grant = self._grant or {}
+        grant_id = grant.get("grant_id_bytes") or b""
+        if not grant_id:
+            return [self._fail("private_join_missing_grant")]
+        sig_init = await self.conn.sign_with_host_key(self.p2p_name, bytes(grant_id))
+        if sig_init is None:
+            return [self._fail("private_join_sign_failed")]
+        join = SessMsg(SessMsg.KIND_PRIVATE_JOIN, {
+            "grant_id": bytes(grant_id),
+            "sig_init": sig_init,
+            "joiner_node_id": self.local_node_id,
+        })
+        if not await self._send_payload(SESSION_WORLD_PROTOCOL, join):
+            return [self._fail("private_join_send_failed")]
+        self._set_state(SessionState.PRIVATE_JOIN_SENT, _TIMEOUT_WORLD_S)
+        log.info(f"{self!r} PRIVATE_JOIN sent")
+        return []
+
+    async def _initiator_on_private_join_ack(self, ack: SessMsg) -> List[SessionEvent]:
+        if not ack.get("accepted"):
+            return [self._fail(f"private_join_rejected:{reason_name(ack.get('reason_code', 0))}")]
+        self._set_state(SessionState.ESTABLISHED, None)
+        self._last_ping_at = time.monotonic()
+        log.info(f"{self!r} ESTABLISHED (world initiator)")
+        return [self._emit(SessionEventType.ESTABLISHED, {
+            "profile_b": self.remote_profile,
+            "rendezvous_topic": ack.get("rendezvous_topic", ""),
+        })]
+
+    async def _responder_on_private_join(self, join: SessMsg) -> List[SessionEvent]:
+        # Verify sig_init over grant_id under the joiner's world-side peer-id.
+        if self.remote_other_peer_id_hint and not await self.conn.verify_peer_signature(
+            self.p2p_name, self.remote_other_peer_id_hint,
+            bytes(join.get("grant_id") or b""), bytes(join.get("sig_init") or b""),
         ):
-            ack = spb.PrivateJoinAck(accepted=False, reason_code=spb.NOT_AUTHORIZED, rendezvous_topic="")
-            await self._send_payload(SESSION_WORLD_PROTOCOL, ack)
+            await self._send_payload(SESSION_WORLD_PROTOCOL, SessMsg(SessMsg.KIND_PRIVATE_JOIN_ACK, {
+                "accepted": False, "reason_code": NOT_AUTHORIZED, "rendezvous_topic": "",
+            }))
             return [self._fail("private_join_bad_sig")]
 
         rendezvous_topic = f"world::{self.peer_id}::ps:rv"
-        ack = spb.PrivateJoinAck(accepted=True, reason_code=spb.OK, rendezvous_topic=rendezvous_topic)
+        ack = SessMsg(SessMsg.KIND_PRIVATE_JOIN_ACK, {
+            "accepted": True, "reason_code": OK, "rendezvous_topic": rendezvous_topic,
+        })
         if not await self._send_payload(SESSION_WORLD_PROTOCOL, ack):
             return [self._fail("private_join_ack_send_failed")]
 
@@ -564,46 +683,37 @@ class Session:
         return [self._emit(SessionEventType.ESTABLISHED, {
             "profile_b": self.remote_profile,
             "rendezvous_topic": rendezvous_topic,
+            "private_join": {"grant_id": bytes(join.get("grant_id") or b"").hex(),
+                             "joiner_node_id": join.get("joiner_node_id", "")},
         })]
 
     # ── Control: GOAWAY ──────────────────────────────────────────────────────
 
-    async def _on_control_protocol(self, payload: bytes) -> List[SessionEvent]:
-        # Try parsing as Goaway first; if that fails, GoawayAck.
-        try:
-            ga = spb.Goaway()
-            ga.ParseFromString(payload)
-            if ga.session_id:
-                return await self._on_remote_goaway(ga)
-        except Exception:
-            pass
-
-        if self.state == SessionState.CLOSING:
-            try:
-                ack = spb.GoawayAck()
-                ack.ParseFromString(payload)
-                if ack.received:
-                    return [self._finalize_close("local_goaway_acked")]
-            except Exception:
-                pass
-        log.debug(f"{self!r} unrecognised CONTROL payload in state {self.state.value}")
+    async def _on_control_protocol(self, msg: SessMsg) -> List[SessionEvent]:
+        if msg.kind == SessMsg.KIND_GOAWAY:
+            return await self._on_remote_goaway(msg)
+        if msg.kind == SessMsg.KIND_GOAWAY_ACK and self.state == SessionState.CLOSING:
+            if msg.get("received"):
+                return [self._finalize_close("local_goaway_acked")]
+        log.debug(f"{self!r} unrecognised CONTROL {msg.kind} in state {self.state.value}")
         return []
 
-    async def close(self, reason_code: int = spb.GRACEFUL_SHUTDOWN) -> None:
+    async def close(self, reason_code: int = GRACEFUL_SHUTDOWN) -> None:
         """Send GOAWAY to the remote peer and enter CLOSING. The FSM completes
         via process_inbound(GoawayAck) or check_timeout."""
         if self.state not in (SessionState.ESTABLISHED, SessionState.RECONNECTING):
             log.debug(f"{self!r} close({reason_code}) called in state {self.state.value} — ignored")
             return
-        msg = spb.Goaway(reason=reason_code, drain_window_ms=0, session_id=self.session_id)
-        await self._send_payload(SESSION_CONTROL_PROTOCOL, msg)
+        await self._send_payload(SESSION_CONTROL_PROTOCOL, SessMsg(SessMsg.KIND_GOAWAY, {
+            "reason": reason_code, "drain_window_ms": 0, "session_id": self.session_id,
+        }))
         self._set_state(SessionState.CLOSING, _TIMEOUT_CLOSING_S)
-        log.info(f"{self!r} GOAWAY sent (reason={spb.ReasonCode.Name(reason_code)})")
+        log.info(f"{self!r} GOAWAY sent (reason={reason_name(reason_code)})")
 
-    async def _on_remote_goaway(self, ga: "spb.Goaway") -> List[SessionEvent]:
-        ack = spb.GoawayAck(received=True)
-        await self._send_payload(SESSION_CONTROL_PROTOCOL, ack)
-        reason = spb.ReasonCode.Name(ga.reason) if ga.reason else "unspecified"
+    async def _on_remote_goaway(self, ga: SessMsg) -> List[SessionEvent]:
+        await self._send_payload(SESSION_CONTROL_PROTOCOL, SessMsg(SessMsg.KIND_GOAWAY_ACK,
+                                                                   {"received": True}))
+        reason = reason_name(ga.get("reason", 0))
         return [self._finalize_close(f"remote_goaway:{reason}")]
 
     # ── Timeout sweep ─────────────────────────────────────────────────────────
@@ -626,7 +736,8 @@ class Session:
                           SessionState.PROFILE_SENT,
                           SessionState.HELLO_ACK_SENT,
                           SessionState.AWAITING_WORLD_GRANT,
-                          SessionState.AWAITING_PRIVATE_JOIN):
+                          SessionState.AWAITING_PRIVATE_JOIN,
+                          SessionState.PRIVATE_JOIN_SENT):
             return self._fail(f"timeout:{self.state.value}")
 
         if self.state == SessionState.RECONNECTING:
@@ -693,7 +804,7 @@ class Session:
 
     async def _do_ping(self) -> None:
         try:
-            rtt = await asyncio.to_thread(self._p2p.ping_peer, self.peer_id, _KEEPALIVE_TIMEOUT_MS)
+            rtt = await self.conn.ping_peer(self.p2p_name, self.peer_id, _KEEPALIVE_TIMEOUT_MS)
         except Exception as e:
             log.error(f"{self!r} ping_peer raised: {e}")
             rtt = None
@@ -702,6 +813,14 @@ class Session:
             self._keepalive_in_flight = False
 
     # ── Internal FSM helpers ──────────────────────────────────────────────────
+
+    def _other_p2p_name(self) -> str:
+        """The agent's *other* p2p instance name (p2p_world when this Session runs
+        on p2p_public and vice-versa). Used for cross-instance SPR / grant signing."""
+        from unaiverse.networking.node.connpool import NodeConn
+        if self.p2p_name == NodeConn.P2P_PUBLIC:
+            return NodeConn.P2P_WORLD
+        return NodeConn.P2P_PUBLIC
 
     def _set_state(self, state: SessionState, timeout_s: Optional[float]) -> None:
         prev = self.state
@@ -730,17 +849,12 @@ class Session:
             data=data,
         )
 
-    async def _send_payload(self, protocol_id: str, msg) -> bool:
-        try:
-            payload = msg.SerializeToString()
-        except Exception as e:
-            log.error(f"{self!r} serialize {protocol_id} failed: {e}")
-            return False
+    async def _send_payload(self, protocol_id: str, msg: SessMsg) -> bool:
         return await self.conn.send_session(
             peer_id=self.peer_id,
             protocol_id=protocol_id,
-            payload=payload,
-            p2p=self._p2p,
+            sess_msg=msg,
+            p2p_name=self.p2p_name,
         )
 
     # ── Silent abort (used by SessionManager tie-breaker) ────────────────────

@@ -11,11 +11,11 @@ import time
 
 import pytest
 
-from unaiverse.networking.p2p import session_pb2 as spb
 from unaiverse.networking.session import (
-    SessionManager, Session, SessionRole, SessionState, SessionEventType,
+    SessionManager, Session, SessionRole, SessionState, SessionEventType, SessMsg,
     SESSION_HELLO_PROTOCOL, SESSION_PROFILE_PROTOCOL, SESSION_CONTROL_PROTOCOL,
 )
+from unaiverse.networking.session.sess_msg import SIMULTANEOUS_OPEN_LOSS, WORLD_DISENGAGEMENT
 from unaiverse.networking.node.connpool import NodeConn
 
 
@@ -30,7 +30,14 @@ def _make_sm(conn, p2p_name, local_peer_id, profile_factory=None):
         local_peer_id=local_peer_id,
         local_node_id="local-node-id",
         local_profile_factory=profile_factory or (lambda: {"node_id": "local"}),
-        local_spr_other_factory=lambda: b"local-spr",
+    )
+
+
+def _mk_session(conn, peer_id, local_peer_id, role=SessionRole.INITIATOR):
+    return Session(
+        peer_id=peer_id, role=role, conn=conn,
+        p2p_name=NodeConn.P2P_PUBLIC, local_peer_id=local_peer_id,
+        local_node_id="alice", local_profile_factory=lambda: {},
     )
 
 
@@ -42,10 +49,8 @@ def test_initiate_idempotent_when_already_healthy(alice_conn, alice_p2p, alice_p
     sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
     events_1 = _run(sm.initiate(bob_peer_id, ["/ip4/127.0.0.1/tcp/0"]))
     assert events_1 == []
-    # Second call: existing session still in HELLO_SENT → no-op.
     events_2 = _run(sm.initiate(bob_peer_id, ["/ip4/127.0.0.1/tcp/0"]))
     assert events_2 == []
-    # Only one outbound dial was attempted.
     assert len(alice_conn.connect_calls) == 1
 
 
@@ -64,14 +69,15 @@ def test_initiate_during_quarantine_returns_failed(alice_conn, alice_peer_id, bo
 
 def test_deliver_unknown_protocol_drops(alice_conn, alice_peer_id, bob_peer_id):
     sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
-    events = _run(sm.deliver(bob_peer_id, "/something/else/1.0.0", b"x"))
+    events = _run(sm.deliver(bob_peer_id, "/something/else/1.0.0", SessMsg(SessMsg.KIND_HELLO_REQ, {})))
     assert events == []
 
 
 def test_deliver_unknown_peer_non_hello_drops(alice_conn, alice_peer_id, bob_peer_id):
     """A PROFILE message from a peer we have no session with → silently dropped."""
     sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
-    events = _run(sm.deliver(bob_peer_id, SESSION_PROFILE_PROTOCOL, b"junk"))
+    events = _run(sm.deliver(bob_peer_id, SESSION_PROFILE_PROTOCOL,
+                             SessMsg(SessMsg.KIND_PROFILE_OFFER, {})))
     assert events == []
 
 
@@ -79,11 +85,11 @@ def test_deliver_inbound_hello_spawns_responder(alice_conn, alice_p2p, alice_pee
     """Unknown peer sends HelloRequest → SessionManager spawns a responder Session
     and runs the message through it."""
     sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
-    hello = spb.HelloRequest(
-        session_id=b"\x02" * 16, nonce_a=b"\xaa" * 32,
-        protocol_versions=["1.0"], client_id="test",
-    )
-    events = _run(sm.deliver(bob_peer_id, SESSION_HELLO_PROTOCOL, hello.SerializeToString()))
+    hello = SessMsg(SessMsg.KIND_HELLO_REQ, {
+        "session_id": b"\x02" * 16, "nonce_a": b"\xaa" * 32,
+        "protocol_versions": ["1.0"], "client_id": "test",
+    })
+    events = _run(sm.deliver(bob_peer_id, SESSION_HELLO_PROTOCOL, hello))
     assert events == []
     sess = sm.get_session(bob_peer_id)
     assert sess is not None
@@ -99,32 +105,21 @@ def test_tiebreak_smaller_peer_keeps_initiator(alice_conn, alice_p2p, alice_peer
     assert alice_peer_id < bob_peer_id, "fixture invariant"
     alice_conn.connect_returns = (bob_peer_id, False)
     sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
-    # 1. Alice starts dialing Bob.
     _run(sm.initiate(bob_peer_id, ["/ip4/1.2.3.4/tcp/0"]))
     sess_before = sm.get_session(bob_peer_id)
     assert sess_before.role == SessionRole.INITIATOR
-    # 2. While she's in HELLO_SENT, a HELLO from Bob arrives.
-    hello = spb.HelloRequest(
-        session_id=b"\x09" * 16, nonce_a=b"\xaa" * 32,
-        protocol_versions=["1.0"],
-    )
-    events = _run(sm.deliver(bob_peer_id, SESSION_HELLO_PROTOCOL, hello.SerializeToString()))
+    hello = SessMsg(SessMsg.KIND_HELLO_REQ, {
+        "session_id": b"\x09" * 16, "nonce_a": b"\xaa" * 32, "protocol_versions": ["1.0"],
+    })
+    events = _run(sm.deliver(bob_peer_id, SESSION_HELLO_PROTOCOL, hello))
     assert events == []
-    # Initiator preserved.
     sess_after = sm.get_session(bob_peer_id)
     assert sess_after is sess_before
     assert sess_after.role == SessionRole.INITIATOR
-    # A HelloResponse(SIMULTANEOUS_OPEN_LOSS) was sent back to Bob.
     sent_helloresponses = [s for s in alice_conn.sent if s[1] == SESSION_HELLO_PROTOCOL]
-    # First send is Alice's original HelloRequest; tie-break adds a HelloResponse.
     last = sent_helloresponses[-1]
-    resp = spb.HelloResponse()
-    try:
-        resp.ParseFromString(last[2])
-    except Exception:
-        # If it's actually the HelloRequest (proto-aliasing safety), that's wrong:
-        pytest.fail("expected a HelloResponse(SIMULTANEOUS_OPEN_LOSS) but got " + repr(last))
-    assert resp.reason_code == spb.SIMULTANEOUS_OPEN_LOSS
+    assert last[2].kind == SessMsg.KIND_HELLO_RESP
+    assert last[2].fields["reason_code"] == SIMULTANEOUS_OPEN_LOSS
 
 
 def test_tiebreak_larger_peer_yields_to_responder(bob_conn, bob_p2p, bob_peer_id, alice_peer_id):
@@ -137,16 +132,13 @@ def test_tiebreak_larger_peer_yields_to_responder(bob_conn, bob_p2p, bob_peer_id
     sess_before = sm.get_session(alice_peer_id)
     assert sess_before.role == SessionRole.INITIATOR
     initiator_session_id_before = sess_before.session_id
-    # Alice's HELLO arrives.
-    hello = spb.HelloRequest(
-        session_id=b"\x42" * 16, nonce_a=b"\xab" * 32,
-        protocol_versions=["1.0"],
-    )
-    _run(sm.deliver(alice_peer_id, SESSION_HELLO_PROTOCOL, hello.SerializeToString()))
+    hello = SessMsg(SessMsg.KIND_HELLO_REQ, {
+        "session_id": b"\x42" * 16, "nonce_a": b"\xab" * 32, "protocol_versions": ["1.0"],
+    })
+    _run(sm.deliver(alice_peer_id, SESSION_HELLO_PROTOCOL, hello))
     sess_after = sm.get_session(alice_peer_id)
     assert sess_after is not sess_before
     assert sess_after.role == SessionRole.RESPONDER
-    # Responder adopted Alice's session_id (it processed the HELLO).
     assert sess_after.session_id == b"\x42" * 16
     assert sess_after.session_id != initiator_session_id_before
 
@@ -157,13 +149,7 @@ def test_tick_drains_timeouts_and_cleans_terminal_sessions(alice_conn, alice_pee
     """Sessions in a state past their timeout → FAILED event; terminal
     sessions are removed from the registry on the same tick."""
     sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
-    # Manually plant a Session in HELLO_SENT with an already-elapsed timeout.
-    sess = Session(
-        peer_id=bob_peer_id, role=SessionRole.INITIATOR, conn=alice_conn,
-        p2p_name=NodeConn.P2P_PUBLIC, local_peer_id=alice_peer_id,
-        local_node_id="alice", local_profile_factory=lambda: {},
-        local_spr_other=b"",
-    )
+    sess = _mk_session(alice_conn, bob_peer_id, alice_peer_id)
     sm._sessions[bob_peer_id] = sess
     sess._set_state(SessionState.HELLO_SENT, 0.001)
     time.sleep(0.005)
@@ -175,12 +161,7 @@ def test_tick_drains_timeouts_and_cleans_terminal_sessions(alice_conn, alice_pee
 def test_lost_event_enters_quarantine(alice_conn, alice_peer_id, bob_peer_id):
     """A Lost event from grace expiry must put the peer in quarantine."""
     sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
-    sess = Session(
-        peer_id=bob_peer_id, role=SessionRole.INITIATOR, conn=alice_conn,
-        p2p_name=NodeConn.P2P_PUBLIC, local_peer_id=alice_peer_id,
-        local_node_id="alice", local_profile_factory=lambda: {},
-        local_spr_other=b"",
-    )
+    sess = _mk_session(alice_conn, bob_peer_id, alice_peer_id)
     sm._sessions[bob_peer_id] = sess
     sess._set_state(SessionState.RECONNECTING, 0.001)
     time.sleep(0.005)
@@ -188,21 +169,15 @@ def test_lost_event_enters_quarantine(alice_conn, alice_peer_id, bob_peer_id):
     assert any(e.type == SessionEventType.LOST for e in events)
     ban_until = sm._quarantine.get(bob_peer_id)
     assert ban_until is not None
-    assert ban_until > time.monotonic() + 25.0   # ~30s ahead, allow slack
+    assert ban_until > time.monotonic() + 25.0
 
 
 # ── on_peer_disconnected() ──────────────────────────────────────────────────
 
 def test_disconnect_during_handshake_fails_immediately(alice_conn, alice_peer_id, bob_peer_id):
-    """Connection drop while still mid-handshake → FAILED event right away
-    (no grace period; we can't continue the handshake)."""
+    """Connection drop while still mid-handshake → FAILED event right away."""
     sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
-    sess = Session(
-        peer_id=bob_peer_id, role=SessionRole.INITIATOR, conn=alice_conn,
-        p2p_name=NodeConn.P2P_PUBLIC, local_peer_id=alice_peer_id,
-        local_node_id="alice", local_profile_factory=lambda: {},
-        local_spr_other=b"",
-    )
+    sess = _mk_session(alice_conn, bob_peer_id, alice_peer_id)
     sm._sessions[bob_peer_id] = sess
     sess._set_state(SessionState.HELLO_SENT, 5.0)
     events = _run(sm.on_peer_disconnected(bob_peer_id))
@@ -213,12 +188,7 @@ def test_disconnect_during_handshake_fails_immediately(alice_conn, alice_peer_id
 def test_disconnect_from_established_emits_reconnecting(alice_conn, alice_peer_id, bob_peer_id):
     """Disconnect from ESTABLISHED → RECONNECTING (grace), session still live."""
     sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
-    sess = Session(
-        peer_id=bob_peer_id, role=SessionRole.INITIATOR, conn=alice_conn,
-        p2p_name=NodeConn.P2P_PUBLIC, local_peer_id=alice_peer_id,
-        local_node_id="alice", local_profile_factory=lambda: {},
-        local_spr_other=b"",
-    )
+    sess = _mk_session(alice_conn, bob_peer_id, alice_peer_id)
     sm._sessions[bob_peer_id] = sess
     sess._set_state(SessionState.ESTABLISHED, None)
     events = _run(sm.on_peer_disconnected(bob_peer_id))
@@ -237,18 +207,12 @@ def test_disconnect_unknown_peer_is_noop(alice_conn, alice_peer_id, bob_peer_id)
 
 def test_close_session_sends_goaway(alice_conn, alice_p2p, alice_peer_id, bob_peer_id):
     sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
-    sess = Session(
-        peer_id=bob_peer_id, role=SessionRole.INITIATOR, conn=alice_conn,
-        p2p_name=NodeConn.P2P_PUBLIC, local_peer_id=alice_peer_id,
-        local_node_id="alice", local_profile_factory=lambda: {},
-        local_spr_other=b"",
-    )
+    sess = _mk_session(alice_conn, bob_peer_id, alice_peer_id)
     sm._sessions[bob_peer_id] = sess
     sess._set_state(SessionState.ESTABLISHED, None)
-    _run(sm.close_session(bob_peer_id, spb.WORLD_DISENGAGEMENT))
+    _run(sm.close_session(bob_peer_id, WORLD_DISENGAGEMENT))
     assert sess.state == SessionState.CLOSING
     sent = [s for s in alice_conn.sent if s[1] == SESSION_CONTROL_PROTOCOL]
     assert len(sent) == 1
-    ga = spb.Goaway()
-    ga.ParseFromString(sent[0][2])
-    assert ga.reason == spb.WORLD_DISENGAGEMENT
+    assert sent[0][2].kind == SessMsg.KIND_GOAWAY
+    assert sent[0][2].fields["reason"] == WORLD_DISENGAGEMENT

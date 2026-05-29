@@ -138,6 +138,14 @@ class Node:
         self._sm_public = None  # SessionManager for p2p_public, built in __init__ after self.conn
         self._sm_world = None   # SessionManager for p2p_world, built in __init__ after self.conn
         self._session_established_waiters: dict[str, asyncio.Event] = {}
+        # public peer-id -> world peer-id, while a world handoff is in flight.
+        self._pending_world_handoff: dict[str, str] = {}
+        # world peer-id -> public peer-id, the reverse map used to GOAWAY the public
+        # Session once the world Session establishes.
+        self._world_to_public: dict[str, str] = {}
+        # joiner node-id -> assigned role bitmask, stashed by the world-host
+        # decision hook so the world-side ESTABLISHED can populate the world lists.
+        self._pending_grant_roles: dict[str, int] = {}
         self.memory_finder = None
         self.world_agent_files = None
         self.talk_to_relay_based_nodes = talk_to_relay_based_nodes
@@ -179,10 +187,9 @@ class Node:
         self.node_token = ""
         self.public_key = ""
 
-        # Attributes: handshake-related
-        self.agents_to_interview: dict[str, tuple[float, NodeProfile | None]] = {}  # peer -> [time, profile|None]
-        self.agents_expected_to_send_ack = {}
-        self.agents_that_provided_ping_pong = set()
+        # Attributes: handshake-related. The legacy interview / ack / ping-pong
+        # structures are gone — the per-peer Session FSM (SessionManager) now owns
+        # establishment state, retry, and reconnection. See networking/session/.
         self.joining_world_info = None
         self.first = True
         self.stop_requested = False
@@ -365,8 +372,10 @@ class Node:
                              token=self.node_token)
 
         # Per-instance SessionManagers — own the FSM for every per-peer Session on
-        # their P2P instance. SignedPeerRecord-for-the-other-peer-id is generated
-        # on demand (cross-binds the two libp2p peer-ids of this agent).
+        # their P2P instance. The SignedPeerRecord for the *other* peer-id is fetched
+        # lazily/async by the Session at PROFILE_OFFER time (via conn), so no SPR
+        # factory is passed here. The decision hook lets a responder accept/reject an
+        # offer and (world host) mint a grant.
         from unaiverse.networking.session import SessionManager
         self._sm_public = SessionManager(
             conn=self.conn,
@@ -374,7 +383,7 @@ class Node:
             local_peer_id=p2p_u.peer_id,
             local_node_id=self.node_id,
             local_profile_factory=lambda: (self.profile.get_all_profile() if self.profile is not None else {}),
-            local_spr_other_factory=lambda: p2p_w.generate_signed_peer_record(),
+            decision_hook=self._session_decision_hook,
         )
         self._sm_world = SessionManager(
             conn=self.conn,
@@ -382,7 +391,7 @@ class Node:
             local_peer_id=p2p_w.peer_id,
             local_node_id=self.node_id,
             local_profile_factory=lambda: (self.profile.get_all_profile() if self.profile is not None else {}),
-            local_spr_other_factory=lambda: p2p_u.generate_signed_peer_record(),
+            decision_hook=self._session_decision_hook,
         )
 
         # Get CV
@@ -407,9 +416,11 @@ class Node:
                                             },
                                    cv=cv)  # Adding CV here
 
-        # Sharing node-level info with the hosted entity
+        # Sharing node-level info with the hosted entity. The trailing dict was the
+        # legacy "agents waiting for ack" queue (never read by the hosted entity);
+        # the Session FSM owns that state now, so we pass an empty placeholder.
         self.hosted.set_node_info(self.conn, self.profile, self.ask_to_get_in_touch,
-                                  self.__purge, self.node_identity_dir, self.agents_expected_to_send_ack)
+                                  self.__purge, self.node_identity_dir, {})
 
         # Finally, sending dynamic profile to the root server
         # (send AFTER set_node_info, not before, since set_node_info updates the profile,
@@ -673,8 +684,8 @@ class Node:
 
     async def ask_to_get_in_touch(self, node_name: str | None = None, addresses: list[str] | None = None,
                                   node_id: str | None = None,
-                                  public: bool = True, before_updating_pools_fcn: Callable | None = None,
-                                  run_count: int = 0) -> str | None:
+                                  public: bool = True, before_updating_pools_fcn: Callable = None,
+                                  run_count: int = 0, is_world_join: bool = False) -> str | None:
         """Tries to connect to another agent or world node. (async)
 
         Args:
@@ -683,15 +694,13 @@ class Node:
             node_id: The ID of the node to connect to (alternative to node_name and addresses).
             public: A boolean flag indicating whether to use the public or world P2P network.
             before_updating_pools_fcn: A callable invoked with the peer ID before updating the connection pools.
-            run_count: The number of connection attempts made so far (used for internal retry logic).
+            run_count: Unused (kept for signature compatibility; Session owns retry now).
+            is_world_join: If True, the public Session expects a WORLD_GRANT and drives
+                the world handoff (used by ask_to_join_world).
 
         Returns:
             The peer ID of the connected node if successful, otherwise None.
         """
-
-        # Getting arguments
-        all_args = locals().copy()
-        del all_args['self']
 
         # Checking arguments
         if node_name is None and addresses is None and node_id is None:
@@ -719,52 +728,34 @@ class Node:
             log.error(f"Addresses of {node_name} were not found, cannot connect!")
             return None
 
-        # Connecting
+        # Connecting (this establishes the libp2p connection and tells us the peer-id
+        # + whether it is relayed; the subsequent Session handshake reuses it).
         log.misc("Connecting to another agent/world...")
-        peer_id, through_relay = await self.conn.connect(addresses,
-                                                         p2p_name=NodeConn.P2P_PUBLIC if public else NodeConn.P2P_WORLD)
+        p2p_name = NodeConn.P2P_PUBLIC if public else NodeConn.P2P_WORLD
+        peer_id, through_relay = await self.conn.connect(addresses, p2p_name=p2p_name)
 
         if through_relay:
             log.user("Warning: this connection goes through a relay-based circuit, "
                      "so a third-party node is involved in the communication")
 
-        if peer_id is not None and (not through_relay or self.talk_to_relay_based_nodes):
-
-            # Ping to test the readiness of the established connection
-            log.misc("Connected, ping-pong...")
-            if not (await self.conn.send(peer_id, channel_trail=None, content_type=Msg.MISC,
-                                         content={"ping": "pong", "public": public},
-                                         p2p=self.conn.p2p_name_to_p2p[
-                                             NodeConn.P2P_PUBLIC if public else NodeConn.P2P_WORLD])):
-                log.error("Sending ping-pong failed!")
-                if run_count < 2:
-                    return await self.ask_to_get_in_touch(addresses=addresses, public=public,
-                                                          before_updating_pools_fcn=before_updating_pools_fcn,
-                                                          run_count=run_count + 1)
-                else:
-                    log.error("Connection failed! (ping-pong max trials exceeded)")
-                    return None
-
-            log.misc("Connected, updating pools...")
-            if before_updating_pools_fcn is not None:
-                before_updating_pools_fcn(peer_id)
-            await self.conn.update()
-
-            if peer_id not in self.agents_expected_to_send_ack:
-                self.agents_expected_to_send_ack[peer_id] = {
-                    "ask_time": clock.get_time(),
-                    "peer_id": peer_id,
-                    "retried": False,
-                    "args_of_ask_to_get_in_touch": all_args
-                }
-
-            log.misc(f"Current set of {len(self.agents_expected_to_send_ack)} connected peer IDs that will "
-                     f"get our profile and are expected to send a confirmation: "
-                     f"{list(self.agents_expected_to_send_ack.keys())}")
-            return peer_id
-        else:
+        if peer_id is None or (through_relay and not self.talk_to_relay_based_nodes):
             log.error("Connection failed!")
             return None
+
+        if before_updating_pools_fcn is not None:
+            before_updating_pools_fcn(peer_id)
+        await self.conn.update()
+
+        # Drive the per-peer Session handshake (replaces the legacy ping-pong +
+        # profile-request + approval + ack-queue flow). On success the peer is
+        # enrolled via the Session ESTABLISHED side-effects (add_agent / join_world).
+        log.misc("Connected, running Session handshake...")
+        ok = await self.connect_via_session(peer_id=peer_id, addresses=addresses, p2p_name=p2p_name,
+                                            is_world_join=is_world_join)
+        if not ok:
+            log.error("Session handshake failed!")
+            return None
+        return peer_id
 
     async def ask_to_join_world(self, node_name: str | None = None, addresses: list[str] | None = None,
                                 node_id: str | None = None, **kwargs) -> str | None:
@@ -786,10 +777,14 @@ class Node:
         if world_peer_id is not None:
             await self.leave(world_peer_id)
 
-        # Connecting to the world (public)
-        peer_id = await self.ask_to_get_in_touch(node_name=node_name, addresses=addresses, node_id=node_id, public=True)
+        # Record the join intent (options forwarded into the offered profile downstream).
+        self.joining_world_info = {"world_public_peer_id": None, "options": kwargs}
 
-        # Saving info
+        # Connecting to the world on the public network, with the Session driving the
+        # full world handshake: PROFILE → WORLD_GRANT → private world Session +
+        # PRIVATE_JOIN → join_world body (all via the Session ESTABLISHED dispatch).
+        peer_id = await self.ask_to_get_in_touch(node_name=node_name, addresses=addresses,
+                                                 node_id=node_id, public=True, is_world_join=True)
         if peer_id is not None:
             log.user("Connected on the public network, waiting for handshake...")
             kwargs |= {
@@ -798,8 +793,11 @@ class Node:
                 'node_id': node_id
             }
             self.joining_world_info = {"world_public_peer_id": peer_id, "options": kwargs}
+            self.joining_world_info["world_public_peer_id"] = peer_id
+            log.user("Connected on the public network, world handshake driven by Session...")
         else:
             log.error("Failed to join world!")
+            self.joining_world_info = None
         return peer_id
 
     async def leave(self, peer_id: str) -> None:
@@ -815,6 +813,14 @@ class Node:
 
         log.user(f"Leaving {peer_id}...")
 
+        # Gracefully close any Session to this peer (sends GOAWAY so the remote sees
+        # Session.Closed, not Lost) on whichever instance holds it.
+        from unaiverse.networking.session.sess_msg import WORLD_DISENGAGEMENT
+        for sm in (self._sm_world, self._sm_public):
+            if sm is not None and sm.get_session(peer_id) is not None:
+                for ev in await sm.close_session(peer_id, WORLD_DISENGAGEMENT):
+                    await self._dispatch_session_event(ev)
+
         dynamic_profile = self.profile.get_dynamic_profile()
 
         if peer_id == dynamic_profile['connections']['world_peer_id']:
@@ -827,10 +833,6 @@ class Node:
 
             # Disconnecting all connected world-related agents, including world node (it clears roles too)
             await self.conn.remove_all_world_agents()
-
-            # Better clear this as well
-            if peer_id in self.agents_expected_to_send_ack:
-                del self.agents_expected_to_send_ack[peer_id]
 
             # Clear profile
             dynamic_profile['connections']['world_peer_id'] = None
@@ -1598,56 +1600,12 @@ class Node:
                          "pool_name: " + pool_name + ", peer_id: " + peer_id + "...",
                          sub="prv" if pool_name in self.conn.WORLD or pool_name in self.conn.WORLD_NODE else "pub")
 
-                # If this is a world node, it is time to tell the world object that a new agent is there
-                if self.node_type is Node.WORLD and pool_name in self.conn.WORLD:
-                    assert self.world is not None
-                    log.misc("Not considering interviewing since this is a world and the considered peer is in the"
-                             " world pools", sub="prv")
-
-                    if peer_id in self.agents_to_interview:
-
-                        # Getting the new agent profile
-                        profile = self.agents_to_interview[peer_id][1]  # [time, profile]
-                        assert profile is not None
-
-                        # Adding the new agent to the world object
-                        if not (await self.world.add_agent(peer_id=peer_id, profile=profile)):
-                            await self.__purge(peer_id)
-                            continue
-
-                        # Clearing the profile from the interviews
-                        del self.agents_to_interview[peer_id]  # Removing from the queue (private peer id)
-                        an_agent_joined_the_world = True
-
-                        # Replacing multi-address with what comes from the profile (there are more addresses there!)
-                        self.conn.set_addresses_in_peer_info(peer_id,
-                                                             profile.get_dynamic_profile()['private_peer_addresses'])
-                    else:
-
-                        # This agent tried to connect to a world "directly", without passing through the
-                        # public handshake
-                        log.error(f"An agent tried to connect to the private network without passing through the "
-                                  f"public one first ({peer_id}), disconnecting it", sub="prv")
-                        await self.__purge(peer_id)
-                        continue
-
-                    continue  # Nothing else to do
-
-                # Both if this is an agent or a world, checks if the newly connected agent can be added or not to the
-                # queue of agents to interview
-                if pool_name not in self.conn.OUTGOING:
-
-                    # Trying to add to the queue
-                    enqueued_for_interview = await self.__interview_enqueue(peer_id)
-
-                    # If the agent is rejected at this stage, we disconnect from its peer
-                    if not enqueued_for_interview:
-                        log.misc(f"Not enqueued for interview, removing peer (disconnecting {peer_id})",
-                                 sub="prv"
-                                 if pool_name in self.conn.WORLD or pool_name in self.conn.WORLD_NODE else "pub")
-                        await self.__purge(peer_id)
-                    else:
-                        log.misc("Enqueued for interview")
+                # Peer enrolment (interview/profile-request/world.add_agent) is no longer
+                # driven off pool diffs — it is driven by the per-peer Session handshake:
+                # an inbound HELLO spawns a responder Session (SessionManager.deliver), and
+                # the world-host registration / agent add happens in the Session ESTABLISHED
+                # dispatch (_world_host_register_agent / add_agent). Nothing to do here.
+                continue
 
         # Updating list of world agents & friends, if needed
         # (it happens only if the node hosts a world, otherwise 'an_agent_joined_the_world' and
@@ -1733,11 +1691,11 @@ class Node:
         # SessionInbound items skip Msg.from_bytes / JWT verify; identity is
         # established cryptographically by sig_a / sig_b inside the handshake.
         for inb in public_session_inbound:
-            events = await self._sm_public.deliver(inb.peer_id, inb.protocol_id, inb.data)
+            events = await self._sm_public.deliver(inb.peer_id, inb.protocol_id, inb.sess_msg)
             for ev in events:
                 await self._dispatch_session_event(ev)
         for inb in world_session_inbound:
-            events = await self._sm_world.deliver(inb.peer_id, inb.protocol_id, inb.data)
+            events = await self._sm_world.deliver(inb.peer_id, inb.protocol_id, inb.sess_msg)
             for ev in events:
                 await self._dispatch_session_event(ev)
 
@@ -1782,206 +1740,16 @@ class Node:
             sender_is_inspector = (sender_node_id == self.profile.get_static_profile()['inspector_node_id'] and
                                    sender_inspector_mode_on)
 
-            # (A) received a profile
-            if msg.content_type == Msg.PROFILE:
-                log.misc("Received a profile...")
-
-                # Checking the received profile
-                # (recall that a profile sent through the world connection to the world node will be considered
-                # not acceptable)
-                profile = NodeProfile.from_dict(msg.content)
-                is_an_already_known_agent = msg.sender in self.hosted.all_agents
-
-                if is_an_already_known_agent:
-                    if not (await self.hosted.add_agent(peer_id=msg.sender, profile=profile)):
-                        await self.__purge(msg.sender)
-                else:
-                    is_expected_and_acceptable_profile = await self.__interview_check_profile(peer_id=msg.sender,
-                                                                                              node_id=sender_node_id,
-                                                                                              profile=profile)
-
-                    if not is_expected_and_acceptable_profile:
-                        log.error("Unexpected or unacceptable profile, removing (disconnecting) " + msg.sender)
-                        await self.__purge(msg.sender)
-                    else:
-
-                        # If the node hosts a world and gets an expected and acceptable profile from the public network,
-                        # assigns a role and sends the world profile (which includes private peer ID) and role to the
-                        # requester
-                        if (self.node_type is Node.WORLD and self.conn.is_public(peer_id=msg.sender) and
-                                not sender_is_inspector):
-                            assert self.world is not None
-                            log.misc("Sending world approval message, profile, "
-                                     "and assigned role to " + msg.sender +
-                                     " (also switching peer ID in the interview queue)...")
-                            is_world_master = (self.world_masters_node_ids is not None and
-                                               sender_node_id in self.world_masters_node_ids)
-
-                            # Assigning a role
-                            role_str = self.world.assign_role(profile=profile, is_world_master=is_world_master)
-                            if role_str is None:
-                                log.error("Unable to determine what role to assign, removing (disconnecting) "
-                                          + msg.sender)
-                                await self.__purge(msg.sender)
-                            else:
-                                role = self.world.ROLE_STR_TO_BITS[role_str]  # The role is a bit-wise-interpretable int
-                                role = role | (Agent.ROLE_WORLD_MASTER if is_world_master else Agent.ROLE_WORLD_AGENT)
-
-                                # Clearing temporary options (if any)
-                                dynamic_profile = profile.get_dynamic_profile()
-                                keys_to_delete = [key for key in dynamic_profile if key.startswith('tmp_')]
-                                for key in keys_to_delete:
-                                    del dynamic_profile[key]
-
-                                is_human = profile.get_static_profile()["node_type"] == self.hosted.HUMAN
-                                log.misc(f"Sending world approval to {msg.sender}")
-                                assert self.world.stats is not None
-                                if not (await self.conn.send(msg.sender, channel_trail=None,
-                                                             content={
-                                                                 'world_profile': self.profile.get_all_profile(),
-                                                                 'rendezvous_tag': clock.get_cycle(),
-                                                                 'your_role': role,
-                                                                 'agent_actions': self.world.packed_agent_files,
-                                                                 'agent_stats_code': self.world.agent_stats_code,
-                                                                 # 'initial_stats': self.world.stats.get_view()
-                                                                 # if is_human else None,
-                                                                 'initial_stats': self.world.stats.plot()
-                                                                 if is_human else None,
-                                                             },
-                                                             content_type=Msg.WORLD_APPROVAL)):
-                                    log.error(
-                                        "Failed to send world approval, removing (disconnecting) " + msg.sender)
-                                    await self.__purge(msg.sender)
-                                else:
-                                    # Update role also in the profile held by the world
-                                    dynamic_profile['connections']['role'] = self.world.ROLE_BITS_TO_STR[role]
-                                    private_peer_id = profile.get_dynamic_profile()['private_peer_id']
-                                    private_addr = profile.get_dynamic_profile()['private_peer_addresses']
-                                    if is_world_master:
-                                        role = role | Agent.ROLE_WORLD_MASTER
-                                        self.conn.add_to_world_masters_list(private_peer_id, private_addr, role)
-                                    else:
-                                        role = role | Agent.ROLE_WORLD_AGENT
-                                        self.conn.add_to_world_agents_list(private_peer_id, private_addr, role)
-
-                                    # Removing from the queue of public interviews
-                                    # and adding to the private ones (refreshing timer)
-                                    del self.agents_to_interview[msg.sender]  # Removing from public queue
-                                    self.agents_to_interview[private_peer_id] = (clock.get_time(), profile)  # Add
-
-                        # If the node is an agent, it is time to tell the agent object that a new agent is now known,
-                        # and send our profile to the agent that asked for out contact
-                        elif self.node_type is Node.AGENT or sender_is_inspector:
-                            log.misc(f"Sending agent approval to {msg.sender}")
-
-                            if not (await self.conn.send(msg.sender, channel_trail=None,
-                                                         content={
-                                                             'my_profile': self.profile.get_all_profile()
-                                                         },
-                                                         content_type=Msg.AGENT_APPROVAL)):
-                                log.error("Failed to send agent approval, removing (disconnecting) " + msg.sender)
-                                await self.__purge(msg.sender)
-                            else:
-                                log.misc("Adding known agent and removing it from the "
-                                         "interview queue " + msg.sender)
-                                if not (await self.hosted.add_agent(peer_id=msg.sender,
-                                                                    profile=profile)):  # keep "hosted" here
-                                    await self.__purge(msg.sender)
-                                else:
-
-                                    # Removing from the queues
-                                    del self.agents_to_interview[msg.sender]  # Removing from queue
-
-                                    # Enabling interactive mode, if public
-                                    if (interact_mode and isinstance(interact_mode_opts, dict) and
-                                            'lone_wolf_peer_id' in interact_mode_opts and
-                                            interact_mode_opts['lone_wolf_peer_id'] is None):
-                                        interact_mode_opts['lone_wolf_peer_id'] = msg.sender
-                                        interact_mode_opts['ready_to_interact'] = True
-
-            # (B) received a world-join-approval
-            elif msg.content_type == Msg.WORLD_APPROVAL:
-                log.misc("Received a world-join-approval message...")
-
-                # Checking if it is the world we asked for
-                # moreover, it must be on the public network, and this must not be a world-node (of course)
-                # and you must not be already in another world
-                if (not self.conn.is_public(peer_id=msg.sender) or self.node_type is Node.WORLD
-                        or msg.sender not in self.agents_expected_to_send_ack or
-                        self.profile.get_dynamic_profile()['connections']['world_peer_id'] is not None):
-                    log.error("Unexpected world approval, removing (disconnecting) " + msg.sender)
-                    await self.__purge(msg.sender)
-                else:
-                    if msg.sender != self.joining_world_info["world_public_peer_id"]:
-                        log.error(f"Unexpected world approval: asked to join "
-                                  f"{self.joining_world_info['world_public_peer_id']} got approval "
-                                  f"from {msg.sender} "
-                                  f"(disconnecting)")
-                        await self.__purge(msg.sender)
-                    else:
-
-                        # Getting world profile (includes private addresses) and connecting to the world (privately)
-                        await self.__join_world(profile=NodeProfile.from_dict(msg.content['world_profile']),
-                                                role=msg.content['your_role'],
-                                                packed_agent_files=msg.content['agent_actions'],
-                                                agent_stats_code=msg.content.get('agent_stats_code', None),
-                                                rendezvous_tag=msg.content['rendezvous_tag'],
-                                                initial_stats=msg.content['initial_stats'])
-
-                        # Enabling interactive mode, if public
-                        if (interact_mode and isinstance(interact_mode_opts, dict) and
-                                'world_peer_id' in interact_mode_opts):
-                            interact_mode_opts['ready_to_interact'] = True
-
-            # (C) received an agent-connect-approval
-            elif msg.content_type == Msg.AGENT_APPROVAL:
-                log.misc("Received an agent-connect-approval message...")
-
-                # Checking if it is the agent we asked for
-                if msg.sender not in self.agents_expected_to_send_ack:
-                    log.error("Unexpected agent-connect approval, removing (disconnecting) " + msg.sender)
-                    await self.__purge(msg.sender)
-                else:
-
-                    # Adding the agent
-                    await self.__join_agent(profile=NodeProfile.from_dict(msg.content['my_profile']),
-                                            peer_id=msg.sender)
-
-                    # Enabling interactive mode, if public
-                    if (interact_mode and isinstance(interact_mode_opts, dict) and
-                            'lone_wolf_peer_id' in interact_mode_opts):
-                        interact_mode_opts['ready_to_interact'] = True
-
-            # (D) requested for a profile
-            elif msg.content_type == Msg.PROFILE_REQUEST:
-                log.misc("Received a profile request...")
-
-                # If this is a world-node, it expects profile requests only on the public network
-                # if this is not a world or not, we only send profile to agents who are involved in the handshake
-                if ((self.node_type is Node.WORLD and not self.conn.is_public(peer_id=msg.sender)) or
-                        (msg.sender not in self.agents_expected_to_send_ack)):
-                    log.error("Unexpected profile request (ignoring it): " + msg.sender)
-                    # await self.__purge(msg.sender)
-                else:
-
-                    # If a preference was defined, we temporarily add it to the profile
-                    if (self.joining_world_info is not None and
-                            msg.sender == self.joining_world_info["world_public_peer_id"] and
-                            self.joining_world_info["options"] is not None and
-                            len(self.joining_world_info["options"]) > 0):
-                        my_profile = copy.deepcopy(self.profile)
-                        for k, v in self.joining_world_info["options"].items():
-                            my_profile.get_dynamic_profile()['tmp_' + str(k)] = v
-                        my_profile = my_profile.get_all_profile()
-                    else:
-                        my_profile = self.profile.get_all_profile()
-
-                    # Sending the profile
-                    if not (await self.conn.send(msg.sender, channel_trail=None,
-                                                 content=my_profile,
-                                                 content_type=Msg.PROFILE)):
-                        log.error("Failed to send profile, removing (disconnecting) " + msg.sender)
-                        await self.__purge(msg.sender)
+            # (A–D) legacy PROFILE / WORLD_APPROVAL / AGENT_APPROVAL / PROFILE_REQUEST
+            # handshake — REMOVED. The per-peer Session now carries all of it
+            # (PROFILE_OFFER/DECISION, WORLD_GRANT, PRIVATE_JOIN) and runs the role
+            # assignment + add_agent + join_world side-effects via
+            # _dispatch_session_event. These chat content-types are no longer sent;
+            # ignore any that arrive from a not-yet-migrated peer.
+            if msg.content_type in (Msg.PROFILE, Msg.WORLD_APPROVAL,
+                                    Msg.AGENT_APPROVAL, Msg.PROFILE_REQUEST):
+                log.misc(f"Ignoring legacy handshake message {msg.content_type} from {msg.sender} "
+                         f"(Session handshake supersedes it)")
 
             # (E) the world node received an ADDRESS_UPDATE from an agent
             elif msg.content_type == Msg.ADDRESS_UPDATE:
@@ -2109,61 +1877,12 @@ class Node:
                         "Unexpected request to alter the HSM received by this world node, sent by: " + msg.sender)
                     await self.__purge(msg.sender)
 
-            # (J) misc
+            # (J) misc — the ping-pong *handshake* / reconnection use is REMOVED
+            # (liveness is /ipfs/ping keep-alive in the Session; reconnection is the
+            # Session RECONNECTING/RESUMED/LOST grace machinery). The Msg.MISC
+            # content-type is kept for any other miscellaneous use.
             elif msg.content_type == Msg.MISC:
-                log.misc("Received a misc message...")
-
-                if (msg.content is not None and isinstance(msg.content, dict) and
-                        'ping' in msg.content and msg.content['ping'] == 'pong'):
-
-                    public_ping_pong = msg.content.get('public', None)
-                    if public_ping_pong is not None and public_ping_pong and is_private_message:
-                        log.error("Invalid format of ping-pong package")
-                        await self.__purge(msg.sender)
-                    else:
-
-                        # Not expected ping-pong from an already fully connected (i.e., handshake done) agent
-                        if msg.sender in self.agents_that_provided_ping_pong:
-                            if not is_private_message:
-
-                                # We must re-interview the agent, so we keep the connection on and clear the rest
-                                await self.__purge(msg.sender, keep_connection=True)
-                                log.misc(f"Reconnection detected for peer {msg.sender} in public network: "
-                                         f"will start handshake again")
-                            else:
-                                if self.node_type is Node.WORLD:
-                                    assert self.world is not None
-                                    if msg.sender in self.world.all_agents:
-                                        log.misc(f"Reconnection detected for peer {msg.sender} in private network: "
-                                                 f"the agent is known, so we allow it to join the world again")
-
-                                        # If an agent is known, then we avoid it from going back to the public net
-                                        profile = self.world.all_agents[msg.sender]  # Get profile before purging
-                                        await self.__purge(msg.sender, keep_connection=True)
-
-                                        # The interview list is used to authorize a switching public-to-private
-                                        # connection, and it is filled right after having sent a world approval.
-                                        # We refill it to allow the agent to be re-added to the world and its
-                                        # addresses to be refreshed in the connection pools.
-                                        self.agents_to_interview[msg.sender] = (clock.get_time(), profile)
-                                    else:
-                                        log.misc(f"Reconnection detected for peer {msg.sender} in private network: "
-                                                 f"the agent is not known, we cannot accept this reconnection")
-
-                                        # If an agent is not known at all, the connection must be re-established by
-                                        # the public network, so we have to kill the connection
-                                        await self.__purge(msg.sender, keep_connection=False)
-                                else:
-                                    log.misc(f"Reconnection detected for peer {msg.sender} in private network: "
-                                             f"will start handshake again")
-
-                                    # We must re-interview the agent, so we keep the connection on and clear the rest
-                                    await self.__purge(msg.sender, keep_connection=True)
-                                log.misc(f"Reconnection detected for peer {msg.sender} in private network")
-                            self.reconnected.add(msg.sender)
-                        else:
-                            # In all cases (private or public), let's remember that we already got a ping-pong
-                            self.agents_that_provided_ping_pong.add(msg.sender)
+                log.misc(f"Received a misc message from {msg.sender} (no handshake action)")
 
             # (K) got a request to re-download the CV from the root server
             elif msg.content_type == Msg.GET_CV_FROM_ROOT:
@@ -2269,12 +1988,13 @@ class Node:
                 elif self.node_type is Node.AGENT:
                     log.error("Receiving stats response is not expected for a world node.")
 
-        await self.__interview_clean()
-        await self.__handle_connected_without_ack()
+        # (interview-queue cleanup + connected-without-ack retry removed — the
+        # Session FSM owns handshake timeouts, retry, and reconnection.)
 
     async def __join_world(self, profile: NodeProfile, role: int,
-                           packed_agent_files: str, agent_stats_code: str | None,
-                           rendezvous_tag: int, initial_stats: dict[str, Any] | None) -> bool:
+                           packed_agent_files: str | None, agent_stats_code: str | None,
+                           rendezvous_tag: int, initial_stats: dict[str, Any] | None,
+                           connected_peer_id: str | None = None) -> bool:
         """Performs the actual operation of joining a world after receiving confirmation. (async)
 
         Args:
@@ -2284,6 +2004,9 @@ class Node:
             agent_stats_code: A string of code defining the statistics for this world.
             rendezvous_tag: The rendezvous tag from the world's profile.
             initial_stats: When joining a world we eventually receive the recent history.
+            connected_peer_id: when set (Session world-handoff path), the private world
+                Session is already established to this peer-id — skip the legacy private
+                dial and run the post-connection body against it.
 
         Returns:
             True if the join operation is successful, otherwise False.
@@ -2292,11 +2015,15 @@ class Node:
         world_public_peer_id = profile.get_dynamic_profile()['peer_id']
         log.user(f"\nActually joining world, role ID will be '{role}'")
 
-        # Connecting to the world (private)
-        # notice that we also communicate the world node private peer ID to the connection manager,
-        # to avoid filtering it out when updating pools
-        peer_id = await self.ask_to_get_in_touch(addresses=addresses, public=False,
-                                                 before_updating_pools_fcn=self.conn.set_world)
+        if connected_peer_id is not None:
+            # Session world-handoff: the world Session already connected privately.
+            peer_id = connected_peer_id
+        else:
+            # Connecting to the world (private)
+            # notice that we also communicate the world node private peer ID to the connection manager,
+            # to avoid filtering it out when updating pools
+            peer_id = await self.ask_to_get_in_touch(addresses=addresses, public=False,
+                                                     before_updating_pools_fcn=self.conn.set_world)
 
         assert self.agent is not None
 
@@ -2344,12 +2071,12 @@ class Node:
                 await self.leave(peer_id)  # If subscribing fails, we quit everything (safer)
                 return False
 
-            # Killing the public connection to the world node
+            # Killing the public connection to the world node. On the Session path the
+            # public Session is GOAWAY-closed by the dispatcher; here we still purge the
+            # public peer from the pools so routing is consistent.
             log.misc("Disconnecting from the public world network (since we joined the private one)")
             await self.__purge(world_public_peer_id)
 
-            # Removing the private world peer id from the list of connected-but-not-managed peer
-            del self.agents_expected_to_send_ack[peer_id]
 
             # Subscribing to all the other world topics, from which we will get fresh information
             # about the streams
@@ -2439,209 +2166,278 @@ class Node:
             self.agent.behav_lone_wolf.update_wildcard(Custom.PARTNER_WILDCARD, peer_id)
             self.agent.behav_lone_wolf.apply_wildcards()
 
-        del self.agents_expected_to_send_ack[peer_id]
         return True
 
-    async def __interview_enqueue(self, peer_id: str) -> bool:
-        """Adds a newly connected peer to the queue of agents to be interviewed. (async)
+    # NOTE: __interview_enqueue / __interview_check_profile / __interview_clean /
+    # __handle_connected_without_ack have been REMOVED. Profile exchange is Stage-2
+    # of the Session handshake (PROFILE_OFFER/DECISION); acceptance/role decisions
+    # are in _session_decision_hook; timeouts/retry/reconnection are owned by the
+    # Session FSM. The profile-acceptance evaluation that lived in
+    # __interview_check_profile (cv_hash / certified / hosted.evaluate_profile) rides
+    # with the deferred auth model and is intentionally light in the hook for now.
 
-        Args:
-            peer_id: The peer ID of the agent to interview.
+    async def _session_decision_hook(self, peer_id: str, remote_node_id, remote_profile: dict,
+                                     p2p_name: str):
+        """Responder decision hook called by a Session on an inbound PROFILE_OFFER.
 
-        Returns:
-            True if the agent is successfully enqueued, otherwise False.
+        Returns a ProfileDecisionResult: accept/reject + (world host, public
+        instance) a WorldGrantSpec, or (world host, world instance) the
+        ``await_private_join`` flag. This is the Session-era replacement for the
+        legacy interview/approval block — the role-assignment and grant payload
+        assembly are ported here; the cv_hash / per-token / certified checks ride
+        with the deferred auth model and are intentionally light for v1.
         """
+        from unaiverse.networking.session import ProfileDecisionResult, WorldGrantSpec
+        from unaiverse.networking.session.sess_msg import (
+            NOT_IN_ALLOW_LIST, ROLE_INCOMPATIBLE, HOSTED_REJECTED,
+        )
 
-        # If the peer_id is not in the same world were we are, we early stop the interview process
-        if (not self.conn.is_public(peer_id) and peer_id not in self.conn.world_agents_set and
-                peer_id not in self.conn.world_masters_set and peer_id != self.conn.world_node_peer_id):
-            log.error(f"Interview failed: "
-                      f"peer ID {peer_id} is not in the world agents/masters list, and it is not the world node")
-            return False
+        # Allow-list gate (node-id based; node-id comes from the JWT-bound hint).
+        if (self.allowed_node_ids is not None and remote_node_id is not None and
+                remote_node_id not in self.allowed_node_ids):
+            log.misc(f"[session] decision: {peer_id[:12]}… node_id not in allow-list → reject")
+            return ProfileDecisionResult(accepted=False, reason_code=NOT_IN_ALLOW_LIST)
 
-        # Ask for the profile
-        log.misc("Sending profile request...")
-        ret = await self.conn.send(peer_id, channel_trail=None,
-                                   content_type=Msg.PROFILE_REQUEST, content=None)
-        if not ret:
-            log.error(f"Interview failed: "
-                      f"unable to send a profile request to peer ID {peer_id}")
-            return False
-        log.misc(f"Interview list expanded: profile request sent to peer ID {peer_id}")
+        try:
+            profile = NodeProfile.from_dict(remote_profile)
+        except Exception as e:
+            log.error(f"[session] decision: bad remote profile from {peer_id[:12]}…: {e}")
+            return ProfileDecisionResult(accepted=False, reason_code=HOSTED_REJECTED)
 
-        # Put the agent in the list of agents to interview (re-adding it if we get multiple requests from the same guy)
-        self.agents_to_interview[peer_id] = (clock.get_time(), None)  # Peer ID -> (time, profile); no profile yet
-        return True
+        # ── World host ────────────────────────────────────────────────────────
+        if self.node_type is Node.WORLD:
+            # On the private world instance, an inbound offer is a joiner redeeming
+            # a grant: accept and wait for its PRIVATE_JOIN (no new grant).
+            if p2p_name == NodeConn.P2P_WORLD:
+                return ProfileDecisionResult(accepted=True, await_private_join=True)
 
-    async def __interview_check_profile(self, peer_id: str, node_id: str, profile: NodeProfile) -> bool:
-        """Checks if a received profile is acceptable and valid. (async)
+            # On the public instance: assign a role and mint a grant.
+            is_world_master = (self.world_masters_node_ids is not None and
+                               remote_node_id in self.world_masters_node_ids)
+            role_str = self.world.assign_role(profile=profile, is_world_master=is_world_master)
+            if role_str is None:
+                return ProfileDecisionResult(accepted=False, reason_code=ROLE_INCOMPATIBLE)
+            role = self.world.ROLE_STR_TO_BITS[role_str]
+            role = role | (Agent.ROLE_WORLD_MASTER if is_world_master else Agent.ROLE_WORLD_AGENT)
 
-        Args:
-            peer_id: The peer ID of the node that sent the profile.
-            node_id: The node ID of the node that sent the profile.
-            profile: The NodeProfile object to be checked.
+            is_human = profile.get_static_profile().get("node_type") == self.hosted.HUMAN
+            code_bundle = json.dumps({
+                "agent_files": self.world.packed_agent_files,
+                "stats_code": self.world.agent_stats_code,
+            }).encode("utf-8")
+            initial_stats = (json.dumps(self.world.stats.plot()).encode("utf-8")
+                             if is_human else b"")
+            spec = WorldGrantSpec(
+                role=role,
+                world_profile_bytes=json.dumps(self.profile.get_all_profile()).encode("utf-8"),
+                rendezvous_tag=clock.get_cycle(),
+                code_bundle=code_bundle,
+                initial_stats=initial_stats,
+            )
+            # Stash the assigned role so the world-side ESTABLISHED (after the
+            # joiner redeems the grant) can add it to the world agents/masters list.
+            if remote_node_id is not None:
+                self._pending_grant_roles[remote_node_id] = role
+            log.misc(f"[session] decision: granting world role '{role_str}' to {peer_id[:12]}…")
+            return ProfileDecisionResult(accepted=True, world_grant=spec)
 
-        Returns:
-            True if the profile is acceptable, otherwise False.
-        """
-
-        # If the node ID was not on the list of allowed ones (if the list exists), then stop it.
-        # Notice that we do not get the node ID from the profile, but from outside (it comes from the token, so safe)
-        if ((self.allowed_node_ids is not None and node_id not in self.allowed_node_ids) or
-                (peer_id not in self.agents_to_interview)):
-            log.misc(f"Profile of f{peer_id} not in the list of agents to interview or its node ID is not allowed")
-            return False
-        else:
-
-            # Getting the parts of profile needed
-            eval_static_profile = profile.get_static_profile()
-            eval_dynamic_profile = profile.get_dynamic_profile()
-            # my_dynamic_profile = self.profile.get_dynamic_profile()
-
-            # Checking if CV was altered
-            cv_hash = await self.conn.get_cv_hash_from_last_token(peer_id)
-            if cv_hash is None:
-                log.error(f"Missing CV hash for peer ID {peer_id}")
-                return False
-            sanity_ok, pairs_of_hashes = profile.verify_cv_hash(cv_hash)
-            if not sanity_ok:
-                log.error(f"The CV in the profile of f{peer_id} failed the sanity check {pairs_of_hashes},"
-                          f" {profile.get_cv()}")
-                return False
-
-            # Determining type of agent, checking the connection pools
-            role = self.conn.get_role(peer_id)
-
-            if role & 1 == 0:
-
-                if self.node_type is Node.AGENT:
-
-                    # Ensuring that the interviewed agent is out of every world
-                    # (if it were in the same world in which we are, it would connect in a private manner) and
-                    # possibly fulfilling the optional constraint of accepting only certified agent,
-                    # then asking the hosted entity for additional custom evaluation
-                    if (not self.only_certified_agents or 'certified' in eval_static_profile and
-                            eval_static_profile['certified'] is True):
-                        return self.hosted.evaluate_profile(role, profile)
-                    else:
-                        log.misc(f"Peer f{peer_id} is not certified "
-                                 f"and maybe I expect certified peers only")
-                        return False
-
-                elif self.node_type is Node.WORLD:
-                    if (eval_dynamic_profile['connections']['world_peer_id'] is not None and
-                            eval_dynamic_profile['connections']['world_peer_id'] != self.get_world_peer_id()):
-                        log.misc(f"Peer f{peer_id} tried to connect to this world, "
-                                 f"but it is already part of another world")
-                        return False
-                    else:
-                        return True
-
-            else:
-
-                if self.node_type is Node.AGENT:
-
-                    # Ensuring that the interviewed agent is in the same world where we are and
-                    # possibly fulfilling the optional constraint of accepting only certified agent
-                    if (not self.only_certified_agents or 'certified' in eval_static_profile and
-                            eval_static_profile['certified'] is True):
-                        return self.hosted.evaluate_profile(role, profile)
-                    else:
-                        log.misc(f"Peer f{peer_id} is not certified "
-                                 f"and maybe I expect certified peers only")
-                        return False
-
-                elif self.node_type is Node.WORLD:
-
-                    # If this node hosts a world, we do not expect to interview agents in the private world connection,
-                    # so something went wrong here, let's reject it
-                    log.misc(f"Peer f{peer_id} sent a profile in the private network, unexpected")
-                    return False
-            return False
-
-    async def __interview_clean(self) -> None:
-        """Removes outdated or timed-out interview requests from the queue. (async)"""
-        cur_time = clock.get_time()
-        agents_to_remove = []
-        for peer_id, (profile_time, profile) in self.agents_to_interview.items():
-
-            # Checking retry_timeout
-            if (cur_time - profile_time) > Custom.INTERVIEW_TIMEOUT:
-                log.misc("Removing (disconnecting) due to retry_timeout in interview queue: " + peer_id)
-                agents_to_remove.append(peer_id)
-
-        # Updating
-        for peer_id in agents_to_remove:
-            await self.__purge(peer_id)  # This will also remove the peer from the queue of peers to interview
-
-    async def __handle_connected_without_ack(self) -> None:
-        """Removes connected peers from the queue if they haven't sent an acknowledgment within
-        the retry_timeout period. (async)"""
-        cur_time = clock.get_time()
-        agents_to_remove = []
-        agents_to_retry = []
-        for peer_id, connection_dict in self.agents_expected_to_send_ack.items():
-
-            # Checking retry_timeout (to resend the request)
-            if ((cur_time - connection_dict["ask_time"]) > Custom.CONNECT_WITHOUT_ACK_RETRY_TIMEOUT and
-                    not connection_dict['retried']):
-                log.misc("Timeout in the connected-without-ack queue, I will try again: " + peer_id)
-                agents_to_retry.append(peer_id)
-                continue
-
-            # Checking retry_timeout
-            if (cur_time - connection_dict["ask_time"]) > Custom.CONNECT_WITHOUT_ACK_TOTAL_TIMEOUT:
-                log.misc("Removing (disconnecting) due to retry_timeout in the connected-without-ack queue: " + peer_id)
-                agents_to_remove.append(peer_id)
-
-        # Updating (disconnected)
-        for peer_id in agents_to_remove:
-            await self.__purge(peer_id)  # This will ALSO remove the peer from the connected-without-ack queue
-
-        # Updating (retry)
-        for peer_id in agents_to_retry:
-            connection_dict = self.agents_expected_to_send_ack[peer_id]
-            connection_dict['retried'] = True
-            log.misc(f"Retrying to connect to {peer_id} with args "
-                     f"{connection_dict['args_of_ask_to_get_in_touch']}")
-            await self.ask_to_get_in_touch(**connection_dict["args_of_ask_to_get_in_touch"])  # Trying again
+        # ── Agent host ────────────────────────────────────────────────────────
+        # v1: accept (allow-list already gated above). Custom hosted.evaluate_profile
+        # / certified / cv_hash gating returns with the deferred auth model.
+        return ProfileDecisionResult(accepted=True)
 
     async def _dispatch_session_event(self, ev) -> None:
-        """Translate a SessionEvent into existing node bookkeeping. For v1 we
-        only handle the events that materially affect the rest of node.py —
-        ESTABLISHED, FAILED, LOST, CLOSED. RECONNECTING and RESUMED are logged
-        but don't touch the legacy data structures (the existing __purge /
-        ack-queue flow is unaffected, so a transient transport drop just sits
-        as a no-op at this layer for v1)."""
-        from unaiverse.networking.session import SessionEventType
+        """Single dispatch site translating SessionEvents into application action.
+
+        ESTABLISHED drives the world handoff (joiner side) and the
+        ``add_agent`` / ``__join_world`` / world-list side-effects that the legacy
+        handshake used to perform inline. RECONNECTING/RESUMED are logged;
+        LOST/CLOSED purge; FAILED wakes any blocked initiator waiter."""
+        from unaiverse.networking.session import SessionEventType, SessionRole
         try:
             log.misc(f"[session] {ev.type.value} peer={ev.peer_id[:12]}… session={ev.session_id[:8]}… "
-                     f"role={ev.role.value} p2p={ev.p2p_name} data={ev.data}",
+                     f"role={ev.role.value} p2p={ev.p2p_name}",
                      sub="prv" if "world" in ev.p2p_name else "pub")
         except Exception:
             pass
 
         if ev.type == SessionEventType.ESTABLISHED:
-            # Wake any ask_to_get_in_touch / connect_via_session waiter blocked on
-            # this peer.
+            await self._on_session_established(ev, SessionRole)
             waiter = self._session_established_waiters.get(ev.peer_id)
             if waiter is not None:
                 waiter.set()
-            # NOTE: the legacy bookkeeping in agents_to_interview /
-            # agents_that_provided_ping_pong is still driven by the old
-            # ask_to_get_in_touch flow; once that is migrated to SessionManager
-            # this is the right place to populate those structures with
-            # `ev.data["profile_b"]`. For v1 we leave the legacy flow alone.
         elif ev.type == SessionEventType.FAILED:
+            self._pending_world_handoff.pop(ev.peer_id, None)
             waiter = self._session_established_waiters.get(ev.peer_id)
             if waiter is not None:
                 waiter.set()
         elif ev.type in (SessionEventType.LOST, SessionEventType.CLOSED):
-            # Treat like a disconnect for the legacy purge path.
+            # WORLD_HANDOFF_COMPLETE is the intentional teardown of the public
+            # Session after a successful world join — it must NOT purge the node.
+            if (ev.type == SessionEventType.CLOSED and
+                    "WORLD_HANDOFF_COMPLETE" in ev.data.get("reason", "")):
+                return
             try:
                 await self.__purge(ev.peer_id)
             except Exception as e:
                 log.error(f"[session] dispatch LOST/CLOSED purge failed for {ev.peer_id[:12]}…: {e}")
+
+    async def _on_session_established(self, ev, SessionRole) -> None:
+        """Run the application side-effects for an ESTABLISHED Session, branching on
+        (role, p2p instance, grant presence)."""
+        from unaiverse.networking.session.sess_msg import WORLD_HANDOFF_COMPLETE
+        is_world = NodeConn.P2P_WORLD == ev.p2p_name or "world" in ev.p2p_name
+        profile_b = ev.data.get("profile_b")
+
+        # ── Initiator on the PUBLIC instance ──────────────────────────────────
+        if ev.role == SessionRole.INITIATOR and not is_world:
+            grant = ev.data.get("world_grant")
+            if grant is not None:
+                # World join: open the private world Session to redeem the grant.
+                await self._start_world_handoff(ev.peer_id, grant)
+            elif profile_b is not None:
+                # Plain agent connection.
+                try:
+                    await self.__join_agent(profile=NodeProfile.from_dict(profile_b), peer_id=ev.peer_id)
+                except Exception as e:
+                    log.error(f"[session] __join_agent failed for {ev.peer_id[:12]}…: {e}")
+            return
+
+        # ── Initiator on the WORLD instance: we joined a world ────────────────
+        if ev.role == SessionRole.INITIATOR and is_world:
+            grant = getattr(self._sm_world.get_session(ev.peer_id), "_grant", None)
+            ok = False
+            try:
+                ok = await self._join_world_after_session(ev.peer_id, ev.data, grant)
+            except Exception as e:
+                log.error(f"[session] __join_world failed for {ev.peer_id[:12]}…: {e}")
+            # Whether or not the join body fully succeeded, the public Session has
+            # done its job — close it (GOAWAY) so the host tears it down cleanly.
+            public_peer_id = self._world_to_public.pop(ev.peer_id, None)
+            if public_peer_id is not None:
+                for cev in await self._sm_public.close_session(public_peer_id, WORLD_HANDOFF_COMPLETE):
+                    await self._dispatch_session_event(cev)
+                self._pending_world_handoff.pop(public_peer_id, None)
+            return
+
+        # ── Responder on the PUBLIC instance: an agent connected to us ────────
+        if ev.role == SessionRole.RESPONDER and not is_world:
+            if profile_b is not None and self.node_type is Node.AGENT:
+                try:
+                    if not (await self.hosted.add_agent(peer_id=ev.peer_id,
+                                                        profile=NodeProfile.from_dict(profile_b))):
+                        await self.__purge(ev.peer_id)
+                except Exception as e:
+                    log.error(f"[session] add_agent failed for {ev.peer_id[:12]}…: {e}")
+            return
+
+        # ── Responder on the WORLD instance: a joiner redeemed a grant ────────
+        if ev.role == SessionRole.RESPONDER and is_world and self.node_type is Node.WORLD:
+            await self._world_host_register_agent(ev, profile_b)
+
+    async def _start_world_handoff(self, public_peer_id: str, grant: dict) -> None:
+        """Joiner side: the public Session yielded a WorldGrant. Open the private
+        world Session to the world's world-side peer-id and redeem the grant there."""
+        try:
+            world_profile = NodeProfile.from_dict(
+                json.loads(grant["world_profile_bytes"].decode("utf-8")))
+        except Exception as e:
+            log.error(f"[session] world handoff: bad world profile: {e}")
+            return
+        world_dyn = world_profile.get_dynamic_profile()
+        world_world_peer_id = world_dyn.get("private_peer_id")
+        world_addrs = world_dyn.get("private_peer_addresses") or []
+        if not world_world_peer_id:
+            log.error("[session] world handoff: world profile lacks private_peer_id")
+            return
+
+        # Tell the connection manager about the world node (pool routing) — replaces
+        # the legacy before_updating_pools_fcn=self.conn.set_world hook.
+        try:
+            self.conn.set_world(world_world_peer_id)
+        except Exception:
+            pass
+
+        blob = dict(grant)
+        blob["grant_id_bytes"] = bytes.fromhex(grant["grant_id"])
+        self._pending_world_handoff[public_peer_id] = world_world_peer_id
+        self._world_to_public[world_world_peer_id] = public_peer_id
+        for ev in await self._sm_world.initiate(
+                world_world_peer_id, list(world_addrs),
+                remote_other_peer_id_hint=world_world_peer_id, grant=blob):
+            await self._dispatch_session_event(ev)
+
+    async def _world_host_register_agent(self, ev, profile_b) -> None:
+        """World host: a joiner completed PRIVATE_JOIN on the world instance — add
+        it to the world agents/masters list (replaces the legacy post-approval
+        bookkeeping)."""
+        if profile_b is None:
+            return
+        try:
+            profile = NodeProfile.from_dict(profile_b)
+        except Exception as e:
+            log.error(f"[session] world register: bad joiner profile: {e}")
+            return
+        joiner_node_id = ev.data.get("private_join", {}).get("joiner_node_id")
+        role = self._pending_grant_roles.pop(joiner_node_id, None) if joiner_node_id else None
+        if role is None:
+            role = Agent.ROLE_WORLD_AGENT
+        private_peer_id = ev.peer_id
+        private_addr = profile.get_dynamic_profile().get("private_peer_addresses")
+        try:
+            # conn pools (routing) + world object (membership). The periodic rendezvous
+            # publish (PUBLISH_RENDEZVOUS_EVERY) advertises the new member to the world.
+            if role & Agent.ROLE_WORLD_MASTER == Agent.ROLE_WORLD_MASTER:
+                self.conn.add_to_world_masters_list(private_peer_id, private_addr, role)
+            else:
+                self.conn.add_to_world_agents_list(private_peer_id, private_addr, role)
+            if private_addr:
+                self.conn.set_addresses_in_peer_info(private_peer_id, private_addr)
+            if not (await self.world.add_agent(peer_id=private_peer_id, profile=profile)):
+                log.error(f"[session] world.add_agent rejected {private_peer_id[:12]}…; purging")
+                await self.__purge(private_peer_id)
+        except Exception as e:
+            log.error(f"[session] world register failed for {private_peer_id[:12]}…: {e}")
+
+    async def _join_world_after_session(self, world_peer_id: str, ev_data: dict, grant) -> bool:
+        """Joiner side: run the world-join body against an already-connected world
+        Session, decoding the grant blob carried from the public Session."""
+        if not grant:
+            log.error("[session] join_world: missing grant blob")
+            return False
+        try:
+            world_profile = NodeProfile.from_dict(
+                json.loads(grant["world_profile_bytes"].decode("utf-8")))
+        except Exception as e:
+            log.error(f"[session] join_world: bad world profile: {e}")
+            return False
+        role = int(grant.get("role", 0))
+        rendezvous_tag = int(grant.get("rendezvous_tag", 0))
+
+        agent_files = stats_code = None
+        code = grant.get("code_bundle") or b""
+        if code:
+            try:
+                bundle = json.loads(code.decode("utf-8"))
+                agent_files = bundle.get("agent_files")
+                stats_code = bundle.get("stats_code")
+            except Exception as e:
+                log.error(f"[session] join_world: bad code_bundle: {e}")
+
+        initial_stats = None
+        istats = grant.get("initial_stats") or b""
+        if istats:
+            try:
+                initial_stats = json.loads(istats.decode("utf-8"))
+            except Exception:
+                initial_stats = None
+
+        return await self.__join_world(
+            profile=world_profile, role=role,
+            packed_agent_files=agent_files, agent_stats_code=stats_code,
+            rendezvous_tag=rendezvous_tag, initial_stats=initial_stats,
+            connected_peer_id=world_peer_id,
+        )
 
     async def connect_via_session(
         self,
@@ -2688,31 +2484,21 @@ class Node:
         finally:
             self._session_established_waiters.pop(peer_id, None)
 
-    async def __purge(self, peer_id: str, keep_connection: bool = False,
-                      clear_agents_to_interview: bool = True) -> None:
-        """Removes a peer from all relevant connection lists and queues. (async)
+    async def __purge(self, peer_id: str, keep_connection: bool = False) -> None:
+        """Removes a peer from the hosted entity and the connection pools. (async)
+
+        The legacy interview / ack / ping-pong queues this used to clear are gone —
+        per-peer state now lives in the Session FSM, which is torn down separately
+        (on Session.Lost/Closed the SessionManager evicts the Session).
 
         Args:
             peer_id: The peer ID of the node to purge.
-            keep_connection: If True, the underlying P2P connection is preserved (only queues are cleared).
-            clear_agents_to_interview: If True, removes the peer profile from the list of agents to interview.
+            keep_connection: If True, the underlying P2P connection is preserved.
         """
         await self.hosted.remove_agent(peer_id)
 
         if not keep_connection:
             await self.conn.remove(peer_id)
-
-        # Clearing also the contents of the list of interviews
-        if clear_agents_to_interview:
-            if peer_id in self.agents_to_interview:
-                del self.agents_to_interview[peer_id]
-
-        # Clearing the temporary list of connected agents
-        if peer_id in self.agents_expected_to_send_ack:
-            del self.agents_expected_to_send_ack[peer_id]
-
-        # Clearing this set as well
-        self.agents_that_provided_ping_pong.discard(peer_id)
 
     @staticmethod
     def __sort_messages_by_priority(messages: list) -> list:

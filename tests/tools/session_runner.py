@@ -100,7 +100,6 @@ def _build_node(identity_dir: str, port: int, listen_ip: str = "0.0.0.0"):
         local_peer_id=p2p.peer_id,
         local_node_id="runner-" + p2p.peer_id[-8:],
         local_profile_factory=lambda: {"node_id": p2p.peer_id, "runner": True},
-        local_spr_other_factory=lambda: p2p.generate_signed_peer_record(),
     )
     return p2p, conn, sm
 
@@ -119,7 +118,7 @@ async def _drain_loop(conn, sm, stop_event: asyncio.Event):
             continue
 
         for inb in session:
-            events = await sm.deliver(inb.peer_id, inb.protocol_id, inb.data)
+            events = await sm.deliver(inb.peer_id, inb.protocol_id, inb.sess_msg)
             for ev in events:
                 _print_event(ev)
 

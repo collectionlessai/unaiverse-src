@@ -41,12 +41,12 @@ import logging
 from typing import Dict, List, Optional, Callable, TYPE_CHECKING
 
 from unaiverse.networking.session.session import (
-    Session, SessionState, SessionRole, SessionEvent, SessionEventType,
+    Session, SessionState, SessionRole, SessionEvent, SessionEventType, DecisionHook,
     SESSION_HELLO_PROTOCOL, SESSION_PROFILE_PROTOCOL,
     SESSION_WORLD_PROTOCOL, SESSION_CONTROL_PROTOCOL,
     SESSION_PROTOCOL_IDS,
 )
-from unaiverse.networking.p2p import session_pb2 as spb
+from unaiverse.networking.session.sess_msg import SessMsg, SIMULTANEOUS_OPEN_LOSS, GRACEFUL_SHUTDOWN
 
 if TYPE_CHECKING:
     from unaiverse.networking.node.connpool import ConnectionPools
@@ -60,25 +60,6 @@ def _p2p_label(name: str) -> str:
     return "pub" if "public" in name else "prv" if "world" in name else name
 
 
-def _looks_like_hello_request(payload: bytes) -> bool:
-    """Heuristically distinguish a HelloRequest from a HelloResponse on the
-    shared /hello/1.0.0 protocol.
-
-    HelloRequest invariants: session_id is exactly 16 bytes, nonce_a is
-    exactly 32 bytes. Both messages use the same protocol_id and both decode
-    permissively into either schema; this check holds because HelloResponse
-    field 1 is a small protocol-version string and field 2 is a varint, which
-    won't match the byte-length constraints above when (mis-)read as
-    HelloRequest fields.
-    """
-    try:
-        req = spb.HelloRequest()
-        req.ParseFromString(payload)
-        return len(req.session_id) == 16 and len(req.nonce_a) == 32
-    except Exception:
-        return False
-
-
 class SessionManager:
     """Per-p2p-instance Session registry and dispatcher."""
 
@@ -89,25 +70,25 @@ class SessionManager:
         local_peer_id: str,
         local_node_id: str,
         local_profile_factory: Callable[[], dict],
-        local_spr_other_factory: Optional[Callable[[], Optional[bytes]]] = None,
+        decision_hook: Optional[DecisionHook] = None,
     ):
         """
         Args:
-            conn: the ConnectionPools instance.
+            conn: the ConnectionPools instance (or a JS NodeConn mirror in Pyodide).
             p2p_name: the P2P instance this manager owns (e.g. "p2p_public").
             local_peer_id: our libp2p peer-id on `p2p_name` (used for tie-breaker).
             local_node_id: our application node-id (passed into each Session).
-            local_profile_factory: () -> NodeProfile dict snapshot.
-            local_spr_other_factory: () -> SignedPeerRecord bytes for the *other*
-                peer-id (the p2p_world key when this manager runs on p2p_public).
-                None disables SignedPeerRecord inclusion for this instance.
+            local_profile_factory: () -> NodeProfile dict snapshot (JSON-serializable).
+            decision_hook: responder side — async callback to accept/reject an inbound
+                PROFILE_OFFER and (for a world host) produce the WorldGrant spec.
+                None ⇒ Sessions accept by default (v1 agent happy-path).
         """
         self.conn = conn
         self.p2p_name = p2p_name
         self.local_peer_id = local_peer_id
         self.local_node_id = local_node_id
         self._local_profile_factory = local_profile_factory
-        self._local_spr_other_factory = local_spr_other_factory or (lambda: None)
+        self._decision_hook = decision_hook
         self._label = _p2p_label(p2p_name)
 
         # peer_id → Session (at most one Session per peer in this p2p instance).
@@ -125,6 +106,7 @@ class SessionManager:
         is_world_join: bool = False,
         remote_other_peer_id_hint: Optional[str] = None,
         remote_node_id_hint: Optional[str] = None,
+        grant: Optional[dict] = None,
     ) -> List[SessionEvent]:
         """Open a new initiator Session to `peer_id`. Idempotent if the peer
         already has a healthy Session — returns []. If a stale FAILED/CLOSED
@@ -155,11 +137,12 @@ class SessionManager:
             local_peer_id=self.local_peer_id,
             local_node_id=self.local_node_id,
             local_profile_factory=self._local_profile_factory,
-            local_spr_other=self._local_spr_other_factory(),
             remote_node_id_hint=remote_node_id_hint,
             remote_other_peer_id_hint=remote_other_peer_id_hint,
             addresses=addresses,
             is_world_join=is_world_join,
+            decision_hook=self._decision_hook,
+            grant=grant,
         )
         self._sessions[peer_id] = sess
         log.info(f"[{self._label}] initiating Session to {peer_id[:12]}…")
@@ -167,9 +150,9 @@ class SessionManager:
 
     # ── Inbound dispatch ──────────────────────────────────────────────────────
 
-    async def deliver(self, peer_id: str, protocol_id: str, payload: bytes) -> List[SessionEvent]:
-        """Route a session-protocol message at this manager's p2p instance.
-        Handles tie-breaker on inbound HELLO from an unknown / contending peer."""
+    async def deliver(self, peer_id: str, protocol_id: str, sess_msg: SessMsg) -> List[SessionEvent]:
+        """Route a session message at this manager's p2p instance. Handles the
+        tie-breaker on inbound HELLO from an unknown / contending peer."""
         if protocol_id not in SESSION_PROTOCOL_IDS:
             log.warning(f"[{self._label}] deliver: unknown protocol {protocol_id}, dropping")
             return []
@@ -177,26 +160,23 @@ class SessionManager:
         sess = self._sessions.get(peer_id)
 
         if sess is None:
-            if protocol_id == SESSION_HELLO_PROTOCOL:
+            if protocol_id == SESSION_HELLO_PROTOCOL and sess_msg.kind == SessMsg.KIND_HELLO_REQ:
                 # Inbound HELLO from an unknown peer → spawn a responder Session
                 # (no tie-breaker possible: we have no in-flight initiator for them).
                 sess = self._spawn_responder(peer_id, remote_other_peer_id_hint=None)
             else:
-                log.debug(f"[{self._label}] {protocol_id} from unknown peer {peer_id[:12]}… — dropped")
+                log.debug(f"[{self._label}] {protocol_id}/{sess_msg.kind} from unknown peer "
+                          f"{peer_id[:12]}… — dropped")
                 return []
 
-        # Tie-breaker — but only when the inbound is actually a competing
-        # HelloRequest, not the HelloResponse coming back to our own dial.
-        # Both messages travel on the same protocol_id, so we disambiguate by
-        # parsing and checking the HelloRequest-specific invariants
-        # (16-byte session_id + 32-byte nonce_a). HelloResponse field numbers
-        # have different wire types or different value-length expectations and
-        # won't pass both checks.
+        # Tie-breaker — only when the inbound is a competing HelloRequest (its
+        # explicit kind tag distinguishes it from the HelloResponse coming back to
+        # our own dial; both travel on the same protocol_id).
         elif (protocol_id == SESSION_HELLO_PROTOCOL and
+              sess_msg.kind == SessMsg.KIND_HELLO_REQ and
               sess.role == SessionRole.INITIATOR and
-              sess.state in (SessionState.CONNECTING, SessionState.HELLO_SENT) and
-              _looks_like_hello_request(payload)):
-            events = await self._handle_simultaneous_open(peer_id, payload)
+              sess.state in (SessionState.CONNECTING, SessionState.HELLO_SENT)):
+            events = await self._handle_simultaneous_open(peer_id)
             if events == "_proceed_with_existing_":   # type: ignore[comparison-overlap]
                 # We kept the existing initiator; the inbound HELLO is dropped after
                 # we wrote a soft-reject to the peer (handled inside the helper).
@@ -207,7 +187,7 @@ class SessionManager:
             else:
                 return events  # type: ignore[return-value]
 
-        return await sess.process_inbound(protocol_id, payload)
+        return await sess.process_inbound(protocol_id, sess_msg)
 
     def _spawn_responder(self, peer_id: str, remote_other_peer_id_hint: Optional[str]) -> Session:
         sess = Session(
@@ -218,14 +198,14 @@ class SessionManager:
             local_peer_id=self.local_peer_id,
             local_node_id=self.local_node_id,
             local_profile_factory=self._local_profile_factory,
-            local_spr_other=self._local_spr_other_factory(),
             remote_other_peer_id_hint=remote_other_peer_id_hint,
+            decision_hook=self._decision_hook,
         )
         self._sessions[peer_id] = sess
         log.info(f"[{self._label}] spawned responder Session for {peer_id[:12]}…")
         return sess
 
-    async def _handle_simultaneous_open(self, peer_id: str, _payload: bytes):
+    async def _handle_simultaneous_open(self, peer_id: str):
         """Deterministic tie-breaker: smaller peer-id keeps initiator, larger
         yields to the responder. Returns one of:
 
@@ -245,18 +225,15 @@ class SessionManager:
             # and fail with SIMULTANEOUS_OPEN_LOSS. Use the existing initiator's
             # session_id (cheap, non-conflicting) for the rejection.
             try:
-                reject = spb.HelloResponse(
-                    chosen_version="",
-                    capabilities=0,
-                    nonce_b=b"",
-                    sig_b=b"",
-                    reason_code=spb.SIMULTANEOUS_OPEN_LOSS,
-                )
+                reject = SessMsg(SessMsg.KIND_HELLO_RESP, {
+                    "chosen_version": "", "capabilities": 0, "nonce_b": b"",
+                    "sig_b": b"", "reason_code": SIMULTANEOUS_OPEN_LOSS,
+                })
                 await self.conn.send_session(
                     peer_id=peer_id,
                     protocol_id=SESSION_HELLO_PROTOCOL,
-                    payload=reject.SerializeToString(),
-                    p2p=self.conn.p2p_name_to_p2p[self.p2p_name],
+                    sess_msg=reject,
+                    p2p_name=self.p2p_name,
                 )
             except Exception as e:
                 log.warning(f"[{self._label}] simultaneous-open reject to {peer_id[:12]}… failed: {e}")
@@ -344,7 +321,7 @@ class SessionManager:
     async def close_session(
         self,
         peer_id: str,
-        reason_code: int = spb.GRACEFUL_SHUTDOWN,
+        reason_code: int = GRACEFUL_SHUTDOWN,
     ) -> List[SessionEvent]:
         sess = self._sessions.get(peer_id)
         if sess is None:

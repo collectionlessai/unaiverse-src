@@ -27,7 +27,9 @@ from unaiverse.networking.node.tokens import TokenVerifier
 # A SessionInbound is a per-stage Session message lifted off the inbound queue
 # without going through Msg.from_bytes or JWT verification. Identity is established
 # inside Stage-2 of the Session handshake (sig_a + signed_peer_record), not here.
-SessionInbound = namedtuple("SessionInbound", ["peer_id", "protocol_id", "data"])
+# `sess_msg` is a decoded SessMsg (see _bytes_to_sess_msg) — the Session FSM never
+# sees protobuf, which keeps session.py/session_manager.py Pyodide-portable.
+SessionInbound = namedtuple("SessionInbound", ["peer_id", "protocol_id", "sess_msg"])
 
 # libp2p protocol IDs that belong to the Session abstraction. Keep in sync with
 # session/session.py SESSION_PROTOCOL_IDS and unailib/types.go Session*Protocol.
@@ -37,6 +39,76 @@ SESSION_PROTOCOL_IDS = frozenset({
     "/unaiverse/session/world/1.0.0",
     "/unaiverse/session/control/1.0.0",
 })
+
+
+# ── SessMsg ↔ protobuf codec (the ONLY session_pb2 importer for the session path) ──
+#
+# The Session FSM speaks plain `SessMsg` value objects (kind + fields dict). The wire
+# bytes are `[1-byte kind tag] || protobuf(payload)`. The Go layer is a pure pipe —
+# it never parses these bytes — so the wire format is defined entirely by this codec
+# and its JS mirror (session_pb.js). The explicit kind tag means no fragile
+# direction/field heuristics are needed to know which message a stream carries.
+from unaiverse.networking.p2p import session_pb2 as _spb  # noqa: E402
+from unaiverse.networking.session.sess_msg import SessMsg  # noqa: E402
+
+# kind -> (tag_byte, pb_class_name, [field names in proto order])
+_KIND_SPEC = {
+    SessMsg.KIND_HELLO_REQ:        (0x01, "HelloRequest",
+                                    ["session_id", "nonce_a", "protocol_versions", "capabilities", "client_id"]),
+    SessMsg.KIND_HELLO_RESP:       (0x02, "HelloResponse",
+                                    ["chosen_version", "capabilities", "nonce_b", "sig_b", "reason_code"]),
+    SessMsg.KIND_PROFILE_OFFER:    (0x03, "ProfileOffer",
+                                    ["profile", "sig_a", "signed_peer_record", "session_id"]),
+    SessMsg.KIND_PROFILE_DECISION: (0x04, "ProfileDecision",
+                                    ["accepted", "profile_b", "reason_code", "hint_addrs", "retry_after_ms",
+                                     "session_id"]),
+    SessMsg.KIND_WORLD_GRANT:      (0x05, "WorldGrant",
+                                    ["grant_id", "grant_sig", "expiry_unix_ms", "world_profile",
+                                     "world_private_peer_record", "role", "code_bundle", "initial_stats",
+                                     "rendezvous_tag"]),
+    SessMsg.KIND_WORLD_GRANT_ACK:  (0x06, "WorldGrantAck", ["received"]),
+    SessMsg.KIND_PRIVATE_JOIN:     (0x07, "PrivateJoin", ["grant_id", "sig_init", "joiner_node_id"]),
+    SessMsg.KIND_PRIVATE_JOIN_ACK: (0x08, "PrivateJoinAck", ["accepted", "reason_code", "rendezvous_topic"]),
+    SessMsg.KIND_GOAWAY:           (0x09, "Goaway", ["reason", "drain_window_ms", "session_id"]),
+    SessMsg.KIND_GOAWAY_ACK:       (0x0A, "GoawayAck", ["received"]),
+}
+_TAG_TO_KIND = {tag: kind for kind, (tag, _cls, _f) in _KIND_SPEC.items()}
+_REPEATED_FIELDS = frozenset({"protocol_versions", "hint_addrs"})
+
+
+def _sess_msg_to_bytes(sess_msg: SessMsg) -> bytes:
+    """Serialize a SessMsg to `[kind tag] || protobuf` wire bytes."""
+    spec = _KIND_SPEC.get(sess_msg.kind)
+    if spec is None:
+        raise ValueError(f"_sess_msg_to_bytes: unknown SessMsg kind '{sess_msg.kind}'")
+    tag, cls_name, field_names = spec
+    msg = getattr(_spb, cls_name)()
+    for fn in field_names:
+        if fn not in sess_msg.fields or sess_msg.fields[fn] is None:
+            continue
+        val = sess_msg.fields[fn]
+        if fn in _REPEATED_FIELDS:
+            getattr(msg, fn).extend(list(val))
+        else:
+            setattr(msg, fn, val)
+    return bytes([tag]) + msg.SerializeToString()
+
+
+def _bytes_to_sess_msg(protocol_id: str, payload: bytes) -> SessMsg:
+    """Decode `[kind tag] || protobuf` wire bytes into a SessMsg."""
+    if not payload:
+        raise ValueError("_bytes_to_sess_msg: empty payload")
+    kind = _TAG_TO_KIND.get(payload[0])
+    if kind is None:
+        raise ValueError(f"_bytes_to_sess_msg: unknown kind tag {payload[0]} on {protocol_id}")
+    _tag, cls_name, field_names = _KIND_SPEC[kind]
+    msg = getattr(_spb, cls_name)()
+    msg.ParseFromString(payload[1:])
+    fields = {}
+    for fn in field_names:
+        val = getattr(msg, fn)
+        fields[fn] = list(val) if fn in _REPEATED_FIELDS else val
+    return SessMsg(kind=kind, fields=fields)
 
 
 class ConnectionPools:
@@ -514,10 +586,16 @@ class ConnectionPools:
                 # Bypass Msg.from_bytes + JWT verify; Session handshake establishes
                 # identity itself in Stage-2 (sig_a + signed_peer_record).
                 if protocol_id in SESSION_PROTOCOL_IDS:
+                    try:
+                        sess_msg = _bytes_to_sess_msg(protocol_id, decoded_data)
+                    except Exception as codec_err:
+                        log.error(f"Failed to decode session message on {protocol_id} "
+                                  f"from {verified_sender_id}: {codec_err}", sub=p2p.log_sub)
+                        continue
                     session_messages.append(SessionInbound(
                         peer_id=verified_sender_id,
                         protocol_id=protocol_id,
-                        data=decoded_data,
+                        sess_msg=sess_msg,
                     ))
                     continue
 
@@ -577,22 +655,58 @@ class ConnectionPools:
 
         return processed_messages, session_messages
 
-    async def send_session(self, peer_id: str, protocol_id: str, payload: bytes,
-                           p2p: P2P) -> bool:
-        """Open a fresh outbound libp2p stream on `protocol_id` to `peer_id`, write a
-        single length-prefixed protobuf payload, close the stream. Returns True on
-        send success.
+    async def send_session(self, peer_id: str, protocol_id: str, sess_msg: SessMsg,
+                           p2p_name: str) -> bool:
+        """Serialize `sess_msg` and open a fresh outbound libp2p stream on
+        `protocol_id` to `peer_id` on the `p2p_name` instance, writing a single
+        length-prefixed payload and closing the stream. Returns True on send success.
 
-        Identity is bound by the Session handshake (sig + signed_peer_record), so no
-        JWT piggyback is inserted here — the Session protocols deliberately skip it.
+        The Session FSM passes a `SessMsg` (not bytes) and a `p2p_name` (not a P2P
+        object) so it stays free of protobuf and of any Python-only P2P handle — the
+        JS `NodeConn` mirror exposes the same signature. Identity is bound by the
+        Session handshake (sig + signed_peer_record), so no JWT piggyback is inserted.
         """
         if protocol_id not in SESSION_PROTOCOL_IDS:
             raise ValueError(f"send_session: protocol_id '{protocol_id}' is not a Session protocol")
+        p2p = self[p2p_name]
+        try:
+            payload = _sess_msg_to_bytes(sess_msg)
+        except Exception as e:
+            log.error(f"send_session({peer_id[:12]}…, {protocol_id}) encode failed: {e}", sub=p2p.log_sub)
+            return False
         try:
             return p2p.send_on_protocol(peer_id, protocol_id, payload)
         except Exception as e:
             log.error(f"send_session({peer_id[:12]}…, {protocol_id}) failed: {e}", sub=p2p.log_sub)
             return False
+
+    # ── Async crypto / ping interface (Session calls only these; the JS NodeConn
+    # mirror implements the same signatures). Each is a thin async wrapper over the
+    # synchronous Go FFI so the same session.py source `await`s identically in
+    # CPython and in Pyodide-over-JS. p2p access is keyed by `p2p_name` (string)
+    # because the browser side has no Python `P2P` object. ─────────────────────────
+
+    async def sign_with_host_key(self, p2p_name: str, data: bytes):
+        """Ed25519-sign `data` with the host key of the `p2p_name` instance."""
+        return self[p2p_name].sign_with_host_key(data)
+
+    async def verify_peer_signature(self, p2p_name: str, peer_id: str,
+                                    data: bytes, signature: bytes) -> bool:
+        """Verify `signature` over `data` under `peer_id`'s public key."""
+        return self[p2p_name].verify_peer_signature(peer_id, data, signature)
+
+    async def verify_signed_peer_record(self, p2p_name: str, envelope: bytes,
+                                        expected_peer_id: str) -> bool:
+        """Verify a SignedPeerRecord envelope binds `expected_peer_id`."""
+        return self[p2p_name].verify_signed_peer_record(envelope, expected_peer_id)
+
+    async def ping_peer(self, p2p_name: str, peer_id: str, timeout_ms: int = 5000):
+        """Single /ipfs/ping round-trip; returns RTT in ms or None."""
+        return self[p2p_name].ping_peer(peer_id, timeout_ms)
+
+    async def generate_signed_peer_record(self, p2p_name: str):
+        """SignedPeerRecord envelope bytes over the `p2p_name` host's addresses."""
+        return self[p2p_name].generate_signed_peer_record()
 
     def passed_time_since_last_communication(self):
         passed = time.time() - max(self.__last_recv_time, self.__last_sent_time)

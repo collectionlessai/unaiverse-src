@@ -118,19 +118,42 @@ class FakeConn:
         # send_session behaviour — set send_inbox on the *other* FakeConn to
         # forward writes; otherwise send_session just records.
         self.send_inbox: Optional[deque] = None
-        self.sent: list[tuple[str, str, bytes]] = []
+        self.sent: list[tuple[str, str, object]] = []
+
+    def _p2p(self, p2p_name: str) -> FakeP2P:
+        # Single-instance test conns only hold P2P_PUBLIC; the Session fetches the
+        # SPR for the *other* instance (p2p_world) lazily — fall back to public so
+        # unit tests don't need to wire a second FakeP2P.
+        from unaiverse.networking.node.connpool import NodeConn
+        return self.p2p_name_to_p2p.get(p2p_name, self.p2p_name_to_p2p[NodeConn.P2P_PUBLIC])
 
     async def connect(self, addresses, p2p_name: str):
         self.connect_calls.append((list(addresses), p2p_name))
         return self.connect_returns
 
-    async def send_session(self, peer_id: str, protocol_id: str, payload: bytes, p2p) -> bool:
+    async def send_session(self, peer_id: str, protocol_id: str, sess_msg, p2p_name: str) -> bool:
         # Record the outbound call exactly as it was made (peer_id == destination).
-        self.sent.append((peer_id, protocol_id, payload))
+        self.sent.append((peer_id, protocol_id, sess_msg))
         if self.send_inbox is not None:
             # The other side's pop_messages reports the SENDER, not the destination.
-            self.send_inbox.append((self.my_peer_id, protocol_id, payload))
+            self.send_inbox.append((self.my_peer_id, protocol_id, sess_msg))
         return True
+
+    # ── Async crypto / ping interface (mirrors ConnectionPools) ──────────────
+    async def sign_with_host_key(self, p2p_name: str, data: bytes):
+        return self._p2p(p2p_name).sign_with_host_key(data)
+
+    async def verify_peer_signature(self, p2p_name: str, peer_id: str, data: bytes, signature: bytes) -> bool:
+        return self._p2p(p2p_name).verify_peer_signature(peer_id, data, signature)
+
+    async def verify_signed_peer_record(self, p2p_name: str, envelope: bytes, expected_peer_id: str) -> bool:
+        return self._p2p(p2p_name).verify_signed_peer_record(envelope, expected_peer_id)
+
+    async def ping_peer(self, p2p_name: str, peer_id: str, timeout_ms: int = 5000):
+        return self._p2p(p2p_name).ping_peer(peer_id, timeout_ms)
+
+    async def generate_signed_peer_record(self, p2p_name: str):
+        return self._p2p(p2p_name).generate_signed_peer_record()
 
 
 # ── Fixtures ────────────────────────────────────────────────────────────────
@@ -205,7 +228,6 @@ def _make_session(role, conn, p2p_name, local_peer_id, addresses=None,
         local_peer_id=local_peer_id,
         local_node_id="local-node-id",
         local_profile_factory=lambda: {"node_id": "local-node-id"},
-        local_spr_other=b"local-spr-bytes",
         remote_other_peer_id_hint=remote_other_peer_id_hint,
         addresses=list(addresses or []),
         is_world_join=is_world_join,

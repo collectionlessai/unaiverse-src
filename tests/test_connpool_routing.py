@@ -1,9 +1,11 @@
-"""Tests for the connpool ``get_messages`` protocol partition.
+"""Tests for the connpool ``get_messages`` protocol partition + SessMsg codec.
 
 Confirms that:
-  * Session-protocol messages skip ``Msg.from_bytes`` and JWT verification.
+  * Session-protocol messages skip ``Msg.from_bytes`` and JWT verification and are
+    decoded into ``SessMsg`` value objects by the codec.
   * Non-session messages still go through the legacy chat path.
   * ``send_session`` refuses non-session protocol IDs.
+  * The SessMsg ↔ protobuf codec round-trips.
 """
 
 import base64
@@ -14,7 +16,9 @@ import pytest
 
 from unaiverse.networking.node.connpool import (
     ConnectionPools, NodeConn, SessionInbound, SESSION_PROTOCOL_IDS,
+    _sess_msg_to_bytes, _bytes_to_sess_msg,
 )
+from unaiverse.networking.session import SessMsg
 
 
 class _FakeP2P:
@@ -48,16 +52,49 @@ def _run(coro):
     return asyncio.get_event_loop().run_until_complete(coro)
 
 
+# ── Codec round-trip ─────────────────────────────────────────────────────────
+
+def test_codec_round_trips_hello_request():
+    msg = SessMsg(SessMsg.KIND_HELLO_REQ, {
+        "session_id": b"\x01" * 16, "nonce_a": b"\xaa" * 32,
+        "protocol_versions": ["1.0"], "capabilities": 0, "client_id": "py/1.0",
+    })
+    wire = _sess_msg_to_bytes(msg)
+    back = _bytes_to_sess_msg("/unaiverse/session/hello/1.0.0", wire)
+    assert back.kind == SessMsg.KIND_HELLO_REQ
+    assert back.fields["session_id"] == b"\x01" * 16
+    assert back.fields["nonce_a"] == b"\xaa" * 32
+    assert list(back.fields["protocol_versions"]) == ["1.0"]
+    assert back.fields["client_id"] == "py/1.0"
+
+
+def test_codec_round_trips_world_grant():
+    msg = SessMsg(SessMsg.KIND_WORLD_GRANT, {
+        "grant_id": b"\x05" * 32, "grant_sig": b"sig", "expiry_unix_ms": 1234567890123,
+        "world_profile": b'{"a":1}', "world_private_peer_record": b"spr",
+        "role": 3, "code_bundle": b"", "initial_stats": b"", "rendezvous_tag": 7,
+    })
+    back = _bytes_to_sess_msg("/unaiverse/session/world/1.0.0", _sess_msg_to_bytes(msg))
+    assert back.kind == SessMsg.KIND_WORLD_GRANT
+    assert back.fields["grant_id"] == b"\x05" * 32
+    assert back.fields["expiry_unix_ms"] == 1234567890123
+    assert back.fields["role"] == 3
+    assert back.fields["rendezvous_tag"] == 7
+
+
 # ── Routing ─────────────────────────────────────────────────────────────────
 
 def test_session_protocol_messages_are_partitioned(pools_with_one_p2p):
     """A batch containing one session message and zero chat messages → the
-    chat list is empty, the session list has exactly one SessionInbound with
-    raw bytes intact (no Msg.from_bytes)."""
+    chat list is empty, the session list has exactly one SessionInbound carrying
+    a decoded SessMsg (no Msg.from_bytes / JWT verify)."""
     pools, fake = pools_with_one_p2p
+    wire = _sess_msg_to_bytes(SessMsg(SessMsg.KIND_HELLO_REQ, {
+        "session_id": b"\x01" * 16, "nonce_a": b"\xaa" * 32, "protocol_versions": ["1.0"],
+    }))
     fake._batch = [{
         "from": "12D3KooWRemote",
-        "data": _b64(b"\xde\xad\xbe\xef-session-payload-not-a-Msg"),
+        "data": _b64(wire),
         "protocol": "/unaiverse/session/hello/1.0.0",
     }]
     chat, session = _run(pools.get_messages(p2p_name=NodeConn.P2P_PUBLIC))
@@ -66,29 +103,24 @@ def test_session_protocol_messages_are_partitioned(pools_with_one_p2p):
     assert isinstance(session[0], SessionInbound)
     assert session[0].peer_id == "12D3KooWRemote"
     assert session[0].protocol_id == "/unaiverse/session/hello/1.0.0"
-    assert session[0].data == b"\xde\xad\xbe\xef-session-payload-not-a-Msg"
+    assert session[0].sess_msg.kind == SessMsg.KIND_HELLO_REQ
+    assert session[0].sess_msg.fields["session_id"] == b"\x01" * 16
 
 
 def test_chat_message_still_uses_legacy_path(pools_with_one_p2p, monkeypatch):
     """A batch with an empty ``protocol`` field must go through the chat path
-    (Msg.from_bytes + JWT verify). We mock both to confirm they get called and
-    the message lands in the chat list."""
+    (Msg.from_bytes + JWT verify)."""
     from unaiverse.networking.p2p import messages as msg_mod
     pools, fake = pools_with_one_p2p
 
-    # Mock Msg.from_bytes to return an object that looks like a Msg with a
-    # matching sender and a piggyback we can pretend-verify.
     fake_msg = MagicMock()
     fake_msg.content_type = "misc"
     fake_msg.channel = "ch"
     fake_msg.sender = "12D3KooWChat"
     fake_msg.piggyback = "fake-jwt0"
     monkeypatch.setattr(msg_mod.Msg, "from_bytes", staticmethod(lambda _b: fake_msg))
-
-    # Pretend the sender is in our pool so it passes the gate.
     pools.peer_id_to_pool_name["12D3KooWChat"] = NodeConn.P2P_PUBLIC
 
-    # Mock verify_token to accept the JWT.
     async def _verify(token, sender):
         return ("node-xyz", None)
     monkeypatch.setattr(pools, "verify_token", _verify)
@@ -102,7 +134,6 @@ def test_chat_message_still_uses_legacy_path(pools_with_one_p2p, monkeypatch):
     assert session == []
     assert len(chat) == 1
     assert chat[0] is fake_msg
-    # Piggyback rewritten to node_id + inspector_bit, as today.
     assert chat[0].piggyback.startswith("node-xyz")
 
 
@@ -123,11 +154,13 @@ def test_mixed_batch_split_correctly(pools_with_one_p2p, monkeypatch):
         return ("node-xyz", None)
     monkeypatch.setattr(pools, "verify_token", _verify)
 
+    offer_wire = _sess_msg_to_bytes(SessMsg(SessMsg.KIND_PROFILE_OFFER, {"sig_a": b"s"}))
+    goaway_wire = _sess_msg_to_bytes(SessMsg(SessMsg.KIND_GOAWAY, {"reason": 9}))
     fake._batch = [
         {"from": "12D3KooWChat", "data": _b64(b"x"), "protocol": ""},
-        {"from": "12D3KooWRemote", "data": _b64(b"sess"),
+        {"from": "12D3KooWRemote", "data": _b64(offer_wire),
          "protocol": "/unaiverse/session/profile/1.0.0"},
-        {"from": "12D3KooWRemote", "data": _b64(b"goaway"),
+        {"from": "12D3KooWRemote", "data": _b64(goaway_wire),
          "protocol": "/unaiverse/session/control/1.0.0"},
     ]
     chat, session = _run(pools.get_messages(p2p_name=NodeConn.P2P_PUBLIC))
@@ -137,18 +170,21 @@ def test_mixed_batch_split_correctly(pools_with_one_p2p, monkeypatch):
         "/unaiverse/session/profile/1.0.0",
         "/unaiverse/session/control/1.0.0",
     }
+    assert {s.sess_msg.kind for s in session} == {
+        SessMsg.KIND_PROFILE_OFFER, SessMsg.KIND_GOAWAY,
+    }
 
 
 # ── send_session() ──────────────────────────────────────────────────────────
 
 def test_send_session_rejects_non_session_protocol(pools_with_one_p2p):
     pools, _ = pools_with_one_p2p
-    p2p = pools.p2p_name_to_p2p[NodeConn.P2P_PUBLIC]
     with pytest.raises(ValueError, match="not a Session protocol"):
         _run(pools.send_session(
             peer_id="12D3KooWRemote",
             protocol_id="/unaiverse/chat/1.0.0",   # not a session protocol
-            payload=b"x", p2p=p2p,
+            sess_msg=SessMsg(SessMsg.KIND_GOAWAY, {}),
+            p2p_name=NodeConn.P2P_PUBLIC,
         ))
 
 
@@ -159,9 +195,8 @@ def test_session_protocol_ids_match_constants():
 
 
 def test_session_inbound_namedtuple_shape():
-    si = SessionInbound(peer_id="P", protocol_id="/x", data=b"d")
+    si = SessionInbound(peer_id="P", protocol_id="/x", sess_msg="d")
     assert si.peer_id == "P"
     assert si.protocol_id == "/x"
-    assert si.data == b"d"
-    # Positional access (it's a namedtuple).
-    assert si[0] == "P" and si[1] == "/x" and si[2] == b"d"
+    assert si.sess_msg == "d"
+    assert si[0] == "P" and si[1] == "/x" and si[2] == "d"

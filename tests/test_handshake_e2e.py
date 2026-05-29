@@ -15,10 +15,10 @@ from collections import deque
 
 import pytest
 
-from unaiverse.networking.p2p import session_pb2 as spb
 from unaiverse.networking.session import (
     SessionManager, SessionRole, SessionState, SessionEventType,
 )
+from unaiverse.networking.session.sess_msg import WORLD_DISENGAGEMENT
 from unaiverse.networking.node.connpool import NodeConn
 
 
@@ -43,7 +43,6 @@ def _make_sm(conn, p2p_name, local_peer_id, node_id):
         local_peer_id=local_peer_id,
         local_node_id=node_id,
         local_profile_factory=lambda: {"node_id": node_id, "ver": "test"},
-        local_spr_other_factory=lambda: b"spr-" + node_id.encode(),
     )
 
 
@@ -109,7 +108,7 @@ def test_intentional_close_reaches_peer(bidirectional_fakeconns,
     _pump(alice_inbox, sm_alice)
 
     # Now Alice intentionally closes with WORLD_DISENGAGEMENT.
-    _run(sm_alice.close_session(bob_peer_id, spb.WORLD_DISENGAGEMENT))
+    _run(sm_alice.close_session(bob_peer_id, WORLD_DISENGAGEMENT))
     # Bob processes the GOAWAY → CLOSED event with the supplied reason.
     bob_events = _pump(bob_inbox, sm_bob)
     closed = [e for e in bob_events if e.type == SessionEventType.CLOSED]
