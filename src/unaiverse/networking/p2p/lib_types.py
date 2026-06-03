@@ -21,6 +21,7 @@ from typing import List, Any
 from .golibp2p import GoLibP2P  # Assuming this class loads the library
 
 logger = logging.getLogger('LIB-TYPES')
+logger.setLevel(logging.WARNING)
 
 
 class TypeInterface:

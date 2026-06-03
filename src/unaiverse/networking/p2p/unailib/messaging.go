@@ -23,25 +23,15 @@ import (
 )
 
 // storeReceivedMessage processes a raw message received either from a direct stream
-// or a PubSub topic. The sender peerID and the channel to store are retrieved in handleStream and readFromSubscription
+// or a PubSub topic. The libp2p protocol ID is preserved on the queued message so
+// Python can route by protocol instead of by content_type. Pass an empty string
+// for protocolID if not available.
 func storeReceivedMessage(
-	ni *NodeInstance,
-	from peer.ID,
-	channel string,
-	data []byte,
-) {
-	storeReceivedMessageWithProtocol(ni, from, channel, "", data)
-}
-
-// storeReceivedMessageWithProtocol is the protocol-aware variant used by session
-// stream handlers — the libp2p protocol ID is preserved on the queued message so
-// Python can route by protocol instead of by content_type.
-func storeReceivedMessageWithProtocol(
-	ni *NodeInstance,
-	from peer.ID,
-	channel string,
-	protocolID string,
-	data []byte,
+    ni *NodeInstance,
+    from peer.ID,
+    channel string,
+    protocolID string,
+    data []byte,
 ) {
 	// Get the message store for this instance
 	store := ni.messageStore
@@ -186,12 +176,12 @@ func readFromSubscription(
 		} else {
 			// This is a standard message. Queue it as before.
 			logger.Debugf("[GO] 📝 Instance %d: Storing new pubsub message from topic '%s'.\n", ni.instanceIndex, topic)
-			storeReceivedMessage(ni, msg.GetFrom(), topic, msg.Data)
+			storeReceivedMessage(ni, msg.GetFrom(), topic, "", msg.Data)  // Empty protocolID for PubSub messages, since they are identified by topic instead.
 		}
 	}
 }
 
-// handleStream reads from a direct message stream using the new framing protocol.
+// handleStream reads from a direct message stream on the UnaiverseChatProtocol using the new framing protocol.
 // It expects the stream to start with a 4-byte length prefix, followed by a 1-byte channel name length,
 // the channel name itself, and finally the Protobuf-encoded payload.
 func handleStream(ni *NodeInstance, s network.Stream) {
@@ -293,7 +283,7 @@ func handleStream(ni *NodeInstance, s network.Stream) {
 		}
 
 		logger.Infof("[GO] 📨 Instance %d: Received msg on channel '%s' via Stream %s from %s.\n", ni.instanceIndex, channel, streamID, senderPeerID)
-		storeReceivedMessage(ni, senderPeerID, channel, payload)
+		storeReceivedMessage(ni, senderPeerID, channel, UnaiverseChatProtocol, payload)
 	}
 }
 
@@ -371,7 +361,7 @@ func handleSessionStream(ni *NodeInstance, s network.Stream, protocolID string) 
 	// Use the protocol ID as the channel key so messages are queued per-protocol.
 	// Python's connpool decoder treats any channel matching a session protocol ID
 	// as a session message and routes it to the SessionManager.
-	storeReceivedMessageWithProtocol(ni, senderPeerID, protocolID, protocolID, payload)
+	storeReceivedMessage(ni, senderPeerID, protocolID, protocolID, payload)
 }
 
 // writeSessionFrame writes a single length-prefixed session payload onto a stream:

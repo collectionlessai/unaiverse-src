@@ -451,6 +451,17 @@ class Session:
         except Exception as e:
             return await self._reject_profile(LOCAL_ERROR, f"bad_profile_json:{e}")
 
+        # Learn the peer's application node-id from its profile when we weren't
+        # given a hint at spawn time (an inbound responder never is). The world
+        # host needs it both for the allow-list decision below and to bind the
+        # WorldGrant signature to the joiner — the joiner verifies that signature
+        # against its own local_node_id (see _responder_issue_world_grant /
+        # _initiator_on_world_grant), so the two must agree on this value.
+        if not self.remote_node_id_hint:
+            nid = self.remote_profile.get("node_id")
+            if isinstance(nid, str) and nid:
+                self.remote_node_id_hint = nid
+
         # Application decision: accept/reject + (world host) the grant spec. When no
         # hook is injected we accept (preserves the v1 agent happy-path default).
         if self._decision_hook is not None:

@@ -30,6 +30,11 @@ Notes:
     Session — it does NOT join a world, run an HSM, or do anything else.
   - Press Ctrl-C to exit. Both sides will log a CLOSED event if the peer
     sends GOAWAY before disconnect.
+  - IMPORTANT: dial a NON-loopback multiaddr. ``connpool.__connect`` filters out
+    every ``127.0.0.1`` address, so even for a same-machine test you must paste
+    one of the listener's LAN multiaddrs (e.g. ``/ip4/192.168.x.y/tcp/30060/p2p/…``),
+    not the ``/ip4/127.0.0.1/…`` one — otherwise the dial fails with
+    "invalid addresses".
 """
 
 from __future__ import annotations
@@ -61,26 +66,46 @@ def _build_node(identity_dir: str, port: int, listen_ip: str = "0.0.0.0"):
     a hosted Agent/World, etc.) — this harness is *only* about exercising the
     Session machinery."""
     from unaiverse.networking.p2p.p2p import P2P
-    from unaiverse.networking.p2p import setup_library
     from unaiverse.networking.node.connpool import NodeConn
     from unaiverse.networking.session import SessionManager
 
-    # Bring the shared library up if it isn't already.
+    # Bring the shared library up if it isn't already. ``setup_library`` is a
+    # classmethod on ``P2P`` (the package __init__ only loads the .so; it does
+    # not call InitializeLibrary).
     if not getattr(P2P, "_library_initialized", False):
-        setup_library()
+        P2P.setup_library()
 
-    cfg = {
-        "identity_dir": identity_dir,
-        "predefined_port": port,
-        "listen_ips": [listen_ip],
-        "relay": {"enable_client": False, "enable_service": False, "with_broad_limits": False},
-        "tls": {"auto_tls": False, "domain": "", "cert_path": "", "key_path": ""},
-        "network": {"isolated": False, "force_public": True, "flood_sub": False},
-        "dht": {"enabled": False, "keep": False},
-        "webrtc": {"enabled": False},
-    }
+    # Initialize the unaiverse logger singleton. connpool's dial path calls
+    # ``log.cpool(..., sub=...)`` / ``log.error(..., sub=...)``; if the singleton
+    # is left uninitialized those fall through to builtin ``print(..., sub=...)``
+    # and raise ``TypeError: 'sub' is an invalid keyword argument for print()``,
+    # crashing every dial. Mirror what ``Node`` does (node.py), but keep it to the
+    # screen only (no stray .jsonl) so connpool diagnostics stay visible here.
+    from unaiverse.utils.logger import log as _ulog, ALL_CHANNELS
+    if getattr(_ulog, "_Logger__instance", None) is None:
+        _ulog.create(name="session_runner", log_dir="/tmp",
+                     active=ALL_CHANNELS, screen=ALL_CHANNELS,
+                     no_color=False, file_enabled=False)
+
     Path(identity_dir).mkdir(parents=True, exist_ok=True)
-    p2p = P2P(cfg=cfg, log_sub="rnr")
+    # No relay / DHT / WebRTC: this harness needs a directly-reachable peer.
+    # ``knows_is_public=True`` skips the NAT-discovery dance.
+    p2p = P2P(
+        identity_dir=identity_dir,
+        port=port,
+        ips=[listen_ip],
+        enable_relay_client=False,
+        enable_relay_service=False,
+        use_broad_limits=False,
+        is_isolated=False,
+        knows_is_public=True,
+        enable_tls=False,
+        dht_enabled=False,
+        dht_keep=False,
+        webrtc_enabled=False,
+        flood_sub=False,
+        log_sub="pub",  # must be a valid logger sub tag ("pub"/"prv"/"gen")
+    )
     log.info("started libp2p instance peer_id=%s", p2p.peer_id)
     for a in p2p.addresses:
         log.info("  listen multiaddr: %s", a)
