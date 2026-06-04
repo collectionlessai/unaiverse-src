@@ -46,7 +46,9 @@ from unaiverse.networking.session.session import (
     SESSION_WORLD_PROTOCOL, SESSION_CONTROL_PROTOCOL,
     SESSION_PROTOCOL_IDS,
 )
-from unaiverse.networking.session.sess_msg import SessMsg, SIMULTANEOUS_OPEN_LOSS, GRACEFUL_SHUTDOWN
+from unaiverse.networking.session.sess_msg import (
+    SessMsg, SIMULTANEOUS_OPEN_LOSS, GRACEFUL_SHUTDOWN, SESSION_UNKNOWN,
+)
 
 if TYPE_CHECKING:
     from unaiverse.networking.node.connpool import ConnectionPools
@@ -107,6 +109,7 @@ class SessionManager:
         remote_other_peer_id_hint: Optional[str] = None,
         remote_node_id_hint: Optional[str] = None,
         grant: Optional[dict] = None,
+        reject_relay: bool = False,
     ) -> List[SessionEvent]:
         """Open a new initiator Session to `peer_id`. Idempotent if the peer
         already has a healthy Session — returns []. If a stale FAILED/CLOSED
@@ -143,6 +146,7 @@ class SessionManager:
             is_world_join=is_world_join,
             decision_hook=self._decision_hook,
             grant=grant,
+            reject_relay=reject_relay,
         )
         self._sessions[peer_id] = sess
         log.info(f"[{self._label}] initiating Session to {peer_id[:12]}…")
@@ -164,6 +168,15 @@ class SessionManager:
                 # Inbound HELLO from an unknown peer → spawn a responder Session
                 # (no tie-breaker possible: we have no in-flight initiator for them).
                 sess = self._spawn_responder(peer_id, remote_other_peer_id_hint=None)
+            elif (protocol_id == SESSION_CONTROL_PROTOCOL and
+                  sess_msg.kind in (SessMsg.KIND_PING, SessMsg.KIND_RESUME)):
+                # We are (most likely) the restarted peer: we hold no Session for
+                # this session_id. Tell the initiator so it stops waiting and
+                # re-handshakes, instead of dropping silently (which would make it
+                # ride its grace timer to LOST). Only the manager knows "no Session
+                # exists for this peer", so the reply lives here.
+                await self._send_unknown_session_reply(peer_id, sess_msg)
+                return []
             else:
                 log.debug(f"[{self._label}] {protocol_id}/{sess_msg.kind} from unknown peer "
                           f"{peer_id[:12]}… — dropped")
@@ -175,7 +188,8 @@ class SessionManager:
         elif (protocol_id == SESSION_HELLO_PROTOCOL and
               sess_msg.kind == SessMsg.KIND_HELLO_REQ and
               sess.role == SessionRole.INITIATOR and
-              sess.state in (SessionState.CONNECTING, SessionState.HELLO_SENT)):
+              sess.state in (SessionState.CONNECTING, SessionState.HELLO_SENT,
+                             SessionState.RECONNECTING)):
             events = await self._handle_simultaneous_open(peer_id)
             if events == "_proceed_with_existing_":   # type: ignore[comparison-overlap]
                 # We kept the existing initiator; the inbound HELLO is dropped after
@@ -204,6 +218,31 @@ class SessionManager:
         self._sessions[peer_id] = sess
         log.info(f"[{self._label}] spawned responder Session for {peer_id[:12]}…")
         return sess
+
+    async def _send_unknown_session_reply(self, peer_id: str, sess_msg: SessMsg) -> None:
+        """Reply to a liveness PING/RESUME for which we hold no Session (we are the
+        restarted/forgetful peer): PONG ok=false / RESUME_ACK accepted=false with
+        SESSION_UNKNOWN, echoing session_id + nonce. Mirrors the simultaneous-open
+        reject pattern — a one-shot send on the control protocol, no Session object."""
+        if sess_msg.kind == SessMsg.KIND_PING:
+            reply = SessMsg(SessMsg.KIND_PONG, {
+                "session_id": bytes(sess_msg.get("session_id") or b""),
+                "nonce": bytes(sess_msg.get("nonce") or b""),
+                "ok": False,
+            })
+        else:  # KIND_RESUME
+            reply = SessMsg(SessMsg.KIND_RESUME_ACK, {
+                "session_id": bytes(sess_msg.get("session_id") or b""),
+                "nonce": bytes(sess_msg.get("nonce") or b""),
+                "accepted": False, "reason_code": SESSION_UNKNOWN,
+            })
+        try:
+            await self.conn.send_session(
+                peer_id=peer_id, protocol_id=SESSION_CONTROL_PROTOCOL,
+                sess_msg=reply, p2p_name=self.p2p_name,
+            )
+        except Exception as e:
+            log.warning(f"[{self._label}] unknown-session reply to {peer_id[:12]}… failed: {e}")
 
     async def _handle_simultaneous_open(self, peer_id: str):
         """Deterministic tie-breaker: smaller peer-id keeps initiator, larger
@@ -250,8 +289,8 @@ class SessionManager:
     # ── Per-cycle tick (timeouts + keep-alive) ────────────────────────────────
 
     async def tick(self, now: Optional[float] = None) -> List[SessionEvent]:
-        """Sweep all sessions: timeout firings + /ipfs/ping keep-alive. Single
-        dispatch path; the returned list is what node.py acts on."""
+        """Sweep all sessions: timeout firings + active re-dial + session-level
+        keep-alive. Single dispatch path; the returned list is what node.py acts on."""
         if now is None:
             now = time.monotonic()
         events: List[SessionEvent] = []
@@ -262,6 +301,9 @@ class SessionManager:
             t_event = sess.check_timeout(now)
             if t_event is not None:
                 events.append(t_event)
+            r_event = sess.tick_reconnect(now)
+            if r_event is not None:
+                events.append(r_event)
             k_event = sess.tick_keepalive(now)
             if k_event is not None:
                 events.append(k_event)
@@ -329,6 +371,18 @@ class SessionManager:
             return []
         await sess.close(reason_code)
         return []  # CLOSED event will arrive via process_inbound(GoawayAck) or tick
+
+    async def close_all(self, reason_code: int = GRACEFUL_SHUTDOWN) -> List[SessionEvent]:
+        """GOAWAY every Session that can be gracefully closed (ESTABLISHED /
+        RECONNECTING). Used on node/runner shutdown so peers see a clean CLOSED
+        instead of falling through liveness-timeout. Sessions already CLOSING/CLOSED
+        (e.g. an intentional world-handoff GOAWAY) are skipped by Session.close."""
+        for sess in list(self._sessions.values()):
+            try:
+                await sess.close(reason_code)
+            except Exception as e:
+                log.warning(f"[{self._label}] close_all: close({sess.peer_id[:12]}…) failed: {e}")
+        return []
 
     # ── Accessors ─────────────────────────────────────────────────────────────
 

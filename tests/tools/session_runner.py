@@ -159,6 +159,26 @@ def _print_event(ev) -> None:
              ev.role.value, ev.data)
 
 
+async def _graceful_close(conn, sm, iters: int = 30) -> None:
+    """On shutdown, GOAWAY every Session and keep pumping deliver+tick briefly so
+    the GOAWAY goes out and the peer's GOAWAY_ACK is processed (clean CLOSED on
+    both sides). Without this the peer only learns we left via liveness timeout."""
+    from unaiverse.networking.node.connpool import NodeConn
+    log.info("sending GOAWAY to peers (graceful close)…")
+    await sm.close_all()
+    for _ in range(iters):
+        try:
+            _chat, session = await conn.get_messages(p2p_name=NodeConn.P2P_PUBLIC)
+        except Exception:
+            session = []
+        for inb in session:
+            for ev in await sm.deliver(inb.peer_id, inb.protocol_id, inb.sess_msg):
+                _print_event(ev)
+        for ev in await sm.tick():
+            _print_event(ev)
+        await asyncio.sleep(0.05)
+
+
 # ── Commands ────────────────────────────────────────────────────────────────
 
 async def cmd_listen(args):
@@ -177,6 +197,7 @@ async def cmd_listen(args):
         loop.add_signal_handler(sig, stop.set)
     await _drain_loop(conn, sm, stop)
     log.info("shutting down")
+    await _graceful_close(conn, sm)
     p2p.close()
 
 
@@ -206,6 +227,7 @@ async def cmd_dial(args):
 
     await _drain_loop(conn, sm, stop)
     log.info("shutting down")
+    await _graceful_close(conn, sm)
     p2p.close()
 
 

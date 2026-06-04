@@ -45,6 +45,7 @@ KICKED_BY_HOST         = 14
 LOCAL_ERROR            = 15
 GRANT_EXPIRED          = 16
 SIMULTANEOUS_OPEN_LOSS = 17
+SESSION_UNKNOWN        = 18  # liveness: peer holds no Session for this session_id
 
 REASON_NAME: Dict[int, str] = {
     OK: "OK",
@@ -65,6 +66,7 @@ REASON_NAME: Dict[int, str] = {
     LOCAL_ERROR: "LOCAL_ERROR",
     GRANT_EXPIRED: "GRANT_EXPIRED",
     SIMULTANEOUS_OPEN_LOSS: "SIMULTANEOUS_OPEN_LOSS",
+    SESSION_UNKNOWN: "SESSION_UNKNOWN",
 }
 
 
@@ -98,6 +100,13 @@ class SessMsg:
     KIND_PRIVATE_JOIN_ACK = "private_join_ack"
     KIND_GOAWAY           = "goaway"
     KIND_GOAWAY_ACK       = "goaway_ack"
+    # Liveness / resume control messages (post-date session.proto; the conn-layer
+    # codec encodes these as a small JSON control envelope rather than protobuf —
+    # see connpool.py. They ride SESSION_CONTROL_PROTOCOL like GOAWAY).
+    KIND_PING             = "ping"          # {session_id: bytes, nonce: bytes}
+    KIND_PONG             = "pong"          # {session_id: bytes, nonce: bytes, ok: bool}
+    KIND_RESUME           = "resume"        # {session_id: bytes, nonce: bytes}
+    KIND_RESUME_ACK       = "resume_ack"    # {session_id, nonce, accepted: bool, reason_code: int}
 
     def get(self, key: str, default: Any = None) -> Any:
         return self.fields.get(key, default)

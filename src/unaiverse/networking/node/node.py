@@ -394,6 +394,12 @@ class Node:
             decision_hook=self._session_decision_hook,
         )
 
+        # Let conn consult per-peer Session state. The hosted entity only holds a
+        # reference to conn (not to the SessionManagers), so this is how actions
+        # like Agent.agents_are_waiting learn whether a peer's handshake is still
+        # in flight (see NodeConn.is_peer_session_pending).
+        self.conn.set_session_managers(self._sm_public, self._sm_world)
+
         # Get CV
         cv = self.get_cv()
 
@@ -420,7 +426,7 @@ class Node:
         # legacy "agents waiting for ack" queue (never read by the hosted entity);
         # the Session FSM owns that state now, so we pass an empty placeholder.
         self.hosted.set_node_info(self.conn, self.profile, self.ask_to_get_in_touch,
-                                  self.__purge, self.node_identity_dir, {})
+                                  self.__purge, self.node_identity_dir)
 
         # Finally, sending dynamic profile to the root server
         # (send AFTER set_node_info, not before, since set_node_info updates the profile,
@@ -728,32 +734,40 @@ class Node:
             log.error(f"Addresses of {node_name} were not found, cannot connect!")
             return None
 
-        # Connecting (this establishes the libp2p connection and tells us the peer-id
-        # + whether it is relayed; the subsequent Session handshake reuses it).
-        log.misc("Connecting to another agent/world...")
-        p2p_name = NodeConn.P2P_PUBLIC if public else NodeConn.P2P_WORLD
-        peer_id, through_relay = await self.conn.connect(addresses, p2p_name=p2p_name)
-
-        if through_relay:
-            log.user("Warning: this connection goes through a relay-based circuit, "
-                     "so a third-party node is involved in the communication")
-
-        if peer_id is None or (through_relay and not self.talk_to_relay_based_nodes):
-            log.error("Connection failed!")
+        # Resolve the target peer-id from the multiaddrs (every root-server address
+        # carries a trailing /p2p/<peer-id>; for a relay circuit it is the final hop,
+        # i.e. the target — not the relay). The Session is now the *sole* dialer:
+        # conn.connect runs inside Session.start()/_dial_then_hello (and again on
+        # re-dial), so we no longer pre-dial here. The relay gate is enforced inside
+        # the dial via reject_relay (see Session._dial_then_hello).
+        peer_id = None
+        for a in addresses:
+            if "/p2p/" in a:
+                cand = a.rsplit("/p2p/", 1)[-1].split("/")[0]
+                if cand:
+                    peer_id = cand
+                    break
+        if peer_id is None:
+            log.error(f"Could not resolve a peer-id from addresses of {node_name}, cannot connect!")
             return None
 
+        p2p_name = NodeConn.P2P_PUBLIC if public else NodeConn.P2P_WORLD
+
+        # Legacy pool-routing hook (e.g. conn.set_world so the world private peer is
+        # not filtered when pools refresh). Harmless for the agent path (None).
         if before_updating_pools_fcn is not None:
             before_updating_pools_fcn(peer_id)
-        await self.conn.update()
 
-        # Drive the per-peer Session handshake (replaces the legacy ping-pong +
-        # profile-request + approval + ack-queue flow). On success the peer is
-        # enrolled via the Session ESTABLISHED side-effects (add_agent / join_world).
-        log.misc("Connected, running Session handshake...")
+        # Drive the per-peer Session handshake (the Session owns dial + handshake +
+        # re-dial). On success the peer is enrolled via the Session ESTABLISHED
+        # side-effects (add_agent / join_world). Pool membership refreshes via the
+        # main polling loop while we await ESTABLISHED.
+        log.misc("Connecting to another agent/world (Session-owned dial + handshake)...")
         ok = await self.connect_via_session(peer_id=peer_id, addresses=addresses, p2p_name=p2p_name,
-                                            is_world_join=is_world_join)
+                                            is_world_join=is_world_join,
+                                            reject_relay=not self.talk_to_relay_based_nodes)
         if not ok:
-            log.error("Session handshake failed!")
+            log.error("Connection / Session handshake failed!")
             return None
         return peer_id
 
@@ -1520,6 +1534,10 @@ class Node:
                     connected_peer_ids = list(self.hosted.all_agents.keys())
                     for peer_id in connected_peer_ids:
                         await self.leave(peer_id)
+                    # GOAWAY any Session not covered by the per-peer leave above.
+                    for sm in (self._sm_public, self._sm_world):
+                        if sm is not None:
+                            await sm.close_all()
                     log.close()  # Closing logger
                 except Exception:
                     pass
@@ -2364,7 +2382,8 @@ class Node:
         self._world_to_public[world_world_peer_id] = public_peer_id
         for ev in await self._sm_world.initiate(
                 world_world_peer_id, list(world_addrs),
-                remote_other_peer_id_hint=world_world_peer_id, grant=blob):
+                remote_other_peer_id_hint=world_world_peer_id, grant=blob,
+                reject_relay=not self.talk_to_relay_based_nodes):
             await self._dispatch_session_event(ev)
 
     async def _world_host_register_agent(self, ev, profile_b) -> None:
@@ -2447,17 +2466,15 @@ class Node:
         is_world_join: bool = False,
         remote_other_peer_id_hint: str | None = None,
         remote_node_id_hint: str | None = None,
+        reject_relay: bool = False,
         timeout_s: float = 35.0,
     ) -> bool:
-        """Open a Session to `peer_id` using SessionManager (new path).
+        """Open a Session to `peer_id` using SessionManager.
 
         Blocks until ESTABLISHED or terminal FAILED, with `timeout_s` upper bound.
-        Returns True on ESTABLISHED.
-
-        This is the new public surface — `ask_to_get_in_touch` / `ask_to_join_world`
-        still use the legacy ping-pong handshake for v1. Switch call sites over
-        incrementally once Sessions verify end-to-end against both Python and JS
-        peers.
+        Returns True on ESTABLISHED. The Session owns the dial (conn.connect runs
+        inside it), so callers must NOT pre-dial. `reject_relay` fails the dial if
+        it resolves through a relay circuit (preserves talk_to_relay_based_nodes).
         """
         sm = self._sm_public if p2p_name == NodeConn.P2P_PUBLIC else self._sm_world
         waiter = asyncio.Event()
@@ -2469,6 +2486,7 @@ class Node:
                 is_world_join=is_world_join,
                 remote_other_peer_id_hint=remote_other_peer_id_hint,
                 remote_node_id_hint=remote_node_id_hint,
+                reject_relay=reject_relay,
             )
             # Drain any immediate events (e.g. fast-fail on quarantine).
             for ev in events:

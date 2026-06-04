@@ -20,7 +20,7 @@ from unaiverse.networking.node.connpool import NodeConn
 
 
 def _run(coro):
-    return asyncio.get_event_loop().run_until_complete(coro)
+    return asyncio.run(coro)
 
 
 def _make_sm(conn, p2p_name, local_peer_id, profile_factory=None):
@@ -216,3 +216,58 @@ def test_close_session_sends_goaway(alice_conn, alice_p2p, alice_peer_id, bob_pe
     assert len(sent) == 1
     assert sent[0][2].kind == SessMsg.KIND_GOAWAY
     assert sent[0][2].fields["reason"] == WORLD_DISENGAGEMENT
+
+
+# ── Unknown-session liveness reply (restarted-peer detection) ────────────────
+
+def test_deliver_unknown_session_ping_replies_pong_not_ok(alice_conn, alice_peer_id, bob_peer_id):
+    """A PING for a peer we hold no Session for (we are the restarted peer) must
+    get a PONG ok=false so the initiator stops waiting and re-handshakes."""
+    from unaiverse.networking.session.sess_msg import SESSION_UNKNOWN
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    ping = SessMsg(SessMsg.KIND_PING, {"session_id": b"\x01" * 16, "nonce": b"n1"})
+    events = _run(sm.deliver(bob_peer_id, SESSION_CONTROL_PROTOCOL, ping))
+    assert events == []
+    assert sm.get_session(bob_peer_id) is None       # no Session spawned
+    sent = [s for s in alice_conn.sent if s[1] == SESSION_CONTROL_PROTOCOL]
+    assert sent and sent[-1][2].kind == SessMsg.KIND_PONG
+    assert sent[-1][2].fields["ok"] is False
+    assert sent[-1][2].fields["nonce"] == b"n1"
+
+
+def test_deliver_unknown_session_resume_naks(alice_conn, alice_peer_id, bob_peer_id):
+    from unaiverse.networking.session.sess_msg import SESSION_UNKNOWN
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    resume = SessMsg(SessMsg.KIND_RESUME, {"session_id": b"\x01" * 16, "nonce": b"r1"})
+    events = _run(sm.deliver(bob_peer_id, SESSION_CONTROL_PROTOCOL, resume))
+    assert events == []
+    sent = [s for s in alice_conn.sent if s[1] == SESSION_CONTROL_PROTOCOL]
+    assert sent and sent[-1][2].kind == SessMsg.KIND_RESUME_ACK
+    assert sent[-1][2].fields["accepted"] is False
+    assert sent[-1][2].fields["reason_code"] == SESSION_UNKNOWN
+
+
+# ── close_all() ──────────────────────────────────────────────────────────────
+
+def test_close_all_goaways_established_sessions(alice_conn, alice_peer_id, bob_peer_id):
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    sess = _mk_session(alice_conn, bob_peer_id, alice_peer_id)
+    sess._set_state(SessionState.ESTABLISHED, None)
+    sm._sessions[bob_peer_id] = sess
+    _run(sm.close_all(WORLD_DISENGAGEMENT))
+    assert sess.state == SessionState.CLOSING
+    sent = [s for s in alice_conn.sent if s[1] == SESSION_CONTROL_PROTOCOL]
+    assert sent and sent[-1][2].kind == SessMsg.KIND_GOAWAY
+    assert sent[-1][2].fields["reason"] == WORLD_DISENGAGEMENT
+
+
+def test_close_all_skips_already_closing(alice_conn, alice_peer_id, bob_peer_id):
+    """A Session already CLOSING (e.g. intentional world-handoff GOAWAY) must not
+    be re-GOAWAY'd by close_all."""
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    sess = _mk_session(alice_conn, bob_peer_id, alice_peer_id)
+    sess._set_state(SessionState.CLOSING, 10.0)
+    sm._sessions[bob_peer_id] = sess
+    _run(sm.close_all())
+    sent = [s for s in alice_conn.sent if s[1] == SESSION_CONTROL_PROTOCOL]
+    assert sent == []   # Session.close is a no-op outside ESTABLISHED/RECONNECTING

@@ -49,7 +49,7 @@ def _b64(b: bytes) -> str:
 
 
 def _run(coro):
-    return asyncio.get_event_loop().run_until_complete(coro)
+    return asyncio.run(coro)
 
 
 # ── Codec round-trip ─────────────────────────────────────────────────────────
@@ -200,3 +200,58 @@ def test_session_inbound_namedtuple_shape():
     assert si.protocol_id == "/x"
     assert si.sess_msg == "d"
     assert si[0] == "P" and si[1] == "/x" and si[2] == "d"
+
+
+def test_codec_roundtrips_liveness_control_messages():
+    """The JSON-envelope codec for PING/PONG/RESUME/RESUME_ACK must round-trip,
+    restoring bytes fields to bytes and preserving bools/ints."""
+    from unaiverse.networking.session.sess_msg import SESSION_UNKNOWN
+    cases = [
+        SessMsg(SessMsg.KIND_PING, {"session_id": b"\x01" * 16, "nonce": b"\xaa\xbb"}),
+        SessMsg(SessMsg.KIND_PONG, {"session_id": b"\x02" * 16, "nonce": b"\xcc", "ok": True}),
+        SessMsg(SessMsg.KIND_PONG, {"session_id": b"\x02" * 16, "nonce": b"\xcc", "ok": False}),
+        SessMsg(SessMsg.KIND_RESUME, {"session_id": b"\x03" * 16, "nonce": b"\xdd"}),
+        SessMsg(SessMsg.KIND_RESUME_ACK, {"session_id": b"\x04" * 16, "nonce": b"\xee",
+                                          "accepted": False, "reason_code": SESSION_UNKNOWN}),
+    ]
+    for msg in cases:
+        wire = _sess_msg_to_bytes(msg)
+        back = _bytes_to_sess_msg("/unaiverse/session/control/1.0.0", wire)
+        assert back.kind == msg.kind
+        for k, v in msg.fields.items():
+            assert back.fields[k] == v, (msg.kind, k, back.fields[k], v)
+        # bytes fields must come back as bytes, not hex strings
+        assert isinstance(back.fields["session_id"], bytes)
+
+
+def test_is_peer_session_pending():
+    """NodeConn.is_peer_session_pending is True only for a Session that exists and
+    is neither ESTABLISHED nor terminal."""
+    from unaiverse.networking.session import SessionState
+
+    class _FakeSess:
+        def __init__(self, state):
+            self.state = state
+
+    class _FakeSM:
+        def __init__(self, sessions):
+            self._s = sessions
+
+        def get_session(self, pid):
+            return self._s.get(pid)
+
+    conn = NodeConn.__new__(NodeConn)  # bypass the heavy P2P-bound __init__
+    conn.set_session_managers(_FakeSM({
+        "pending": _FakeSess(SessionState.HELLO_SENT),
+        "reconnecting": _FakeSess(SessionState.RECONNECTING),
+        "established": _FakeSess(SessionState.ESTABLISHED),
+        "failed": _FakeSess(SessionState.FAILED),
+        "closed": _FakeSess(SessionState.CLOSED),
+    }))
+    assert conn.is_peer_session_pending("pending") is True
+    # RECONNECTING was already established once → not "waiting to be managed".
+    assert conn.is_peer_session_pending("reconnecting") is False
+    assert conn.is_peer_session_pending("established") is False
+    assert conn.is_peer_session_pending("failed") is False
+    assert conn.is_peer_session_pending("closed") is False
+    assert conn.is_peer_session_pending("unknown") is False

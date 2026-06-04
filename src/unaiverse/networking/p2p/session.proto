@@ -32,6 +32,7 @@ enum ReasonCode {
   LOCAL_ERROR              = 15;
   GRANT_EXPIRED            = 16;
   SIMULTANEOUS_OPEN_LOSS   = 17;
+  SESSION_UNKNOWN          = 18;  // liveness: peer holds no Session for this session_id
 }
 
 // ── Stage 1 ──────────────────────────────────────────────────────────────────
@@ -110,4 +111,41 @@ message Goaway {
 
 message GoawayAck {
   bool received             = 1;
+}
+
+// ── Liveness / resume (session-level keep-alive) ─────────────────────────────
+// NOTE: the Python conn-layer codec currently encodes the four messages below as
+// a small JSON control envelope (NOT protobuf) to avoid a protoc regen — see
+// connpool.py `_JSON_KIND_FIELDS`. They are declared here as the canonical schema
+// so a future unified protobuf codec (and the JS mirror) can adopt them directly;
+// when that happens, move them into _KIND_SPEC and drop the JSON path. They ride
+// /unaiverse/session/control/1.0.0 alongside Goaway.
+//
+// Liveness is session-level (carries session_id) on purpose: /ipfs/ping is a
+// transport probe that go-libp2p answers by dial-on-demand, so it cannot tell a
+// restarted peer (which has no Session) from a live one. PING/PONG bound to
+// session_id can: the peer answers ok=false (SESSION_UNKNOWN) when it holds no
+// matching Session, which drives the initiator to RESUME → re-handshake.
+
+message Ping {
+  bytes session_id          = 1;
+  bytes nonce               = 2;  // echoed in Pong for RTT / idempotency
+}
+
+message Pong {
+  bytes session_id          = 1;
+  bytes nonce               = 2;
+  bool  ok                  = 3;  // true iff responder holds this Session
+}
+
+message Resume {
+  bytes session_id          = 1;
+  bytes nonce               = 2;
+}
+
+message ResumeAck {
+  bytes session_id          = 1;
+  bytes nonce               = 2;
+  bool  accepted            = 3;
+  ReasonCode reason_code    = 4;  // SESSION_UNKNOWN when accepted=false
 }

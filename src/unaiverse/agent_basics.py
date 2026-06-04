@@ -173,7 +173,6 @@ class AgentBasics:
         self.node_profile = None
         self.node_ask_to_get_in_touch_fcn: Callable | None = None
         self.node_purge_fcn: Callable | None = None
-        self.node_agents_waiting = None
         self.node_identity_dir = ''
 
         # Utilities (keep the "__" prefix, or they will be cleared on world leaving!)
@@ -226,8 +225,8 @@ class AgentBasics:
                 raise GenException("No world folder was indicated (world_folder argument)")
 
     def set_node_info(self, conn: NodeConn, profile: NodeProfile,
-                      ask_to_get_in_touch_fcn: Callable, purge_fcn: Callable, node_identity_dir: str,
-                      agents_waiting: dict) -> bool:
+                      ask_to_get_in_touch_fcn: Callable, purge_fcn: Callable,
+                      node_identity_dir: str) -> bool:
         """Set the required information from the node that hosts this agent.
 
         Args:
@@ -236,7 +235,6 @@ class AgentBasics:
             ask_to_get_in_touch_fcn: The function to call to request getting in touch with another peer.
             purge_fcn: The function to call to purge (kill/disconnect) a connection.
             node_identity_dir: The folder where the node identity files are stored.
-            agents_waiting: Dict of agents that connected to this node but have not been evaluated yet to be added.
 
         Returns:
             True upon successful setup.
@@ -249,7 +247,6 @@ class AgentBasics:
         self.node_ask_to_get_in_touch_fcn = ask_to_get_in_touch_fcn
         self.node_purge_fcn = purge_fcn
         self.node_identity_dir = node_identity_dir
-        self.node_agents_waiting = agents_waiting
 
         # Checking if human, marking the node
         assert self.proc is None or isinstance(self.proc, ModuleWrapper)  # It is None in worlds!

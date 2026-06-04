@@ -15,6 +15,7 @@
 import asyncio
 import time
 import math
+import json
 import base64
 import binascii
 from collections import namedtuple
@@ -75,9 +76,47 @@ _KIND_SPEC = {
 _TAG_TO_KIND = {tag: kind for kind, (tag, _cls, _f) in _KIND_SPEC.items()}
 _REPEATED_FIELDS = frozenset({"protocol_versions", "hint_addrs"})
 
+# ── Liveness / resume control codec (JSON envelope, protobuf-free) ────────────
+#
+# PING/PONG/RESUME/RESUME_ACK post-date session.proto and carry only a handful of
+# simple fields. Rather than force a protoc regen of session_pb2 for them, they
+# ride a tiny JSON envelope: wire bytes are `[kind tag] || utf8(json)`. This is
+# legitimate because the Go layer never parses these bytes (the wire format is
+# defined entirely by this codec + its JS mirror), and JSON is trivially mirrored
+# on the JS side. `bytes` fields (session_id, nonce) are hex-encoded so they
+# survive JSON; the codec restores them to `bytes` on decode so the FSM sees the
+# same value types as for the protobuf messages.
+_JSON_KIND_TO_TAG = {
+    SessMsg.KIND_PING:       0x0B,
+    SessMsg.KIND_PONG:       0x0C,
+    SessMsg.KIND_RESUME:     0x0D,
+    SessMsg.KIND_RESUME_ACK: 0x0E,
+}
+_JSON_TAG_TO_KIND = {tag: kind for kind, tag in _JSON_KIND_TO_TAG.items()}
+# Field name -> True if it is a `bytes` field (hex-encoded in the JSON envelope).
+_JSON_KIND_FIELDS = {
+    SessMsg.KIND_PING:       {"session_id": True, "nonce": True},
+    SessMsg.KIND_PONG:       {"session_id": True, "nonce": True, "ok": False},
+    SessMsg.KIND_RESUME:     {"session_id": True, "nonce": True},
+    SessMsg.KIND_RESUME_ACK: {"session_id": True, "nonce": True,
+                              "accepted": False, "reason_code": False},
+}
+
 
 def _sess_msg_to_bytes(sess_msg: SessMsg) -> bytes:
-    """Serialize a SessMsg to `[kind tag] || protobuf` wire bytes."""
+    """Serialize a SessMsg to `[kind tag] || payload` wire bytes (protobuf for the
+    handshake messages, a JSON envelope for the liveness/resume control messages)."""
+    json_tag = _JSON_KIND_TO_TAG.get(sess_msg.kind)
+    if json_tag is not None:
+        spec = _JSON_KIND_FIELDS[sess_msg.kind]
+        obj = {}
+        for fn, is_bytes in spec.items():
+            val = sess_msg.fields.get(fn)
+            if val is None:
+                continue
+            obj[fn] = bytes(val).hex() if is_bytes else val
+        return bytes([json_tag]) + json.dumps(obj).encode("utf-8")
+
     spec = _KIND_SPEC.get(sess_msg.kind)
     if spec is None:
         raise ValueError(f"_sess_msg_to_bytes: unknown SessMsg kind '{sess_msg.kind}'")
@@ -95,9 +134,21 @@ def _sess_msg_to_bytes(sess_msg: SessMsg) -> bytes:
 
 
 def _bytes_to_sess_msg(protocol_id: str, payload: bytes) -> SessMsg:
-    """Decode `[kind tag] || protobuf` wire bytes into a SessMsg."""
+    """Decode `[kind tag] || payload` wire bytes into a SessMsg."""
     if not payload:
         raise ValueError("_bytes_to_sess_msg: empty payload")
+    json_kind = _JSON_TAG_TO_KIND.get(payload[0])
+    if json_kind is not None:
+        spec = _JSON_KIND_FIELDS[json_kind]
+        obj = json.loads(payload[1:].decode("utf-8")) if len(payload) > 1 else {}
+        fields = {}
+        for fn, is_bytes in spec.items():
+            if fn not in obj:
+                fields[fn] = b"" if is_bytes else (False if fn in ("ok", "accepted") else 0)
+                continue
+            fields[fn] = bytes.fromhex(obj[fn]) if is_bytes else obj[fn]
+        return SessMsg(kind=json_kind, fields=fields)
+
     kind = _TAG_TO_KIND.get(payload[0])
     if kind is None:
         raise ValueError(f"_bytes_to_sess_msg: unknown kind tag {payload[0]} on {protocol_id}")
@@ -1040,6 +1091,39 @@ class NodeConn(ConnectionPools):
 
         # Rendezvous
         self.rendezvous_tag = -1
+
+        # Per-instance SessionManagers, registered by Node after construction via
+        # set_session_managers. conn does not own them — it only consults them so
+        # the hosted entity (which holds conn, not the managers) can ask about
+        # per-peer Session state (see is_peer_session_pending).
+        self._session_managers = []
+
+    def set_session_managers(self, *session_managers) -> None:
+        """Register the per-instance SessionManagers so conn can answer per-peer
+        Session-state queries on behalf of the hosted entity. Called once by Node."""
+        self._session_managers = [sm for sm in session_managers if sm is not None]
+
+    def is_peer_session_pending(self, peer_id: str) -> bool:
+        """True if `peer_id` has a Session whose *first* handshake is still in
+        flight (it exists but has never reached ESTABLISHED) on any registered
+        instance. This is the session-era replacement for the old "connected but
+        not yet managed" notion behind Agent.agents_are_waiting.
+
+        RECONNECTING is deliberately excluded: such a peer was already established
+        (already managed) and is merely re-establishing, so it is not "waiting to
+        be managed". Returns False for no Session / ESTABLISHED / RECONNECTING /
+        terminal (FAILED, CLOSED)."""
+        from unaiverse.networking.session.session import SessionState
+        for sm in self._session_managers:
+            sess = sm.get_session(peer_id)
+            if sess is None:
+                continue
+            if sess.state not in (SessionState.ESTABLISHED,
+                                  SessionState.RECONNECTING,
+                                  SessionState.FAILED,
+                                  SessionState.CLOSED):
+                return True
+        return False
 
     def reset_rendezvous_tag(self) -> None:
         """Resets the rendezvous tag to its initial state."""

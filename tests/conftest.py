@@ -252,6 +252,52 @@ def pump_once(inbox: deque, sm) -> int:
 def _pump_call(sm, peer_id, protocol_id, payload):
     """Synchronously run an async deliver call from sync tests via asyncio."""
     import asyncio
-    return asyncio.get_event_loop().run_until_complete(
-        sm.deliver(peer_id, protocol_id, payload)
-    )
+    return asyncio.run(sm.deliver(peer_id, protocol_id, payload))
+
+
+# ── Real-libp2p (`-m p2p`) fixtures ─────────────────────────────────────────
+# These live in the *root* conftest (not a second tests/p2p/conftest.py) so the
+# bare ``from conftest import ...`` used by the go-mocked tests keeps resolving to
+# this module — two conftest.py files with no package collide on the module name
+# under pytest's prepend import mode. The pure helpers (build_real_node,
+# pump_until, …) live in tests/realnet_helpers.py. Fixtures defined here are
+# inherited by tests/p2p/ tests; they are lazy, so the fast suite never starts a
+# real P2P node.
+
+@pytest.fixture(scope="session")
+def _libp2p_setup():
+    """Initialize the Go shared library exactly once for the whole session."""
+    from unaiverse.networking.p2p.p2p import P2P
+    if not getattr(P2P, "_library_initialized", False):
+        P2P.setup_library()
+    return P2P
+
+
+@pytest.fixture
+def real_nodes(_libp2p_setup, tmp_path):
+    """Factory for real libp2p nodes with unique temp identities; closes every
+    P2P on teardown to free instance slots (32-slot global cap). ALL real-node
+    creation must go through this. See tests/realnet_helpers.py."""
+    from realnet_helpers import build_real_node, build_real_world_node
+    created = []
+
+    class _Factory:
+        def node(self, name: str):
+            p2p, conn, sm = build_real_node(str(tmp_path / f"id-{name}"), node_id=name)
+            created.append(p2p)
+            return p2p, conn, sm
+
+        def world_node(self, name: str, decision_hook=None):
+            pp, pw, conn, smp, smw = build_real_world_node(
+                str(tmp_path / f"id-{name}-pub"), str(tmp_path / f"id-{name}-world"),
+                decision_hook=decision_hook, node_id=name)
+            created.extend([pp, pw])
+            return pp, pw, conn, smp, smw
+
+    yield _Factory()
+
+    for p2p in created:
+        try:
+            p2p.close()
+        except Exception:
+            pass

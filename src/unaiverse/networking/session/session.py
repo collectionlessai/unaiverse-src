@@ -2,8 +2,11 @@
 Session — per-peer connection lifecycle FSM.
 
 Each Session owns the entire lifecycle of a connection to one remote peer:
-  dial (via conn.connect) → 4-stage handshake → established → /ipfs/ping
-  keep-alive → reconnect grace → intentional GOAWAY close.
+  dial (via conn.connect) → 4-stage handshake → established → session-level
+  PING/PONG keep-alive → active re-dial + RESUME on loss → intentional GOAWAY
+  close. Liveness/recovery are session-aware (bound to session_id), so a peer
+  that restarts and forgets the session is detected and re-handshaked rather
+  than masked by a transport that transparently re-dials.
 
 Design (v1 — polling mode)
 --------------------------
@@ -22,8 +25,8 @@ Portability (CPython + Pyodide)
 -------------------------------
 This module is **protobuf-free** and never holds a Python ``P2P`` handle: it
 speaks ``SessMsg`` value objects and reaches the transport/crypto only through
-the async ``conn`` interface (``send_session`` / ``sign_with_host_key`` /
-``verify_peer_signature`` / ``verify_signed_peer_record`` / ``ping_peer`` /
+the async ``conn`` interface (``send_session`` / ``connect`` / ``sign_with_host_key`` /
+``verify_peer_signature`` / ``verify_signed_peer_record`` /
 ``generate_signed_peer_record``), all keyed by ``p2p_name`` (a string). That is
 exactly the surface a JS ``NodeConn`` mirror exposes, so this file runs unchanged
 in Pyodide. The wire (de)serialization lives in the conn layer (``connpool.py``
@@ -57,7 +60,7 @@ from typing import Optional, Dict, Any, List, Callable, Awaitable, TYPE_CHECKING
 from unaiverse.networking.session.sess_msg import (
     SessMsg, reason_name, ProfileDecisionResult, WorldGrantSpec,
     OK, VERSION_UNSUPPORTED, NOT_AUTHORIZED, LOCAL_ERROR, GRACEFUL_SHUTDOWN,
-    SIMULTANEOUS_OPEN_LOSS,
+    SIMULTANEOUS_OPEN_LOSS, SESSION_UNKNOWN,
 )
 
 if TYPE_CHECKING:
@@ -83,17 +86,24 @@ _TIMEOUT_CONNECT_S = 35.0   # dial: PeerConnectionTimeout (30s Go) + 5s buffer
 _TIMEOUT_HELLO_S = 5.0      # Stage 1: HELLO → HELLO_ACK
 _TIMEOUT_PROFILE_S = 15.0   # Stage 2: PROFILE_OFFER → PROFILE_DECISION
 _TIMEOUT_WORLD_S = 30.0     # Stage 3: WORLD_GRANT expiry
-_TIMEOUT_RECONNECT_S = 10.0 # Grace period before Session.Lost (matches Go DisconnectionGracePeriod)
+_TIMEOUT_RECONNECT_S = 45.0 # Session-level reconnect ceiling before Session.Lost. Longer than the
+                            # Go transport grace (DisconnectionGracePeriod) so several backoff'd
+                            # re-dial + RESUME cycles fit inside the window (see tick_reconnect).
 _TIMEOUT_CLOSING_S = 10.0   # GOAWAY sent; wait for GOAWAY_ACK
 
 # ── Retry / backoff ──────────────────────────────────────────────────────────
 _MAX_DIAL_ATTEMPTS = 4
 _RETRY_BASE_S = 1.0
 _RETRY_CAP_S = 30.0
+_RESUME_ACK_TIMEOUT_S = 3.0  # RESUME sent; if un-acked within this, re-dial + re-RESUME
 
-# ── Keep-alive (/ipfs/ping) ──────────────────────────────────────────────────
+# ── Session-level keep-alive (PING/PONG over the control protocol) ────────────
+# Bound to session_id on purpose: /ipfs/ping is a transport probe that go-libp2p
+# answers by dial-on-demand, so it cannot distinguish a restarted peer (no Session)
+# from a live one. A PONG with ok=false (peer holds no matching Session) is treated
+# as a hard liveness failure → reconnect → RESUME → re-handshake.
 _KEEPALIVE_PERIOD_S = 15.0
-_KEEPALIVE_TIMEOUT_MS = 5000
+_PING_RTT_TIMEOUT_S = 5.0
 _KEEPALIVE_FAIL_THRESHOLD = 2
 
 # ── Misc ─────────────────────────────────────────────────────────────────────
@@ -181,6 +191,7 @@ class Session:
         is_world_join: bool = False,
         decision_hook: Optional[DecisionHook] = None,
         grant: Optional[dict] = None,
+        reject_relay: bool = False,
     ):
         """
         Args:
@@ -217,6 +228,7 @@ class Session:
         self.is_world_join = is_world_join
         self._decision_hook = decision_hook
         self._grant = grant  # initiator world Session: redeem this after PROFILE
+        self._reject_relay = reject_relay  # fail the dial if it resolves through a relay
 
         # Session identity. Initiator chooses; responder adopts from HELLO.
         self.session_id: bytes = secrets.token_bytes(_SESSION_ID_BYTES)
@@ -235,12 +247,21 @@ class Session:
         # Profile received from the remote peer (set on ESTABLISHED).
         self.remote_profile: Optional[dict] = None
 
-        # Keep-alive state.
+        # Session-level keep-alive state (PING/PONG over the control protocol,
+        # bound to session_id — not /ipfs/ping). One ping in flight at a time; its
+        # PONG arrives via process_inbound and clears _ping_in_flight.
         self._last_ping_at: float = 0.0
         self._consecutive_ping_failures: int = 0
-        self._keepalive_in_flight: bool = False
-        # Single-producer, drained on tick_keepalive.
-        self._pending_keepalive_results: List[Optional[int]] = []
+        self._ping_in_flight: bool = False
+        self._ping_nonce: bytes = b""
+        self._ping_deadline: float = 0.0
+
+        # Active re-dial + RESUME state (initiator drives recovery while RECONNECTING).
+        self._reconnect_substep: str = ""   # "" | "redial" | "resume_sent"
+        self._reconnect_attempts: int = 0
+        self._next_redial_at: float = 0.0   # monotonic gate, set/advanced by tick_reconnect
+        self._redial_in_flight: bool = False
+        self._resume_nonce: bytes = b""
 
         # World-join specifics.
         self.grant_id: bytes = b""
@@ -269,10 +290,15 @@ class Session:
         log.info(f"{self!r} dial attempt {self._dial_attempts}/{_MAX_DIAL_ATTEMPTS}")
 
         try:
-            peer_id, _through_relay = await self.conn.connect(self.addresses, p2p_name=self.p2p_name)
+            peer_id, through_relay = await self.conn.connect(self.addresses, p2p_name=self.p2p_name)
         except Exception as e:
             log.warning(f"{self!r} conn.connect raised: {e}")
-            peer_id = None
+            peer_id, through_relay = None, False
+
+        if peer_id is not None and through_relay and self._reject_relay:
+            log.error(f"{self!r} dial resolved through a relay circuit but relay nodes are "
+                      f"disallowed (talk_to_relay_based_nodes=False)")
+            return [self._fail("relay_rejected")]
 
         if peer_id is None:
             if self._dial_attempts < _MAX_DIAL_ATTEMPTS:
@@ -706,8 +732,110 @@ class Session:
         if msg.kind == SessMsg.KIND_GOAWAY_ACK and self.state == SessionState.CLOSING:
             if msg.get("received"):
                 return [self._finalize_close("local_goaway_acked")]
+            return []
+        if msg.kind == SessMsg.KIND_PING:
+            return await self._on_ping(msg)
+        if msg.kind == SessMsg.KIND_PONG:
+            ev = self._on_pong(msg)
+            return [ev] if ev is not None else []
+        if msg.kind == SessMsg.KIND_RESUME:
+            return await self._on_resume(msg)
+        if msg.kind == SessMsg.KIND_RESUME_ACK:
+            return await self._on_resume_ack(msg)
         log.debug(f"{self!r} unrecognised CONTROL {msg.kind} in state {self.state.value}")
         return []
+
+    # ── Control: session-level liveness (PING/PONG) ──────────────────────────
+
+    async def _on_ping(self, msg: SessMsg) -> List[SessionEvent]:
+        """Answer a peer's liveness PING. ok=True only if we hold this exact
+        Session and are usable (ESTABLISHED or mid-reconnect). A restarted peer
+        with no Session never reaches here — SessionManager.deliver answers ok=False
+        on its behalf."""
+        ok = (bytes(msg.get("session_id") or b"") == self.session_id and
+              self.state in (SessionState.ESTABLISHED, SessionState.RECONNECTING))
+        await self._send_payload(SESSION_CONTROL_PROTOCOL, SessMsg(SessMsg.KIND_PONG, {
+            "session_id": self.session_id,
+            "nonce": bytes(msg.get("nonce") or b""),
+            "ok": ok,
+        }))
+        return []
+
+    def _on_pong(self, msg: SessMsg) -> Optional[SessionEvent]:
+        """Handle a PONG to our in-flight ping. Pure sync (no sends)."""
+        if not self._ping_in_flight or bytes(msg.get("nonce") or b"") != self._ping_nonce:
+            return None  # stale / unmatched
+        self._ping_in_flight = False
+        if msg.get("ok"):
+            self._consecutive_ping_failures = 0
+            return None
+        # Peer holds no Session for our session_id (restarted / forgot us): treat as
+        # a hard liveness failure and begin the reconnect + RESUME path immediately.
+        self._consecutive_ping_failures = 0
+        log.info(f"{self!r} PONG ok=false (peer lost our session) → reconnecting")
+        return self.on_transport_disconnected()
+
+    # ── Control: RESUME (fast-path recovery before re-handshake) ─────────────
+
+    async def _on_resume(self, msg: SessMsg) -> List[SessionEvent]:
+        """Peer (initiator) is resuming after a link blip. ACK if we still hold the
+        Session; NACK (SESSION_UNKNOWN) otherwise so the peer re-handshakes."""
+        if (bytes(msg.get("session_id") or b"") == self.session_id and
+                self.state in (SessionState.ESTABLISHED, SessionState.RECONNECTING)):
+            await self._send_payload(SESSION_CONTROL_PROTOCOL, SessMsg(SessMsg.KIND_RESUME_ACK, {
+                "session_id": self.session_id, "nonce": bytes(msg.get("nonce") or b""),
+                "accepted": True, "reason_code": OK,
+            }))
+            if self.state == SessionState.RECONNECTING:
+                return [self._resume_established()]
+            return []
+        await self._send_payload(SESSION_CONTROL_PROTOCOL, SessMsg(SessMsg.KIND_RESUME_ACK, {
+            "session_id": bytes(msg.get("session_id") or b""), "nonce": bytes(msg.get("nonce") or b""),
+            "accepted": False, "reason_code": SESSION_UNKNOWN,
+        }))
+        return []
+
+    async def _on_resume_ack(self, msg: SessMsg) -> List[SessionEvent]:
+        """Our RESUME was answered. accepted → RESUMED; NACK → re-handshake."""
+        if self.state != SessionState.RECONNECTING or self._reconnect_substep != "resume_sent":
+            return []
+        if bytes(msg.get("nonce") or b"") != self._resume_nonce:
+            return []  # stale ack for a previous attempt
+        if msg.get("accepted"):
+            return [self._resume_established()]
+        return await self._restart_handshake_or_fail(reason_name(msg.get("reason_code", SESSION_UNKNOWN)))
+
+    def _resume_established(self) -> SessionEvent:
+        """RECONNECTING → ESTABLISHED after a confirmed RESUME. Resets liveness."""
+        self._set_state(SessionState.ESTABLISHED, None)
+        self._last_ping_at = time.monotonic()
+        self._consecutive_ping_failures = 0
+        self._ping_in_flight = False
+        self._reconnect_substep = ""
+        self._reconnect_attempts = 0
+        log.info(f"{self!r} session resumed → ESTABLISHED")
+        return self._emit(SessionEventType.RESUMED, {})
+
+    async def _restart_handshake_or_fail(self, reason: str) -> List[SessionEvent]:
+        """RESUME NACK: the peer doesn't recognise our Session. A plain initiator
+        Session re-runs the full handshake over the (already re-dialed) transport,
+        preserving the application-visible peer-id/node-id. World sessions can't be
+        transparently re-joined (double-join risk) → LOST so node re-drives the join."""
+        if self.role != SessionRole.INITIATOR or self.is_world_join or self._grant is not None:
+            self._set_state(SessionState.FAILED, None)
+            log.info(f"{self!r} resume NACK ({reason}); not re-handshakeable → LOST")
+            return [self._emit(SessionEventType.LOST, {"reason": f"resume_nack:{reason}"})]
+        log.info(f"{self!r} resume NACK ({reason}) → re-running handshake")
+        self.session_id = secrets.token_bytes(_SESSION_ID_BYTES)
+        self.session_id_hex = self.session_id.hex()
+        self.nonce_a = b""
+        self.nonce_b = b""
+        self.remote_profile = None
+        self._reconnect_substep = ""
+        self._reconnect_attempts = 0
+        self._consecutive_ping_failures = 0
+        self._ping_in_flight = False
+        return await self._send_hello()
 
     async def close(self, reason_code: int = GRACEFUL_SHUTDOWN) -> None:
         """Send GOAWAY to the remote peer and enter CLOSING. The FSM completes
@@ -763,65 +891,122 @@ class Session:
     # ── Transport events (sync) ───────────────────────────────────────────────
 
     def on_transport_disconnected(self) -> Optional[SessionEvent]:
-        """Called when the underlying libp2p connection drops unexpectedly.
-        ESTABLISHED → RECONNECTING (grace); already reconnecting: reset timer."""
+        """Called when the link drops (transport diff) or when session-level
+        liveness fails. ESTABLISHED → RECONNECTING, arming the active re-dial +
+        RESUME loop (tick_reconnect). Already reconnecting: reset the grace timer."""
         if self.state == SessionState.ESTABLISHED:
             self._set_state(SessionState.RECONNECTING, _TIMEOUT_RECONNECT_S)
-            log.info(f"{self!r} transport dropped, starting {_TIMEOUT_RECONNECT_S}s grace")
+            self._reconnect_substep = "redial"
+            self._reconnect_attempts = 0
+            self._next_redial_at = 0.0   # re-dial on the next tick_reconnect
+            self._ping_in_flight = False
+            log.info(f"{self!r} link lost, starting {_TIMEOUT_RECONNECT_S}s reconnect window")
             return self._emit(SessionEventType.RECONNECTING, {"cause": "transport_disconnected"})
         if self.state == SessionState.RECONNECTING:
             self._state_entered_at = time.monotonic()
         return None
 
     def on_transport_reconnected(self) -> Optional[SessionEvent]:
+        """Transport-diff reconnect signal. Do NOT blindly resume — a reconnect can
+        be to a *restarted* peer that holds no Session (the /ipfs/ping false-resume
+        bug). Just kick the RESUME handshake; only a valid RESUME_ACK promotes us
+        back to ESTABLISHED (see _on_resume_ack / _resume_established)."""
         if self.state == SessionState.RECONNECTING:
-            self._set_state(SessionState.ESTABLISHED, None)
-            self._last_ping_at = time.monotonic()
-            self._consecutive_ping_failures = 0
-            log.info(f"{self!r} transport restored → ESTABLISHED (resumed)")
-            return self._emit(SessionEventType.RESUMED, {})
+            self._reconnect_substep = "redial"
+            self._next_redial_at = 0.0   # send RESUME on the next tick_reconnect
+            log.info(f"{self!r} transport reconnect signal → attempting RESUME")
         return None
 
-    # ── /ipfs/ping keep-alive ────────────────────────────────────────────────
+    # ── Session-level keep-alive (PING/PONG over the control protocol) ───────
 
     def tick_keepalive(self, now: Optional[float] = None) -> Optional[SessionEvent]:
-        """Drain any pending ping results, then schedule a new ping if due.
-        Returns at most one SessionEvent (RECONNECTING on threshold hit)."""
+        """Time out an unanswered ping, then schedule a new one if due. The PONG
+        itself is handled inbound (_on_pong). Returns at most one SessionEvent
+        (RECONNECTING on the miss threshold). Sync + non-blocking: the only async
+        work is a fire-and-forget control-protocol send."""
         if now is None:
             now = time.monotonic()
 
-        # Drain results from any prior fire-and-forget pings.
-        for result_ms in self._pending_keepalive_results:
-            if result_ms is None:
-                self._consecutive_ping_failures += 1
-                log.info(f"{self!r} ping miss ({self._consecutive_ping_failures}/{_KEEPALIVE_FAIL_THRESHOLD})")
-            else:
+        # An in-flight ping that has not been PONGed within the RTT window is a miss.
+        if self._ping_in_flight and now >= self._ping_deadline:
+            self._ping_in_flight = False
+            self._consecutive_ping_failures += 1
+            log.info(f"{self!r} ping miss ({self._consecutive_ping_failures}/{_KEEPALIVE_FAIL_THRESHOLD})")
+            if (self._consecutive_ping_failures >= _KEEPALIVE_FAIL_THRESHOLD and
+                    self.state == SessionState.ESTABLISHED):
                 self._consecutive_ping_failures = 0
-                log.debug(f"{self!r} ping OK ({result_ms}ms)")
-        self._pending_keepalive_results.clear()
+                return self.on_transport_disconnected()
 
-        if (self._consecutive_ping_failures >= _KEEPALIVE_FAIL_THRESHOLD and
-                self.state == SessionState.ESTABLISHED):
-            self._consecutive_ping_failures = 0
-            return self.on_transport_disconnected()
-
+        # Schedule a new ping when due (ESTABLISHED only, one in flight at a time).
         if (self.state == SessionState.ESTABLISHED and
-                not self._keepalive_in_flight and
+                not self._ping_in_flight and
                 now - self._last_ping_at >= _KEEPALIVE_PERIOD_S):
             self._last_ping_at = now
-            self._keepalive_in_flight = True
-            asyncio.create_task(self._do_ping())
+            self._ping_in_flight = True
+            self._ping_nonce = secrets.token_bytes(8)
+            self._ping_deadline = now + _PING_RTT_TIMEOUT_S
+            asyncio.create_task(self._send_payload(SESSION_CONTROL_PROTOCOL, SessMsg(SessMsg.KIND_PING, {
+                "session_id": self.session_id, "nonce": self._ping_nonce,
+            })))
         return None
 
-    async def _do_ping(self) -> None:
+    # ── Active re-dial + RESUME (initiator-driven recovery) ──────────────────
+
+    def tick_reconnect(self, now: Optional[float] = None) -> Optional[SessionEvent]:
+        """Drive active re-dial + RESUME while RECONNECTING. Sync + non-blocking:
+        it only schedules a fire-and-forget re-dial task (never sleeps). Only an
+        initiator with known addresses can re-dial; a responder rides the grace
+        timer to LOST and is re-handshaked by the peer. Always returns None — the
+        RESUMED/LOST/FAILED events surface via _on_resume_ack / check_timeout."""
+        if now is None:
+            now = time.monotonic()
+        if self.state != SessionState.RECONNECTING:
+            return None
+        if self.role != SessionRole.INITIATOR or not self.addresses:
+            return None
+        # A RESUME that wasn't acked within its window → fall back to another re-dial.
+        if self._reconnect_substep == "resume_sent" and now >= self._next_redial_at:
+            self._reconnect_substep = "redial"
+        if (self._reconnect_substep == "redial" and not self._redial_in_flight and
+                now >= self._next_redial_at):
+            self._redial_in_flight = True
+            asyncio.create_task(self._redial_and_resume())
+        return None
+
+    async def _redial_and_resume(self) -> None:
+        """Re-dial the peer; on success send a RESUME bound to the current
+        session_id. Fire-and-forget — outcome is observed on the next tick /
+        inbound RESUME_ACK. Backoff is stored in _next_redial_at, never slept."""
         try:
-            rtt = await self.conn.ping_peer(self.p2p_name, self.peer_id, _KEEPALIVE_TIMEOUT_MS)
-        except Exception as e:
-            log.error(f"{self!r} ping_peer raised: {e}")
-            rtt = None
+            if self.state != SessionState.RECONNECTING:
+                return
+            try:
+                peer_id, through_relay = await self.conn.connect(self.addresses, p2p_name=self.p2p_name)
+            except Exception as e:
+                log.warning(f"{self!r} reconnect dial raised: {e}")
+                peer_id, through_relay = None, False
+            if self.state != SessionState.RECONNECTING:
+                return  # grace expired (→ LOST) or otherwise advanced while awaiting
+            if peer_id is not None and through_relay and self._reject_relay:
+                peer_id = None  # relay-only reconnect disallowed; treat as a failed dial
+            if peer_id is None:
+                self._reconnect_attempts += 1
+                delay = min(_RETRY_BASE_S * (2 ** (self._reconnect_attempts - 1)), _RETRY_CAP_S)
+                self._next_redial_at = time.monotonic() + delay
+                log.info(f"{self!r} reconnect dial failed, next try in {delay:.1f}s")
+                return
+            if peer_id != self.peer_id:
+                self.peer_id = peer_id
+            # Transport back — try to resume the existing session before re-handshaking.
+            self._resume_nonce = secrets.token_bytes(8)
+            self._reconnect_substep = "resume_sent"
+            self._next_redial_at = time.monotonic() + _RESUME_ACK_TIMEOUT_S
+            await self._send_payload(SESSION_CONTROL_PROTOCOL, SessMsg(SessMsg.KIND_RESUME, {
+                "session_id": self.session_id, "nonce": self._resume_nonce,
+            }))
+            log.info(f"{self!r} reconnect dial ok, RESUME sent")
         finally:
-            self._pending_keepalive_results.append(rtt)
-            self._keepalive_in_flight = False
+            self._redial_in_flight = False
 
     # ── Internal FSM helpers ──────────────────────────────────────────────────
 

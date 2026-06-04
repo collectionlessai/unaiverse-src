@@ -27,6 +27,7 @@ from unaiverse.networking.session import (
 )
 from unaiverse.networking.session.sess_msg import (
     OK, VERSION_UNSUPPORTED, NOT_AUTHORIZED, GRACEFUL_SHUTDOWN, WORLD_DISENGAGEMENT,
+    SESSION_UNKNOWN,
 )
 from unaiverse.networking.node.connpool import NodeConn
 
@@ -43,7 +44,7 @@ def _last_sent(conn, protocol_id):
 
 
 def _run(coro):
-    return asyncio.get_event_loop().run_until_complete(coro)
+    return asyncio.run(coro)
 
 
 def _mk(peer_id, role, conn, local_peer_id, local_node_id="local-node",
@@ -257,12 +258,16 @@ def test_disconnect_from_established_enters_reconnecting(alice_conn, alice_peer_
     assert sess.state == SessionState.RECONNECTING
 
 
-def test_reconnect_within_grace_resumes(alice_conn, alice_peer_id, bob_peer_id):
+def test_transport_reconnect_does_not_blindly_resume(alice_conn, alice_peer_id, bob_peer_id):
+    """A transport-diff reconnect must NOT flip straight to ESTABLISHED (that is the
+    /ipfs/ping false-resume bug). It only arms the RESUME handshake; the session
+    stays RECONNECTING until a valid RESUME_ACK arrives."""
     sess = _mk(bob_peer_id, SessionRole.INITIATOR, alice_conn, alice_peer_id)
     sess._set_state(SessionState.RECONNECTING, 10.0)
     ev = sess.on_transport_reconnected()
-    assert ev is not None and ev.type == SessionEventType.RESUMED
-    assert sess.state == SessionState.ESTABLISHED
+    assert ev is None
+    assert sess.state == SessionState.RECONNECTING
+    assert sess._reconnect_substep == "redial"
 
 
 def test_grace_expiry_emits_lost(alice_conn, alice_peer_id, bob_peer_id):
@@ -311,31 +316,190 @@ def test_remote_goaway_sends_ack_and_closes(bob_conn, bob_p2p, bob_peer_id, alic
     assert last[2].fields["received"] is True
 
 
-# ── Keep-alive ──────────────────────────────────────────────────────────────
+# ── Session-level keep-alive (PING/PONG over the control protocol) ───────────
 
-def test_tick_keepalive_schedules_ping_when_due(alice_conn, alice_p2p, alice_peer_id, bob_peer_id):
-    """When ESTABLISHED and the keep-alive period has elapsed, tick must
-    spawn a ping task that ends up calling conn.ping_peer → p2p.ping_peer."""
+def test_tick_keepalive_sends_session_ping_when_due(alice_conn, alice_peer_id, bob_peer_id):
+    """When ESTABLISHED and the keep-alive period has elapsed, tick must send a
+    session-level PING on the CONTROL protocol (NOT /ipfs/ping) bound to session_id."""
     async def _runner():
         sess = _mk(bob_peer_id, SessionRole.INITIATOR, alice_conn, alice_peer_id)
         sess._set_state(SessionState.ESTABLISHED, None)
+        sess.session_id = b"\x01" * 16
         sess._last_ping_at = time.monotonic() - 30.0   # well past 15s threshold
         ev = sess.tick_keepalive()
         assert ev is None
-        await asyncio.sleep(0.05)
-    asyncio.get_event_loop().run_until_complete(_runner())
-    assert alice_p2p.pinged == [(bob_peer_id, 5000)]
+        assert sess._ping_in_flight is True
+        await asyncio.sleep(0.05)   # let the fire-and-forget send run
+        return sess
+    sess = asyncio.run(_runner())
+    last = _last_sent(alice_conn, SESSION_CONTROL_PROTOCOL)
+    assert last is not None and last[2].kind == SessMsg.KIND_PING
+    assert last[2].fields["session_id"] == sess.session_id
+    # No /ipfs/ping was used.
+    assert alice_conn.p2p_name_to_p2p[NodeConn.P2P_PUBLIC].pinged == []
 
 
-def test_keepalive_threshold_triggers_reconnecting(alice_conn, alice_p2p, alice_peer_id, bob_peer_id):
-    """Two consecutive ping failures while ESTABLISHED → RECONNECTING."""
+def test_pong_ok_clears_failures(alice_conn, alice_peer_id, bob_peer_id):
     sess = _mk(bob_peer_id, SessionRole.INITIATOR, alice_conn, alice_peer_id)
     sess._set_state(SessionState.ESTABLISHED, None)
-    sess._last_ping_at = time.monotonic()   # not due
-    sess._pending_keepalive_results.extend([None, None])
-    ev = sess.tick_keepalive()
+    sess.session_id = b"\x02" * 16
+    sess._ping_in_flight = True
+    sess._ping_nonce = b"nonce-123"
+    sess._consecutive_ping_failures = 1
+    pong = SessMsg(SessMsg.KIND_PONG, {"session_id": sess.session_id, "nonce": b"nonce-123", "ok": True})
+    events = _run(sess.process_inbound(SESSION_CONTROL_PROTOCOL, pong))
+    assert events == []
+    assert sess._ping_in_flight is False
+    assert sess._consecutive_ping_failures == 0
+    assert sess.state == SessionState.ESTABLISHED
+
+
+def test_pong_not_ok_starts_reconnect(alice_conn, alice_peer_id, bob_peer_id):
+    """A PONG ok=false (peer holds no Session) is a hard liveness failure → RECONNECTING."""
+    sess = _mk(bob_peer_id, SessionRole.INITIATOR, alice_conn, alice_peer_id)
+    sess._set_state(SessionState.ESTABLISHED, None)
+    sess.session_id = b"\x02" * 16
+    sess._ping_in_flight = True
+    sess._ping_nonce = b"nonce-123"
+    pong = SessMsg(SessMsg.KIND_PONG, {"session_id": sess.session_id, "nonce": b"nonce-123", "ok": False})
+    events = _run(sess.process_inbound(SESSION_CONTROL_PROTOCOL, pong))
+    assert len(events) == 1 and events[0].type == SessionEventType.RECONNECTING
+    assert sess.state == SessionState.RECONNECTING
+
+
+def test_keepalive_two_misses_trigger_reconnecting(alice_conn, alice_peer_id, bob_peer_id):
+    """Two consecutive unanswered pings while ESTABLISHED → RECONNECTING."""
+    sess = _mk(bob_peer_id, SessionRole.INITIATOR, alice_conn, alice_peer_id)
+    sess._set_state(SessionState.ESTABLISHED, None)
+    now = time.monotonic()
+    # First miss: a ping is in flight whose RTT deadline has passed.
+    sess._ping_in_flight = True
+    sess._ping_deadline = now - 1.0
+    sess._last_ping_at = now            # not due to send a fresh one this tick
+    ev = sess.tick_keepalive(now)
+    assert ev is None and sess._consecutive_ping_failures == 1
+    # Second miss.
+    sess._ping_in_flight = True
+    sess._ping_deadline = now - 1.0
+    ev = sess.tick_keepalive(now)
     assert ev is not None and ev.type == SessionEventType.RECONNECTING
     assert sess.state == SessionState.RECONNECTING
+
+
+def test_on_ping_answers_pong_ok_when_session_matches(bob_conn, bob_peer_id, alice_peer_id):
+    sess = _mk(alice_peer_id, SessionRole.RESPONDER, bob_conn, bob_peer_id)
+    sess._set_state(SessionState.ESTABLISHED, None)
+    sess.session_id = b"\x07" * 16
+    ping = SessMsg(SessMsg.KIND_PING, {"session_id": sess.session_id, "nonce": b"abc"})
+    events = _run(sess.process_inbound(SESSION_CONTROL_PROTOCOL, ping))
+    assert events == []
+    last = _last_sent(bob_conn, SESSION_CONTROL_PROTOCOL)
+    assert last is not None and last[2].kind == SessMsg.KIND_PONG
+    assert last[2].fields["ok"] is True and last[2].fields["nonce"] == b"abc"
+
+
+# ── RESUME (fast-path recovery) ──────────────────────────────────────────────
+
+def test_resume_inbound_while_reconnecting_resumes(bob_conn, bob_peer_id, alice_peer_id):
+    """Peer RESUME for a session we still hold (and we are RECONNECTING) → ACK + RESUMED."""
+    sess = _mk(alice_peer_id, SessionRole.RESPONDER, bob_conn, bob_peer_id)
+    sess._set_state(SessionState.RECONNECTING, 10.0)
+    sess.session_id = b"\x08" * 16
+    resume = SessMsg(SessMsg.KIND_RESUME, {"session_id": sess.session_id, "nonce": b"r1"})
+    events = _run(sess.process_inbound(SESSION_CONTROL_PROTOCOL, resume))
+    assert len(events) == 1 and events[0].type == SessionEventType.RESUMED
+    assert sess.state == SessionState.ESTABLISHED
+    last = _last_sent(bob_conn, SESSION_CONTROL_PROTOCOL)
+    assert last[2].kind == SessMsg.KIND_RESUME_ACK and last[2].fields["accepted"] is True
+
+
+def test_resume_inbound_unknown_session_naks(bob_conn, bob_peer_id, alice_peer_id):
+    """RESUME for a session_id we don't hold → NACK with SESSION_UNKNOWN."""
+    sess = _mk(alice_peer_id, SessionRole.RESPONDER, bob_conn, bob_peer_id)
+    sess._set_state(SessionState.ESTABLISHED, None)
+    sess.session_id = b"\x08" * 16
+    resume = SessMsg(SessMsg.KIND_RESUME, {"session_id": b"\x99" * 16, "nonce": b"r1"})
+    events = _run(sess.process_inbound(SESSION_CONTROL_PROTOCOL, resume))
+    assert events == []
+    last = _last_sent(bob_conn, SESSION_CONTROL_PROTOCOL)
+    assert last[2].kind == SessMsg.KIND_RESUME_ACK
+    assert last[2].fields["accepted"] is False
+    assert last[2].fields["reason_code"] == SESSION_UNKNOWN
+
+
+def test_resume_ack_accepted_resumes(alice_conn, alice_peer_id, bob_peer_id):
+    sess = _mk(bob_peer_id, SessionRole.INITIATOR, alice_conn, alice_peer_id)
+    sess._set_state(SessionState.RECONNECTING, 10.0)
+    sess._reconnect_substep = "resume_sent"
+    sess._resume_nonce = b"rn"
+    sess.session_id = b"\x08" * 16
+    ack = SessMsg(SessMsg.KIND_RESUME_ACK, {"session_id": sess.session_id, "nonce": b"rn",
+                                            "accepted": True, "reason_code": OK})
+    events = _run(sess.process_inbound(SESSION_CONTROL_PROTOCOL, ack))
+    assert len(events) == 1 and events[0].type == SessionEventType.RESUMED
+    assert sess.state == SessionState.ESTABLISHED
+
+
+def test_resume_ack_nack_replays_handshake_for_plain_session(alice_conn, alice_peer_id, bob_peer_id):
+    """A NACK on a plain initiator session re-runs the full handshake (re-HELLO),
+    preserving peer-id."""
+    sess = _mk(bob_peer_id, SessionRole.INITIATOR, alice_conn, alice_peer_id)
+    sess._set_state(SessionState.RECONNECTING, 10.0)
+    sess._reconnect_substep = "resume_sent"
+    sess._resume_nonce = b"rn"
+    old_sid = sess.session_id
+    ack = SessMsg(SessMsg.KIND_RESUME_ACK, {"session_id": b"\x00" * 16, "nonce": b"rn",
+                                            "accepted": False, "reason_code": SESSION_UNKNOWN})
+    events = _run(sess.process_inbound(SESSION_CONTROL_PROTOCOL, ack))
+    assert events == []
+    assert sess.state == SessionState.HELLO_SENT
+    assert sess.session_id != old_sid     # identity rotated for the fresh handshake
+    last = _last_sent(alice_conn, SESSION_HELLO_PROTOCOL)
+    assert last is not None and last[2].kind == SessMsg.KIND_HELLO_REQ
+
+
+def test_resume_ack_nack_world_session_is_lost(alice_conn, alice_peer_id, bob_peer_id):
+    """A world-join session cannot transparently re-handshake (double-join risk) → LOST."""
+    sess = Session(
+        peer_id=bob_peer_id, role=SessionRole.INITIATOR, conn=alice_conn,
+        p2p_name=NodeConn.P2P_PUBLIC, local_peer_id=alice_peer_id,
+        local_node_id="ln", local_profile_factory=lambda: {}, is_world_join=True,
+    )
+    sess._set_state(SessionState.RECONNECTING, 10.0)
+    sess._reconnect_substep = "resume_sent"
+    sess._resume_nonce = b"rn"
+    ack = SessMsg(SessMsg.KIND_RESUME_ACK, {"session_id": b"\x00" * 16, "nonce": b"rn",
+                                            "accepted": False, "reason_code": SESSION_UNKNOWN})
+    events = _run(sess.process_inbound(SESSION_CONTROL_PROTOCOL, ack))
+    assert len(events) == 1 and events[0].type == SessionEventType.LOST
+    assert sess.state == SessionState.FAILED
+
+
+def test_tick_reconnect_responder_does_not_redial(bob_conn, bob_peer_id, alice_peer_id):
+    """A responder (no addresses) cannot re-dial; it rides the grace timer to LOST."""
+    sess = _mk(alice_peer_id, SessionRole.RESPONDER, bob_conn, bob_peer_id)
+    sess._set_state(SessionState.RECONNECTING, 10.0)
+    assert sess.tick_reconnect() is None
+    assert bob_conn.connect_calls == []
+
+
+def test_tick_reconnect_initiator_redials_and_sends_resume(alice_conn, alice_peer_id, bob_peer_id):
+    """An initiator with addresses re-dials and, on success, sends RESUME."""
+    async def _runner():
+        sess = _mk(bob_peer_id, SessionRole.INITIATOR, alice_conn, alice_peer_id,
+                   addresses=["/ip4/127.0.0.1/tcp/0/p2p/" + bob_peer_id])
+        alice_conn.connect_returns = (bob_peer_id, False)
+        sess._set_state(SessionState.RECONNECTING, 45.0)
+        sess._reconnect_substep = "redial"
+        sess._next_redial_at = 0.0
+        sess.tick_reconnect()
+        await asyncio.sleep(0.05)   # let the fire-and-forget re-dial+resume run
+        return sess
+    sess = asyncio.run(_runner())
+    assert alice_conn.connect_calls          # a re-dial happened
+    assert sess._reconnect_substep == "resume_sent"
+    last = _last_sent(alice_conn, SESSION_CONTROL_PROTOCOL)
+    assert last is not None and last[2].kind == SessMsg.KIND_RESUME
 
 
 # ── Silent abort (tie-breaker support) ──────────────────────────────────────

@@ -885,12 +885,14 @@ class Agent(AgentBasics):
         Returns:
             True if there are waiting agents, False otherwise.
         """
-        log.misc(f"Current set of {len(self.node_agents_waiting)} connected peer IDs non managed yet: "
-                 f"{list(self.node_agents_waiting.keys())}")
-        for found_agent in self._found_agents:
-            if found_agent in self.node_agents_waiting:
-                return True
-        return False
+        # Session-era replacement for the old `_node_agents_waiting` dict: a found
+        # agent is "waiting" while its per-peer Session exists but has not yet
+        # reached ESTABLISHED (handshake in flight). The hosted entity only holds
+        # `conn`, so this state is queried through NodeConn.is_peer_session_pending.
+        waiting = [a for a in self._found_agents if self._node_conn.is_peer_session_pending(a)]
+        log.misc(f"Current set of {len(waiting)} found agents with an in-flight (not yet "
+                 f"established) session: {waiting}")
+        return len(waiting) > 0
 
     @action
     async def send_subscribe(self, agent: str | None = None,
