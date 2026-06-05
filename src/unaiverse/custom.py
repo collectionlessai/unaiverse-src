@@ -59,22 +59,54 @@ class Custom:
     # =======
 
     # Special action arguments, that will be considered when using the @action decorator
-    STREAM_ARG_NAMES = {'stream', 'streams', 'u_hashes', 'yhat_hashes'}
-    AGENT_ARG_NAMES = {'agent', 'agents', 'partner', 'partners'}
+    STREAM_ARG_NAMES = {'stream', 'streams'}  # Last one => INTERACTION_FIELD_NAMES too
+    AGENT_ARG_NAMES = {'agent', 'agents', 'partner', 'partners',
+                       'targets', 'target'}  # Last one => INTERACTION_FIELD_NAMES too
 
-    # Candidate action argument names (when calling an action) that tells that such an action is multi-steps
-    SECONDS_ARG_NAMES = {'max_duration', 'time'}  # Keep the preferred name on top
-    TIMEOUT_ARG_NAMES = {'retry_timeout', 'timeout'}  # Keep the preferred name on top
-    DELAY_ARG_NAMES = {'wait_before_running', 'delay'}  # Keep the preferred name on top
-    NOT_ALLOWED_IN_ACTION_SIGNATURE = SECONDS_ARG_NAMES | TIMEOUT_ARG_NAMES | DELAY_ARG_NAMES
-    INTERACTION_ARG_NAMES = {'interaction'}
+    # Special action argument names (when calling an action) that tells intrinsic information of the action and
+    # are stipped from the argument list
+    SECONDS_ARG_NAMES = ['max_duration']  # Keep the preferred name on top
+    TIMEOUT_ARG_NAMES = ['retry_timeout']  # Keep the preferred name on top
+    DELAY_ARG_NAMES = ['delay']  # Keep the preferred name on top
+    TIME_TO_WAIT_BEFORE_ACTING_ARG_NAMES = ['time_to_wait_before_acting']  # State only
+
+    # Special cases of action arguments
+    """
+    --------------------------------------------------------------------------------------------------------------------
+    Role	            Names	                                Semantics
+    --------------------------------------------------------------------------------------------------------------------
+    INTERACTION_INJECT  {'interaction'}	                        Framework injects the Interaction object at call time. 
+                                                                Must be declarable in body sig (that's how injection 
+                                                                opts in). Forbidden in action.args and in wire 
+                                                                action_kwargs.
+    INTERACTION_FIELD   {streams, num_steps, target, timeout,   Promoted from Action.args to a field of the Interaction
+                        copy_sys, forced_uuid, id, volatile,    object by __build_system_interaction. Allowed in body
+                        data_samples, callback}                 sig (then stays in action_kwargs). 
+                                                                Allowed in wire action_kwargs iff value equals the 
+                                                                matching Interaction field.
+    HSM_TRANSIT_META	{max_duration, retry_timeout, delay}    Per-transit scalars consumed by __guess_* then stripped 
+                                                                from Action.args. Forbidden in body sig and in wire 
+                                                                action_kwargs.
+    WIRE_SENTINEL       {'action_kwargs'}	                    Framework-private container name. Forbidden everywhere              
+                                                                except send's body sig.
+    REGULAR	            everything else	                        Validated only against the body sig.
+    --------------------------------------------------------------------------------------------------------------------
+    """
+    INTERACTION_INJECT_NAMES = {'interaction'}
+    INTERACTION_FIELD_NAMES = {'streams', 'num_steps', 'target', 'timeout', 'copy_sys', 'forced_uuid', 'id', 'volatile',
+                               'data_samples', 'callback'}
+    HSM_TRANSIT_META_NAMES = {SECONDS_ARG_NAMES[0], TIMEOUT_ARG_NAMES[0], DELAY_ARG_NAMES[0]}
+    WIRE_SENTINEL_NAMES = {'action_kwargs'}
+    SPECIAL_ACTION_NAMES = {'send'}
+
+    # Collectors
+    RESERVED_IN_BODY_SIGNATURE = HSM_TRANSIT_META_NAMES | WIRE_SENTINEL_NAMES
+    RESERVED_IN_ACTION_KWARGS = HSM_TRANSIT_META_NAMES | WIRE_SENTINEL_NAMES | INTERACTION_INJECT_NAMES
+
+    # Others
     DEFAULT_TIMEOUT = 10.0
     ALL_STATES_NAME = 'all'
     NOT_ALLOWED_STATE_NAMES = {ALL_STATES_NAME}
-
-    # Deprecated action argument-related things
-    SPECIAL_DEPRECATED_CASES_PREFIXES = {'ask_', 'do_', 'done_'}
-    DEPRECATED_COMPLETED_ARG = '_completed'
 
     # ============
     # INTERACTIONS
@@ -87,11 +119,6 @@ class Custom:
     DEFAULT_INTER_TIMEOUT = 60. * 5.  # Seconds
     DRAIN_TIMEOUT = 0.
     FAKE_INTERACTION_UUID = "fake_system"
-
-    # ======================
-    # BACKWARD COMPATIBILITY
-    # ======================
-    IS_IN_DEPRECATED_WORLD = False  # Automatically set during execution, do not change it here
 
 
 class GenException(Exception):

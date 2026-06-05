@@ -920,8 +920,8 @@ class P2P:
         logger.info("  - Stopping background threads...")
 
         # 2. Wait briefly for threads to finish (optional, they are daemons)
-        # self._get_connected_peers_thread.join(timeout=2)
-        # self._check_message_queue_thread.join(timeout=2)
+        # self._get_connected_peers_thread.join(retry_timeout=2)
+        # self._check_message_queue_thread.join(retry_timeout=2)
         # print("  - Background threads signaled.")
 
         # 3. Call the Go CloseNode function

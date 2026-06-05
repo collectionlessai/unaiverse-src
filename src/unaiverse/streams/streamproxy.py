@@ -79,6 +79,10 @@ class StreamProxy:
             if name_only not in self._streams_by_name_only:  # In case of collision, the first name wins
                 self._streams_by_name_only[name_only] = stream
 
+    def bind_uuid_only(self, uuid: str | None) -> None:
+        """Set the default UUID used by get/set when the caller does not pass one."""
+        self._uuid = uuid
+
     def clear_data(self, uuid: str | None):
         """Remove all the currently existing data from the bind streams (not the interactions)."""
 
@@ -151,7 +155,7 @@ class StreamProxy:
             else:
                 return self._stream_list[key]  # Default value
         elif key in self._streams:
-            if isinstance(self._stream_list[key], Stream):
+            if isinstance(self._streams[key], Stream):
                 return self._streams[key].get(requested_by, uuid, all_uuids)
             else:
                 return self._streams[key]  # Default value
@@ -162,7 +166,7 @@ class StreamProxy:
                 return self._streams_by_name_only[key]  # Default value
         else:
             raise GenException(f"Unknown stream/key: {key}"
-                               f"\n{self._stream_list}\n{self._streams}\n{self._streams_by_name_only}")  # TODO remove
+                               f"\n{self._stream_list}\n{self._streams}\n{self._streams_by_name_only}")
 
     def add_interaction(self, interaction) -> None:
         """Register an interaction on all bound streams.
@@ -323,7 +327,12 @@ class StreamProxy:
                 return -1  # Default value
         elif key in self._streams:
             if self._streams[key] is not None:
-                return self._streams[key].get_tag(uuid)
+                stream = self._streams[key]
+                if isinstance(stream, Stream):
+                    tag = stream.get_tag(uuid)
+                    return tag if tag is not None else -1
+                else:
+                    return -1
             else:
                 return -1  # Default value
         else:
@@ -374,6 +383,14 @@ class StreamProxy:
         """
         for key, value in self._streams.items():
             yield key, value
+
+    def values(self):
+        """Iterate over the bound streams.
+
+        Returns:
+            An iterator.
+        """
+        yield from self._streams.values()
 
     @property
     def names(self) -> list[str]:

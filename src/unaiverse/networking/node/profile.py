@@ -273,7 +273,7 @@ class NodeProfile:
         for url in services:
             try:
 
-                # Make a GET request to the service URL with a timeout
+                # Make a GET request to the service URL with a retry_timeout
                 response = requests.get(url, timeout=5)
 
                 # Raise an HTTPError for bad responses (4xx or 5xx status codes)
@@ -295,7 +295,7 @@ class NodeProfile:
 
             except requests.exceptions.RequestException:
 
-                # Catch any request-related errors (e.g., network issues, timeout, bad status)
+                # Catch any request-related errors (e.g., network issues, retry_timeout, bad status)
                 continue  # Try the next service on error
 
             except Exception:

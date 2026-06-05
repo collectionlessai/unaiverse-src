@@ -21,6 +21,7 @@ import math
 import time
 import queue
 import types
+import signal
 import asyncio
 import requests
 import threading
@@ -33,7 +34,6 @@ from unaiverse.world import World
 from unaiverse.agent import Agent
 from collections.abc import Callable
 from datetime import datetime, timezone
-from unaiverse.interaction import Interaction
 from unaiverse.networking.p2p.messages import Msg
 from unaiverse.custom import Custom, GenException
 from unaiverse.networking.p2p import P2P, P2PError
@@ -179,6 +179,7 @@ class Node:
         self.agents_that_provided_ping_pong = set()
         self.joining_world_info = None
         self.first = True
+        self.stop_requested = False
 
         # Inspector related
         self.inspector_activated = False
@@ -869,6 +870,33 @@ class Node:
         """
         log.set_sub("gen")
 
+        # First CTRL+C asks for graceful shutdown (the main loop checks
+        # `self.stop_requested` between cycles). Second CTRL+C bypasses
+        # all cleanup with os._exit(130). We install BOTH a loop-level
+        # handler (Unix only, immune to matplotlib/PyTorch signal hijacks
+        # and to GIL-holding C extensions) and a Python-level handler
+        # (the only option on Windows, vulnerable to override but better
+        # than nothing). Registered here — after user imports but before
+        # the main loop — to overwrite any handlers installed at import
+        # time by matplotlib/PyTorch/etc.
+        self.stop_requested = False
+
+        def _request_stop():
+            if self.stop_requested:
+                os._exit(130)
+            log.user("\nDetected Ctrl+C! Exiting gracefully... (Ctrl+C again to force-quit)")
+            self.stop_requested = True
+
+        try:
+            asyncio.get_running_loop().add_signal_handler(signal.SIGINT, _request_stop)
+        except (NotImplementedError, RuntimeError):
+            pass  # Windows or no event loop — fall back to signal.signal only
+
+        try:
+            signal.signal(signal.SIGINT, lambda signum, frame: _request_stop())
+        except (ValueError, OSError):
+            pass  # Not in main thread, etc.
+
         # Subscribing/creating our own pubsub
         await self.hosted.subscribe_to_pubsub_owned_streams()
 
@@ -1020,7 +1048,7 @@ class Node:
             # Main loop
             must_quit = False
             self.run_start_time = clock.get_time()
-            while not must_quit:
+            while not must_quit and not self.stop_requested:
                 log.set_sub("gen")
 
                 # Tuning clock speed
@@ -1123,7 +1151,7 @@ class Node:
                                 else:
                                     log.user(f"\n*** Connected to world {interact_mode_opts['world_peer_id']} ***")
                                 cap = cv2.VideoCapture(0) if processor_img_stream is not None else None
-                                log.user("*** Entering interactive mode ***\n")
+                                log.user("*** Entering interactive mode [type exit() to quit] ***\n")
                                 keyboard_listener.start()
                                 time.sleep(1)
 
@@ -1819,39 +1847,7 @@ class Node:
                     log.error("Unexpected stream samples received by this world node, sent by: " + msg.sender)
                     await self.__purge(msg.sender)
 
-            # (G) got action request
-            elif msg.content_type == Msg.ACTION_REQUEST:
-                log.misc("Received an action request...")
-
-                if self.node_type is Node.AGENT:
-                    if msg.sender not in self.agent.all_agents:
-                        log.error("Unexpected action request received by a unknown node: " + msg.sender)
-                    else:
-                        behav = self.agent.behav_lone_wolf \
-                            if msg.sender in self.agent.public_agents else self.agent.behav
-
-                        interaction = Interaction(
-                            action_name=msg.content['action_name'],
-                            action_kwargs=msg.content['args'],
-                            from_state=msg.content.get('from_state', None),
-                            to_state=msg.content.get('to_state', None),
-                            requester=msg.sender,
-                            target="self",
-                            timeout=-1.,
-                            forced_uuid=msg.content['uuid'])
-
-                        if not behav.request_action(interaction):
-                            log.error(f"Cannot enqueue the request, incompatible action "
-                                      f"(action_name: {msg.content['action_name']}, "
-                                      f"action_kwargs: {msg.content['args']}, "
-                                      f"from_state: {msg.content.get('from_state', None)}, "
-                                      f"to_state: {msg.content.get('to_state', None)})")
-
-                elif self.node_type is Node.WORLD:
-                    log.error("Unexpected action request received by this world node, sent by: " + msg.sender)
-                    await self.__purge(msg.sender)
-
-            # (G2) got interaction request (new-style, replaces ACTION_REQUEST for new agents)
+            # (G) got interaction request (new-style, replaces ACTION_REQUEST for new agents)
             elif msg.content_type == Msg.INTERACTION:
                 log.misc(f"Received an interaction request...")
 
@@ -1886,7 +1882,8 @@ class Node:
                     if msg.sender == self.conn.get_world_peer_id():
                         new_role_indication = msg.content
                         if new_role_indication['peer_id'] == self.get_world_peer_id():
-                            self.__replace_agent_instance_by_role(role=new_role_indication['role'])
+                            self.__replace_agent_instance_by_role(role=new_role_indication['role'],
+                                                                  changing_an_existing_role_in_world=True)
 
                 elif self.node_type is Node.WORLD:
                     if msg.sender in self.world.world_masters:
@@ -2160,11 +2157,9 @@ class Node:
             # Getting agent files
             try:
                 agent_files = unpack_py_files(packed_agent_files)
-                Custom.IS_IN_DEPRECATED_WORLD = False
             except Exception:
 
-                # Backward compatibility (single agent.py for all roles)
-                Custom.IS_IN_DEPRECATED_WORLD = True
+                # Assuming we are in the case of a single agent.py for all roles (still valid)
                 roles = profile.get_dynamic_profile()['world_roles_fsm'].keys()
                 agent_files = {f"{k}.py": packed_agent_files for k in roles}
 
@@ -2356,9 +2351,9 @@ class Node:
         agents_to_remove = []
         for peer_id, (profile_time, profile) in self.agents_to_interview.items():
 
-            # Checking timeout
+            # Checking retry_timeout
             if (cur_time - profile_time) > Custom.INTERVIEW_TIMEOUT:
-                log.misc("Removing (disconnecting) due to timeout in interview queue: " + peer_id)
+                log.misc("Removing (disconnecting) due to retry_timeout in interview queue: " + peer_id)
                 agents_to_remove.append(peer_id)
 
         # Updating
@@ -2367,22 +2362,22 @@ class Node:
 
     async def __handle_connected_without_ack(self) -> None:
         """Removes connected peers from the queue if they haven't sent an acknowledgment within
-        the timeout period. (async)"""
+        the retry_timeout period. (async)"""
         cur_time = clock.get_time()
         agents_to_remove = []
         agents_to_retry = []
         for peer_id, connection_dict in self.agents_expected_to_send_ack.items():
 
-            # Checking timeout (to resend the request)
+            # Checking retry_timeout (to resend the request)
             if ((cur_time - connection_dict["ask_time"]) > Custom.CONNECT_WITHOUT_ACK_RETRY_TIMEOUT and
                     not connection_dict['retried']):
                 log.misc("Timeout in the connected-without-ack queue, I will try again: " + peer_id)
                 agents_to_retry.append(peer_id)
                 continue
 
-            # Checking timeout
+            # Checking retry_timeout
             if (cur_time - connection_dict["ask_time"]) > Custom.CONNECT_WITHOUT_ACK_TOTAL_TIMEOUT:
-                log.misc("Removing (disconnecting) due to timeout in the connected-without-ack queue: " + peer_id)
+                log.misc("Removing (disconnecting) due to retry_timeout in the connected-without-ack queue: " + peer_id)
                 agents_to_remove.append(peer_id)
 
         # Updating (disconnected)
@@ -2443,8 +2438,6 @@ class Node:
                 _world_approval_messages.append(_msg)
             elif _msg.content_type == Msg.AGENT_APPROVAL:
                 _agent_approval_messages.append(_msg)
-            elif _msg.content_type == Msg.ACTION_REQUEST:
-                _action_messages.append(_msg)
             else:
                 _other_messages.append(_msg)
         return _world_approval_messages + _agent_approval_messages + _action_messages + _other_messages
@@ -2486,7 +2479,8 @@ class Node:
                                          world_peer_id: str | None = None,
                                          world_profile: NodeProfile | None = None,
                                          stats_class=None,
-                                         initial_stats=None):
+                                         initial_stats=None,
+                                         changing_an_existing_role_in_world: bool = False):
         """Generating a new instance of the Agent class accordingly to the given role (when in-world only)."""
 
         if world_profile is None:
@@ -2502,7 +2496,7 @@ class Node:
             role_bits_to_str, role_str_to_bits = Agent.build_augmented_roles_dictionaries(world_roles)
 
             # Creating a new agent with the received actions
-            if not self.agent.__class__.__name__ == "WAgent":
+            if not self.agent.__class__.__name__ == "WAgent" or changing_an_existing_role_in_world:
                 base_role_str = role_bits_to_str[(role >> 2) << 2]
                 new_agent, new_agent_memory_finder = load_agent_in_memory(self.world_agent_files,
                                                                           base_role_str,

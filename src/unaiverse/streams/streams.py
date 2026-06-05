@@ -24,7 +24,6 @@ import random
 from PIL.Image import Image
 from .dataprops import DataProps
 from unaiverse.clock import clock
-from unaiverse.utils.logger import log
 from unaiverse.utils.misc import show_images_grid
 from unaiverse.custom import Custom, GenException
 
@@ -134,11 +133,10 @@ class Stream:
         self.data_by_uuid = {}
         self.interactions_by_uuid = {}  # Interactions tracking
         self.enabled = True
-        self._last_set_uuid = None  # Utility
 
     @staticmethod
     def create(stream: 'Stream', name: str | None = None, group: str = 'none',
-               public: bool = True, pubsub: bool = True):
+               public: bool = True, pubsub: bool = True, delta: float = -1.):
         """Create and set the name for a given stream, also updates data stream labels.
 
         Args:
@@ -147,6 +145,7 @@ class Stream:
             group (str): The name of the group to which the stream belongs.
             public (bool): If the stream is going to be served in the public net or the private one.
             pubsub (bool): If the stream is going to be served by broadcasting (PubSub) or not.
+            delta (float): The minimum interval between two consecutive 'set' operations on the stream.
 
         Returns:
             Stream: The modified stream with updated group name.
@@ -161,6 +160,8 @@ class Stream:
         stream.props.set_name(name)
         stream.props.set_public(public)
         stream.props.set_pubsub(pubsub)
+        stream.props.set_delta(delta)
+        assert stream.props is not None
         if (stream.props.is_flat_tensor_with_labels() and
                 len(stream.props.tensor_labels) == 1 and stream.props.tensor_labels[0] == 'unk'):
             stream.props.tensor_labels[0] = group if group != 'none' else name
@@ -248,12 +249,13 @@ class Stream:
             some_hash: A net hash or user hash string.
 
         Returns:
-            The peer ID string, or None if the hash format is unrecognised.
+            The peer ID string, or None if the hash format is unrecognized.
         """
         if Stream.is_net_hash(some_hash):
             return DataProps.peer_id_from_net_hash(some_hash)
         elif Stream.is_user_hash(some_hash):
             return DataProps.peer_id_from_user_hash(some_hash)
+        return None
 
     @staticmethod
     def name_or_group_from_net_hash(net_hash: str) -> str:
@@ -340,7 +342,7 @@ class Stream:
         return s
 
     def set(self,
-            data: torch.Tensor | Image | str, data_tag: int = -1, keep_existing_tag: bool = False,
+            data: torch.Tensor | Image | str | None, data_tag: int = -1, keep_existing_tag: bool = False,
             uuid: str | None = None, force: bool = False) -> Data | None:
         """Set a new data sample into the stream, that will be provided when calling "get()".
 
@@ -357,16 +359,11 @@ class Stream:
         if not self.enabled and not force:
             return None
 
-        # Backward compatibility
-        if Custom.IS_IN_DEPRECATED_WORLD and uuid is None and self._last_set_uuid is not None:
-            uuid = self._last_set_uuid
-
         first = False
         if uuid not in self.data_by_uuid:
             first = True
             self.limit_data_without_interactions()
             self.data_by_uuid[uuid] = Data(uuid=uuid)
-            self._last_set_uuid = uuid  # Backward compatibility
 
         # This is the data sample (with tag and so on)
         data_struct = self.data_by_uuid[uuid]
@@ -400,10 +397,6 @@ class Stream:
         Returns:
             True if data exists for that UUID, False otherwise.
         """
-        # Backward compatibility
-        if Custom.IS_IN_DEPRECATED_WORLD and uuid is None and self._last_set_uuid is not None:
-            uuid = self._last_set_uuid
-
         return uuid in self.data_by_uuid
 
     def has_data_and_interaction(self, uuid: str | None) -> bool:
@@ -468,8 +461,7 @@ class Stream:
 
         Args:
             requested_by: Identifier of the caller; when provided, each caller receives each sample at most once.
-            uuid: UUID of the interaction whose data to retrieve (it can be None for backward compatibility;
-                in "deprecated worlds" defaults to the last set UUID).
+            uuid: UUID of the interaction whose data to retrieve (it can be None in pre-built streams).
             all_uuids: Whether to return a list with all the data samples for all the existing UUIDs (default: False).
                 In this case, the uuid argument is ignored.
 
@@ -478,11 +470,6 @@ class Stream:
             If all_uuids is True, then it returns a list of tuples (data_sample, tag, timestamp),
                 where each data_sample has the just mentioned properties.
         """
-
-        # Backward compatibility
-        if Custom.IS_IN_DEPRECATED_WORLD and uuid is None and self._last_set_uuid is not None:
-            uuid = self._last_set_uuid
-
         if all_uuids:
             samples = []
             for _uuid in self.get_data_uuids():
@@ -522,10 +509,6 @@ class Stream:
         Returns:
             The data timestamp as a float, or None if no data exists for that UUID.
         """
-        # Backward compatibility
-        if Custom.IS_IN_DEPRECATED_WORLD and uuid is None and self._last_set_uuid is not None:
-            uuid = self._last_set_uuid
-
         if uuid not in self.data_by_uuid:
             return None
 
@@ -540,10 +523,6 @@ class Stream:
         Returns:
             The integer data tag, or None if no data exists for that UUID.
         """
-        # Backward compatibility
-        if Custom.IS_IN_DEPRECATED_WORLD and uuid is None and self._last_set_uuid is not None:
-            uuid = self._last_set_uuid
-
         if uuid not in self.data_by_uuid:
             return None
 
@@ -556,10 +535,6 @@ class Stream:
             data_tag: The new integer tag value.
             uuid: The UUID to update (defaults to the last set UUID).
         """
-        # Backward compatibility
-        if Custom.IS_IN_DEPRECATED_WORLD and uuid is None and self._last_set_uuid is not None:
-            uuid = self._last_set_uuid
-
         if uuid not in self.data_by_uuid:
             return
 
@@ -575,7 +550,7 @@ class Stream:
             del self.data_by_uuid[uuid]
 
     def clear_expired_data(self, timeout: float) -> list[str]:
-        """Remove all data entries whose timestamp is older than the given timeout.
+        """Remove all data entries whose timestamp is older than the given retry_timeout.
 
         Args:
             timeout: Maximum age in seconds; entries older than this are deleted. No-op if <= 0.
@@ -608,7 +583,6 @@ class Stream:
             return
         uuid = interaction.uuid
         self.interactions_by_uuid[uuid] = interaction
-        self._last_set_uuid = interaction.uuid
 
     def edit_uuid_in_data(self, current_uuid: str, new_uuid: str) -> None:
         """Rename a UUID in the data store (used when a temporary UUID is replaced by a permanent one).
@@ -738,32 +712,6 @@ class Stream:
         """
         return self.to_code_str()
 
-    # ==================================================================================================================
-    # BEGIN OF DEPRECATED METHODS
-    # ==================================================================================================================
-    def get_uuid(self, expected: bool = False) -> str | None:
-        """DEPRECATED"""
-        return self._last_set_uuid
-
-    def set_uuid(self, ref_uuid: str | None, expected: bool = False) -> None:
-        """DEPRECATED"""
-        if not expected:
-            self._last_set_uuid = ref_uuid
-
-    def clear_uuid_if_marked_as_clearable(self) -> None:
-        """DEPRECATED"""
-        self.clear_uuid()
-
-    def clear_uuid(self) -> bool:
-        """DEPRECATED"""
-        self._last_set_uuid = None
-        self.clear_all_interactions()
-        self.clear_all_data()
-        return True
-    # ==================================================================================================================
-    # END OF DEPRECATED METHODS
-    # ==================================================================================================================
-
 
 class BufferedStream(Stream):
     """
@@ -807,7 +755,7 @@ class BufferedStream(Stream):
         return self.data_buffer_by_uuid.keys()
 
     def add_interaction(self, interaction: object) -> None:
-        """Register an interaction and initialise per-UUID buffer structures if needed.
+        """Register an interaction and initialize per-UUID buffer structures if needed.
 
         Args:
             interaction: The Interaction object to register.
@@ -851,14 +799,20 @@ class BufferedStream(Stream):
         if len(kwargs) > 0:
             raise GenException(f"Unsupported arguments in calling 'get' for BufferedStreams: {kwargs}")
 
-        if Custom.IS_IN_DEPRECATED_WORLD and uuid is None and self._last_set_uuid is not None:
-            uuid = self._last_set_uuid
-
         if (requested_by is not None and uuid in self.restart_before_next_get_by_uuid and
                 requested_by in self.restart_before_next_get_by_uuid[uuid]):
             self.restart_before_next_get_by_uuid[uuid].remove(requested_by)
             if len(self.restart_before_next_get_by_uuid[uuid]) == 0:
                 del self.restart_before_next_get_by_uuid[uuid]
+            self.restart(uuid)
+
+        # Auto-anchor `first_cycle_by_uuid[uuid]` on the very first get for any non-None uuid, so subclass
+        # __getitem__ tag formulas (e.g. ImageFileStream's `clock.get_cycle() - first_cycle_by_uuid[uuid]`)
+        # emit tag=0 at that first read and walk 0, 1, 2, … from there — independent of when the uuid was
+        # registered relative to first publish. Replaces the explicit `plan_restart_before_next_get` pattern.
+        # Detected via `last_get_cycle_by_uuid[uuid] == -2` (the sentinel set by `add_interaction`, only ever
+        # overwritten by a successful get below).
+        if uuid is not None and self.last_get_cycle_by_uuid.get(uuid, -2) == -2:
             self.restart(uuid)
 
         cycle = clock.get_cycle()
@@ -921,6 +875,9 @@ class BufferedStream(Stream):
         if self.is_read_only:
             return None
 
+        if self.is_static:
+            uuid = None
+
         if self.is_queue and data is None:
             return None
 
@@ -947,21 +904,7 @@ class BufferedStream(Stream):
                 # Boilerplate
                 if self.first_cycle_by_uuid[uuid] < 0:
                     self.first_cycle_by_uuid[uuid] = clock.get_cycle()
-                    self.last_cycle_by_uuid[uuid] = self.first_cycle_by_uuid[uuid]
-                else:
-
-                    if not self.is_queue:
-
-                        # Filling gaps with "None"
-                        cycle = clock.get_cycle()
-                        if cycle > self.last_cycle_by_uuid[uuid] + 1:
-                            for cycle in range(self.last_cycle_by_uuid[uuid] + 1, cycle):
-                                self.data_buffer_by_uuid[uuid].append(Data(uuid=uuid))
-                            self.last_cycle_by_uuid[uuid] = cycle - 1
-
-                        self.last_cycle_by_uuid[uuid] += 1
-                    else:
-                        self.last_cycle_by_uuid[uuid] = clock.get_cycle()
+                self.last_cycle_by_uuid[uuid] = clock.get_cycle()
         return data_struct
 
     def __getitem__(self, idx_and_uuid: tuple[int, str | None]) -> tuple[torch.Tensor | None, int]:
@@ -974,7 +917,7 @@ class BufferedStream(Stream):
             torch.Tensor | None: The sample, if available.
         """
         idx, uuid = idx_and_uuid
-        if self.is_read_only:
+        if self.is_read_only or self.is_static:
             uuid = None
         if not self.is_static:
             if uuid not in self.data_buffer_by_uuid or idx >= len(self.data_buffer_by_uuid[uuid]) or idx < 0:
@@ -985,7 +928,13 @@ class BufferedStream(Stream):
         else:
             data_struct = self.data_buffer_by_uuid[uuid][0]
             data = data_struct.data if data_struct is not None else None
-            data_tag = data_struct.data_tag if data_struct is not None else -1
+            
+            # Static streams have a single sample with a fixed data tag, and that is not a valid tag to use multiple
+            # times, since the repeated tag will trigger a rejection on the receiver's side.
+            # We have to rely on the clock.
+            # Hence, the line below, data_tag = -1, will trigger the fall-through on the "return" line,
+            # actually setting data_tag to clock.get_cycle() - self.first_cycle_by_uuid[uuid]
+            data_tag = -1
         return data, data_tag if data_tag >= 0 else clock.get_cycle() - self.first_cycle_by_uuid[uuid]
 
     def __len__(self):
@@ -1171,11 +1120,11 @@ class BufferedStream(Stream):
 
     def get_since_cycle(self, since_what_cycle: int, stride: int = 1, uuid: str | None = None) -> (
             tuple[list[int] | None, list[torch.Tensor | None] | None, int, DataProps]):
-        """Retrieve all samples starting from a given clock cycle.
+        """Retrieve all samples whose data_tag (cycle when written) is >= since_what_cycle.
 
         Args:
             since_what_cycle (int): Cycle number.
-            stride (int): Stride to skip cycles.
+            stride (int): Minimum cycle gap between consecutive returned samples.
             uuid: UUID of the data.
 
         Returns:
@@ -1183,28 +1132,24 @@ class BufferedStream(Stream):
         """
         assert stride >= 1 and isinstance(stride, int), f"Invalid stride: {stride}"
 
-        # Notice: this whole routed never calls ".get()", on purpose! it must be as it is
         global_cycle = clock.get_cycle()
         if global_cycle < 0:
             return None, None, -1, self.props
 
-        # Fist check: ensure we do not go beyond the first clock and counting the resulting number of steps
         since_what_cycle = max(since_what_cycle, 0)
-        num_steps = global_cycle - since_what_cycle + 1
+        ret_cycles: list[int] = []
+        ret_data: list = []
 
-        # Second check: now we compute the index we should pass to get item
-        since_what_idx_in_getitem = since_what_cycle - self.first_cycle_by_uuid[uuid]
-
-        ret_cycles = []
-        ret_data = []
-
-        for k in range(0, num_steps, stride):
-            _idx = since_what_idx_in_getitem + k
-            data, tag = self[(_idx, uuid)]
-
-            if data is not None:
-                ret_cycles.append(since_what_cycle + k)
-                ret_data.append(data)
+        if uuid in self.data_buffer_by_uuid:
+            last_kept = since_what_cycle - stride  # ensure the first eligible sample is kept
+            for d in self.data_buffer_by_uuid[uuid]:
+                if d.data is None or d.data_tag < since_what_cycle:
+                    continue
+                if d.data_tag - last_kept < stride:
+                    continue
+                ret_cycles.append(d.data_tag)
+                ret_data.append(d.data)
+                last_kept = d.data_tag
 
         return ret_cycles, ret_data, global_cycle, self.props
 
@@ -1269,7 +1214,7 @@ class ImageFileStream(BufferedStream):
     """
 
     def __init__(self, image_dir: str, list_of_image_files: str,
-                 device: torch.device = None, circular: bool = True, show_images: bool = False):
+                 device: torch.device | None = None, circular: bool = True, show_images: bool = False):
         """Initialize an ImageFileStream instance for streaming image data.
 
         Args:
@@ -1299,7 +1244,8 @@ class ImageFileStream(BufferedStream):
                 image_name = parts[0]
                 self.image_paths.append(os.path.join(image_dir, image_name))
 
-        # It was buffered previously than every other thing
+        # It was buffered previously than every other thing (not strictly required given the fact that
+        # BufferedStream's now force restart at the first get
         self.last_cycle_by_uuid[None] = -1
         self.first_cycle_by_uuid[None] = self.last_cycle_by_uuid[None] - len(self.image_paths) + 1
 
@@ -1341,7 +1287,7 @@ class LabelStream(BufferedStream):
     """
 
     def __init__(self, label_dir: str, label_file_csv: str,
-                 device: torch.device = None, circular: bool = True, single_class: bool = False,
+                 device: torch.device | None = None, circular: bool = True, single_class: bool = False,
                  line_header: bool = False):
         """Initialize a LabelStream instance for streaming labels.
 
@@ -1388,7 +1334,7 @@ class LabelStream(BufferedStream):
         with open(label_file_csv, 'r') as f:
             for line in f:
                 parts = line.strip().split(',')
-                label = parts[1:] if not line_header else parts[2:]
+                label = parts[0:] if not line_header else parts[1:]
                 target_vector = torch.zeros((1, len(class_names)), dtype=torch.float32)
                 for lab in label:
                     idx = class_name_to_index[lab]
@@ -1533,7 +1479,7 @@ def deserialize_payload(json_str: str) -> list:
         A list of deserialized objects (``torch.Tensor``, PIL ``Image``, or ``str``).
 
     Raises:
-        GenException: If an item declares an unrecognised type.
+        GenException: If an item declares an unrecognized type.
     """
     payload = json.loads(json_str)
     output = []

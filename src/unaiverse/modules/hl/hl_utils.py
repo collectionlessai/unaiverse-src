@@ -111,8 +111,7 @@ def _init(val: float | str, data_shape: torch.Size, device, dtype: torch.dtype, 
         return torch.tensor([[0., 1.]], device=device, dtype=dtype).repeat(batch_size, order)
 
 
-def _init_state_and_costate(model: nn.Module, batch_size: int = 1) -> (
-        Dict)[str, Dict[str, torch.Tensor | Dict[str, torch.Tensor]]]:
+def _init_state_and_costate(model: nn.Module, batch_size: int = 1):
     """Initialize the state and costate dictionaries (keys are 'xi', 'w_xi', 'w_y').
     """
 
