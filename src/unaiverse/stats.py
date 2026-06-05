@@ -1858,36 +1858,3 @@ class Stats:
             return '#ffffff'
         idx = zlib.adler32(str(unique_str).encode()) % len(THEME['peers'])
         return THEME['peers'][idx]
-
-    # ==================================================================================================================
-    # BEGIN OF DEPRECATED METHODS
-    # ==================================================================================================================
-    @deprecated("Use the new logger")
-    def _out(self, msg: str):
-        """DEPRECATED: Logs a stats-level message.
-
-        Args:
-            msg: Message text to log.
-        """
-        log.stats(msg)
-
-    @deprecated("Use the new logger")
-    def _err(self, msg: str):
-        """DEPRECATED: Logs an error message.
-
-        Args:
-            msg: Error message text to log.
-        """
-        log.error(msg)
-
-    @deprecated("Use the new logger")
-    def _deb(self, msg: str):
-        """DEPRECATED: Logs a debug message.
-
-        Args:
-            msg: Debug message text to log.
-        """
-        log.debug(msg)
-    # ==================================================================================================================
-    # END OF DEPRECATED METHODS
-    # ==================================================================================================================

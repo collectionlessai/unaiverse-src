@@ -30,7 +30,7 @@ from unaiverse.networking.p2p.messages import Msg
 from unaiverse.networking.node.connpool import NodeConn
 from unaiverse.networking.node.profile import NodeProfile
 from unaiverse.streams.streams import Stream, BufferedStream
-from unaiverse.streams.dataprops import DataProps, StreamType
+from unaiverse.streams.dataprops import DataProps, StreamType, TensorLabels
 from unaiverse.interaction import Interaction, InteractionManager
 from unaiverse.streams.streamproxy import StreamProxy, StreamsProxyWithDefaults
 from unaiverse.modules.utils import AgentProcessorChecker, ModuleWrapper, HumanModule, has_human_processor
@@ -79,8 +79,8 @@ class AgentBasics:
                  buffer_generated: bool = False,
                  buffer_generated_by_others: str = "none",
                  world_folder: str | None = None,
-                 policy_filter: callable = None,
-                 policy_filter_lone_wolf: callable = None):
+                 policy_filter: Callable | None = None,
+                 policy_filter_lone_wolf: Callable | None = None):
         """Create a new agent.
 
         Args:
@@ -113,7 +113,7 @@ class AgentBasics:
         self.proc_last_inputs = None
         self.proc_last_outputs = None
         self.proc_human_peer_id_to_interaction = {}
-        self.proc_optional_inputs: list[dict] | None = None
+        self.proc_optional_inputs: list[dict] | None = None  # It must be None (do not put an empty list)
         self.proc_net_hash: dict[str, None | str] = {'public': None, 'private': None}
         self.proc_in_net_hash: dict[str, None | str] = {'public': None, 'private': None}
         self.merge_flat_stream_labels = merge_flat_stream_labels
@@ -140,8 +140,8 @@ class AgentBasics:
         self.env_streams_by_user_hash = {}  # From peer_id:name to stream object
         self.proc_streams_by_user_hash = {}  # From peer_id:name to stream object
         self.proc_in_streams_by_user_hash = {}  # From peer_id:name to stream object
-        self.compat_in_streams = set()  # Streams compatible with the processor input (dynamically set)
-        self.compat_out_streams = set()  # Streams compatible with the processor output (dynamically set)
+        self.compat_in_streams = []  # Streams compatible with the processor input (dynamically set)
+        self.compat_out_streams = []  # Streams compatible with the processor output (dynamically set)
 
         # Agents, world masters, expected world masters
         self.all_agents: dict[str, NodeProfile] = {}  # ID -> profile (all types of agent)
@@ -152,9 +152,10 @@ class AgentBasics:
         self.artificial_agents: dict[str, NodeProfile] = {}  # ID -> profile (artificial agent)
         self.world_profile = None
         self.is_world = False  # If this instance is about a world: it will be discovered at creation time
+        self.last_sent_interaction = None
 
         # World specific attributes (they are only used if this agent is actually a world)
-        self.packed_agent_files: str | None = None
+        self.packed_agent_files: str = ""
         self.role_to_behav = {}
         self.agent_badges: dict[str, list[dict]] = {}  # Peer_id -> collected badges for other agents
         self.role_changed_by_world: bool = False
@@ -188,16 +189,13 @@ class AgentBasics:
         self._proc_streams_by_user_hash_prv = {}
         self._env_streams_by_user_hash_prv = {}
 
-        # Checking
-        if not (self.proc is None or
-                (isinstance(self.proc, torch.nn.Module) or (isinstance(self.proc, str) and self.proc == "default"))):
-            raise GenException("Invalid data processor: it must be either the string 'default' or a torch.nn.module")
-        if not (self.behav is None or isinstance(self.behav, HybridStateMachine)):
-            raise GenException("Invalid behavior: it must be either None or a HybridStateMachine")
-
-        # Filling (guessing) missing processor-related info (proc_inputs and proc_outputs)
+        # Checking and filling (guessing) missing processor-related info (proc_inputs and proc_outputs)
         # and allocating a dummy processor if it was not specified (if None)
         AgentProcessorChecker(self)
+
+        # Checking HSMs
+        if not (self.behav is None or isinstance(self.behav, HybridStateMachine)):
+            raise GenException("Invalid behavior: it must be either None or a HybridStateMachine")
 
         # The stream_hash of compatible streams for each data_props are stored in a set
         self.compat_in_streams = [set() for _ in range(len(self.proc_inputs))] \
@@ -214,7 +212,7 @@ class AgentBasics:
         self.stdout = StreamProxy()
 
         # Loading default public HSM
-        if hasattr(self, "do_gen"):  # Trick to distinguish if this is an Agent or a World (both sons of this class)
+        if hasattr(self, "process"):  # Trick to distinguish if this is an Agent or a World (both sons of this class)
             self.is_world = False
 
             # Setting an empty HSM as default is not provided (private/world)
@@ -335,6 +333,7 @@ class AgentBasics:
         # World only: loading action files and refactoring (or building) JSON files of the different roles.
         # This where the world guesses roles.
         if self.is_world:
+            assert self.world_folder is not None
 
             # Check role-JSON files in the world folder
             role_json_tracker = FileTracker(self.world_folder, ext=".json")
@@ -412,6 +411,7 @@ class AgentBasics:
 
         if (public is not None and public) or (public is None and not self.behaving_in_world()):
             return self._proc_in_streams_by_user_hash_pub
+        return {}
 
     def get_default_stream_bindings(self, public: bool | None = None) -> tuple[dict, dict, dict, dict]:
         """Returns the streams that are bind by default on the standard streams (stdin, stdtar, stdext, stdout)."""
@@ -422,6 +422,7 @@ class AgentBasics:
         if (public is not None and public) or (public is None and not self.behaving_in_world()):
             return (self._proc_in_streams_by_user_hash_pub, {},
                     self._env_streams_by_user_hash_pub, self._proc_streams_by_user_hash_pub)
+        return {}, {}, {}, {}
 
     def get_proc_output_net_hash(self, public: bool = True) -> str | None:
         """Return the network hash of the processor output streams.
@@ -483,17 +484,18 @@ class AgentBasics:
         # Marking
         public = sender in self.public_agents
 
-        # Also register with the HSM for action selection (backward compat bridge)
+        # Also register with the HSM for action selection
         behav = self.behav_lone_wolf if public else self.behav
+        assert isinstance(behav, HybridStateMachine)
+
         if (interaction.action_name is not None and len(interaction.action_name) > 0 and
-                not behav.request_action(interaction)):
+                not behav.request_action(interaction)):  # Here the interaction links to action (IM does not do this!)
             log.error(f"Cannot enqueue a received interaction!")
         else:
             # Register with the InteractionManager
-            if hasattr(self, 'im'):
-                log.misc(f"Registering received interaction for action "
-                         f"{interaction.action_name}")
-                self.im.register_received(interaction, public)
+            log.misc(f"Registering received interaction for action "
+                     f"{interaction.action_name}")
+            self.im.register_received(interaction, public)
 
     @staticmethod
     def build_augmented_roles_dictionaries(custom_roles: list[str] | set[str]) -> tuple[dict[int, str], dict[str, int]]:
@@ -577,7 +579,7 @@ class AgentBasics:
             if len(self.CUSTOM_ROLES) == 0:
                 raise GenException(f"No world-role files (*.json) were found in the world folder {self.world_folder}")
 
-            # Default behaviours (getting roles, that are the names of the files with extension "json")
+            # Default behaviors (getting roles, that are the names of the files with extension "json")
             default_behav_files = [os.path.join(self.world_folder, f) for f in listdir
                                    if os.path.isfile(os.path.join(self.world_folder, f)) and
                                    f.lower().endswith(".json")]
@@ -592,7 +594,7 @@ class AgentBasics:
             # Loading and refactoring behaviors
             agent_files = unpack_py_files(self.packed_agent_files)
 
-            # Backward compatibility
+            # We keep the compatibility with the case of a single agent.py
             if len(self.CUSTOM_ROLES) > 0:
                 found = 0
                 found_agent_py = False
@@ -656,101 +658,6 @@ class AgentBasics:
         and create the JSON files with the role-related behaviors, if you like. Recall that acting like this is not
         mandatory at all: you can just manually create the JSON  files, and this method will simply do nothing."""
         pass
-
-    def resolve_agent_ref(self, ref: str) -> str | None:
-        """Resolve an agent name or peer_id to a peer_id.
-
-        If ``ref`` is already a known peer_id, it is returned as-is.
-        Otherwise, the method searches all known agents by node_name.
-
-        Args:
-            ref: A peer_id or agent name.
-
-        Returns:
-            The peer_id if found, None otherwise.
-        """
-
-        # If already a valid peer_id
-        if ref in self.all_agents:
-            return ref
-
-        # Search by email@node_name (if only node_name is provided, assumes it is one of your agents)
-        if '@' not in ref:
-            your_email = self.get_profile().get_static_profile()['email']
-            ref = your_email + '@' + ref
-
-        for peer_id, profile in self.all_agents.items():
-            static_profile = profile.get_static_profile() if hasattr(profile, 'get_static_profile') else {}
-            if isinstance(static_profile, dict):
-                if (static_profile.get('email') + '@' + static_profile.get('node_name')) == ref:
-                    return peer_id
-
-        return None
-
-    def resolve_stream_ref(self, ref: str, public: bool) -> str | None:
-        """Resolve a stream name to a stream user or net hash (heuristic, gives priority to owned streams).
-
-        Args:
-            ref: A stream name, without peer IDs, just the name.
-            public: A boolean to inform the resolve procedure whether it must look for streams among public agents
-                (True) or world-related agents (False).
-
-        Returns:
-            The stream user hash or net hash if found, None otherwise.
-        """
-
-        # If already a valid user hash
-        if ref in self.known_streams_by_user_hash:
-            return ref
-
-        # If already a valid net hash
-        if ref in self.known_streams:
-            return ref
-
-        # If it is formatted as a net hash, but was not found, then nothing to do
-        if Stream.is_net_hash(ref):
-            return None
-
-        # By default, we will try to resolve by looking at owned (first) and other (then) streams
-        search_owned_streams = True
-        search_other_streams = True
-
-        # If it looks like a user hash but was not found in the code above, then it could be a stream group
-        # represented as a user hash, so we clear it, and we keep the group name only. Moreover, since it will also
-        # contain a peer ID, we immediately know where to look
-        if Stream.is_user_hash(ref):
-            peer_id = DataProps.peer_id_from_user_hash(ref)
-            ref = DataProps.name_from_user_hash(ref)
-            search_owned_streams = peer_id == self.get_peer_id()
-            search_other_streams = not search_owned_streams
-
-        # Search your own streams first (priority)
-        if search_owned_streams:
-            for user_hash, stream_obj in self.owned_streams_by_user_hash.items():
-                if public and not stream_obj.is_public():
-                    continue
-                if ref == Stream.name_from_user_hash(user_hash):
-                    return user_hash
-            for net_hash, stream_dict in self.owned_streams.items():
-                if public and not next(iter(stream_dict.values())).is_public():
-                    continue
-                if ref == Stream.name_or_group_from_net_hash(net_hash):
-                    return net_hash
-
-        # Search all streams then
-        if search_other_streams:
-            for user_hash, stream_obj in self.known_streams_by_user_hash.items():
-                if public and not stream_obj.is_public():
-                    continue
-                if ref == Stream.name_from_user_hash(user_hash):
-                    return user_hash
-            for net_hash, stream_dict in self.known_streams.items():
-                if public and not next(iter(stream_dict.values())).is_public():
-                    continue
-                if ref == Stream.name_or_group_from_net_hash(net_hash):
-                    return net_hash
-
-        return None
 
     def get_name(self) -> str:
         """Returns the name of the agent or world from the node's profile.
@@ -1306,20 +1213,22 @@ class AgentBasics:
             # In the case of BufferedStream, we have to update the data buffer by clearing previously applied
             # adaptation first (I know it looks similar to what is done below, but we must clear first!)
             if isinstance(stream, BufferedStream):
+                assert stream.props is not None
                 for uuid in stream.data_buffer_by_uuid.keys():
-                    for i, (data, data_tag) in enumerate(stream.data_buffer_by_uuid[uuid]):
-                        stream.data_buffer_by_uuid[uuid][i] = (stream.props.clear_label_adaptation(data),
-                                                               data_tag)
+                    for data in stream.data_buffer_by_uuid[uuid]:
+                        data.data = stream.props.clear_label_adaptation(data.data)
 
             # Updating labels
+            assert stream.props is not None and isinstance(stream.props.tensor_labels, TensorLabels)
             stream.props.tensor_labels.interleave_with(superset_labels)
 
             # In the case of BufferedStream, we have to update the data buffer with the new labels
             if isinstance(stream, BufferedStream):
+                assert stream.props is not None
+
                 for uuid in stream.data_buffer_by_uuid.keys():
-                    for i, (data, data_tag) in enumerate(stream.data_buffer_by_uuid[uuid]):
-                        stream.data_buffer_by_uuid[uuid][i] = (stream.props.adapt_tensor_to_tensor_labels(data),
-                                                               data_tag)
+                    for data in stream.data_buffer_by_uuid[uuid]:
+                        data.data = stream.props.adapt_tensor_to_tensor_labels(data.data)
 
     def user_stream_hash_to_net_hash(self, user_stream_hash: str) -> str | None:
         """Converts a user-defined stream hash (peer_id:name_or_group) to a network hash
@@ -1444,6 +1353,7 @@ class AgentBasics:
             added_net_hash_to_prop_name = {}
 
             # Find streams that are compatible with our 'proc_inputs'
+            assert self.proc_inputs is not None
             for i, in_proc in enumerate(self.proc_inputs):
                 for j in streams_in_profile:
                     jj = DataProps.from_dict(j)
@@ -1462,6 +1372,7 @@ class AgentBasics:
 
             # Find streams that are compatible with our 'proc_outputs'
             has_cross_entropy = []
+            assert self.proc_outputs is not None
             if 'losses' in self.proc_opts:
                 for i in range(0, len(self.proc_outputs)):
                     if self.proc_opts['losses'][i] is not None and \
@@ -1473,6 +1384,7 @@ class AgentBasics:
                         has_cross_entropy.append(False)
 
             for i, out_proc in enumerate(self.proc_outputs):
+                out_proc: StreamType
                 for j in streams_in_profile:
                     jj = DataProps.from_dict(j)
                     if ((public == jj.is_public() and
@@ -1545,7 +1457,8 @@ class AgentBasics:
 
         # Filling the information about the streams that can be generated and handled
         dynamic_profile = self._node_profile.get_dynamic_profile()
-        if hasattr(self, 'proc_outputs') and hasattr(self, 'proc_inputs'):
+        if (hasattr(self, 'proc_outputs') and hasattr(self, 'proc_inputs') and
+                self.proc_outputs is not None and self.proc_inputs is not None):
             dynamic_profile['proc_outputs'] = \
                 [dct for d in self.proc_outputs for dct in d.to_list_of_dicts()]  # List of dict of DataProp
             dynamic_profile['proc_inputs'] = \
@@ -1625,15 +1538,16 @@ class AgentBasics:
                 log.inter(f"Communicating completion of interaction {interaction.to_code_str(True)}")
                 my_public_peer_id, my_private_peer_id = self.get_peer_ids()
                 if interaction.requester in self.public_agents:
-                    my_peer_id = my_public_peer_id
+                    my_peer_id: str = my_public_peer_id
                 else:
-                    my_peer_id = my_private_peer_id
+                    my_peer_id: str = my_private_peer_id
                 ret = await self._node_conn.send(interaction.requester, channel_trail=None,
                                                  content=interaction.to_status_dict(status_generated_by=my_peer_id),
                                                  content_type=Msg.INTERACTION_STATUS)
                 if not ret:
                     log.error(
                         f"Failed to send interaction status to peer {interaction.requester}, disconnecting it")
+
                     await self._node_purge_fcn(interaction.requester)
 
     def learn_behave(self, state: int, last_action: int, prev_state: int):
@@ -1665,7 +1579,7 @@ class AgentBasics:
         else:
             return public_peer_id
 
-    def get_peer_ids(self):
+    def get_peer_ids(self) -> tuple[str, str]:
         """Retrieve the public and private peer IDs of the agent, from the underlying node's dynamic profile.
 
         Returns:
@@ -1676,10 +1590,10 @@ class AgentBasics:
         private_peer_id = None
         if self._node_profile is not None:
             dynamic_profile = self._node_profile.get_dynamic_profile()
-            public_peer_id = dynamic_profile['peer_id']  # Public
-            private_peer_id = dynamic_profile['private_peer_id']  # Private
-        public_peer_id = '<public_peer_id>' if public_peer_id is None else public_peer_id
-        private_peer_id = '<private_peer_id>' if private_peer_id is None else private_peer_id
+            public_peer_id: str = dynamic_profile['peer_id']  # Public
+            private_peer_id: str = dynamic_profile['private_peer_id']  # Private
+        public_peer_id: str = '<public_peer_id>' if public_peer_id is None else public_peer_id
+        private_peer_id: str = '<private_peer_id>' if private_peer_id is None else private_peer_id
         return public_peer_id, private_peer_id
 
     def evaluate_profile(self, role: int, profile: NodeProfile) -> bool:
@@ -1712,7 +1626,7 @@ class AgentBasics:
             return True
 
     def accept_new_role(self, role: int):
-        """Set the agent's role and optionally load a default behavior (private/world behaviour).
+        """Set the agent's role and optionally load a default behavior (private/world behavior).
 
         Args:
             role: The integer role to assign to the agent (e.g., ROLE_PUBLIC, ROLE_WORLD_MASTER).
@@ -1728,7 +1642,7 @@ class AgentBasics:
             if base_role_str in base_role_to_behav:
                 default_behav = self.world_profile.get_dynamic_profile()['world_roles_fsm'][base_role_str]
 
-        if default_behav is not None and len(default_behav) > 0:
+        if default_behav is not None and isinstance(default_behav, str) and len(default_behav) > 0:
             default_behav_hsm = HybridStateMachine(self)
             default_behav_hsm.load(default_behav)
             self.behav = HybridStateMachine(self, policy=self.policy_default)
@@ -1957,8 +1871,9 @@ class AgentBasics:
 
                 # For each agent who triggered the interaction that generated this data (recipient)
 
-                # Backward compatibility: set None as last UUID, since it is sometimes replaced by the last set
-                # reference, and we prefer to give priority to the not-None cases
+                # Set None as last UUID (it is present in pre-built BufferedStreams)
+                # since it is sometimes replaced by the last set reference,
+                # and we prefer to give priority to the not-None cases
                 if None in uuids:
                     uuids = [x for x in uuids if x is not None] + [None]
 
@@ -2174,7 +2089,7 @@ class AgentBasics:
         return behav.get_action_step_idx() if self.overridden_action_step is None else self.overridden_action_step
 
     def is_last_action_step(self):
-        """Check if the agent's current action (private/world behaviour) is on its last step.
+        """Check if the agent's current action (private/world behavior) is on its last step.
 
         Returns:
             True if the current action was its last step, False otherwise. Returns None if there is no active action.
@@ -2216,18 +2131,20 @@ class AgentBasics:
             if not callable(policy_fcn):
                 return False
             behav = self.behav if not public else self.behav_lone_wolf
+            assert isinstance(behav, HybridStateMachine)
             behav.set_policy(policy_fcn)
             return True
         elif callable(policy_method_name_or_policy_fcn):
             policy_fcn = policy_method_name_or_policy_fcn
             behav = self.behav if not public else self.behav_lone_wolf
+            assert isinstance(behav, HybridStateMachine)
             behav.set_policy(policy_fcn)
             return True
         return False
 
     def set_policy_filter(self,
                           filter_method_name_or_policy_fcn: str | Callable[
-                              [int, Interaction | None, list[Action], dict], [int, Interaction | None]],
+                              [int, Interaction | None, list[Action], dict], [int, Interaction | None]] | None,
                           public: bool = False) -> bool:
         """Sets the policy filter function, which overrides the action selected by the policy in the current state.
 
@@ -2246,16 +2163,18 @@ class AgentBasics:
             True if the filter was successfully set, False otherwise.
         """
         if isinstance(filter_method_name_or_policy_fcn, str):
-            filter_fcn = getattr(self, filter_method_name_or_policy_fcn, None)
+            filter_fcn: Callable | None = getattr(self, filter_method_name_or_policy_fcn, None)
             if not callable(filter_fcn):
                 return False
             if public:
                 self.policy_filter_lone_wolf = filter_fcn
+                assert isinstance(self.behav_lone_wolf, HybridStateMachine)
                 self.behav_lone_wolf.set_policy_filter(self.policy_filter_lone_wolf, self.policy_filter_lone_wolf_opts)
                 self.policy_filter_lone_wolf_opts['agent'] = self  # Forced (do it *after* set_policy_filter)
                 self.policy_filter_lone_wolf_opts['public'] = True
             else:
                 self.policy_filter = filter_fcn
+                assert isinstance(self.behav, HybridStateMachine)
                 self.behav.set_policy_filter(self.policy_filter, self.policy_filter_opts)
                 self.policy_filter_opts['agent'] = self  # Forced (do it *after* set_policy_filter)
                 self.policy_filter_opts['public'] = False
@@ -2263,11 +2182,13 @@ class AgentBasics:
         elif callable(filter_method_name_or_policy_fcn):
             if public:
                 self.policy_filter_lone_wolf = filter_method_name_or_policy_fcn
+                assert isinstance(self.behav_lone_wolf, HybridStateMachine)
                 self.behav_lone_wolf.set_policy_filter(self.policy_filter_lone_wolf, self.policy_filter_lone_wolf_opts)
                 self.policy_filter_lone_wolf_opts['agent'] = self  # Forced (do it *after* set_policy_filter)
                 self.policy_filter_lone_wolf_opts['public'] = True
             else:
                 self.policy_filter = filter_method_name_or_policy_fcn
+                assert isinstance(self.behav, HybridStateMachine)
                 self.behav.set_policy_filter(self.policy_filter, self.policy_filter_opts)
                 self.policy_filter_opts['agent'] = self  # Forced (do it *after* set_policy_filter)
                 self.policy_filter_opts['public'] = False
@@ -2525,11 +2446,11 @@ class AgentBasics:
                     action_name: str | None = None,
                     target: str | list[str] | None = None,
                     action_kwargs: dict | None = None,
-                    streams: dict[str, str] | list[str] | None = None,
+                    streams: dict[str, str | list[str]] | list[str] | None = None,
                     data_samples: list[str | Image | torch.Tensor] | dict[
                         str, str | Image | torch.Tensor] | None = None,
                     num_steps: int = -1,
-                    max_time: float = -1.,
+                    timeout: float = -1.,
                     from_state: str | None = None,
                     to_state: str | None = None,
                     callback: str | None = None,
@@ -2558,7 +2479,7 @@ class AgentBasics:
                 were produced by a stream.
             num_steps: Number of steps the interaction spans (used when building from raw args).
                 Ignored when a pre-built Interaction is provided.
-            max_time: Maximum time for the interaction. Ignored when a pre-built Interaction is provided.
+            timeout: Maximum time for the interaction. Ignored when a pre-built Interaction is provided.
             from_state: Optional source state. Ignored when a pre-built Interaction provided.
             to_state: Optional destination state. Ignored when a pre-built Interaction provided.
             callback: Callback action.
@@ -2574,13 +2495,14 @@ class AgentBasics:
             The Interaction on success, ``None`` on failure.
         """
         # Build Interaction from raw args if needed
+        self.last_sent_interaction = None
         if interaction is None:
             interaction = Interaction(action_name=action_name, action_kwargs=action_kwargs,
                                       streams=streams, data_samples=data_samples,
                                       num_steps=num_steps,
                                       requester=self.get_peer_id(), target=target,
                                       from_state=from_state, to_state=to_state,
-                                      timeout=max_time, callback=callback, forced_uuid=forced_uuid, id=id,
+                                      timeout=timeout, callback=callback, forced_uuid=forced_uuid, id=id,
                                       volatile=volatile)
 
         # Resolve target agent(s)
@@ -2621,6 +2543,7 @@ class AgentBasics:
                     if last_stream_data is not None:
                         stream.set(last_stream_data, uuid=interaction.uuid)
 
+            self.last_sent_interaction = interaction
             return interaction
         else:
             self.im.unregister(interaction)
@@ -2683,329 +2606,3 @@ class AgentBasics:
         # Remove it
         for (peer_id, name) in to_remove:
             await self.remove_streams(peer_id, name)
-
-    # ==================================================================================================================
-    # BEGIN OF DEPRECATED METHODS
-    # ==================================================================================================================
-    @deprecated("Use the provided logger")
-    def out(self, msg):
-        """DEPRECATED"""
-        log.misc(msg)
-
-    @deprecated("Use the provided logger")
-    def err(self, msg):
-        """DEPRECATED"""
-        log.error(msg)
-
-    @deprecated("Use the provided logger")
-    def deb(self, msg):
-        """DEPRECATED"""
-        log.debug(msg)
-
-    @deprecated("Use the interaction-based design")
-    def set_uuid(self, net_hash: str, uuid: int | None, expected: bool = False):
-        """DEPRECATED"""
-        if net_hash in self.known_streams:
-            stream_dict = self.known_streams[net_hash]
-            for stream_obj in stream_dict.values():
-                stream_obj.set_uuid(uuid, expected=expected)
-
-    @deprecated("Use hook_proc_tweak_inputs")
-    def proc_callback_inputs(self, inputs):
-        """DEPRECATED"""
-        return self.hook_proc_tweak_inputs(inputs)
-
-    @deprecated("Use hook_proc_tweak_outputs")
-    def proc_callback_outputs(self, outputs):
-        """DEPRECATED"""
-        return self.hook_proc_tweak_outputs(outputs)
-
-    @deprecated("Use the interaction-based methods")
-    def generate(self, input_net_hashes: list[str] | None = None,
-                 inputs: list[str | torch.Tensor | Image] | None = None,
-                 first: bool = False, last: bool = False, ref_uuid: str | None = None) -> (
-            tuple[tuple[torch.Tensor] | None, int]):
-        """DEPRECATED: Generate new signals.
-
-        Args:
-            input_net_hashes: A list of network hashes to be considered as input streams (they will be sub-selected).
-            inputs: A list of data to be directly provided as input to the processor (if not None, input_net_hashes is
-                ignored).
-            first: If True, indicates this is the first generation call in a sequence.
-            last: If True, indicates this is the last generation call in a sequence.
-            ref_uuid: An optional UUID to match against input stream UUIDs (it can be None).
-
-        Returns:
-            A tuple containing:
-                - A tuple of torch.Tensor objects representing the generated output, or None if generation failed.
-                - An integer representing a data tag or status.
-        """
-
-        # Preparing processor input
-        if inputs is None:
-            inputs = [None] * len(self.proc_inputs)
-            matched = set()
-            data_tag = None
-
-            if input_net_hashes is None:
-                input_net_hashes = []
-
-            # Checking UUIDs and searching the provided input streams: we look to match them with the processor input
-            for net_hash in input_net_hashes:
-                if net_hash is None:
-                    return None, - 1
-
-                stream_dict = self.known_streams[net_hash]
-                for stream_name, stream in stream_dict.items():
-
-                    # Checking the UUID in our known streams, comparing it with the UUID provided as input:
-                    # if they are not compatible, we don't generate at all
-                    if ref_uuid is not None and ref_uuid not in stream.get_data_uuids():
-                        log.debug(f"[generate] The UUIDs of stream {net_hash} ({list(stream.get_data_uuids())}) "
-                                  f"does not include the one we were  "
-                                  f"looking for ({ref_uuid}), skipping this stream")
-                        continue
-
-                    # Matching the currently checked input stream with one of the processor inputs
-                    stream_sample = stream.get(requested_by="generate", uuid=ref_uuid)
-                    for i in range(len(self.proc_inputs)):
-
-                        # If the current input stream is compatible with the i-th input slot...
-                        if (net_hash, stream_name) in self.compat_in_streams[i]:
-
-                            # If the current input stream was already assigned to another input slot
-                            # (different from "i") we skip the generation
-                            if (net_hash, stream_name) in matched:
-                                log.error("Cannot generate: ambiguous input streams provided "
-                                          "(they can match multiple processor inputs)")
-                                return None, -1
-
-                            # Found a valid assignment: getting stream sample
-                            log.debug(f"[generate] Setting the {i}-th network input to stream with "
-                                      f"net_hash: {net_hash}, name: {stream_name}")
-                            if stream_sample is None:
-                                log.debug(f"[generate] Failed setting the {i}-th input, got a None sample "
-                                          f"(uuid={ref_uuid})")
-                            else:
-                                log.debug(f"[generate] Going ahead setting the {i}-th input, got a valid sample")
-
-                                # Found a valid assignment: associating it to the i-th input slot
-                                try:
-                                    inputs[i] = self.proc_inputs[i].check_and_preprocess(stream_sample,
-                                                                                         device=self.proc.device)
-                                except Exception as e:
-                                    log.error(f"Error while checking and preprocessing the {i}-th input [{e}]")
-                                    continue
-
-                                log.debug(f"[generate] Finished setting the {i}-th input, preprocessing complete")
-
-                                # Found a valid assignment: saving match
-                                matched.add((net_hash, stream_name))
-
-                                # If all the inputs share the same data tag, we will return it,
-                                # otherwise we set it at -1 (meaning no tag)
-                                if data_tag is None:
-                                    data_tag = stream.get_tag(uuid=ref_uuid)
-                                elif data_tag != stream.get_tag(uuid=ref_uuid):
-                                    data_tag = -1
-
-                                if stream.props.is_text():
-                                    log.debug(f"[generate] Input {i} of the network: {stream_sample}")
-                                break
-
-            # Checking if we were able to match some data for each input slot of the network (processor)
-            for i in range(len(self.proc_inputs)):
-                if inputs[i] is None:
-                    if self.proc_optional_inputs[i]["has_default"]:
-                        inputs[i] = self.proc_optional_inputs[i]["default_value"]
-                    else:
-                        return None, -1
-
-            # If we reach this point and data_tag is still None, it means that inputs were all taken from defaults
-            if data_tag is None:
-                return None, -1
-        else:
-            data_tag = -1
-
-        if inputs is not None:
-            input_shapes = []
-            for x in inputs:
-                if isinstance(x, torch.Tensor):
-                    input_shapes.append(x.shape)
-                else:
-                    input_shapes.append("<non-tensor>")
-            log.debug(f"[generate] Input shapes: {input_shapes}")
-            log.debug(f"[generate] Input data tag: {data_tag}")
-
-        # Calling processor (inference) passing the collected inputs
-        if "proc_callback_inputs" in type(self).__dict__:
-            inputs = self.proc_callback_inputs(inputs)  # Backward compatibility
-        else:
-            inputs = self.hook_proc_tweak_inputs(inputs)
-        try:
-            outputs = self.proc(*inputs, first=first, last=last)
-
-            # Ensuring the output is a tuple, even if composed by a single tensor
-            if not isinstance(outputs, tuple):
-                outputs = (outputs,)
-        except Exception as e:
-            log.error(f"Error while calling the processor [{e}]")
-            outputs = (None,) * len(self.proc_outputs)
-        outputs = self.hook_proc_tweak_outputs(outputs)
-
-        # Saving
-        self.last_ref_uuid = ref_uuid
-
-        if outputs is not None:
-            i = 0
-            for net_hash, stream_dict in self.proc_streams.items():
-                for stream in stream_dict.values():
-                    if self.behaving_in_world() != stream.props.is_public():
-                        if outputs[i] is not None:
-                            if stream.props.is_tensor() or stream.props.is_text():
-                                log.debug(f"[generate] outputs[{i}]: {str(stream.props.to_text(outputs[i]))}")
-                            else:
-                                log.debug(
-                                    f"[generate] outputs[{i}]: not None, but it cannot be converted to text")
-                        else:
-                            log.debug(f"[generate] outputs[{i}]: None")
-                        i += 1
-            log.debug(f"[generate] Output shapes: "
-                      f"{[x.shape if isinstance(x, torch.Tensor) else '<non-tensor>' for x in outputs]}")
-
-        return outputs, data_tag
-
-    @deprecated("Use the interaction-based methods")
-    def learn_generate(self,
-                       outputs: tuple[torch.Tensor],
-                       targets_net_hashes: list[str] | None,
-                       ref_uuid: str | None = None) -> tuple[list[float] | None, list[float] | None]:
-        """DEPRECATED: Learn (i.e., update model params) by matching the given processor outputs with a set of targets.
-
-        Args:
-            outputs: A tuple of torch.Tensor representing the outputs generated by the agent's processor.
-            targets_net_hashes: An optional list of network hashes identifying the streams
-                                from which target data should be retrieved for learning.
-                                If None, losses are evaluated without explicit targets.
-            ref_uuid: UUID of the interaction associated to the learning procedure.
-
-        Returns:
-            A tuple containing:
-            - A list of float values representing the individual loss values for each output.
-              Returns None if targets are specified but cannot be found.
-            - A list of integers representing the data tags of the given target streams (None if no targets were given).
-        """
-
-        # Cannot learn without optimizer and losses
-        if (self.proc_opts['optimizer'] is None or self.proc_opts['losses'] is None or
-                len(self.proc_opts['losses']) == 0):
-            return None, None
-
-        # Matching targets with the output slots of the processor
-        at_least_one_target_found = False
-        if targets_net_hashes is not None:
-            targets = [None] * len(self.proc_outputs)
-            matched = set()
-            data_tags = [-1] * len(self.proc_outputs)
-
-            # For each target stream group...
-            for net_hash in targets_net_hashes:
-                stream_dict = self.known_streams[net_hash]
-
-                # For each stream of the current target group....
-                for stream_name, stream in stream_dict.items():
-                    stream_sample = None
-
-                    # For each output slot of our processor... (index "i")
-                    for i in range(len(self.proc_outputs)):
-
-                        # Check if the i-th target was already assigned or if the i-th output is not a tensor
-                        if targets[i] is not None or not isinstance(outputs[i], torch.Tensor):
-                            continue
-
-                        # If the target stream is compatible with the i-th output of the processor...
-                        if (net_hash, stream_name) in self.compat_out_streams[i]:
-
-                            # If the current target was already assigned to another output slot (different from "i)"
-                            # we skip learning
-                            if (net_hash, stream_name) in matched:
-                                log.error("Cannot generate: ambiguous target streams provided "
-                                          "(they can match multiple processor outputs)")
-                                return None, None
-
-                            # Found a valid assignment: getting stream sample
-                            if stream_sample is None:
-                                stream_sample = stream.get(requested_by="learn_generate", uuid=ref_uuid)
-                                if stream_sample is None:
-                                    return None, None
-
-                            # Found a valid assignment: associating target to the i-th output slot
-                            try:
-                                targets[i] = self.proc_outputs[i].check_and_preprocess(stream_sample,
-                                                                                       allow_class_ids=True,
-                                                                                       targets=True,
-                                                                                       device=self.proc.device)
-                            except Exception as e:
-                                log.error(f"Error while checking and preprocessing the {i}-th targets [{e}]")
-
-                            # Found a valid assignment: saving match
-                            matched.add((net_hash, stream_name))
-
-                            # Saving tag
-                            data_tags[i] = stream.get_tag(uuid=ref_uuid)
-
-                            # Confirming
-                            at_least_one_target_found = True
-
-                            if stream.props.is_tensor():
-                                log.debug("[generate] Target of the network: " +
-                                          str(stream.props.to_text(targets[i])))
-                            elif stream.props.is_text():
-                                log.debug("[generate] Target of the network: " + stream_sample)
-                            break
-
-            # If no targets were matched, we skip learning
-            if not at_least_one_target_found:
-                log.error(f"Cannot learn: cannot find a valid target for any output positions of the processor")
-                return None, None
-        else:
-
-            # If no targets were provided, it is expected to be the case of fully unsupervised learning
-            data_tags = None
-            targets = None
-
-        # Retrieving custom elements from the option dictionary
-        loss_functions: list = self.proc_opts['losses']
-        optimizer: torch.optim.optimizer.Optimizer | None = self.proc_opts['optimizer']
-
-        # Evaluating loss function(s), one for each processor output slot (they are set to 0. if no targets are there)
-        if targets_net_hashes is not None:
-
-            # Supervised or partly supervised learning
-            loss_values = [loss_fcn(outputs[i], targets[i]) if targets[i] is not None else
-                           torch.tensor(0., device=self.proc.device)
-                           for i, loss_fcn in enumerate(loss_functions)]
-            loss = torch.stack(loss_values).sum()  # Sum of losses
-        else:
-
-            # Unsupervised learning
-            loss_values = [loss_fcn(outputs[i]) for i, loss_fcn in enumerate(loss_functions)]
-            loss = torch.stack(loss_values).sum()  # Sum of losses
-
-        # Learning step
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-        # This is where parameters are actually updated, but the flag is set
-        # upon success in do_learn which is the outer method calling this one
-        # self.proc_updated_since_last_save = True
-
-        # Teaching (for autoregressive models, expected to have attribute "y")
-        if hasattr(self.proc, 'y'):
-            self.proc.y = targets[0]
-
-        # Returning a list of float values and the data tags of the targets
-        return [loss_value.item() for loss_value in loss_values], data_tags
-    # ==================================================================================================================
-    # END OF DEPRECATED METHODS
-    # ==================================================================================================================

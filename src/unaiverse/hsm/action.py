@@ -21,7 +21,7 @@ from typing import Any
 from unaiverse.custom import Custom
 from collections.abc import Iterator
 from unaiverse.utils.logger import log
-from unaiverse.interaction import Interaction
+from unaiverse.interaction import Interaction, CompletionReason
 
 
 class Action:
@@ -33,12 +33,12 @@ class Action:
                  avoid_changing_ready: bool = False,
                  teleport: bool = False,
                  high_priority: bool = False,
-                 total_time: float | str = 0.,
-                 timeout: float | str = 0,
+                 max_duration: float | str = 0.,
+                 retry_timeout: float | str = 0,
                  delay: float | str = 0):
         """Initializes an `Action` object, which encapsulates a method to be executed on a given object (`actionable`)
         with specified arguments. It sets up various properties for managing multistep actions, including
-        `total_steps`, `total_time`, and `timeout`. It also handles wildcard argument replacement and checks for the
+        `total_steps`, `total_time`, and `retry_timeout`. It also handles wildcard argument replacement and checks for the
         existence of required parameters. It identifies if the action is a 'not ready' type (e.g., `do_`, `get_`) and
         sets its initial status accordingly.
 
@@ -53,10 +53,10 @@ class Action:
                 internal rules.
             teleport: A boolean indicating that this action must be hidden when drawing the state machine ('teleport').
             high_priority: A boolean indicating that this action must be preferred over others by the policy.
-            total_time: The number of seconds representing the max duration of this action (from the moment it stars).
+            max_duration: The number of seconds representing the max duration of this action (from when it starts).
                 When <= 0., then no limits. It can be a wildcard (str).
-            timeout: The number of seconds representing the max time we keep try running this action before giving up.
-                When <= 0., then no timeouts at all. It can be a wildcard (str).
+            retry_timeout: The number of seconds representing the max time we keep try running this action before
+                giving up. When <= 0., then no timeouts at all. It can be a wildcard (str).
             delay: The number of seconds that must pass when joining a state before considering this action.
                 When <= 0., then no delays at all. It can be a wildcard (str).
         """
@@ -88,21 +88,21 @@ class Action:
         self.__get_action_params()  # This will fill the two attributes above
 
         # Time-based metrics
-        self.__total_time = total_time  # A total time <= 0 means "no total time at all"
-        self.__total_time_with_wildcard = total_time if isinstance(total_time, str) else None
-        self.__guess_total_time(self.args)  # This will "guess" the value of self.__total_time from the args dict
+        self.__action_max_duration = max_duration  # A total time <= 0 means "no total time at all"
+        self.__action_max_duration_with_wildcard = max_duration if isinstance(max_duration, str) else None
+        self.__guess_total_time(self.args)  # This will "guess" the value of self.__action_max_duration from args dict
 
         # Time-based metrics
-        self.__timeout = timeout  # A timeout <= 0 means "no total time at all"
-        self.__timeout_with_wildcard = timeout if isinstance(timeout, str) else None
-        self.__guess_timeout(self.args)  # This will "guess" the value of self.__timeout from the args dict
+        self.__action_retry_timeout = retry_timeout  # A retry_timeout <= 0 means "no total time at all"
+        self.__action_retry_timeout_with_wildcard = retry_timeout if isinstance(retry_timeout, str) else None
+        self.__guess_timeout(self.args)  # This will "guess" the value of self.__action_retry_timeout from the args dict
 
         # Time-based metrics
         self.__delay = delay
         self.__delay_with_wildcard = delay if isinstance(delay, str) else None
         self.__guess_delay(self.args)  # This will "guess" the value of self.__delay from the args dict
 
-        # Checking arguments (also removing 'timeout', 'delay', etc...)
+        # Checking arguments (also removing 'retry_timeout', 'delay', etc...)
         self.check_provided_args(self.args, exception=True, remove_special_arguments=True)
 
         # Argument values replaced by wildcards (commonly assumed to be in the format <value>)
@@ -110,36 +110,37 @@ class Action:
         self.args_with_wildcards = copy.deepcopy(self.args)  # Backup of the originally provided arguments
         self.msg_with_wildcards = self.msg
 
-        # Checking
-        self.deprecated = (any([self.name.startswith(p) for p in Custom.SPECIAL_DEPRECATED_CASES_PREFIXES]) and
-                           not any([p in Custom.INTERACTION_ARG_NAMES for p in self.param_list]))
-        self.deprecated_has_completion = Custom.DEPRECATED_COMPLETED_ARG in self.param_list
-
         # Fixing (forcing NOT-ready on some actions)
         if not avoid_changing_ready:
             for p in self.param_list:
-                if p in Custom.INTERACTION_ARG_NAMES or p == "_requester":
+                if p in Custom.INTERACTION_INJECT_NAMES:
                     self.inner = False
                     self.outer = True
                     break
 
-        # This must be done at the very end of the constructor!
-        # This interaction is NOT registered
-        self.system_interaction = Interaction(requester=Custom.SYSTEM_INTERACTION_LABEL,
-                                              target=Custom.SYSTEM_INTERACTION_LABEL,
-                                              action_name=self.name, action_kwargs=self.args,
-                                              id=Custom.SYSTEM_INTERACTION_ID)
-        self.system_interaction.set_action_ref(self)
+        # Whether for this Action we've already register_lazy a system_interaction,
+        # and whether `copy_sys` was requested for the current round.
+        self._lazy_registered = False
+        self._must_lazy_register = False
+        self._copy_sys_on_register = False
+
+        # Build the initial system_interaction (lightweight dummy or interaction-shaped). MUST stay
+        # at the very end of __init__.
+        self.__build_system_interaction()
+
+    async def __on_lazy_done(self) -> None:
+        """Complete the current lazy system_interaction and rebuild a fresh one so the next round
+        starts with a brand-new uuid. No-op for dummy (non-registered) system_interactions; expired
+        lazy interactions are also caught by `InteractionManager.complete_expired()` every cycle."""
+        if not self._lazy_registered:
+            return
+        await self.actionable.im.complete(self.system_interaction, CompletionReason.OK)
+        self.__build_system_interaction()
 
     @property
     def ready(self) -> bool:
         """Returns the inner readiness flag of the Custom."""
         return self.inner
-
-    @property
-    def has_completion_step(self) -> bool:
-        """Returns whether the action has a dedicated completion step (deprecated actions only)."""
-        return self.deprecated_has_completion
 
     @property
     def is_high_priority(self) -> bool:
@@ -171,7 +172,7 @@ class Action:
 
     async def __call__(self, interaction: Interaction | None = None) -> int:
         """Executes the action's associated method. This is the main entry point for running an Action. It handles
-        multistep logic by updating the step counter and checking for completion based on steps, time, or timeout.
+        multistep logic by updating the step counter and checking for completion based on steps, time, or retry_timeout.
         It also injects dynamic arguments like the `requester`, `request_time`, and `request_uuid` into the method's
         arguments before execution. If the action is a multistep action and has a completion step, it handles that
         callback as well (async).
@@ -185,6 +186,23 @@ class Action:
         """
         if interaction is None:
             interaction = self.system_interaction
+
+        if self._must_lazy_register and not self._lazy_registered:
+            # If `system_interaction` is interaction-shaped (the HSM transit passed `streams` /
+            # `num_steps` / etc.), register it lazily on first dispatch. The action body may or may
+            # not read from `interaction` — the framework's use of the metadata (readiness gate,
+            # mult-step counter, recipient resolution) is independent.
+            # It is the same things that happen in "send".
+            public = not self.actionable.behaving_in_world()
+            if self.actionable.im.register_lazy(self.system_interaction, public=public):
+                self._lazy_registered = True
+                if self._copy_sys_on_register:
+                    for stream in self.system_interaction.owned_streams.values():
+                        last_data = stream.get(uuid=Custom.SYSTEM_INTERACTION_UUID)
+                        if last_data is not None:
+                            stream.set(last_data, uuid=self.system_interaction.uuid)
+            else:
+                log.error(f"Calling action {self.name}: register_lazy failed, falling back to dummy")
 
         interaction_args = self.__apply_wildcards_to_args(interaction.action_kwargs, in_place=False)
         actual_args = self.get_actual_params(additional_args=interaction_args)
@@ -201,60 +219,27 @@ class Action:
         if interaction.get_starting_time() <= 0:
             interaction.set_starting_time(time.perf_counter())
 
-        # Deprecated (old-style) actions
-        run_deprecated_completion_step = False
-        timed_out = interaction.is_timed_out() or interaction.is_expired()
-        if self.deprecated:
-            if timed_out:
-                if interaction.is_single_step():
+        if interaction.is_timed_out():
+            interaction.clear_mark()
+            if interaction.is_single_step():
+                return 2
+            if interaction.is_multi_steps():
+                if interaction.was_at_least_one_step_done():
+                    return 0
+                else:
                     return 2
 
-                if interaction.is_multi_steps():
-                    if not interaction.was_at_least_one_step_done():
-                        return 2
+        if interaction.is_multi_steps() and interaction.was_at_least_one_step_done():
+            if interaction.get_new_stream_data_tags(all_fresh_or_fail=True) is None:
+                return 1
 
-            # Check if we are in front of an action that completed all its steps (even just a single step or an
-            # action  with no data at all) or that was timed out, but it did at last a step (of course,
-            # multistep actions only): in those cases, the action is considered "completed in a correct way"
-            run_deprecated_completion_step = (interaction.was_last_step_done() or
-                                              (timed_out and interaction.was_at_least_one_step_done()))
+        for p in self.param_list:
+            if p in Custom.INTERACTION_INJECT_NAMES:
+                actual_args[p] = interaction
 
-            for p in self.param_list:
-                if p == '_requester':
-                    actual_args[p] = interaction.requester
-                elif p == '_request_time':
-                    actual_args[p] = interaction.timestamp_created
-                elif p == '_request_uuid':
-                    actual_args[p] = interaction.uuid
-                elif p == '_completed':
-                    actual_args[p] = run_deprecated_completion_step
-                elif p == 'samples' or p == 'steps':
-                    actual_args[p] = max(actual_args[p], interaction.get_total_steps())  # total number of samples
-                elif p == 'time':
-                    actual_args[p] = self.get_total_time()
-                elif p == 'timeout':
-                    actual_args[p] = self.get_timeout()
-        else:
-            if interaction.is_timed_out():
-                interaction.clear_mark()
-                if interaction.is_single_step():
-                    return 2
-                if interaction.is_multi_steps():
-                    if interaction.was_at_least_one_step_done():
-                        return 0
-                    else:
-                        return 2
-            if interaction.is_multi_steps() and interaction.was_at_least_one_step_done():
-                if interaction.get_new_stream_data_tags(all_fresh_or_fail=True) is None:
-                    return 1
-
-            for p in self.param_list:
-                if p in Custom.INTERACTION_ARG_NAMES or p == "_requester":  # Second part is for backward compatibility
-                    actual_args[p] = interaction
-
-            # If the action continues (multistep), increasing the step index
-            # This is a step index, so interaction.__step == 0 means "doing/done 1 step"
-            # We start with  interaction.__step = -1, that here will become 0 - it will be run in the following code
+        # If the action continues (multistep), increasing the step index
+        # This is a step index, so interaction.__step == 0 means "doing/done 1 step"
+        # We start with  interaction.__step = -1, that here will become 0 - it will be run in the following code
         interaction.inc_step_idx()
 
         # Calling the method here
@@ -271,37 +256,31 @@ class Action:
                     interaction.clear_mark()
                     return 2
             if interaction.is_multi_steps():
-                if self.deprecated:
-                    if interaction.was_at_least_one_step_done():
+                if interaction.was_at_least_one_step_done():
+                    if self.is_pedantic():
                         return 1
-                    else:
-                        return 2
+                    interaction.clear_mark()
+                    await self.__on_lazy_done()
+                    return 0
                 else:
                     interaction.clear_mark()
-                    if interaction.was_at_least_one_step_done():
-                        return 0
-                    else:
-                        return 2
+                    return 2
 
-        # If it went OK, we reset the time counter that is related to the timeout
+        # If it went OK, we reset the time counter that is related to the retry_timeout
         else:
             interaction.set_timeout_starting_time(time.perf_counter())
 
             if interaction.is_single_step():
                 interaction.clear_mark()
+                await self.__on_lazy_done()
                 return 0
             if interaction.is_multi_steps():
-                if self.deprecated:
-                    if run_deprecated_completion_step:
-                        return 0
-                    else:
-                        return 1
+                if interaction.was_last_step_done():
+                    interaction.clear_mark()
+                    await self.__on_lazy_done()
+                    return 0
                 else:
-                    if interaction.was_last_step_done():
-                        interaction.clear_mark()
-                        return 0
-                    else:
-                        return 1
+                    return 1
 
         # Unexpected
         return -1
@@ -313,7 +292,9 @@ class Action:
             A string containing a formatted summary of the instance.
         """
         return (f"[Action: {self.name}] id: {self.id}, args: {self.args}, param_list: {self.param_list}, "
-                f"total_time: {self.__total_time}, timeout: {self.__timeout}, delay: {self.__delay}, "
+                f"{Custom.SECONDS_ARG_NAMES[0]}: {self.__action_max_duration}, "
+                f"{Custom.TIMEOUT_ARG_NAMES[0]}: {self.__action_retry_timeout}, "
+                f"{Custom.DELAY_ARG_NAMES[0]}: {self.__delay}, "
                 f"ready (inner): {self.inner}, outer: {self.outer}, interactions: {str(self.interactions)}, "
                 f"msg: {str(self.msg)}]")
 
@@ -374,29 +355,29 @@ class Action:
         """Returns whether this action can be triggered internally (inner readiness flag)."""
         return self.inner
 
-    def set_timeout(self, timeout: float) -> None:
-        """Sets the timeout to a custom value."""
-        self.__timeout = timeout
+    def set_timeout(self, retry_timeout: float) -> None:
+        """Sets the retry_timeout to a custom value."""
+        self.__action_retry_timeout = retry_timeout
 
     def set_default_timeout(self) -> None:
-        """Sets the timeout to the class-level default value (``Custom.DEFAULT_TIMEOUT``)."""
-        self.__timeout = Custom.DEFAULT_TIMEOUT
+        """Sets the retry_timeout to the class-level default value (``Custom.DEFAULT_TIMEOUT``)."""
+        self.__action_retry_timeout = Custom.DEFAULT_TIMEOUT
 
     def is_pedantic(self) -> bool:
-        """Checks if a timeout has been configured for the Custom.
+        """Checks if a retry_timeout has been configured for the Custom.
 
         Returns:
-            A boolean indicating if a timeout is set.
+            A boolean indicating if a retry_timeout is set.
         """
-        return self.__timeout > 0
+        return self.__action_retry_timeout > 0
 
     def get_total_time(self) -> float | str:
         """Returns the total execution time configured for this action (0 means no limit)."""
-        return self.__total_time
+        return self.__action_max_duration
 
     def get_timeout(self) -> float | str:
-        """Returns the timeout configured for this action (0 means no timeout)."""
-        return self.__timeout
+        """Returns the retry_timeout configured for this action (0 means no retry_timeout)."""
+        return self.__action_retry_timeout
 
     def get_delay(self) -> float | str:
         """Returns the delay configured for this action (0 means no delay)."""
@@ -409,15 +390,15 @@ class Action:
             A list containing the action's properties.
         """
         total_time = 0.
-        timeout = 0.
+        retry_timeout = 0.
         delay = 0.
-        if isinstance(self.__total_time, str) or self.__total_time > 0:
-            total_time = self.__total_time
-        if isinstance(self.__timeout, str) or self.__timeout > 0.:
-            timeout = self.__timeout
+        if isinstance(self.__action_max_duration, str) or self.__action_max_duration > 0:
+            total_time = self.__action_max_duration
+        if isinstance(self.__action_retry_timeout, str) or self.__action_retry_timeout > 0.:
+            retry_timeout = self.__action_retry_timeout
         if isinstance(self.__delay, str) or self.__delay > 0.:
             delay = self.__delay
-        return [self.name, self.args, self.inner, self.outer, total_time, timeout, delay, self.msg]
+        return [self.name, self.args, self.inner, self.outer, total_time, retry_timeout, delay, self.msg]
 
     def to_dict(self) -> dict:
         """Converts the action's properties into a dict for easy serialization.
@@ -432,14 +413,14 @@ class Action:
                                    "xmlcharrefreplace").decode("ascii") if self.msg is not None else None,
             "ready": self.inner,
             "high_priority": self.is_high_priority,
-            "max_duration": self.__total_time,
-            "retry_timeout": self.__timeout,
-            "time_to_wait_before_running": self.__delay
+            Custom.SECONDS_ARG_NAMES[0]: self.__action_max_duration,
+            Custom.TIMEOUT_ARG_NAMES[0]: self.__action_retry_timeout,
+            Custom.DELAY_ARG_NAMES[0]: self.__delay
         }
 
     def same_as(self, name: str, args: dict | None) -> bool:
         """Compares the current action to a target action by name and arguments. It returns `True` if they are
-        considered the same, ignoring specific arguments like time or timeout.
+        considered the same, ignoring specific arguments like time or retry_timeout.
 
         Args:
             name: The name of the target Custom.
@@ -459,7 +440,7 @@ class Action:
         # action, so:
         # - if the current action is act(a=3, b=4), then it is the same_as(name='act', args={'a': 3})
         # - if the current action is act(a=3, b=4), then it is the same_as(name='act', args={'a': 3, 'b': 4, 'c': 5})
-        args_to_exclude = Custom.NOT_ALLOWED_IN_ACTION_SIGNATURE  # Some deprecated actions might still have them
+        args_to_exclude = Custom.RESERVED_IN_ACTION_KWARGS
         return (name == self.name and
                 self.check_provided_args(args) and
                 all(k in args_to_exclude or k not in self.args or self.args[k] == v for k, v in args.items()))
@@ -478,31 +459,29 @@ class Action:
             True if all arguments are valid, False otherwise (if `exception` is `False`).
         """
         if args is not None:
-            args_to_remove = []
-            deprecated_format = False
-            for p in Custom.SPECIAL_DEPRECATED_CASES_PREFIXES:
-                if self.name.startswith(p):
-                    deprecated_format = True
-                    break
-            for arg_name in args.keys():
-                if arg_name in Custom.NOT_ALLOWED_IN_ACTION_SIGNATURE:
-                    # if deprecated_format:
-                    #    continue
+            for k in list(args.keys()):
+                if k in Custom.HSM_TRANSIT_META_NAMES:
                     if remove_special_arguments:
-                        args_to_remove.append(arg_name)
-                    else:
-                        if exception:
-                            raise ValueError(f"Parameter {arg_name} has a private name and cannot be used in action"
-                                             f" {self.name}")
-                        else:
-                            return False
-                elif arg_name not in self.param_list:
-                    if exception:
-                        raise ValueError(f"Unknown parameter {arg_name} for action {self.name}")
+                        del args[k]
+                    elif exception:
+                        raise ValueError(f"Parameter {k} is not a valid param for action"
+                                         f" {self.name} (it is a private HSM transit meta name)")
                     else:
                         return False
-            for arg_name in args_to_remove:
-                del args[arg_name]
+                elif k in Custom.WIRE_SENTINEL_NAMES or k in Custom.INTERACTION_INJECT_NAMES:
+                    if exception:
+                        raise ValueError(f"Parameter {k} is not a valid param for action"
+                                         f" {self.name} (it is reserved)")
+                    else:
+                        return False
+                elif k in Custom.INTERACTION_FIELD_NAMES:
+                    continue  # Skipping
+                elif k not in self.param_list:
+                    if exception:
+                        raise ValueError(f"Parameter {k} is not a valid param for action"
+                                         f" {self.name} (it is not part of the action signature)")
+                    else:
+                        return False
         return True
 
     def set_wildcards(self, wildcards: dict[str, str | float | int] | None) -> None:
@@ -583,7 +562,34 @@ class Action:
                 return None
         return actual_params
 
-    get_list_of_requests = get_list_of_interactions  # Backward compatibility
+    def __build_system_interaction(self) -> None:
+        """Build (or rebuild) self.system_interaction reflecting current self.args.
+
+        If self.args contains any interaction-shaped keys (`Custom.INTERACTION_FIELD_NAMES`), the new
+        interaction is populated with those fields and will be register_lazy-ed on first dispatch
+        (see `__call__`). The action body may or may not read from `interaction` — that's
+        independent; the framework uses the interaction's metadata regardless."""
+        interaction_kwargs = {k: self.args[k] for k in Custom.INTERACTION_FIELD_NAMES
+                              if k in self.args and k not in self.param_list}
+        self._copy_sys_on_register = bool(interaction_kwargs.pop("copy_sys", False))
+
+        action_kwargs = {k: v for k, v in self.args.items() if k not in interaction_kwargs}
+
+        if "id" not in interaction_kwargs and "forced_uuid" not in interaction_kwargs:
+            interaction_kwargs["id"] = Custom.SYSTEM_INTERACTION_ID
+        if "target" not in interaction_kwargs:
+            interaction_kwargs["target"] = Custom.SYSTEM_INTERACTION_LABEL
+
+        self.system_interaction = Interaction(
+            requester=Custom.SYSTEM_INTERACTION_LABEL,
+            action_name=self.name,
+            action_kwargs=action_kwargs,
+            **interaction_kwargs,
+        )
+        self.system_interaction.set_action_ref(self)
+        self._lazy_registered = False
+        self._must_lazy_register = (len(interaction_kwargs) > 0 and
+                                    (self.system_interaction.streams or self.system_interaction.num_steps > 0))
 
     def __action_name_to_callable(self, action_name: str) -> Any | None:
         """A private helper method that resolves a string action name into a callable method on the `actionable`
@@ -613,37 +619,48 @@ class Action:
 
         # Ensuring those *specially handled* arguments are not present in the method signature (they can only be
         # present in the kwargs used to call the function)
-        deprecated_hp = any([self.name.startswith(p) for p in Custom.SPECIAL_DEPRECATED_CASES_PREFIXES])
+        # Exceptions:
+        # - Some actions are special, and some arguments must be allowed to them (e.g., send(action_kwargs)).
+        # - The INTERACTION_INJECT_NAMES must be allowed here, since it is natural for an action to have the
+        # interaction argument somewhere.
+        error_msg = ""
         for p in self.param_list:
-            if p in Custom.NOT_ALLOWED_IN_ACTION_SIGNATURE and not deprecated_hp:
-                log.user(f"Action {self.name} includes argument {p} in its signature: "
-                         f"this is a special argument that is automatically handled, and cannot be "
-                         f"included in the function signature (change its name).")
+            if p in Custom.HSM_TRANSIT_META_NAMES:
+                error_msg = f"{p} is HSM-transit metadata, cannot be a body param"
+            elif p in Custom.WIRE_SENTINEL_NAMES and self.name not in Custom.SPECIAL_ACTION_NAMES:
+                error_msg = f"{p} is a framework-private name, only {list(Custom.SPECIAL_ACTION_NAMES)} may use it"
+        if len(error_msg) > 0:
+            log.critical(f"Action {self.name} includes and argument that is problematic: {error_msg}")
 
-    def __apply_wildcards_to_args(self, args: dict | None = None, in_place: bool = True) -> dict:
-        """A private helper method that replaces placeholder values (wildcards) in given action's arguments with their
-        actual, concrete values. It handles both single-value and list-based wildcards.
-        """
+    def __apply_wildcards_to_args(self, args: dict | None = None, in_place: bool = True):
+        """Replace placeholder values (wildcards) in action arguments with their concrete values.
+        Handles single values, lists, and nested dicts (so an arg like
+        `{"streams": {"stdin": ["<world>:all"]}}` is fully expanded)."""
         if not in_place:
             args = copy.deepcopy(args)
 
-        # Applying wildcard-suggested replacements
-        for wildcard_from, wildcard_to in self.wildcards.items():
-
-            # ... to arguments
-            for k, v in args.items():
-                if not isinstance(wildcard_to, str):
-                    if wildcard_from == v:
-                        args[k] = wildcard_to
+        def _replace(value):
+            for wildcard_from, wildcard_to in self.wildcards.items():
+                if isinstance(wildcard_to, str):
+                    if isinstance(value, str) and wildcard_from in value:
+                        value = value.replace(wildcard_from, wildcard_to)
                 else:
-                    if isinstance(v, list):
-                        for i, vv in enumerate(v):
-                            if isinstance(vv, str) and wildcard_from in vv:
-                                v[i] = vv.replace(wildcard_from, wildcard_to)
-                    elif isinstance(v, str):
-                        if wildcard_from in v:
-                            args[k] = v.replace(wildcard_from, wildcard_to)
+                    if value == wildcard_from:
+                        return wildcard_to
+            return value
 
+        def _walk(node):
+            if isinstance(node, dict):
+                for k in list(node.keys()):
+                    node[k] = _walk(node[k])
+                return node
+            if isinstance(node, list):
+                for i in range(len(node)):
+                    node[i] = _walk(node[i])
+                return node
+            return _replace(node)
+
+        _walk(args)
         return args
 
     def apply_wildcards(self) -> None:
@@ -668,12 +685,20 @@ class Action:
                 self.msg = self.msg.replace(wildcard_from, str(wildcard_to))
 
             # ... to the rest
-            if self.__total_time_with_wildcard is not None and wildcard_from in self.__total_time_with_wildcard:
-                self.__total_time = float(self.__total_time_with_wildcard.replace(wildcard_from, str(wildcard_to)))
-            if self.__timeout_with_wildcard is not None and wildcard_from in self.__timeout_with_wildcard:
-                self.__timeout = float(self.__timeout_with_wildcard.replace(wildcard_from, str(wildcard_to)))
+            if (self.__action_max_duration_with_wildcard is not None and
+                    wildcard_from in self.__action_max_duration_with_wildcard):
+                self.__action_max_duration = (
+                    float(self.__action_max_duration_with_wildcard.replace(wildcard_from, str(wildcard_to))))
+            if (self.__action_retry_timeout_with_wildcard is not None and
+                    wildcard_from in self.__action_retry_timeout_with_wildcard):
+                self.__action_retry_timeout = (
+                    float(self.__action_retry_timeout_with_wildcard.replace(wildcard_from, str(wildcard_to))))
             if self.__delay_with_wildcard is not None and wildcard_from in self.__delay_with_wildcard:
                 self.__delay = float(self.__delay_with_wildcard.replace(wildcard_from, str(wildcard_to)))
+
+        # Now that wildcards have been resolved in self.args, rebuild the system_interaction so any
+        # streams / num_steps / etc. reflect the concrete (post-wildcard) values.
+        self.__build_system_interaction()
 
     def __guess_total_time(self, args) -> None:
         """A private helper method that attempts to determine the total execution time for an action by looking for a
@@ -685,20 +710,20 @@ class Action:
         for arg_name in Custom.SECONDS_ARG_NAMES:
             if arg_name in args:
                 try:
-                    self.__total_time = max(float(args[arg_name]), 0.)
-                    self.__total_time_with_wildcard = None
+                    self.__action_max_duration = max(float(args[arg_name]), 0.)
+                    self.__action_max_duration_with_wildcard = None
                 except ValueError:
                     if isinstance(args[arg_name], str):
-                        self.__total_time = str(args[arg_name])
-                        self.__total_time_with_wildcard = str(args[arg_name])
+                        self.__action_max_duration = str(args[arg_name])
+                        self.__action_max_duration_with_wildcard = str(args[arg_name])
                     else:
-                        self.__total_time = -1.
+                        self.__action_max_duration = -1.
                     pass
                 break
 
     def __guess_timeout(self, args) -> None:
-        """A private helper method that attempts to determine the timeout duration for an action by looking for a
-        'timeout' argument.
+        """A private helper method that attempts to determine the retry_timeout duration for an action by looking for a
+        'retry_timeout' argument.
 
         Args:
             args: The dictionary of arguments to inspect.
@@ -706,14 +731,14 @@ class Action:
         for arg_name in Custom.TIMEOUT_ARG_NAMES:
             if arg_name in args:
                 try:
-                    self.__timeout = max(float(args[arg_name]), 0.)
-                    self.__timeout_with_wildcard = None
+                    self.__action_retry_timeout = max(float(args[arg_name]), 0.)
+                    self.__action_retry_timeout_with_wildcard = None
                 except ValueError:
                     if isinstance(args[arg_name], str):
-                        self.__timeout = str(args[arg_name])
-                        self.__timeout_with_wildcard = str(args[arg_name])
+                        self.__action_retry_timeout = str(args[arg_name])
+                        self.__action_retry_timeout_with_wildcard = str(args[arg_name])
                     else:
-                        self.__timeout = -1.
+                        self.__action_retry_timeout = -1.
                 break
 
     def __guess_delay(self, args) -> None:
@@ -825,7 +850,7 @@ class ActionInteractionList:
                 interaction.by_requester_insertion_order_id = -1
 
     def remove_due_to_timeout(self, timeout_secs: float) -> None:
-        """Removes all interactions that have been waiting longer than the specified timeout.
+        """Removes all interactions that have been waiting longer than the specified retry_timeout.
 
         Args:
             timeout_secs: The maximum age in seconds; older interactions are removed.

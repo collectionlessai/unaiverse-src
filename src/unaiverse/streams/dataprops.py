@@ -520,6 +520,22 @@ class DataProps:
         """
         self.pubsub = pubsub
 
+    def set_delta(self, delta: float) -> None:
+        """Sets a new delta (offset between two consecutive 'set'-like operations) for the stream.
+
+        Args:
+            delta: The new delta (float).
+        """
+        self.delta = delta
+
+    def set_stream_to_proc_transforms(self, t):
+        self.stream_to_proc_transforms = t
+        self.__original_stream_to_proc_transforms = t
+
+    def set_proc_to_stream_transforms(self, t):
+        self.proc_to_stream_transforms = t
+        self.__original_proc_to_stream_transforms = t
+
     def is_tensor(self) -> bool:
         """Checks if the data type is 'tensor'.
 
@@ -850,11 +866,11 @@ class DataProps:
         """
         return self.tensor_labels is not None and len(self.tensor_labels) > 0
 
-    def to_text(self, data: torch.Tensor | str, ignore_raw_tensors: bool = False):
+    def to_text(self, data: torch.Tensor | Image.Image | str, ignore_raw_tensors: bool = False):
         """Converts the tensor data into a text-based representation exploiting the given labels and the labeling rule.
 
         Args:
-            data (torch.Tensor or str): The data tensor to convert into text (if a string, then pass-through only).
+            data (torch.Tensor or Image.Image or str): The data to convert into text (if a string, then pass-through).
             ignore_raw_tensors (bool): Default False. If True, only tensor with labels will be considered.
 
         Returns:
@@ -906,6 +922,7 @@ class DataProps:
                     return ", ".join(self.tensor_labels[j] for j in jj.tolist())
                 else:
                     return None
+            return None
 
         elif self.is_text():
             if self.proc_to_stream_transforms is None:
@@ -995,9 +1012,13 @@ class DataProps:
                         if isinstance(text_to_tensor_transform, PreTrainedTokenizerBase):
                             return text_to_tensor_transform(data, return_tensors='pt')['input_ids'].to(device)  # Tok
                         elif isinstance(text_to_tensor_transform, dict):
-                            return torch.tensor(text_to_tensor_transform[data]
-                                                if data in text_to_tensor_transform else len(text_to_tensor_transform),
-                                                dtype=torch.long, device=device).view(1, -1)  # Warning batch size 1
+                            tensor = torch.tensor(
+                                text_to_tensor_transform[data] if data in text_to_tensor_transform else len(
+                                    text_to_tensor_transform), dtype=torch.long, device=device)
+                            if not targets or tensor.ndim > 1:
+                                return tensor.view(1, -1)  # Warning batch size 1
+                            else:
+                                return tensor.view(-1)  # No batch size for targets, just a 1D vector with IDS
                         else:
                             return text_to_tensor_transform(data).to(device)  # Custom callable function
                     else:
@@ -1364,6 +1385,3 @@ class TensorLabels:
         else:
             self.indices = None
 
-
-# Backward compatibility alias (Deprecated)
-Data4Proc = StreamType

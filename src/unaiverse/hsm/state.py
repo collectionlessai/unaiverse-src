@@ -31,7 +31,7 @@ class State:
             name: The unique name of the state.
             idx: A unique ID for the state.
             action: An optional `Action` object to be executed when the state is entered.
-            waiting_time: The number of seconds to wait before the state can transition.
+            waiting_time: umber of seconds to wait in the current state before acting.
             blocking: A boolean indicating if the state blocks execution until a condition is met.
             msg: An optional message associated with the state.
         """
@@ -152,7 +152,7 @@ class State:
             "msg": self.msg.encode("ascii",
                                    "xmlcharrefreplace").decode("ascii") if self.msg is not None else None,
             "blocking": self.blocking,
-            "time_to_wait_for_interactions": self.waiting_time
+            Custom.TIME_TO_WAIT_BEFORE_ACTING_ARG_NAMES[0]: self.waiting_time
         }
 
     def has_action(self) -> bool:

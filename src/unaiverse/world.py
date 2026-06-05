@@ -27,7 +27,7 @@ class World(AgentBasics):
 
     def __init__(self, world_folder: str, merge_flat_stream_labels: bool = False,
                  stats: Stats | None = None) -> None:
-        """Initialises a World object as a special agent with no processor or behaviour.
+        """Initializes a World object as a special agent with no processor or behaviour.
 
         Args:
             world_folder: Path to the world folder containing per-role behaviour JSON files
@@ -46,6 +46,8 @@ class World(AgentBasics):
         self.proc = None
         self.proc_inputs = []  # Do not set it to None
         self.proc_outputs = []  # Do not set it to None
+        self.proc_opts = {}
+        self.proc_optional_inputs = []
         self.compat_in_streams = None
         self.compat_out_streams = None
 
@@ -107,7 +109,7 @@ class World(AgentBasics):
 
         if new_role != cur_role:
             self._node_conn.set_role(peer_id, new_role)
-            log("Telling an agent that his role changed")
+            log.misc("Telling an agent that his role changed")
             if not (await self._node_conn.send(peer_id, channel_trail=None,
                                                content={'peer_id': peer_id, 'role': new_role,
                                                         'default_behav':

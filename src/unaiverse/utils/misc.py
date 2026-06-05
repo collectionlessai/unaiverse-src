@@ -648,7 +648,7 @@ class PolicyFilterDelayAction:
                  policy_filter_opts: dict) -> tuple[int, object]:
         """Applies the timing-based filter to the selected policy action.
 
-        For ``do_gen`` and ``do_learn`` actions, defers execution until the configured
+        Defers execution until the configured
         wait time has elapsed since the action was first selected.
 
         Args:

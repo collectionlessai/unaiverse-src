@@ -17,6 +17,7 @@ import os
 import json
 import html
 import graphviz
+from typing import IO
 import importlib.resources
 from unaiverse.custom import Custom
 from collections.abc import Callable
@@ -255,7 +256,8 @@ class HybridStateMachine:
             if state_obj.action is not None:
                 state_obj.action.actionable = obj
 
-    def set_policy(self, policy_fcn: Callable[[list[Action]], tuple[int, Interaction | None]]) -> None:
+    def set_policy(self, policy_fcn: Callable[
+        [int, Interaction | None, list[Action], dict], tuple[int, Interaction | None]] | None) -> None:
         """Sets the policy to be used in selecting what action to perform in the current state.
 
         Args:
@@ -266,7 +268,7 @@ class HybridStateMachine:
         self.policy = policy_fcn
 
     def set_policy_filter(self, filter_fcn: Callable[
-        [int, Interaction | None, list[Action], dict], tuple[int, Interaction | None]],
+        [int, Interaction | None, list[Action], dict], tuple[int, Interaction | None]] | None,
                           filter_fcn_opts: dict) -> None:
         """Sets the filter function that will overload the decision of the policy.
 
@@ -774,7 +776,7 @@ class HybridStateMachine:
         new_action = Action(name=action, args=args, idx=act_id, actionable=self.actionable, ready=ready, msg=msg,
                             avoid_changing_ready=avoid_changing_ready,
                             teleport=teleport, high_priority=high_priority,
-                            total_time=total_time, timeout=timeout, delay=delay)
+                            max_duration=total_time, retry_timeout=timeout, delay=delay)
         self.transitions[from_state][to_state].append(new_action)
         self.__id_to_action.append(new_action)
 
@@ -1220,20 +1222,6 @@ class HybridStateMachine:
         Returns:
             True if the request was accepted and queued, False otherwise.
         """
-
-        # Backward compatibility
-        if interaction is None:
-            interaction = Interaction(
-                action_name=kwargs.get('action_name', None),
-                action_kwargs=kwargs.get('args', None),
-                from_state=kwargs.get('from_state', None),
-                to_state=kwargs.get('to_state', None),
-                requester=kwargs.get('signature', None),
-                target="self",
-                timeout=-1.,
-                forced_uuid=kwargs.get('forced_uuid', "do_not_force"),
-                id=kwargs.get('id', "random"))
-
         log.misc(f"Received an action request with this interaction: {interaction}", state=self.get_state_name())
 
         # Getting data
@@ -1262,7 +1250,8 @@ class HybridStateMachine:
             action_list = self.transitions[from_state][to_state]
             for i, action in enumerate(action_list):
                 if action.same_as(name=action_name, args=args):
-                    log.misc(f"Requested action found in state {from_state}, adding interaction to the queue",
+                    log.misc(f"Requested action ({action_name}) found in state {from_state}, "
+                             f"adding interaction to the queue",
                              state=self.get_state_name())
 
                     # Action found, let's save the suggestion
@@ -1273,7 +1262,9 @@ class HybridStateMachine:
                         return False  # If the action does not support interactions
 
         # If the action was not found
-        log.error("Requested action not found", state=self.get_state_name())
+        log.error(f"Requested action ({action_name}) not found "
+                  f"(from_state={from_state}, cur_state={self.get_state_name()})",
+                  state=self.get_state_name())
         return False
 
     def wait_for_all_actions_that_start_with(self, prefix: str) -> None:
@@ -1327,7 +1318,7 @@ class HybridStateMachine:
             file.write(str(self))
         return True
 
-    def load(self, filename_or_hsm_as_string: str | io.TextIOWrapper) -> 'HybridStateMachine':
+    def load(self, filename_or_hsm_as_string: str | io.TextIOWrapper | IO[str]) -> 'HybridStateMachine':
         """Loads a state machine's configuration from a JSON file or a JSON string. It reconstructs the states,
         actions, and transitions from the serialized data. This method is critical for persistence and for loading
         pre-defined state machine models.
@@ -1389,7 +1380,11 @@ class HybridStateMachine:
             act_args = state_action.get("action_kwargs", {})
             blocking = state_action.get("blocking", True)
             msg = state_action.get("msg", None)
-            waiting_time = state_action.get("time_to_wait_for_interactions", 0.)
+            waiting_time = 0.
+            for k in Custom.TIME_TO_WAIT_BEFORE_ACTING_ARG_NAMES:
+                if k in state_action:
+                    waiting_time = state_action[k]
+                    break
 
             self.add_state(state, action=act_name, args=act_args,
                            waiting_time=waiting_time, blocking=blocking, msg=msg)
@@ -1405,9 +1400,21 @@ class HybridStateMachine:
                 msg = action_dict.get("msg", None)
                 act_ready = action_dict.get("ready", True)
                 high_priority = action_dict.get("high_priority", False)
-                total_time = action_dict.get("max_duration", 0.)
-                timeout = action_dict.get("retry_timeout", 0.)
-                delay = action_dict.get("time_to_wait_before_running", 0.)
+                total_time = 0.
+                for k in Custom.SECONDS_ARG_NAMES:
+                    if k in action_dict:
+                        total_time = action_dict[k]
+                        break
+                timeout = 0.
+                for k in Custom.TIMEOUT_ARG_NAMES:
+                    if k in action_dict:
+                        timeout = action_dict[k]
+                        break
+                delay = 0.
+                for k in Custom.DELAY_ARG_NAMES:
+                    if k in action_dict:
+                        delay = action_dict[k]
+                        break
 
                 self.add_transit(from_state, to_state,
                                  action=act_name, args=act_args, ready=act_ready, msg=msg,
@@ -1431,9 +1438,21 @@ class HybridStateMachine:
                     msg = action_dict.get("msg", None)
                     act_ready = action_dict.get("ready", True)
                     high_priority = action_dict.get("high_priority", False)
-                    total_time = action_dict.get("max_duration", 0.)
-                    timeout = action_dict.get("retry_timeout", 0.)
-                    delay = action_dict.get("time_to_wait_before_running", 0.)
+                    total_time = 0.
+                    for k in Custom.SECONDS_ARG_NAMES:
+                        if k in action_dict:
+                            total_time = action_dict[k]
+                            break
+                    timeout = 0.
+                    for k in Custom.TIMEOUT_ARG_NAMES:
+                        if k in action_dict:
+                            timeout = action_dict[k]
+                            break
+                    delay = 0.
+                    for k in Custom.DELAY_ARG_NAMES:
+                        if k in action_dict:
+                            delay = action_dict[k]
+                            break
 
                     # Looping over all states
                     for from_state_obj in self.__id_to_state:
@@ -1465,9 +1484,18 @@ class HybridStateMachine:
                     msg = action_dict.get("msg", None)
                     act_ready = action_dict.get("ready", True)
                     high_priority = action_dict.get("high_priority", False)
-                    total_time = action_dict.get("max_duration", 0.)
-                    timeout = action_dict.get("retry_timeout", 0.)
-                    delay = action_dict.get("time_to_wait_before_running", 0.)
+                    total_time = 0.
+                    for k in Custom.SECONDS_ARG_NAMES:
+                        if k in action_dict:
+                            total_time = action_dict[k]
+                    timeout = 0.
+                    for k in Custom.TIMEOUT_ARG_NAMES:
+                        if k in action_dict:
+                            timeout = action_dict[k]
+                    delay = 0.
+                    for k in Custom.DELAY_ARG_NAMES:
+                        if k in action_dict:
+                            delay = action_dict[k]
 
                     self.add_transit(from_state, to_state,
                                      action=act_name, args=act_args, ready=act_ready, msg=msg,
@@ -1608,13 +1636,13 @@ class HybridStateMachine:
                     special_args = {}
                     if isinstance(action.get_total_time(), str) or action.get_total_time() > 0:
                         total_time = action.get_total_time()
-                        special_args['max_duration'] = total_time
+                        special_args[Custom.SECONDS_ARG_NAMES[0]] = total_time
                     if isinstance(action.get_timeout(), str) or action.get_timeout() > 0.:
                         timeout = action.get_timeout()
-                        special_args['retry_timeout'] = timeout
+                        special_args[Custom.TIMEOUT_ARG_NAMES[0]] = timeout
                     if isinstance(action.get_delay(), str) or action.get_delay() > 0.:
                         delay = action.get_delay()
-                        special_args['delay'] = delay
+                        special_args[Custom.DELAY_ARG_NAMES[0]] = delay
 
                     if len(special_args) > 0:
                         s += "\n["

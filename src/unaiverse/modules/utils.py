@@ -40,19 +40,20 @@ def has_human_processor(agent: object) -> bool:
     Returns:
         True if the agent's processor module is a HumanModule, False otherwise.
     """
-    return agent.proc is not None and isinstance(agent.proc.module, HumanModule)
+    assert hasattr(agent, "proc")
+    return getattr(agent, "proc") is not None and isinstance(getattr(agent, "proc").module, HumanModule)
 
 
 def transforms_factory(trans_type: str, add_batch_dim: bool = True,
-                       return_inverse: bool = False) -> transforms.Compose:
+                       return_inverse: bool = False) -> transforms.Compose | None:
     """Builds and returns a torchvision transform pipeline for the given type.
 
     Args:
         trans_type: A string identifying the desired transform.  Supported values are
-            ``"rgb<N>"`` / ``"gray<N>"`` (resize + center-crop to ``<N>`` pixels, with normalization),
-            ``"rgb-no_norm<N>"`` / ``"gray-no_norm<N>"`` (resize + center-crop, no normalization),
-            ``"rgb"`` / ``"gray"`` (full-image with normalization),
-            ``"rgb-no_norm"`` / ``"gray-no_norm"`` (full-image, no normalization), and
+            ``"rgb<N>"`` / ``"gray<N>"`` (resize + center-crop to ``<N>`` pixels, with normalization).
+            ``"rgb-no_norm<N>"`` / ``"gray-no_norm<N>"`` (resize + center-crop, no normalization).
+            ``"rgb"`` / ``"gray"`` (full-image with normalization).
+            ``"rgb-no_norm"`` / ``"gray-no_norm"`` (full-image, no normalization).
             ``"gray_mnist"`` (MNIST-specific 28×28 grayscale pipeline).
         add_batch_dim: If True, appends an ``unsqueeze(0)`` step to the forward transform and
             inserts a ``squeeze(0)`` step at the start of the inverse transform (default: True).
@@ -60,7 +61,7 @@ def transforms_factory(trans_type: str, add_batch_dim: bool = True,
             forward transform (default: False).
 
     Returns:
-        The requested ``transforms.Compose`` pipeline.
+        The requested ``transforms.Compose`` pipeline (or None, if the type is unknown).
     """
     supported_types = {"rgb*",          "gray*",
                        "rgb-no_norm*",  "gray-no_norm*",
@@ -142,7 +143,7 @@ def transforms_factory(trans_type: str, add_batch_dim: bool = True,
             transforms.CenterCrop(num),
             transforms.PILToTensor(),  # Convert PIL to tensor (1, H, W), uint [0,255]
         ])
-        inverse_trans = transforms.ToPILImage()
+        inverse_trans = transforms.Compose([transforms.ToPILImage()])
     elif trans_type == "rgb":
         trans = transforms.Compose([
             transforms.Lambda(lambda img: img.convert("RGB") if img.mode != "RGB" else img),  # Ensure 3 channels
@@ -197,7 +198,7 @@ def transforms_factory(trans_type: str, add_batch_dim: bool = True,
             transforms.ToPILImage()
         ])
 
-    if add_batch_dim:
+    if add_batch_dim and (trans is not None and inverse_trans is not None):
         trans.transforms.append(transforms.Lambda(lambda x: x.unsqueeze(0)))
         inverse_trans.transforms.insert(0, transforms.Lambda(lambda x: x.squeeze(0)))
 
@@ -264,22 +265,24 @@ def get_proc_inputs_and_proc_outputs_for_rnn(u_shape: torch.Size | tuple, du_dim
         u_shape = tuple(u_shape)
     proc_inputs = [
         StreamType(data_type="tensor", tensor_shape=(None,) + u_shape, tensor_dtype=torch.float32,
-                   pubsub=False, private_only=True),
+                   pubsub=False, private_only=False),
         StreamType(data_type="tensor", tensor_shape=(None, du_dim,), tensor_dtype=torch.float32,
-                   pubsub=False, private_only=True)
+                   pubsub=False, private_only=False)
     ]
     proc_outputs = [
         StreamType(data_type="tensor", tensor_shape=(None, y_dim), tensor_dtype=torch.float32,
-                   pubsub=False, private_only=True)
+                   pubsub=False, private_only=False)
     ]
     return proc_inputs, proc_outputs
 
 
-def get_proc_inputs_and_proc_outputs_for_image_classification(y_dim: int) -> tuple[list, list]:
+def get_proc_inputs_and_proc_outputs_for_image_classification(y_dim: int = -1, trans_forms=None) \
+        -> tuple[list[StreamType], list[StreamType]]:
     """Creates Stream descriptors for the inputs and output of an image-classification processor.
 
     Args:
         y_dim: Number of output classes.  Pass ``-1`` to default to 1000 (ImageNet).
+        trans_forms: Stream to processor transforms, if any (Default: None).
 
     Returns:
         A tuple ``(proc_inputs, proc_outputs)`` where each element is a list of
@@ -287,9 +290,9 @@ def get_proc_inputs_and_proc_outputs_for_image_classification(y_dim: int) -> tup
     """
     if y_dim == -1:
         y_dim = 1000  # Assuming ImageNet-trained models
-    proc_inputs = [StreamType(data_type="img", pubsub=False, private_only=True)]
+    proc_inputs = [StreamType(data_type="img", pubsub=False, private_only=False, stream_to_proc_transforms=trans_forms)]
     proc_outputs = [StreamType(data_type="tensor", tensor_shape=(None, y_dim), tensor_dtype=torch.float32,
-                               pubsub=False, private_only=True)]
+                               pubsub=False, private_only=False)]
     return proc_inputs, proc_outputs
 
 
@@ -351,7 +354,9 @@ class MultiIdentity(torch.nn.Module):
     def __init__(self) -> None:
         super().__init__()
 
-    def forward(self, *args, **kwargs) -> object | tuple:
+    # noinspection PyMethodMayBeStatic
+    # noinspection PyUnusedLocal
+    def forward(self, *args: object, **kwargs: object):
         """Returns the single input unchanged, or all positional inputs as a tuple.
 
         Args:
@@ -373,6 +378,8 @@ class HumanModule(torch.nn.Module):
     def __init__(self) -> None:
         super().__init__()
 
+    # noinspection PyMethodMayBeStatic
+    # noinspection PyUnusedLocal
     def forward(self, text: str | None = None, img: Image.Image | None = None,
                 whatever: object | None = None) -> tuple[str | None, Image.Image | None]:
         """Returns the text and image inputs as-is (placeholder for human interaction).
@@ -414,11 +421,13 @@ class LoggerModule(torch.nn.Module):
 
     def __setup_logger(self) -> None:
         """Creates the output directory and Initializes the file-based logger handler."""
-        os.makedirs(os.path.abspath(os.path.dirname(self.log_file)), exist_ok=True)
-        self.__handler = logging.FileHandler(self.log_file, mode='w')  # 'w' mode overwrites the file
-        formatter = logging.Formatter('%(message)s')
-        self.__handler.setFormatter(formatter)
-        self._logger.addHandler(self.__handler)
+
+        if self.log_file is not None:
+            os.makedirs(os.path.abspath(os.path.dirname(self.log_file)), exist_ok=True)
+            self.__handler = logging.FileHandler(self.log_file, mode='w')  # 'w' mode overwrites the file
+            formatter = logging.Formatter('%(message)s')
+            self.__handler.setFormatter(formatter)
+            self._logger.addHandler(self.__handler)
         self._initialized = True
 
     def forward(self, text: str, img: Image.Image | None = None) -> tuple[str | None, Image.Image | None]:
@@ -454,36 +463,112 @@ class ModuleWrapper(torch.nn.Module):
     """Wraps a torch.nn.Module with Stream-based input/output preprocessing and optional learning support."""
 
     def __init__(self,
-                 module: torch.nn.Module | None = None,
+                 module: torch.nn.Module | Callable,
                  proc_inputs: list[StreamType] | None = None,
                  proc_outputs: list[StreamType] | None = None,
                  proc_opts: dict | None = None,
                  seed: int = -1,
-                 agent: object = None) -> None:
+                 agent: object = None,
+                 device=None) -> None:
         """Initializes the ModuleWrapper.
 
         Args:
-            module: The torch.nn.Module to wrap (default: None).
+            module: The torch.nn.Module or callable object to wrap (default: None).
             proc_inputs: List of Stream objects describing the input types (default: None).
             proc_outputs: List of Stream objects describing the output types (default: None).
             proc_opts: Dictionary with keys ``"optimizer"`` and ``"losses"`` (default: None).
             seed: Random seed to fix before instantiation; negative values are ignored (default: -1).
             agent: The agent who owns this processor.
+            device: The device on which to run the processor (default: None).
         """
         super(ModuleWrapper, self).__init__()
-        self.device = None  # The device which is supposed to host the module
-        self.module = None  # The module itself
-        self.proc_inputs = proc_inputs  # The list of Stream objects describing the input types of the module
-        self.proc_outputs = proc_outputs  # The list of Stream objects describing the output types of the module
-        self.proc_opts = proc_opts
-        self.agent = agent
+        self.device = None
+        self.module: Callable | None = None
+        self.proc_inputs = None  # The list of Stream objects describing the input types of the module
+        self.proc_outputs = None  # The list of Stream objects describing the output types of the module
+        self.proc_opts = None
+        self.proc_optional_inputs = []
+        self.agent = None
+        self._has_first = False
+        self._has_last = False
+        self._sig_defaults = []
+        self._last_raw_outputs = None
 
         # Working
         set_seed(seed)
+
+        self.guess_device(device)
+        self.set_module(module)
+        self.set_proc_inputs_and_outputs(proc_inputs, proc_outputs)
+        self.set_proc_opts(proc_opts)
+        self.set_agent(agent)
+    
+    def guess_device(self, device):
         device_env = os.getenv("PROC_DEVICE", None)
         self.device = torch.device("cpu") if device_env is None else torch.device(device_env)
-        self.module = module.to(self.device) if module is not None else None
-        self.__last_raw_outputs = None
+
+        # Override if it was given
+        if device is not None:
+            self.device = torch.device(device) if isinstance(device, str) else device
+
+    def set_agent(self, agent):
+        self.agent = agent
+
+    def set_proc_inputs_and_outputs(self, proc_inputs, proc_outputs):
+        if proc_inputs is not None:
+            self.proc_inputs = proc_inputs
+            self.__refresh_proc_optional_inputs()  # rebuilds, truncating or padding as needed
+        if proc_outputs is not None:
+            self.proc_outputs = proc_outputs
+
+    def set_proc_opts(self, proc_opts):
+        if proc_opts is not None:
+            self.proc_opts = proc_opts
+
+    def set_module(self, mod: Callable | torch.nn.Module):
+
+        # Case 1: torch.nn.Module / object with .forward
+        if hasattr(mod, "forward") and callable(getattr(mod, "forward")):
+            sig = inspect.signature(mod.forward)
+        elif callable(mod):
+            sig = inspect.signature(mod)
+        else:
+            raise GenException("Invalid processor module, cannot guess the signature of the callable method, if any")
+
+        self.module = mod.to(self.device) if isinstance(mod, torch.nn.Module) else mod
+        self._has_first = "first" in sig.parameters  # B8: rename below
+        self._has_last = "last" in sig.parameters
+
+        # Cache the signature-derived defaults ONCE, excluding framework-handled kwargs and *args/**kwargs
+        # catch-alls. This is the canonical per-positional-data-arg default list of the wrapped module's forward.
+        framework_kwargs = {"first", "last"}
+        self._sig_defaults: list[dict] = []
+        for name, param in sig.parameters.items():
+            if name in framework_kwargs:
+                continue
+            if param.kind in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD):
+                continue
+            if param.default is not inspect.Parameter.empty:
+                self._sig_defaults.append({"has_default": True, "default_value": param.default})
+            else:
+                self._sig_defaults.append({"has_default": False, "default_value": None})
+
+        # Align proc_optional_inputs to current proc_inputs (if already known)
+        self.__refresh_proc_optional_inputs()
+
+    def __refresh_proc_optional_inputs(self) -> None:
+        """Rebuild `proc_optional_inputs` to be exactly parallel to `proc_inputs` (same length, same ordering).
+        Slices the cached signature defaults; pads with no-default if `proc_inputs` is longer than the
+        signature has data args."""
+        if self.proc_inputs is None:
+            # Until proc_inputs is set, expose the full signature defaults so __guess_proc_inputs/_outputs
+            # can still inspect them.
+            self.proc_optional_inputs = list(self._sig_defaults)
+            return
+        n = len(self.proc_inputs)
+        self.proc_optional_inputs = list(self._sig_defaults[:n])
+        while len(self.proc_optional_inputs) < n:
+            self.proc_optional_inputs.append({"has_default": False, "default_value": None})
 
     def forward(self, *args, **kwargs) -> tuple:
         """Preprocesses inputs, runs the wrapped module, and post-processes the outputs.
@@ -496,26 +581,29 @@ class ModuleWrapper(torch.nn.Module):
         Returns:
             A tuple of post-processed outputs, one per entry in ``proc_outputs``.
         """
+        assert self.module is not None
+        assert self.proc_inputs is not None
+        assert self.proc_outputs is not None
 
         # The forward signature expected by who calls this method is:
         # forward(self, *args, first: bool, last: bool, **kwargs)
         # so we have to discard 'first' and 'last' that are not used by an external module not designed for this library
-        if 'first' in kwargs:
+        if 'first' in kwargs and not self._has_first:
             del kwargs['first']
-        if 'last' in kwargs:
+        if 'last' in kwargs and not self._has_last:
             del kwargs['last']
-        self.__last_raw_outputs = None
+        self._last_raw_outputs = None
 
         # Preprocessing data
         args = [self.proc_inputs[i].check_and_preprocess(args[i], device=self.device)
                 for i in range(0, len(self.proc_inputs))]  # Don't try to build a tuple here, keep a list!
 
         # Calling the module
-        outputs = self.module.forward(*args, **kwargs)
-        self.__last_raw_outputs = outputs
+        outputs = self.module(*args, **kwargs)  # Forward
 
         if not isinstance(outputs, tuple):
             outputs = (outputs,)
+        self._last_raw_outputs = outputs
 
         # Postprocessing data (this does not affect the raw outputs, that might be used while learning)
         outputs = [self.proc_outputs[i].check_and_postprocess(outputs[i])
@@ -523,7 +611,7 @@ class ModuleWrapper(torch.nn.Module):
 
         return tuple(outputs)
 
-    def learn_backward(self, targets: list | None = None) -> list | bool:
+    def learn_backward(self, targets: list | None = None) -> list:
         """Runs a supervised or unsupervised backward pass and optimizer step.
 
         Args:
@@ -531,15 +619,14 @@ class ModuleWrapper(torch.nn.Module):
                 entries may be ``None`` (treated as unsupervised for that slot).
 
         Returns:
-            A list of per-output loss values if a backward pass was performed, or ``False``
-            if ``proc_opts`` contains no optimizer or losses.
+            A list of per-output loss values if a backward pass was performed.
         """
         if (self.proc_opts is None or len(self.proc_opts) == 0 or
-                ('losses' not in self.proc_opts and 'optimizer' not in self.proc_opts)):
-            return False
+                ('losses' not in self.proc_opts and 'optimizer' not in self.proc_opts) or self.proc_outputs is None):
+            return []
 
         loss_functions: list = self.proc_opts['losses']
-        optimizer: torch.optim.optimizer.Optimizer | None = self.proc_opts['optimizer']
+        optimizer: torch.optim.optimizer.Optimizer = self.proc_opts['optimizer']
 
         # Evaluating loss function(s), one for each processor output slot (they are set to 0. if no targets are there)
         if targets is not None and len(targets) > 0 and any(x is not None for x in targets):
@@ -550,14 +637,14 @@ class ModuleWrapper(torch.nn.Module):
                        for i in range(0, len(self.proc_outputs))]
 
             # Supervised or partly supervised learning
-            loss_values = [loss_fcn(self.__last_raw_outputs[i], targets[i]) if targets[i] is not None else
+            loss_values = [loss_fcn(self._last_raw_outputs[i], targets[i]) if targets[i] is not None else
                            torch.tensor(0., device=self.device)
                            for i, loss_fcn in enumerate(loss_functions)]
             loss = torch.stack(loss_values).sum()  # Sum of losses
         else:
 
             # Unsupervised learning
-            loss_values = [loss_fcn(self.__last_raw_outputs[i]) for i, loss_fcn in enumerate(loss_functions)]
+            loss_values = [loss_fcn(self._last_raw_outputs[i]) for i, loss_fcn in enumerate(loss_functions)]
             loss = torch.stack(loss_values).sum()  # Sum of losses
 
         # Learning step
@@ -566,7 +653,7 @@ class ModuleWrapper(torch.nn.Module):
         optimizer.step()
 
         # Teaching (for autoregressive models, expected to have attribute "y")
-        if hasattr(self.module, 'y'):
+        if targets is not None and hasattr(self.module, 'y'):
             self.module.y = targets[0]
 
         return loss_values
@@ -575,7 +662,7 @@ class ModuleWrapper(torch.nn.Module):
 class AgentProcessorChecker:
     """Validates and normalizes the processor-related attributes of an agent-like container object."""
 
-    def __init__(self, processor_container: object) -> None:
+    def __init__(self, agent: object) -> None:
         """Validates and normalizes processor attributes on the given container.
 
         Checks that ``processor_container`` exposes the required processor attributes, performs
@@ -584,40 +671,44 @@ class AgentProcessorChecker:
         The validated and completed values are written back onto ``processor_container``.
 
         Args:
-            processor_container: Any object that exposes ``proc``, ``proc_inputs``,
+            agent: Any object that exposes ``proc``, ``proc_inputs``,
                 ``proc_outputs``, ``proc_opts``, and ``proc_optional_inputs`` attributes.
         """
-        assert hasattr(processor_container, 'proc'), "Invalid processor container object"
-        assert hasattr(processor_container, 'proc_inputs'), "Invalid processor container object"
-        assert hasattr(processor_container, 'proc_outputs'), "Invalid processor container object"
-        assert hasattr(processor_container, 'proc_opts'), "Invalid processor container object"
-        assert hasattr(processor_container, 'proc_optional_inputs'), "Invalid processor container object"
+
+        # Right now, the processor has its own attributes, but they are also directly referenced from the agent object.
+        # In the future, we might drop the ones on the agent side.
+        assert hasattr(agent, 'proc'), "Invalid processor container (agent) object"
+        assert hasattr(agent, 'proc_inputs'), "Invalid processor container (agent) object"
+        assert hasattr(agent, 'proc_outputs'), "Invalid processor container (agent) object"
+        assert hasattr(agent, 'proc_opts'), "Invalid processor container (agent) object"
+        assert hasattr(agent, 'proc_optional_inputs'), "Invalid processor container (agent) object"
 
         # Getting processor-related info from the main object which collects processor and its properties
-        proc: torch.nn.Module = processor_container.proc
-        proc_inputs: list[StreamType] | None = processor_container.proc_inputs
-        proc_outputs: list[StreamType] | None = processor_container.proc_outputs
-        proc_opts: dict | None = processor_container.proc_opts
-        proc_optional_inputs: list | None = processor_container.proc_optional_inputs
+        proc: torch.nn.Module | ModuleWrapper | Callable | None = agent.proc
+        proc_inputs: list[StreamType] | list[str] | None = agent.proc_inputs
+        proc_outputs: list[StreamType] | list[str] | None = agent.proc_outputs
+        proc_opts: dict | None = agent.proc_opts
 
-        # Auto-wrap
-        if 'forward' in vars(processor_container) and isinstance(processor_container, torch.nn.Module):
-            proc = processor_container
+        # The agent itself could be a processor
+        if proc is None and callable(agent):
+            proc = agent
 
-        if not (proc is None or isinstance(proc, torch.nn.Module)):
-            raise GenException("Processor (proc) must be a torch.nn.Module")
+        if not (proc is None or isinstance_fcn(proc, torch.nn.Module) or isinstance_fcn(proc, ModuleWrapper) or
+                callable(proc)):
+            raise GenException("Processor (proc) must be either None or a torch.nn.Module, "
+                               "or a ModuleWrapper, or a callable object")
         if not ((proc_inputs is None or (
                 isinstance_fcn(proc_inputs, list) and (len(proc_inputs) == 0 or
                                                        (len(proc_inputs) > 0 and
                                                         isinstance_fcn(proc_inputs[0],
                                                                        (StreamType, str))))))):
-            raise GenException("Invalid proc_inputs: it must be None or a list of Stream/str")
+            raise GenException("Invalid proc_inputs: it must be None or a list of StreamType/str")
         if not ((proc_outputs is None or (
                 isinstance_fcn(proc_outputs, list) and (len(proc_outputs) == 0 or
                                                         (len(proc_outputs) > 0 and
                                                          isinstance_fcn(proc_outputs[0],
                                                                         (StreamType, str))))))):
-            raise GenException("Invalid proc_outputs: it must be None or a list of Stream/str")
+            raise GenException("Invalid proc_outputs: it must be None or a list of StreamType/str")
         if not (proc_opts is None or isinstance_fcn(proc_opts, dict)):
             raise GenException("Invalid proc_opts: it must be None or a dictionary")
 
@@ -643,105 +734,107 @@ class AgentProcessorChecker:
                         raise GenException(f"Invalid stream type {p}: {e}")
             proc_outputs = proc_outputs_copy
 
+        # From None to empty dictionary (proc_opts)
         if proc_opts is None:
             proc_opts = {}
 
-        # Saving as attributes
-        self.proc = proc
-        self.proc_inputs = proc_inputs
-        self.proc_outputs = proc_outputs
-        self.proc_opts = proc_opts
-        self.proc_optional_inputs = proc_optional_inputs
+        # Type checking
+        if proc_inputs is not None:
+            proc_inputs: list[StreamType]
+        if proc_outputs is not None:
+            proc_outputs: list[StreamType]
 
         # Dummy processor (if no processor was provided)
-        if self.proc is None:
-            if self.proc_inputs is None:
-                self.proc_inputs = [StreamType(data_type="all", pubsub=False, private_only=False)]
-            if self.proc_outputs is None:
-                self.proc_outputs = [StreamType(data_type="all", pubsub=False, private_only=False)]
-            self.proc_opts = {'optimizer': None, 'losses': [None] * len(self.proc_outputs)}
-            self.proc = ModuleWrapper(module=MultiIdentity(), proc_inputs=self.proc_inputs,
-                                      proc_outputs=self.proc_outputs, proc_opts=self.proc_opts,
-                                      agent=processor_container)
-            self.proc.device = torch.device("cpu")
+        if proc is None:
+            if proc_inputs is None:
+                proc_inputs: list[StreamType] = [StreamType(data_type="all", pubsub=False, private_only=False)]
+            if proc_outputs is None:
+                proc_outputs: list[StreamType] = [StreamType(data_type="all", pubsub=False, private_only=False)]
+            assert proc_outputs is not None
+            proc_opts = {'optimizer': None, 'losses': [None] * len(proc_outputs)}
+            proc = ModuleWrapper(module=MultiIdentity(), proc_inputs=proc_inputs,
+                                 proc_outputs=proc_outputs, proc_opts=proc_opts,
+                                 agent=agent, device=torch.device("cpu"))
         else:
 
-            # String telling it is a human
-            if isinstance(self.proc, str) and self.proc.lower() == "human":
-                self.proc_inputs = [StreamType(data_type="text", pubsub=False, private_only=False),
-                                    StreamType(data_type="img", pubsub=False, private_only=False)]
-                self.proc_outputs = [StreamType(data_type="text", pubsub=False, private_only=False),
-                                     StreamType(data_type="img", pubsub=False, private_only=False)]
-                self.proc = ModuleWrapper(module=HumanModule(), proc_inputs=self.proc_inputs,
-                                          proc_outputs=self.proc_outputs, agent=processor_container)
-                self.proc.device = torch.device("cpu")
+            # String telling it is a human converted to a ModuleWrapper with HumanModule processor
+            if isinstance(proc, str) and proc.lower().strip() == "human":
+                proc_inputs: list[StreamType] = [StreamType(data_type="text", pubsub=False, private_only=False),
+                                                 StreamType(data_type="img", pubsub=False, private_only=False)]
+                proc_outputs: list[StreamType] = [StreamType(data_type="text", pubsub=False, private_only=False),
+                                                  StreamType(data_type="img", pubsub=False, private_only=False)]
+                proc = ModuleWrapper(module=HumanModule(), proc_inputs=proc_inputs,
+                                     proc_outputs=proc_outputs, agent=agent, device=torch.device("cpu"))
 
-            # Wrapping to have the basic attributes (device)
-            elif not isinstance(self.proc, ModuleWrapper):
-                self.proc = ModuleWrapper(module=self.proc, proc_opts=self.proc_opts, proc_inputs=self.proc_inputs,
-                                          proc_outputs=self.proc_outputs, agent=processor_container)
-                self.proc.device = torch.device("cpu")
+            # Creating a ModuleWrapper with the given processor
+            elif not isinstance(proc, ModuleWrapper):
+                proc: torch.Module | Callable
+                proc = ModuleWrapper(module=proc, proc_opts=proc_opts, proc_inputs=proc_inputs,
+                                     proc_outputs=proc_outputs, agent=agent, device=torch.device("cpu"))
             else:
 
                 # If it is already a ModuleWrapper, we force the reference to the agent and the references to the
-                # types of inputs and outputs: actually, the inputs/outpus might have been already defined by the
+                # types of inputs and outputs: actually, the inputs/outpus/opts might have been already defined by the
                 # wrapper creator, but we give priority to the user options
-                self.proc.proc_inputs = self.proc_inputs
-                self.proc.proc_outputs = self.proc_outputs
-                self.proc.proc_opts = self.proc_opts
-                self.proc.agent = processor_container
+                proc.set_proc_inputs_and_outputs(proc_inputs, proc_outputs)
+                proc.set_proc_opts(proc_opts)
+                proc.set_agent(agent)
+
+        # From here after, the proc is not None, and it is a ModuleWrapper.
+        # However, proc_inputs, proc_outputs, and proc_opts might still not be specified
+        assert proc is not None
+        assert isinstance(proc, ModuleWrapper)
 
         # Guessing inputs, fixing attributes
-        if self.proc_inputs is None:
-            self.__guess_proc_inputs()
+        AgentProcessorChecker.__guess_proc_inputs(proc)
+        if proc.proc_inputs is None:
+            raise GenException("The inputs of the processor were not described and cannot be automatically guessed")
 
-        for j in range(len(self.proc_inputs)):
-            if self.proc_inputs[j].get_name() == "unk":
-                self.proc_inputs[j].set_name("proc_input_" + str(j))
+        # Fixing naming conventions
+        AgentProcessorChecker.__fix_proc_inputs(proc)
 
         # Guessing outputs, fixing attributes
-        if self.proc_outputs is None:
-            self.__guess_proc_outputs()
+        AgentProcessorChecker.__guess_proc_outputs(proc)
+        if proc.proc_outputs is None:
+            raise GenException("The outputs of the processor were not described and cannot be automatically guessed")
 
-        for j in range(len(self.proc_outputs)):
-            if self.proc_outputs[j].get_name() == "unk":
-                self.proc_outputs[j].set_name("proc_output_" + str(j))
+        # Fixing naming conventions (should not be needed)
+        AgentProcessorChecker.__fix_proc_outputs(proc)
 
         # Guessing optimization-related options and stuff, fixing attributes
-        if (self.proc_opts is None or len(self.proc_opts) == 0 or
-                'optimizer' not in self.proc_opts or 'losses' not in self.proc_opts):
-            self.__guess_proc_opts()
-        self.__fix_proc_opts()
+        AgentProcessorChecker.__guess_proc_opts(proc)
+
+        # Fixing attribute-presence conventions
+        AgentProcessorChecker.__fix_proc_opts(proc)
 
         # Ensuring all is OK
-        if self.proc is not None:
-            assert "optimizer" in self.proc_opts, "Missing 'optimizer' key in proc_opts (required)"
-            assert "losses" in self.proc_opts, "Missing 'losses' key in proc_opts (required)"
+        assert proc.proc_inputs is not None
+        assert proc.proc_outputs is not None
+        assert proc.proc_opts is not None
+        assert proc.proc_optional_inputs is not None
 
-        # Checking inputs with default values
-        if self.proc_optional_inputs is None:
-            self.__guess_proc_optional_inputs()
+        # Updating processor container object (agent)
+        agent.proc = proc
+        agent.proc_inputs = proc.proc_inputs
+        agent.proc_outputs = proc.proc_outputs
+        agent.proc_opts = proc.proc_opts
+        agent.proc_optional_inputs = proc.proc_optional_inputs
 
-        # Updating processor container object
-        processor_container.proc = self.proc
-        processor_container.proc_inputs = self.proc_inputs
-        processor_container.proc_outputs = self.proc_outputs
-        processor_container.proc_opts = self.proc_opts
-        processor_container.proc_optional_inputs = self.proc_optional_inputs
-
-    def __guess_proc_inputs(self) -> None:
+    @staticmethod
+    def __guess_proc_inputs(proc: ModuleWrapper):
         """Heuristically infers ``proc_inputs`` from the first layer of the wrapped module."""
-        if hasattr(self.proc, "proc_inputs"):
-            if self.proc.proc_inputs is not None:
-                self.proc_inputs = []
-                for p in self.proc.proc_inputs:
-                    self.proc_inputs.append(p.clone())
+        assert proc is not None
+        assert proc.module is not None
+        if proc.proc_inputs is not None:
+            return
+
+        if not isinstance(proc.module, torch.nn.Module):
             return
 
         first_layer = None
 
         # Traverse modules to find the first real layer (skip containers like Sequential)
-        for layer in self.proc.modules():
+        for layer in proc.module.modules():
             if isinstance(layer, (torch.nn.Conv2d, torch.nn.Linear, torch.nn.Conv1d, torch.nn.Embedding)):
                 first_layer = layer
                 break
@@ -758,6 +851,31 @@ class AgentProcessorChecker:
         stream_to_proc_transforms = None
         proc_to_stream_transforms = None
 
+        import copy as _copy
+
+        def probe(_proc: ModuleWrapper, call: Callable[[], object]) -> bool:
+            """Run `call()` against the wrapped module and return True iff it didn't raise.
+            Snapshots the module's state_dict around the call so probes don't corrupt stateful modules
+            (RNN/CTE/CTB hidden state, etc.)."""
+            snap = None
+            if isinstance(_proc.module, torch.nn.Module):
+                try:
+                    snap = _copy.deepcopy(_proc.module.state_dict())
+                except Exception:
+                    snap = None
+            try:
+                call()
+                return True
+            except Exception:
+                return False
+            finally:
+                if snap is not None:
+                    try:
+                        assert isinstance(_proc.module, torch.nn.Module)
+                        _proc.module.load_state_dict(snap)
+                    except Exception:
+                        pass
+
         if isinstance(first_layer, torch.nn.Conv2d):
 
             if first_layer.in_channels == 3 or first_layer.in_channels == 1:
@@ -766,6 +884,7 @@ class AgentProcessorChecker:
                 # Creating dummy PIL images
                 rgb_input_img = Image.new('RGB', (224, 224))
                 pixels = rgb_input_img.load()
+                assert pixels is not None
                 for x in range(28):
                     for y in range(28):
                         pixels[x, y] = (random.randint(0, 255),
@@ -774,19 +893,13 @@ class AgentProcessorChecker:
                 gray_input_img = rgb_input_img.convert('L')
 
                 # Checking if the model supports PIL images as input
-                # noinspection PyBroadException
-                try:
-                    _ = self.proc(rgb_input_img)
-                    can_handle_rgb_img = True
-                except Exception:
-                    can_handle_rgb_img = False
+                can_handle_rgb_img = probe(proc,
+                                           lambda: proc.module(rgb_input_img)
+                                           if proc.module is not None else None)
 
-                # Noinspection PyBroadException
-                try:
-                    _ = self.proc(gray_input_img)
-                    can_handle_gray_img = True
-                except Exception:
-                    can_handle_gray_img = False
+                can_handle_gray_img = probe(proc,
+                                            lambda: proc.module(gray_input_img)
+                                            if proc.module is not None else None)
 
                 if can_handle_gray_img and can_handle_rgb_img:
                     stream_to_proc_transforms = None
@@ -816,26 +929,20 @@ class AgentProcessorChecker:
             tensor_shape = (first_layer.in_features,)
         elif isinstance(first_layer, torch.nn.Embedding):
 
-            # Noinspection PyBroadException
-            try:
-                input_text = "testing if tokenizer is present"
-                _ = self.proc(input_text)
-                can_handle_text = True
-                can_handle_more_than_one_token = True  # Unused
-            except Exception:
-                can_handle_text = False
-
-                # Noinspection PyBroadException
-                try:
-                    device = torch.device("cpu")
-                    for param in self.proc.parameters():
-                        device = param.device
-                        break
-                    input_tokens = torch.tensor([[0, 1, 2, 3]], dtype=torch.long, device=device)
-                    _ = self.proc(input_tokens)
-                    can_handle_more_than_one_token = True
-                except Exception:
-                    can_handle_more_than_one_token = False
+            can_handle_text = probe(proc,
+                                    lambda: proc.module("testing if tokenizer is present")
+                                    if proc.module is not None else None)
+            if can_handle_text:
+                can_handle_more_than_one_token = True
+            else:
+                device = torch.device("cpu")
+                for param in proc.module.parameters():
+                    device = param.device
+                    break
+                input_tokens = torch.tensor([[0, 1, 2, 3]], dtype=torch.long, device=device)
+                can_handle_more_than_one_token = probe(proc,
+                                                       lambda: proc.module(input_tokens)
+                                                       if proc.module is not None else None)
 
             if can_handle_text:
                 data_type = "text"
@@ -853,31 +960,35 @@ class AgentProcessorChecker:
                              "please explicitly provide it (proc_input)")
 
         # Setting the input attribute
-        self.proc_inputs = [StreamType(name="proc_input_0",
-                                       data_type=data_type,
-                                       data_desc=data_desc,
-                                       tensor_shape=tensor_shape,
-                                       tensor_labels=tensor_labels,
-                                       tensor_dtype=tensor_dtype,
-                                       stream_to_proc_transforms=stream_to_proc_transforms,
-                                       proc_to_stream_transforms=proc_to_stream_transforms,
-                                       pubsub=False,
-                                       private_only=True)]
+        proc.set_proc_inputs_and_outputs([StreamType(name="proc_input_0",
+                                                     data_type=data_type,
+                                                     data_desc=data_desc,
+                                                     tensor_shape=tensor_shape,
+                                                     tensor_labels=tensor_labels,
+                                                     tensor_dtype=tensor_dtype,
+                                                     stream_to_proc_transforms=stream_to_proc_transforms,
+                                                     proc_to_stream_transforms=proc_to_stream_transforms,
+                                                     pubsub=False,
+                                                     private_only=False)], None)
 
-    def __guess_proc_outputs(self) -> None:
+    @staticmethod
+    def __fix_proc_inputs(proc: ModuleWrapper):
+        # Fixing naming conventions
+        for j in range(len(proc.proc_inputs)):
+            if proc.proc_inputs[j].get_name() == "unk":
+                proc.proc_inputs[j].set_name("proc_input_" + str(j))
+
+    @staticmethod
+    def __guess_proc_outputs(proc: ModuleWrapper):
         """Heuristically infers ``proc_outputs`` by running a dummy forward pass."""
-        if hasattr(self.proc, "proc_outputs"):
-            if self.proc.proc_outputs is not None:
-                self.proc_outputs = []
-                for p in self.proc.proc_outputs:
-                    self.proc_outputs.append(p.clone())
+        if proc.proc_outputs is not None:
             return
 
-        proc = self.proc
-        device = self.proc.device
+        device = proc.device
         inputs = []
 
-        for i, proc_input in enumerate(self.proc_inputs):
+        assert proc.proc_inputs is not None
+        for i, proc_input in enumerate(proc.proc_inputs):
             if proc_input.is_tensor():
                 inputs.append(proc_input.check_and_preprocess(
                     torch.randn([1] + list(proc_input.tensor_shape),  # Adding batch size here
@@ -885,6 +996,7 @@ class AgentProcessorChecker:
             elif proc_input.is_img():
                 rgb_input_img = Image.new('RGB', (224, 224))
                 pixels = rgb_input_img.load()
+                assert pixels is not None
                 for x in range(224):
                     for y in range(224):
                         pixels[x, y] = (random.randint(0, 255),
@@ -903,7 +1015,8 @@ class AgentProcessorChecker:
             outputs = list(outputs)
 
         # This will be filled below
-        self.proc_outputs = []
+        proc_outputs = []
+        assert proc_outputs is not None
 
         for j, output in enumerate(outputs):
 
@@ -936,48 +1049,59 @@ class AgentProcessorChecker:
                 raise ValueError(f"Unsupported output type {type(output)}")
 
             # Setting the output attribute
-            self.proc_outputs.append(StreamType(name="proc_output_" + str(j),
-                                                data_type=data_type,
-                                                data_desc=data_desc,
-                                                tensor_shape=tensor_shape,
-                                                tensor_labels=tensor_labels,
-                                                tensor_dtype=tensor_dtype,
-                                                stream_to_proc_transforms=stream_to_proc_transforms,
-                                                proc_to_stream_transforms=proc_to_stream_transforms,
-                                                pubsub=False,
-                                                private_only=True))
+            proc_outputs.append(StreamType(name="proc_output_" + str(j),
+                                           data_type=data_type,
+                                           data_desc=data_desc,
+                                           tensor_shape=tensor_shape,
+                                           tensor_labels=tensor_labels,
+                                           tensor_dtype=tensor_dtype,
+                                           stream_to_proc_transforms=stream_to_proc_transforms,
+                                           proc_to_stream_transforms=proc_to_stream_transforms,
+                                           pubsub=False,
+                                           private_only=False))
+        proc.set_proc_inputs_and_outputs(None, proc_outputs)
 
-    def __guess_proc_opts(self) -> None:
+    @staticmethod
+    def __fix_proc_outputs(proc: ModuleWrapper):
+        # Fixing naming conventions
+        for j in range(len(proc.proc_outputs)):
+            if proc.proc_outputs[j].get_name() == "unk":
+                proc.proc_outputs[j].set_name("proc_output_" + str(j))
+
+    @staticmethod
+    def __guess_proc_opts(proc: ModuleWrapper) -> None:
         """Fills in missing optimizer and loss entries in ``proc_opts``."""
-        if self.proc_opts is None:
-            if isinstance(self.proc.module, MultiIdentity) or len(list(self.proc.parameters())) == 0:
-                self.proc_opts = {"optimizer": None,
-                                  "losses": [None] * len(self.proc_outputs)}
-            else:
-                self.proc_opts = {"optimizer": torch.optim.SGD(self.proc.parameters(), lr=1e-5),
-                                  "losses": [torch.nn.functional.mse_loss] * len(self.proc_outputs)}
-        else:
-            if "optimizer" not in self.proc_opts:
-                self.proc_opts["optimizer"] = None
-            if "losses" not in self.proc_opts:
-                self.proc_opts["losses"] = [None] * len(self.proc_outputs)
+        assert proc.proc_outputs is not None and proc is not None
+        proc_opts = {"optimizer": None,
+                     "losses": [None] * len(proc.proc_outputs)}
+        if proc.proc_opts is not None and len(proc.proc_opts) > 0:
+            proc_opts = dict(proc.proc_opts)  # shallow copy — never mutate caller's dict
+            if "optimizer" not in proc_opts:
+                proc_opts["optimizer"] = None
+            if "losses" not in proc_opts:
+                proc_opts["losses"] = [None] * len(proc.proc_outputs)
+        proc.set_proc_opts(proc_opts)
 
-    def __fix_proc_opts(self) -> None:
+    @staticmethod
+    def __fix_proc_opts(proc: ModuleWrapper) -> None:
         """normalizes ``proc_opts`` to always contain the canonical ``"optimizer"`` and ``"losses"`` keys."""
         opts = {}
         found_optimizer = False
         found_loss = False
         cannot_fix = False
 
-        if "optimizer" in self.proc_opts:
+        assert proc.proc_opts is not None
+        if "optimizer" in proc.proc_opts:
             found_optimizer = True
-        if "losses" in self.proc_opts:
+        if "losses" in proc.proc_opts:
             found_loss = True
 
         if not found_loss:
-            opts['losses'] = [torch.nn.functional.mse_loss] * len(self.proc_outputs)
+            assert proc.proc_outputs is not None
+            opts['losses'] = [torch.nn.functional.mse_loss] * len(proc.proc_outputs)
 
-        for k, v in self.proc_opts.items():
+        assert proc.proc_opts is not None
+        for k, v in proc.proc_opts.items():
             if isinstance(v, torch.optim.Optimizer):
                 if k == "optimizer":
                     opts["optimizer"] = v
@@ -1006,7 +1130,8 @@ class AgentProcessorChecker:
 
         if not found_optimizer:
             if 'lr' in opts:
-                opts['optimizer'] = torch.optim.SGD(self.proc.parameters(), lr=opts['lr'])
+                assert proc.module is not None and isinstance(proc.module, torch.nn.Module)
+                opts['optimizer'] = torch.optim.SGD(proc.module.parameters(), lr=opts['lr'])
 
         assert not cannot_fix, \
             "About proc_opts: cannot find required keys ('optimizer', 'losses') and/or cannot automatically guess them"
@@ -1021,28 +1146,7 @@ class AgentProcessorChecker:
         opts['losses'] = fixed_list
 
         # Updating
-        self.proc_opts = opts
-
-    def __guess_proc_optional_inputs(self) -> None:
-        """Infers which processor inputs have default values by inspecting the module's ``forward`` signature."""
-        self.proc_optional_inputs = []
-        if isinstance(self.proc, ModuleWrapper):
-            if hasattr(self.proc.module, "forward"):
-                sig = inspect.signature(self.proc.module.forward)
-            else:
-                sig = inspect.signature(self.proc.forward)
-        else:
-            sig = inspect.signature(self.proc.forward)
-
-        i = 0
-        for name, param in sig.parameters.items():
-            if i >= len(self.proc_inputs):
-                break
-            if param.default is not inspect.Parameter.empty:
-                self.proc_optional_inputs.append({"has_default": True, "default_value": param.default})
-            else:
-                self.proc_optional_inputs.append({"has_default": False, "default_value": None})
-            i += 1
+        proc.set_proc_opts(opts)
 
 
 # Process-wide Featherless client, created once on first use (see _get_featherless_client). Reused for every call so

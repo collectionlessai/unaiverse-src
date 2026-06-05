@@ -74,6 +74,9 @@ class Random(BufferedStream):
         Returns:
             A tuple of the generated tensor and the current clock cycle offset.
         """
+        assert self.props is not None
+
+        # noinspection PyTypeChecker
         y = self.std * torch.rand(self.props.tensor_shape, device=self.device)
         return self.props.adapt_tensor_to_tensor_labels(y), clock.get_cycle() - self.first_cycle_by_uuid[None]
 
@@ -112,6 +115,7 @@ class Sin(BufferedStream):
         Returns:
             A tuple of the sine tensor sample and the current clock cycle offset.
         """
+        assert self.props is not None
         idx, _ = idx_and_uuid
         t = idx * self.delta + self.phase * self.period
         y = torch.sin(torch.tensor([[2. * math.pi * self.freq * t]], device=self.device))
@@ -154,6 +158,7 @@ class Square(BufferedStream):
         Returns:
             A tuple of the square wave tensor sample and the current clock cycle offset.
         """
+        assert self.props is not None
         idx, _ = idx_and_uuid
         t = idx * self.delta + self.phase * self.period
         y = self.ampl * torch.tensor([[(-1.) ** (math.floor(2. * self.freq * t))]], device=self.device)
@@ -211,6 +216,7 @@ class CombSin(BufferedStream):
         Returns:
             A tuple of the combined-sine tensor sample and the current clock cycle offset.
         """
+        assert self.props is not None
         idx, _ = idx_and_uuid
         t = idx * self.delta
         y = torch.sum(self.coeffs * torch.sin(2 * math.pi * self.freqs * t + self.phases)).view(1, 1)
@@ -231,6 +237,7 @@ class SmoothHFHA(CombSin):
         freqs = [0.11, 0.07, 0.05]
         coeffs = [0.8, 0.16, 0.16]
         super().__init__(f_cap=freqs, c_cap=coeffs, order=3, delta=0.1, device=device)
+        assert self.props is not None
         self.props.set_name("smoHfHa")
 
 
@@ -248,6 +255,7 @@ class SmoothHFLA(CombSin):
         freqs = [0.11, 0.07, 0.05]
         coeffs = [0.4, 0.08, 0.08]
         super().__init__(f_cap=freqs, c_cap=coeffs, order=3, delta=0.1, device=device)
+        assert self.props is not None
         self.props.set_name("smoHfLa")
 
 
@@ -265,6 +273,7 @@ class SmoothLFLA(CombSin):
         freqs = [0.11, 0.07, 0.05]
         coeffs = [0.08, 0.08, 0.4]
         super().__init__(f_cap=freqs, c_cap=coeffs, order=3, delta=0.1, device=device)
+        assert self.props is not None
         self.props.set_name("smoLfLa")
 
 
@@ -282,6 +291,7 @@ class SmoothLFHA(CombSin):
         freqs = [0.11, 0.07, 0.05]
         coeffs = [0.16, 0.16, 0.8]
         super().__init__(f_cap=freqs, c_cap=coeffs, order=3, delta=0.1, device=device)
+        assert self.props is not None
         self.props.set_name("smoLfHa")
 
 
@@ -297,6 +307,7 @@ class SquareHFHA(Square):
             device: PyTorch device to place the tensor on (default: CPU).
         """
         super().__init__(freq=0.06, phase=0.5, ampl=1.0, delta=0.1, device=device)
+        assert self.props is not None
         self.props.set_name("squHfHa")
 
 
@@ -312,6 +323,7 @@ class SquareHFLA(Square):
             device: PyTorch device to place the tensor on (default: CPU).
         """
         super().__init__(freq=0.06, phase=0.5, ampl=0.5, delta=0.1, device=device)
+        assert self.props is not None
         self.props.set_name("squHfLa")
 
 
@@ -327,6 +339,7 @@ class SquareLFHA(Square):
             device: PyTorch device to place the tensor on (default: CPU).
         """
         super().__init__(freq=0.03, phase=0.5, ampl=1.0, delta=0.1, device=device)
+        assert self.props is not None
         self.props.set_name("squLfHa")
 
 
@@ -342,4 +355,5 @@ class SquareLFLA(Square):
             device: PyTorch device to place the tensor on (default: CPU).
         """
         super().__init__(freq=0.03, phase=0.5, ampl=0.5, delta=0.1, device=device)
+        assert self.props is not None
         self.props.set_name("squLfLa")

@@ -62,8 +62,8 @@ class Interaction:
             target: Peer ID of the target agent or list of peer IDs.
             from_state: Name of the state from which the interaction is expected to happen.
             to_state: Name of the state where the interaction is supposed to yield.
-            timeout: Maximum timeout until which the interaction is valid (-1 means no limit: the InteractionManager
-                will override this with its internal timeout valid for all actions).
+            timeout: Maximum retry_timeout until which the interaction is valid (-1 means no limit: the InteractionManager
+                will override this with its internal retry_timeout valid for all actions).
             callback: Name of the method to call on the agent (the InteractionManager will do it) when this
                 interaction finishes (it must be a method with a single argument, which is the interaction object).
             volatile: If True, it is marked so that the recipient is asked to not
@@ -312,7 +312,7 @@ class Interaction:
         self.__starting_time = t
 
     def set_timeout_starting_time(self, t: float) -> None:
-        """Record the wall-clock time used as the baseline for next-step timeout checks.
+        """Record the wall-clock time used as the baseline for next-step retry_timeout checks.
 
         Args:
             t: Timeout baseline timestamp (from ``time.perf_counter()``).
@@ -336,10 +336,10 @@ class Interaction:
         return self.__starting_time
 
     def get_timeout_starting_time(self) -> float:
-        """Retrieves the timestamp used as the baseline for next-step timeout checks.
+        """Retrieves the timestamp used as the baseline for next-step retry_timeout checks.
 
         Returns:
-            A float representing the timeout starting time.
+            A float representing the retry_timeout starting time.
         """
         return self.__timeout_starting_time
 
@@ -349,7 +349,10 @@ class Interaction:
         Returns:
             A boolean indicating if the action is multistep.
         """
-        return self.num_steps > 1
+
+        # The first part of this check sounds weird, I know,
+        # it happens if num_steps is specified as a wildcard like <eval_steps>
+        return isinstance(self.num_steps, str) or self.num_steps > 1
 
     def is_single_step(self) -> bool:
         """Return True if this is a single-step action (one data sample or no data at all)."""
@@ -422,7 +425,7 @@ class Interaction:
         return self.action_ref.get_delay() > 0 and (time.perf_counter() - starting_time) <= self.action_ref.get_delay()
 
     def is_timed_out(self):
-        """Checks if the action has exceeded its configured timeout period since the last successful execution attempt.
+        """Checks if the action has exceeded its configured retry_timeout period since the last successful execution attempt.
 
         Returns:
             True if the action has timed out, False otherwise.
@@ -432,7 +435,7 @@ class Interaction:
         if self.__starting_time <= 0.:
             return False
 
-        # Checking global timeout: if too much time passed, no matter if the action started or not, it's timeout!
+        # Checking global retry_timeout: if too much time passed, no matter if the action started or not, it's retry_timeout!
         if self.action_ref.get_total_time() > 0:
             if self.action_ref.get_total_time() <= (time.perf_counter() - self.__starting_time):
                 log.inter(f"Timeout for {self.action_name}! "
@@ -440,20 +443,20 @@ class Interaction:
                           f"{self.action_ref.get_total_time()})!")
                 return True
             else:
-                log.debug(f"Running timeout for {self.action_name}! "
+                log.debug(f"Running retry_timeout for {self.action_name}! "
                           f"({(time.perf_counter() - self.__starting_time)}/"
                           f"{self.action_ref.get_total_time()})!")
 
-        # Checking next-step timeout
+        # Checking next-step retry_timeout
         if self.__timeout_starting_time > 0. and self.action_ref.get_timeout() > 0:
             if self.action_ref.get_timeout() <= (time.perf_counter() - self.__timeout_starting_time):
                 log.inter(
-                    f"Hot timeout for {self.action_name}! "
+                    f"Hot retry_timeout for {self.action_name}! "
                     f"({(time.perf_counter() - self.__timeout_starting_time)}/"
                     f"{self.action_ref.get_timeout()})!")
                 return True
             else:
-                log.debug(f"Running hot timeout for {self.action_name} "
+                log.debug(f"Running hot retry_timeout for {self.action_name} "
                           f"({(time.perf_counter() - self.__timeout_starting_time)}/"
                           f"{self.action_ref.get_timeout()})!")
                 return False
@@ -472,7 +475,7 @@ class Interaction:
         action_kwargs = self.action_kwargs if self.action_kwargs is not None else {}
         self.action_ref.check_provided_args(action_kwargs, exception=True)
 
-        # Force a default timeout on multistep actions, to avoid infinite trials
+        # Force a default retry_timeout on multistep actions, to avoid infinite trials
         if self.is_multi_steps() and self.action_ref.get_timeout() <= 0:
             self.action_ref.set_default_timeout()
 
@@ -555,16 +558,16 @@ class Interaction:
             self.action_ref.get_list_of_interactions().remove(self)
 
     def is_expired(self, timeout_secs: float | None = None) -> bool:
-        """Check if this interaction has expired based on an external timeout.
+        """Check if this interaction has expired based on an external retry_timeout.
 
         Args:
-            timeout_secs: Maximum higher-priority timeout in seconds (default: None).
+            timeout_secs: Maximum higher-priority retry_timeout in seconds (default: None).
 
         Returns:
             True if the interaction is older than timeout_secs.
         """
 
-        # Deciding the real value of timeout_specs, also in function of the interaction-specific timeout (if given)
+        # Deciding the real value of timeout_specs, also in function of the interaction-specific retry_timeout (if given)
         if timeout_secs is not None and timeout_secs > 0. and self.timeout is not None and self.timeout > 0.:
             timeout_secs = min(timeout_secs, self.timeout)
         elif timeout_secs is None or timeout_secs <= 0.:
@@ -600,6 +603,7 @@ class Interaction:
 
             # Check if stream has data with a tag not yet consumed by this interaction
             current_tag = stream_obj.get_tag(self.uuid)
+
             if last_handled_data_tag is not None and current_tag == last_handled_data_tag:
                 if all_fresh_or_fail:
                     return None
@@ -688,7 +692,7 @@ class Interaction:
             'destination_state': self.destination_state,
             'from_state': self.from_state,
             'to_state': self.to_state,
-            'timeout': self.timeout,
+            'retry_timeout': self.timeout,
             'volatile': self.volatile,
             'status': self.status.value
         }
@@ -715,7 +719,7 @@ class Interaction:
             from_state=d.get('from_state'),
             to_state=d.get('to_state'),
             volatile=d.get('volatile'),
-            timeout=d.get('timeout', -1.),
+            timeout=d.get('retry_timeout', -1.),
         )
         interaction.uuid = d['uuid']
         interaction.status = InteractionStatus(d['status'])
@@ -814,7 +818,7 @@ class Interaction:
                 for stream in streams_list:
                     if not isinstance(stream, str):
                         raise GenException(invalid_msg)
-                self.streams[redirect] = streams_list
+                self.streams[redirect] = list(streams_list)  # Shallow copy (that's why we have "list(...)" - NEEDED!)
         else:
             raise GenException(invalid_msg)
 
@@ -923,6 +927,9 @@ class InteractionManager:
             log.error(f"No more room for interactions (limit: {self.max_interactions})")
             return False
 
+        if not InteractionManager.check_consistency_between_action_kwargs_and_interaction_fields(interaction):
+            return False  # The error message is printed inside the method
+
         # This will resolve target names, data samples, stream names
         if not self.resolve(interaction, public):
             return False
@@ -975,7 +982,11 @@ class InteractionManager:
             log.error(f"No more room for interactions (limit: {self.max_interactions})")
             return False
 
-        if interaction.requester not in self.agent.all_agents:
+        if not InteractionManager.check_consistency_between_action_kwargs_and_interaction_fields(interaction):
+            return False  # The error message is printed inside the method
+
+        if (interaction.requester not in self.agent.all_agents and
+                interaction.requester != Custom.SYSTEM_INTERACTION_LABEL):
             log.error(f"Unexpected interaction from an unknown agent: {interaction.requester}. "
                       f"Interaction is: {interaction}")
             return False
@@ -1293,12 +1304,22 @@ class InteractionManager:
             interaction: The interaction to evaluate.
         """
         requester_is_known = interaction.requester in self.agent.all_agents
-        run_deprecated_completion_step = ((interaction.is_timed_out() and
-                                           interaction.was_at_least_one_step_done()) or
-                                          interaction.was_last_step_done())
         return (not interaction.completed and requester_is_known and
-                (interaction.get_new_stream_data_tags(all_fresh_or_fail=True) is not None or
-                 run_deprecated_completion_step))
+                (interaction.get_new_stream_data_tags(all_fresh_or_fail=True) is not None))
+
+    @staticmethod
+    def check_consistency_between_action_kwargs_and_interaction_fields(interaction: Interaction):
+        for k, v in interaction.action_kwargs.items():
+            if k in Custom.RESERVED_IN_ACTION_KWARGS:
+                log.error(f"Tried to register and interaction that includes a "
+                          f"private/not-allowed argument: {k} not allowed in action_kwargs")
+                return False
+            if k in Custom.INTERACTION_FIELD_NAMES and v != getattr(interaction, k):
+                log.error(f"Tried to register and interaction that includes a "
+                          f"private/not-allowed argument: {k} echoed inconsistently,"
+                          f" {v} vs {getattr(interaction, k)}")
+                return False
+        return True
 
     def get_current(self) -> Interaction | None:
         """Return the currently executing interaction, or None if no interaction is running."""
@@ -1342,6 +1363,7 @@ class InteractionManager:
                 self.agent.stdin.bind(interaction.stdin_streams, uuid=interaction.uuid)
                 self.agent.stdtar.bind(interaction.stdtar_streams, uuid=interaction.uuid)
                 self.agent.stdext.bind(interaction.stdext_streams, uuid=interaction.uuid)
+                self.agent.stdout.bind_uuid_only(interaction.uuid)
 
     def has_data(self, interaction: 'Interaction') -> bool:
         """Return True if any owned stream has data available for the given interaction.
@@ -1359,8 +1381,7 @@ class InteractionManager:
 
         For sent interactions the recipients are the interaction targets; for received interactions it
         is the original requester; for lazy interactions it is the interaction targets.  Unknown
-        (unregistered) interactions fall back to the interaction's target list for backward
-        compatibility.
+        (unregistered) interactions fall back to the interaction's target list.
 
         Args:
             interaction: The interaction whose recipients should be determined.
@@ -1380,8 +1401,6 @@ class InteractionManager:
         else:
 
             # This is the case of a not-registered interaction.
-            # It is exploited for backward compatibility, for those interactions whose only purpose
-            # is to provide a recipient over a stream
             recipients = interaction.target  # This is always a list, even when with 1 element only
         return [x for x in recipients if x is not None]
 
@@ -1488,7 +1507,7 @@ class InteractionManager:
     async def complete_expired(self) -> None:
         """Remove expired (or no-action-based) interactions and return them for notification (async).
 
-        Checks all received and sent interactions against the timeout.
+        Checks all received and sent interactions against the retry_timeout.
         Expired interactions are marked as COMPLETED with TIMEOUT reason
         and removed from the tracking dicts.
         """
@@ -1662,12 +1681,12 @@ class InteractionManager:
                 all_have_defaults_with_the_exception_of_interaction_if_needed = all(
                     p.default is not inspect.Parameter.empty
                     for name, p in sig.parameters.items()
-                    if name not in Custom.INTERACTION_ARG_NAMES
+                    if name not in Custom.INTERACTION_INJECT_NAMES
                 )
                 if not all_have_defaults_with_the_exception_of_interaction_if_needed:
                     log.critical(f"Invalid callback method {interaction.callback}: it must have default values "
                                  f"for all parameters (the interaction argument might not have a default, if needed)")
-                found_args = [name for name in sig.parameters if name in Custom.INTERACTION_ARG_NAMES]
+                found_args = [name for name in sig.parameters if name in Custom.INTERACTION_INJECT_NAMES]
                 if len(found_args) != 1:
                     log.critical(f"Invalid callback method {interaction.callback}: it must have an argument "
                                  f"which is the interaction object (a single one)")
@@ -1729,7 +1748,7 @@ class InteractionStatus(Enum):
 
 class CompletionReason(Enum):
     OK = "ok"  # Correctly completed: triggered a transition
-    TIMEOUT = "timeout"  # The interaction was waiting in the queue for too long, it's time to remove it
+    TIMEOUT = "retry_timeout"  # The interaction was waiting in the queue for too long, it's time to remove it
     REJECTED = "rejected"  # The interaction was not accepted since the very beginning
     DISCONNECTED = "disconnected"
     ERROR = "error"  # An error occurred
