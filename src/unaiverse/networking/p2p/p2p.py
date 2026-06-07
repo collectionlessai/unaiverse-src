@@ -13,6 +13,7 @@
                  Main Developers:    Stefano Melacci (Project Leader), Christian Di Maio, Tommaso Guidi
 """
 import os
+import base64
 import logging
 import threading
 from .lib_types import TypeInterface
@@ -695,31 +696,6 @@ class P2P:
             logger.error(f"send_on_protocol({peer_id[:12]}…, {protocol_id}) exception: {e}")
             return False
 
-    def ping_peer(self, peer_id: str, timeout_ms: int = 5000) -> Optional[int]:
-        """
-        Run a single /ipfs/ping/1.0.0 round-trip against `peer_id`. Returns the
-        measured RTT in milliseconds on success, or None on timeout / error.
-        Called by the Session keep-alive (every 15s on ESTABLISHED sessions).
-        """
-        if not peer_id or not isinstance(peer_id, str):
-            raise ValueError("ping_peer: peer_id must be a non-empty string")
-        try:
-            result_ptr = P2P.libp2p.PingPeer(
-                P2P._type_interface.to_go_int(self._instance),
-                P2P._type_interface.to_go_string(peer_id),
-                P2P._type_interface.to_go_int(int(timeout_ms)),
-            )
-            result = P2P._type_interface.from_go_ptr_to_json(result_ptr)
-            if result is None or result.get('state') == 'Error':
-                return None
-            try:
-                return int(result.get('message', '0'))
-            except (TypeError, ValueError):
-                return None
-        except Exception as e:
-            logger.error(f"ping_peer({peer_id[:12]}…) exception: {e}")
-            return None
-
     def generate_signed_peer_record(self) -> Optional[bytes]:
         """
         Build a libp2p SignedPeerRecord over the host's current listen addresses,
@@ -730,7 +706,6 @@ class P2P:
         bind the agent's *other* peer-id (p2p_world key when the handshake runs on
         p2p_public, and vice-versa).
         """
-        import base64
         try:
             result_ptr = P2P.libp2p.GenerateSignedPeerRecord(
                 P2P._type_interface.to_go_int(self._instance),
@@ -756,7 +731,6 @@ class P2P:
         """Sign `data` with the host's libp2p private key (Ed25519 by default).
         Returns the raw signature bytes, or None on error. Used by Session to
         produce sig_a / sig_b over (nonce || session_id) for replay defence."""
-        import base64
         if not isinstance(data, (bytes, bytearray)):
             raise TypeError("sign_with_host_key: data must be bytes")
         try:
@@ -778,7 +752,6 @@ class P2P:
         """Verify that `signature` over `data` is valid under the public key derivable
         from `peer_id`. Works for Ed25519 peer-ids (libp2p default — pubkey is
         embedded in the id); fails for RSA peer-ids."""
-        import base64
         if not isinstance(data, (bytes, bytearray)):
             raise TypeError("verify_peer_signature: data must be bytes")
         if not isinstance(signature, (bytes, bytearray)):
@@ -803,7 +776,6 @@ class P2P:
         names `expected_peer_id`. Used by the Session responder to validate the
         `signed_peer_record` field of an incoming PROFILE_OFFER.
         """
-        import base64
         if not isinstance(envelope_bytes, (bytes, bytearray)):
             raise TypeError("verify_signed_peer_record: envelope_bytes must be bytes")
         if not expected_peer_id or not isinstance(expected_peer_id, str):

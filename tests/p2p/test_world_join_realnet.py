@@ -95,7 +95,9 @@ def test_real_world_join_full_handoff(real_nodes):
                     await orchestrate(e)
             elif ev.p2p_name == NodeConn.P2P_WORLD and ev.role.value == "initiator":
                 # joiner.world established → GOAWAY the public session.
-                await j_pub.close_session(host_pub_id, WORLD_HANDOFF_COMPLETE)
+                    evs = await j_pub.close_session(host_pub_id, WORLD_HANDOFF_COMPLETE)
+                    for e in evs:
+                        await orchestrate(e)
         elif ev.type == SessionEventType.CLOSED:
             closed.append(ev)
 

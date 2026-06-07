@@ -39,6 +39,11 @@ from unaiverse.custom import Custom, GenException
 from unaiverse.networking.p2p import P2P, P2PError
 from unaiverse.networking.node.connpool import NodeConn
 from unaiverse.networking.node.profile import NodeProfile
+from unaiverse.networking.session import (SessionManager, ProfileDecisionResult, WorldGrantSpec,
+                                          SessionEventType, SessionRole)
+from unaiverse.networking.session.sess_msg import (WORLD_DISENGAGEMENT, WORLD_HANDOFF_COMPLETE,
+                                                   LOCAL_ERROR, NOT_IN_ALLOW_LIST, ROLE_INCOMPATIBLE,
+                                                   HOSTED_REJECTED)
 from unaiverse.streams.streams import DataProps, BufferedStream
 from unaiverse.utils.logger import log, ALWAYS_ON_CHANNELS, ALL_CHANNELS
 from unaiverse.utils.misc import (get_key_considering_multiple_sources, save_node_addresses_to_file,
@@ -376,7 +381,6 @@ class Node:
         # lazily/async by the Session at PROFILE_OFFER time (via conn), so no SPR
         # factory is passed here. The decision hook lets a responder accept/reject an
         # offer and (world host) mint a grant.
-        from unaiverse.networking.session import SessionManager
         self._sm_public = SessionManager(
             conn=self.conn,
             p2p_name=NodeConn.P2P_PUBLIC,
@@ -691,7 +695,7 @@ class Node:
     async def ask_to_get_in_touch(self, node_name: str | None = None, addresses: list[str] | None = None,
                                   node_id: str | None = None,
                                   public: bool = True, before_updating_pools_fcn: Callable = None,
-                                  run_count: int = 0, is_world_join: bool = False) -> str | None:
+                                  is_world_join: bool = False) -> str | None:
         """Tries to connect to another agent or world node. (async)
 
         Args:
@@ -700,7 +704,6 @@ class Node:
             node_id: The ID of the node to connect to (alternative to node_name and addresses).
             public: A boolean flag indicating whether to use the public or world P2P network.
             before_updating_pools_fcn: A callable invoked with the peer ID before updating the connection pools.
-            run_count: Unused (kept for signature compatibility; Session owns retry now).
             is_world_join: If True, the public Session expects a WORLD_GRANT and drives
                 the world handoff (used by ask_to_join_world).
 
@@ -829,7 +832,6 @@ class Node:
 
         # Gracefully close any Session to this peer (sends GOAWAY so the remote sees
         # Session.Closed, not Lost) on whichever instance holds it.
-        from unaiverse.networking.session.sess_msg import WORLD_DISENGAGEMENT
         for sm in (self._sm_world, self._sm_public):
             if sm is not None and sm.get_session(peer_id) is not None:
                 for ev in await sm.close_session(peer_id, WORLD_DISENGAGEMENT):
@@ -1717,9 +1719,8 @@ class Node:
             for ev in events:
                 await self._dispatch_session_event(ev)
 
-        # ── Per-cycle SessionManager tick: timeouts + /ipfs/ping keep-alive ───
-        import time as _time
-        _now = _time.monotonic()
+        # ── Per-cycle SessionManager tick: timeouts + session-level PING/PONG keep-alive ───
+        _now = time.monotonic()
         for ev in await self._sm_public.tick(_now):
             await self._dispatch_session_event(ev)
         for ev in await self._sm_world.tick(_now):
@@ -1828,7 +1829,7 @@ class Node:
 
                 elif self.node_type is Node.WORLD:
                     log.error("Unexpected stream samples received by this world node, sent by: " + msg.sender)
-                    await self.__purge(msg.sender)
+                    await self.__purge(msg.sender, reason=LOCAL_ERROR)
 
             # (G) got interaction request (new-style, replaces ACTION_REQUEST for new agents)
             elif msg.content_type == Msg.INTERACTION:
@@ -1848,7 +1849,7 @@ class Node:
 
                 elif self.node_type is Node.WORLD:
                     log.error("Unexpected interaction received by this world node, sent by: " + msg.sender)
-                    await self.__purge(msg.sender)
+                    await self.__purge(msg.sender, reason=LOCAL_ERROR)
 
             # (G3) got interaction status update
             elif msg.content_type == Msg.INTERACTION_STATUS:
@@ -1893,12 +1894,12 @@ class Node:
                 elif self.node_type is Node.WORLD:
                     log.error(
                         "Unexpected request to alter the HSM received by this world node, sent by: " + msg.sender)
-                    await self.__purge(msg.sender)
+                    await self.__purge(msg.sender, reason=LOCAL_ERROR)
 
             # (J) misc — the ping-pong *handshake* / reconnection use is REMOVED
-            # (liveness is /ipfs/ping keep-alive in the Session; reconnection is the
-            # Session RECONNECTING/RESUMED/LOST grace machinery). The Msg.MISC
-            # content-type is kept for any other miscellaneous use.
+            # (liveness is the session-level PING/PONG keep-alive in the Session;
+            # reconnection is the Session RECONNECTING/RESUMED/LOST grace machinery).
+            # The Msg.MISC content-type is kept for any other miscellaneous use.
             elif msg.content_type == Msg.MISC:
                 log.misc(f"Received a misc message from {msg.sender} (no handshake action)")
 
@@ -1935,7 +1936,7 @@ class Node:
                     log.misc("Inspector activated")
                 else:
                     log.error("Inspector-activation message was not sent by the expected inspector node ID")
-                    await self.__purge(msg.sender)
+                    await self.__purge(msg.sender, reason=LOCAL_ERROR)
 
             # (N) got a command from an inspector
             elif msg.content_type == Msg.INSPECT_CMD:
@@ -1946,7 +1947,7 @@ class Node:
                 else:
                     log.error("Inspector command was not sent by the expected inspector node ID "
                               "or the inspector was not yet activated (Msg.INSPECT_ON not received yet)")
-                    await self.__purge(msg.sender)
+                    await self.__purge(msg.sender, reason=LOCAL_ERROR)
 
             # (O) world got stats update from an agent
             elif msg.content_type == Msg.STATS_UPDATE:
@@ -2177,7 +2178,7 @@ class Node:
         log.misc("Adding a new known agent " + peer_id)
         assert self.agent is not None
         if not (await self.agent.add_agent(peer_id=peer_id, profile=profile)):
-            await self.__purge(peer_id)
+            await self.__purge(peer_id, reason=LOCAL_ERROR)
             return False
 
         if self.conn.is_public(peer_id):
@@ -2205,10 +2206,6 @@ class Node:
         assembly are ported here; the cv_hash / per-token / certified checks ride
         with the deferred auth model and are intentionally light for v1.
         """
-        from unaiverse.networking.session import ProfileDecisionResult, WorldGrantSpec
-        from unaiverse.networking.session.sess_msg import (
-            NOT_IN_ALLOW_LIST, ROLE_INCOMPATIBLE, HOSTED_REJECTED,
-        )
 
         # Allow-list gate (node-id based; node-id comes from the JWT-bound hint).
         if (self.allowed_node_ids is not None and remote_node_id is not None and
@@ -2271,7 +2268,6 @@ class Node:
         ``add_agent`` / ``__join_world`` / world-list side-effects that the legacy
         handshake used to perform inline. RECONNECTING/RESUMED are logged;
         LOST/CLOSED purge; FAILED wakes any blocked initiator waiter."""
-        from unaiverse.networking.session import SessionEventType, SessionRole
         try:
             log.misc(f"[session] {ev.type.value} peer={ev.peer_id[:12]}… session={ev.session_id[:8]}… "
                      f"role={ev.role.value} p2p={ev.p2p_name}",
@@ -2280,7 +2276,7 @@ class Node:
             pass
 
         if ev.type == SessionEventType.ESTABLISHED:
-            await self._on_session_established(ev, SessionRole)
+            await self._on_session_established(ev)
             waiter = self._session_established_waiters.get(ev.peer_id)
             if waiter is not None:
                 waiter.set()
@@ -2300,10 +2296,9 @@ class Node:
             except Exception as e:
                 log.error(f"[session] dispatch LOST/CLOSED purge failed for {ev.peer_id[:12]}…: {e}")
 
-    async def _on_session_established(self, ev, SessionRole) -> None:
+    async def _on_session_established(self, ev) -> None:
         """Run the application side-effects for an ESTABLISHED Session, branching on
         (role, p2p instance, grant presence)."""
-        from unaiverse.networking.session.sess_msg import WORLD_HANDOFF_COMPLETE
         is_world = NodeConn.P2P_WORLD == ev.p2p_name or "world" in ev.p2p_name
         profile_b = ev.data.get("profile_b")
 
@@ -2344,7 +2339,7 @@ class Node:
                 try:
                     if not (await self.hosted.add_agent(peer_id=ev.peer_id,
                                                         profile=NodeProfile.from_dict(profile_b))):
-                        await self.__purge(ev.peer_id)
+                        await self.__purge(ev.peer_id, reason=LOCAL_ERROR)
                 except Exception as e:
                     log.error(f"[session] add_agent failed for {ev.peer_id[:12]}…: {e}")
             return
@@ -2414,7 +2409,7 @@ class Node:
                 self.conn.set_addresses_in_peer_info(private_peer_id, private_addr)
             if not (await self.world.add_agent(peer_id=private_peer_id, profile=profile)):
                 log.error(f"[session] world.add_agent rejected {private_peer_id[:12]}…; purging")
-                await self.__purge(private_peer_id)
+                await self.__purge(private_peer_id, reason=LOCAL_ERROR)
         except Exception as e:
             log.error(f"[session] world register failed for {private_peer_id[:12]}…: {e}")
 
@@ -2502,17 +2497,33 @@ class Node:
         finally:
             self._session_established_waiters.pop(peer_id, None)
 
-    async def __purge(self, peer_id: str, keep_connection: bool = False) -> None:
+    async def __purge(self, peer_id: str, keep_connection: bool = False,
+                      reason: int | None = None) -> None:
         """Removes a peer from the hosted entity and the connection pools. (async)
 
         The legacy interview / ack / ping-pong queues this used to clear are gone —
-        per-peer state now lives in the Session FSM, which is torn down separately
-        (on Session.Lost/Closed the SessionManager evicts the Session).
+        per-peer state now lives in the Session FSM. When `reason` is given and we
+        are actually dropping the link, the peer's Session (if any) is gracefully
+        closed first (GOAWAY with `reason`) so the remote observes Session.Closed
+        instead of timing out to Lost, and the Session is evicted rather than left
+        dangling until its keep-alive expires. Pass `reason=None` (the default) for
+        drops where the Session is handled elsewhere: the polled transport-disconnect
+        path (already moved to RECONNECTING for re-dial/RESUME), the LOST/CLOSED
+        dispatch (Session already terminal), and the world-handoff public purge
+        (Session already GOAWAY-closed by the dispatcher).
 
         Args:
             peer_id: The peer ID of the node to purge.
             keep_connection: If True, the underlying P2P connection is preserved.
+            reason: Optional ReasonCode; when set (and not keep_connection), the
+                Session is GOAWAY-closed with this reason before teardown.
         """
+        if reason is not None and not keep_connection:
+            for sm in (self._sm_world, self._sm_public):
+                if sm is not None and sm.get_session(peer_id) is not None:
+                    for ev in await sm.close_session(peer_id, reason):
+                        await self._dispatch_session_event(ev)
+
         await self.hosted.remove_agent(peer_id)
 
         if not keep_connection:

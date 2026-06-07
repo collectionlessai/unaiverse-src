@@ -156,8 +156,8 @@ _shared_lib.ReserveOnRelay.restype = ctypes.c_void_p  # Treat returned *C.char a
 _shared_lib.GetWebRTCConnections.argtypes = [ctypes.c_int]
 _shared_lib.GetWebRTCConnections.restype = ctypes.c_void_p  # Treat returned *C.char as opaque pointer
 
-# Session abstraction (per-stage handshake protocols + ping liveness +
-# signed peer record). See unailib/session_api.go.
+# Session abstraction (per-stage handshake protocols + signed peer record).
+# See unailib/session_api.go. (Liveness is session-level PING/PONG, not /ipfs/ping.)
 _shared_lib.SendOnProtocol.argtypes = [
     ctypes.c_int,      # instanceIndex
     ctypes.c_char_p,   # peerID
@@ -166,13 +166,6 @@ _shared_lib.SendOnProtocol.argtypes = [
     ctypes.c_int,      # payloadLen
 ]
 _shared_lib.SendOnProtocol.restype = ctypes.c_void_p
-
-_shared_lib.PingPeer.argtypes = [
-    ctypes.c_int,      # instanceIndex
-    ctypes.c_char_p,   # peerID
-    ctypes.c_int,      # timeoutMs
-]
-_shared_lib.PingPeer.restype = ctypes.c_void_p
 
 _shared_lib.GenerateSignedPeerRecord.argtypes = [ctypes.c_int]
 _shared_lib.GenerateSignedPeerRecord.restype = ctypes.c_void_p

@@ -159,14 +159,6 @@ class GoLibP2P:
         """
         ...
 
-    def PingPeer(self, instance: int, peer_id: bytes, timeout_ms: int) -> int:
-        """
-        PingPeer(instance: int, peer_id: bytes, timeout_ms: int) -> int
-
-        Run a single /ipfs/ping/1.0.0 round-trip against `peer_id`.
-        """
-        ...
-
     def GenerateSignedPeerRecord(self, instance: int) -> int:
         """
         GenerateSignedPeerRecord(self, instance: int) -> int

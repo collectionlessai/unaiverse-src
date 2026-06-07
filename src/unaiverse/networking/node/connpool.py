@@ -51,6 +51,7 @@ SESSION_PROTOCOL_IDS = frozenset({
 # direction/field heuristics are needed to know which message a stream carries.
 from unaiverse.networking.p2p import session_pb2 as _spb  # noqa: E402
 from unaiverse.networking.session.sess_msg import SessMsg  # noqa: E402
+from unaiverse.networking.session import sess_msg as _sess_msg  # noqa: E402
 
 # kind -> (tag_byte, pb_class_name, [field names in proto order])
 _KIND_SPEC = {
@@ -751,10 +752,6 @@ class ConnectionPools:
         """Verify a SignedPeerRecord envelope binds `expected_peer_id`."""
         return self[p2p_name].verify_signed_peer_record(envelope, expected_peer_id)
 
-    async def ping_peer(self, p2p_name: str, peer_id: str, timeout_ms: int = 5000):
-        """Single /ipfs/ping round-trip; returns RTT in ms or None."""
-        return self[p2p_name].ping_peer(peer_id, timeout_ms)
-
     async def generate_signed_peer_record(self, p2p_name: str):
         """SignedPeerRecord envelope bytes over the `p2p_name` host's addresses."""
         return self[p2p_name].generate_signed_peer_record()
@@ -1022,9 +1019,10 @@ class NodeConn(ConnectionPools):
     __INBOUND = "in_"
     __OUTBOUND = "out_"
 
-    # P2p names
-    P2P_PUBLIC = "p2p_public"
-    P2P_WORLD = "p2p_world"
+    # P2p names (canonical strings live in the protobuf-free sess_msg so the
+    # Session FSM can read them without importing this conn layer)
+    P2P_PUBLIC = _sess_msg.P2P_PUBLIC
+    P2P_WORLD = _sess_msg.P2P_WORLD
 
     # All pools (prefix + basic name + suffix)
     IN_PUBLIC = __INBOUND + __ALL_UNIVERSE + __PUBLIC_NET

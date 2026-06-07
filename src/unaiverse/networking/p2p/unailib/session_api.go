@@ -1,9 +1,10 @@
 // FFI exports backing the Python Session abstraction.
 //
-// These four exports — SendOnProtocol, PingPeer, GenerateSignedPeerRecord,
-// VerifySignedPeerRecord — are what Python needs on top of the existing
-// chat/pubsub surface to drive per-stage Session handshakes (see session.proto
-// and session/session.py).
+// These exports — SendOnProtocol, GenerateSignedPeerRecord,
+// VerifySignedPeerRecord (+ host-key signing/verification) — are what Python
+// needs on top of the existing chat/pubsub surface to drive per-stage Session
+// handshakes (see session.proto and session/session.py). Liveness is a
+// session-level PING/PONG over the control protocol, not /ipfs/ping.
 package main
 
 /*
@@ -28,10 +29,6 @@ import (
 // a Session protocol. Sessions enforce their own per-stage timeouts (5s for HELLO,
 // 15s for PROFILE, etc.); this is the safety net at the libp2p layer.
 const sessionOpenStreamTimeout = 10 * time.Second
-
-// sessionPingTimeout caps a single PingPeer call when the Python-side override
-// is zero / negative. Matches the 5s default used by SessionManager.tick_keepalive.
-const sessionPingTimeout = 5 * time.Second
 
 // SendOnProtocol opens a fresh outbound libp2p stream to peerID on the given
 // protocol, writes a single length-prefixed protobuf payload, and closes the
@@ -95,55 +92,6 @@ func SendOnProtocol(
 
 	logger.Infof("[GO] 📤 Instance %d: Sent %d bytes on %s to %s\n", ni.instanceIndex, len(payload), protocolIDStr, pid)
 	return C.CString(jsonSuccessResponse(fmt.Sprintf("Sent %d bytes on %s to %s", len(payload), protocolIDStr, pid)))
-}
-
-// PingPeer runs a single /ipfs/ping/1.0.0 round-trip against peerID. timeoutMsC
-// is the upper bound; pass 0 to use sessionPingTimeout. Returns:
-//
-//	`{"state":"Success","message":"<rtt-ms>"}` on response;
-//	`{"state":"Error","message":"..."}` on timeout / error.
-//
-// Caller MUST FreeString the result.
-//
-//export PingPeer
-func PingPeer(
-	instanceIndexC C.int,
-	peerIDC *C.char,
-	timeoutMsC C.int,
-) *C.char {
-	ni, err := getInstance(int(instanceIndexC))
-	if err != nil {
-		return C.CString(jsonErrorResponse("Invalid instance", err))
-	}
-	if ni.pingService == nil {
-		return C.CString(jsonErrorResponse("Ping service not initialised", nil))
-	}
-
-	pid, err := peer.Decode(C.GoString(peerIDC))
-	if err != nil {
-		return C.CString(jsonErrorResponse("PingPeer: bad peerID", err))
-	}
-
-	timeout := sessionPingTimeout
-	if int(timeoutMsC) > 0 {
-		timeout = time.Duration(int(timeoutMsC)) * time.Millisecond
-	}
-	ctx, cancel := context.WithTimeout(ni.ctx, timeout)
-	defer cancel()
-
-	ch := ni.pingService.Ping(ctx, pid)
-	select {
-	case res, ok := <-ch:
-		if !ok {
-			return C.CString(jsonErrorResponse("PingPeer: ping channel closed", nil))
-		}
-		if res.Error != nil {
-			return C.CString(jsonErrorResponse(fmt.Sprintf("PingPeer: %s", pid), res.Error))
-		}
-		return C.CString(jsonSuccessResponse(fmt.Sprintf("%d", res.RTT.Milliseconds())))
-	case <-ctx.Done():
-		return C.CString(jsonErrorResponse(fmt.Sprintf("PingPeer: timeout after %s waiting for %s", timeout, pid), ctx.Err()))
-	}
 }
 
 // GenerateSignedPeerRecord builds a libp2p PeerRecord over the host's currently

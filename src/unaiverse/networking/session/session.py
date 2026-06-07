@@ -60,7 +60,7 @@ from typing import Optional, Dict, Any, List, Callable, Awaitable, TYPE_CHECKING
 from unaiverse.networking.session.sess_msg import (
     SessMsg, reason_name, ProfileDecisionResult, WorldGrantSpec,
     OK, VERSION_UNSUPPORTED, NOT_AUTHORIZED, LOCAL_ERROR, GRACEFUL_SHUTDOWN,
-    SIMULTANEOUS_OPEN_LOSS, SESSION_UNKNOWN,
+    SIMULTANEOUS_OPEN_LOSS, SESSION_UNKNOWN, P2P_PUBLIC, P2P_WORLD,
 )
 
 if TYPE_CHECKING:
@@ -1012,11 +1012,12 @@ class Session:
 
     def _other_p2p_name(self) -> str:
         """The agent's *other* p2p instance name (p2p_world when this Session runs
-        on p2p_public and vice-versa). Used for cross-instance SPR / grant signing."""
-        from unaiverse.networking.node.connpool import NodeConn
-        if self.p2p_name == NodeConn.P2P_PUBLIC:
-            return NodeConn.P2P_WORLD
-        return NodeConn.P2P_PUBLIC
+        on p2p_public and vice-versa). Used for cross-instance SPR / grant signing.
+        Uses the protobuf-free constants from sess_msg so the FSM never imports the
+        conn layer (which would pull protobuf into the Pyodide import graph)."""
+        if self.p2p_name == P2P_PUBLIC:
+            return P2P_WORLD
+        return P2P_PUBLIC
 
     def _set_state(self, state: SessionState, timeout_s: Optional[float]) -> None:
         prev = self.state
