@@ -18,10 +18,10 @@ import torch
 import functools
 from typing import Callable
 from PIL.Image import Image
+from unaiverse.hsm import Action
 from unaiverse.stats import Stats
 from unaiverse.clock import clock
 from unaiverse.utils.logger import log
-from typing_extensions import deprecated
 from unaiverse.interaction import Interaction
 from unaiverse.agent_basics import AgentBasics
 from unaiverse.networking.p2p.messages import Msg
@@ -95,9 +95,14 @@ def action(func: Callable) -> Callable:
                              "(it is tolerated to return non-None stuff and interpreted as True, "
                              "but not if it returns None, as happens here)")
         except Exception as e:
-            log.error(f"Action '{func.__name__}' failed since it raised an exception: {e}")  # No-Debug
-            # import traceback  # Debug
-            # log.error(f"{traceback.format_exc()}")  # Debug
+            if not isinstance(e, AssertionError):
+                log.error(f"Action '{func.__name__}' failed since it raised an exception: {e}")  # No-Debug
+                import traceback  # Debug
+                log.error(f"{traceback.format_exc()}")  # Debug
+            else:
+                log.error(f"Action '{func.__name__}' failed since it raised an AssertionError")  # No-Debug
+                import traceback
+                log.error(f"{traceback.format_exc()}")
             ret = False
         return ret
 
@@ -151,6 +156,7 @@ class Agent(AgentBasics):
 
         try:
             behav = self.behav
+            assert behav is not None
             self.stats.store_stat('state', behav.get_state_name(), group_key=own_private_pid, timestamp=t)
             self.stats.store_stat('action', behav.get_action_name(), group_key=own_private_pid, timestamp=t)
             self.stats.store_stat('last_action', behav.get_last_completed_action_name(),
@@ -170,6 +176,7 @@ class Agent(AgentBasics):
             return
 
         self.collect_and_store_own_stats()  # update own stats
+        assert self.stats is not None
         payload = self.stats.get_payload_for_world()
         if not payload:
             log.debug("[send_stats_to_world] No stats to send.")
@@ -190,6 +197,7 @@ class Agent(AgentBasics):
             received_view: The view dictionary received from the world.
             overwrite: Whether to overwrite existing entries. Defaults to False.
         """
+        assert self.stats is not None
         self.stats.update_view(received_view, overwrite)
 
     async def suggest_role_to_world(self, agent: str | None, role: str) -> bool:
@@ -296,9 +304,8 @@ class Agent(AgentBasics):
     async def send(self, action_name: str | None = None,
                    target: str | list[str] | None = None,
                    action_kwargs: dict | None = None,
-                   streams: list[tuple[str, int]] | list[str] | None = None,
-                   data_samples: list[str | Image | torch.Tensor] | dict[
-                       str, str | Image | torch.Tensor] | None = None,
+                   streams: dict[str, str | list[str]] | list[str] | None = None,
+                   data_samples: list[str | Image | torch.Tensor] | None = None,
                    num_steps: int = -1,
                    timeout: float = -1.,
                    from_state: str | None = None,
@@ -326,8 +333,6 @@ class Agent(AgentBasics):
                 or a user hash. It is also fine to specify just the stream name or the stream
                 group, then the user hash or the net hash will be automatically estimated.
             data_samples: List of actual data samples. Ignored when a pre-built Interaction is provided.
-                It can also be a dictionary stream user hash -> data sample, to actually send the samples as if they
-                were produced by a stream.
             num_steps: Number of steps the interaction spans (used when building from raw args).
                 Ignored when a pre-built Interaction is provided.
             timeout: Maximum time for the interaction. Ignored when a pre-built Interaction is provided.
@@ -355,9 +360,14 @@ class Agent(AgentBasics):
         if wait_completion and volatile:
             raise GenException("You cannot wait for completion a volatile interaction (it will not return any updates)")
 
-        first_run = True
-        system_interaction = None
-        if interaction is not None:
+        if wait_completion and interaction is None:
+            raise GenException("You cannot wait for completion by directly calling this action, without an interaction"
+                               " (the state of the action needs to be saved in the interaction object)")
+
+        if interaction is None:  # This happens when calling 'send' from the code, e.g., inside another action
+            system_interaction = None
+            first_run = True
+        else:
             system_interaction = interaction
             first_run = system_interaction.get_mark() is None
 
@@ -367,15 +377,20 @@ class Agent(AgentBasics):
                                                 data_samples, num_steps, timeout, from_state, to_state, callback,
                                                 forced_uuid, id, copy_sys, volatile)
             if wait_completion:
+                assert system_interaction is not None
+                assert isinstance(system_interaction.action_ref, Action)
                 system_interaction.action_ref.set_default_timeout()  # This will make the action pedantic
                 system_interaction.set_mark(sent_interaction)  # First run, Saving the interaction that was sent
                 return False
             else:
                 if system_interaction:
+                    assert isinstance(system_interaction.action_ref, Action)
                     system_interaction.action_ref.set_timeout(-1.)  # Clear timeouts to ensure it is not pedantic
                 return sent_interaction is not None
         else:
+            assert system_interaction is not None
             sent_interaction = system_interaction.get_mark()  # Loading the interaction that was sent at the first run
+            sent_interaction: Interaction
             if sent_interaction.is_completed():
                 return True  # The mark will be automatically cleared by the Action class
             else:
@@ -462,7 +477,7 @@ class Agent(AgentBasics):
         Returns:
             True if the learning step ran successfully, False otherwise.
         """
-        if (self.proc_opts['optimizer'] is None
+        if (self.proc_opts is None or self.proc_opts['optimizer'] is None
                 or self.proc_opts['losses'] is None
                 or len(self.proc_opts['losses']) == 0):
             log.misc(f"Current processor has no learning skills (or learning options not specified)")
@@ -506,7 +521,9 @@ class Agent(AgentBasics):
         Returns:
             True all the times.
         """
-        log.debug(f"The following interaction was completed: "
+        if interaction is None:
+            return False
+        log.debug(f"[show] The following interaction was completed: "
                   f"{interaction.to_code_str(True, True)}")
         return True
 
@@ -622,8 +639,6 @@ class Agent(AgentBasics):
         Returns:
             True if disengagement requests were successfully sent to at least one engaged agent, False otherwise.
         """
-        at_least_one_sent = False
-
         if len(self._engaged_agents) > 0:
             log.misc(f"Sending disengagement request to {', '.join([x for x in self._engaged_agents])}")
         if await self._send(target=list(self._engaged_agents), action_name="disengage",
@@ -781,8 +796,10 @@ class Agent(AgentBasics):
                 net_hash_to_stream_dict = self.find_streams(agent, "processor", discard_owned=True)
                 for stream_dict in net_hash_to_stream_dict.values():
                     for stream_obj in stream_dict.values():
+                        assert stream_obj.props is not None
                         if data_type is not None and stream_obj.props.data_type != data_type:
                             continue
+                        assert stream_obj.props is not None
                         if not stream_obj.props.is_public():
                             data = stream_obj.get("received_some_asked_data", uuid=uuid)
                             data_tag = stream_obj.get_tag(uuid=uuid)
@@ -792,6 +809,7 @@ class Agent(AgentBasics):
                                     return True
                                 else:
                                     got_something = True
+                                    _processing_fcn: Callable
                                     _processing_fcn(agent, stream_obj.props, data, data_tag)
         return got_something
 
@@ -938,6 +956,7 @@ class Agent(AgentBasics):
                   f" will return {len(correctly_asked) > 0}")
         return len(correctly_asked) > 0
 
+    # noinspection PyUnusedLocal
     @action
     async def subscribe(self, stream_owners: list[str] | None = None, stream_props: list[str] | None = None,
                         unsubscribe: bool = False, interaction: Interaction | None = None) -> bool:
@@ -954,33 +973,12 @@ class Agent(AgentBasics):
         Returns:
             True if the action is successful, False otherwise.
         """
+        if stream_props is None or stream_owners is None:
+            log.debug("[subscribe] Called without specifying required arguments")
+            return False
+
         log.debug(f"[subscribe] unsubscribe: {unsubscribe}, "
                   f"stream_owners: {stream_owners}, stream_props: ... ({len(stream_props)} props)")
-
-        _requester = interaction.requester
-        if _requester is not None:
-            if isinstance(_requester, list):
-                for _r in _requester:
-                    if self.behaving_in_world():
-                        if _r not in self.world_agents and _requester not in self.world_masters:
-                            log.error(f"Unknown agent: {_r} in list {_requester} (fully skipping action subscribe)")
-                            return False
-                    else:
-                        if _r not in self.public_agents:
-                            log.error(f"Unknown agent: {_r} in list {_requester} (fully skipping action subscribe)")
-                            return False
-            else:
-                if self.behaving_in_world():
-                    if _requester not in self.world_agents and _requester not in self.world_masters:
-                        log.error(f"Unknown agent: {_requester} (fully skipping action subscribe)")
-                        return False
-                else:
-                    if _requester not in self.public_agents:
-                        log.error(f"Unknown agent: {_requester} (fully skipping action subscribe)")
-                        return False
-        else:
-            log.error("Unknown requester (None)")
-            return False
 
         # Building properties
         props_dicts = []
@@ -1219,6 +1217,7 @@ class Agent(AgentBasics):
 
         log.misc(f"Checking if the current preferred playlist item "
                  f"(id: {self._cur_preferred_stream}) is the '{what}' one")
+
         if what == "first":
             return self._cur_preferred_stream == 0
         elif what == "last":
@@ -1239,6 +1238,8 @@ class Agent(AgentBasics):
         elif what == "not_last_song":
             num_streams_in_playlist = len(self._preferred_streams) // self._repeat
             return (self._cur_preferred_stream + 1) % num_streams_in_playlist != 0
+        else:
+            return False
 
     @action
     async def set_pref_streams(self, net_hashes: list[str], repeat: int = 1) -> bool:
@@ -1296,6 +1297,8 @@ class Agent(AgentBasics):
             net_hash = self._preferred_streams[self._cur_preferred_stream]
         else:
             net_hash = self.user_stream_hash_to_net_hash(stream_hash)
+
+        assert net_hash is not None
 
         # Agents to evaluate
         if agents_to_evaluate is None:
@@ -1424,36 +1427,6 @@ class Agent(AgentBasics):
         else:
             return True
 
-    def resolve_agent_ref(self, ref: str) -> str | None:
-        """Resolve an agent name or peer_id to a peer_id.
-
-        If ``ref`` is already a known peer_id, it is returned as-is.
-        Otherwise, the method searches all known agents by node_name.
-
-        Args:
-            ref: A peer_id or agent name.
-
-        Returns:
-            The peer_id if found, None otherwise.
-        """
-
-        # If already a valid peer_id
-        if ref in self.all_agents:
-            return ref
-
-        # Search by email@node_name (if only node_name is provided, assumes it is one of your agents)
-        if '@' not in ref:
-            your_email = self.get_profile().get_static_profile()['email']
-            ref = your_email + '@' + ref
-
-        for peer_id, profile in self.all_agents.items():
-            static_profile = profile.get_static_profile() if hasattr(profile, 'get_static_profile') else {}
-            if isinstance(static_profile, dict):
-                if (static_profile.get('email', '') + '@' + static_profile.get('node_name')) == ref:
-                    return peer_id
-
-        return None
-
     def resolve_stream_ref(self, ref: str, public: bool) -> str | None:
         """Resolve a stream name to a stream user or net hash (heuristic, gives priority to owned streams).
 
@@ -1466,61 +1439,10 @@ class Agent(AgentBasics):
             The stream user hash or net hash if found, None otherwise.
         """
 
-        # If already a valid user hash
-        if ref in self.known_streams_by_user_hash:
-            return ref
-
-        # If already a valid net hash
-        if ref in self.known_streams:
-            return ref
-
         if ref == "<playlist>":
             return self._preferred_streams[self._cur_preferred_stream]
-
-        # If it is formatted as a net hash, but was not found, then nothing to do
-        if Stream.is_net_hash(ref):
-            return None
-
-        # By default, we will try to resolve by looking at owned (first) and other (then) streams
-        search_owned_streams = True
-        search_other_streams = True
-
-        # If it looks like a user hash but was not found in the code above, then it could be a stream group
-        # represented as a user hash, so we clear it, and we keep the group name only. Moreover, since it will also
-        # contain a peer ID, we immediately know where to look
-        if Stream.is_user_hash(ref):
-            peer_id = DataProps.peer_id_from_user_hash(ref)
-            ref = DataProps.name_from_user_hash(ref)
-            search_owned_streams = peer_id == self.get_peer_id()
-            search_other_streams = not search_owned_streams
-
-        # Search your own streams first (priority)
-        if search_owned_streams:
-            for user_hash, stream_obj in self.owned_streams_by_user_hash.items():
-                if public and not stream_obj.is_public():
-                    continue
-                if ref == Stream.name_from_user_hash(user_hash):
-                    return user_hash
-            for net_hash, stream_dict in self.owned_streams.items():
-                if public and not next(iter(stream_dict.values())).is_public():
-                    continue
-                if ref == Stream.name_or_group_from_net_hash(net_hash):
-                    return net_hash
-
-        # Search all streams then
-        if search_other_streams:
-            for user_hash, stream_obj in self.known_streams_by_user_hash.items():
-                if public and not stream_obj.is_public():
-                    continue
-                if ref == Stream.name_from_user_hash(user_hash):
-                    return user_hash
-            for net_hash, stream_dict in self.known_streams.items():
-                if public and not next(iter(stream_dict.values())).is_public():
-                    continue
-                if ref == Stream.name_or_group_from_net_hash(net_hash):
-                    return net_hash
-
-        return None
+        else:
+            return super().resolve_stream_ref(ref, public)
 
     def __compare_streams(self, net_hash_a: str, net_hash_b: str,
                           how: str = "mse", steps: int = 100, re_offset: bool = False) -> tuple[float, bool]:
@@ -1531,7 +1453,7 @@ class Agent(AgentBasics):
         Args:
             net_hash_a: The network hash of the first stream.
             net_hash_b: The network hash of the second stream.
-            how: The comparison metric ('mse', 'max', 'geqX').
+            how: The comparison metric ('mse', 'max', 'geq-X').
             steps: The number of samples to compare.
             re_offset: A boolean to re-align stream tags before comparison.
 
@@ -1552,7 +1474,7 @@ class Agent(AgentBasics):
 
         if how not in ["mse", "max"] and not how.startswith("geq"):
             log.error(f"Data can be compared by MSE, or by comparing the argmax ('max'), or comparing the number "
-                      f"of corresponding bits (obtained by 'geqX', where 'X' is a number). Unknown: {how})")
+                      f"of corresponding bits (obtained by 'geq-X', where '-X' is a number). Unknown: {how})")
             return -1., False
 
         stream_dict_a = self.known_streams[net_hash_a]
@@ -1735,6 +1657,7 @@ class Agent(AgentBasics):
             # The following code automatically advances the tag by 1 for stream "a", that is expected to be the
             # reference stream (i.e., the one for which the agent has all samples, with no missing data in between)
             if a_tag_prev is not None and a_tag <= a_tag_prev:
+                a_tag_prev: int
                 a_tag = int(a_tag_prev) + 1  # Fixed tag detected (patching)
                 a_tag_w_offset = a_tag - a_tag_offset
 
@@ -1759,7 +1682,8 @@ class Agent(AgentBasics):
                         k_b += 1  # A restart was detected, it means that "stream_b" is behind, let's move it ahead
                 elif b_tag_w_offset < a_tag_w_offset:
                     log.user(
-                        f"Comparing tags by {how}: {a_tag} vs {b_tag} -> too early w.r.t. expected, samples: {a} vs {b}")
+                        f"Comparing tags by {how}: {a_tag} vs {b_tag} -> too early w.r.t. expected, "
+                        f"samples: {a} vs {b}")
                     return -1., False
 
         log.user(f"Comparing error: {o / steps}")

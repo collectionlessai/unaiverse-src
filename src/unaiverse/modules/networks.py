@@ -873,9 +873,10 @@ class ResNet(ModuleWrapper):
     def __init__(self, d_dim: int = -1, freeze_backbone: bool = True, *args, **kwargs):
         net = torchvision.models.resnet50(weights="IMAGENET1K_V1")
         if freeze_backbone:
-            for layer in net.parameters():
-                if layer != net.fc:
-                    layer.requires_grad = False
+            for p in net.parameters():
+                p.requires_grad = False
+            for p in net.fc.parameters():
+                p.requires_grad = True
 
         if d_dim > 0:
             net.fc = torch.nn.Sequential(
@@ -892,9 +893,10 @@ class ResNetCNU(ModuleWrapper):
                  delta: int = 1, scramble: bool = False, freeze_backbone: bool = True, *args, **kwargs):
         net = torchvision.models.resnet50(weights="IMAGENET1K_V1")
         if freeze_backbone:
-            for layer in net.parameters():
-                if layer != net.fc:
-                    layer.requires_grad = False
+            for p in net.parameters():
+                p.requires_grad = False
+            for p in net.fc.parameters():
+                p.requires_grad = True
 
         if d_dim > 0:
             net.fc = torch.nn.Sequential(

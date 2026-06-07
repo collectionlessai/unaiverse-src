@@ -31,14 +31,19 @@ from pathlib import Path
 import importlib.machinery
 from datetime import datetime
 from collections import deque
+from typing import TYPE_CHECKING
 from unaiverse.custom import GenException
+
+# This import ONLY happens during IDE/Type inspection
+if TYPE_CHECKING:
+    from unaiverse.networking.node.node import Node
 
 
 def build_unaid(profile):
     return profile.get_static_profile()['email'] + '/' + profile.get_static_profile()['node_name']
 
 
-def save_node_addresses_to_file(node: object, dir_path: str, public: bool,
+def save_node_addresses_to_file(node: "Node", dir_path: str, public: bool,
                                 filename: str = "addresses.txt", append: bool = False) -> None:
     """Writes the hosted node's name and its public or world addresses to a file.
 
@@ -102,7 +107,7 @@ class Silent:
     """Context manager that suppresses stdout by redirecting it to /dev/null."""
 
     def __init__(self, ignore: bool = False) -> None:
-        """Initialises the Silent context manager.
+        """Initializes the Silent context manager.
 
         Args:
             ignore: If True, stdout is not suppressed (context manager is a no-op; default: False).
@@ -135,7 +140,7 @@ def countdown_start(seconds: int, msg: str) -> threading.Thread:
         The background ``threading.Thread`` running the countdown.
     """
     class TqdmPrintRedirector:
-        def __init__(self, tqdm_instance: object) -> None:
+        def __init__(self, tqdm_instance: tqdm) -> None:
             self.tqdm_instance = tqdm_instance
             self.original_stdout = sys.__stdout__
 
@@ -245,8 +250,8 @@ def show_images_grid(image_paths: list[str], max_cols: int = 3) -> None:
     widths, heights = zip(*[(img.shape[1], img.shape[0]) for img in images])
 
     # Use average width/height for scaling
-    avg_width = sum(widths) / len(widths)
-    avg_height = sum(heights) / len(heights)
+    avg_width = float(sum(widths)) / len(widths)
+    avg_height = float(sum(heights)) / len(heights)
 
     fig_width = cols * avg_width / 100
     fig_height = rows * avg_height / 100
@@ -254,6 +259,7 @@ def show_images_grid(image_paths: list[str], max_cols: int = 3) -> None:
     fig, axes = plt.subplots(rows, cols, figsize=(fig_width, fig_height))
     axes = axes.flatten() if n > 1 else [axes]
 
+    assert fig.canvas.manager is not None
     fig.canvas.manager.set_window_title("Image Grid")
 
     # Hide unused axes
@@ -280,11 +286,11 @@ class FileTracker:
 
     def __init__(self, folder: str, ext: str = ".json",
                  prefix: str | None = None, skip: str | None = None) -> None:
-        """Initialises the FileTracker and takes an initial snapshot of the folder.
+        """Initializes the FileTracker and takes an initial snapshot of the folder.
 
         Args:
             folder: Path to the folder to monitor.
-            ext: File extension to watch (default: ``".json"``).
+            ext: File extension to watch (default: ".json").
             prefix: If set, only files whose names start with this prefix are tracked (default: None).
             skip: If set, files with this exact name are ignored (default: None).
         """
@@ -529,7 +535,7 @@ def prepare_app_dir(app_name: str = "unaiverse") -> str:
     app_name = app_name.lower()
     if os.name == "nt":  # Windows
         if os.getenv("APPDATA") is not None:
-            key_dir = os.path.join(os.getenv("APPDATA"), "Local", app_name)  # Expected
+            key_dir = os.path.join(str(os.getenv("APPDATA")), "Local", app_name)  # Expected
         else:
             key_dir = os.path.join(str(Path.home()), f".{app_name}")  # Fallback
     else:  # Linux/macOS
@@ -605,12 +611,14 @@ def get_key_considering_multiple_sources(key_variable: str | None) -> str:
             msg = "UNaIVERSE key (the exact same key) present in multiple locations: " + ", ".join(source_names)
             print(msg)
         if multiple_source and mismatching:
+            assert isinstance(first_source, str)
             msg = "UNaIVERSE keys (different keys) present in multiple locations: " + ", ".join(source_names)
             msg += "\nLoaded the one stored in " + first_source
             print(msg)
         # if not multiple_source:
         #    msg = f"UNaIVERSE key loaded from {first_source}"
         #    print(msg)
+        assert isinstance(first_key, str)
         return first_key
     else:
 
@@ -627,7 +635,7 @@ class PolicyFilterDelayAction:
     """Policy filter that delays self-generation or learning actions by a configurable wait time."""
 
     def __init__(self, action_names: set[str], wait: float, add_random_up_to: float = 0.) -> None:
-        """Initialises the PolicyFilterSelfGen.
+        """Initializes the PolicyFilterSelfGen.
 
         Args:
             action_names: The name of the actions to delay (set).
@@ -644,7 +652,7 @@ class PolicyFilterDelayAction:
         if wait <= 0.:
             raise GenException("Invalid number of seconds ('wait' must be > 0)")
 
-    def __call__(self, action_id: int, request: object, all_actions: object,
+    def __call__(self, action_id: int, request: object, all_actions: list,
                  policy_filter_opts: dict) -> tuple[int, object]:
         """Applies the timing-based filter to the selected policy action.
 
@@ -705,7 +713,7 @@ class PolicyHumanLikeDelay:
     """
 
     def __init__(self, action_names: set[str], median_delay: float = 5.0, variability: float = 0.6) -> None:
-        """Initialises the PolicyHumanLikeDelay.
+        """Initializes the PolicyHumanLikeDelay.
 
         Args:
             action_names: The name of the actions to delay (set).
@@ -742,7 +750,7 @@ class PolicyHumanLikeDelay:
 
         return raw
 
-    def __call__(self, action_id: int, request: object, all_actions: object,
+    def __call__(self, action_id: int, request: object, all_actions: list,
                  policy_filter_opts: dict) -> tuple[int, object]:
         """Applies human-like timing filter to the selected policy action.
 
@@ -784,7 +792,7 @@ class MultiPartLimitedDict(dict):
     """A dict subclass that keeps at most a configurable number of entries per named partition."""
 
     def __init__(self, part_name_to_limit: dict) -> None:
-        """Initialises the MultiPartLimitedDict.
+        """Initializes the MultiPartLimitedDict.
 
         Args:
             part_name_to_limit: A dictionary mapping partition names to their maximum entry counts.
@@ -878,10 +886,13 @@ def analyze_code(files_in_memory: dict[str, str]) -> bool:
                         return True
 
         # Detect imports
-        if isinstance(ast_node, (ast.Import, ast.ImportFrom)):
+        if isinstance(ast_node, ast.Import):
             for alias in ast_node.names:
                 if alias.name.split('.')[0] in dangerous_modules:
                     return True
+        elif isinstance(ast_node, ast.ImportFrom):
+            if ast_node.module and ast_node.module.split('.')[0] in dangerous_modules:
+                return True
 
         return False
 

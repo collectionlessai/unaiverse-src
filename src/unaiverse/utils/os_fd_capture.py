@@ -122,15 +122,18 @@ class FdCapture:
             #    dup2, those file objects now also write into the pipe.  We
             #    therefore reassign sys.stdout/stderr to write through saved_fd
             #    so that Logger screen output bypasses the pipe.
+            assert self._write_fd is not None
             os.dup2(self._write_fd, self._target_fd)
 
             if self._target_fd == 1:
+                assert self._saved_fd is not None
                 self._py_stream = sys.stdout
                 sys.stdout = open(self._saved_fd, "w",
                                   encoding=self._encoding, errors=self._errors,
                                   closefd=False)  # closefd=False: we own saved_fd
             else:
                 self._py_stream = sys.stderr
+                assert self._saved_fd is not None
                 sys.stderr = open(self._saved_fd, "w",
                                   encoding=self._encoding, errors=self._errors,
                                   closefd=False)
@@ -142,6 +145,7 @@ class FdCapture:
                 daemon=True,
             )
             self._active = True
+            assert self._thread is not None
             self._thread.start()
 
     def stop(self, timeout: float = 2.0) -> None:
@@ -169,11 +173,13 @@ class FdCapture:
                 sys.stderr = self._py_stream
 
             # 2. Restore the original OS-level fd
+            assert self._saved_fd is not None
             os.dup2(self._saved_fd, self._target_fd)
             os.close(self._saved_fd)
             self._saved_fd = None
 
             # 3. Close write end of pipe → reader thread sees EOF
+            assert self._write_fd is not None
             os.close(self._write_fd)
             self._write_fd = None
 
@@ -206,6 +212,7 @@ class FdCapture:
         # Keep a local reference — self._read_fd may be cleared by stop()
         # but we captured it before the thread started.
         read_fd = self._read_fd
+        assert read_fd is not None
         try:
             while True:
                 try:

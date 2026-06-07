@@ -119,8 +119,8 @@ class StreamProxy:
                 are bind, the first found one is returned.
 
         Returns:
-            The data from the requested stream, or None if no new data is available.
-            If all_uuids is True, returns a list of tuples, (data, data_tag).
+            The data from the requested stream, or None if no new data is available (it is a list if key = None).
+            If all_uuids is True, returns a wild list of tuples (data, data_tag).
         """
         if len(self._stream_list) == 0:
             return None
@@ -140,7 +140,7 @@ class StreamProxy:
             ret = []
             for s in self._stream_list:
                 if isinstance(s, Stream):
-                    if data_type and s.props.data_type != data_type:
+                    if data_type and (s.props is None or s.props.data_type != data_type):
                         continue
                     data = s.get(requested_by, uuid, all_uuids)  # This might will be None if requested multiple times
                     if data is not None:
@@ -155,15 +155,17 @@ class StreamProxy:
             else:
                 return self._stream_list[key]  # Default value
         elif key in self._streams:
-            if isinstance(self._streams[key], Stream):
-                return self._streams[key].get(requested_by, uuid, all_uuids)
+            stream = self._streams[key]
+            if isinstance(stream, Stream):
+                return stream.get(requested_by, uuid, all_uuids)
             else:
-                return self._streams[key]  # Default value
+                return stream  # Default value
         elif key in self._streams_by_name_only:
-            if isinstance(self._streams_by_name_only[key], Stream):
-                return self._streams_by_name_only[key].get(requested_by, uuid, all_uuids)
+            stream = self._streams_by_name_only[key]
+            if isinstance(stream, Stream):
+                return stream.get(requested_by, uuid, all_uuids)
             else:
-                return self._streams_by_name_only[key]  # Default value
+                return stream  # Default value
         else:
             raise GenException(f"Unknown stream/key: {key}"
                                f"\n{self._stream_list}\n{self._streams}\n{self._streams_by_name_only}")
@@ -253,20 +255,22 @@ class StreamProxy:
                     self._streams[key_at_index] = data
                     name_only = StreamProxy.__get_name_only(key_at_index)
                     self._streams_by_name_only[name_only] = data
+            return key_or_data
         elif isinstance(key_or_data, int):
             s = self._stream_list[key_or_data]
             if isinstance(s, Stream):
-                s.set(data, uuid=uuid, force=force)
+                return s.set(data, uuid=uuid, force=force)
             else:
                 self._stream_list[key_or_data] = data
                 key_at_index = next(islice(self._streams, key_or_data, None))
                 self._streams[key_at_index] = data
                 name_only = StreamProxy.__get_name_only(key_at_index)
                 self._streams_by_name_only[name_only] = data
+                return data
         elif key_or_data in self._streams:
             s = self._streams[key_or_data]
             if isinstance(s, Stream):
-                s.set(data, data_tag, uuid=uuid, force=force)
+                return s.set(data, data_tag, uuid=uuid, force=force)
             else:
                 self._streams[key_or_data] = data
 
@@ -276,15 +280,18 @@ class StreamProxy:
                 self._stream_list[p] = data
                 name_only = StreamProxy.__get_name_only(key_or_data)
                 self._streams_by_name_only[name_only] = data
+                return data
         elif key_or_data in self._streams_by_name_only:
-            if isinstance(self._streams_by_name_only[key_or_data], Stream):
-                return self._streams_by_name_only[key_or_data].set(data, data_tag, uuid=uuid, force=force)
+            stream = self._streams_by_name_only[key_or_data]
+            if isinstance(stream, Stream):
+                return stream.set(data, data_tag, uuid=uuid, force=force)
             else:
                 # We guess the full name and call set again using it
                 for i, full_name in enumerate(self._streams.keys()):
                     name_only = StreamProxy.__get_name_only(full_name)
                     if name_only == key_or_data:
                         return self.set(full_name, data, data_tag, uuid, force)
+                raise GenException(f"Unknown stream: {key_or_data}")
         else:
             raise GenException(f"Unknown stream: {key_or_data}")
 
@@ -427,9 +434,13 @@ class StreamsProxyWithDefaults(StreamProxy):
         self.default_values = default_values
 
     def get(self, *args, **kwargs):
-        data_list = super().get(*args, **kwargs)
-        if data_list is not None and self.default_values is not None:
-            for i, data in enumerate(data_list):
-                if data is None:
-                    data_list[i] = self.default_values[i]
-        return data_list
+        if 'key' not in kwargs and 'all_uuids' not in kwargs:
+            data_list = super().get(*args, **kwargs)
+            if data_list is not None and self.default_values is not None:
+                assert isinstance(data_list, list)
+                for i, data in enumerate(data_list):
+                    if data is None:
+                        data_list[i] = self.default_values[i]
+            return data_list
+        else:
+            return super().get(*args, **kwargs)

@@ -21,7 +21,7 @@ from typing import Any
 from datetime import timedelta
 from unaiverse.utils.logger import log
 from sortedcontainers import SortedDict
-from typing_extensions import deprecated
+
 
 # A fixed palette for consistent coloring
 THEMES = {
@@ -297,6 +297,14 @@ class UIPlot:
         """
         return json.dumps({'data': self._data, 'layout': self._layout})
 
+    @property
+    def layout(self):
+        return self._layout
+
+    @property
+    def data(self):
+        return self._data
+
 
 class DefaultBaseDash:
     """
@@ -355,6 +363,7 @@ class DefaultBaseDash:
             "bot_right": ("xaxis4", "yaxis4")
         }
 
+    # noinspection PyUnresolvedReferences
     def add_panel(self, ui_plot: UIPlot, position: str):
         """Merges a UIPlot into one of the four fixed grid positions.
 
@@ -367,11 +376,11 @@ class DefaultBaseDash:
             return
 
         xa, ya = self._map[position]
-        self.layout: dict[str, dict[str, list[float]]]
-        x_dom: list[float] = self.layout[xa]["domain"]
-        y_dom: list[float] = self.layout[ya]["domain"]
+        x_dom = self.layout[xa]["domain"]
+        y_dom = self.layout[ya]["domain"]
 
         # Merge Traces
+        # noinspection PyProtectedMember
         for t in ui_plot._data:
             nt = t.copy()
             if nt.get("type") == "table":
@@ -383,7 +392,7 @@ class DefaultBaseDash:
             self.traces.append(nt)
 
         # Merge Layout
-        src_l = ui_plot._layout
+        src_l = ui_plot.layout
         dest_x = self.layout.setdefault(xa, {})
         dest_y = self.layout.setdefault(ya, {})
         if "xaxis" in src_l:
@@ -393,6 +402,8 @@ class DefaultBaseDash:
 
         # Add Title via Annotation
         if src_l.get("title"):
+            assert isinstance(x_dom, list)
+            assert isinstance(y_dom, list)
             self.layout: dict[str, list]
             self.layout.setdefault("annotations", []).append({
                 "text": f"<b>{src_l['title']}</b>",
@@ -512,7 +523,7 @@ class Stats:
         self.world_ungrouped_keys: set[str] = set()
         self.agent_grouped_keys: set[str] = set()
         self.agent_ungrouped_keys: set[str] = set()
-        self.stat_types = {}
+        self.stat_types: dict[str, type] = {}
         self._stat_defaults: dict[str, Any] = {}
         self._initialize_key_sets()
 
@@ -576,11 +587,13 @@ class Stats:
             return
 
         try:
+            assert isinstance(self.db_path, str)
             db_dir = os.path.dirname(self.db_path)
             if db_dir:
                 os.makedirs(db_dir, exist_ok=True)
 
             self._db_conn = sqlite3.connect(self.db_path)
+            assert self._db_conn is not None
             self._db_conn.execute('PRAGMA journal_mode=WAL;')
             self._db_conn.execute('PRAGMA synchronous=NORMAL;')
 
@@ -645,7 +658,7 @@ class Stats:
             static stats, or ``None`` if this instance is not the World.
         """
         if not self.is_world:
-            return
+            return None
 
         peer_cache = self._stats[self.GROUP_KEY].setdefault(group_key, {})
         if stat_name not in peer_cache:
@@ -698,6 +711,7 @@ class Stats:
             raise KeyError(f'Statistic "{stat_name}" is not defined in the stat_types schema.')
 
         schema_type = self.stat_types.get(stat_name)  # no default to str because it's a silent fail
+        assert schema_type is not None
         if isinstance(value, schema_type):
             return value
         else:
@@ -706,7 +720,7 @@ class Stats:
                 return schema_type(value)
             except (ValueError, TypeError, AttributeError):
                 log.error(f'Type mismatch for {stat_name}: '
-                          f'Expected {schema_type} but got {type(value)}. '
+                          f'Expected {schema_type.__name__} but got {type(value)}. '
                           f'Value: "{value}". Storing as string.')
                 return str(value)  # Fallback
 
@@ -884,6 +898,7 @@ class Stats:
                     target[stat_name] = val_or_ts
 
         # 1. Merge World (Ungrouped) Stats
+        assert view_data is not None
         if 'world' in view_data:
             _merge_dict(self._world_view.setdefault('world', {}), view_data['world'])
 
@@ -894,6 +909,7 @@ class Stats:
                 target_peer = target_peers.setdefault(peer_id, {})
                 _merge_dict(target_peer, peer_data)
 
+    # noinspection PyMethodMayBeStatic
     def _get_last_val_from_view(self, view: dict[str, Any], name: str) -> str:
         """Extracts the most recent scalar value for a world-level stat from the view snapshot.
 
@@ -1019,7 +1035,7 @@ class Stats:
         """
         if isinstance(value, SortedDict):
             idx = value.bisect_left(since_timestamp)
-            sliced_items = value.items()[idx:]
+            sliced_items = value.islice(start=idx)
             # Convert to list of [timestamp, value] for Plotly readiness
             return [[k, self._make_json_serializable(v)] for k, v in sliced_items]
         else:
@@ -1162,7 +1178,8 @@ class Stats:
         if not self._db_conn:
             return
         pass
-    
+
+    # noinspection PyMethodMayBeStatic
     def _prune_ungrouped_timeseries(self, cache: SortedDict, cutoff: int):
         # For ungrouped dynamic stats we always keep a value on the cutoff line
         last_popped_val = None
@@ -1638,6 +1655,7 @@ class Stats:
             if x:
                 label = title_override if title_override else "World"
                 color = color_override if color_override else THEME['main']
+                color: str | None
                 panel.add_line(x, y, name=label, color=color,
                                legend_group=label, show_legend=show_legend)
 
@@ -1653,6 +1671,7 @@ class Stats:
                     panel.add_line(x, y, name=f'{pid[-6:]}', color=c,
                                    legend_group=pid, show_legend=show_legend)
 
+    # noinspection PyMethodMayBeStatic
     def _populate_indicator(self, panel: 'UIPlot', view: dict[str, Any], stat_name: str,
                             peer_ids: list[str] | None = None):
         """Extracts a scalar value and adds a big-number indicator trace to the panel.
@@ -1675,6 +1694,7 @@ class Stats:
 
         panel.add_indicator(val, title=stat_name)
 
+    # noinspection PyMethodMayBeStatic
     def _populate_table(self, panel: 'UIPlot', view: dict[str, Any], stat_name: str,
                         peer_ids: list[str] | None = None):
         """Builds a two-column ``Entity / Value`` table and adds it to the panel.
@@ -1841,6 +1861,7 @@ class Stats:
         # 3. Plot
         panel.add_bar(xs=sorted_keys, ys=sorted_vals, names=sorted_vals, colors=colors)
 
+    # noinspection PyMethodMayBeStatic
     def _get_consistent_color(self, unique_str: str) -> str:
         """Returns a deterministic color from the theme palette for a given string.
 
@@ -1852,7 +1873,7 @@ class Stats:
 
         Returns:
             A CSS hex color string from the ``THEME['peers']`` palette. Returns
-            ``'#ffffff'`` for empty strings.
+            '#ffffff' for empty strings.
         """
         if not unique_str:
             return '#ffffff'

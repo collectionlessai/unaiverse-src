@@ -17,13 +17,18 @@ import json
 import inspect
 import uuid as _uuid
 from enum import Enum
+from typing import TYPE_CHECKING
 from unaiverse.clock import clock
-from collections.abc import Callable
 from unaiverse.utils.logger import log
 from unaiverse.streams.dataprops import DataProps
 from unaiverse.custom import Custom, GenException
 from unaiverse.streams.streamproxy import StreamProxy
 from unaiverse.streams.streams import Stream, BufferedStream, serialize_payload, deserialize_payload
+
+# This import ONLY happens during IDE/Type inspection
+if TYPE_CHECKING:
+    from unaiverse.agent import AgentBasics
+    from unaiverse.hsm.action import Action
 
 
 class Interaction:
@@ -37,8 +42,8 @@ class Interaction:
     def __init__(self,
                  action_name: str | None = None,
                  action_kwargs: dict | None = None,
-                 streams: dict[str, str] | list[str] | None = None,
-                 data_samples: list | dict | None = None,
+                 streams: dict[str, str | list[str]] | list[str] | None = None,
+                 data_samples: list | None = None,
                  num_steps: int = -1,
                  requester: str | None = None,
                  target: str | list[str] | None = None,
@@ -55,15 +60,14 @@ class Interaction:
             action_name: The name of the action being requested (e.g. "process", "learn").
             action_kwargs: Action arguments (dict, no streams).
             streams: List of (stream_name - a.k.a. stream user hash, num_samples) tuples specifying expected data.
-            data_samples: List of actual data samples (alternative to samples specification). It can also be a dict
-                stream user hash -> data sample, that will load samples on the indicated stream hashes.
+            data_samples: List of actual data samples (alternative to samples specification).
             num_steps: Total number of steps for this interaction (-1 means no data-based steps).
             requester: Peer ID of the agent originating this interaction.
             target: Peer ID of the target agent or list of peer IDs.
             from_state: Name of the state from which the interaction is expected to happen.
             to_state: Name of the state where the interaction is supposed to yield.
-            timeout: Maximum retry_timeout until which the interaction is valid (-1 means no limit: the InteractionManager
-                will override this with its internal retry_timeout valid for all actions).
+            timeout: Maximum retry_timeout until which the interaction is valid (-1 means no limit: the
+                InteractionManager will override this with its internal retry_timeout valid for all actions).
             callback: Name of the method to call on the agent (the InteractionManager will do it) when this
                 interaction finishes (it must be a method with a single argument, which is the interaction object).
             volatile: If True, it is marked so that the recipient is asked to not
@@ -80,11 +84,11 @@ class Interaction:
         self.target: list[str | None] = target if isinstance(target, list) else [target]
 
         # Identity
-        self.id: str = _uuid.uuid4().hex[0:8] if (id is not None and id == 'random') else id \
+        self.id = _uuid.uuid4().hex[0:8] if (id is not None and id == 'random') else id \
             if id is not None else Custom.SYSTEM_INTERACTION_UUID
 
         # Indexing string (the actual unique identifier of the interaction, that also involves the requester)
-        self.uuid: str = Interaction.build_uuid(self.id, str(self.requester))
+        self.uuid = Interaction.build_uuid(self.id, str(self.requester))
 
         # Forcing a specific UUID (if needed)
         if forced_uuid != "do_not_force":
@@ -92,7 +96,7 @@ class Interaction:
             self.uuid = forced_uuid
 
         # Action requested
-        self.action_name: str = action_name
+        self.action_name = action_name
         self.action_kwargs: dict = action_kwargs if action_kwargs is not None else {}
 
         # Timing information
@@ -129,10 +133,10 @@ class Interaction:
         self.status: InteractionStatus = InteractionStatus.CREATED
         self.data_sent_after_completion = False
         self.buffered_stream_restarted = False
-        self.volatile = volatile
+        self.volatile: bool = volatile
 
         # Pointers
-        self.action_ref: Callable[Interaction] | None = None  # Reference to the actual Action object
+        self.action_ref = None  # Reference to the actual Action object
 
         # Data tags
         self.data_tags: dict[str, list[int]] = {}  # Streams could have different data tags
@@ -425,7 +429,8 @@ class Interaction:
         return self.action_ref.get_delay() > 0 and (time.perf_counter() - starting_time) <= self.action_ref.get_delay()
 
     def is_timed_out(self):
-        """Checks if the action has exceeded its configured retry_timeout period since the last successful execution attempt.
+        """Checks if the action has exceeded its configured retry_timeout period since the last successful
+         execution attempt.
 
         Returns:
             True if the action has timed out, False otherwise.
@@ -435,7 +440,8 @@ class Interaction:
         if self.__starting_time <= 0.:
             return False
 
-        # Checking global retry_timeout: if too much time passed, no matter if the action started or not, it's retry_timeout!
+        # Checking global retry_timeout: if too much time passed, no matter if the action started or not,
+        # it's retry_timeout!
         if self.action_ref.get_total_time() > 0:
             if self.action_ref.get_total_time() <= (time.perf_counter() - self.__starting_time):
                 log.inter(f"Timeout for {self.action_name}! "
@@ -463,7 +469,7 @@ class Interaction:
         else:
             return False
 
-    def set_action_ref(self, action_ref: object) -> None:
+    def set_action_ref(self, action_ref: "Action") -> None:
         """Bind the interaction to its Action object and validate/augment its argument list.
 
         Args:
@@ -530,6 +536,7 @@ class Interaction:
 
             _time = clock.get_time()
             _cycle = clock.get_cycle()
+            self.target: list
             for i, tar in enumerate(self.target):
                 if self.target_completion_reason[i] is None:
                     self.target_completion_reason[i] = reason  # The completion reason of the whole interaction
@@ -567,7 +574,7 @@ class Interaction:
             True if the interaction is older than timeout_secs.
         """
 
-        # Deciding the real value of timeout_specs, also in function of the interaction-specific retry_timeout (if given)
+        # Deciding the real value of timeout_specs also in function of the interaction-specific retry_timeout (if given)
         if timeout_secs is not None and timeout_secs > 0. and self.timeout is not None and self.timeout > 0.:
             timeout_secs = min(timeout_secs, self.timeout)
         elif timeout_secs is None or timeout_secs <= 0.:
@@ -622,9 +629,9 @@ class Interaction:
             target: The agent who handled the data tags (if None, then it's the current agent).
         """
         if data_tags is None:
-            data_tags: dict[str, list[int]] = self.get_new_stream_data_tags()
+            data_tags: dict[str, list[int]] | None = self.get_new_stream_data_tags()
 
-        if len(data_tags) == 0:
+        if data_tags is None or len(data_tags) == 0:
             return
 
         if target is None:
@@ -713,12 +720,12 @@ class Interaction:
             action_kwargs=d.get('action_kwargs', {}),
             streams=d.get('streams', {}),
             data_samples=d.get('data_samples', None),
-            num_steps=d.get('num_steps'),
+            num_steps=d.get('num_steps', -1),
             requester=d.get('requester'),
             target=d.get('target'),
             from_state=d.get('from_state'),
             to_state=d.get('to_state'),
-            volatile=d.get('volatile'),
+            volatile=d.get('volatile', False),
             timeout=d.get('retry_timeout', -1.),
         )
         interaction.uuid = d['uuid']
@@ -757,7 +764,7 @@ class Interaction:
             A compact string describing the interaction.
         """
         s = ""
-        t: list[str] = self.target
+        t = self.target
 
         if include_id:
             s = f"{self.uuid} => "
@@ -839,7 +846,7 @@ class InteractionManager:
     - Waits for all involved streams to have sent data before marking action ready
     """
 
-    def __init__(self, agent: object, max_interactions: int = -1):
+    def __init__(self, agent: "AgentBasics", max_interactions: int = -1):
         """Create an InteractionManager.
 
         Args:
@@ -848,9 +855,9 @@ class InteractionManager:
         """
         self.agent = agent
         self.max_interactions = max_interactions if max_interactions > 0 else Custom.MAX_INTERACTIONS
-        self.sent: dict[str, Interaction] = {}       # uuid -> Interaction (sent by this agent)
-        self.received: dict[str, Interaction] = {}   # uuid -> Interaction (received from others)
-        self.lazy: dict[str, Interaction] = {}   # uuid -> Interaction (added by you)
+        self.sent: dict[str | None, Interaction] = {}       # uuid -> Interaction (sent by this agent)
+        self.received: dict[str | None, Interaction] = {}   # uuid -> Interaction (received from others)
+        self.lazy: dict[str | None, Interaction] = {}   # uuid -> Interaction (added by you)
         self.current: Interaction | None = None      # Currently executing interaction
         self.last_registered: Interaction | None = None
         self.sent_recently_completed: set[Interaction] = set()  # Completed interactions
@@ -954,6 +961,7 @@ class InteractionManager:
         # No matter what the interaction does: the processor output streams of the target be aware of the possibility
         # that this interaction might yield new data
         for target_agent in interaction.target:
+            assert target_agent is not None
             streams_of_target_agent = self.agent.find_streams(target_agent, 'processor', discard_owned=True)
             for stream_dict in streams_of_target_agent.values():
                 for stream in stream_dict.values():
@@ -1081,6 +1089,7 @@ class InteractionManager:
             target = interaction.target
             if target is not None:
                 for i, _target in enumerate(target):
+                    assert _target is not None
                     _target = self.agent.resolve_agent_ref(_target)
                     if _target is not None:
                         target[i] = _target
@@ -1121,6 +1130,7 @@ class InteractionManager:
         # C. Resolving streams
         streams = interaction.streams
         if streams is not None and not already_resolved:
+            streams: dict
             for redirect, streams_list in streams.items():
                 for j, stream_hash in enumerate(streams_list):
                     stream_user_hash_or_net_hash = self.agent.resolve_stream_ref(stream_hash, public)
@@ -1131,7 +1141,7 @@ class InteractionManager:
         return True
 
     def expand_and_normalize_streams(self, interaction: Interaction) -> (
-            tuple)[dict[str | None, list[str]], dict[str | None, list[str]]]:
+            tuple[dict[str | None, list[str]], dict[str | None, list[str]]]):
         """Resolve all stream references in an interaction to fully-populated stream dicts.
 
         Translates user-level and net-level hashes into detailed dicts containing ``user_hash``,
@@ -1211,6 +1221,7 @@ class InteractionManager:
         # We also consider the streams with no specific suggestions (lower priority).
         if processor_will_be_used:
             sources = ['stdin', 'stdunk']
+            assert self.agent.proc_inputs is not None
             pos_stdin_streams = [None] * len(self.agent.proc_inputs)
             for i in range(len(self.agent.proc_inputs)):
                 found_match = -1
@@ -1238,6 +1249,7 @@ class InteractionManager:
             # We ensured that the not-filled-arguments of the processor have a default value, otherwise no ways
             for i in range(len(self.agent.proc_inputs)):
                 if pos_stdin_streams[i] is None:
+                    assert self.agent.proc_optional_inputs is not None
                     if not self.agent.proc_optional_inputs[i]["has_default"]:
                         return False, {}, {}, {}, {}
                     else:
@@ -1250,6 +1262,7 @@ class InteractionManager:
 
             # Matching targets
             sources = ['stdtar', 'stdunk']
+            assert self.agent.proc_outputs is not None
             pos_stdtar_streams = [None] * len(self.agent.proc_outputs)
             for i in range(len(self.agent.proc_outputs)):
                 found_match = -1
@@ -1346,7 +1359,7 @@ class InteractionManager:
         """
         self.current = interaction
 
-        # Default stream bindings (this also automatically switches from private to public and vice-versa)
+        # Default stream bindings (this also automatically switches from private to public and vice versa)
         self.agent.set_default_stream_binding()
 
         if interaction is not None:
@@ -1435,7 +1448,6 @@ class InteractionManager:
                 # Running callback method, if any
                 if interaction.callback is not None:
                     callback_method = getattr(self.agent, interaction.callback)
-
                     self.agent.behav_lone_wolf.enable(False)
                     self.agent.behav.enable(False)
                     if interaction.requester in self.agent.public_agents:
@@ -1456,7 +1468,8 @@ class InteractionManager:
             dest_state: The destination state reached by completing this action.
             reason: The reason for completion.
         """
-        await self.complete(self.current, dest_state=dest_state, reason=reason)
+        if self.current is not None:
+            await self.complete(self.current, dest_state=dest_state, reason=reason)
         self.current = None
 
     def drain_completed(self) -> list[Interaction]:
@@ -1530,6 +1543,7 @@ class InteractionManager:
         """Purge stale buffered data from streams whose associated interaction is done or gone."""
         all_interactions = list(self.received.values()) + list(self.sent.values()) + list(self.lazy.values())
         for interaction in all_interactions:
+            assert interaction is not None
             for stream in interaction.stream_proxy:
 
                 # In case of data samples or default input values, skip
@@ -1538,9 +1552,8 @@ class InteractionManager:
 
                 # We only consider streams whose interactions were either removed, or are already completed, or
                 # were just created (artificial interaction, for example the ones created just to send a sample)
-                if (not stream.has_interaction(interaction.uuid)
-                        or stream.get_interaction(interaction.uuid).completed
-                        or stream.get_interaction(interaction.uuid).created):
+                _interaction = stream.get_interaction(interaction.uuid)
+                if _interaction is None or _interaction.completed or _interaction.created:
 
                     # This will also clear the associated (completed) interaction, if still there
                     stream.clear_expired_data(Custom.DEFAULT_INTER_TIMEOUT)
@@ -1626,7 +1639,7 @@ class InteractionManager:
             return self.lazy[uuid]
         else:
             if consider_completed_too:
-                found_so_far = None
+                found_so_far: Interaction | None = None
                 for inter in self.received_recently_completed:
                     if inter.uuid == uuid:
                         if found_so_far is None or found_so_far.timestamp_completed < inter.timestamp_completed:

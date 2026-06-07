@@ -59,9 +59,9 @@ class Node:
                  clock_delta: float = 1. / 25.,
                  base_identity_dir: str | None = None,
                  only_certified_agents: bool = False,
-                 allowed_node_ids: list[str] | set[str] = None,  # Optional: it is loaded from the online profile
-                 world_masters_node_ids: list[str] | set[str] = None,  # Optional: it is loaded from the online profile
-                 world_masters_node_names: list[str] | set[str] = None,  # Optional: it will be converted to node IDs
+                 allowed_node_ids: list[str] | set[str] | None = None,  # Optional: it is loaded from online profile
+                 world_masters_node_ids: list[str] | set[str] | None = None,  # Optional: it is loaded from profile
+                 world_masters_node_names: list[str] | set[str] | None = None,  # Optional: then converted to node IDs
                  allow_connection_through_relay: bool = True,
                  talk_to_relay_based_nodes: bool = True,
                  run_hook: Callable[['Node'], None] | None = None,
@@ -218,7 +218,7 @@ class Node:
                         self.world_masters_node_ids = set()
                     self.world_masters_node_ids.add(master_node_id)
 
-        # Here you can setup max_instances, max_channels, enable_logging at libp2p level etc.
+        # Here you can set up max_instances, max_channels, enable_logging at libp2p level etc.
         P2P.setup_library(enable_logging=Custom.LIBP2PLOG, unai_logger=log)
 
         # --- PARALLEL P2P NODE CREATION ---
@@ -443,7 +443,7 @@ class Node:
 
         Args:
             alive (bool): Whether to communicate that the node is alive (i.e., if this is False, it means the
-                node is simpy not alive anymore (dead).
+                node is simpy not alive anymore (dead)).
 
         Returns:
             A boolean flag indicating whether the node was already live before sending this.
@@ -1190,7 +1190,7 @@ class Node:
                         except queue.Empty:
                             pass  # If nothing has been typed (+ enter)
 
-                    # Ordinary behaviour
+                    # Ordinary behavior
                     if not must_quit:
                         await self.agent.behave()
                         if self.hosted.im.count_interactions() > 0:
@@ -2275,8 +2275,8 @@ class Node:
             True if the profile is acceptable, otherwise False.
         """
 
-        # If the node ID was not on the list of allowed ones (if the list exists), then stop it
-        # notice that we do not get the node ID from the profile, but from outside (it comes from the token, so safe)
+        # If the node ID was not on the list of allowed ones (if the list exists), then stop it.
+        # Notice that we do not get the node ID from the profile, but from outside (it comes from the token, so safe)
         if ((self.allowed_node_ids is not None and node_id not in self.allowed_node_ids) or
                 (peer_id not in self.agents_to_interview)):
             log.misc(f"Profile of f{peer_id} not in the list of agents to interview or its node ID is not allowed")
