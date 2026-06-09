@@ -68,7 +68,7 @@ class AgentBasics:
     HUMAN = "human"  # Human agent
 
     def __init__(self,
-                 proc: ModuleWrapper | torch.nn.Module | None,
+                 proc: ModuleWrapper | torch.nn.Module | Callable | None,
                  proc_inputs: list[StreamType | str] | None = None,
                  proc_outputs: list[StreamType | str] | None = None,
                  proc_opts: dict | None = None,
@@ -81,7 +81,7 @@ class AgentBasics:
         """Create a new agent.
 
         Args:
-            proc: The processing module (e.g., a neural network) for the agent. Can be None or "default".
+            proc: The processing module (e.g., a neural network) for the agent. Can be None.
             proc_inputs: list of DataProps defining the expected inputs for processor (if None it will be guessed).
             proc_outputs: list of DataProps defining the expected outputs from processor (if None it will be guessed).
             proc_opts: A dictionary of options for the processor.
@@ -251,6 +251,7 @@ class AgentBasics:
         self._node_agents_waiting = agents_waiting
 
         # Checking if human, marking the node
+        assert isinstance(self.proc, ModuleWrapper)
         if self.proc is not None and isinstance(self.proc.module, HumanModule):
             self._node_profile.get_static_profile()["node_type"] = self.HUMAN
 
@@ -2440,6 +2441,8 @@ class AgentBasics:
             IOError: If there is an issue with file operations (e.g., directory creation, writing files).
             TypeError, ValueError, RuntimeError: For other potential issues during serialization or saving.
         """
+        if not (isinstance(self.proc, ModuleWrapper) and isinstance(self.proc.module, torch.nn.Module)):
+            return False
 
         if where == '':
             if self._node_identity_dir is None or len(self._node_identity_dir) == 0:
@@ -2450,11 +2453,15 @@ class AgentBasics:
 
         # Saving the processor
         if self.proc is not None and self.proc_updated_since_last_save:
+            assert isinstance(self.proc, ModuleWrapper)
+            proc: ModuleWrapper = self.proc
+            assert isinstance(proc.module, torch.nn.Module)
+
             pt_final = os.path.join(where, f"{self._node_name}.pt")
             pt_tmp = pt_final + ".tmp"
             try:
                 checkpoint = {
-                    'model_state_dict': self.proc.state_dict(),
+                    'model_state_dict': proc.module.state_dict(),
                 }
 
                 # If your agent has an optimizer, save its state too
@@ -2496,6 +2503,8 @@ class AgentBasics:
         Returns:
             True if loading succeeded.
         """
+        if not (isinstance(self.proc, ModuleWrapper) and isinstance(self.proc.module, torch.nn.Module)):
+            return False
 
         if where == '':
             if self._node_identity_dir is None or len(self._node_identity_dir) == 0:
@@ -2532,15 +2541,17 @@ class AgentBasics:
             try:
                 assert self.proc is not None
                 assert self.proc_opts is not None
+                proc: ModuleWrapper = self.proc
+                assert isinstance(proc.module, torch.nn.Module)
                 checkpoint = torch.load(pt_path)
                 if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
-                    self.proc.load_state_dict(checkpoint['model_state_dict'])
+                    proc.module.load_state_dict(checkpoint['model_state_dict'])
 
                     # Restore Optimizer to proc_opts
                     if 'optimizer_state_dict' in checkpoint and self.proc_opts.get('optimizer') is not None:
                         self.proc_opts['optimizer'].load_state_dict(checkpoint['optimizer_state_dict'])
                 else:
-                    self.proc.load_state_dict(checkpoint)
+                    proc.module.load_state_dict(checkpoint)
             except Exception as e:
                 raise Exception(f"Error loading processor state: {e}")
 

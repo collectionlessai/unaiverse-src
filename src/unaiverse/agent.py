@@ -27,7 +27,7 @@ from unaiverse.agent_basics import AgentBasics
 from unaiverse.networking.p2p.messages import Msg
 from unaiverse.custom import Custom, GenException
 from unaiverse.streams.dataprops import DataProps
-from unaiverse.streams.streams import BufferedDataStream, Stream
+from unaiverse.streams.streams import BufferedStream, Stream
 
 
 def action(func: Callable) -> Callable:
@@ -1011,7 +1011,7 @@ class Agent(AgentBasics):
     async def record(self, interaction: Interaction | None = None,
                      record_uuid: str | None = "see_interaction_uuid") -> bool:
         """Records `interaction.num_steps` samples from the interaction's stdin stream group into a
-        new owned `BufferedDataStream` group and exposes it via pubsub. Multistep by virtue of the
+        new owned `BufferedStream` group and exposes it via pubsub. Multistep by virtue of the
         interaction's `num_steps`; the framework's readiness gate already pauses execution on
         no-fresh-data cycles.
 
@@ -1046,7 +1046,7 @@ class Agent(AgentBasics):
                 assert s_obj.props is not None
                 props = s_obj.props.clone()
                 props.set_group("recorded" + str(self._last_recorded_stream_num))
-                dest[s_obj.props.get_name()] = BufferedDataStream(props=props)
+                dest[s_obj.props.get_name()] = BufferedStream(props=props)
             self._last_recorded_stream_dict = dest
 
         dest = self._last_recorded_stream_dict
@@ -1550,11 +1550,11 @@ class Agent(AgentBasics):
             log.error(f"Cannot find the data stream to consider in the comparison, {net_hash_b}")
             return -1., False
 
-        if not isinstance(stream_a, BufferedDataStream):
+        if not isinstance(stream_a, BufferedStream):
             log.error(f"Can only compare buffered streams and {net_hash_a} is not buffered")
             return -1., False
 
-        if not isinstance(stream_b, BufferedDataStream):
+        if not isinstance(stream_b, BufferedStream):
             log.error(f"Can only compare buffered streams and {net_hash_b} is not buffered")
             return -1., False
 

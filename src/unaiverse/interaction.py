@@ -14,9 +14,11 @@
 """
 import time
 import json
+import torch
 import inspect
 import uuid as _uuid
 from enum import Enum
+from PIL import Image
 from typing import TYPE_CHECKING
 from unaiverse.clock import clock
 from unaiverse.utils.logger import log
@@ -43,7 +45,7 @@ class Interaction:
                  action_name: str | None = None,
                  action_kwargs: dict | None = None,
                  streams: dict[str, str | list[str]] | list[str] | None = None,
-                 data_samples: list | None = None,
+                 data_samples: list | dict[str, torch.Tensor | Image.Image | str] | str | None = None,
                  num_steps: int = -1,
                  requester: str | None = None,
                  target: str | list[str] | None = None,
@@ -60,7 +62,11 @@ class Interaction:
             action_name: The name of the action being requested (e.g. "process", "learn").
             action_kwargs: Action arguments (dict, no streams).
             streams: List of (stream_name - a.k.a. stream user hash, num_samples) tuples specifying expected data.
-            data_samples: List of actual data samples (alternative to samples specification).
+            data_samples: List of actual data samples (alternative to streams specification). It can also be a
+                dictionary mapping one or more stream user hashes to data samples that will be artificially loaded on
+                such streams, so that the 'streams' argument above is actually automatically populated.
+                It can also be a string representing the payload that encodes a list of samples, if it was received
+                from the net.
             num_steps: Total number of steps for this interaction (-1 means no data-based steps).
             requester: Peer ID of the agent originating this interaction.
             target: Peer ID of the target agent or list of peer IDs.
@@ -114,7 +120,7 @@ class Interaction:
 
         # Samples specification: list of (stream_name, num_samples)
         self.streams: dict = {}
-        self.data_samples: list = []
+        self.data_samples = []
         self.num_steps: int = num_steps  # Generic not-data-based interactions have -1 here
 
         # Stream-based specification
@@ -122,11 +128,15 @@ class Interaction:
             self.parse_streams(streams)  # This will create a specific stream structure
 
         # Actual data (alternative to samples above)
+        if streams is not None and data_samples is not None:
+            log.error("You are not expected to build an interaction object specifying both streams and data_samples. "
+                      "Keeping streams only!")
+
         if streams is None and data_samples is not None:
             if isinstance(data_samples, str):  # If it is JSON string of a list of dicts, each is type_name->base64...
                 self.data_samples: list = deserialize_payload(data_samples)  # List of PIL.Image, torch.Tensor, str, ...
             else:
-                self.data_samples = data_samples  # List of PIL.Image, torch.Tensor, str, ...
+                self.data_samples = data_samples  # List of PIL.Image, torch.Tensor, str, or dict user hash -> sample
             self.num_steps = 1
 
         # Status
@@ -685,6 +695,11 @@ class Interaction:
         Returns:
             A dictionary representation of this interaction.
         """
+        assert isinstance(self.data_samples, list)
+        if len(self.data_samples) > 0 and len(self.streams) > 0:
+            log.critical("You are trying to convert to dictionary (to_dict) an interaction object where both streams "
+                         "and data_samples are specified, that is unexpected, and might create troubles when sent "
+                         "through the net. Only one of them can be provided")
         return {
             'id': self.id,
             'uuid': self.uuid,
@@ -1311,7 +1326,7 @@ class InteractionManager:
         """Return True if the given interaction can be executed right now.
 
         An interaction is doable when it is not yet completed, the requester is a known agent, and
-        either all involved streams have fresh data or a deprecated completion step is pending.
+        either all involved streams have fresh data.
 
         Args:
             interaction: The interaction to evaluate.
