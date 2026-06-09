@@ -1,5 +1,5 @@
 """
-SessMsg — protobuf-free value object for Session handshake messages.
+SessMsg — self-contained value object + wire codec for Session handshake messages.
 
 Why this module exists
 ----------------------
@@ -7,21 +7,27 @@ Why this module exists
 in the browser, driving a JS-implemented connection layer). Pyodide mocks the
 ``google.protobuf`` runtime, so the FSM cannot touch ``session_pb2`` directly.
 
-The split is therefore:
+The contract that keeps the FSM portable:
 
   * Session/SessionManager speak only in :class:`SessMsg` — a plain ``kind`` tag
-    plus a ``dict`` of fields (field names mirror ``p2p/session.proto`` exactly).
-    Pure stdlib; works identically in CPython and Pyodide.
-  * The **conn layer** owns wire (de)serialization: in CPython
-    ``connpool.py`` maps ``SessMsg`` ↔ ``session_pb2`` bytes; in the browser the
-    JS ``NodeConn`` maps ``SessMsg`` ↔ ``session_pb.js`` bytes.
+    plus a ``dict`` of fields (field names mirror ``session.proto`` exactly). They
+    *construct* and *read* SessMsg, but never serialize: the conn layer does that.
+  * :class:`SessMsg` is self-contained like ``p2p/messages.py``'s ``Msg``: it owns
+    its own wire (de)serialization via :meth:`SessMsg.to_bytes` /
+    :meth:`SessMsg.from_bytes`. The conn layer (``connpool.py`` in CPython, the JS
+    ``NodeConn`` in the browser) just calls those — it no longer holds the codec.
 
-This module must NOT import ``google.protobuf`` (mocked in Pyodide) nor anything
-that does (e.g. ``p2p/messages.py``). Stdlib only.
+The module **top** stays stdlib-only so importing it is safe under Pyodide. The
+``session_pb2`` import lives **inside** ``to_bytes``/``from_bytes`` (a lazy import):
+those methods run only in the CPython conn layer, never in the FSM, so protobuf
+never enters the Pyodide import graph. Do not hoist that import to module top, and
+do not import anything that pulls protobuf at module level (e.g. ``p2p/messages.py``).
+The JS twin is a single ``sess_msg.js`` carrying both the value object and the codec.
 """
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 
@@ -35,7 +41,7 @@ P2P_PUBLIC = "p2p_public"
 P2P_WORLD = "p2p_world"
 
 
-# ── ReasonCode (verbatim from p2p/session.proto enum ReasonCode) ──────────────
+# ── ReasonCode (verbatim from session.proto enum ReasonCode) ──────────────────
 OK                     = 0
 VERSION_UNSUPPORTED    = 1
 OVERLOADED             = 2
@@ -122,6 +128,129 @@ class SessMsg:
 
     def __getitem__(self, key: str) -> Any:
         return self.fields[key]
+
+    # ── Wire (de)serialization ───────────────────────────────────────────────
+    # SessMsg is self-contained: it owns its own codec, like p2p/messages.py's Msg.
+    # The protobuf runtime is imported lazily inside these two methods (never at
+    # module top) so importing SessMsg stays protobuf-free — the FSM constructs and
+    # reads SessMsg but never serializes, so these run only in the CPython conn layer
+    # and protobuf never reaches the Pyodide import graph.
+
+    def to_bytes(self) -> bytes:
+        """Serialize to ``[1-byte kind tag] || payload`` wire bytes: protobuf for the
+        handshake messages, a small JSON envelope for the liveness/resume control
+        messages (which carry no protobuf at all)."""
+        json_tag = _JSON_KIND_TO_TAG.get(self.kind)
+        if json_tag is not None:
+            spec = _JSON_KIND_FIELDS[self.kind]
+            obj = {}
+            for fn, is_bytes in spec.items():
+                val = self.fields.get(fn)
+                if val is None:
+                    continue
+                obj[fn] = bytes(val).hex() if is_bytes else val
+            return bytes([json_tag]) + json.dumps(obj).encode("utf-8")
+
+        spec = _KIND_SPEC.get(self.kind)
+        if spec is None:
+            raise ValueError(f"SessMsg.to_bytes: unknown SessMsg kind '{self.kind}'")
+        from . import session_pb2 as _spb  # lazy: CPython conn layer only, never under Pyodide
+        tag, cls_name, field_names = spec
+        msg = getattr(_spb, cls_name)()
+        for fn in field_names:
+            if fn not in self.fields or self.fields[fn] is None:
+                continue
+            val = self.fields[fn]
+            if fn in _REPEATED_FIELDS:
+                getattr(msg, fn).extend(list(val))
+            else:
+                setattr(msg, fn, val)
+        return bytes([tag]) + msg.SerializeToString()
+
+    @classmethod
+    def from_bytes(cls, payload: bytes, protocol_id: str | None = None) -> "SessMsg":
+        """Decode ``[1-byte kind tag] || payload`` wire bytes into a SessMsg (inverse of
+        :meth:`to_bytes`). ``protocol_id`` is optional and only used in error text."""
+        if not payload:
+            raise ValueError("SessMsg.from_bytes: empty payload")
+        json_kind = _JSON_TAG_TO_KIND.get(payload[0])
+        if json_kind is not None:
+            spec = _JSON_KIND_FIELDS[json_kind]
+            obj = json.loads(payload[1:].decode("utf-8")) if len(payload) > 1 else {}
+            fields = {}
+            for fn, is_bytes in spec.items():
+                if fn not in obj:
+                    fields[fn] = b"" if is_bytes else (False if fn in ("ok", "accepted") else 0)
+                    continue
+                fields[fn] = bytes.fromhex(obj[fn]) if is_bytes else obj[fn]
+            return cls(kind=json_kind, fields=fields)
+
+        kind = _TAG_TO_KIND.get(payload[0])
+        if kind is None:
+            raise ValueError(f"SessMsg.from_bytes: unknown kind tag {payload[0]} on {protocol_id}")
+        from . import session_pb2 as _spb  # lazy: CPython conn layer only, never under Pyodide
+        _tag, cls_name, field_names = _KIND_SPEC[kind]
+        msg = getattr(_spb, cls_name)()
+        msg.ParseFromString(payload[1:])
+        fields = {}
+        for fn in field_names:
+            val = getattr(msg, fn)
+            fields[fn] = list(val) if fn in _REPEATED_FIELDS else val
+        return cls(kind=kind, fields=fields)
+
+
+# ── SessMsg ↔ wire codec tables ───────────────────────────────────────────────
+#
+# Wire bytes are ``[1-byte kind tag] || payload``. Handshake messages encode with
+# protobuf (session_pb2); the liveness/resume control messages ride a small JSON
+# envelope instead, to avoid a protoc regen for their handful of fields. The Go
+# layer is a pure pipe (it never parses these bytes), so the wire format is owned
+# entirely by these tables + SessMsg.to_bytes/from_bytes and their JS mirror. The
+# explicit kind tag means no direction/field heuristic is needed to tell which
+# message a stream carries.
+
+# kind -> (tag_byte, pb_class_name, [field names in proto order])
+_KIND_SPEC = {
+    SessMsg.KIND_HELLO_REQ:        (0x01, "HelloRequest",
+                                    ["session_id", "nonce_a", "protocol_versions", "capabilities", "client_id"]),
+    SessMsg.KIND_HELLO_RESP:       (0x02, "HelloResponse",
+                                    ["chosen_version", "capabilities", "nonce_b", "sig_b", "reason_code"]),
+    SessMsg.KIND_PROFILE_OFFER:    (0x03, "ProfileOffer",
+                                    ["profile", "sig_a", "signed_peer_record", "session_id"]),
+    SessMsg.KIND_PROFILE_DECISION: (0x04, "ProfileDecision",
+                                    ["accepted", "profile_b", "reason_code", "hint_addrs", "retry_after_ms",
+                                     "session_id"]),
+    SessMsg.KIND_WORLD_GRANT:      (0x05, "WorldGrant",
+                                    ["grant_id", "grant_sig", "expiry_unix_ms", "world_profile",
+                                     "world_private_peer_record", "role", "code_bundle", "initial_stats",
+                                     "rendezvous_tag"]),
+    SessMsg.KIND_WORLD_GRANT_ACK:  (0x06, "WorldGrantAck", ["received"]),
+    SessMsg.KIND_PRIVATE_JOIN:     (0x07, "PrivateJoin", ["grant_id", "sig_init", "joiner_node_id"]),
+    SessMsg.KIND_PRIVATE_JOIN_ACK: (0x08, "PrivateJoinAck", ["accepted", "reason_code", "rendezvous_topic"]),
+    SessMsg.KIND_GOAWAY:           (0x09, "Goaway", ["reason", "drain_window_ms", "session_id"]),
+    SessMsg.KIND_GOAWAY_ACK:       (0x0A, "GoawayAck", ["received"]),
+}
+_TAG_TO_KIND = {tag: kind for kind, (tag, _cls, _f) in _KIND_SPEC.items()}
+_REPEATED_FIELDS = frozenset({"protocol_versions", "hint_addrs"})
+
+# Liveness / resume control codec (JSON envelope, protobuf-free). `bytes` fields
+# (session_id, nonce) are hex-encoded so they survive JSON; the codec restores them
+# to `bytes` on decode so the FSM sees the same value types as for protobuf messages.
+_JSON_KIND_TO_TAG = {
+    SessMsg.KIND_PING:       0x0B,
+    SessMsg.KIND_PONG:       0x0C,
+    SessMsg.KIND_RESUME:     0x0D,
+    SessMsg.KIND_RESUME_ACK: 0x0E,
+}
+_JSON_TAG_TO_KIND = {tag: kind for kind, tag in _JSON_KIND_TO_TAG.items()}
+# Field name -> True if it is a `bytes` field (hex-encoded in the JSON envelope).
+_JSON_KIND_FIELDS = {
+    SessMsg.KIND_PING:       {"session_id": True, "nonce": True},
+    SessMsg.KIND_PONG:       {"session_id": True, "nonce": True, "ok": False},
+    SessMsg.KIND_RESUME:     {"session_id": True, "nonce": True},
+    SessMsg.KIND_RESUME_ACK: {"session_id": True, "nonce": True,
+                              "accepted": False, "reason_code": False},
+}
 
 
 # ── Application decision types (returned by the responder decision hook) ──────

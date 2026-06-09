@@ -28,7 +28,7 @@ const DisconnectionGracePeriod = 10 * time.Second
 // Session abstraction protocol IDs. Each stage of the Session handshake gets its own
 // libp2p protocol so timeouts / cancellation / version negotiation are independent.
 // One protobuf message per stream (no per-stream channel header), length-prefixed by
-// a single uint32. See p2p/session.proto for the message types and session/session.py
+// a single uint32. See session/session.proto for the message types and session/session.py
 // for the FSM that drives them. Keep these strings in sync with SESSION_*_PROTOCOL
 // in session/session.py.
 const (

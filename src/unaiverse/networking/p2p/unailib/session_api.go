@@ -3,7 +3,7 @@
 // These exports — SendOnProtocol, GenerateSignedPeerRecord,
 // VerifySignedPeerRecord (+ host-key signing/verification) — are what Python
 // needs on top of the existing chat/pubsub surface to drive per-stage Session
-// handshakes (see session.proto and session/session.py). Liveness is a
+// handshakes (see session/session.proto and session/session.py). Liveness is a
 // session-level PING/PONG over the control protocol, not /ipfs/ping.
 package main
 

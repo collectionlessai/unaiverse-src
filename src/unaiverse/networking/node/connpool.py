@@ -28,7 +28,7 @@ from unaiverse.networking.node.tokens import TokenVerifier
 # A SessionInbound is a per-stage Session message lifted off the inbound queue
 # without going through Msg.from_bytes or JWT verification. Identity is established
 # inside Stage-2 of the Session handshake (sig_a + signed_peer_record), not here.
-# `sess_msg` is a decoded SessMsg (see _bytes_to_sess_msg) — the Session FSM never
+# `sess_msg` is a decoded SessMsg (see SessMsg.from_bytes) — the Session FSM never
 # sees protobuf, which keeps session.py/session_manager.py Pyodide-portable.
 SessionInbound = namedtuple("SessionInbound", ["peer_id", "protocol_id", "sess_msg"])
 
@@ -42,125 +42,13 @@ SESSION_PROTOCOL_IDS = frozenset({
 })
 
 
-# ── SessMsg ↔ protobuf codec (the ONLY session_pb2 importer for the session path) ──
-#
-# The Session FSM speaks plain `SessMsg` value objects (kind + fields dict). The wire
-# bytes are `[1-byte kind tag] || protobuf(payload)`. The Go layer is a pure pipe —
-# it never parses these bytes — so the wire format is defined entirely by this codec
-# and its JS mirror (session_pb.js). The explicit kind tag means no fragile
-# direction/field heuristics are needed to know which message a stream carries.
-from unaiverse.networking.p2p import session_pb2 as _spb  # noqa: E402
+# `SessMsg` owns its own wire codec now (SessMsg.to_bytes / SessMsg.from_bytes, in
+# session/sess_msg.py), so connpool no longer imports session_pb2: the protobuf
+# dependency lives inside those methods (lazy import) and never at this module top.
+# These two imports are the session layer's portable seam — SessMsg for send/decode,
+# _sess_msg for the P2P_PUBLIC/P2P_WORLD aliases used below.
 from unaiverse.networking.session.sess_msg import SessMsg  # noqa: E402
 from unaiverse.networking.session import sess_msg as _sess_msg  # noqa: E402
-
-# kind -> (tag_byte, pb_class_name, [field names in proto order])
-_KIND_SPEC = {
-    SessMsg.KIND_HELLO_REQ:        (0x01, "HelloRequest",
-                                    ["session_id", "nonce_a", "protocol_versions", "capabilities", "client_id"]),
-    SessMsg.KIND_HELLO_RESP:       (0x02, "HelloResponse",
-                                    ["chosen_version", "capabilities", "nonce_b", "sig_b", "reason_code"]),
-    SessMsg.KIND_PROFILE_OFFER:    (0x03, "ProfileOffer",
-                                    ["profile", "sig_a", "signed_peer_record", "session_id"]),
-    SessMsg.KIND_PROFILE_DECISION: (0x04, "ProfileDecision",
-                                    ["accepted", "profile_b", "reason_code", "hint_addrs", "retry_after_ms",
-                                     "session_id"]),
-    SessMsg.KIND_WORLD_GRANT:      (0x05, "WorldGrant",
-                                    ["grant_id", "grant_sig", "expiry_unix_ms", "world_profile",
-                                     "world_private_peer_record", "role", "code_bundle", "initial_stats",
-                                     "rendezvous_tag"]),
-    SessMsg.KIND_WORLD_GRANT_ACK:  (0x06, "WorldGrantAck", ["received"]),
-    SessMsg.KIND_PRIVATE_JOIN:     (0x07, "PrivateJoin", ["grant_id", "sig_init", "joiner_node_id"]),
-    SessMsg.KIND_PRIVATE_JOIN_ACK: (0x08, "PrivateJoinAck", ["accepted", "reason_code", "rendezvous_topic"]),
-    SessMsg.KIND_GOAWAY:           (0x09, "Goaway", ["reason", "drain_window_ms", "session_id"]),
-    SessMsg.KIND_GOAWAY_ACK:       (0x0A, "GoawayAck", ["received"]),
-}
-_TAG_TO_KIND = {tag: kind for kind, (tag, _cls, _f) in _KIND_SPEC.items()}
-_REPEATED_FIELDS = frozenset({"protocol_versions", "hint_addrs"})
-
-# ── Liveness / resume control codec (JSON envelope, protobuf-free) ────────────
-#
-# PING/PONG/RESUME/RESUME_ACK post-date session.proto and carry only a handful of
-# simple fields. Rather than force a protoc regen of session_pb2 for them, they
-# ride a tiny JSON envelope: wire bytes are `[kind tag] || utf8(json)`. This is
-# legitimate because the Go layer never parses these bytes (the wire format is
-# defined entirely by this codec + its JS mirror), and JSON is trivially mirrored
-# on the JS side. `bytes` fields (session_id, nonce) are hex-encoded so they
-# survive JSON; the codec restores them to `bytes` on decode so the FSM sees the
-# same value types as for the protobuf messages.
-_JSON_KIND_TO_TAG = {
-    SessMsg.KIND_PING:       0x0B,
-    SessMsg.KIND_PONG:       0x0C,
-    SessMsg.KIND_RESUME:     0x0D,
-    SessMsg.KIND_RESUME_ACK: 0x0E,
-}
-_JSON_TAG_TO_KIND = {tag: kind for kind, tag in _JSON_KIND_TO_TAG.items()}
-# Field name -> True if it is a `bytes` field (hex-encoded in the JSON envelope).
-_JSON_KIND_FIELDS = {
-    SessMsg.KIND_PING:       {"session_id": True, "nonce": True},
-    SessMsg.KIND_PONG:       {"session_id": True, "nonce": True, "ok": False},
-    SessMsg.KIND_RESUME:     {"session_id": True, "nonce": True},
-    SessMsg.KIND_RESUME_ACK: {"session_id": True, "nonce": True,
-                              "accepted": False, "reason_code": False},
-}
-
-
-def _sess_msg_to_bytes(sess_msg: SessMsg) -> bytes:
-    """Serialize a SessMsg to `[kind tag] || payload` wire bytes (protobuf for the
-    handshake messages, a JSON envelope for the liveness/resume control messages)."""
-    json_tag = _JSON_KIND_TO_TAG.get(sess_msg.kind)
-    if json_tag is not None:
-        spec = _JSON_KIND_FIELDS[sess_msg.kind]
-        obj = {}
-        for fn, is_bytes in spec.items():
-            val = sess_msg.fields.get(fn)
-            if val is None:
-                continue
-            obj[fn] = bytes(val).hex() if is_bytes else val
-        return bytes([json_tag]) + json.dumps(obj).encode("utf-8")
-
-    spec = _KIND_SPEC.get(sess_msg.kind)
-    if spec is None:
-        raise ValueError(f"_sess_msg_to_bytes: unknown SessMsg kind '{sess_msg.kind}'")
-    tag, cls_name, field_names = spec
-    msg = getattr(_spb, cls_name)()
-    for fn in field_names:
-        if fn not in sess_msg.fields or sess_msg.fields[fn] is None:
-            continue
-        val = sess_msg.fields[fn]
-        if fn in _REPEATED_FIELDS:
-            getattr(msg, fn).extend(list(val))
-        else:
-            setattr(msg, fn, val)
-    return bytes([tag]) + msg.SerializeToString()
-
-
-def _bytes_to_sess_msg(protocol_id: str, payload: bytes) -> SessMsg:
-    """Decode `[kind tag] || payload` wire bytes into a SessMsg."""
-    if not payload:
-        raise ValueError("_bytes_to_sess_msg: empty payload")
-    json_kind = _JSON_TAG_TO_KIND.get(payload[0])
-    if json_kind is not None:
-        spec = _JSON_KIND_FIELDS[json_kind]
-        obj = json.loads(payload[1:].decode("utf-8")) if len(payload) > 1 else {}
-        fields = {}
-        for fn, is_bytes in spec.items():
-            if fn not in obj:
-                fields[fn] = b"" if is_bytes else (False if fn in ("ok", "accepted") else 0)
-                continue
-            fields[fn] = bytes.fromhex(obj[fn]) if is_bytes else obj[fn]
-        return SessMsg(kind=json_kind, fields=fields)
-
-    kind = _TAG_TO_KIND.get(payload[0])
-    if kind is None:
-        raise ValueError(f"_bytes_to_sess_msg: unknown kind tag {payload[0]} on {protocol_id}")
-    _tag, cls_name, field_names = _KIND_SPEC[kind]
-    msg = getattr(_spb, cls_name)()
-    msg.ParseFromString(payload[1:])
-    fields = {}
-    for fn in field_names:
-        val = getattr(msg, fn)
-        fields[fn] = list(val) if fn in _REPEATED_FIELDS else val
-    return SessMsg(kind=kind, fields=fields)
 
 
 class ConnectionPools:
@@ -639,7 +527,7 @@ class ConnectionPools:
                 # identity itself in Stage-2 (sig_a + signed_peer_record).
                 if protocol_id in SESSION_PROTOCOL_IDS:
                     try:
-                        sess_msg = _bytes_to_sess_msg(protocol_id, decoded_data)
+                        sess_msg = SessMsg.from_bytes(decoded_data, protocol_id)
                     except Exception as codec_err:
                         log.error(f"Failed to decode session message on {protocol_id} "
                                   f"from {verified_sender_id}: {codec_err}", sub=p2p.log_sub)
@@ -722,7 +610,7 @@ class ConnectionPools:
             raise ValueError(f"send_session: protocol_id '{protocol_id}' is not a Session protocol")
         p2p = self[p2p_name]
         try:
-            payload = _sess_msg_to_bytes(sess_msg)
+            payload = sess_msg.to_bytes()
         except Exception as e:
             log.error(f"send_session({peer_id[:12]}…, {protocol_id}) encode failed: {e}", sub=p2p.log_sub)
             return False

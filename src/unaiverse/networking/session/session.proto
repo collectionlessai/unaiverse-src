@@ -11,7 +11,9 @@ syntax = "proto3";
 
 package unaiverse.session.v1;
 
-option go_package = "./proto-go";
+// Python-only schema. Go is a pure transport pipe for the session protocols (it
+// forwards the raw, length-prefixed bytes without parsing them), so no Go code is
+// generated from this proto — see compile_proto.sh, which compiles it to Python only.
 
 enum ReasonCode {
   OK                       = 0;
