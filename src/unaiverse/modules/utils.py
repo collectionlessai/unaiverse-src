@@ -447,6 +447,9 @@ class LoggerModule(torch.nn.Module):
             self._logger.info("-------------------------------------------------------------------------------")
             self._logger.info(f"[INPUT] text={text if text is not None else None}, "
                               f"img={img.size if img is not None else None}")
+        else:
+            log.user(f"[INPUT] text={text if text is not None else None}, "
+                     f"img={img.size if img is not None else None}")
 
         text = f"{self._idx}_{self._objects[self._idx]}"
         self._idx = (self._idx + 1) % len(self._objects)
@@ -456,6 +459,8 @@ class LoggerModule(torch.nn.Module):
             self._logger.info(f"[OUTPUT] text={text}, img={None}")
             self._logger.info("-------------------------------------------------------------------------------")
             self.__handler.flush()
+        else:
+            log.user(f"[OUTPUT] text={text}, img={None}")
         return text, img
 
 

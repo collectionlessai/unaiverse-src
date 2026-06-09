@@ -261,6 +261,10 @@ class HybridStateMachine:
             if state_obj.action is not None:
                 state_obj.action.agent = obj
 
+        for action_obj in self.__id_to_action:
+            if action_obj is not None:
+                action_obj.agent = obj
+
     def set_policy(self, policy_fcn: Callable[[int,
                                                Interaction | None,
                                                list[Action], dict], tuple[int, Interaction | None]] | None) -> None:

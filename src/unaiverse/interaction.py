@@ -127,16 +127,17 @@ class Interaction:
         if streams is not None and len(streams) > 0:
             self.parse_streams(streams)  # This will create a specific stream structure
 
+        if isinstance(data_samples, str):
+            # If it is JSON string of a list of dicts, each is type_name->base64...
+            data_samples = deserialize_payload(data_samples)  # List of PIL.Image, torch.Tensor, str, ...
+
         # Actual data (alternative to samples above)
-        if streams is not None and data_samples is not None:
+        if len(self.streams) > 0 and (data_samples is not None and len(data_samples) > 0):
             log.error("You are not expected to build an interaction object specifying both streams and data_samples. "
                       "Keeping streams only!")
 
-        if streams is None and data_samples is not None:
-            if isinstance(data_samples, str):  # If it is JSON string of a list of dicts, each is type_name->base64...
-                self.data_samples: list = deserialize_payload(data_samples)  # List of PIL.Image, torch.Tensor, str, ...
-            else:
-                self.data_samples = data_samples  # List of PIL.Image, torch.Tensor, str, or dict user hash -> sample
+        if len(self.streams) == 0 and (data_samples is not None and len(data_samples) > 0):
+            self.data_samples = data_samples  # List of PIL.Image, torch.Tensor, str, or dict user hash -> sample
             self.num_steps = 1
 
         # Status
@@ -733,7 +734,7 @@ class Interaction:
             id=d['id'],
             action_name=d['action_name'],
             action_kwargs=d.get('action_kwargs', {}),
-            streams=d.get('streams', {}),
+            streams=d.get('streams', None),
             data_samples=d.get('data_samples', None),
             num_steps=d.get('num_steps', -1),
             requester=d.get('requester'),
@@ -1105,11 +1106,12 @@ class InteractionManager:
             if target is not None:
                 for i, _target in enumerate(target):
                     assert _target is not None
+                    _target_bck = _target
                     _target = self.agent.resolve_agent_ref(_target)
                     if _target is not None:
                         target[i] = _target
                     else:
-                        log.error(f"Unknown target specified in an interaction ({_target})")
+                        log.error(f"Unknown target specified in an interaction ({_target_bck})")
                         return False
 
         # B. Moving data samples to streams, if needed (when data_samples is a dictionary)
@@ -1138,7 +1140,7 @@ class InteractionManager:
                 streams.append(stream_user_hash)
 
             # Purging
-            interaction.data_samples.clear()
+            interaction.data_samples = []
             interaction.parse_streams(streams)  # Rebuilding the stream dictionaries
             already_resolved = True
 
@@ -1261,7 +1263,7 @@ class InteractionManager:
                         del expanded_streams[source][found_match]  # Removing the stream from the suggestions
                         break
 
-            # We ensured that the not-filled-arguments of the processor have a default value, otherwise no ways
+            # We ensured that all the not-filled-arguments of the processor have a default value, otherwise no ways
             for i in range(len(self.agent.proc_inputs)):
                 if pos_stdin_streams[i] is None:
                     assert self.agent.proc_optional_inputs is not None

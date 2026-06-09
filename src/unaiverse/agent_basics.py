@@ -26,12 +26,12 @@ from unaiverse.utils.logger import log
 from unaiverse.hsm.action import Action
 from unaiverse.hsm.hsm import HybridStateMachine
 from unaiverse.networking.p2p.messages import Msg
+from unaiverse.streams.streamproxy import StreamProxy
 from unaiverse.networking.node.connpool import NodeConn
 from unaiverse.networking.node.profile import NodeProfile
 from unaiverse.streams.streams import Stream, BufferedStream
-from unaiverse.streams.dataprops import DataProps, StreamType, TensorLabels
 from unaiverse.interaction import Interaction, InteractionManager
-from unaiverse.streams.streamproxy import StreamProxy, StreamsProxyWithDefaults
+from unaiverse.streams.dataprops import DataProps, StreamType, TensorLabels
 from unaiverse.modules.utils import AgentProcessorChecker, ModuleWrapper, HumanModule, has_human_processor
 from unaiverse.utils.misc import (GenException, FileTracker, collect_py_files, load_agent_in_memory, pack_py_files,
                                   unpack_py_files)
@@ -196,8 +196,8 @@ class AgentBasics:
         # Interaction Manager, stdin/stdout
         assert isinstance(self.proc_optional_inputs, list)
         self.im = InteractionManager(self, max_interactions=Custom.MAX_INTERACTIONS)
-        self.stdin = StreamsProxyWithDefaults(default_values=[item["default_value"] if item["has_default"] else None
-                                                              for item in self.proc_optional_inputs])
+        self.stdin = StreamProxy(replace_none_samples_with=[item["default_value"] if item["has_default"] else None
+                                                            for item in self.proc_optional_inputs])
         self.stdtar = StreamProxy()
         self.stdext = StreamProxy()
         self.stdout = StreamProxy()
@@ -251,7 +251,7 @@ class AgentBasics:
         self._node_agents_waiting = agents_waiting
 
         # Checking if human, marking the node
-        assert isinstance(self.proc, ModuleWrapper)
+        assert self.proc is None or isinstance(self.proc, ModuleWrapper)  # It is None in worlds!
         if self.proc is not None and isinstance(self.proc.module, HumanModule):
             self._node_profile.get_static_profile()["node_type"] = self.HUMAN
 
@@ -2562,7 +2562,7 @@ class AgentBasics:
                     target: str | list[str] | None = None,
                     action_kwargs: dict | None = None,
                     streams: dict[str, str | list[str]] | list[str] | None = None,
-                    data_samples: list[str | Image | torch.Tensor] | None = None,
+                    data_samples: list | dict[str, torch.Tensor | Image | str] | None = None,
                     num_steps: int = -1,
                     timeout: float = -1.,
                     from_state: str | None = None,
@@ -2588,7 +2588,11 @@ class AgentBasics:
                 Ignored when a pre-built Interaction is provided. A lot of freedom here: stream_hash can be a net hash
                 or a user hash. It is also fine to specify just the stream name or the stream
                 group, then the user hash or the net hash will be automatically estimated.
-            data_samples: List of actual data samples. Ignored when a pre-built Interaction is provided.
+            data_samples: List of actual data samples. Ignored when a pre-built Interaction is provided. It can also be
+                a dictionary mapping one or more stream user hashes to data samples that will be artificially loaded on
+                such streams, so that the 'streams' argument above is actually automatically populated.
+                It can also be a string representing the payload that encodes a list of samples, if it was received
+                from the net.
             num_steps: Number of steps the interaction spans (used when building from raw args).
                 Ignored when a pre-built Interaction is provided.
             timeout: Maximum time for the interaction. Ignored when a pre-built Interaction is provided.

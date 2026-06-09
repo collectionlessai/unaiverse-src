@@ -54,13 +54,13 @@ class World(AgentBasics):
         self.private_peer_of = {}
 
         # Stats
+        self.stats: Stats
         if stats is not None:
             self.stats = stats
         else:
             # fallback to default Stats class
             self.stats = Stats(is_world=True, db_path=f"{self.world_folder}/stats/world_stats.db",
                                cache_window_hours=2.0)
-        self.stats: Stats
         assert self.stats is not None
 
     def assign_role(self, profile: NodeProfile, is_world_master: bool) -> str:

@@ -305,7 +305,7 @@ class Agent(AgentBasics):
                    target: str | list[str] | None = None,
                    action_kwargs: dict | None = None,
                    streams: dict[str, str | list[str]] | list[str] | None = None,
-                   data_samples: list[str | Image | torch.Tensor] | None = None,
+                   data_samples: list | dict[str, torch.Tensor | Image | str] | None = None,
                    num_steps: int = -1,
                    timeout: float = -1.,
                    from_state: str | None = None,
@@ -332,7 +332,11 @@ class Agent(AgentBasics):
                 Ignored when a pre-built Interaction is provided. A lot of freedom here: stream_hash can be a net hash
                 or a user hash. It is also fine to specify just the stream name or the stream
                 group, then the user hash or the net hash will be automatically estimated.
-            data_samples: List of actual data samples. Ignored when a pre-built Interaction is provided.
+            data_samples: List of actual data samples. Ignored when a pre-built Interaction is provided. It can also be
+                a dictionary mapping one or more stream user hashes to data samples that will be artificially loaded on
+                such streams, so that the 'streams' argument above is actually automatically populated.
+                It can also be a string representing the payload that encodes a list of samples, if it was received
+                from the net.
             num_steps: Number of steps the interaction spans (used when building from raw args).
                 Ignored when a pre-built Interaction is provided.
             timeout: Maximum time for the interaction. Ignored when a pre-built Interaction is provided.
@@ -1618,7 +1622,6 @@ class Agent(AgentBasics):
         a_tag = None
         a_tag_prev = None
         for k_a in range(0, steps):
-
             restart_detected = False
             if a_tag is not None:
                 a_tag_prev = a_tag

@@ -626,7 +626,7 @@ class ConnectionPools:
             return c
 
     async def send(self, peer_id: str, channel_trail: str | None,
-                   content_type: str, content: bytes | dict | None = None, p2p: P2P | None = None) -> bool:
+                   content_type: str, content: bytes | dict | str | None = None, p2p: P2P | None = None) -> bool:
         """Sends a direct message to a specific peer (async).
 
         Args:
