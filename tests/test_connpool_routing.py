@@ -16,7 +16,6 @@ import pytest
 
 from unaiverse.networking.node.connpool import (
     ConnectionPools, NodeConn, SessionInbound, SESSION_PROTOCOL_IDS,
-    _sess_msg_to_bytes, _bytes_to_sess_msg,
 )
 from unaiverse.networking.session import SessMsg
 
@@ -59,8 +58,8 @@ def test_codec_round_trips_hello_request():
         "session_id": b"\x01" * 16, "nonce_a": b"\xaa" * 32,
         "protocol_versions": ["1.0"], "capabilities": 0, "client_id": "py/1.0",
     })
-    wire = _sess_msg_to_bytes(msg)
-    back = _bytes_to_sess_msg("/unaiverse/session/hello/1.0.0", wire)
+    wire = SessMsg.to_bytes(msg)
+    back = SessMsg.from_bytes(wire, "/unaiverse/session/hello/1.0.0")
     assert back.kind == SessMsg.KIND_HELLO_REQ
     assert back.fields["session_id"] == b"\x01" * 16
     assert back.fields["nonce_a"] == b"\xaa" * 32
@@ -74,7 +73,7 @@ def test_codec_round_trips_world_grant():
         "world_profile": b'{"a":1}', "world_private_peer_record": b"spr",
         "role": 3, "code_bundle": b"", "initial_stats": b"", "rendezvous_tag": 7,
     })
-    back = _bytes_to_sess_msg("/unaiverse/session/world/1.0.0", _sess_msg_to_bytes(msg))
+    back = SessMsg.from_bytes(SessMsg.to_bytes(msg), "/unaiverse/session/world/1.0.0")
     assert back.kind == SessMsg.KIND_WORLD_GRANT
     assert back.fields["grant_id"] == b"\x05" * 32
     assert back.fields["expiry_unix_ms"] == 1234567890123
@@ -89,7 +88,7 @@ def test_session_protocol_messages_are_partitioned(pools_with_one_p2p):
     chat list is empty, the session list has exactly one SessionInbound carrying
     a decoded SessMsg (no Msg.from_bytes / JWT verify)."""
     pools, fake = pools_with_one_p2p
-    wire = _sess_msg_to_bytes(SessMsg(SessMsg.KIND_HELLO_REQ, {
+    wire = SessMsg.to_bytes(SessMsg(SessMsg.KIND_HELLO_REQ, {
         "session_id": b"\x01" * 16, "nonce_a": b"\xaa" * 32, "protocol_versions": ["1.0"],
     }))
     fake._batch = [{
@@ -154,8 +153,8 @@ def test_mixed_batch_split_correctly(pools_with_one_p2p, monkeypatch):
         return ("node-xyz", None)
     monkeypatch.setattr(pools, "verify_token", _verify)
 
-    offer_wire = _sess_msg_to_bytes(SessMsg(SessMsg.KIND_PROFILE_OFFER, {"sig_a": b"s"}))
-    goaway_wire = _sess_msg_to_bytes(SessMsg(SessMsg.KIND_GOAWAY, {"reason": 9}))
+    offer_wire = SessMsg.to_bytes(SessMsg(SessMsg.KIND_PROFILE_OFFER, {"sig_a": b"s"}))
+    goaway_wire = SessMsg.to_bytes(SessMsg(SessMsg.KIND_GOAWAY, {"reason": 9}))
     fake._batch = [
         {"from": "12D3KooWChat", "data": _b64(b"x"), "protocol": ""},
         {"from": "12D3KooWRemote", "data": _b64(offer_wire),
@@ -215,8 +214,8 @@ def test_codec_roundtrips_liveness_control_messages():
                                           "accepted": False, "reason_code": SESSION_UNKNOWN}),
     ]
     for msg in cases:
-        wire = _sess_msg_to_bytes(msg)
-        back = _bytes_to_sess_msg("/unaiverse/session/control/1.0.0", wire)
+        wire = SessMsg.to_bytes(msg)
+        back = SessMsg.from_bytes(wire, "/unaiverse/session/control/1.0.0")
         assert back.kind == msg.kind
         for k, v in msg.fields.items():
             assert back.fields[k] == v, (msg.kind, k, back.fields[k], v)
