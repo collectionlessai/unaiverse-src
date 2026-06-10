@@ -18,6 +18,7 @@ class Custom:
     SAVE_CHECKPOINT_EVERY = -1.  # When negative, means "do not save" (warning: modified by means in Node constructor!)
     SLOW_DOWN_CLOCK_AFTER = 10.0  # Seconds without networks exchanges and 0 interaction (stats are not considered)
     SLOW_CLOCK_DELTA = 2.0  # Clock delta when running in slow-mode
+    REJOINING_WAIT = 30.0  # Time to wait before trying to rejoin a world from which we were disconnected
 
     # =====================
     # ENVIRONMENT VARIABLES

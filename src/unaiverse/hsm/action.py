@@ -17,16 +17,20 @@ import copy
 import html
 import time
 import inspect
-from typing import Any
+from typing import TYPE_CHECKING
 from unaiverse.custom import Custom
 from collections.abc import Iterator
 from unaiverse.utils.logger import log
 from unaiverse.interaction import Interaction, CompletionReason
 
+if TYPE_CHECKING:
+    from unaiverse.agent_basics import AgentBasics
+    from unaiverse.hsm import HybridStateMachine
+
 
 class Action:
 
-    def __init__(self, name: str, args: dict, actionable: object,
+    def __init__(self, name: str, args: dict, agent: "AgentBasics",
                  idx: int = -1,
                  ready: bool = True,
                  msg: str | None = None,
@@ -36,16 +40,16 @@ class Action:
                  max_duration: float | str = 0.,
                  retry_timeout: float | str = 0,
                  delay: float | str = 0):
-        """Initializes an `Action` object, which encapsulates a method to be executed on a given object (`actionable`)
+        """Initializes an `Action` object, which encapsulates a method to be executed on a given object (`agent`)
         with specified arguments. It sets up various properties for managing multistep actions, including
-        `total_steps`, `total_time`, and `retry_timeout`. It also handles wildcard argument replacement and checks for the
+        `total_steps`, `total_time`, and `retry_timeout`. It also handles wildcard argument replacement and checks for
         existence of required parameters. It identifies if the action is a 'not ready' type (e.g., `do_`, `get_`) and
         sets its initial status accordingly.
 
         Args:
             name: The name of the method to call.
             args: A dictionary of arguments for the method.
-            actionable: The object on which the method will be executed.
+            agent: The object on which the method will be executed.
             idx: A unique ID for the Custom.
             ready: A boolean indicating if the action is ready to be executed.
             msg: An optional human-readable message.
@@ -63,8 +67,8 @@ class Action:
         # Basic properties
         self.name = name  # Name of the action (name of the corresponding method)
         self.args = args.copy()  # Dictionary of arguments to pass to the action (shallow copy, we will remove some)
-        self.actionable = actionable  # Object on which the method whose name is self.name is searched
-        self.interactions = ActionInteractionList()  # List of interactions to make this action ready to be executed
+        self.agent: "AgentBasics" = agent  # Object on which the method whose name is self.name is searched
+        self.interactions: ActionInteractionList = ActionInteractionList()  # List of interactions
         self.id = idx  # Unique ID of the action (-1 if not needed)
         self.msg = msg  # Human-readable message associated to this instance of action
         self.inner = ready
@@ -79,6 +83,7 @@ class Action:
             self.msg = html.unescape(self.msg)
 
         # Reference elements
+        assert self.agent is not None
         self.__fcn = self.__action_name_to_callable(name)  # The real method to be called
         self.__sig = inspect.signature(self.__fcn)  # Signature of the method for argument inspection
 
@@ -134,7 +139,7 @@ class Action:
         lazy interactions are also caught by `InteractionManager.complete_expired()` every cycle."""
         if not self._lazy_registered:
             return
-        await self.actionable.im.complete(self.system_interaction, CompletionReason.OK)
+        await self.agent.im.complete(self.system_interaction, CompletionReason.OK)
         self.__build_system_interaction()
 
     @property
@@ -150,7 +155,7 @@ class Action:
     def set_high_priority(self) -> None:
         self.high_priority = True
 
-    def set_state_machine(self, hsm: object) -> None:
+    def set_state_machine(self, hsm: "HybridStateMachine") -> None:
         """Registers the parent state machine that owns this action."""
         self.state_machine = hsm
         self.set_wildcards(hsm.get_wildcards())
@@ -193,8 +198,8 @@ class Action:
             # not read from `interaction` — the framework's use of the metadata (readiness gate,
             # mult-step counter, recipient resolution) is independent.
             # It is the same things that happen in "send".
-            public = not self.actionable.behaving_in_world()
-            if self.actionable.im.register_lazy(self.system_interaction, public=public):
+            public = not self.agent.behaving_in_world()
+            if self.agent.im.register_lazy(self.system_interaction, public=public):
                 self._lazy_registered = True
                 if self._copy_sys_on_register:
                     for stream in self.system_interaction.owned_streams.values():
@@ -206,6 +211,7 @@ class Action:
 
         interaction_args = self.__apply_wildcards_to_args(interaction.action_kwargs, in_place=False)
         actual_args = self.get_actual_params(additional_args=interaction_args)
+        assert actual_args is not None
 
         if self.msg is not None and interaction.get_step_idx() < 0:
             if self.state_machine.show_action_request_info and interaction is not None:
@@ -216,6 +222,7 @@ class Action:
             log.user(msg)
 
         # Storing the starting time of this action (only at the very first run attempt)
+        assert interaction is not None
         if interaction.get_starting_time() <= 0:
             interaction.set_starting_time(time.perf_counter())
 
@@ -484,7 +491,7 @@ class Action:
                         return False
         return True
 
-    def set_wildcards(self, wildcards: dict[str, str | float | int] | None) -> None:
+    def set_wildcards(self, wildcards: dict[str, str | float | int | list[str]] | None) -> None:
         """Replaces wildcard values with new ones.
 
         Args:
@@ -514,6 +521,7 @@ class Action:
         else:
             if self.interactions.is_requester_known(requester):
                 requests = self.interactions.get_interactions(requester)
+                assert isinstance(requests, list)
                 for req in requests:
                     self.interactions.remove(req)
 
@@ -591,8 +599,8 @@ class Action:
         self._must_lazy_register = (len(interaction_kwargs) > 0 and
                                     (self.system_interaction.streams or self.system_interaction.num_steps > 0))
 
-    def __action_name_to_callable(self, action_name: str) -> Any | None:
-        """A private helper method that resolves a string action name into a callable method on the `actionable`
+    def __action_name_to_callable(self, action_name: str):
+        """A private helper method that resolves a string action name into a callable method on the `agent`
         object. It raises a `ValueError` if the method is not found.
 
         Args:
@@ -601,13 +609,10 @@ class Action:
         Returns:
             A callable function or method.
         """
-        if self.actionable is not None:
-            action_fcn = getattr(self.actionable, action_name)
-            if action_fcn is None:
-                raise ValueError("Cannot find function/method: " + str(action_name))
-            return action_fcn
-        else:
-            return None
+        action_fcn = getattr(self.agent, action_name)
+        if action_fcn is None:
+            raise ValueError("Cannot find function/method: " + str(action_name))
+        return action_fcn
 
     def __get_action_params(self) -> None:
         """A private helper method that inspects the signature of the action's method to populate the list of
@@ -785,6 +790,7 @@ class ActionInteractionList:
 
         # Searching for already existing interactions with this UUID, FROM THE SAME REQUESTER
         # If already there - do not accumulate multiple requests with same UUID (useful also for system interactions)
+        assert interaction.requester is not None
         existing_request_same_uuid = self.get_interaction_by_uuid(interaction.requester, interaction.uuid)
         if existing_request_same_uuid:
 
@@ -810,7 +816,11 @@ class ActionInteractionList:
             self.by_requester_and_by_insertion_order[interaction.requester] = []
 
         if 0 < self.max_per_requester <= len(self.by_requester_and_by_insertion_order[interaction.requester]):
-            self.remove(self.get_oldest_interaction(interaction.requester))
+            inter = self.get_oldest_interaction(interaction.requester)
+            if inter is not None:
+                self.remove(inter)
+            else:
+                log.critical("Unexpected behavior: getting the oldest interaction of a known requester returned None")
         by_requester_insertion_order_id = len(self.by_requester_and_by_insertion_order[interaction.requester])
         self.by_requester_and_by_insertion_order[interaction.requester].append(interaction)
 
@@ -893,7 +903,7 @@ class ActionInteractionList:
             requester: The peer ID whose interactions should be moved to the back.
         """
         requests = self.get_interactions(requester)
-        if requests is not None and len(requests) > 0:
+        if requests is not None and isinstance(requests, list) and len(requests) > 0:
             requests_copy = []
             entering_times = []
             for req in requests:
@@ -941,12 +951,13 @@ class ActionInteractionList:
         else:
             req = self.get_interaction(0, requester)
             i = 1
-            while req.completed:
-                if i < len(self):
-                    req = self.get_interaction(i, requester)
-                    i += 1
-                else:
-                    return None
+            if req is not None:
+                while req.completed:
+                    if i < len(self):
+                        req = self.get_interaction(i, requester)
+                        i += 1
+                    else:
+                        return None
             return req
 
     def get_most_recent_interaction(self, requester: str | None = None, ignore_completed: bool = False) \
@@ -965,12 +976,13 @@ class ActionInteractionList:
         else:
             req = self.get_interaction(-1, requester)
             i = len(self) - 2
-            while req.completed:
-                if i >= 0:
-                    req = self.get_interaction(i, requester)
-                    i -= 1
-                else:
-                    return None
+            if req is not None:
+                while req.completed:
+                    if i >= 0:
+                        req = self.get_interaction(i, requester)
+                        i -= 1
+                    else:
+                        return None
             return req
 
     def get_interaction_by_uuid(self, requester: str, uuid: str | None) -> Interaction | None:
@@ -987,9 +999,11 @@ class ActionInteractionList:
         if requests is None or len(requests) == 0:
             return None
 
+        assert isinstance(requests, list)
         for req in requests:
             if req.uuid == uuid:
                 return req
+        return None
 
     def keep_only_the_most_recent_interaction(self, ignore_completed: bool = False) -> None:
         """Discards all interactions except the most recently added one, preserving its entering time.

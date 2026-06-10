@@ -19,6 +19,7 @@ import html
 import graphviz
 from typing import IO
 import importlib.resources
+from typing import TYPE_CHECKING
 from unaiverse.custom import Custom
 from collections.abc import Callable
 from unaiverse.hsm.state import State
@@ -26,26 +27,29 @@ from unaiverse.utils.logger import log
 from unaiverse.hsm.action import Action
 from unaiverse.interaction import Interaction, CompletionReason
 
+if TYPE_CHECKING:
+    from unaiverse.agent_basics import AgentBasics
+
 
 class HybridStateMachine:
 
-    def __init__(self, actionable: object, wildcards: dict[str, str | float | int] | None = None,
+    def __init__(self, agent: "AgentBasics", wildcards: dict[str, str | float | int] | None = None,
                  policy: Callable[[list[Action]], tuple[int, Interaction | None]] | None = None):
         """Initializes a `HybridStateMachine` object, which orchestrates states and transitions. It manages a set of
         states and actions, and handles the logic for transitions between states based on conditions and a defined
         policy. It sets up initial and current states, wildcards for dynamic arguments, and references to an
-        `actionable` object whose methods are the actions to be called. It also includes debug and output settings.
+        `agent` object whose methods are the actions to be called. It also includes debug and output settings.
 
         Args:
-            actionable: The object on which actions (methods) are to be executed.
+            agent: The object on which actions (methods) are to be executed.
             wildcards: A dictionary of key-value pairs for dynamic argument substitution.
             policy: An optional callable that determines which action to execute from a list of feasible actions.
         """
 
         # States are identified by strings, and then handled as State object with possibly and integer ID and action
-        self.initial_state: str | None = None  # Initial state of the machine
-        self.prev_state: str | None = None  # Previous state
-        self.limbo_state: str | None = None  # When an action takes more than a step to complete, we are in "limbo"
+        self.initial_state = None  # Initial state of the machine
+        self.prev_state = None  # Previous state
+        self.limbo_state = None  # When an action takes more than a step to complete, we are in "limbo"
         self.state: str | None = None  # Current state
         self.role: str | None = None  # Role of the agent in the state machine (e.g., teacher, student, etc.)
         self.enabled: bool = True
@@ -53,11 +57,11 @@ class HybridStateMachine:
 
         # Actions (transitions) are handled as Action objects in-between state strings
         self.transitions: dict[str, dict[str, list[Action]]] = {}  # Pair-of-states to the actions between them
-        self.actionable: object = None  # The object on whose methods are actions that the machine calls
-        self.wildcards: dict[str, str | float | int] | None = wildcards \
+        self.agent: "AgentBasics" = agent  # The object on whose methods are actions that the machine calls
+        self.wildcards: dict[str, str | float | int | list[str]] = wildcards \
             if wildcards is not None else {}  # From a wildcards string to a specific value (used in action arguments)
         self.policy = policy if policy is not None else self.__policy_first_requested_or_first_ready
-        self.policy_filter = None
+        self.policy_filter: Callable | None = None
         self.policy_filter_opts = {}
         self.welcome_msg = None
         self.welcome_msg_with_wildcards = None
@@ -84,7 +88,7 @@ class HybridStateMachine:
         # Forcing output function
         self.__debug_messages_active = False
 
-        self.set_actionable(actionable)
+        self.set_actionable(agent)  # Propagating to inner actions
 
     def show_ticks_in_action_messages(self, do_it: bool = True) -> None:
         """Enables or disables tick symbols appended to action log messages upon completion."""
@@ -239,25 +243,31 @@ class HybridStateMachine:
         json_str = json.dumps(hsm_data, indent=4, default=custom_serializer)
         return json_str
 
-    def set_actionable(self, obj: object) -> None:
+    def set_actionable(self, obj: "AgentBasics") -> None:
         """Sets the object on which the state machine's actions will be performed. This allows the same state machine
-        logic to be applied to different objects. It updates the `actionable` reference for all states and actions
+        logic to be applied to different objects. It updates the `agent` reference for all states and actions
         within the machine.
 
         Args:
-            obj: The object instance to be set as the new `actionable`.
+            obj: The object instance to be set as the new `agent`.
         """
         if obj is None:
+            log.critical("Unexpected None for the agent HSM actionable")
             return
 
-        self.actionable = obj
+        self.agent = obj
 
         for state_obj in self.states.values():
             if state_obj.action is not None:
-                state_obj.action.actionable = obj
+                state_obj.action.agent = obj
 
-    def set_policy(self, policy_fcn: Callable[
-        [int, Interaction | None, list[Action], dict], tuple[int, Interaction | None]] | None) -> None:
+        for action_obj in self.__id_to_action:
+            if action_obj is not None:
+                action_obj.agent = obj
+
+    def set_policy(self, policy_fcn: Callable[[int,
+                                               Interaction | None,
+                                               list[Action], dict], tuple[int, Interaction | None]] | None) -> None:
         """Sets the policy to be used in selecting what action to perform in the current state.
 
         Args:
@@ -328,7 +338,7 @@ class HybridStateMachine:
             role: The string representation of the new role.
         """
         self.role = role
-        self.update_wildcard(Custom.ROLE_WILDCARD, self.role)
+        self.update_wildcard(Custom.ROLE_WILDCARD, role)
         self.apply_wildcards()
 
     def get_wildcards(self) -> dict:
@@ -375,6 +385,7 @@ class HybridStateMachine:
         Returns:
             An integer representing the current step, or -1 if no action is running.
         """
+        assert isinstance(self.__cur_feasible_actions_status, dict)
         return self.__cur_feasible_actions_status['selected_interaction'].get_step_idx() \
             if self.__action is not None else -1
 
@@ -387,7 +398,7 @@ class HybridStateMachine:
         """
         return self.get_action_step_idx() >= 0
 
-    def add_state(self, state: str, action: str = None, args: dict | None = None, state_id: int | None = None,
+    def add_state(self, state: str, action: str | None = None, args: dict | None = None, state_id: int | None = None,
                   waiting_time: float | None = None, blocking: bool | None = None,
                   msg: str | None = None, msg_action: str | None = None) -> None:
         """Adds a new state to the state machine. This method can create a new state with an optional inner action or
@@ -415,8 +426,9 @@ class HybridStateMachine:
         if action is None:
             act = sta_obj.action if sta_obj is not None else None
         else:
+            assert self.agent is not None
             act = Action(name=action, args=args, idx=len(self.__id_to_action),
-                         actionable=self.actionable, avoid_changing_ready=True,
+                         agent=self.agent, avoid_changing_ready=True,
                          msg=msg_action)
             act.set_wildcards(self.wildcards)
             self.__id_to_action.append(act)
@@ -544,6 +556,7 @@ class HybridStateMachine:
             self.prev_state = self.state
             self.state = state
             if self.__action is not None:
+                assert isinstance(self.__cur_feasible_actions_status, dict)
                 self.__cur_feasible_actions_status['selected_interaction'].reset_status()
                 self.__action = None
             if self.initial_state is None:
@@ -605,13 +618,13 @@ class HybridStateMachine:
 
                 if state.msg_with_wildcards is None:
                     state.set_msg("📍 " + state.name.replace('_', ' ').capitalize())
-                elif force is True:
+                elif force:
                     state.set_msg("📍 " + state.name.replace('_', ' ').capitalize() +
                                   " [" + state.msg_with_wildcards + "]")
                 if state.action is not None:
                     if state.action.msg_with_wildcards is None:
                         state.action.set_msg("📍 " + state.action.name.replace('_', ' ').capitalize())
-                    elif force is True:
+                    elif force:
                         state.action.set_msg("📍 " + state.action.name.replace('_', ' ').capitalize() +
                                              " [" + state.action.msg_with_wildcards + "]")
 
@@ -697,7 +710,7 @@ class HybridStateMachine:
                 raise FileNotFoundError(f"Cannot find {to_state}")
 
             file_name = to_state
-            hsm = HybridStateMachine(self.actionable).load(file_name)
+            hsm = HybridStateMachine(self.agent).load(file_name)
 
             # First, we avoid name clashes, renaming already-used-state-names in original_name~1 (or ~2, or ~3, ...)
             hsm_states = list(hsm.states.keys())  # Keep the list(...) thing, since we need a copy here (it will change)
@@ -773,7 +786,7 @@ class HybridStateMachine:
                                  f"{existing_action.to_list()}")
 
         # Adding the new action
-        new_action = Action(name=action, args=args, idx=act_id, actionable=self.actionable, ready=ready, msg=msg,
+        new_action = Action(name=action, args=args, idx=act_id, agent=self.agent, ready=ready, msg=msg,
                             avoid_changing_ready=avoid_changing_ready,
                             teleport=teleport, high_priority=high_priority,
                             max_duration=total_time, retry_timeout=timeout, delay=delay)
@@ -886,7 +899,7 @@ class HybridStateMachine:
         # Setting up the ghost action (nop) as only possible action from the current state
         original_transitions = self.transitions[from_state]
         self.transitions[from_state] = \
-            {to_state: [Action(name="nop", args={}, actionable=self.actionable, ready=True, teleport=True)]}
+            {to_state: [Action(name="nop", args={}, agent=self.agent, ready=True, teleport=True)]}
 
         # Acting the ghost action (nop)
         ret = await self.act_transitions()
@@ -902,7 +915,7 @@ class HybridStateMachine:
         if state is None:
             return -1.
         else:
-            return self.states[self.state].get_time_passed()
+            return self.states[state].get_time_passed()
 
     async def act_transitions(self, only_the_ones_with_interactions: bool = False) -> int:
         """This is the core execution loop for transitions. It finds all feasible actions from the current state and,
@@ -926,7 +939,7 @@ class HybridStateMachine:
                 return -1
 
             actions_list = []
-            to_state_list = []
+            to_state_list: list[str] = []
             attempts_to_serve_an_interaction_list = []
 
             for to_state, action_list in self.transitions[self.state].items():
@@ -953,9 +966,14 @@ class HybridStateMachine:
 
             # Reloading the already computed set of actions, wait flags, etc. (when in the middle of an action)
             actions_list = self.__cur_feasible_actions_status['actions_list']
-            to_state_list = self.__cur_feasible_actions_status['to_state_list']
-            attempts_to_serve_an_interaction_list = (
+            to_state_list: list[str] = self.__cur_feasible_actions_status['to_state_list']
+            attempts_to_serve_an_interaction_list: list[int] = (
                 self.__cur_feasible_actions_status)['attempts_to_serve_an_interaction_list']
+
+        # If action_list is empty, then self.__cur_feasible_actions_status stays None, and the loop below is not
+        # considered at all. If action_list is not empty, then self.__cur_feasible_actions_status must have been
+        # initialized (dict)
+        assert len(actions_list) == 0 or isinstance(self.__cur_feasible_actions_status, dict)
 
         # Using the selected policy to decide what action to apply
         while len(actions_list) > 0:
@@ -995,7 +1013,7 @@ class HybridStateMachine:
 
                         # Keep this part of code: needed to stabilize potential object duplicates (JS)
                         if _interactions_f != _interaction and _interactions_f is not None:
-                            _interactions_f = self.actionable.im.get_interaction(uuid=_interactions_f.uuid)
+                            _interactions_f = self.agent.im.get_interaction(uuid=_interactions_f.uuid)
                     except Exception as e:
                         log.error(f"Skipping policy filter due to exception: {e}",
                                   state=self.get_state_name())
@@ -1030,6 +1048,8 @@ class HybridStateMachine:
                 self.state = None
                 self.__action = actions_list[_idx]
 
+                assert self.__action is not None
+
                 # Forcing system interaction if no external interactions were selected
                 if _interaction is None:
                     _interaction = self.__action.system_interaction
@@ -1041,32 +1061,34 @@ class HybridStateMachine:
             # References
             action = self.__action
             idx = self.__cur_feasible_actions_status['selected_idx']
-            interaction = self.__cur_feasible_actions_status['selected_interaction']
+            interaction: Interaction = self.__cur_feasible_actions_status['selected_interaction']
+
+            assert interaction is not None
 
             # If this action has an associated Interaction, set it as current on the IM
             # (this configures stdin/stdout for the action)
             # If the Interaction is (1) None, or (2) a system interaction with no streams at all, or
             # (3) a received interaction with no streams, then the stdin/stdout/... will be set back to default streams
-            if self.actionable.im.current is None or self.actionable.im.current != interaction:
-                self.actionable.im.set_current(interaction)
+            if self.agent.im.current is None or self.agent.im.current != interaction:
+                self.agent.im.set_current(interaction)
 
-            log.statem(f">>> ACTION {self.__action.name}...", state=self.get_state_name(True))
-            if len(self.__action.get_list_of_interactions()) > 0:
-                log.statem(str(self.__action.get_list_of_interactions()))
+            log.statem(f">>> ACTION {action.name}...", state=self.get_state_name(True))
+            if len(action.get_list_of_interactions()) > 0:
+                log.statem(str(action.get_list_of_interactions()))
 
             # Calling action, getting back status.
             # Status can be one of these:
             # 0: action fully done;
             # 1: try again this action;
             # 2: failed, move to another action.
-            status = await action(interaction=interaction) if not skip_action_due_to_filter else 2
+            status = (await action(interaction=interaction)) if not skip_action_due_to_filter else 2  # noqa
 
             if status == 0:
-                log.statem(f"+++ ACTION {self.__action.name} correctly completed", state=self.get_state_name(True))
+                log.statem(f"+++ ACTION {action.name} correctly completed", state=self.get_state_name(True))
             elif status == 1:
-                log.statem(f"~~~ ACTION {self.__action.name} will be run again", state=self.get_state_name(True))
+                log.statem(f"~~~ ACTION {action.name} will be run again", state=self.get_state_name(True))
             else:
-                log.statem(f"--- ACTION {self.__action.name} failed", state=self.get_state_name(True))
+                log.statem(f"--- ACTION {action.name} failed", state=self.get_state_name(True))
 
             if action.msg is not None and self.show_action_completion:
                 log.user(Custom.ACTION_TICKS_PER_STATUS[status])
@@ -1079,13 +1101,13 @@ class HybridStateMachine:
 
                 # State transition
                 self.prev_state = self.limbo_state
+                idx: int
                 self.state = to_state_list[idx]
                 self.limbo_state = None
 
                 # Complete the associated Interaction (if any) via Interaction Manager (IM)
-                if interaction is not None:
-                    # The IM on the actionable (agent) will handle the completion, also saving the destination state
-                    await self.actionable.im.complete_current(self.state, CompletionReason.OK)
+                # The Interaction Manager on the agent (agent) will handle the completion, saving the destination state
+                await self.agent.im.complete_current(self.state, CompletionReason.OK)
 
                 # Update status
                 self.__state_changed = self.state != self.prev_state  # Checking if we are on a self-loop or not
@@ -1138,16 +1160,17 @@ class HybridStateMachine:
             elif status == 2:  # Move to the next action (or to the next request of the same action)
 
                 # Clearing request
-                if interaction is not None:
-                    self.__action.interactions.move_interaction_to_back(interaction)  # Rotating to avoid starvation
-                    attempts_to_serve_an_interaction_list[idx] += 1
+                assert self.__action is not None
+                self.__action.interactions.move_interaction_to_back(interaction)  # Rotating to avoid starvation
+                attempts_to_serve_an_interaction_list[idx] += 1
 
                 # Back to the original state
                 self.state = self.limbo_state
                 self.limbo_state = None
 
                 # Purging action from the current list
-                if interaction is None or attempts_to_serve_an_interaction_list[idx] >= len(self.__action.interactions):
+                attempts_to_serve_an_interaction_list: list[int]
+                if attempts_to_serve_an_interaction_list[idx] >= len(self.__action.get_list_of_interactions()):
                     del actions_list[idx]
                     del to_state_list[idx]
                     del attempts_to_serve_an_interaction_list[idx]
@@ -1155,7 +1178,7 @@ class HybridStateMachine:
                 # Update status
                 self.__state_changed = False
                 interaction.reset_state()
-                self.actionable.im.set_current_as_paused()
+                self.agent.im.set_current_as_paused()
                 self.__action = None  # Clearing
 
                 continue  # Move to the next action
@@ -1211,7 +1234,7 @@ class HybridStateMachine:
                     return True
         return False
 
-    def request_action(self, interaction: Interaction | None = None, **kwargs) -> bool:
+    def request_action(self, interaction: Interaction) -> bool:
         """Allows an external entity to request a specific action. The request is validated by a signature checker
         (if one exists) and then queued on the corresponding action. This method enables dynamic, external triggers for
         state machine transitions.
@@ -1227,6 +1250,10 @@ class HybridStateMachine:
         # Getting data
         action_name = interaction.action_name
         args = interaction.action_kwargs
+
+        if action_name is None:
+            log.error(f"Requested an action with no name!")
+            return False
 
         # If state is not provided, the current state is assumed
         from_state = interaction.from_state
@@ -1293,7 +1320,7 @@ class HybridStateMachine:
                     if arg_name in action.args:
                         action.set_as_not_ready()
 
-    def save(self, filename: str, only_if_changed: object | None = None) -> bool:
+    def save(self, filename: str, only_if_changed: "AgentBasics | None" = None) -> bool:
         """Saves the state machine's current configuration to a JSON file. It can optionally check if the configuration
         has changed before saving to avoid redundant file writes.
 
@@ -1307,7 +1334,7 @@ class HybridStateMachine:
         """
         if only_if_changed is not None and os.path.exists(filename):
             try:
-                existing = HybridStateMachine(actionable=only_if_changed).load(filename)
+                existing = HybridStateMachine(agent=only_if_changed).load(filename)
                 if str(existing) == str(self):
                     return False
             except Exception as e:  # If load fails, we assume it changed
@@ -1335,17 +1362,17 @@ class HybridStateMachine:
                 isinstance(filename_or_hsm_as_string, io.TextIOWrapper)):
 
             # Safe way to load when this file is packed in a pip package
-            hsm_data = json.load(filename_or_hsm_as_string)
+            hsm_data = json.load(filename_or_hsm_as_string)  # noqa
         else:
 
             # Ordinary case
-            if os.path.exists(filename_or_hsm_as_string) and os.path.isfile(filename_or_hsm_as_string):
-                with open(filename_or_hsm_as_string, 'r', encoding="utf-8") as file:
+            if os.path.exists(filename_or_hsm_as_string) and os.path.isfile(filename_or_hsm_as_string):    # noqa
+                with open(filename_or_hsm_as_string, 'r', encoding="utf-8") as file:    # noqa
                     hsm_data = json.load(file)
             else:
 
                 # Assuming it is a string
-                hsm_data = json.loads(filename_or_hsm_as_string)
+                hsm_data = json.loads(filename_or_hsm_as_string)  # noqa
 
         # Backward compatibility
         if "machine" not in hsm_data:
@@ -1703,14 +1730,16 @@ class HybridStateMachine:
             state: The name of the state from which to print actions. Defaults to the current state.
         """
         state = (self.state if self.state is not None else self.limbo_state) if state is None else state
+        assert state is not None
         for to_state, action_list in self.transitions[state].items():
             if action_list is None or len(action_list) == 0:
                 log.user(f"{state}, no actions")
-            for action in action_list:
-                log.user(f"{state} --> {to_state} {action}")
+            else:
+                for action in action_list:
+                    log.user(f"{state} --> {to_state} {action}")
 
-    # Noinspection PyMethodMayBeStatic
-    def __policy_first_requested_or_first_ready(self, actions_list: list[Action]) -> tuple[int, Interaction | None]:  # noqa: E501
+    # noinspection PyMethodMayBeStatic
+    def __policy_first_requested_or_first_ready(self, actions_list: list[Action]) -> tuple[int, Interaction | None]:
         """This is the default policy for selecting which action to execute from a list of feasible actions.
         It prioritizes actions that have been explicitly requested (i.e., have pending requests) on a first-come,
         first-served basis. If no requested actions are found, it then selects the first action in the list that is

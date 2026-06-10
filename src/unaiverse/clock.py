@@ -85,8 +85,9 @@ class _Clock:
             except (NTPException, socket.gaierror):
                 continue
         if response is not None:
-            assert response is not None and hasattr(response, 'tx_time') and response.tx_time is not None
-            return datetime.fromtimestamp(response.tx_time, timezone.utc).timestamp()
+            assert response is not None
+            assert hasattr(response, 'tx_time') and getattr(response, 'tx_time') is not None
+            return datetime.fromtimestamp(getattr(response, 'tx_time'), timezone.utc).timestamp()
         else:
 
             # If the firewall is blocking NTP, we go by HTTP, which is way less accurate

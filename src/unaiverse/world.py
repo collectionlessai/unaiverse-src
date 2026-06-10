@@ -17,20 +17,19 @@ from unaiverse.stats import Stats
 from unaiverse.clock import clock
 from unaiverse.utils.logger import log
 from unaiverse.agent import AgentBasics
-from unaiverse.hsm.hsm import HybridStateMachine
 from unaiverse.networking.p2p.messages import Msg
 from unaiverse.networking.node.profile import NodeProfile
 
 
 class World(AgentBasics):
-    """A special AgentBasics subclass representing a world node with no processor or behaviour."""
+    """A special AgentBasics subclass representing a world node with no processor or behavior."""
 
     def __init__(self, world_folder: str, merge_flat_stream_labels: bool = False,
                  stats: Stats | None = None) -> None:
-        """Initializes a World object as a special agent with no processor or behaviour.
+        """Initializes a World object as a special agent with no processor or behavior.
 
         Args:
-            world_folder: Path to the world folder containing per-role behaviour JSON files
+            world_folder: Path to the world folder containing per-role behavior JSON files
                 and ``agent.py``.
             merge_flat_stream_labels: If True, flat stream labels are merged (default: False).
             stats: An optional Stats instance for recording world metrics.  If None, a default
@@ -38,29 +37,31 @@ class World(AgentBasics):
         """
 
         # Creating a "special" agent with no processor and no behavior, but with a "world_folder", which is our world
-        super().__init__(proc=None, proc_inputs=None, proc_outputs=None, proc_opts=None, behav=None,
+        super().__init__(proc=None, proc_inputs=None, proc_outputs=None, proc_opts=None,
                          world_folder=world_folder, merge_flat_stream_labels=merge_flat_stream_labels)
 
         # Clearing processor (world must have no processor, and, maybe, a dummy processor was allocated when building
         # the agent in the init call above)
         self.proc = None
-        self.proc_inputs = []  # Do not set it to None
-        self.proc_outputs = []  # Do not set it to None
-        self.proc_opts = {}
-        self.proc_optional_inputs = []
-        self.compat_in_streams = None
-        self.compat_out_streams = None
+        self.proc_inputs = []  # Do not set it to None, keep an empty list
+        self.proc_outputs = []  # Do not set it to None, keep an empty list
+        self.proc_opts = {}  # Do not set it to None, keep an empty dict
+        self.proc_optional_inputs = []  # See above :)
+        self.compat_in_streams: list[set] | None = None
+        self.compat_out_streams: list[set] | None = None
 
         # Map from public peer IDs to private peer IDs
         self.private_peer_of = {}
 
         # Stats
+        self.stats: Stats
         if stats is not None:
             self.stats = stats
         else:
             # fallback to default Stats class
             self.stats = Stats(is_world=True, db_path=f"{self.world_folder}/stats/world_stats.db",
                                cache_window_hours=2.0)
+        assert self.stats is not None
 
     def assign_role(self, profile: NodeProfile, is_world_master: bool) -> str:
         """Assigns an initial role to a newly connected agent.
@@ -103,23 +104,21 @@ class World(AgentBasics):
         assert self.is_world, "Setting the role is expected to be done by the world, which will broadcast such info"
 
         # Computing new role (keeping the first two bits as before)
-        cur_role = self._node_conn.get_role(peer_id)
+        cur_role = self.node_conn.get_role(peer_id)
         new_role_without_base_int = (role >> 2) << 2
         new_role = (cur_role & 3) | new_role_without_base_int
 
         if new_role != cur_role:
-            self._node_conn.set_role(peer_id, new_role)
+            self.node_conn.set_role(peer_id, new_role)
             log.misc("Telling an agent that his role changed")
-            if not (await self._node_conn.send(peer_id, channel_trail=None,
-                                               content={'peer_id': peer_id, 'role': new_role,
+            if not (await self.node_conn.send(peer_id, channel_trail=None,
+                                              content={'peer_id': peer_id, 'role': new_role,
                                                         'default_behav':
                                                             self.role_to_behav[
-                                                                self.ROLE_BITS_TO_STR[new_role_without_base_int]]
-                                                            if self.role_to_behav is not None else
-                                                            str(HybridStateMachine(None))},
-                                               content_type=Msg.ROLE_SUGGESTION)):
+                                                                self.ROLE_BITS_TO_STR[new_role_without_base_int]]},
+                                              content_type=Msg.ROLE_SUGGESTION)):
                 log.error("Failed to send role change, removing (disconnecting) " + peer_id)
-                await self._node_purge_fcn(peer_id)
+                await self.node_purge_fcn(peer_id)
             else:
                 self.role_changed_by_world = True
 
@@ -153,7 +152,7 @@ class World(AgentBasics):
             badge_description: An optional text description for the badge.
 
         Raises:
-            ValueError: If ``score`` is not in [0.0, 1.0] or ``badge_type`` is not a recognised type.
+            ValueError: If ``score`` is not in [0.0, 1.0] or ``badge_type`` is not a recognized type.
         """
 
         # Validate score
@@ -183,7 +182,7 @@ class World(AgentBasics):
             self.agent_badges[peer_id].append(badge)
 
         # This will force the sending of the dynamic profile at the defined time instants
-        self._node_profile.mark_change_in_connections()
+        self.node_profile.mark_change_in_connections()
 
     # Get all the badges requested by the world
     def get_all_badges(self) -> dict[str, list[dict[str, Any]]]:
@@ -283,7 +282,7 @@ class World(AgentBasics):
         return False
 
     def _extract_graph_node_info(self, peer_id: str) -> dict[str, Any]:
-        """Extracts lightweight visualisation metadata for a node from its NodeProfile.
+        """Extracts lightweight visualization metadata for a node from its NodeProfile.
 
         Args:
             peer_id: The peer ID of the node to inspect; uses the world's own profile
@@ -293,10 +292,9 @@ class World(AgentBasics):
             A dictionary of display fields (name, owner, role, type, badge count, etc.),
             or an empty dict if the profile cannot be found.
         """
-
         if peer_id == self.get_peer_ids()[1]:
             # this is the world itself
-            profile = self._node_profile
+            profile = self.node_profile
         else:
             profile = self.all_agents.get(peer_id)
         if profile is None:
@@ -306,6 +304,7 @@ class World(AgentBasics):
         static_profile = profile.get_static_profile()
         dynamic_profile = profile.get_dynamic_profile()
         cv = profile.get_cv()
+        assert self.stats is not None
 
         return {
             'Name': static_profile.get('node_name', '~'),
@@ -327,6 +326,7 @@ class World(AgentBasics):
         """
 
         # 1. initialize structure if missing (e.g. first run or after DB load)
+        assert self.stats is not None
         graph_stat = self.stats.get_stats().setdefault("graph", {'nodes': {}, 'edges': {}})
 
         nodes = graph_stat.setdefault('nodes', {})
@@ -367,8 +367,9 @@ class World(AgentBasics):
 
     def _prune_graph(self) -> None:
         """Removes nodes that are no longer connected to the World."""
-        graph_stat = self.stats.get_stats().get("graph")
-        if not graph_stat:
+        assert self.stats is not None
+        graph_stat: dict | None = self.stats.get_stats().get("graph")
+        if graph_stat is None or not graph_stat:
             return
 
         nodes = graph_stat.get('nodes', {})
@@ -412,6 +413,7 @@ class World(AgentBasics):
 
         # 2. Process peer stats
         connected_peers = []
+        assert self.stats is not None
         for update in peer_stats_batch:
             try:
                 p_id = update['group_key']
@@ -455,6 +457,7 @@ class World(AgentBasics):
         import webbrowser
 
         log.debug("Rendering Dashboard...")
+        assert self.stats is not None
         html = self.stats.plot()
         if html:
             tmp = tempfile.NamedTemporaryFile(suffix=".html", delete=False, mode="w", encoding="utf-8")

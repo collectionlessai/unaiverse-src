@@ -18,16 +18,16 @@ import torch
 import functools
 from typing import Callable
 from PIL.Image import Image
+from unaiverse.hsm import Action
 from unaiverse.stats import Stats
 from unaiverse.clock import clock
 from unaiverse.utils.logger import log
-from typing_extensions import deprecated
 from unaiverse.interaction import Interaction
 from unaiverse.agent_basics import AgentBasics
 from unaiverse.networking.p2p.messages import Msg
 from unaiverse.custom import Custom, GenException
 from unaiverse.streams.dataprops import DataProps
-from unaiverse.streams.streams import BufferedDataStream, Stream
+from unaiverse.streams.streams import BufferedStream, Stream
 
 
 def action(func: Callable) -> Callable:
@@ -95,9 +95,14 @@ def action(func: Callable) -> Callable:
                              "(it is tolerated to return non-None stuff and interpreted as True, "
                              "but not if it returns None, as happens here)")
         except Exception as e:
-            log.error(f"Action '{func.__name__}' failed since it raised an exception: {e}")  # No-Debug
-            # import traceback  # Debug
-            # log.error(f"{traceback.format_exc()}")  # Debug
+            if not isinstance(e, AssertionError):
+                log.error(f"Action '{func.__name__}' failed since it raised an exception: {e}")  # No-Debug
+                import traceback  # Debug
+                log.error(f"{traceback.format_exc()}")  # Debug
+            else:
+                log.error(f"Action '{func.__name__}' failed since it raised an AssertionError")  # No-Debug
+                import traceback
+                log.error(f"{traceback.format_exc()}")
             ret = False
         return ret
 
@@ -142,7 +147,7 @@ class Agent(AgentBasics):
         _, own_private_pid = self.get_peer_ids()
         t = clock.get_time_ms()
         try:
-            info = self._node_conn['p2p_world'].get_connected_peers_info()
+            info = self.node_conn['p2p_world'].get_connected_peers_info()
             peers_list = [i['id'] for i in info]
             self.stats.store_stat('connected_peers', peers_list, group_key=own_private_pid, timestamp=t)
         except Exception as e:
@@ -151,6 +156,7 @@ class Agent(AgentBasics):
 
         try:
             behav = self.behav
+            assert behav is not None
             self.stats.store_stat('state', behav.get_state_name(), group_key=own_private_pid, timestamp=t)
             self.stats.store_stat('action', behav.get_action_name(), group_key=own_private_pid, timestamp=t)
             self.stats.store_stat('last_action', behav.get_last_completed_action_name(),
@@ -164,12 +170,13 @@ class Agent(AgentBasics):
             log.debug("[send_stats_to_world] Not in a world, skipping stats send.")
             return
 
-        world_peer_id = self._node_conn.get_world_peer_id()
+        world_peer_id = self.node_conn.get_world_peer_id()
         if world_peer_id is None:
             log.error("Agent in world, but world_peer_id is None.")
             return
 
         self.collect_and_store_own_stats()  # update own stats
+        assert self.stats is not None
         payload = self.stats.get_payload_for_world()
         if not payload:
             log.debug("[send_stats_to_world] No stats to send.")
@@ -177,10 +184,10 @@ class Agent(AgentBasics):
 
         # Send all stats
         log.misc(f"Sending stats update to world {world_peer_id}...")
-        if not (await self._node_conn.send(world_peer_id,
-                                           channel_trail=None,
-                                           content=payload,
-                                           content_type=Msg.STATS_UPDATE)):
+        if not (await self.node_conn.send(world_peer_id,
+                                          channel_trail=None,
+                                          content=payload,
+                                          content_type=Msg.STATS_UPDATE)):
             log.error("Failed to send stats update to world.")
 
     def update_stats_view(self, received_view: dict, overwrite: bool = False) -> None:
@@ -190,6 +197,7 @@ class Agent(AgentBasics):
             received_view: The view dictionary received from the world.
             overwrite: Whether to overwrite existing entries. Defaults to False.
         """
+        assert self.stats is not None
         self.stats.update_view(received_view, overwrite)
 
     async def suggest_role_to_world(self, agent: str | None, role: str) -> bool:
@@ -222,10 +230,10 @@ class Agent(AgentBasics):
                 content.append({'peer_id': _agent, 'role': role_bits})
 
         if len(content) > 0:
-            world_peer_id = self._node_conn.get_world_peer_id()
-            if not (await self._node_conn.send(world_peer_id, channel_trail=None,
-                                               content=content,
-                                               content_type=Msg.ROLE_SUGGESTION)):
+            world_peer_id = self.node_conn.get_world_peer_id()
+            if not (await self.node_conn.send(world_peer_id, channel_trail=None,
+                                              content=content,
+                                              content_type=Msg.ROLE_SUGGESTION)):
                 log.error("Failed to send role suggestion to the world")
                 return False
         return True
@@ -253,7 +261,7 @@ class Agent(AgentBasics):
             return False
 
         agents = self.__involved_agents(agent)
-        world_peer_id = self._node_conn.get_world_peer_id()
+        world_peer_id = self.node_conn.get_world_peer_id()
 
         if badge_type not in Agent.BADGE_TYPES:
             log.error(f"Unknown badge type: {badge_type}")
@@ -265,11 +273,11 @@ class Agent(AgentBasics):
                                                'score': score,
                                                'badge_type': badge_type,
                                                'badge_description': badge_description,
-                                               'agent_token': self._node_conn.get_last_token(peer_id)})
+                                               'agent_token': self.node_conn.get_last_token(peer_id)})
 
-        if not (await self._node_conn.send(world_peer_id, channel_trail=None,
-                                           content=list_of_badge_dictionaries,
-                                           content_type=Msg.BADGE_SUGGESTIONS)):
+        if not (await self.node_conn.send(world_peer_id, channel_trail=None,
+                                          content=list_of_badge_dictionaries,
+                                          content_type=Msg.BADGE_SUGGESTIONS)):
             log.error("Failed to send badge suggestions to the world")
             return False
         else:
@@ -296,9 +304,8 @@ class Agent(AgentBasics):
     async def send(self, action_name: str | None = None,
                    target: str | list[str] | None = None,
                    action_kwargs: dict | None = None,
-                   streams: list[tuple[str, int]] | list[str] | None = None,
-                   data_samples: list[str | Image | torch.Tensor] | dict[
-                       str, str | Image | torch.Tensor] | None = None,
+                   streams: dict[str, str | list[str]] | list[str] | None = None,
+                   data_samples: list | dict[str, torch.Tensor | Image | str] | None = None,
                    num_steps: int = -1,
                    timeout: float = -1.,
                    from_state: str | None = None,
@@ -325,9 +332,11 @@ class Agent(AgentBasics):
                 Ignored when a pre-built Interaction is provided. A lot of freedom here: stream_hash can be a net hash
                 or a user hash. It is also fine to specify just the stream name or the stream
                 group, then the user hash or the net hash will be automatically estimated.
-            data_samples: List of actual data samples. Ignored when a pre-built Interaction is provided.
-                It can also be a dictionary stream user hash -> data sample, to actually send the samples as if they
-                were produced by a stream.
+            data_samples: List of actual data samples. Ignored when a pre-built Interaction is provided. It can also be
+                a dictionary mapping one or more stream user hashes to data samples that will be artificially loaded on
+                such streams, so that the 'streams' argument above is actually automatically populated.
+                It can also be a string representing the payload that encodes a list of samples, if it was received
+                from the net.
             num_steps: Number of steps the interaction spans (used when building from raw args).
                 Ignored when a pre-built Interaction is provided.
             timeout: Maximum time for the interaction. Ignored when a pre-built Interaction is provided.
@@ -355,9 +364,14 @@ class Agent(AgentBasics):
         if wait_completion and volatile:
             raise GenException("You cannot wait for completion a volatile interaction (it will not return any updates)")
 
-        first_run = True
-        system_interaction = None
-        if interaction is not None:
+        if wait_completion and interaction is None:
+            raise GenException("You cannot wait for completion by directly calling this action, without an interaction"
+                               " (the state of the action needs to be saved in the interaction object)")
+
+        if interaction is None:  # This happens when calling 'send' from the code, e.g., inside another action
+            system_interaction = None
+            first_run = True
+        else:
             system_interaction = interaction
             first_run = system_interaction.get_mark() is None
 
@@ -367,15 +381,20 @@ class Agent(AgentBasics):
                                                 data_samples, num_steps, timeout, from_state, to_state, callback,
                                                 forced_uuid, id, copy_sys, volatile)
             if wait_completion:
+                assert system_interaction is not None
+                assert isinstance(system_interaction.action_ref, Action)
                 system_interaction.action_ref.set_default_timeout()  # This will make the action pedantic
                 system_interaction.set_mark(sent_interaction)  # First run, Saving the interaction that was sent
                 return False
             else:
                 if system_interaction:
+                    assert isinstance(system_interaction.action_ref, Action)
                     system_interaction.action_ref.set_timeout(-1.)  # Clear timeouts to ensure it is not pedantic
                 return sent_interaction is not None
         else:
+            assert system_interaction is not None
             sent_interaction = system_interaction.get_mark()  # Loading the interaction that was sent at the first run
+            sent_interaction: Interaction
             if sent_interaction.is_completed():
                 return True  # The mark will be automatically cleared by the Action class
             else:
@@ -462,7 +481,7 @@ class Agent(AgentBasics):
         Returns:
             True if the learning step ran successfully, False otherwise.
         """
-        if (self.proc_opts['optimizer'] is None
+        if (self.proc_opts is None or self.proc_opts['optimizer'] is None
                 or self.proc_opts['losses'] is None
                 or len(self.proc_opts['losses']) == 0):
             log.misc(f"Current processor has no learning skills (or learning options not specified)")
@@ -506,7 +525,9 @@ class Agent(AgentBasics):
         Returns:
             True all the times.
         """
-        log.debug(f"The following interaction was completed: "
+        if interaction is None:
+            return False
+        log.debug(f"[show] The following interaction was completed: "
                   f"{interaction.to_code_str(True, True)}")
         return True
 
@@ -542,7 +563,7 @@ class Agent(AgentBasics):
         """
         if len(self._found_agents) > 0:
             log.misc(f"Sending engagement request to {', '.join([x for x in self._found_agents])}")
-        my_role_str = self._node_profile.get_dynamic_profile()['connections']['role']
+        my_role_str = self.node_profile.get_dynamic_profile()['connections']['role']
         ret = await self.send(target=self._found_agents, action_name="engage",
                               action_kwargs={"sender_role": my_role_str}, wait_completion=True,
                               interaction=self.im.get_current())
@@ -622,8 +643,6 @@ class Agent(AgentBasics):
         Returns:
             True if disengagement requests were successfully sent to at least one engaged agent, False otherwise.
         """
-        at_least_one_sent = False
-
         if len(self._engaged_agents) > 0:
             log.misc(f"Sending disengagement request to {', '.join([x for x in self._engaged_agents])}")
         if await self._send(target=list(self._engaged_agents), action_name="disengage",
@@ -661,7 +680,7 @@ class Agent(AgentBasics):
         if disconnect_too:
             if interaction is not None:
                 interaction.send_status = False  # This will avoid sending back a confirmation for this interaction
-            await self._node_purge_fcn(_requester)
+            await self.node_purge_fcn(_requester)
 
         # Marking this agent as available if not engaged to any agent
         self._available = len(self._engaged_agents) == 0
@@ -692,7 +711,7 @@ class Agent(AgentBasics):
             Always True.
         """
         log.misc(f"Disconnecting agent: {agent}")
-        await self._node_purge_fcn(agent)  # This will also call remove_agent, that will call remove_streams
+        await self.node_purge_fcn(agent)  # This will also call remove_agent, that will call remove_streams
         return True
 
     @action
@@ -713,7 +732,7 @@ class Agent(AgentBasics):
         if await self.find_agents(role):
             found_agents = copy.deepcopy(self._found_agents)
             for agent in found_agents:
-                await self._node_purge_fcn(agent)  # This will also call remove_agent, that will call remove_streams
+                await self.node_purge_fcn(agent)  # This will also call remove_agent, that will call remove_streams
         return True
 
     @action
@@ -746,7 +765,7 @@ class Agent(AgentBasics):
                     all_disconnected = False
                     break
             else:
-                if agent in self.all_agents or self._node_conn.is_connected(agent):
+                if agent in self.all_agents or self.node_conn.is_connected(agent):
                     all_disconnected = False
                     break
         return all_disconnected
@@ -781,8 +800,10 @@ class Agent(AgentBasics):
                 net_hash_to_stream_dict = self.find_streams(agent, "processor", discard_owned=True)
                 for stream_dict in net_hash_to_stream_dict.values():
                     for stream_obj in stream_dict.values():
+                        assert stream_obj.props is not None
                         if data_type is not None and stream_obj.props.data_type != data_type:
                             continue
+                        assert stream_obj.props is not None
                         if not stream_obj.props.is_public():
                             data = stream_obj.get("received_some_asked_data", uuid=uuid)
                             data_tag = stream_obj.get_tag(uuid=uuid)
@@ -792,6 +813,7 @@ class Agent(AgentBasics):
                                     return True
                                 else:
                                     got_something = True
+                                    _processing_fcn: Callable
                                     _processing_fcn(agent, stream_obj.props, data, data_tag)
         return got_something
 
@@ -835,7 +857,7 @@ class Agent(AgentBasics):
                 if agent not in self.all_agents:
                     return False
             else:
-                if not self._node_conn.is_connected(agent):
+                if not self.node_conn.is_connected(agent):
                     return False
         return True
 
@@ -869,10 +891,10 @@ class Agent(AgentBasics):
         Returns:
             True if there are waiting agents, False otherwise.
         """
-        log.misc(f"Current set of {len(self._node_agents_waiting)} connected peer IDs non managed yet: "
-                 f"{list(self._node_agents_waiting.keys())}")
+        log.misc(f"Current set of {len(self.node_agents_waiting)} connected peer IDs non managed yet: "
+                 f"{list(self.node_agents_waiting.keys())}")
         for found_agent in self._found_agents:
-            if found_agent in self._node_agents_waiting:
+            if found_agent in self.node_agents_waiting:
                 return True
         return False
 
@@ -938,6 +960,7 @@ class Agent(AgentBasics):
                   f" will return {len(correctly_asked) > 0}")
         return len(correctly_asked) > 0
 
+    # noinspection PyUnusedLocal
     @action
     async def subscribe(self, stream_owners: list[str] | None = None, stream_props: list[str] | None = None,
                         unsubscribe: bool = False, interaction: Interaction | None = None) -> bool:
@@ -954,33 +977,12 @@ class Agent(AgentBasics):
         Returns:
             True if the action is successful, False otherwise.
         """
+        if stream_props is None or stream_owners is None:
+            log.debug("[subscribe] Called without specifying required arguments")
+            return False
+
         log.debug(f"[subscribe] unsubscribe: {unsubscribe}, "
                   f"stream_owners: {stream_owners}, stream_props: ... ({len(stream_props)} props)")
-
-        _requester = interaction.requester
-        if _requester is not None:
-            if isinstance(_requester, list):
-                for _r in _requester:
-                    if self.behaving_in_world():
-                        if _r not in self.world_agents and _requester not in self.world_masters:
-                            log.error(f"Unknown agent: {_r} in list {_requester} (fully skipping action subscribe)")
-                            return False
-                    else:
-                        if _r not in self.public_agents:
-                            log.error(f"Unknown agent: {_r} in list {_requester} (fully skipping action subscribe)")
-                            return False
-            else:
-                if self.behaving_in_world():
-                    if _requester not in self.world_agents and _requester not in self.world_masters:
-                        log.error(f"Unknown agent: {_requester} (fully skipping action subscribe)")
-                        return False
-                else:
-                    if _requester not in self.public_agents:
-                        log.error(f"Unknown agent: {_requester} (fully skipping action subscribe)")
-                        return False
-        else:
-            log.error("Unknown requester (None)")
-            return False
 
         # Building properties
         props_dicts = []
@@ -1013,7 +1015,7 @@ class Agent(AgentBasics):
     async def record(self, interaction: Interaction | None = None,
                      record_uuid: str | None = "see_interaction_uuid") -> bool:
         """Records `interaction.num_steps` samples from the interaction's stdin stream group into a
-        new owned `BufferedDataStream` group and exposes it via pubsub. Multistep by virtue of the
+        new owned `BufferedStream` group and exposes it via pubsub. Multistep by virtue of the
         interaction's `num_steps`; the framework's readiness gate already pauses execution on
         no-fresh-data cycles.
 
@@ -1048,7 +1050,7 @@ class Agent(AgentBasics):
                 assert s_obj.props is not None
                 props = s_obj.props.clone()
                 props.set_group("recorded" + str(self._last_recorded_stream_num))
-                dest[s_obj.props.get_name()] = BufferedDataStream(props=props)
+                dest[s_obj.props.get_name()] = BufferedStream(props=props)
             self._last_recorded_stream_dict = dest
 
         dest = self._last_recorded_stream_dict
@@ -1081,10 +1083,10 @@ class Agent(AgentBasics):
 
     @action
     async def connect_to(self, peer_id: str):
-        addresses = self._node_conn.get_addrs(peer_id)
-        if not self._node_conn.is_connected(peer_id):
+        addresses = self.node_conn.get_addrs(peer_id)
+        if not self.node_conn.is_connected(peer_id):
             log.misc(f"Asking to get in touch with {peer_id}...")
-            peer_id = await self._node_ask_to_get_in_touch_fcn(addresses=addresses, public=False)
+            peer_id = await self.node_ask_to_get_in_touch_fcn(addresses=addresses, public=False)
             if peer_id is not None:
                 return True
             else:
@@ -1115,12 +1117,12 @@ class Agent(AgentBasics):
         for role in role_list:
             role = self.ROLE_STR_TO_BITS[role]
 
-            found_addresses1, found_peer_ids1 = self._node_conn.find_addrs_by_role(Agent.ROLE_WORLD_MASTER | role,
-                                                                                   return_peer_ids_too=True,
-                                                                                   discard_yourself=True)
-            found_addresses2, found_peer_ids2 = self._node_conn.find_addrs_by_role(Agent.ROLE_WORLD_AGENT | role,
-                                                                                   return_peer_ids_too=True,
-                                                                                   discard_yourself=True)
+            found_addresses1, found_peer_ids1 = self.node_conn.find_addrs_by_role(Agent.ROLE_WORLD_MASTER | role,
+                                                                                  return_peer_ids_too=True,
+                                                                                  discard_yourself=True)
+            found_addresses2, found_peer_ids2 = self.node_conn.find_addrs_by_role(Agent.ROLE_WORLD_AGENT | role,
+                                                                                  return_peer_ids_too=True,
+                                                                                  discard_yourself=True)
             found_addresses = found_addresses1 + found_addresses2
             found_peer_ids = found_peer_ids1 + found_peer_ids2
 
@@ -1134,9 +1136,9 @@ class Agent(AgentBasics):
 
             log.misc(f"Found addresses ({len(found_addresses)}) with role: {role}")
             for f_addr, f_peer_id in zip(found_addresses, found_peer_ids):
-                if not self._node_conn.is_connected(f_peer_id):
+                if not self.node_conn.is_connected(f_peer_id):
                     log.misc(f"Asking to get in touch with {f_peer_id}...")
-                    peer_id = await self._node_ask_to_get_in_touch_fcn(addresses=f_addr, public=False)
+                    peer_id = await self.node_ask_to_get_in_touch_fcn(addresses=f_addr, public=False)
                     if peer_id is not None:
                         at_least_one_is_valid = True
                         self._found_agents.add(peer_id)
@@ -1219,6 +1221,7 @@ class Agent(AgentBasics):
 
         log.misc(f"Checking if the current preferred playlist item "
                  f"(id: {self._cur_preferred_stream}) is the '{what}' one")
+
         if what == "first":
             return self._cur_preferred_stream == 0
         elif what == "last":
@@ -1239,6 +1242,8 @@ class Agent(AgentBasics):
         elif what == "not_last_song":
             num_streams_in_playlist = len(self._preferred_streams) // self._repeat
             return (self._cur_preferred_stream + 1) % num_streams_in_playlist != 0
+        else:
+            return False
 
     @action
     async def set_pref_streams(self, net_hashes: list[str], repeat: int = 1) -> bool:
@@ -1296,6 +1301,8 @@ class Agent(AgentBasics):
             net_hash = self._preferred_streams[self._cur_preferred_stream]
         else:
             net_hash = self.user_stream_hash_to_net_hash(stream_hash)
+
+        assert net_hash is not None
 
         # Agents to evaluate
         if agents_to_evaluate is None:
@@ -1424,36 +1431,6 @@ class Agent(AgentBasics):
         else:
             return True
 
-    def resolve_agent_ref(self, ref: str) -> str | None:
-        """Resolve an agent name or peer_id to a peer_id.
-
-        If ``ref`` is already a known peer_id, it is returned as-is.
-        Otherwise, the method searches all known agents by node_name.
-
-        Args:
-            ref: A peer_id or agent name.
-
-        Returns:
-            The peer_id if found, None otherwise.
-        """
-
-        # If already a valid peer_id
-        if ref in self.all_agents:
-            return ref
-
-        # Search by email@node_name (if only node_name is provided, assumes it is one of your agents)
-        if '@' not in ref:
-            your_email = self.get_profile().get_static_profile()['email']
-            ref = your_email + '@' + ref
-
-        for peer_id, profile in self.all_agents.items():
-            static_profile = profile.get_static_profile() if hasattr(profile, 'get_static_profile') else {}
-            if isinstance(static_profile, dict):
-                if (static_profile.get('email', '') + '@' + static_profile.get('node_name')) == ref:
-                    return peer_id
-
-        return None
-
     def resolve_stream_ref(self, ref: str, public: bool) -> str | None:
         """Resolve a stream name to a stream user or net hash (heuristic, gives priority to owned streams).
 
@@ -1466,61 +1443,10 @@ class Agent(AgentBasics):
             The stream user hash or net hash if found, None otherwise.
         """
 
-        # If already a valid user hash
-        if ref in self.known_streams_by_user_hash:
-            return ref
-
-        # If already a valid net hash
-        if ref in self.known_streams:
-            return ref
-
         if ref == "<playlist>":
             return self._preferred_streams[self._cur_preferred_stream]
-
-        # If it is formatted as a net hash, but was not found, then nothing to do
-        if Stream.is_net_hash(ref):
-            return None
-
-        # By default, we will try to resolve by looking at owned (first) and other (then) streams
-        search_owned_streams = True
-        search_other_streams = True
-
-        # If it looks like a user hash but was not found in the code above, then it could be a stream group
-        # represented as a user hash, so we clear it, and we keep the group name only. Moreover, since it will also
-        # contain a peer ID, we immediately know where to look
-        if Stream.is_user_hash(ref):
-            peer_id = DataProps.peer_id_from_user_hash(ref)
-            ref = DataProps.name_from_user_hash(ref)
-            search_owned_streams = peer_id == self.get_peer_id()
-            search_other_streams = not search_owned_streams
-
-        # Search your own streams first (priority)
-        if search_owned_streams:
-            for user_hash, stream_obj in self.owned_streams_by_user_hash.items():
-                if public and not stream_obj.is_public():
-                    continue
-                if ref == Stream.name_from_user_hash(user_hash):
-                    return user_hash
-            for net_hash, stream_dict in self.owned_streams.items():
-                if public and not next(iter(stream_dict.values())).is_public():
-                    continue
-                if ref == Stream.name_or_group_from_net_hash(net_hash):
-                    return net_hash
-
-        # Search all streams then
-        if search_other_streams:
-            for user_hash, stream_obj in self.known_streams_by_user_hash.items():
-                if public and not stream_obj.is_public():
-                    continue
-                if ref == Stream.name_from_user_hash(user_hash):
-                    return user_hash
-            for net_hash, stream_dict in self.known_streams.items():
-                if public and not next(iter(stream_dict.values())).is_public():
-                    continue
-                if ref == Stream.name_or_group_from_net_hash(net_hash):
-                    return net_hash
-
-        return None
+        else:
+            return super().resolve_stream_ref(ref, public)
 
     def __compare_streams(self, net_hash_a: str, net_hash_b: str,
                           how: str = "mse", steps: int = 100, re_offset: bool = False) -> tuple[float, bool]:
@@ -1531,7 +1457,7 @@ class Agent(AgentBasics):
         Args:
             net_hash_a: The network hash of the first stream.
             net_hash_b: The network hash of the second stream.
-            how: The comparison metric ('mse', 'max', 'geqX').
+            how: The comparison metric ('mse', 'max', 'geq-X').
             steps: The number of samples to compare.
             re_offset: A boolean to re-align stream tags before comparison.
 
@@ -1552,7 +1478,7 @@ class Agent(AgentBasics):
 
         if how not in ["mse", "max"] and not how.startswith("geq"):
             log.error(f"Data can be compared by MSE, or by comparing the argmax ('max'), or comparing the number "
-                      f"of corresponding bits (obtained by 'geqX', where 'X' is a number). Unknown: {how})")
+                      f"of corresponding bits (obtained by 'geq-X', where '-X' is a number). Unknown: {how})")
             return -1., False
 
         stream_dict_a = self.known_streams[net_hash_a]
@@ -1628,11 +1554,11 @@ class Agent(AgentBasics):
             log.error(f"Cannot find the data stream to consider in the comparison, {net_hash_b}")
             return -1., False
 
-        if not isinstance(stream_a, BufferedDataStream):
+        if not isinstance(stream_a, BufferedStream):
             log.error(f"Can only compare buffered streams and {net_hash_a} is not buffered")
             return -1., False
 
-        if not isinstance(stream_b, BufferedDataStream):
+        if not isinstance(stream_b, BufferedStream):
             log.error(f"Can only compare buffered streams and {net_hash_b} is not buffered")
             return -1., False
 
@@ -1696,7 +1622,6 @@ class Agent(AgentBasics):
         a_tag = None
         a_tag_prev = None
         for k_a in range(0, steps):
-
             restart_detected = False
             if a_tag is not None:
                 a_tag_prev = a_tag
@@ -1735,6 +1660,7 @@ class Agent(AgentBasics):
             # The following code automatically advances the tag by 1 for stream "a", that is expected to be the
             # reference stream (i.e., the one for which the agent has all samples, with no missing data in between)
             if a_tag_prev is not None and a_tag <= a_tag_prev:
+                a_tag_prev: int
                 a_tag = int(a_tag_prev) + 1  # Fixed tag detected (patching)
                 a_tag_w_offset = a_tag - a_tag_offset
 
@@ -1759,7 +1685,8 @@ class Agent(AgentBasics):
                         k_b += 1  # A restart was detected, it means that "stream_b" is behind, let's move it ahead
                 elif b_tag_w_offset < a_tag_w_offset:
                     log.user(
-                        f"Comparing tags by {how}: {a_tag} vs {b_tag} -> too early w.r.t. expected, samples: {a} vs {b}")
+                        f"Comparing tags by {how}: {a_tag} vs {b_tag} -> too early w.r.t. expected, "
+                        f"samples: {a} vs {b}")
                     return -1., False
 
         log.user(f"Comparing error: {o / steps}")

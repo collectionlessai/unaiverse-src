@@ -836,7 +836,7 @@ class P2P:
             # Optionally raise P2PError(f"Failed to get connected peers info") from e if called directly
             return []  # Return empty list on error during polling
 
-    def get_rendezvous_peers_info(self) -> Dict[str, Any] | List | None:
+    def get_rendezvous_peers_info(self) -> Dict[str, Any] | None:
         """
         Gets the full rendezvous state from the Go library, including peers and metadata.
 

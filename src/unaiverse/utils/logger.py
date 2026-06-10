@@ -18,8 +18,8 @@ import json
 import html
 import threading
 from enum import Enum
-from typing import Any
 from pathlib import Path
+from typing import Any, Callable
 from datetime import datetime, timezone
 from unaiverse.custom import Custom, GenException
 
@@ -149,7 +149,7 @@ class _Logger:
         [CHANNEL ] HH:MM:SS.mmm  c=<cycle> | ctx_key=val ...  Message text  [key=val  key=val]
         [NETWORK ] HH:MM:SS.mmm  c=<cycle> | ...  {pub}  Message text  [key=val]
 
-    **Thread safety**: all public methods are protected by a single RLock.
+    **Thread safety**: all public methods are protected by a single "R-Lock".
 
     Args:
         name:     Base name for the log file (no extension).
@@ -190,7 +190,8 @@ class _Logger:
         self._ctx: dict[str, Any] = {}
         self._sub: str = ""  # sticky subdomain tag (set via set_sub)
         self._clock = None
-        self._print_fcn = {ks: {k: print for k in ALL_CHANNELS} for ks in _ALL_SUBS}
+        self._print_fcn: dict[str, dict[str, Callable[..., Any]]] = {ks: {k: print for k in ALL_CHANNELS}
+                                                                     for ks in _ALL_SUBS}
         self._print_fcn_supports_html = {ks: {k: False for k in ALL_CHANNELS} for ks in _ALL_SUBS}
 
         # Resolve active channels
@@ -353,9 +354,6 @@ class _Logger:
         """Log a user-facing application message."""
         self._log(Ch.USER, msg, info, sub=sub)
 
-    def print_instance(self):
-        print(f"LOG OBJECT INSTANCE: {self}")
-
     def statem(self, msg: str, sub: str = "", **info: Any) -> None:
         """Log an app state message (e.g. a per-cycle snapshot summary).
 
@@ -448,6 +446,7 @@ class _Logger:
                 record["info"] = info
 
             if self._file_enabled:
+                assert self._log_file is not None
                 self._log_file.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
 
             if ch in self._screen:
@@ -528,7 +527,7 @@ class _Logger:
         Allows the logger to be used as a drop-in callable anywhere a simple
         print-like function is expected::
 
-            log("initialising subsystem", component="foo")
+            log("initializing subsystem", component="foo")
             log("pub path shortcut", sub="pub")
         """
         self._log(Ch.MISC, msg, info, sub=sub)
@@ -551,6 +550,7 @@ class _Logger:
     def close(self) -> None:
         """Flush and close the log file."""
         with self._lock:
+            assert self._log_file is not None
             self._log_file.flush()
             self._log_file.close()
 

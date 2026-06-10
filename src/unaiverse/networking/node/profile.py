@@ -32,7 +32,7 @@ class NodeProfile:
                  static: dict,
                  dynamic: dict,
                  cv: list) -> None:
-        """Initialises a NodeProfile from static, dynamic, and CV data.
+        """Initializes a NodeProfile from static, dynamic, and CV data.
 
         Args:
             static: Dictionary of static profile fields (e.g. node_id, node_type, name, email).
@@ -51,7 +51,7 @@ class NodeProfile:
         # Forcing key order (important! otherwise the hash operation will not be consistent with the one on the server)
         cv = [{k: _cv[k] for k in sorted(_cv)} for _cv in sorted(cv, key=lambda x: x['last_edit_utc'])]
 
-        self._profile_data = \
+        self._profile_data: dict = \
             {
                 'static': {
                     'node_id': None,
@@ -185,7 +185,10 @@ class NodeProfile:
         """
 
         # Ensure essential 'node_id' is present
-        node_id = combined_data.get('static').get('node_id')
+        static_combined_data = combined_data.get('static')
+        assert static_combined_data is not None
+        static_combined_data: dict
+        node_id = static_combined_data.get('node_id', None)
         if not node_id:
             raise ValueError("Input dictionary must contain a 'node_id'.")
 

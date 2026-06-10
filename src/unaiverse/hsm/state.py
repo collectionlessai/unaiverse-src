@@ -14,9 +14,13 @@
 """
 import html
 import time
+from typing import TYPE_CHECKING
 from unaiverse.custom import Custom
 from unaiverse.utils.logger import log
 from unaiverse.hsm.action import Action
+
+if TYPE_CHECKING:
+    from unaiverse.hsm import HybridStateMachine
 
 
 class State:
@@ -53,7 +57,7 @@ class State:
         self.wildcards = {}  # Value-to-value (es: <playlist> to this:and:this)
         self.msg_with_wildcards = self.msg
 
-        if self.name is Custom.NOT_ALLOWED_STATE_NAMES:
+        if self.name in Custom.NOT_ALLOWED_STATE_NAMES:
             log.critical(f"Invalid state name (not allowed): {self.name}")
 
     async def __call__(self, *args, **kwargs) -> int | None:
@@ -105,7 +109,7 @@ class State:
         return (f"[State: {self.name}] id: {self.id}, waiting_time: {self.waiting_time}, blocking: {self.blocking}, "
                 f"action -> {self.action if self.action is not None else 'none'}, msg: {self.msg}")
 
-    def set_state_machine(self, hsm: object) -> None:
+    def set_state_machine(self, hsm: "HybridStateMachine") -> None:
         """Registers the parent state machine that owns this state."""
         self.state_machine = hsm
         self.set_wildcards(hsm.get_wildcards())
@@ -190,7 +194,7 @@ class State:
         """
         self.blocking = blocking
 
-    def set_wildcards(self, wildcards: dict[str, str | float | int] | None) -> None:
+    def set_wildcards(self, wildcards: dict[str, str | float | int | list[str]] | None) -> None:
         """Replaces wildcard dictionary.
 
         Args:

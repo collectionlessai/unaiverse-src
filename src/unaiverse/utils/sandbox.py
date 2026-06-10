@@ -54,7 +54,7 @@ def sandbox(file_to_run: str,
             writable_paths: tuple[str] | list[str] | None = None) -> None:
 
     # Path of this file
-    absolute_path_of_this_file = os.path.abspath(__file__)
+    absolute_path_of_this_file = str(os.path.abspath(__file__))
 
     # Folders composing the path (and file name at the end)
     path_components = list(Path(absolute_path_of_this_file).parts)
@@ -155,7 +155,8 @@ def cleanup_docker_artifacts(where: str):
         print("Removed Dockerfile.")
 
 
-def run_in_docker(file_to_run: str, read_only_host_paths: list[str] = None, writable_host_paths: list[str] = None):
+def run_in_docker(file_to_run: str, read_only_host_paths: list[str] | None = None,
+                  writable_host_paths: list[str] | None = None):
     """Runs the code in a Docker container with optional mounts."""
     print(f"\nRunning code in Docker container '{CONTAINER_NAME}'...")
 
@@ -221,6 +222,7 @@ def run_in_docker(file_to_run: str, read_only_host_paths: list[str] = None, writ
         try:
             command.extend(["python3", file_to_run])
             process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            assert process.stdout is not None
             for line in iter(process.stdout.readline, ''):
                 sys.stdout.write(line)
             process.wait()  # Wait for the process to finish

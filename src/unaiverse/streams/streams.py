@@ -22,10 +22,18 @@ import torch
 import base64
 import random
 from PIL.Image import Image
-from .dataprops import DataProps
+from typing import TYPE_CHECKING
+
+from torch import Tensor
+
+from .dataprops import DataProps, TensorLabels
 from unaiverse.clock import clock
 from unaiverse.utils.misc import show_images_grid
 from unaiverse.custom import Custom, GenException
+
+# This import ONLY happens during IDE/Type inspection
+if TYPE_CHECKING:
+    from unaiverse.interaction import Interaction
 
 
 class Data:
@@ -162,9 +170,12 @@ class Stream:
         stream.props.set_pubsub(pubsub)
         stream.props.set_delta(delta)
         assert stream.props is not None
-        if (stream.props.is_flat_tensor_with_labels() and
-                len(stream.props.tensor_labels) == 1 and stream.props.tensor_labels[0] == 'unk'):
-            stream.props.tensor_labels[0] = group if group != 'none' else name
+        if stream.props.is_flat_tensor_with_labels():
+            tensor_labels = stream.props.tensor_labels
+            assert tensor_labels is not None
+            tensor_labels: TensorLabels
+            if len(tensor_labels) == 1 and tensor_labels[0] == 'unk':
+                tensor_labels[0] = group if group != 'none' else name
         return stream
 
     def enable(self) -> None:
@@ -282,7 +293,7 @@ class Stream:
         return DataProps.is_pubsub_from_net_hash(net_hash)
 
     @staticmethod
-    def is_net_hash(some_hash: str) -> bool:
+    def is_net_hash(some_hash: str | None) -> bool:
         """Check if the given hash is a network hash (contains '::').
 
         Args:
@@ -291,10 +302,10 @@ class Stream:
         Returns:
             True if it is a net hash, False otherwise.
         """
-        return '::' in some_hash
+        return some_hash is not None and '::' in some_hash
 
     @staticmethod
-    def is_user_hash(some_hash: str) -> bool:
+    def is_user_hash(some_hash: str | None) -> bool:
         """Check if the given hash is a user hash (contains ':' but not '::').
 
         Args:
@@ -303,7 +314,7 @@ class Stream:
         Returns:
             True if it is a user hash, False otherwise.
         """
-        return ':' in some_hash and not Stream.is_net_hash(some_hash)
+        return some_hash is not None and ':' in some_hash and not Stream.is_net_hash(some_hash)
 
     def is_pubsub(self) -> bool:
         """Check whether this stream uses Pub/Sub.
@@ -496,7 +507,7 @@ class Stream:
         else:
             return data_struct.data
 
-    def get_(self, requested_by: str | None = None, uuid: str | None = None) -> str | Image | torch.Tensor | None:
+    def get_(self, requested_by: str | None = None, uuid: str | None = None):
         """Wrapper of 'get'."""
         return self.get(requested_by, uuid)
 
@@ -573,7 +584,7 @@ class Stream:
                 del self.interactions_by_uuid[uuid]
         return to_remove
 
-    def add_interaction(self, interaction: object) -> None:
+    def add_interaction(self, interaction: "Interaction") -> None:
         """Register an interaction that involves this stream.
 
         Args:
@@ -597,7 +608,7 @@ class Stream:
             del self.data_by_uuid[current_uuid]  # Do not call remove_data here, since it will break buffered streams
             self.data_by_uuid[new_uuid] = data
 
-    def remove_interaction(self, interaction: object) -> None:
+    def remove_interaction(self, interaction: "Interaction") -> None:
         """Remove an interaction from this stream.
 
         Args:
@@ -626,7 +637,7 @@ class Stream:
         """Remove all stored data from this stream."""
         self.data_by_uuid = {}
 
-    def get_interaction(self, uuid: str | None = None) -> object | None:
+    def get_interaction(self, uuid: str | None = None) -> "Interaction | None":
         """Get the interaction registered for the given UUID.
 
         Args:
@@ -754,7 +765,7 @@ class BufferedStream(Stream):
         """
         return self.data_buffer_by_uuid.keys()
 
-    def add_interaction(self, interaction: object) -> None:
+    def add_interaction(self, interaction: "Interaction") -> None:
         """Register an interaction and initialize per-UUID buffer structures if needed.
 
         Args:
@@ -786,7 +797,7 @@ class BufferedStream(Stream):
             self.buffered_data_index_by_uuid[uuid] = -1  # Keep it to -1, it will be incremented then used
 
     def get(self, requested_by: str | None = None, uuid: str | None = None, **kwargs) \
-            -> str | Image | torch.Tensor | None:
+            -> str | Image | Tensor | None | list[tuple[str | Image | Tensor | None, int, float]]:
         """Get the current data sample based on cycle and buffer.
 
         Args:
@@ -828,7 +839,9 @@ class BufferedStream(Stream):
         # however, it is not like that, since "set" will also call "adapt_to_labels", that is not needed for
         # buffered streams
         if (first or (self.last_get_cycle_by_uuid[uuid] != cycle and
-                      (self.props.delta <= 0. or self.props.delta <= (clock.get_time() - data_struct.data_timestamp)))):
+                      (self.props.delta <= 0. or
+                       self.props.delta <=
+                       (clock.get_time() - data_struct.data_timestamp)))):  # type: ignore[union-attr]
             self.last_get_cycle_by_uuid[uuid] = cycle
 
             if not self.is_queue:
@@ -1225,6 +1238,7 @@ class ImageFileStream(BufferedStream):
             show_images: If True, display a clickable grid of the images. Default is False.
         """
         self.image_dir = image_dir
+        # noinspection PyCallingNonCallable
         self.device = device if device is not None else torch.device("cpu")
         self.circular = circular
 
@@ -1244,7 +1258,7 @@ class ImageFileStream(BufferedStream):
                 image_name = parts[0]
                 self.image_paths.append(os.path.join(image_dir, image_name))
 
-        # It was buffered previously than every other thing (not strictly required given the fact that
+        # It was buffered previously than every other thing (not strictly required due to the fact that
         # BufferedStream's now force restart at the first get
         self.last_cycle_by_uuid[None] = -1
         self.first_cycle_by_uuid[None] = self.last_cycle_by_uuid[None] - len(self.image_paths) + 1
@@ -1300,6 +1314,7 @@ class LabelStream(BufferedStream):
             line_header: If True, treat the first field as a header to skip. Default is False.
         """
         self.label_dir = label_dir
+        # noinspection PyCallingNonCallable
         self.device = device if device is not None else torch.device("cpu")
         self.circular = circular
 
@@ -1500,13 +1515,3 @@ def deserialize_payload(json_str: str) -> list:
             raise GenException(f"Cannot deserialize object declared to be of type {i_type}")
 
     return output
-
-
-# ==================================================================================================================
-# BEGIN OF DEPRECATED NAMES
-# ==================================================================================================================
-DataStream = Stream
-BufferedDataStream = BufferedStream
-# ==================================================================================================================
-# END OF DEPRECATED METHODS
-# ==================================================================================================================

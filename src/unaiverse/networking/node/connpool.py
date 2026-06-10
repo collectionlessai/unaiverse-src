@@ -25,7 +25,7 @@ from unaiverse.networking.node.tokens import TokenVerifier
 
 class ConnectionPools:
 
-    def __init__(self, max_connections: int, pool_name_to_p2p_name_and_ratio: dict[str, [str, float]],
+    def __init__(self, max_connections: int, pool_name_to_p2p_name_and_ratio: dict[str, list[str | float]],
                  p2p_name_to_p2p: dict[str, P2P],
                  public_key: str | None = None, token: str | None = None) -> None:
         """Initializes a new instance of the ConnectionPools class.
@@ -46,7 +46,11 @@ class ConnectionPools:
         self.max_con = max_connections
         self.pool_count = len(pool_name_to_p2p_name_and_ratio)
         self.pool_names = list(pool_name_to_p2p_name_and_ratio.keys())
-        self.pool_ratios = [p2p_name_and_ratio[1] for p2p_name_and_ratio in pool_name_to_p2p_name_and_ratio.values()]
+        self.pool_ratios: list[float] = []
+        for p2p_name_and_ratio in pool_name_to_p2p_name_and_ratio.values():
+            ratio = p2p_name_and_ratio[1]
+            assert isinstance(ratio, float)
+            self.pool_ratios.append(ratio)
 
         # Indices involving the P2P object or its name
         self.p2p_name_to_p2p = p2p_name_to_p2p
@@ -76,8 +80,12 @@ class ConnectionPools:
         assert sum([x for x in self.pool_ratios if x > 0]) == 1.0, "Pool ratios must sum to 1.0"
 
         # Preparing the pool triples
-        self.pool_name_to_pool_triple = \
-            {k: [set(), 0, self.p2p_name_to_p2p[pool_name_to_p2p_name_and_ratio[k][0]]] for k in self.pool_names}
+        self.pool_name_to_pool_triple = {}
+        for k in self.pool_names:
+            p2p_name = pool_name_to_p2p_name_and_ratio[k][0]
+            assert isinstance(p2p_name, str)
+            p2p: P2P = self.p2p_name_to_p2p[p2p_name]
+            self.pool_name_to_pool_triple[k] = [set(), 0, p2p]
         num_zero_ratio_pools = len([x for x in self.pool_ratios if x == 0])
         assert num_zero_ratio_pools <= self.max_con, "Cannot create pools given the provided max connection count"
 
@@ -111,6 +119,7 @@ class ConnectionPools:
                     break
             if p2p_name not in self.p2p_name_and_pool_name_to_pool_triple:
                 self.p2p_name_and_pool_name_to_pool_triple[p2p_name] = {}
+                p2p: P2P
                 self.p2p_to_pool_names[p2p] = []
             self.p2p_name_and_pool_name_to_pool_triple[p2p_name][pool_name] = (
                 pool_contents_max_con_and_p2p)
@@ -220,7 +229,9 @@ class ConnectionPools:
         try:
             winning_addr_info_dict = p2p.connect_to(addresses)
             peer_id = winning_addr_info_dict.get('ID')
-            connected_addr_str = winning_addr_info_dict.get('Addrs')[0]
+            addrs = winning_addr_info_dict.get('Addrs')
+            assert addrs is not None and isinstance(addrs, (tuple, list))
+            connected_addr_str = addrs[0]
             through_relay = '/p2p-circuit/' in connected_addr_str
             log.cpool(f"Connected to peer {peer_id} via {connected_addr_str} "
                       f"(through relay: {through_relay})", sub=p2p.log_sub)
@@ -468,7 +479,7 @@ class ConnectionPools:
                 base64_data = msg_dict.get("data")
 
                 # Decode data
-                decoded_data = base64.b64decode(base64_data)
+                decoded_data = base64.b64decode(base64_data)  # noqa
 
                 # Attempt to create the higher-level Msg object
                 # This assumes Msg.from_bytes can parse your message protocol from decoded_data
@@ -526,7 +537,7 @@ class ConnectionPools:
         return processed_messages
 
     def passed_time_since_last_communication(self):
-        passed = time.time() - max(self.__last_recv_time, self.__last_recv_time)
+        passed = time.time() - max(self.__last_recv_time, self.__last_sent_time)
         return 0. if passed < 0. else passed
 
     def get_added_after_updating(self, pool_name: str | None = None) -> set | dict:
@@ -615,7 +626,7 @@ class ConnectionPools:
             return c
 
     async def send(self, peer_id: str, channel_trail: str | None,
-                   content_type: str, content: bytes | dict | None = None, p2p: P2P | None = None) -> bool:
+                   content_type: str, content: bytes | dict | str | None = None, p2p: P2P | None = None) -> bool:
         """Sends a direct message to a specific peer (async).
 
         Args:
@@ -750,6 +761,7 @@ class ConnectionPools:
         if p2p is None:
             return False
 
+        p2p: P2P
         log.network(f">>> PUBLISHING {content_type} to {channel}", sub=p2p.log_sub)
 
         # Adding sender info here
@@ -830,10 +842,10 @@ class NodeConn(ConnectionPools):
                          pool_name_to_p2p_name_and_ratio={
                              NodeConn.IN_PUBLIC: [NodeConn.P2P_PUBLIC, 0.25 / 2. if not is_world_node else 0.25 / 2.],
                              NodeConn.OUT_PUBLIC: [NodeConn.P2P_PUBLIC, 0.25 / 2. if not is_world_node else 0.25 / 2.],
-                             NodeConn.IN_WORLD_AGENTS: [NodeConn.P2P_WORLD, .75 / 2 if not is_world_node else 0.5 / 2],
+                             NodeConn.IN_WORLD_AGENTS: [NodeConn.P2P_WORLD, .75 / 2. if not is_world_node else 0.5 / 2],
                              NodeConn.OUT_WORLD_AGENTS: [NodeConn.P2P_WORLD, .75 / 2 if not is_world_node else 0.5 / 2],
                              NodeConn.IN_WORLD_NODE: [NodeConn.P2P_WORLD, 0. if not is_world_node else -1.],
-                             NodeConn.OUT_WORLD_NODE: [NodeConn.P2P_WORLD, 0. if not is_world_node else -1],
+                             NodeConn.OUT_WORLD_NODE: [NodeConn.P2P_WORLD, 0. if not is_world_node else -1.],
                              NodeConn.IN_WORLD_MASTERS: [NodeConn.P2P_WORLD, 0. if not is_world_node else 0.25 / 2.],
                              NodeConn.OUT_WORLD_MASTERS: [NodeConn.P2P_WORLD, 0. if not is_world_node else 0.25 / 2.]
                          },
@@ -952,7 +964,9 @@ class NodeConn(ConnectionPools):
             addresses: A new list of addresses for the peer.
         """
         if self.in_connection_queues(peer_id):
-            addrs = self.pool_name_to_peer_infos[self.get_pool_of(peer_id)][peer_id]['addrs']
+            pool_name = self.get_pool_of(peer_id)
+            assert pool_name is not None
+            addrs = self.pool_name_to_peer_infos[pool_name][peer_id]['addrs']
             addrs.clear()  # Warning: do not allocate a new list, keep the current one (it is referenced by others)
             for _addrs in addresses:
                 addrs.append(_addrs)
@@ -970,7 +984,9 @@ class NodeConn(ConnectionPools):
         self.peer_id_to_misc[peer_id] = new_role
 
         if self.in_connection_queues(peer_id):
-            self.pool_name_to_peer_infos[self.get_pool_of(peer_id)][peer_id]['misc'] = new_role
+            pool_name = self.get_pool_of(peer_id)
+            assert pool_name is not None
+            self.pool_name_to_peer_infos[pool_name][peer_id]['misc'] = new_role
 
         # Updating
         if cur_role in self.role_to_peer_ids:
@@ -1085,7 +1101,7 @@ class NodeConn(ConnectionPools):
         self.set_role(peer_id, role)
         self.world_agents_and_world_masters_set = self.world_agents_set | self.world_masters_set
 
-    def get_added_after_updating(self, pool_names: list[str] | None = None) -> dict[str, set]:
+    def get_added_after_updating(self, pool_names: list[str] | None = None) -> dict[str, set] | set:
         """Retrieves the set of peers added after the last update cycle for specified pools.
 
         Args:
@@ -1102,7 +1118,7 @@ class NodeConn(ConnectionPools):
         else:
             return super().get_added_after_updating()
 
-    def get_removed_after_updating(self, pool_names: list[str] | None = None) -> dict[str, set]:
+    def get_removed_after_updating(self, pool_names: list[str] | None = None) -> dict[str, set] | set:
         """Retrieves the set of peers removed after the last update cycle for specified pools.
 
         Args:
