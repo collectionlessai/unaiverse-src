@@ -1035,9 +1035,9 @@ class Stats:
         """
         if isinstance(value, SortedDict):
             idx = value.bisect_left(since_timestamp)
-            sliced_items = value.islice(start=idx)
+            sliced_keys = value.islice(start=idx)
             # Convert to list of [timestamp, value] for Plotly readiness
-            return [[k, self._make_json_serializable(v)] for k, v in sliced_items]
+            return [[k, self._make_json_serializable(value[k])] for k in sliced_keys]
         else:
             # Static value: return as is (assuming it's serializable)
             return self._make_json_serializable(value)
