@@ -41,8 +41,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import logging
-import os
 import signal
 import sys
 from pathlib import Path
@@ -52,11 +50,11 @@ _HERE = Path(__file__).resolve().parent
 _REPO_SRC = _HERE.parent.parent / "src"
 sys.path.insert(0, str(_REPO_SRC))
 
-logging.basicConfig(
-    level=os.environ.get("LOG_LEVEL", "INFO"),
-    format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
-)
-log = logging.getLogger("runner")
+# The unaiverse package is importable only after the sys.path tweak above, so
+# every unaiverse import in this harness is below this line. Use the project's
+# channel-based logger (same one connpool/session speak); the runner's own
+# messages ride the SESSION channel.
+from unaiverse.utils.logger import log
 
 
 def _build_node(identity_dir: str, port: int, listen_ip: str = "0.0.0.0"):
@@ -81,11 +79,11 @@ def _build_node(identity_dir: str, port: int, listen_ip: str = "0.0.0.0"):
     # and raise ``TypeError: 'sub' is an invalid keyword argument for print()``,
     # crashing every dial. Mirror what ``Node`` does (node.py), but keep it to the
     # screen only (no stray .jsonl) so connpool diagnostics stay visible here.
-    from unaiverse.utils.logger import log as _ulog, ALL_CHANNELS
-    if getattr(_ulog, "_Logger__instance", None) is None:
-        _ulog.create(name="session_runner", log_dir="/tmp",
-                     active=ALL_CHANNELS, screen=ALL_CHANNELS,
-                     no_color=False, file_enabled=False)
+    from unaiverse.utils.logger import ALL_CHANNELS
+    if getattr(log, "_Logger__instance", None) is None:
+        log.create(name="session_runner", log_dir="/tmp",
+                   active=ALL_CHANNELS, screen=ALL_CHANNELS,
+                   no_color=False, file_enabled=False)
 
     Path(identity_dir).mkdir(parents=True, exist_ok=True)
     # No relay / DHT / WebRTC: this harness needs a directly-reachable peer.
@@ -106,9 +104,9 @@ def _build_node(identity_dir: str, port: int, listen_ip: str = "0.0.0.0"):
         flood_sub=False,
         log_sub="pub",  # must be a valid logger sub tag ("pub"/"prv"/"gen")
     )
-    log.info("started libp2p instance peer_id=%s", p2p.peer_id)
+    log.session(f"started libp2p instance peer_id={p2p.peer_id}")
     for a in p2p.addresses:
-        log.info("  listen multiaddr: %s", a)
+        log.session(f"  listen multiaddr: {a}")
 
     # A minimal NodeConn that only uses ``p2p_public``. Tokens are disabled
     # because we don't have a root-server signature here.
@@ -133,12 +131,12 @@ async def _drain_loop(conn, sm, stop_event: asyncio.Event):
     """Poll inbound messages + tick the SessionManager, printing every event."""
     from unaiverse.networking.node.connpool import NodeConn
 
-    log.info("event loop running — Ctrl-C to exit")
+    log.session("event loop running — Ctrl-C to exit")
     while not stop_event.is_set():
         try:
             chat, session = await conn.get_messages(p2p_name=NodeConn.P2P_PUBLIC)
         except Exception as e:
-            log.error("get_messages failed: %s", e)
+            log.error(f"get_messages failed: {e}")
             await asyncio.sleep(0.5)
             continue
 
@@ -154,9 +152,8 @@ async def _drain_loop(conn, sm, stop_event: asyncio.Event):
 
 
 def _print_event(ev) -> None:
-    log.info("[SessionEvent] %-12s peer=%s… session=%s… role=%-9s data=%s",
-             ev.type.value, ev.peer_id[:12], ev.session_id[:8],
-             ev.role.value, ev.data)
+    log.session(f"[SessionEvent] {ev.type.value:<12} peer={ev.peer_id[:12]}… "
+                f"session={ev.session_id[:8]}… role={ev.role.value:<9} data={ev.data}")
 
 
 async def _graceful_close(conn, sm, iters: int = 30) -> None:
@@ -164,7 +161,7 @@ async def _graceful_close(conn, sm, iters: int = 30) -> None:
     the GOAWAY goes out and the peer's GOAWAY_ACK is processed (clean CLOSED on
     both sides). Without this the peer only learns we left via liveness timeout."""
     from unaiverse.networking.node.connpool import NodeConn
-    log.info("sending GOAWAY to peers (graceful close)…")
+    log.session("sending GOAWAY to peers (graceful close)…")
     await sm.close_all()
     for _ in range(iters):
         try:
@@ -196,7 +193,7 @@ async def cmd_listen(args):
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, stop.set)
     await _drain_loop(conn, sm, stop)
-    log.info("shutting down")
+    log.session("shutting down")
     await _graceful_close(conn, sm)
     p2p.close()
 
@@ -208,10 +205,12 @@ async def cmd_dial(args):
     target_addr = args.peer_addr
     # Extract the target peer-id from the multiaddr (.../p2p/<peer-id>).
     if "/p2p/" not in target_addr:
-        log.critical("--peer-addr must contain /p2p/<peer-id>")
+        # NB: log.critical on the custom logger raises GenException; use error here
+        # so the harness exits cleanly via sys.exit instead.
+        log.error("--peer-addr must contain /p2p/<peer-id>")
         sys.exit(2)
     target_peer = target_addr.rsplit("/p2p/", 1)[-1]
-    log.info("dialing peer=%s via %s", target_peer, target_addr)
+    log.session(f"dialing peer={target_peer} via {target_addr}")
 
     stop = asyncio.Event()
     loop = asyncio.get_event_loop()
@@ -226,7 +225,7 @@ async def cmd_dial(args):
     asyncio.create_task(_do_dial())
 
     await _drain_loop(conn, sm, stop)
-    log.info("shutting down")
+    log.session("shutting down")
     await _graceful_close(conn, sm)
     p2p.close()
 

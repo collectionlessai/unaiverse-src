@@ -37,7 +37,6 @@ seconds — re-dials during that window return immediately with
 from __future__ import annotations
 
 import time
-import logging
 from typing import Dict, List, Optional, Callable, TYPE_CHECKING
 
 from unaiverse.networking.session.session import (
@@ -49,11 +48,10 @@ from unaiverse.networking.session.session import (
 from unaiverse.networking.session.sess_msg import (
     SessMsg, SIMULTANEOUS_OPEN_LOSS, GRACEFUL_SHUTDOWN, SESSION_UNKNOWN,
 )
+from unaiverse.utils.logger import log
 
 if TYPE_CHECKING:
     from unaiverse.networking.node.connpool import ConnectionPools
-
-log = logging.getLogger("SessionManager")
 
 _QUARANTINE_S = 30.0
 
@@ -118,7 +116,7 @@ class SessionManager:
         # Quarantine check.
         ban_until = self._quarantine.get(peer_id, 0.0)
         if ban_until > now:
-            log.info(f"[{self._label}] initiate({peer_id[:12]}…) refused: quarantined for {ban_until - now:.1f}s")
+            log.session(f"initiate({peer_id[:12]}…) refused: quarantined for {ban_until - now:.1f}s", sub=self._label)
             ev = SessionEvent(
                 type=SessionEventType.FAILED, session_id="",
                 peer_id=peer_id, role=SessionRole.INITIATOR,
@@ -128,8 +126,8 @@ class SessionManager:
 
         existing = self._sessions.get(peer_id)
         if existing is not None and existing.state not in (SessionState.FAILED, SessionState.CLOSED):
-            log.debug(f"[{self._label}] initiate({peer_id[:12]}…): "
-                      f"already have Session in state {existing.state.value} — no-op")
+            log.session(f"initiate({peer_id[:12]}…): "
+                      f"already have Session in state {existing.state.value} — no-op", sub=self._label)
             return []
 
         sess = Session(
@@ -149,7 +147,7 @@ class SessionManager:
             reject_relay=reject_relay,
         )
         self._sessions[peer_id] = sess
-        log.info(f"[{self._label}] initiating Session to {peer_id[:12]}…")
+        log.session(f"initiating Session to {peer_id[:12]}…", sub=self._label)
         return await sess.start()
 
     # ── Inbound dispatch ──────────────────────────────────────────────────────
@@ -158,7 +156,7 @@ class SessionManager:
         """Route a session message at this manager's p2p instance. Handles the
         tie-breaker on inbound HELLO from an unknown / contending peer."""
         if protocol_id not in SESSION_PROTOCOL_IDS:
-            log.warning(f"[{self._label}] deliver: unknown protocol {protocol_id}, dropping")
+            log.error(f"deliver: unknown protocol {protocol_id}, dropping", sub=self._label)
             return []
 
         sess = self._sessions.get(peer_id)
@@ -178,8 +176,8 @@ class SessionManager:
                 await self._send_unknown_session_reply(peer_id, sess_msg)
                 return []
             else:
-                log.debug(f"[{self._label}] {protocol_id}/{sess_msg.kind} from unknown peer "
-                          f"{peer_id[:12]}… — dropped")
+                log.session(f"{protocol_id}/{sess_msg.kind} from unknown peer "
+                          f"{peer_id[:12]}… — dropped", sub=self._label)
                 return []
 
         # Tie-breaker — only when the inbound is a competing HelloRequest (its
@@ -216,7 +214,7 @@ class SessionManager:
             decision_hook=self._decision_hook,
         )
         self._sessions[peer_id] = sess
-        log.info(f"[{self._label}] spawned responder Session for {peer_id[:12]}…")
+        log.session(f"spawned responder Session for {peer_id[:12]}…", sub=self._label)
         return sess
 
     async def _send_unknown_session_reply(self, peer_id: str, sess_msg: SessMsg) -> None:
@@ -242,7 +240,7 @@ class SessionManager:
                 sess_msg=reply, p2p_name=self.p2p_name,
             )
         except Exception as e:
-            log.warning(f"[{self._label}] unknown-session reply to {peer_id[:12]}… failed: {e}")
+            log.error(f"unknown-session reply to {peer_id[:12]}… failed: {e}", sub=self._label)
 
     async def _handle_simultaneous_open(self, peer_id: str):
         """Deterministic tie-breaker: smaller peer-id keeps initiator, larger
@@ -275,12 +273,12 @@ class SessionManager:
                     p2p_name=self.p2p_name,
                 )
             except Exception as e:
-                log.warning(f"[{self._label}] simultaneous-open reject to {peer_id[:12]}… failed: {e}")
-            log.info(f"[{self._label}] simultaneous-open with {peer_id[:12]}…: kept initiator")
+                log.error(f"simultaneous-open reject to {peer_id[:12]}… failed: {e}", sub=self._label)
+            log.session(f"simultaneous-open with {peer_id[:12]}…: kept initiator", sub=self._label)
             return "_proceed_with_existing_"
 
         # We yield: drop our initiator, spawn a fresh responder for the inbound HELLO.
-        log.info(f"[{self._label}] simultaneous-open with {peer_id[:12]}…: yielding to responder")
+        log.session(f"simultaneous-open with {peer_id[:12]}…: yielding to responder", sub=self._label)
         existing.abort_silently("simultaneous_open_yielded")
         del self._sessions[peer_id]
         self._spawn_responder(peer_id, remote_other_peer_id_hint=existing.remote_other_peer_id_hint)
@@ -367,7 +365,7 @@ class SessionManager:
     ) -> List[SessionEvent]:
         sess = self._sessions.get(peer_id)
         if sess is None:
-            log.debug(f"[{self._label}] close_session({peer_id[:12]}…): no Session — no-op")
+            log.session(f"close_session({peer_id[:12]}…): no Session — no-op", sub=self._label)
             return []
         await sess.close(reason_code)
         return []  # CLOSED event will arrive via process_inbound(GoawayAck) or tick
@@ -381,7 +379,7 @@ class SessionManager:
             try:
                 await sess.close(reason_code)
             except Exception as e:
-                log.warning(f"[{self._label}] close_all: close({sess.peer_id[:12]}…) failed: {e}")
+                log.error(f"close_all: close({sess.peer_id[:12]}…) failed: {e}", sub=self._label)
         return []
 
     # ── Accessors ─────────────────────────────────────────────────────────────

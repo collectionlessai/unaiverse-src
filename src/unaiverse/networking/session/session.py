@@ -50,7 +50,6 @@ from __future__ import annotations
 import json
 import secrets
 import asyncio
-import logging
 import time
 import random
 from dataclasses import dataclass, field
@@ -62,11 +61,10 @@ from unaiverse.networking.session.sess_msg import (
     OK, VERSION_UNSUPPORTED, NOT_AUTHORIZED, LOCAL_ERROR, GRACEFUL_SHUTDOWN,
     SIMULTANEOUS_OPEN_LOSS, SESSION_UNKNOWN, P2P_PUBLIC, P2P_WORLD,
 )
+from unaiverse.utils.logger import log
 
 if TYPE_CHECKING:
     from unaiverse.networking.node.connpool import ConnectionPools
-
-log = logging.getLogger("Session")
 
 # ── Protocol IDs (keep in sync with unailib/types.go + connpool SESSION_PROTOCOL_IDS) ─
 SESSION_HELLO_PROTOCOL   = "/unaiverse/session/hello/1.0.0"
@@ -219,6 +217,7 @@ class Session:
         self.role = role
         self.conn = conn
         self.p2p_name = p2p_name
+        self._sub = "pub" if p2p_name == P2P_PUBLIC else "prv"
         self.local_peer_id = local_peer_id
         self.local_node_id = local_node_id
         self._local_profile_factory = local_profile_factory
@@ -287,17 +286,17 @@ class Session:
     async def _dial_then_hello(self) -> List[SessionEvent]:
         self._dial_attempts += 1
         self._set_state(SessionState.CONNECTING, _TIMEOUT_CONNECT_S)
-        log.info(f"{self!r} dial attempt {self._dial_attempts}/{_MAX_DIAL_ATTEMPTS}")
+        log.session(f"{self!r} dial attempt {self._dial_attempts}/{_MAX_DIAL_ATTEMPTS}", sub=self._sub)
 
         try:
             peer_id, through_relay = await self.conn.connect(self.addresses, p2p_name=self.p2p_name)
         except Exception as e:
-            log.warning(f"{self!r} conn.connect raised: {e}")
+            log.error(f"{self!r} conn.connect raised: {e}", sub=self._sub)
             peer_id, through_relay = None, False
 
         if peer_id is not None and through_relay and self._reject_relay:
             log.error(f"{self!r} dial resolved through a relay circuit but relay nodes are "
-                      f"disallowed (talk_to_relay_based_nodes=False)")
+                      f"disallowed (talk_to_relay_based_nodes=False)", sub=self._sub)
             return [self._fail("relay_rejected")]
 
         if peer_id is None:
@@ -306,16 +305,16 @@ class Session:
                     random.uniform(0, _RETRY_BASE_S * (2 ** (self._dial_attempts - 1))),
                     _RETRY_CAP_S,
                 )
-                log.info(f"{self!r} dial failed, retrying in {delay:.1f}s")
+                log.session(f"{self!r} dial failed, retrying in {delay:.1f}s", sub=self._sub)
                 await asyncio.sleep(delay)
                 return await self._dial_then_hello()
-            log.error(f"{self!r} dial failed after {_MAX_DIAL_ATTEMPTS} attempts")
+            log.error(f"{self!r} dial failed after {_MAX_DIAL_ATTEMPTS} attempts", sub=self._sub)
             return [self._fail("dial_failed")]
 
         # If the dial returned a different peer-id than we expected (e.g., relayed
         # multiaddr without /p2p hop), update it.
         if peer_id != self.peer_id:
-            log.info(f"{self!r} peer_id updated from {self.peer_id[:12]}… → {peer_id[:12]}…")
+            log.session(f"{self!r} peer_id updated from {self.peer_id[:12]}… → {peer_id[:12]}…", sub=self._sub)
             self.peer_id = peer_id
 
         return await self._send_hello()
@@ -332,7 +331,7 @@ class Session:
         if not await self._send_payload(SESSION_HELLO_PROTOCOL, msg):
             return [self._fail("hello_send_failed")]
         self._set_state(SessionState.HELLO_SENT, _TIMEOUT_HELLO_S)
-        log.info(f"{self!r} HELLO sent")
+        log.session(f"{self!r} HELLO sent", sub=self._sub)
         return []
 
     # ── Inbound dispatch ──────────────────────────────────────────────────────
@@ -351,9 +350,9 @@ class Session:
             elif protocol_id == SESSION_CONTROL_PROTOCOL:
                 events += await self._on_control_protocol(sess_msg)
             else:
-                log.debug(f"{self!r} unknown protocol {protocol_id}")
+                log.session(f"{self!r} unknown protocol {protocol_id}", sub=self._sub)
         except Exception as e:
-            log.error(f"{self!r} process_inbound({protocol_id}) raised: {e}", exc_info=True)
+            log.error(f"{self!r} process_inbound({protocol_id}) raised: {e}", sub=self._sub)
             events.append(self._fail(f"inbound_dispatch_error:{e}"))
         return events
 
@@ -368,7 +367,7 @@ class Session:
                 self.role == SessionRole.INITIATOR and self.state == SessionState.HELLO_SENT):
             return await self._initiator_on_hello_ack(msg)
 
-        log.debug(f"{self!r} ignored HELLO-protocol {msg.kind} in state {self.state.value}")
+        log.session(f"{self!r} ignored HELLO-protocol {msg.kind} in state {self.state.value}", sub=self._sub)
         return []
 
     async def _responder_on_hello(self, req: SessMsg) -> List[SessionEvent]:
@@ -400,7 +399,7 @@ class Session:
         if not await self._send_payload(SESSION_HELLO_PROTOCOL, resp):
             return [self._fail("hello_ack_send_failed")]
         self._set_state(SessionState.HELLO_ACK_SENT, _TIMEOUT_PROFILE_S)
-        log.info(f"{self!r} HELLO_ACK sent")
+        log.session(f"{self!r} HELLO_ACK sent", sub=self._sub)
         return []
 
     async def _initiator_on_hello_ack(self, resp: SessMsg) -> List[SessionEvent]:
@@ -439,7 +438,7 @@ class Session:
         if not await self._send_payload(SESSION_PROFILE_PROTOCOL, offer):
             return [self._fail("profile_offer_send_failed")]
         self._set_state(SessionState.PROFILE_SENT, _TIMEOUT_PROFILE_S)
-        log.info(f"{self!r} PROFILE_OFFER sent")
+        log.session(f"{self!r} PROFILE_OFFER sent", sub=self._sub)
         return []
 
     async def _on_profile_protocol(self, msg: SessMsg) -> List[SessionEvent]:
@@ -451,7 +450,7 @@ class Session:
                 self.role == SessionRole.INITIATOR and self.state == SessionState.PROFILE_SENT):
             return await self._initiator_on_profile_decision(msg)
 
-        log.debug(f"{self!r} ignored PROFILE-protocol {msg.kind} in state {self.state.value}")
+        log.session(f"{self!r} ignored PROFILE-protocol {msg.kind} in state {self.state.value}", sub=self._sub)
         return []
 
     async def _responder_on_profile_offer(self, offer: SessMsg) -> List[SessionEvent]:
@@ -495,7 +494,7 @@ class Session:
                 decision = await self._decision_hook(
                     self.peer_id, self.remote_node_id_hint, self.remote_profile, self.p2p_name)
             except Exception as e:
-                log.error(f"{self!r} decision_hook raised: {e}", exc_info=True)
+                log.error(f"{self!r} decision_hook raised: {e}", sub=self._sub)
                 return await self._reject_profile(LOCAL_ERROR, f"decision_hook_error:{e}")
         else:
             decision = ProfileDecisionResult(accepted=True)
@@ -523,12 +522,12 @@ class Session:
         # ESTABLISH yet — wait for the PRIVATE_JOIN that follows on this Session.
         if decision.await_private_join:
             self._set_state(SessionState.AWAITING_PRIVATE_JOIN, _TIMEOUT_WORLD_S)
-            log.info(f"{self!r} PROFILE accepted, awaiting PRIVATE_JOIN (world responder)")
+            log.session(f"{self!r} PROFILE accepted, awaiting PRIVATE_JOIN (world responder)", sub=self._sub)
             return []
 
         # Agent host: established immediately.
         self._set_state(SessionState.ESTABLISHED, None)
-        log.info(f"{self!r} ESTABLISHED (responder)")
+        log.session(f"{self!r} ESTABLISHED (responder)", sub=self._sub)
         self._last_ping_at = time.monotonic()
         return [self._emit(SessionEventType.ESTABLISHED, {"profile_b": self.remote_profile})]
 
@@ -550,7 +549,7 @@ class Session:
         # World joiner on the PUBLIC Session: expect a WORLD_GRANT next.
         if self.is_world_join:
             self._set_state(SessionState.AWAITING_WORLD_GRANT, _TIMEOUT_WORLD_S)
-            log.info(f"{self!r} PROFILE accepted, awaiting WORLD_GRANT")
+            log.session(f"{self!r} PROFILE accepted, awaiting WORLD_GRANT", sub=self._sub)
             return []
 
         # World joiner on the WORLD Session (carries a grant): redeem it via
@@ -559,7 +558,7 @@ class Session:
             return await self._initiator_send_private_join()
 
         self._set_state(SessionState.ESTABLISHED, None)
-        log.info(f"{self!r} ESTABLISHED (initiator)")
+        log.session(f"{self!r} ESTABLISHED (initiator)", sub=self._sub)
         self._last_ping_at = time.monotonic()
         return [self._emit(SessionEventType.ESTABLISHED, {"profile_b": self.remote_profile})]
 
@@ -595,7 +594,7 @@ class Session:
         if not await self._send_payload(SESSION_WORLD_PROTOCOL, grant):
             return [self._fail("world_grant_send_failed")]
         self._set_state(SessionState.AWAITING_PRIVATE_JOIN, _TIMEOUT_WORLD_S)
-        log.info(f"{self!r} WORLD_GRANT sent, awaiting PRIVATE_JOIN")
+        log.session(f"{self!r} WORLD_GRANT sent, awaiting PRIVATE_JOIN", sub=self._sub)
         return []
 
     async def _on_world_protocol(self, msg: SessMsg) -> List[SessionEvent]:
@@ -611,7 +610,7 @@ class Session:
                 self.role == SessionRole.INITIATOR and self.state == SessionState.PRIVATE_JOIN_SENT):
             return await self._initiator_on_private_join_ack(msg)
 
-        log.debug(f"{self!r} ignored WORLD-protocol {msg.kind} in state {self.state.value}")
+        log.session(f"{self!r} ignored WORLD-protocol {msg.kind} in state {self.state.value}", sub=self._sub)
         return []
 
     async def _initiator_on_world_grant(self, grant: SessMsg) -> List[SessionEvent]:
@@ -649,7 +648,7 @@ class Session:
         # this public Session (WORLD_HANDOFF_COMPLETE).
         self._set_state(SessionState.ESTABLISHED, None)
         self._last_ping_at = time.monotonic()
-        log.info(f"{self!r} WORLD_GRANT received, public session ESTABLISHED (handoff pending)")
+        log.session(f"{self!r} WORLD_GRANT received, public session ESTABLISHED (handoff pending)", sub=self._sub)
         return [self._emit(SessionEventType.ESTABLISHED, {
             "profile_b": self.remote_profile,
             "world_grant": {
@@ -682,7 +681,7 @@ class Session:
         if not await self._send_payload(SESSION_WORLD_PROTOCOL, join):
             return [self._fail("private_join_send_failed")]
         self._set_state(SessionState.PRIVATE_JOIN_SENT, _TIMEOUT_WORLD_S)
-        log.info(f"{self!r} PRIVATE_JOIN sent")
+        log.session(f"{self!r} PRIVATE_JOIN sent", sub=self._sub)
         return []
 
     async def _initiator_on_private_join_ack(self, ack: SessMsg) -> List[SessionEvent]:
@@ -690,7 +689,7 @@ class Session:
             return [self._fail(f"private_join_rejected:{reason_name(ack.get('reason_code', 0))}")]
         self._set_state(SessionState.ESTABLISHED, None)
         self._last_ping_at = time.monotonic()
-        log.info(f"{self!r} ESTABLISHED (world initiator)")
+        log.session(f"{self!r} ESTABLISHED (world initiator)", sub=self._sub)
         return [self._emit(SessionEventType.ESTABLISHED, {
             "profile_b": self.remote_profile,
             "rendezvous_topic": ack.get("rendezvous_topic", ""),
@@ -716,7 +715,7 @@ class Session:
 
         self._set_state(SessionState.ESTABLISHED, None)
         self._last_ping_at = time.monotonic()
-        log.info(f"{self!r} ESTABLISHED (world responder)")
+        log.session(f"{self!r} ESTABLISHED (world responder)", sub=self._sub)
         return [self._emit(SessionEventType.ESTABLISHED, {
             "profile_b": self.remote_profile,
             "rendezvous_topic": rendezvous_topic,
@@ -742,7 +741,7 @@ class Session:
             return await self._on_resume(msg)
         if msg.kind == SessMsg.KIND_RESUME_ACK:
             return await self._on_resume_ack(msg)
-        log.debug(f"{self!r} unrecognised CONTROL {msg.kind} in state {self.state.value}")
+        log.session(f"{self!r} unrecognised CONTROL {msg.kind} in state {self.state.value}", sub=self._sub)
         return []
 
     # ── Control: session-level liveness (PING/PONG) ──────────────────────────
@@ -772,7 +771,7 @@ class Session:
         # Peer holds no Session for our session_id (restarted / forgot us): treat as
         # a hard liveness failure and begin the reconnect + RESUME path immediately.
         self._consecutive_ping_failures = 0
-        log.info(f"{self!r} PONG ok=false (peer lost our session) → reconnecting")
+        log.session(f"{self!r} PONG ok=false (peer lost our session) → reconnecting", sub=self._sub)
         return self.on_transport_disconnected()
 
     # ── Control: RESUME (fast-path recovery before re-handshake) ─────────────
@@ -813,7 +812,7 @@ class Session:
         self._ping_in_flight = False
         self._reconnect_substep = ""
         self._reconnect_attempts = 0
-        log.info(f"{self!r} session resumed → ESTABLISHED")
+        log.session(f"{self!r} session resumed → ESTABLISHED", sub=self._sub)
         return self._emit(SessionEventType.RESUMED, {})
 
     async def _restart_handshake_or_fail(self, reason: str) -> List[SessionEvent]:
@@ -823,9 +822,9 @@ class Session:
         transparently re-joined (double-join risk) → LOST so node re-drives the join."""
         if self.role != SessionRole.INITIATOR or self.is_world_join or self._grant is not None:
             self._set_state(SessionState.FAILED, None)
-            log.info(f"{self!r} resume NACK ({reason}); not re-handshakeable → LOST")
+            log.session(f"{self!r} resume NACK ({reason}); not re-handshakeable → LOST", sub=self._sub)
             return [self._emit(SessionEventType.LOST, {"reason": f"resume_nack:{reason}"})]
-        log.info(f"{self!r} resume NACK ({reason}) → re-running handshake")
+        log.session(f"{self!r} resume NACK ({reason}) → re-running handshake", sub=self._sub)
         self.session_id = secrets.token_bytes(_SESSION_ID_BYTES)
         self.session_id_hex = self.session_id.hex()
         self.nonce_a = b""
@@ -841,13 +840,13 @@ class Session:
         """Send GOAWAY to the remote peer and enter CLOSING. The FSM completes
         via process_inbound(GoawayAck) or check_timeout."""
         if self.state not in (SessionState.ESTABLISHED, SessionState.RECONNECTING):
-            log.debug(f"{self!r} close({reason_code}) called in state {self.state.value} — ignored")
+            log.session(f"{self!r} close({reason_code}) called in state {self.state.value} — ignored", sub=self._sub)
             return
         await self._send_payload(SESSION_CONTROL_PROTOCOL, SessMsg(SessMsg.KIND_GOAWAY, {
             "reason": reason_code, "drain_window_ms": 0, "session_id": self.session_id,
         }))
         self._set_state(SessionState.CLOSING, _TIMEOUT_CLOSING_S)
-        log.info(f"{self!r} GOAWAY sent (reason={reason_name(reason_code)})")
+        log.session(f"{self!r} GOAWAY sent (reason={reason_name(reason_code)})", sub=self._sub)
 
     async def _on_remote_goaway(self, ga: SessMsg) -> List[SessionEvent]:
         await self._send_payload(SESSION_CONTROL_PROTOCOL, SessMsg(SessMsg.KIND_GOAWAY_ACK,
@@ -868,7 +867,7 @@ class Session:
         if elapsed < self._timeout_s:
             return None
 
-        log.warning(f"{self!r} TIMEOUT after {elapsed:.1f}s in state {self.state.value}")
+        log.error(f"{self!r} TIMEOUT after {elapsed:.1f}s in state {self.state.value}", sub=self._sub)
 
         if self.state in (SessionState.CONNECTING,
                           SessionState.HELLO_SENT,
@@ -900,7 +899,7 @@ class Session:
             self._reconnect_attempts = 0
             self._next_redial_at = 0.0   # re-dial on the next tick_reconnect
             self._ping_in_flight = False
-            log.info(f"{self!r} link lost, starting {_TIMEOUT_RECONNECT_S}s reconnect window")
+            log.session(f"{self!r} link lost, starting {_TIMEOUT_RECONNECT_S}s reconnect window", sub=self._sub)
             return self._emit(SessionEventType.RECONNECTING, {"cause": "transport_disconnected"})
         if self.state == SessionState.RECONNECTING:
             self._state_entered_at = time.monotonic()
@@ -914,7 +913,7 @@ class Session:
         if self.state == SessionState.RECONNECTING:
             self._reconnect_substep = "redial"
             self._next_redial_at = 0.0   # send RESUME on the next tick_reconnect
-            log.info(f"{self!r} transport reconnect signal → attempting RESUME")
+            log.session(f"{self!r} transport reconnect signal → attempting RESUME", sub=self._sub)
         return None
 
     # ── Session-level keep-alive (PING/PONG over the control protocol) ───────
@@ -931,7 +930,7 @@ class Session:
         if self._ping_in_flight and now >= self._ping_deadline:
             self._ping_in_flight = False
             self._consecutive_ping_failures += 1
-            log.info(f"{self!r} ping miss ({self._consecutive_ping_failures}/{_KEEPALIVE_FAIL_THRESHOLD})")
+            log.session(f"{self!r} ping miss ({self._consecutive_ping_failures}/{_KEEPALIVE_FAIL_THRESHOLD})", sub=self._sub)
             if (self._consecutive_ping_failures >= _KEEPALIVE_FAIL_THRESHOLD and
                     self.state == SessionState.ESTABLISHED):
                 self._consecutive_ping_failures = 0
@@ -983,7 +982,7 @@ class Session:
             try:
                 peer_id, through_relay = await self.conn.connect(self.addresses, p2p_name=self.p2p_name)
             except Exception as e:
-                log.warning(f"{self!r} reconnect dial raised: {e}")
+                log.error(f"{self!r} reconnect dial raised: {e}", sub=self._sub)
                 peer_id, through_relay = None, False
             if self.state != SessionState.RECONNECTING:
                 return  # grace expired (→ LOST) or otherwise advanced while awaiting
@@ -993,7 +992,7 @@ class Session:
                 self._reconnect_attempts += 1
                 delay = min(_RETRY_BASE_S * (2 ** (self._reconnect_attempts - 1)), _RETRY_CAP_S)
                 self._next_redial_at = time.monotonic() + delay
-                log.info(f"{self!r} reconnect dial failed, next try in {delay:.1f}s")
+                log.session(f"{self!r} reconnect dial failed, next try in {delay:.1f}s", sub=self._sub)
                 return
             if peer_id != self.peer_id:
                 self.peer_id = peer_id
@@ -1004,7 +1003,7 @@ class Session:
             await self._send_payload(SESSION_CONTROL_PROTOCOL, SessMsg(SessMsg.KIND_RESUME, {
                 "session_id": self.session_id, "nonce": self._resume_nonce,
             }))
-            log.info(f"{self!r} reconnect dial ok, RESUME sent")
+            log.session(f"{self!r} reconnect dial ok, RESUME sent", sub=self._sub)
         finally:
             self._redial_in_flight = False
 
@@ -1024,16 +1023,16 @@ class Session:
         self.state = state
         self._state_entered_at = time.monotonic()
         self._timeout_s = timeout_s
-        log.debug(f"{self!r} {prev.value} → {state.value} (timeout={timeout_s}s)")
+        log.session(f"{self!r} {prev.value} → {state.value} (timeout={timeout_s}s)", sub=self._sub)
 
     def _fail(self, reason: str) -> SessionEvent:
         self._set_state(SessionState.FAILED, None)
-        log.error(f"{self!r} FAILED: {reason}")
+        log.error(f"{self!r} FAILED: {reason}", sub=self._sub)
         return self._emit(SessionEventType.FAILED, {"reason": reason})
 
     def _finalize_close(self, reason: str) -> SessionEvent:
         self._set_state(SessionState.CLOSED, None)
-        log.info(f"{self!r} CLOSED: {reason}")
+        log.session(f"{self!r} CLOSED: {reason}", sub=self._sub)
         return self._emit(SessionEventType.CLOSED, {"reason": reason})
 
     def _emit(self, event_type: SessionEventType, data: dict) -> SessionEvent:
@@ -1060,4 +1059,4 @@ class Session:
         """Drop this Session without emitting an event. Used by the
         SessionManager simultaneous-open tie-breaker on the losing initiator."""
         self._set_state(SessionState.FAILED, None)
-        log.info(f"{self!r} aborted silently: {reason}")
+        log.session(f"{self!r} aborted silently: {reason}", sub=self._sub)

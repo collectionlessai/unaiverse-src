@@ -112,10 +112,16 @@ class Node:
                          current_time=datetime.now(timezone.utc).timestamp())  # Node clock (not synced at all!)
 
         # Logging: we create a new logger and will share it with the agent/world as well
+        if Custom.LOG_CHANNELS:
+            _valid = {c.name: c for c in ALL_CHANNELS}
+            _wanted = frozenset(_valid[n] for n in
+                                (s.strip().upper() for s in Custom.LOG_CHANNELS.split(",")) if n in _valid)
+            active = screen = ALWAYS_ON_CHANNELS | _wanted
+        else:
+            active = ALWAYS_ON_CHANNELS if Custom.PRINT_LEVEL < 1 else ALL_CHANNELS
+            screen = ALWAYS_ON_CHANNELS if Custom.PRINT_SCREEN_BASIC_ONLY else ALL_CHANNELS
         log.create(name=os.path.basename(sys.argv[0]), log_dir=os.path.dirname(os.path.abspath(sys.argv[0])),
-                   active=ALWAYS_ON_CHANNELS if Custom.PRINT_LEVEL < 1 else ALL_CHANNELS,
-                   screen=ALWAYS_ON_CHANNELS if Custom.PRINT_SCREEN_BASIC_ONLY else ALL_CHANNELS,
-                   no_color=False, file_enabled=Custom.LOG_TO_FILE)
+                   active=active, screen=screen, no_color=False, file_enabled=Custom.LOG_TO_FILE)
         log.set_clock(clock)  # Wiring the clock
 
         # Checking main arguments
@@ -2490,7 +2496,7 @@ class Node:
             try:
                 await asyncio.wait_for(waiter.wait(), timeout=timeout_s)
             except asyncio.TimeoutError:
-                log.warning(f"connect_via_session({peer_id[:12]}…) timed out after {timeout_s}s")
+                log.error(f"connect_via_session({peer_id[:12]}…) timed out after {timeout_s}s")
                 return False
 
             return sm.is_established(peer_id)
