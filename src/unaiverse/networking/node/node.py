@@ -2549,6 +2549,8 @@ class Node:
                 _world_approval_messages.append(_msg)
             elif _msg.content_type == Msg.AGENT_APPROVAL:
                 _agent_approval_messages.append(_msg)
+            elif _msg.content_type == Msg.INTERACTION:
+                _agent_approval_messages.append(_msg)
             else:
                 _other_messages.append(_msg)
         return _world_approval_messages + _agent_approval_messages + _action_messages + _other_messages
