@@ -147,7 +147,7 @@ class Agent(AgentBasics):
         _, own_private_pid = self.get_peer_ids()
         t = clock.get_time_ms()
         try:
-            info = self._node_conn['p2p_world'].get_connected_peers_info()
+            info = self.node_conn['p2p_world'].get_connected_peers_info()
             peers_list = [i['id'] for i in info]
             self.stats.store_stat('connected_peers', peers_list, group_key=own_private_pid, timestamp=t)
         except Exception as e:
@@ -170,7 +170,7 @@ class Agent(AgentBasics):
             log.debug("[send_stats_to_world] Not in a world, skipping stats send.")
             return
 
-        world_peer_id = self._node_conn.get_world_peer_id()
+        world_peer_id = self.node_conn.get_world_peer_id()
         if world_peer_id is None:
             log.error("Agent in world, but world_peer_id is None.")
             return
@@ -184,10 +184,10 @@ class Agent(AgentBasics):
 
         # Send all stats
         log.misc(f"Sending stats update to world {world_peer_id}...")
-        if not (await self._node_conn.send(world_peer_id,
-                                           channel_trail=None,
-                                           content=payload,
-                                           content_type=Msg.STATS_UPDATE)):
+        if not (await self.node_conn.send(world_peer_id,
+                                          channel_trail=None,
+                                          content=payload,
+                                          content_type=Msg.STATS_UPDATE)):
             log.error("Failed to send stats update to world.")
 
     def update_stats_view(self, received_view: dict, overwrite: bool = False) -> None:
@@ -230,10 +230,10 @@ class Agent(AgentBasics):
                 content.append({'peer_id': _agent, 'role': role_bits})
 
         if len(content) > 0:
-            world_peer_id = self._node_conn.get_world_peer_id()
-            if not (await self._node_conn.send(world_peer_id, channel_trail=None,
-                                               content=content,
-                                               content_type=Msg.ROLE_SUGGESTION)):
+            world_peer_id = self.node_conn.get_world_peer_id()
+            if not (await self.node_conn.send(world_peer_id, channel_trail=None,
+                                              content=content,
+                                              content_type=Msg.ROLE_SUGGESTION)):
                 log.error("Failed to send role suggestion to the world")
                 return False
         return True
@@ -261,7 +261,7 @@ class Agent(AgentBasics):
             return False
 
         agents = self.__involved_agents(agent)
-        world_peer_id = self._node_conn.get_world_peer_id()
+        world_peer_id = self.node_conn.get_world_peer_id()
 
         if badge_type not in Agent.BADGE_TYPES:
             log.error(f"Unknown badge type: {badge_type}")
@@ -273,11 +273,11 @@ class Agent(AgentBasics):
                                                'score': score,
                                                'badge_type': badge_type,
                                                'badge_description': badge_description,
-                                               'agent_token': self._node_conn.get_last_token(peer_id)})
+                                               'agent_token': self.node_conn.get_last_token(peer_id)})
 
-        if not (await self._node_conn.send(world_peer_id, channel_trail=None,
-                                           content=list_of_badge_dictionaries,
-                                           content_type=Msg.BADGE_SUGGESTIONS)):
+        if not (await self.node_conn.send(world_peer_id, channel_trail=None,
+                                          content=list_of_badge_dictionaries,
+                                          content_type=Msg.BADGE_SUGGESTIONS)):
             log.error("Failed to send badge suggestions to the world")
             return False
         else:
@@ -563,7 +563,7 @@ class Agent(AgentBasics):
         """
         if len(self._found_agents) > 0:
             log.misc(f"Sending engagement request to {', '.join([x for x in self._found_agents])}")
-        my_role_str = self._node_profile.get_dynamic_profile()['connections']['role']
+        my_role_str = self.node_profile.get_dynamic_profile()['connections']['role']
         ret = await self.send(target=self._found_agents, action_name="engage",
                               action_kwargs={"sender_role": my_role_str}, wait_completion=True,
                               interaction=self.im.get_current())
@@ -680,7 +680,7 @@ class Agent(AgentBasics):
         if disconnect_too:
             if interaction is not None:
                 interaction.send_status = False  # This will avoid sending back a confirmation for this interaction
-            await self._node_purge_fcn(_requester)
+            await self.node_purge_fcn(_requester)
 
         # Marking this agent as available if not engaged to any agent
         self._available = len(self._engaged_agents) == 0
@@ -711,7 +711,7 @@ class Agent(AgentBasics):
             Always True.
         """
         log.misc(f"Disconnecting agent: {agent}")
-        await self._node_purge_fcn(agent)  # This will also call remove_agent, that will call remove_streams
+        await self.node_purge_fcn(agent)  # This will also call remove_agent, that will call remove_streams
         return True
 
     @action
@@ -732,7 +732,7 @@ class Agent(AgentBasics):
         if await self.find_agents(role):
             found_agents = copy.deepcopy(self._found_agents)
             for agent in found_agents:
-                await self._node_purge_fcn(agent)  # This will also call remove_agent, that will call remove_streams
+                await self.node_purge_fcn(agent)  # This will also call remove_agent, that will call remove_streams
         return True
 
     @action
@@ -765,7 +765,7 @@ class Agent(AgentBasics):
                     all_disconnected = False
                     break
             else:
-                if agent in self.all_agents or self._node_conn.is_connected(agent):
+                if agent in self.all_agents or self.node_conn.is_connected(agent):
                     all_disconnected = False
                     break
         return all_disconnected
@@ -857,7 +857,7 @@ class Agent(AgentBasics):
                 if agent not in self.all_agents:
                     return False
             else:
-                if not self._node_conn.is_connected(agent):
+                if not self.node_conn.is_connected(agent):
                     return False
         return True
 
@@ -891,10 +891,10 @@ class Agent(AgentBasics):
         Returns:
             True if there are waiting agents, False otherwise.
         """
-        log.misc(f"Current set of {len(self._node_agents_waiting)} connected peer IDs non managed yet: "
-                 f"{list(self._node_agents_waiting.keys())}")
+        log.misc(f"Current set of {len(self.node_agents_waiting)} connected peer IDs non managed yet: "
+                 f"{list(self.node_agents_waiting.keys())}")
         for found_agent in self._found_agents:
-            if found_agent in self._node_agents_waiting:
+            if found_agent in self.node_agents_waiting:
                 return True
         return False
 
@@ -1083,10 +1083,10 @@ class Agent(AgentBasics):
 
     @action
     async def connect_to(self, peer_id: str):
-        addresses = self._node_conn.get_addrs(peer_id)
-        if not self._node_conn.is_connected(peer_id):
+        addresses = self.node_conn.get_addrs(peer_id)
+        if not self.node_conn.is_connected(peer_id):
             log.misc(f"Asking to get in touch with {peer_id}...")
-            peer_id = await self._node_ask_to_get_in_touch_fcn(addresses=addresses, public=False)
+            peer_id = await self.node_ask_to_get_in_touch_fcn(addresses=addresses, public=False)
             if peer_id is not None:
                 return True
             else:
@@ -1117,12 +1117,12 @@ class Agent(AgentBasics):
         for role in role_list:
             role = self.ROLE_STR_TO_BITS[role]
 
-            found_addresses1, found_peer_ids1 = self._node_conn.find_addrs_by_role(Agent.ROLE_WORLD_MASTER | role,
-                                                                                   return_peer_ids_too=True,
-                                                                                   discard_yourself=True)
-            found_addresses2, found_peer_ids2 = self._node_conn.find_addrs_by_role(Agent.ROLE_WORLD_AGENT | role,
-                                                                                   return_peer_ids_too=True,
-                                                                                   discard_yourself=True)
+            found_addresses1, found_peer_ids1 = self.node_conn.find_addrs_by_role(Agent.ROLE_WORLD_MASTER | role,
+                                                                                  return_peer_ids_too=True,
+                                                                                  discard_yourself=True)
+            found_addresses2, found_peer_ids2 = self.node_conn.find_addrs_by_role(Agent.ROLE_WORLD_AGENT | role,
+                                                                                  return_peer_ids_too=True,
+                                                                                  discard_yourself=True)
             found_addresses = found_addresses1 + found_addresses2
             found_peer_ids = found_peer_ids1 + found_peer_ids2
 
@@ -1136,9 +1136,9 @@ class Agent(AgentBasics):
 
             log.misc(f"Found addresses ({len(found_addresses)}) with role: {role}")
             for f_addr, f_peer_id in zip(found_addresses, found_peer_ids):
-                if not self._node_conn.is_connected(f_peer_id):
+                if not self.node_conn.is_connected(f_peer_id):
                     log.misc(f"Asking to get in touch with {f_peer_id}...")
-                    peer_id = await self._node_ask_to_get_in_touch_fcn(addresses=f_addr, public=False)
+                    peer_id = await self.node_ask_to_get_in_touch_fcn(addresses=f_addr, public=False)
                     if peer_id is not None:
                         at_least_one_is_valid = True
                         self._found_agents.add(peer_id)

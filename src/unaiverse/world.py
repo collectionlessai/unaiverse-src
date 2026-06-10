@@ -104,21 +104,21 @@ class World(AgentBasics):
         assert self.is_world, "Setting the role is expected to be done by the world, which will broadcast such info"
 
         # Computing new role (keeping the first two bits as before)
-        cur_role = self._node_conn.get_role(peer_id)
+        cur_role = self.node_conn.get_role(peer_id)
         new_role_without_base_int = (role >> 2) << 2
         new_role = (cur_role & 3) | new_role_without_base_int
 
         if new_role != cur_role:
-            self._node_conn.set_role(peer_id, new_role)
+            self.node_conn.set_role(peer_id, new_role)
             log.misc("Telling an agent that his role changed")
-            if not (await self._node_conn.send(peer_id, channel_trail=None,
-                                               content={'peer_id': peer_id, 'role': new_role,
+            if not (await self.node_conn.send(peer_id, channel_trail=None,
+                                              content={'peer_id': peer_id, 'role': new_role,
                                                         'default_behav':
                                                             self.role_to_behav[
                                                                 self.ROLE_BITS_TO_STR[new_role_without_base_int]]},
-                                               content_type=Msg.ROLE_SUGGESTION)):
+                                              content_type=Msg.ROLE_SUGGESTION)):
                 log.error("Failed to send role change, removing (disconnecting) " + peer_id)
-                await self._node_purge_fcn(peer_id)
+                await self.node_purge_fcn(peer_id)
             else:
                 self.role_changed_by_world = True
 
@@ -182,7 +182,7 @@ class World(AgentBasics):
             self.agent_badges[peer_id].append(badge)
 
         # This will force the sending of the dynamic profile at the defined time instants
-        self._node_profile.mark_change_in_connections()
+        self.node_profile.mark_change_in_connections()
 
     # Get all the badges requested by the world
     def get_all_badges(self) -> dict[str, list[dict[str, Any]]]:
@@ -294,7 +294,7 @@ class World(AgentBasics):
         """
         if peer_id == self.get_peer_ids()[1]:
             # this is the world itself
-            profile = self._node_profile
+            profile = self.node_profile
         else:
             profile = self.all_agents.get(peer_id)
         if profile is None:

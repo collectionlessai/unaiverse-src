@@ -827,6 +827,11 @@ class Node:
             new_agent.set_policy_filter(self.agent.policy_filter, public=False)
             new_agent.set_policy_filter(self.agent.policy_filter_lone_wolf, public=True)
 
+            # Interaction Manager and processor
+            new_agent.im.agent = new_agent
+            if new_agent.proc is not None and hasattr(new_agent.proc, 'set_agent'):
+                new_agent.proc.set_agent(new_agent)
+
             # Fixing role in the agent profile
             new_agent.world_profile = None  # It is already None actually...
             new_agent.accept_new_role(Agent.ROLE_PUBLIC)

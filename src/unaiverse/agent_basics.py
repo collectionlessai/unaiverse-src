@@ -166,22 +166,21 @@ class AgentBasics:
         self.agent_stats_code = None
 
         # Information inherited from the node that hosts this agent
-        self._node_name = "unk"
-        self._node_conn = None
-        self._node_profile = None
-        self._node_out_fcn = print
-        self._node_ask_to_get_in_touch_fcn: Callable | None = None
-        self._node_purge_fcn: Callable | None = None
-        self._node_agents_waiting = None
-        self._node_identity_dir = ''
+        self.node_name = "unk"
+        self.node_conn = None
+        self.node_profile = None
+        self.node_ask_to_get_in_touch_fcn: Callable | None = None
+        self.node_purge_fcn: Callable | None = None
+        self.node_agents_waiting = None
+        self.node_identity_dir = ''
 
-        # Utilities
-        self._proc_in_streams_by_user_hash_pub = {}
-        self._proc_streams_by_user_hash_pub = {}
-        self._env_streams_by_user_hash_pub = {}
-        self._proc_in_streams_by_user_hash_prv = {}
-        self._proc_streams_by_user_hash_prv = {}
-        self._env_streams_by_user_hash_prv = {}
+        # Utilities (keep the "__" prefix, or they will be cleared on world leaving!)
+        self.__proc_in_streams_by_user_hash_pub = {}
+        self.__proc_streams_by_user_hash_pub = {}
+        self.__env_streams_by_user_hash_pub = {}
+        self.__proc_in_streams_by_user_hash_prv = {}
+        self.__proc_streams_by_user_hash_prv = {}
+        self.__env_streams_by_user_hash_prv = {}
 
         # Checking and filling (guessing) missing processor-related info (proc_inputs and proc_outputs)
         # and allocating a dummy processor if it was not specified (if None)
@@ -242,18 +241,18 @@ class AgentBasics:
         """
 
         # Getting basic references
-        self._node_conn = conn
-        self._node_profile = profile
-        self._node_name = profile.get_static_profile()['node_name']
-        self._node_ask_to_get_in_touch_fcn = ask_to_get_in_touch_fcn
-        self._node_purge_fcn = purge_fcn
-        self._node_identity_dir = node_identity_dir
-        self._node_agents_waiting = agents_waiting
+        self.node_conn = conn
+        self.node_profile = profile
+        self.node_name = profile.get_static_profile()['node_name']
+        self.node_ask_to_get_in_touch_fcn = ask_to_get_in_touch_fcn
+        self.node_purge_fcn = purge_fcn
+        self.node_identity_dir = node_identity_dir
+        self.node_agents_waiting = agents_waiting
 
         # Checking if human, marking the node
         assert self.proc is None or isinstance(self.proc, ModuleWrapper)  # It is None in worlds!
         if self.proc is not None and isinstance(self.proc.module, HumanModule):
-            self._node_profile.get_static_profile()["node_type"] = self.HUMAN
+            self.node_profile.get_static_profile()["node_type"] = self.HUMAN
 
         # Adding peer_id information into the already existing stream data (if any)
         # (initially marked with generic wildcards like <public_peer_id>, ...)
@@ -360,50 +359,50 @@ class AgentBasics:
         return True
 
     def get_connection_pool_manager(self) -> NodeConn:
-        return self._node_conn
+        return self.node_conn
 
     def set_default_stdin_binding(self, public: bool | None = None) -> None:
         """Set default bindings for the stdin."""
 
         if (public is not None and not public) or (public is None and self.behaving_in_world()):
-            self.stdin.bind(self._proc_in_streams_by_user_hash_prv, uuid=Custom.SYSTEM_INTERACTION_UUID)
+            self.stdin.bind(self.__proc_in_streams_by_user_hash_prv, uuid=Custom.SYSTEM_INTERACTION_UUID)
 
         if (public is not None and public) or (public is None and not self.behaving_in_world()):
-            self.stdin.bind(self._proc_in_streams_by_user_hash_pub, uuid=Custom.SYSTEM_INTERACTION_UUID)
+            self.stdin.bind(self.__proc_in_streams_by_user_hash_pub, uuid=Custom.SYSTEM_INTERACTION_UUID)
 
     def set_default_stream_binding(self, public: bool | None = None) -> None:
         """Set default bindings for the stdin, stdtar, stdext, stdout stream proxies."""
 
         if (public is not None and not public) or (public is None and self.behaving_in_world()):
-            self.stdin.bind(self._proc_in_streams_by_user_hash_prv, uuid=Custom.SYSTEM_INTERACTION_UUID)
+            self.stdin.bind(self.__proc_in_streams_by_user_hash_prv, uuid=Custom.SYSTEM_INTERACTION_UUID)
             self.stdtar.bind({}, uuid=Custom.SYSTEM_INTERACTION_UUID)
-            self.stdext.bind(self._env_streams_by_user_hash_prv, uuid=Custom.SYSTEM_INTERACTION_UUID)
-            self.stdout.bind(self._proc_streams_by_user_hash_prv, uuid=Custom.SYSTEM_INTERACTION_UUID)
+            self.stdext.bind(self.__env_streams_by_user_hash_prv, uuid=Custom.SYSTEM_INTERACTION_UUID)
+            self.stdout.bind(self.__proc_streams_by_user_hash_prv, uuid=Custom.SYSTEM_INTERACTION_UUID)
 
         if (public is not None and public) or (public is None and not self.behaving_in_world()):
-            self.stdin.bind(self._proc_in_streams_by_user_hash_pub, uuid=Custom.SYSTEM_INTERACTION_UUID)
+            self.stdin.bind(self.__proc_in_streams_by_user_hash_pub, uuid=Custom.SYSTEM_INTERACTION_UUID)
             self.stdtar.bind({}, uuid=Custom.SYSTEM_INTERACTION_UUID)
-            self.stdext.bind(self._env_streams_by_user_hash_pub, uuid=Custom.SYSTEM_INTERACTION_UUID)
-            self.stdout.bind(self._proc_streams_by_user_hash_pub, uuid=Custom.SYSTEM_INTERACTION_UUID)
+            self.stdext.bind(self.__env_streams_by_user_hash_pub, uuid=Custom.SYSTEM_INTERACTION_UUID)
+            self.stdout.bind(self.__proc_streams_by_user_hash_pub, uuid=Custom.SYSTEM_INTERACTION_UUID)
 
     def get_default_stdin_bindings(self, public: bool | None = None) -> dict:
         """Returns the streams that are bind by default on the stdin."""
         if (public is not None and not public) or (public is None and self.behaving_in_world()):
-            return self._proc_in_streams_by_user_hash_prv
+            return self.__proc_in_streams_by_user_hash_prv
 
         if (public is not None and public) or (public is None and not self.behaving_in_world()):
-            return self._proc_in_streams_by_user_hash_pub
+            return self.__proc_in_streams_by_user_hash_pub
         return {}
 
     def get_default_stream_bindings(self, public: bool | None = None) -> tuple[dict, dict, dict, dict]:
         """Returns the streams that are bind by default on the standard streams (stdin, stdtar, stdext, stdout)."""
         if (public is not None and not public) or (public is None and self.behaving_in_world()):
-            return (self._proc_in_streams_by_user_hash_prv, {},
-                    self._env_streams_by_user_hash_prv, self._proc_streams_by_user_hash_prv)
+            return (self.__proc_in_streams_by_user_hash_prv, {},
+                    self.__env_streams_by_user_hash_prv, self.__proc_streams_by_user_hash_prv)
 
         if (public is not None and public) or (public is None and not self.behaving_in_world()):
-            return (self._proc_in_streams_by_user_hash_pub, {},
-                    self._env_streams_by_user_hash_pub, self._proc_streams_by_user_hash_pub)
+            return (self.__proc_in_streams_by_user_hash_pub, {},
+                    self.__env_streams_by_user_hash_pub, self.__proc_streams_by_user_hash_pub)
         return {}, {}, {}, {}
 
     def get_proc_output_net_hash(self, public: bool = True) -> str | None:
@@ -432,7 +431,7 @@ class AgentBasics:
         self.set_default_stdin_binding(public)
 
         # Zero-step: if we are in a world, the peer ID used for indexing the interaction cache is the world peer ID
-        peer_id = peer_id if public else self._node_conn.get_world_peer_id()
+        peer_id = peer_id if public else self.node_conn.get_world_peer_id()
 
         # First of all, clearing residuals of interactions that were completed in the past
         to_remove = []
@@ -538,7 +537,7 @@ class AgentBasics:
         # Clear/reset
         await self.__remove_all_world_private_streams()
         await self.__remove_all_world_related_agents()
-        self._node_conn.reset_rendezvous_tag()
+        self.node_conn.reset_rendezvous_tag()
 
     def load_and_refactor_action_file_and_behav_files(self, force_save: bool = False):
         """This method is called when building a world object. It loads the behavior files and refactors them.
@@ -618,7 +617,7 @@ class AgentBasics:
                     self.role_to_behav[role] = str(behav)
 
                     # Adding roles and machines to profile
-                    self._node_profile.get_dynamic_profile()['world_roles_fsm'] = self.role_to_behav
+                    self.node_profile.get_dynamic_profile()['world_roles_fsm'] = self.role_to_behav
                 except Exception as e:
                     raise GenException(f'Error while loading or handling '
                                        f'behav file {default_behav_file} for role {role} [{e}]')
@@ -650,7 +649,7 @@ class AgentBasics:
         Returns:
             The name of the agent or world.
         """
-        return self._node_name
+        return self.node_name
 
     def get_profile(self) -> NodeProfile:
         """Returns the profile of the node hosting this agent/world.
@@ -658,10 +657,10 @@ class AgentBasics:
             Returns:
                 The NodeProfile of this node.
         """
-        return self._node_profile
+        return self.node_profile
 
     def get_role(self, agent: str) -> str | None:
-        role_int = self._node_conn.get_role(agent)
+        role_int = self.node_conn.get_role(agent)
         base_role_int = (role_int >> 2) << 2
         return self.ROLE_BITS_TO_STR[base_role_int] if base_role_int in self.ROLE_BITS_TO_STR else None
 
@@ -681,7 +680,7 @@ class AgentBasics:
 
         found_agents = []
         for role_int in searched_roles_int:
-            _, _found_connected_peer_ids = self._node_conn.find_addrs_by_role(role_int, return_peer_ids_too=True)
+            _, _found_connected_peer_ids = self.node_conn.find_addrs_by_role(role_int, return_peer_ids_too=True)
             if handshake_completed:
                 for agent in _found_connected_peer_ids:
                     if agent in self.all_agents:
@@ -702,7 +701,7 @@ class AgentBasics:
             The role as a string or integer, or None if the agent is not living in any worlds.
         """
         if self.in_world():
-            role_str = self._node_profile.get_dynamic_profile()['connections']['role']
+            role_str = self.node_profile.get_dynamic_profile()['connections']['role']
             if ignore_base_role:
                 role_str = role_str.split("~")[-1]
             if not return_int:
@@ -735,7 +734,7 @@ class AgentBasics:
         await self.remove_agent(peer_id)  # It has no effects if the agent is not existing
 
         # Guessing the type of agent to add (accordingly to the default roles shared by every agent)
-        role = self._node_conn.get_role(peer_id)
+        role = self.node_conn.get_role(peer_id)
         self.all_agents[peer_id] = profile
         if role & 1 == self.ROLE_PUBLIC:
             self.public_agents[peer_id] = profile
@@ -802,6 +801,9 @@ class AgentBasics:
                 del self.artificial_agents[peer_id]
             elif peer_id in self.human_agents:
                 del self.human_agents[peer_id]
+
+            if peer_id in self.proc_human_peer_id_to_interaction:
+                del self.proc_human_peer_id_to_interaction[peer_id]
 
             # Clearing from the list of processor-input-compatible-streams
             if self.compat_in_streams is not None:
@@ -933,9 +935,9 @@ class AgentBasics:
                     self.proc_streams[net_hash][stream.get_props().get_name()] = stream
                     self.proc_streams_by_user_hash[user_hash] = stream
                     if stream.is_public():
-                        self._proc_streams_by_user_hash_pub[user_hash] = stream
+                        self.__proc_streams_by_user_hash_pub[user_hash] = stream
                     else:
-                        self._proc_streams_by_user_hash_prv[user_hash] = stream
+                        self.__proc_streams_by_user_hash_prv[user_hash] = stream
                     is_proc_outputs_stream = True
 
             # Adding an 'owned' processor input stream (i.e., the stream entering OUR OWN processor)
@@ -950,9 +952,9 @@ class AgentBasics:
                     self.proc_in_streams[net_hash][stream.get_props().get_name()] = stream
                     self.proc_in_streams_by_user_hash[user_hash] = stream
                     if stream.is_public():
-                        self._proc_in_streams_by_user_hash_pub[user_hash] = stream
+                        self.__proc_in_streams_by_user_hash_pub[user_hash] = stream
                     else:
-                        self._proc_in_streams_by_user_hash_prv[user_hash] = stream
+                        self.__proc_in_streams_by_user_hash_prv[user_hash] = stream
                     is_proc_inputs_stream = True
 
             if net_hash not in self.owned_streams:
@@ -966,9 +968,9 @@ class AgentBasics:
                 self.env_streams[net_hash][stream.get_props().get_name()] = stream
                 self.env_streams_by_user_hash[user_hash] = stream
                 if stream.is_public():
-                    self._env_streams_by_user_hash_pub[user_hash] = stream
+                    self.__env_streams_by_user_hash_pub[user_hash] = stream
                 else:
-                    self._env_streams_by_user_hash_prv[user_hash] = stream
+                    self.__env_streams_by_user_hash_prv[user_hash] = stream
 
         # If needed, merging descriptor labels (attribute labels) and sharing them with all streams
         if self.merge_flat_stream_labels:
@@ -1034,7 +1036,7 @@ class AgentBasics:
             # Unsubscribing to pubsub
             if DataProps.is_pubsub_from_net_hash(net_hash):
                 if peer_id != "<private_peer_id>" and peer_id != "<public_peer_id>":
-                    if not (await self._node_conn.unsubscribe(peer_id, channel=net_hash)):
+                    if not (await self.node_conn.unsubscribe(peer_id, channel=net_hash)):
                         # log.error(f"Failed in unsubscribing from pubsub, peer_id: {peer_id}, channel: {net_hash}")
                         pass
                     else:
@@ -1511,7 +1513,7 @@ class AgentBasics:
         # Opening PubSubs
         for net_hash in net_hashes_to_subscribe:
             log.misc(f"Opening channel for the not-owned but processor-compatible stream {net_hash}")
-            if not (await self._node_conn.subscribe(peer_id, channel=net_hash)):
+            if not (await self.node_conn.subscribe(peer_id, channel=net_hash)):
                 log.error(f"Error subscribing to {net_hash}")
                 return False
 
@@ -1532,7 +1534,7 @@ class AgentBasics:
                 log.misc(f"Opening channel for the owned stream {net_hash}")
                 peer_id = Stream.peer_id_from_net_hash(net_hash)  # Guessing peer ID from the net hash
 
-                if not (await self._node_conn.subscribe(peer_id, channel=net_hash)):
+                if not (await self.node_conn.subscribe(peer_id, channel=net_hash)):
                     log.error(f"Cannot open a channel for owned stream hash {net_hash}")
                     return False
         return True
@@ -1541,7 +1543,7 @@ class AgentBasics:
         """Updates the agent's profile with information about its owned (environmental and processor) streams."""
 
         # Filling the information about the streams that can be generated and handled
-        dynamic_profile = self._node_profile.get_dynamic_profile()
+        dynamic_profile = self.node_profile.get_dynamic_profile()
         if (hasattr(self, 'proc_outputs') and hasattr(self, 'proc_inputs') and
                 self.proc_outputs is not None and self.proc_inputs is not None):
             dynamic_profile['proc_outputs'] = \
@@ -1567,9 +1569,9 @@ class AgentBasics:
         agents = list(self.all_agents.keys())
         for peer_id in agents:
             log.misc(f"Sending profile to {peer_id}")
-            if not (await self._node_conn.send(peer_id, channel_trail=None,
-                                               content=self._node_profile.get_all_profile(),
-                                               content_type=Msg.PROFILE)):
+            if not (await self.node_conn.send(peer_id, channel_trail=None,
+                                              content=self.node_profile.get_all_profile(),
+                                              content_type=Msg.PROFILE)):
                 log.error("Failed to send profile, removing (disconnecting) " + peer_id)
                 await self.remove_agent(peer_id)
 
@@ -1588,9 +1590,9 @@ class AgentBasics:
                 if self.behav_lone_wolf is not None:
                     self.behav_lone_wolf.enable(False)
                 self.behav.enable(True)
-                self.stdin.bind(self._proc_in_streams_by_user_hash_prv, uuid=Custom.SYSTEM_INTERACTION_UUID)
-                self.stdout.bind(self._proc_streams_by_user_hash_prv, uuid=Custom.SYSTEM_INTERACTION_UUID)
-                self.stdext.bind(self._env_streams_by_user_hash_prv, uuid=Custom.SYSTEM_INTERACTION_UUID)
+                self.stdin.bind(self.__proc_in_streams_by_user_hash_prv, uuid=Custom.SYSTEM_INTERACTION_UUID)
+                self.stdout.bind(self.__proc_streams_by_user_hash_prv, uuid=Custom.SYSTEM_INTERACTION_UUID)
+                self.stdext.bind(self.__env_streams_by_user_hash_prv, uuid=Custom.SYSTEM_INTERACTION_UUID)
                 await self.on_tick()
                 await self.behav.act()
                 self.behav.enable(False)
@@ -1603,9 +1605,9 @@ class AgentBasics:
             if self.behav is not None:
                 self.behav.enable(False)
             self.behav_lone_wolf.enable(True)
-            self.stdin.bind(self._proc_in_streams_by_user_hash_pub, uuid=Custom.SYSTEM_INTERACTION_UUID)
-            self.stdout.bind(self._proc_streams_by_user_hash_pub, uuid=Custom.SYSTEM_INTERACTION_UUID)
-            self.stdext.bind(self._env_streams_by_user_hash_pub, uuid=Custom.SYSTEM_INTERACTION_UUID)
+            self.stdin.bind(self.__proc_in_streams_by_user_hash_pub, uuid=Custom.SYSTEM_INTERACTION_UUID)
+            self.stdout.bind(self.__proc_streams_by_user_hash_pub, uuid=Custom.SYSTEM_INTERACTION_UUID)
+            self.stdext.bind(self.__env_streams_by_user_hash_pub, uuid=Custom.SYSTEM_INTERACTION_UUID)
             await self.behav_lone_wolf.act()
             self.behav_lone_wolf.enable(False)
 
@@ -1629,15 +1631,15 @@ class AgentBasics:
                     my_peer_id: str = my_public_peer_id
                 else:
                     my_peer_id: str = my_private_peer_id
-                ret = await self._node_conn.send(interaction.requester, channel_trail=None,
-                                                 content=interaction.to_status_dict(status_generated_by=my_peer_id),
-                                                 content_type=Msg.INTERACTION_STATUS)
+                ret = await self.node_conn.send(interaction.requester, channel_trail=None,
+                                                content=interaction.to_status_dict(status_generated_by=my_peer_id),
+                                                content_type=Msg.INTERACTION_STATUS)
                 if not ret:
                     log.error(
                         f"Failed to send interaction status to peer {interaction.requester}, disconnecting it")
 
-                    assert self._node_purge_fcn is not None
-                    await self._node_purge_fcn(interaction.requester)
+                    assert self.node_purge_fcn is not None
+                    await self.node_purge_fcn(interaction.requester)
 
     def learn_behave(self, state: int, last_action: int, prev_state: int):
         """A placeholder method for behavioral learning, intended to be implemented by child classes.
@@ -1677,8 +1679,8 @@ class AgentBasics:
         """
         public_peer_id = None
         private_peer_id = None
-        if self._node_profile is not None:
-            dynamic_profile = self._node_profile.get_dynamic_profile()
+        if self.node_profile is not None:
+            dynamic_profile = self.node_profile.get_dynamic_profile()
             public_peer_id: str = dynamic_profile['peer_id']  # Public
             private_peer_id: str = dynamic_profile['private_peer_id']  # Private
         public_peer_id: str = '<public_peer_id>' if public_peer_id is None else public_peer_id
@@ -1723,7 +1725,7 @@ class AgentBasics:
         base_role_str = self.ROLE_BITS_TO_STR[(role >> 2) << 2]
         full_role_str = self.ROLE_BITS_TO_STR[role]
 
-        self._node_profile.get_dynamic_profile()['connections']['role'] = full_role_str
+        self.node_profile.get_dynamic_profile()['connections']['role'] = full_role_str
 
         default_behav = None  # A public role will not be found in the world map
         if self.world_profile is not None:
@@ -1745,8 +1747,8 @@ class AgentBasics:
         Returns:
             True if the agent is in a human, False otherwise.
         """
-        if self._node_profile is not None:
-            return self._node_profile.get_static_profile()["node_type"] == self.HUMAN
+        if self.node_profile is not None:
+            return self.node_profile.get_static_profile()["node_type"] == self.HUMAN
         else:
             return False
 
@@ -1756,8 +1758,8 @@ class AgentBasics:
         Returns:
             True if the agent is in a world, False otherwise.
         """
-        if self._node_profile is not None:
-            return self.ROLE_STR_TO_BITS[self._node_profile.get_dynamic_profile()['connections']['role']] & 1 == 1
+        if self.node_profile is not None:
+            return self.ROLE_STR_TO_BITS[self.node_profile.get_dynamic_profile()['connections']['role']] & 1 == 1
         else:
             return False
 
@@ -2046,9 +2048,9 @@ class AgentBasics:
                                       f"(data_tag={content[name]['data_tag']}, data_uuid={uuid}, "
                                       f"data is None?={content[name]['data'] is None})")
 
-                        ret = await self._node_conn.send(recipient, channel_trail=name_or_group,
-                                                         content_type=Msg.STREAM_SAMPLE,
-                                                         content=content)
+                        ret = await self.node_conn.send(recipient, channel_trail=name_or_group,
+                                                        content_type=Msg.STREAM_SAMPLE,
+                                                        content=content)
 
                         log.debug(f"[send_stream_samples] Sending returned: " + str(ret))
 
@@ -2069,9 +2071,9 @@ class AgentBasics:
                             f"data is None?={content[name]['data'] is None}")
 
                     peer_id = Stream.peer_id_from_net_hash(net_hash)  # Guessing agent peer ID from the net hash
-                    ret = await self._node_conn.publish(peer_id, channel=net_hash,
-                                                        content_type=Msg.STREAM_SAMPLE,
-                                                        content=content)
+                    ret = await self.node_conn.publish(peer_id, channel=net_hash,
+                                                       content_type=Msg.STREAM_SAMPLE,
+                                                       content=content)
 
                     log.debug(f"[send_stream_samples] Sending returned: " + str(ret))
 
@@ -2393,8 +2395,8 @@ class AgentBasics:
     def reset_agent_status_attrs(self):
         """Resets attributes that represent the status of the agent, assuming to be the ones that start with '_'."""
         for attr_name in dir(self):
-            if attr_name.startswith("_") and (not attr_name.startswith("__") and not attr_name.startswith("_Agent")
-                                              and not attr_name.startswith("_WAgent")):
+            if (attr_name.startswith("_") and not attr_name.startswith("__") and not attr_name.startswith("_Agent")
+                    and not attr_name.startswith("_WAgent") and not attr_name.startswith("_AgentBasics")):
                 try:
                     value = getattr(self, attr_name)
                     if isinstance(value, list):
@@ -2445,9 +2447,9 @@ class AgentBasics:
             return False
 
         if where == '':
-            if self._node_identity_dir is None or len(self._node_identity_dir) == 0:
+            if self.node_identity_dir is None or len(self.node_identity_dir) == 0:
                 return False
-            where = os.path.join(self._node_identity_dir, "agent_state")  # Default save path
+            where = os.path.join(self.node_identity_dir, "agent_state")  # Default save path
 
         os.makedirs(where, exist_ok=True)
 
@@ -2457,7 +2459,7 @@ class AgentBasics:
             proc: ModuleWrapper = self.proc
             assert isinstance(proc.module, torch.nn.Module)
 
-            pt_final = os.path.join(where, f"{self._node_name}.pt")
+            pt_final = os.path.join(where, f"{self.node_name}.pt")
             pt_tmp = pt_final + ".tmp"
             try:
                 checkpoint = {
@@ -2479,7 +2481,7 @@ class AgentBasics:
                 raise e
 
         # Save Agent State
-        pkl_final = os.path.join(where, f"{self._node_name}.pkl")
+        pkl_final = os.path.join(where, f"{self.node_name}.pkl")
         pkl_tmp = pkl_final + ".tmp"
         try:
             state = self.agent_state_dict()
@@ -2507,21 +2509,21 @@ class AgentBasics:
             return False
 
         if where == '':
-            if self._node_identity_dir is None or len(self._node_identity_dir) == 0:
+            if self.node_identity_dir is None or len(self.node_identity_dir) == 0:
                 return False
-            where = os.path.join(self._node_identity_dir, "agent_state")  # Default save path
+            where = os.path.join(self.node_identity_dir, "agent_state")  # Default save path
 
         # Check if directory exists
         if not os.path.exists(where):
             log.error("No state folder found for " + ("agent" if not self.is_world else "world") +
-                      f" {self._node_name}.")
+                      f" {self.node_name}.")
             return False
 
         # Check if the specific pickle file exists
-        pkl_path = os.path.join(where, f"{self._node_name}.pkl")
+        pkl_path = os.path.join(where, f"{self.node_name}.pkl")
         if not os.path.exists(pkl_path):
             log.error("No saved state found for " + ("agent" if not self.is_world else "world") +
-                      f" {self._node_name}.")
+                      f" {self.node_name}.")
             return False
 
         # Loading the agent state dictionary
@@ -2535,7 +2537,7 @@ class AgentBasics:
         self.__dict__.update(agent_state_dict)
 
         # Check if we also need to load the processor state
-        pt_path = os.path.join(where, f"{self._node_name}.pt")
+        pt_path = os.path.join(where, f"{self.node_name}.pt")
         load_proc = self.proc is not None and os.path.exists(pt_path)
         if load_proc:
             try:
@@ -2638,8 +2640,8 @@ class AgentBasics:
         at_least_one_completed = False
         correctly_contacted = []
         for _peer_id in interaction.target:
-            ret = await self._node_conn.send(_peer_id, channel_trail=None,
-                                             content=content, content_type=Msg.INTERACTION)
+            ret = await self.node_conn.send(_peer_id, channel_trail=None,
+                                            content=content, content_type=Msg.INTERACTION)
             if ret:
                 correctly_contacted.append(_peer_id)
                 at_least_one_completed = at_least_one_completed or ret
@@ -2672,7 +2674,7 @@ class AgentBasics:
             A formatted string describing the agent's current state and relationships.
         """
         s = ("[" + ("Agent" if not self.is_world else "World") + "]"
-             + f" {self._node_name} (role: {self._node_profile.get_dynamic_profile()['connections']['role']})")
+             + f" {self.node_name} (role: {self.node_profile.get_dynamic_profile()['connections']['role']})")
         if len(self.world_masters) > 0:
             s += "\n\t- known world masters:"
             for _s in self.world_masters.keys():
