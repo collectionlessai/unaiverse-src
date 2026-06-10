@@ -927,7 +927,7 @@ class AgentBasics:
             if self.proc_outputs is not None:
                 proc_outputs_name_and_group = set()
                 for props in self.proc_outputs:
-                    assert isinstance(props, StreamType)
+                    assert not isinstance(props, str)
                     proc_outputs_name_and_group.add((props.get_name(), props.get_group()))
                 if (stream.get_props().get_name(), stream.get_props().get_group()) in proc_outputs_name_and_group:
                     if net_hash not in self.proc_streams:
@@ -944,7 +944,7 @@ class AgentBasics:
             if self.proc_inputs is not None and not is_proc_outputs_stream:
                 proc_inputs_name_and_group = set()
                 for props in self.proc_inputs:
-                    assert isinstance(props, StreamType)
+                    assert not isinstance(props, str)
                     proc_inputs_name_and_group.add((props.get_name(), props.get_group()))
                 if (stream.get_props().get_name(), stream.get_props().get_group()) in proc_inputs_name_and_group:
                     if net_hash not in self.proc_in_streams:
@@ -1350,7 +1350,7 @@ class AgentBasics:
         # Adding input streams (grouped together), passing the node clock
         if self.proc_inputs is not None:
             for i, procs in enumerate(self.proc_inputs):
-                assert isinstance(procs, StreamType)
+                assert not isinstance(procs, str)
                 procs.set_group("processor_in")  # Adding default group info, forced, do not change this!
 
                 # Creating the streams
@@ -1383,7 +1383,7 @@ class AgentBasics:
         # Adding generated streams (grouped together), passing the node clock
         if self.proc_outputs is not None:
             for i, procs in enumerate(self.proc_outputs):
-                assert isinstance(procs, StreamType)
+                assert not isinstance(procs, str)
                 procs.set_group("processor")  # Adding default group info, forced, do not change this!
 
                 # Creating the streams
@@ -1440,7 +1440,7 @@ class AgentBasics:
             # Find streams that are compatible with our 'proc_inputs'
             assert self.proc_inputs is not None
             for i, in_proc in enumerate(self.proc_inputs):
-                assert isinstance(in_proc, StreamType)
+                assert not isinstance(in_proc, str)
                 for j in streams_in_profile:
                     jj = DataProps.from_dict(j)
                     if (public == jj.is_public() and in_proc.is_compatible(jj)
@@ -1547,9 +1547,11 @@ class AgentBasics:
         if (hasattr(self, 'proc_outputs') and hasattr(self, 'proc_inputs') and
                 self.proc_outputs is not None and self.proc_inputs is not None):
             dynamic_profile['proc_outputs'] = \
-                [dct for d in self.proc_outputs if isinstance(d, StreamType) for dct in d.to_list_of_dicts()]
+                [dct for d in self.proc_outputs
+                 if hasattr(d, "to_list_of_dicts") for dct in d.to_list_of_dicts()]  # noqa
             dynamic_profile['proc_inputs'] = \
-                [dct for d in self.proc_inputs if isinstance(d, StreamType) for dct in d.to_list_of_dicts()]
+                [dct for d in self.proc_inputs
+                 if hasattr(d, "to_list_of_dicts") for dct in d.to_list_of_dicts()]  # noqa
 
         # Adding the list of locally-created ("environmental") streams to the profile
         list_of_props = []
