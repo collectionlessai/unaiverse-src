@@ -148,15 +148,11 @@ class Node:
         self.conn: NodeConn  # Manages the network operations in the P2P network
         self._sm_public = None  # SessionManager for p2p_public, built in __init__ after self.conn
         self._sm_world = None   # SessionManager for p2p_world, built in __init__ after self.conn
-        self._session_established_waiters: dict[str, asyncio.Event] = {}
         # public peer-id -> world peer-id, while a world handoff is in flight.
         self._pending_world_handoff: dict[str, str] = {}
         # world peer-id -> public peer-id, the reverse map used to GOAWAY the public
         # Session once the world Session establishes.
         self._world_to_public: dict[str, str] = {}
-        # joiner node-id -> assigned role bitmask, stashed by the world-host
-        # decision hook so the world-side ESTABLISHED can populate the world lists.
-        self._pending_grant_roles: dict[str, int] = {}
         self.memory_finder = None
         self.world_agent_files = None
         self.talk_to_relay_based_nodes = talk_to_relay_based_nodes
@@ -803,9 +799,11 @@ class Node:
         # Record the join intent (options forwarded into the offered profile downstream).
         self.joining_world_info = {"world_public_peer_id": None, "options": kwargs}
 
-        # Connecting to the world on the public network, with the Session driving the
-        # full world handshake: PROFILE → WORLD_GRANT → private world Session +
-        # PRIVATE_JOIN → join_world body (all via the Session ESTABLISHED dispatch).
+        # Start the public-network Session to the world. Fire-and-forget: the dial
+        # happens here (so an unreachable world fails synchronously), but the world
+        # handshake — PROFILE → WORLD_GRANT → private world Session + PRIVATE_JOIN →
+        # join_world body — completes asynchronously in the main loop via the Session
+        # ESTABLISHED dispatch.
         peer_id = await self.ask_to_get_in_touch(node_name=node_name, addresses=addresses,
                                                  node_id=node_id, public=True, is_world_join=True)
         if peer_id is not None:
@@ -817,7 +815,7 @@ class Node:
             }
             self.joining_world_info = {"world_public_peer_id": peer_id, "options": kwargs}
             self.joining_world_info["world_public_peer_id"] = peer_id
-            log.user("Connected on the public network, world handshake driven by Session...")
+            log.user("Connected on the public network, waiting for the world handshake to complete...")
         else:
             log.error("Failed to join world!")
             self.joining_world_info = None
@@ -1195,9 +1193,14 @@ class Node:
             while not must_quit and not self.stop_requested:
                 log.set_sub("gen")
 
-                # Tuning clock speed
+                # Tuning clock speed. A node with live Sessions is never idle:
+                # the keep-alive PING RTT window is sized for a full-speed pump,
+                # and a slowed clock (2s cycles) would starve it into false
+                # ping misses on both sides at once.
                 if (self.conn.passed_time_since_last_communication() >= Custom.SLOW_DOWN_CLOCK_AFTER and
-                        self.hosted.im.count_interactions() == 0):
+                        self.hosted.im.count_interactions() == 0 and
+                        not self._sm_public.has_active_sessions() and
+                        not self._sm_world.has_active_sessions()):
                     if not clock.is_slowed_down():
                         log.misc("Reducing clock speed (idle)")
                         clock.run_slower()
@@ -1604,6 +1607,12 @@ class Node:
         # Handling newly connected peers
         an_agent_joined_the_world = False
         added_peers = False
+        # Every peer (re)appearing in the pool diff is a potential transport
+        # reconnect for a Session riding its grace period: on_peer_reconnected
+        # is a no-op unless the Session is RECONNECTING, so feeding it fresh
+        # first-time connections is harmless.
+        for new_peer_ids in new_peer_ids_by_pool.values():
+            self.reconnected.update(new_peer_ids)
         for r in self.reconnected:
             # Tell SessionManagers — RECONNECTING → ESTABLISHED if grace period
             # hasn't expired yet (otherwise no-op, the session is gone).
@@ -2270,10 +2279,9 @@ class Node:
                 code_bundle=code_bundle,
                 initial_stats=initial_stats,
             )
-            # Stash the assigned role so the world-side ESTABLISHED (after the
-            # joiner redeems the grant) can add it to the world agents/masters list.
-            if remote_node_id is not None:
-                self._pending_grant_roles[remote_node_id] = role
+            # No role stash: the grant signature binds (joiner world peer-id,
+            # role, expiry), and the world-side ESTABLISHED reads the role back
+            # from the verified PRIVATE_JOIN.
             log.misc(f"[session] decision: granting world role '{role_str}' to {peer_id[:12]}…")
             return ProfileDecisionResult(accepted=True, world_grant=spec)
 
@@ -2287,8 +2295,10 @@ class Node:
 
         ESTABLISHED drives the world handoff (joiner side) and the
         ``add_agent`` / ``__join_world`` / world-list side-effects that the legacy
-        handshake used to perform inline. RECONNECTING/RESUMED are logged;
-        LOST/CLOSED purge; FAILED wakes any blocked initiator waiter."""
+        handshake used to perform inline. RECONNECTING is logged; RESUMED
+        re-enrols the agent if the disconnect path already purged it;
+        LOST/CLOSED purge; FAILED is surfaced as an error (the handshake is
+        fire-and-forget, so a failure that surfaces here is asynchronous)."""
         try:
             log.misc(f"[session] {ev.type.value} peer={ev.peer_id[:12]}… session={ev.session_id[:8]}… "
                      f"role={ev.role.value} p2p={ev.p2p_name}",
@@ -2298,24 +2308,74 @@ class Node:
 
         if ev.type == SessionEventType.ESTABLISHED:
             await self._on_session_established(ev)
-            waiter = self._session_established_waiters.get(ev.peer_id)
-            if waiter is not None:
-                waiter.set()
+        elif ev.type == SessionEventType.RESUMED:
+            await self._on_session_resumed(ev)
         elif ev.type == SessionEventType.FAILED:
-            self._pending_world_handoff.pop(ev.peer_id, None)
-            waiter = self._session_established_waiters.get(ev.peer_id)
-            if waiter is not None:
-                waiter.set()
+            # Roll back any in-flight world-handoff bookkeeping, whichever side
+            # failed: the forward map is keyed by the public peer-id, the
+            # reverse one by the world peer-id.
+            world_peer_id = self._pending_world_handoff.pop(ev.peer_id, None)
+            if world_peer_id is not None:
+                self._world_to_public.pop(world_peer_id, None)
+            public_peer_id = self._world_to_public.pop(ev.peer_id, None)
+            if public_peer_id is not None:
+                self._pending_world_handoff.pop(public_peer_id, None)
+            self._world_host_unlist_member(ev)
+            log.error(f"[session] handshake to {ev.peer_id[:12]}… failed "
+                      f"(p2p={ev.p2p_name}, reason={ev.data.get('reason', 'unknown')})",
+                      sub="prv" if "world" in ev.p2p_name else "pub")
         elif ev.type in (SessionEventType.LOST, SessionEventType.CLOSED):
             # WORLD_HANDOFF_COMPLETE is the intentional teardown of the public
             # Session after a successful world join — it must NOT purge the node.
             if (ev.type == SessionEventType.CLOSED and
                     "WORLD_HANDOFF_COMPLETE" in ev.data.get("reason", "")):
                 return
+            self._world_host_unlist_member(ev)
             try:
                 await self.__purge(ev.peer_id)
             except Exception as e:
                 log.error(f"[session] dispatch LOST/CLOSED purge failed for {ev.peer_id[:12]}…: {e}")
+
+    def _world_host_unlist_member(self, ev) -> None:
+        """World host only: a member's world Session terminated — stop advertising
+        it (world agents/masters lists feed routing and the rendezvous publish).
+        Covers grant-time preregistration too (a joiner that failed mid-handshake)."""
+        if self.node_type is Node.WORLD and (NodeConn.P2P_WORLD == ev.p2p_name or
+                                             "world" in ev.p2p_name):
+            try:
+                self.conn.remove_from_world_lists(ev.peer_id)
+            except Exception as e:
+                log.error(f"[session] world unlist failed for {ev.peer_id[:12]}…: {e}")
+
+    async def _on_session_resumed(self, ev) -> None:
+        """A Session survived a transport drop (RESUME acked). The pool-removal
+        path purges the peer from the hosted entity as soon as the link drops
+        (see __handle_network_connections), so on resume the agent must be
+        re-enrolled from the profile the Session still holds. Pool membership
+        self-heals on the next conn.update(); only the hosted side needs repair.
+        No-op if the peer was never purged."""
+        if ev.peer_id in self.hosted.all_agents:
+            return
+        is_world = NodeConn.P2P_WORLD == ev.p2p_name or "world" in ev.p2p_name
+        # A world host's public Sessions are grant carriers: they never enrolled
+        # an agent, so there is nothing to restore.
+        if self.node_type is Node.WORLD and not is_world:
+            return
+        sm = self._sm_world if is_world else self._sm_public
+        sess = sm.get_session(ev.peer_id)
+        profile_dict = sess.remote_profile if sess is not None else None
+        if not profile_dict:
+            return
+        try:
+            profile = NodeProfile.from_dict(profile_dict)
+        except Exception as e:
+            log.error(f"[session] resumed: bad stored profile for {ev.peer_id[:12]}…: {e}")
+            return
+        try:
+            if not (await self.hosted.add_agent(peer_id=ev.peer_id, profile=profile)):
+                await self.__purge(ev.peer_id, reason=LOCAL_ERROR)
+        except Exception as e:
+            log.error(f"[session] resumed: re-enrol failed for {ev.peer_id[:12]}…: {e}")
 
     async def _on_session_established(self, ev) -> None:
         """Run the application side-effects for an ESTABLISHED Session, branching on
@@ -2405,7 +2465,9 @@ class Node:
     async def _world_host_register_agent(self, ev, profile_b) -> None:
         """World host: a joiner completed PRIVATE_JOIN on the world instance — add
         it to the world agents/masters list (replaces the legacy post-approval
-        bookkeeping)."""
+        bookkeeping). The role comes from the PRIVATE_JOIN event: the Session
+        already verified our own grant signature over it, so it is exactly the
+        role this host assigned at decision time."""
         if profile_b is None:
             return
         try:
@@ -2413,10 +2475,12 @@ class Node:
         except Exception as e:
             log.error(f"[session] world register: bad joiner profile: {e}")
             return
-        joiner_node_id = ev.data.get("private_join", {}).get("joiner_node_id")
-        role = self._pending_grant_roles.pop(joiner_node_id, None) if joiner_node_id else None
-        if role is None:
-            role = Agent.ROLE_WORLD_AGENT
+        role = int(ev.data.get("private_join", {}).get("role") or 0)
+        if role & Agent.ROLE_WORLD_AGENT != Agent.ROLE_WORLD_AGENT:
+            log.error(f"[session] world register: grant role {role} lacks the world "
+                      f"bit for {ev.peer_id[:12]}…; purging")
+            await self.__purge(ev.peer_id, reason=LOCAL_ERROR)
+            return
         private_peer_id = ev.peer_id
         private_addr = profile.get_dynamic_profile().get("private_peer_addresses")
         try:
@@ -2483,40 +2547,33 @@ class Node:
         remote_other_peer_id_hint: str | None = None,
         remote_node_id_hint: str | None = None,
         reject_relay: bool = False,
-        timeout_s: float = 35.0,
     ) -> bool:
-        """Open a Session to `peer_id` using SessionManager.
+        """Start an initiator Session to `peer_id` via SessionManager and return.
 
-        Blocks until ESTABLISHED or terminal FAILED, with `timeout_s` upper bound.
-        Returns True on ESTABLISHED. The Session owns the dial (conn.connect runs
-        inside it), so callers must NOT pre-dial. `reject_relay` fails the dial if
-        it resolves through a relay circuit (preserves talk_to_relay_based_nodes).
+        Fire-and-forget: the dial runs synchronously inside Session.start (so an
+        unreachable peer or a rejected relay fails right here), but the
+        HELLO/PROFILE handshake completes asynchronously in the main loop's pump
+        (deliver/tick). Returns False only if the handshake could not be *started*
+        (dial/relay/quarantine), True once HELLO is on the wire. The Session owns
+        the dial, so callers must NOT pre-dial.
         """
         sm = self._sm_public if p2p_name == NodeConn.P2P_PUBLIC else self._sm_world
-        waiter = asyncio.Event()
-        self._session_established_waiters[peer_id] = waiter
-        try:
-            events = await sm.initiate(
-                peer_id=peer_id,
-                addresses=addresses,
-                is_world_join=is_world_join,
-                remote_other_peer_id_hint=remote_other_peer_id_hint,
-                remote_node_id_hint=remote_node_id_hint,
-                reject_relay=reject_relay,
-            )
-            # Drain any immediate events (e.g. fast-fail on quarantine).
-            for ev in events:
-                await self._dispatch_session_event(ev)
-
-            try:
-                await asyncio.wait_for(waiter.wait(), timeout=timeout_s)
-            except asyncio.TimeoutError:
-                log.error(f"connect_via_session({peer_id[:12]}…) timed out after {timeout_s}s")
-                return False
-
-            return sm.is_established(peer_id)
-        finally:
-            self._session_established_waiters.pop(peer_id, None)
+        events = await sm.initiate(
+            peer_id=peer_id,
+            addresses=addresses,
+            is_world_join=is_world_join,
+            remote_other_peer_id_hint=remote_other_peer_id_hint,
+            remote_node_id_hint=remote_node_id_hint,
+            reject_relay=reject_relay,
+        )
+        # A terminal FAILED among the start-up events means the handshake could not
+        # even begin (dial failed after retries, relay rejected, peer quarantined).
+        started = True
+        for ev in events:
+            if ev.type == SessionEventType.FAILED:
+                started = False
+            await self._dispatch_session_event(ev)
+        return started
 
     async def __purge(self, peer_id: str, keep_connection: bool = False,
                       reason: int | None = None) -> None:

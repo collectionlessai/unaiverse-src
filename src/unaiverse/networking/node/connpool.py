@@ -649,7 +649,7 @@ class ConnectionPools:
         return self[p2p_name].generate_signed_peer_record()
 
     def passed_time_since_last_communication(self):
-        passed = time.time() - max(self.__last_recv_time, self.__last_sent_time)
+        passed = time.time() - max(self.__last_sent_time, self.__last_recv_time)
         return 0. if passed < 0. else passed
 
     def get_added_after_updating(self, pool_name: str | None = None) -> set | dict:
@@ -1178,6 +1178,23 @@ class NodeConn(ConnectionPools):
     def get_world_masters(self) -> set[str]:
         """Returns the set of world masters."""
         return self.world_masters_set
+
+    def remove_from_world_lists(self, peer_id: str) -> None:
+        """Drops a peer from the world agents/masters lists and the role/address
+        bookkeeping. The world host calls this when a member's world Session
+        terminates, so the routing pass and the rendezvous publish stop
+        advertising it."""
+        self.world_agents_set.discard(peer_id)
+        self.world_masters_set.discard(peer_id)
+        if self.world_masters_first == peer_id:
+            self.world_masters_first = next(iter(self.world_masters_set), None)
+        self.world_agents_and_world_masters_set = self.world_agents_set | self.world_masters_set
+        self.peer_id_to_addrs.pop(peer_id, None)
+        misc = self.peer_id_to_misc.pop(peer_id, None)
+        if misc in self.role_to_peer_ids:
+            self.role_to_peer_ids[misc].discard(peer_id)
+            if not self.role_to_peer_ids[misc]:
+                del self.role_to_peer_ids[misc]
 
     def set_world_masters_list(self, world_masters_list_peer_infos: list[dict] | None) -> None:
         """Sets the list of all world masters based on a provided list of peer information.
