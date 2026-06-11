@@ -111,7 +111,7 @@ class SessMsg:
     KIND_PROFILE_DECISION = "profile_decision"
     KIND_WORLD_GRANT      = "world_grant"
     KIND_WORLD_GRANT_ACK  = "world_grant_ack"
-    KIND_PRIVATE_JOIN     = "private_join"
+    KIND_PRIVATE_JOIN     = "private_join"   # JSON envelope (grant echo fields post-date session.proto)
     KIND_PRIVATE_JOIN_ACK = "private_join_ack"
     KIND_GOAWAY           = "goaway"
     KIND_GOAWAY_ACK       = "goaway_ack"
@@ -180,7 +180,7 @@ class SessMsg:
             fields = {}
             for fn, is_bytes in spec.items():
                 if fn not in obj:
-                    fields[fn] = b"" if is_bytes else (False if fn in ("ok", "accepted") else 0)
+                    fields[fn] = b"" if is_bytes else _JSON_FIELD_DEFAULTS.get(fn, 0)
                     continue
                 fields[fn] = bytes.fromhex(obj[fn]) if is_bytes else obj[fn]
             return cls(kind=json_kind, fields=fields)
@@ -225,7 +225,6 @@ _KIND_SPEC = {
                                      "world_private_peer_record", "role", "code_bundle", "initial_stats",
                                      "rendezvous_tag"]),
     SessMsg.KIND_WORLD_GRANT_ACK:  (0x06, "WorldGrantAck", ["received"]),
-    SessMsg.KIND_PRIVATE_JOIN:     (0x07, "PrivateJoin", ["grant_id", "sig_init", "joiner_node_id"]),
     SessMsg.KIND_PRIVATE_JOIN_ACK: (0x08, "PrivateJoinAck", ["accepted", "reason_code", "rendezvous_topic"]),
     SessMsg.KIND_GOAWAY:           (0x09, "Goaway", ["reason", "drain_window_ms", "session_id"]),
     SessMsg.KIND_GOAWAY_ACK:       (0x0A, "GoawayAck", ["received"]),
@@ -233,24 +232,33 @@ _KIND_SPEC = {
 _TAG_TO_KIND = {tag: kind for kind, (tag, _cls, _f) in _KIND_SPEC.items()}
 _REPEATED_FIELDS = frozenset({"protocol_versions", "hint_addrs"})
 
-# Liveness / resume control codec (JSON envelope, protobuf-free). `bytes` fields
-# (session_id, nonce) are hex-encoded so they survive JSON; the codec restores them
-# to `bytes` on decode so the FSM sees the same value types as for protobuf messages.
+# JSON-envelope codec (protobuf-free): the liveness/resume control messages plus
+# PrivateJoin, which outgrew its session.proto shape (it now echoes the signed
+# grant fields — role/expiry/grant_sig — so the world host can verify its own
+# grant statelessly at redemption; no protoc regen needed). `bytes` fields are
+# hex-encoded so they survive JSON; the codec restores them to `bytes` on decode
+# so the FSM sees the same value types as for protobuf messages.
 _JSON_KIND_TO_TAG = {
-    SessMsg.KIND_PING:       0x0B,
-    SessMsg.KIND_PONG:       0x0C,
-    SessMsg.KIND_RESUME:     0x0D,
-    SessMsg.KIND_RESUME_ACK: 0x0E,
+    SessMsg.KIND_PRIVATE_JOIN: 0x07,
+    SessMsg.KIND_PING:         0x0B,
+    SessMsg.KIND_PONG:         0x0C,
+    SessMsg.KIND_RESUME:       0x0D,
+    SessMsg.KIND_RESUME_ACK:   0x0E,
 }
 _JSON_TAG_TO_KIND = {tag: kind for kind, tag in _JSON_KIND_TO_TAG.items()}
 # Field name -> True if it is a `bytes` field (hex-encoded in the JSON envelope).
 _JSON_KIND_FIELDS = {
-    SessMsg.KIND_PING:       {"session_id": True, "nonce": True},
-    SessMsg.KIND_PONG:       {"session_id": True, "nonce": True, "ok": False},
-    SessMsg.KIND_RESUME:     {"session_id": True, "nonce": True},
-    SessMsg.KIND_RESUME_ACK: {"session_id": True, "nonce": True,
-                              "accepted": False, "reason_code": False},
+    SessMsg.KIND_PRIVATE_JOIN: {"grant_id": True, "sig_init": True,
+                                "joiner_node_id": False, "role": False,
+                                "expiry_unix_ms": False, "grant_sig": True},
+    SessMsg.KIND_PING:         {"session_id": True, "nonce": True},
+    SessMsg.KIND_PONG:         {"session_id": True, "nonce": True, "ok": False},
+    SessMsg.KIND_RESUME:       {"session_id": True, "nonce": True},
+    SessMsg.KIND_RESUME_ACK:   {"session_id": True, "nonce": True,
+                                "accepted": False, "reason_code": False},
 }
+# Decode defaults for missing non-bytes JSON fields (bytes default to b"").
+_JSON_FIELD_DEFAULTS = {"ok": False, "accepted": False, "joiner_node_id": ""}
 
 
 # ── Application decision types (returned by the responder decision hook) ──────

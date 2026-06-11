@@ -27,7 +27,8 @@ This module is **protobuf-free** and never holds a Python ``P2P`` handle: it
 speaks ``SessMsg`` value objects and reaches the transport/crypto only through
 the async ``conn`` interface (``send_session`` / ``connect`` / ``sign_with_host_key`` /
 ``verify_peer_signature`` / ``verify_signed_peer_record`` /
-``generate_signed_peer_record``), all keyed by ``p2p_name`` (a string). That is
+``generate_signed_peer_record``, plus the sync ``get_local_peer_id``), all keyed
+by ``p2p_name`` (a string). That is
 exactly the surface a JS ``NodeConn`` mirror exposes, so this file runs unchanged
 in Pyodide. The wire (de)serialization lives in the conn layer (``connpool.py``
 in CPython; ``session_pb.js`` in the browser).
@@ -59,7 +60,7 @@ from typing import Optional, Dict, Any, List, Callable, Awaitable, TYPE_CHECKING
 from unaiverse.networking.session.sess_msg import (
     SessMsg, reason_name, ProfileDecisionResult, WorldGrantSpec,
     OK, VERSION_UNSUPPORTED, NOT_AUTHORIZED, LOCAL_ERROR, GRACEFUL_SHUTDOWN,
-    SIMULTANEOUS_OPEN_LOSS, SESSION_UNKNOWN, P2P_PUBLIC, P2P_WORLD,
+    SIMULTANEOUS_OPEN_LOSS, SESSION_UNKNOWN, GRANT_EXPIRED, P2P_PUBLIC, P2P_WORLD,
 )
 from unaiverse.utils.logger import log
 
@@ -169,9 +170,19 @@ def _sign_payload(nonce: bytes, session_id: bytes) -> bytes:
     return bytes(nonce) + bytes(session_id)
 
 
-def _grant_sign_payload(grant_id: bytes, joiner_node_id: str, expiry_unix_ms: int) -> bytes:
-    """Canonical sign-payload for grant_sig: ``grant_id || joiner_node_id || expiry_be``."""
-    return bytes(grant_id) + joiner_node_id.encode("utf-8") + int(expiry_unix_ms).to_bytes(8, "big")
+def _grant_sign_payload(grant_id: bytes, joiner_world_peer_id: str, role: int,
+                        expiry_unix_ms: int) -> bytes:
+    """Canonical sign-payload for grant_sig:
+    ``grant_id || joiner_world_peer_id || role_be || expiry_be``.
+
+    Binding the joiner's WORLD-side peer-id (instead of its application node-id)
+    makes the grant single-redeemer at the transport level: the world host
+    verifies its own signature at PRIVATE_JOIN against the peer that actually
+    dialed, so a grant lifted from another node cannot be redeemed. Binding the
+    role lets the host trust the role echoed back in PRIVATE_JOIN with no
+    server-side stash."""
+    return (bytes(grant_id) + joiner_world_peer_id.encode("utf-8") +
+            int(role).to_bytes(8, "big") + int(expiry_unix_ms).to_bytes(8, "big"))
 
 
 # ── Session ───────────────────────────────────────────────────────────────────
@@ -579,10 +590,15 @@ class Session:
         it will actually connect to."""
         self.grant_id = secrets.token_bytes(_GRANT_ID_BYTES)
         self.grant_expiry_unix_ms = int(time.time() * 1000) + int(spec.grant_ttl_ms)
-        joiner_node_id = self.remote_node_id_hint or ""
+        # The grant is bound to the world-side identity the joiner will redeem it
+        # from, taken from its offered profile.
+        joiner_world_peer_id = (self.remote_profile.get("dynamic") or {}).get("private_peer_id") or ""
+        if not joiner_world_peer_id:
+            return [self._fail("world_grant_missing_joiner_world_peer_id")]
         grant_sig = await self.conn.sign_with_host_key(
             self._other_p2p_name(),
-            _grant_sign_payload(self.grant_id, joiner_node_id, self.grant_expiry_unix_ms),
+            _grant_sign_payload(self.grant_id, joiner_world_peer_id, spec.role,
+                                self.grant_expiry_unix_ms),
         )
         if grant_sig is None:
             return [self._fail("world_grant_sign_failed")]
@@ -630,19 +646,32 @@ class Session:
             return [self._fail("world_grant_expired")]
 
         world_spr = bytes(grant.get("world_private_peer_record") or b"")
-        # Verify grant_sig against the world's WORLD-side identity. That identity is
-        # carried in world_private_peer_record; require the hint to match it.
-        if self.remote_other_peer_id_hint and world_spr:
-            if not await self.conn.verify_signed_peer_record(
-                self.p2p_name, world_spr, self.remote_other_peer_id_hint,
-            ):
-                return [self._fail("world_grant_bad_spr")]
-            grant_sig = bytes(grant.get("grant_sig") or b"")
-            if not await self.conn.verify_peer_signature(
-                self.p2p_name, self.remote_other_peer_id_hint,
-                _grant_sign_payload(grant_id, self.local_node_id, expiry), grant_sig,
-            ):
-                return [self._fail("world_grant_bad_sig")]
+        # Verify grant_sig against the world's WORLD-side identity: the spawn-time
+        # hint when given, otherwise the private peer-id advertised in the grant's
+        # world profile — the exact identity the handoff will dial, so a forged
+        # role/expiry would need that identity's key. Verification is mandatory:
+        # an unverifiable grant fails the handshake instead of riding through.
+        expected_world_peer_id = self.remote_other_peer_id_hint
+        if not expected_world_peer_id:
+            try:
+                wp = json.loads(bytes(grant.get("world_profile") or b"").decode("utf-8"))
+                expected_world_peer_id = (wp.get("dynamic") or {}).get("private_peer_id") or ""
+            except Exception:
+                expected_world_peer_id = ""
+        if not expected_world_peer_id:
+            return [self._fail("world_grant_unverifiable_identity")]
+        if world_spr and not await self.conn.verify_signed_peer_record(
+            self.p2p_name, world_spr, expected_world_peer_id,
+        ):
+            return [self._fail("world_grant_bad_spr")]
+        grant_sig = bytes(grant.get("grant_sig") or b"")
+        if not await self.conn.verify_peer_signature(
+            self.p2p_name, expected_world_peer_id,
+            _grant_sign_payload(grant_id, self.conn.get_local_peer_id(self._other_p2p_name()),
+                                int(grant.get("role", 0)), expiry),
+            grant_sig,
+        ):
+            return [self._fail("world_grant_bad_sig")]
 
         self.grant_id = bytes(grant_id)
         self.grant_sig = bytes(grant.get("grant_sig") or b"")
@@ -673,7 +702,9 @@ class Session:
         })]
 
     async def _initiator_send_private_join(self) -> List[SessionEvent]:
-        """World Session initiator: after PROFILE_DECISION, redeem the grant."""
+        """World Session initiator: after PROFILE_DECISION, redeem the grant. The
+        signed grant fields (role/expiry/grant_sig) are echoed back so the host
+        can verify its own signature statelessly."""
         grant = self._grant or {}
         grant_id = grant.get("grant_id_bytes") or b""
         if not grant_id:
@@ -681,10 +712,17 @@ class Session:
         sig_init = await self.conn.sign_with_host_key(self.p2p_name, bytes(grant_id))
         if sig_init is None:
             return [self._fail("private_join_sign_failed")]
+        try:
+            grant_sig = bytes.fromhex(grant.get("grant_sig") or "")
+        except (ValueError, TypeError):
+            grant_sig = b""
         join = SessMsg(SessMsg.KIND_PRIVATE_JOIN, {
             "grant_id": bytes(grant_id),
             "sig_init": sig_init,
             "joiner_node_id": self.local_node_id,
+            "role": int(grant.get("role", 0)),
+            "expiry_unix_ms": int(grant.get("expiry_unix_ms", 0)),
+            "grant_sig": grant_sig,
         })
         if not await self._send_payload(SESSION_WORLD_PROTOCOL, join):
             return [self._fail("private_join_send_failed")]
@@ -704,15 +742,36 @@ class Session:
         })]
 
     async def _responder_on_private_join(self, join: SessMsg) -> List[SessionEvent]:
-        # Verify sig_init over grant_id under the joiner's world-side peer-id.
-        if self.remote_other_peer_id_hint and not await self.conn.verify_peer_signature(
-            self.p2p_name, self.remote_other_peer_id_hint,
-            bytes(join.get("grant_id") or b""), bytes(join.get("sig_init") or b""),
-        ):
+        grant_id = bytes(join.get("grant_id") or b"")
+        role = int(join.get("role") or 0)
+        expiry = int(join.get("expiry_unix_ms") or 0)
+
+        async def _nack(reason_code: int, fail_reason: str) -> List[SessionEvent]:
             await self._send_payload(SESSION_WORLD_PROTOCOL, SessMsg(SessMsg.KIND_PRIVATE_JOIN_ACK, {
-                "accepted": False, "reason_code": NOT_AUTHORIZED, "rendezvous_topic": "",
+                "accepted": False, "reason_code": reason_code, "rendezvous_topic": "",
             }))
-            return [self._fail("private_join_bad_sig")]
+            return [self._fail(fail_reason)]
+
+        if expiry < int(time.time() * 1000):
+            return await _nack(GRANT_EXPIRED, "private_join_grant_expired")
+
+        # Verify OUR OWN grant signature over (grant_id, the peer that actually
+        # dialed, role, expiry): proves we minted this grant for this exact
+        # world-side identity with this role — no server-side stash needed, and a
+        # grant lifted from another joiner cannot be redeemed.
+        if not await self.conn.verify_peer_signature(
+            self.p2p_name, self.local_peer_id,
+            _grant_sign_payload(grant_id, self.peer_id, role, expiry),
+            bytes(join.get("grant_sig") or b""),
+        ):
+            return await _nack(NOT_AUTHORIZED, "private_join_bad_grant_sig")
+
+        # Verify sig_init over grant_id under the joiner's world-side peer-id
+        # (the transport identity of this very Session): proof of key possession.
+        if not await self.conn.verify_peer_signature(
+            self.p2p_name, self.peer_id, grant_id, bytes(join.get("sig_init") or b""),
+        ):
+            return await _nack(NOT_AUTHORIZED, "private_join_bad_sig")
 
         rendezvous_topic = f"world::{self.peer_id}::ps:rv"
         ack = SessMsg(SessMsg.KIND_PRIVATE_JOIN_ACK, {
@@ -727,8 +786,9 @@ class Session:
         return [self._emit(SessionEventType.ESTABLISHED, {
             "profile_b": self.remote_profile,
             "rendezvous_topic": rendezvous_topic,
-            "private_join": {"grant_id": bytes(join.get("grant_id") or b"").hex(),
-                             "joiner_node_id": join.get("joiner_node_id", "")},
+            "private_join": {"grant_id": grant_id.hex(),
+                             "joiner_node_id": join.get("joiner_node_id", ""),
+                             "role": role},
         })]
 
     # ── Control: GOAWAY ──────────────────────────────────────────────────────

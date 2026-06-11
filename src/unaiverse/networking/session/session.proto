@@ -77,7 +77,7 @@ message ProfileDecision {
 
 message WorldGrant {
   bytes grant_id            = 1;  // 32 bytes random
-  bytes grant_sig           = 2;  // Ed25519(world_key, grant_id || joiner_node_id || expiry_unix_ms)
+  bytes grant_sig           = 2;  // Ed25519(world_key, grant_id || joiner_world_peer_id || role_be8 || expiry_be8)
   uint64 expiry_unix_ms     = 3;
   bytes world_profile       = 4;  // serialized WorldProfile JSON
   bytes world_private_peer_record = 5;  // SignedPeerRecord for the world p2p_world peer-id
@@ -91,6 +91,10 @@ message WorldGrantAck {
   bool received             = 1;
 }
 
+// NOTE: PrivateJoin no longer rides protobuf — it moved to the JSON control
+// envelope (see sess_msg.py) when it grew the signed-grant echo fields
+// (role, expiry_unix_ms, grant_sig) that let the world host verify its own
+// grant statelessly at redemption. Kept here for reference only.
 message PrivateJoin {
   bytes grant_id            = 1;
   bytes sig_init            = 2;  // Ed25519(joiner_world_key, grant_id)

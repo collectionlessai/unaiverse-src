@@ -626,6 +626,10 @@ class ConnectionPools:
     # CPython and in Pyodide-over-JS. p2p access is keyed by `p2p_name` (string)
     # because the browser side has no Python `P2P` object. ─────────────────────────
 
+    def get_local_peer_id(self, p2p_name: str) -> str:
+        """Our own libp2p peer-id on the `p2p_name` instance."""
+        return self[p2p_name].peer_id
+
     async def sign_with_host_key(self, p2p_name: str, data: bytes):
         """Ed25519-sign `data` with the host key of the `p2p_name` instance."""
         return self[p2p_name].sign_with_host_key(data)
