@@ -502,6 +502,83 @@ def test_tick_reconnect_initiator_redials_and_sends_resume(alice_conn, alice_pee
     assert last is not None and last[2].kind == SessMsg.KIND_RESUME
 
 
+# ── Out-of-order / duplicate messages ───────────────────────────────────────
+
+def test_profile_offer_in_hello_sent_is_ignored(alice_conn, alice_peer_id, bob_peer_id):
+    """A PROFILE_OFFER arriving while the initiator still waits for HELLO_ACK
+    (replay or broken peer) must be dropped: no state change, no decision sent."""
+    alice_conn.connect_returns = (bob_peer_id, False)
+    sess = _mk(bob_peer_id, SessionRole.INITIATOR, alice_conn, alice_peer_id,
+               addresses=["/ip4/127.0.0.1/tcp/0"])
+    _run(sess.start())
+    assert sess.state == SessionState.HELLO_SENT
+    offer = SessMsg(SessMsg.KIND_PROFILE_OFFER, {
+        "profile": json.dumps({}).encode(), "sig_a": b"sig",
+        "signed_peer_record": b"spr", "session_id": sess.session_id,
+    })
+    events = _run(sess.process_inbound(SESSION_PROFILE_PROTOCOL, offer))
+    assert events == []
+    assert sess.state == SessionState.HELLO_SENT
+    assert _last_sent(alice_conn, SESSION_PROFILE_PROTOCOL) is None
+
+
+def test_duplicate_hello_req_ignored_after_hello_ack_sent(bob_conn, bob_peer_id, alice_peer_id):
+    """A retransmitted HELLO_REQ on a responder already past INIT must not
+    restart the handshake: exactly one HELLO_RESP total, same session_id."""
+    sess = _mk(alice_peer_id, SessionRole.RESPONDER, bob_conn, bob_peer_id)
+    hello = SessMsg(SessMsg.KIND_HELLO_REQ, {
+        "session_id": b"\x01" * 16, "nonce_a": b"\xaa" * 32,
+        "protocol_versions": ["1.0"], "capabilities": 0, "client_id": "test/1.0",
+    })
+    _run(sess.process_inbound(SESSION_HELLO_PROTOCOL, hello))
+    assert sess.state == SessionState.HELLO_ACK_SENT
+    events = _run(sess.process_inbound(SESSION_HELLO_PROTOCOL, hello))
+    assert events == []
+    assert sess.state == SessionState.HELLO_ACK_SENT
+    assert sess.session_id == b"\x01" * 16
+    hello_resps = [e for e in bob_conn.sent
+                   if e[1] == SESSION_HELLO_PROTOCOL and e[2].kind == SessMsg.KIND_HELLO_RESP]
+    assert len(hello_resps) == 1
+
+
+def test_profile_decision_in_established_is_ignored(alice_conn, alice_peer_id, bob_peer_id):
+    """A duplicate PROFILE_DECISION after ESTABLISHED must not emit a second
+    ESTABLISHED event nor overwrite the stored remote profile."""
+    sess = _mk(bob_peer_id, SessionRole.INITIATOR, alice_conn, alice_peer_id)
+    sess._set_state(SessionState.ESTABLISHED, None)
+    sess.remote_profile = {"node_id": "bob-node"}
+    dup = SessMsg(SessMsg.KIND_PROFILE_DECISION, {
+        "accepted": True, "profile_b": json.dumps({"node_id": "evil"}).encode(),
+        "reason_code": OK, "session_id": sess.session_id,
+    })
+    events = _run(sess.process_inbound(SESSION_PROFILE_PROTOCOL, dup))
+    assert events == []
+    assert sess.state == SessionState.ESTABLISHED
+    assert sess.remote_profile == {"node_id": "bob-node"}
+
+
+def test_world_grant_to_plain_initiator_is_ignored(alice_conn, alice_peer_id, bob_peer_id):
+    """A WORLD_GRANT sent to an initiator that did not ask for a world join
+    (is_world_join=False) must be dropped without state change."""
+    alice_conn.connect_returns = (bob_peer_id, False)
+    sess = _mk(bob_peer_id, SessionRole.INITIATOR, alice_conn, alice_peer_id,
+               addresses=["/ip4/127.0.0.1/tcp/0"])
+    _run(sess.start())
+    _run(sess.process_inbound(SESSION_HELLO_PROTOCOL, SessMsg(SessMsg.KIND_HELLO_RESP, {
+        "chosen_version": "1.0", "nonce_b": b"\xbb" * 32, "sig_b": b"sig", "reason_code": OK,
+    })))
+    assert sess.state == SessionState.PROFILE_SENT
+    grant = SessMsg(SessMsg.KIND_WORLD_GRANT, {
+        "grant_id": b"\x05" * 32, "grant_sig": b"sig",
+        "expiry_unix_ms": int(time.time() * 1000) + 30000,
+        "world_profile": b"{}", "world_private_peer_record": b"",
+        "role": 1, "code_bundle": b"", "initial_stats": b"", "rendezvous_tag": 0,
+    })
+    events = _run(sess.process_inbound(SESSION_WORLD_PROTOCOL, grant))
+    assert events == []
+    assert sess.state == SessionState.PROFILE_SENT
+
+
 # ── Silent abort (tie-breaker support) ──────────────────────────────────────
 
 def test_abort_silently_fails_without_event(alice_conn, alice_peer_id, bob_peer_id):
@@ -509,3 +586,40 @@ def test_abort_silently_fails_without_event(alice_conn, alice_peer_id, bob_peer_
     sess._set_state(SessionState.HELLO_SENT, 5.0)
     sess.abort_silently("simultaneous_open_yielded")
     assert sess.state == SessionState.FAILED
+
+
+def test_world_grant_arriving_before_decision_is_buffered(alice_conn, alice_peer_id, bob_peer_id):
+    """WORLD and PROFILE ride different libp2p protocols, so the host's
+    back-to-back DECISION+GRANT can be popped grant-first. The early grant must
+    be buffered and consumed when the decision lands (it used to be dropped,
+    stranding the joiner in awaiting_world_grant until timeout)."""
+    alice_conn.connect_returns = (bob_peer_id, False)
+    sess = Session(
+        peer_id=bob_peer_id, role=SessionRole.INITIATOR, conn=alice_conn,
+        p2p_name=NodeConn.P2P_PUBLIC, local_peer_id=alice_peer_id,
+        local_node_id="local-node", local_profile_factory=lambda: {},
+        addresses=["/ip4/127.0.0.1/tcp/0"], is_world_join=True,
+    )
+    _run(sess.start())
+    _run(sess.process_inbound(SESSION_HELLO_PROTOCOL, SessMsg(SessMsg.KIND_HELLO_RESP, {
+        "chosen_version": "1.0", "nonce_b": b"\xbb" * 32, "sig_b": b"sig", "reason_code": OK,
+    })))
+    assert sess.state == SessionState.PROFILE_SENT
+
+    world_profile = json.dumps({"dynamic": {"private_peer_id": "12D3WorldPriv"}}).encode()
+    grant = SessMsg(SessMsg.KIND_WORLD_GRANT, {
+        "grant_id": b"\x05" * 32, "grant_sig": b"sig",
+        "expiry_unix_ms": int(time.time() * 1000) + 30000,
+        "world_profile": world_profile, "world_private_peer_record": b"",
+        "role": 3, "code_bundle": b"", "initial_stats": b"", "rendezvous_tag": 0,
+    })
+    events = _run(sess.process_inbound(SESSION_WORLD_PROTOCOL, grant))
+    assert events == []
+    assert sess.state == SessionState.PROFILE_SENT  # buffered, not applied yet
+
+    events = _run(sess.process_inbound(SESSION_PROFILE_PROTOCOL, SessMsg(SessMsg.KIND_PROFILE_DECISION, {
+        "accepted": True, "profile_b": b"{}", "reason_code": OK, "session_id": sess.session_id,
+    })))
+    assert sess.state == SessionState.ESTABLISHED
+    established = [e for e in events if e.type == SessionEventType.ESTABLISHED]
+    assert established and established[0].data.get("world_grant") is not None

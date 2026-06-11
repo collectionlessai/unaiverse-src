@@ -135,11 +135,16 @@ class FakeConn:
         # Record the outbound call exactly as it was made (peer_id == destination).
         self.sent.append((peer_id, protocol_id, sess_msg))
         if self.send_inbox is not None:
-            # The other side's pop_messages reports the SENDER, not the destination.
-            self.send_inbox.append((self.my_peer_id, protocol_id, sess_msg))
+            # The other side's pop_messages reports the SENDER, not the
+            # destination — and the sender identity is per-instance (a node's
+            # world sends carry its world peer-id).
+            self.send_inbox.append((self._p2p(p2p_name).peer_id, protocol_id, sess_msg))
         return True
 
-    # ── Async crypto / ping interface (mirrors ConnectionPools) ──────────────
+    # ── Crypto / ping / identity interface (mirrors ConnectionPools) ─────────
+    def get_local_peer_id(self, p2p_name: str) -> str:
+        return self._p2p(p2p_name).peer_id
+
     async def sign_with_host_key(self, p2p_name: str, data: bytes):
         return self._p2p(p2p_name).sign_with_host_key(data)
 
@@ -239,6 +244,33 @@ def make_session():
     return _make_session
 
 
+async def apump(inbox: deque, sm) -> list:
+    """Drain everything currently in `inbox` into `sm.deliver` from within an
+    already-running event loop. Unlike `_pump_call` (one asyncio.run per
+    message), this keeps the loop alive, so the fire-and-forget tasks spawned
+    by tick_keepalive / tick_reconnect survive across pumps. Returns the
+    concatenated list of SessionEvents."""
+    events = []
+    while inbox:
+        peer_id, protocol_id, payload = inbox.popleft()
+        events.extend(await sm.deliver(peer_id, protocol_id, payload))
+    return events
+
+
+async def establish_pair(sm_initiator, sm_responder, initiator_inbox, responder_inbox,
+                         responder_peer_id, addresses=None):
+    """Drive the standard 4-message HELLO+PROFILE handshake to ESTABLISHED on
+    both sides. The initiator's FakeConn must already have `connect_returns`
+    set to a successful dial. Returns (initiator_events, responder_events) as
+    emitted on the final two pumps (each should contain one ESTABLISHED)."""
+    await sm_initiator.initiate(responder_peer_id, addresses or ["/ip4/127.0.0.1/tcp/0"])
+    await apump(responder_inbox, sm_responder)                       # HELLO → HELLO_ACK
+    await apump(initiator_inbox, sm_initiator)                       # HELLO_ACK → PROFILE_OFFER
+    responder_events = await apump(responder_inbox, sm_responder)    # OFFER → DECISION (+ESTABLISHED)
+    initiator_events = await apump(initiator_inbox, sm_initiator)    # DECISION (+ESTABLISHED)
+    return initiator_events, responder_events
+
+
 def pump_once(inbox: deque, sm) -> int:
     """Drain *one* message from inbox into the given SessionManager. Returns
     the number of events emitted (caller can inspect events via SM accessors
@@ -282,8 +314,11 @@ def real_nodes(_libp2p_setup, tmp_path):
     created = []
 
     class _Factory:
-        def node(self, name: str):
-            p2p, conn, sm = build_real_node(str(tmp_path / f"id-{name}"), node_id=name)
+        def node(self, name: str, port: int = 0):
+            # Same `name` → same identity_dir → same peer-id: rebuilding a node
+            # with a fixed port simulates a peer restart (fresh SessionManager,
+            # same network identity). Port 0 lets the OS pick.
+            p2p, conn, sm = build_real_node(str(tmp_path / f"id-{name}"), port=port, node_id=name)
             created.append(p2p)
             return p2p, conn, sm
 

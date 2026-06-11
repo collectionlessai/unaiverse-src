@@ -16,8 +16,13 @@ import pytest
 from unaiverse.networking.node.connpool import NodeConn
 
 
-def _profile_factory(peer_id: str):
-    return lambda: {"node_id": peer_id, "test": True}
+def _profile_factory(node_id: str, world_peer_id: str | None = None):
+    """Real-shaped enough for the grant flow: the world host binds the grant
+    signature to the joiner's ``dynamic.private_peer_id``."""
+    profile = {"node_id": node_id, "test": True}
+    if world_peer_id is not None:
+        profile["dynamic"] = {"private_peer_id": world_peer_id}
+    return lambda: profile
 
 
 def build_real_node(identity_dir: str, port: int = 0, listen_ip: str = "0.0.0.0",
@@ -44,7 +49,7 @@ def build_real_node(identity_dir: str, port: int = 0, listen_ip: str = "0.0.0.0"
                     is_world_node=False, public_key=None, token=None)
     sm = SessionManager(
         conn=conn, p2p_name=NodeConn.P2P_PUBLIC, local_peer_id=p2p.peer_id,
-        local_node_id=nid, local_profile_factory=_profile_factory(p2p.peer_id),
+        local_node_id=nid, local_profile_factory=_profile_factory(p2p.peer_id, p2p.peer_id),
     )
     return p2p, conn, sm
 
@@ -72,16 +77,16 @@ def build_real_world_node(idir_pub: str, idir_world: str, decision_hook=None,
 
     conn = NodeConn(max_connections=16, p2p_u=p2p_pub, p2p_w=p2p_world,
                     is_world_node=False, public_key=None, token=None)
-    # The profile's node_id must equal local_node_id: the world host binds the
-    # WorldGrant signature to the node_id advertised in the joiner's profile, and
-    # the joiner verifies it against its own local_node_id.
+    # The profile must advertise the world-side peer-id: the world host binds the
+    # WorldGrant signature to the joiner's dynamic.private_peer_id, and verifies
+    # it again at PRIVATE_JOIN against the peer that actually dialed.
     sm_pub = SessionManager(conn=conn, p2p_name=NodeConn.P2P_PUBLIC,
                             local_peer_id=p2p_pub.peer_id, local_node_id=node_id,
-                            local_profile_factory=_profile_factory(node_id),
+                            local_profile_factory=_profile_factory(node_id, p2p_world.peer_id),
                             decision_hook=decision_hook)
     sm_world = SessionManager(conn=conn, p2p_name=NodeConn.P2P_WORLD,
                               local_peer_id=p2p_world.peer_id, local_node_id=node_id,
-                              local_profile_factory=_profile_factory(node_id),
+                              local_profile_factory=_profile_factory(node_id, p2p_world.peer_id),
                               decision_hook=decision_hook)
     return p2p_pub, p2p_world, conn, sm_pub, sm_world
 
