@@ -2406,9 +2406,20 @@ class Node:
                     log.error(f"[session] __join_agent failed for {ev.peer_id[-5:]}…: {e}")
             return
 
-        # ── Initiator on the WORLD instance: we joined a world ────────────────
+        # ── Initiator on the WORLD instance ───────────────────────────────────
         if ev.role == SessionRole.INITIATOR and is_world:
             grant = getattr(self._sm_world.get_session(ev.peer_id), "_grant", None)
+            if grant is None and ev.peer_id not in self._world_to_public:
+                # In-world agent-to-agent connection (connect_to/connect_by_role):
+                # same enrolment as the public initiator path. Only the handoff
+                # Session to the world host carries a grant.
+                if profile_b is not None:
+                    try:
+                        await self.__join_agent(profile=NodeProfile.from_dict(profile_b), peer_id=ev.peer_id)
+                    except Exception as e:
+                        log.error(f"[session] __join_agent failed for {ev.peer_id[-5:]}…: {e}")
+                return
+            # We joined a world: run the join body and retire the public Session.
             ok = False
             try:
                 ok = await self._join_world_after_session(ev.peer_id, ev.data, grant)
@@ -2423,8 +2434,10 @@ class Node:
                 self._pending_world_handoff.pop(public_peer_id, None)
             return
 
-        # ── Responder on the PUBLIC instance: an agent connected to us ────────
-        if ev.role == SessionRole.RESPONDER and not is_world:
+        # ── Responder on an agent node (public or in-world peer connection) ───
+        # On a world host the world-side responder is the grant-redemption path
+        # handled below; everything else lands here.
+        if ev.role == SessionRole.RESPONDER and (not is_world or self.node_type is not Node.WORLD):
             if profile_b is not None and self.node_type is Node.AGENT:
                 try:
                     if not (await self.hosted.add_agent(peer_id=ev.peer_id,

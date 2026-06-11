@@ -121,7 +121,7 @@ def _build_node(identity_dir: str, port: int, listen_ip: str = "0.0.0.0"):
         conn=conn,
         p2p_name=NodeConn.P2P_PUBLIC,
         local_peer_id=p2p.peer_id,
-        local_node_id="runner-" + p2p.peer_id[-8:],
+        local_node_id="runner-" + p2p.peer_id[-5:],
         local_profile_factory=lambda: {"node_id": p2p.peer_id, "runner": True},
     )
     return p2p, conn, sm
@@ -152,7 +152,7 @@ async def _drain_loop(conn, sm, stop_event: asyncio.Event):
 
 
 def _print_event(ev) -> None:
-    log.session(f"[SessionEvent] {ev.type.value:<12} peer={ev.peer_id[:12]}… "
+    log.session(f"[SessionEvent] {ev.type.value:<12} peer={ev.peer_id[-5:]}… "
                 f"session={ev.session_id[:8]}… role={ev.role.value:<9} data={ev.data}")
 
 

@@ -76,6 +76,61 @@ def test_inbound_handshake_through_node_pump_calls_add_agent():
     asyncio.run(_scenario())
 
 
+def test_inworld_inbound_agent_connection_calls_add_agent():
+    """An agent-to-agent handshake on the WORLD instance (a world member
+    connecting to us) must enrol the peer exactly like the public path: the
+    responder branch is not reserved to world hosts."""
+    async def _scenario():
+        node, conn = build_agent_node_shell(NODE_PEER)
+        remote_sm, remote_conn, remote_inbox = make_remote_peer(
+            REMOTE_PEER, "remote-node", conn.inbox_by_p2p[NodeConn.P2P_WORLD],
+            p2p_name=NodeConn.P2P_WORLD)
+        conn.send_inbox = remote_inbox
+        remote_conn.connect_returns = (NODE_PEER + "-w", False)
+
+        await remote_sm.initiate(NODE_PEER + "-w", ["/ip4/127.0.0.1/tcp/0"])
+        await node._Node__handle_network_messages()   # HELLO → HELLO_ACK
+        await apump(remote_inbox, remote_sm)          # HELLO_ACK → PROFILE_OFFER
+        await node._Node__handle_network_messages()   # OFFER → decision (+ESTABLISHED)
+        remote_events = await apump(remote_inbox, remote_sm)
+
+        assert [e.type for e in remote_events] == [SessionEventType.ESTABLISHED]
+        assert node._sm_world.is_established(REMOTE_PEER)
+        assert len(node.hosted.added) == 1
+        assert node.hosted.added[0][0] == REMOTE_PEER
+
+    asyncio.run(_scenario())
+
+
+def test_inworld_outbound_agent_connection_joins_agent():
+    """An initiator Session on the WORLD instance without a grant is an in-world
+    agent-to-agent connection (connect_to/connect_by_role): ESTABLISHED must run
+    __join_agent, not the world-join body."""
+    async def _scenario():
+        node, conn = build_agent_node_shell(NODE_PEER)
+        remote_sm, remote_conn, remote_inbox = make_remote_peer(
+            REMOTE_PEER, "remote-node", conn.inbox_by_p2p[NodeConn.P2P_WORLD],
+            p2p_name=NodeConn.P2P_WORLD)
+        conn.send_inbox = remote_inbox
+        conn.connect_returns = (REMOTE_PEER, False)
+
+        ok = await node.connect_via_session(peer_id=REMOTE_PEER,
+                                            addresses=["/ip4/127.0.0.1/tcp/0"],
+                                            p2p_name=NodeConn.P2P_WORLD)
+        assert ok
+        await apump(remote_inbox, remote_sm)          # HELLO → HELLO_ACK
+        await node._Node__handle_network_messages()   # HELLO_ACK → PROFILE_OFFER
+        await apump(remote_inbox, remote_sm)          # OFFER → DECISION
+        await node._Node__handle_network_messages()   # DECISION → ESTABLISHED dispatch
+
+        assert node._sm_world.is_established(REMOTE_PEER)
+        assert len(node.hosted.added) == 1
+        assert node.hosted.added[0][0] == REMOTE_PEER
+        assert node._pending_world_handoff == {} and node._world_to_public == {}
+
+    asyncio.run(_scenario())
+
+
 def test_decision_hook_rejects_node_not_in_allow_list():
     """With an allow-list set, a non-listed node-id must be rejected with
     NOT_IN_ALLOW_LIST and never reach add_agent."""
