@@ -181,43 +181,53 @@ func readFromSubscription(
 	}
 }
 
+// promoteFriendlyPeer records (or address-refreshes) a peer in friendlyPeers,
+// the map GetConnectedPeers reports from. Chat streams have always done this on
+// their first message (see handleStream); Session-protocol traffic must do it
+// too — on both the sending and the receiving side — otherwise a peer whose
+// only traffic is the Session handshake/keep-alive never surfaces to the
+// application connection pools.
+func promoteFriendlyPeer(ni *NodeInstance, peerID peer.ID, direction string, fallbackAddr ma.Multiaddr) {
+	ni.peersMutex.Lock()
+	defer ni.peersMutex.Unlock()
+	knownAddrs := ni.host.Peerstore().Addrs(peerID)
+	if len(knownAddrs) == 0 && fallbackAddr != nil {
+		knownAddrs = []ma.Multiaddr{fallbackAddr}
+	}
+	if existing, ok := ni.friendlyPeers[peerID]; ok {
+		// Keep ConnectedAt and Direction from the original first contact.
+		existing.Addrs = knownAddrs
+		ni.friendlyPeers[peerID] = existing
+		return
+	}
+	ni.friendlyPeers[peerID] = ExtendedPeerInfo{
+		ID:          peerID,
+		Addrs:       knownAddrs,
+		ConnectedAt: time.Now(),
+		Direction:   direction,
+		Relayed:     false,
+	}
+	logger.Infof("[GO] ➕ Instance %d: Peer %s promoted to App Peer (%s).", ni.instanceIndex, peerID, direction)
+}
+
+// connDirection maps a stream's underlying connection direction to the
+// "inbound"/"outbound" labels the Python pool routing expects.
+func connDirection(s network.Stream) string {
+	if s.Conn().Stat().Direction == network.DirOutbound {
+		return "outbound"
+	}
+	return "inbound"
+}
+
 // handleStream reads from a direct message stream on the UnaiverseChatProtocol using the new framing protocol.
 // It expects the stream to start with a 4-byte length prefix, followed by a 1-byte channel name length,
 // the channel name itself, and finally the Protobuf-encoded payload.
 func handleStream(ni *NodeInstance, s network.Stream) {
 	senderPeerID := s.Conn().RemotePeer()
 	streamID := s.ID()
-	ni.peersMutex.Lock()
-	existingPeer, peerExists := ni.friendlyPeers[senderPeerID]
-
-	// 1. Gather fresh info (Addresses & Direction)
-	direction := "inbound"
-	if s.Stat().Direction == network.DirOutbound {
-		direction = "outbound"
-	}
-	knownAddrs := ni.host.Peerstore().Addrs(senderPeerID)
-	if len(knownAddrs) == 0 {
-		knownAddrs = []ma.Multiaddr{s.Conn().RemoteMultiaddr()}
-	}
-
-	if !peerExists {
-		// CASE A: New Application Peer
-		ni.friendlyPeers[senderPeerID] = ExtendedPeerInfo{
-			ID:          senderPeerID,
-			Addrs:       knownAddrs,
-			ConnectedAt: time.Now(),
-			Direction:   direction,
-			Relayed:     false,
-		}
-		logger.Infof("[GO] ➕ Instance %d: Peer %s promoted to App Peer via Stream %s (Incoming).", ni.instanceIndex, senderPeerID, streamID)
-	} else {
-		// CASE B: Existing Peer - Update Addresses
-		// We keep ConnectedAt and Direction from the original session start.
-		existingPeer.Addrs = knownAddrs
-		ni.friendlyPeers[senderPeerID] = existingPeer
-		logger.Debugf("[GO] 🔄 Instance %d: Refreshed addresses for Peer %s via Stream %s.", ni.instanceIndex, senderPeerID, streamID)
-	}
-	ni.peersMutex.Unlock()
+	// Delegate peer promotion and address updates to the helper function.
+	// This safely handles the mutex locking and state management for us.
+	promoteFriendlyPeer(ni, senderPeerID, connDirection(s), s.Conn().RemoteMultiaddr())
 	logger.Debugf("[GO] 📥 Instance %d: Accepted INCOMING stream %s from %s. Storing for duplex use.\n", ni.instanceIndex, streamID, senderPeerID)
 
 	// Store the newly accepted stream so we can use it to send messages back to this peer.
@@ -263,6 +273,12 @@ func handleStream(ni *NodeInstance, s network.Stream) {
 		var channelLen uint8
 		if err := binary.Read(s, binary.BigEndian, &channelLen); err != nil {
 			logger.Errorf("[GO] ❌ Instance %d: Error reading channel len from Stream %s: %v\n", ni.instanceIndex, streamID, err)
+			return
+		}
+
+		if totalLen <= uint32(channelLen) + 1 {
+			logger.Errorf("[GO] ❌ Instance %d: Total length %d too short for channel header on Stream %s, preventing underflow. Resetting.\n", ni.instanceIndex, totalLen, streamID)
+			s.Reset()
 			return
 		}
 
@@ -331,6 +347,9 @@ func handleSessionStream(ni *NodeInstance, s network.Stream, protocolID string) 
 	senderPeerID := s.Conn().RemotePeer()
 	streamID := s.ID()
 	defer s.Close()
+
+	// Session traffic is application traffic: surface the peer to the pools.
+	promoteFriendlyPeer(ni, senderPeerID, connDirection(s), s.Conn().RemoteMultiaddr())
 
 	// Per-stream read budget — keeps a slow / malicious peer from holding the stream
 	// open indefinitely. The Session FSM enforces its own per-stage timeouts on the

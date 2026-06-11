@@ -77,6 +77,11 @@ func SendOnProtocol(
 	if err != nil {
 		return C.CString(jsonErrorResponse(fmt.Sprintf("SendOnProtocol: NewStream(%s, %s) failed", pid, protocolIDStr), err))
 	}
+	// The sending side of Session traffic must surface the peer to the pools
+	// too (the receiving side does it in handleSessionStream). ConnectTo stays
+	// promotion-free on purpose: it also dials relays, which must never enter
+	// the application pools.
+	promoteFriendlyPeer(ni, pid, connDirection(s), s.Conn().RemoteMultiaddr())
 	// Best-effort: keep the read side open so a responder reply can come back on
 	// THIS stream if the peer ever decides to write before we close — for now
 	// responses arrive on a *fresh* inbound stream, so we just half-close write.
