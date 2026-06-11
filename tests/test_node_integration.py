@@ -131,6 +131,60 @@ def test_inworld_outbound_agent_connection_joins_agent():
     asyncio.run(_scenario())
 
 
+def test_world_session_goaway_triggers_full_world_leave():
+    """A terminal event on the Session toward the CURRENT world host must run
+    the full leave_world cleanup (profile, world lists, role restore), not a
+    plain purge: otherwise in_world() stays True and the agent keeps acting
+    against a dead world (stats sender, behaviors)."""
+    async def _scenario():
+        from unaiverse.agent import Agent
+        from unaiverse.networking.session.sess_msg import WORLD_DISENGAGEMENT
+
+        node, conn = build_agent_node_shell(NODE_PEER)
+        remote_sm, remote_conn, remote_inbox = make_remote_peer(
+            REMOTE_PEER, "world-host", conn.inbox_by_p2p[NodeConn.P2P_WORLD],
+            p2p_name=NodeConn.P2P_WORLD)
+        conn.send_inbox = remote_inbox
+        conn.connect_returns = (REMOTE_PEER, False)
+
+        ok = await node.connect_via_session(peer_id=REMOTE_PEER,
+                                            addresses=["/ip4/127.0.0.1/tcp/0"],
+                                            p2p_name=NodeConn.P2P_WORLD)
+        assert ok
+        await apump(remote_inbox, remote_sm)
+        await node._Node__handle_network_messages()
+        await apump(remote_inbox, remote_sm)
+        await node._Node__handle_network_messages()
+        assert node._sm_world.is_established(REMOTE_PEER)
+
+        # Mark the remote as our current world host (what __join_world records).
+        dyn = node.profile.get_dynamic_profile()
+        dyn['connections']['world_peer_id'] = REMOTE_PEER
+        conn.set_world(REMOTE_PEER)
+
+        # The world host tears the session down gracefully (GOAWAY).
+        await remote_sm.close_session(NODE_PEER + "-w", WORLD_DISENGAGEMENT)
+        await node._Node__handle_network_messages()
+
+        assert dyn['connections']['world_peer_id'] is None
+        assert conn.set_world_calls[-1] is None
+        assert getattr(conn, "removed_all_world_agents", 0) == 1
+        assert node.hosted.world_data_clears == 1
+        assert node.hosted.accepted_roles[-1] == Agent.ROLE_PUBLIC
+        assert node.hosted.behav.actionable is node.hosted
+        assert node.hosted.im.agent is node.hosted
+
+        # A later terminal event for the same peer must NOT re-run the leave
+        # (world_peer_id is gone): it falls back to the plain purge path.
+        late = SessionEvent(type=SessionEventType.LOST, session_id="00" * 8,
+                            peer_id=REMOTE_PEER, role=SessionRole.INITIATOR,
+                            p2p_name=NodeConn.P2P_WORLD, data={"reason": "liveness_timeout"})
+        await node._dispatch_session_event(late)
+        assert node.hosted.world_data_clears == 1
+
+    asyncio.run(_scenario())
+
+
 def test_decision_hook_rejects_node_not_in_allow_list():
     """With an allow-list set, a non-listed node-id must be rejected with
     NOT_IN_ALLOW_LIST and never reach add_agent."""

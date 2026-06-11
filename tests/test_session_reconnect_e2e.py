@@ -7,9 +7,9 @@ at a time: RESUME round-trips, the RESUME-NACK → full re-handshake fallback,
 grace expiry → LOST + quarantine, and the manager-level SESSION_UNKNOWN
 replies a restarted peer sends on behalf of sessions it no longer holds.
 
-Every test runs as a single coroutine under one asyncio.run so the
-fire-and-forget tasks spawned by tick_reconnect / tick_keepalive can complete
-(the one-run-per-call pump pattern would tear the loop down under them).
+Every test runs as a single coroutine under one asyncio.run, mirroring how the
+node's main loop drives the SessionManagers (re-dial and PING run inline within
+the tick).
 """
 
 import time

@@ -16,10 +16,11 @@ The FSM is *synchronous* with async send helpers: ``process_inbound()`` and
 ``process_inbound()`` is async only because some transitions need to
 ``await conn.send_session()`` / ``await conn.<crypto>()``.
 
-No asyncio.Queue, no background Task for the FSM — the polling loop drives it.
-The single exception is the keep-alive ping, which runs in a fire-and-forget
-``asyncio.create_task`` and posts its result back into a tiny single-writer
-queue drained on the next ``tick_keepalive()`` call.
+No asyncio.Queue, no background Task at all — the polling loop drives
+everything, and all I/O (sends, keep-alive PING, re-dial + RESUME) happens
+inline at the polling points (``deliver`` / ``tick``). Fire-and-forget tasks
+are deliberately avoided: they only start when the event loop regains control,
+which a mostly-synchronous main loop cannot guarantee.
 
 Portability (CPython + Pyodide)
 -------------------------------
@@ -281,7 +282,6 @@ class Session:
         self._reconnect_substep: str = ""   # "" | "redial" | "resume_sent"
         self._reconnect_attempts: int = 0
         self._next_redial_at: float = 0.0   # monotonic gate, set/advanced by tick_reconnect
-        self._redial_in_flight: bool = False
         self._resume_nonce: bytes = b""
 
         # World-join specifics.
@@ -1016,11 +1016,12 @@ class Session:
 
     # ── Session-level keep-alive (PING/PONG over the control protocol) ───────
 
-    def tick_keepalive(self, now: Optional[float] = None) -> Optional[SessionEvent]:
-        """Time out an unanswered ping, then schedule a new one if due. The PONG
+    async def tick_keepalive(self, now: Optional[float] = None) -> Optional[SessionEvent]:
+        """Time out an unanswered ping, then send a new one if due. The PONG
         itself is handled inbound (_on_pong). Returns at most one SessionEvent
-        (RECONNECTING on the miss threshold). Sync + non-blocking: the only async
-        work is a fire-and-forget control-protocol send."""
+        (RECONNECTING on the miss threshold). The PING is sent inline: a
+        fire-and-forget task would only start when the loop yields, which the
+        mostly-synchronous main loop cannot guarantee."""
         if now is None:
             now = time.monotonic()
 
@@ -1042,12 +1043,12 @@ class Session:
             self._ping_in_flight = True
             self._ping_nonce = secrets.token_bytes(8)
             self._ping_deadline = now + _PING_RTT_TIMEOUT_S
-            asyncio.create_task(self._send_ping())
+            await self._send_ping()
         return None
 
     async def _send_ping(self) -> None:
-        """Fire-and-forget keep-alive PING; a send failure would otherwise be
-        invisible until it surfaces as a ping miss, so log it here."""
+        """Keep-alive PING; a send failure would otherwise be invisible until
+        it surfaces as a ping miss, so log it here."""
         if not await self._send_payload(SESSION_CONTROL_PROTOCOL, SessMsg(SessMsg.KIND_PING, {
             "session_id": self.session_id, "nonce": self._ping_nonce,
         })):
@@ -1055,12 +1056,13 @@ class Session:
 
     # ── Active re-dial + RESUME (initiator-driven recovery) ──────────────────
 
-    def tick_reconnect(self, now: Optional[float] = None) -> Optional[SessionEvent]:
-        """Drive active re-dial + RESUME while RECONNECTING. Sync + non-blocking:
-        it only schedules a fire-and-forget re-dial task (never sleeps). Only an
-        initiator with known addresses can re-dial; a responder rides the grace
-        timer to LOST and is re-handshaked by the peer. Always returns None — the
-        RESUMED/LOST/FAILED events surface via _on_resume_ack / check_timeout."""
+    async def tick_reconnect(self, now: Optional[float] = None) -> Optional[SessionEvent]:
+        """Drive active re-dial + RESUME while RECONNECTING (at most one attempt
+        per backoff window, run inline — see tick_keepalive for why no task).
+        Only an initiator with known addresses can re-dial; a responder rides the
+        grace timer to LOST and is re-handshaked by the peer. Always returns
+        None — the RESUMED/LOST/FAILED events surface via _on_resume_ack /
+        check_timeout."""
         if now is None:
             now = time.monotonic()
         if self.state != SessionState.RECONNECTING:
@@ -1070,46 +1072,39 @@ class Session:
         # A RESUME that wasn't acked within its window → fall back to another re-dial.
         if self._reconnect_substep == "resume_sent" and now >= self._next_redial_at:
             self._reconnect_substep = "redial"
-        if (self._reconnect_substep == "redial" and not self._redial_in_flight and
-                now >= self._next_redial_at):
-            self._redial_in_flight = True
-            asyncio.create_task(self._redial_and_resume())
+        if self._reconnect_substep == "redial" and now >= self._next_redial_at:
+            await self._redial_and_resume()
         return None
 
     async def _redial_and_resume(self) -> None:
         """Re-dial the peer; on success send a RESUME bound to the current
-        session_id. Fire-and-forget — outcome is observed on the next tick /
-        inbound RESUME_ACK. Backoff is stored in _next_redial_at, never slept."""
+        session_id. Outcome is observed on the next tick / inbound RESUME_ACK.
+        Backoff is stored in _next_redial_at, never slept."""
         try:
-            if self.state != SessionState.RECONNECTING:
-                return
-            try:
-                peer_id, through_relay = await self.conn.connect(self.addresses, p2p_name=self.p2p_name)
-            except Exception as e:
-                log.error(f"{self!r} reconnect dial raised: {e}", sub=self._sub)
-                peer_id, through_relay = None, False
-            if self.state != SessionState.RECONNECTING:
-                return  # grace expired (→ LOST) or otherwise advanced while awaiting
-            if peer_id is not None and through_relay and self._reject_relay:
-                peer_id = None  # relay-only reconnect disallowed; treat as a failed dial
-            if peer_id is None:
-                self._reconnect_attempts += 1
-                delay = min(_RETRY_BASE_S * (2 ** (self._reconnect_attempts - 1)), _RETRY_CAP_S)
-                self._next_redial_at = time.monotonic() + delay
-                log.session(f"{self!r} reconnect dial failed, next try in {delay:.1f}s", sub=self._sub)
-                return
-            if peer_id != self.peer_id:
-                self.peer_id = peer_id
-            # Transport back — try to resume the existing session before re-handshaking.
-            self._resume_nonce = secrets.token_bytes(8)
-            self._reconnect_substep = "resume_sent"
-            self._next_redial_at = time.monotonic() + _RESUME_ACK_TIMEOUT_S
-            await self._send_payload(SESSION_CONTROL_PROTOCOL, SessMsg(SessMsg.KIND_RESUME, {
-                "session_id": self.session_id, "nonce": self._resume_nonce,
-            }))
-            log.session(f"{self!r} reconnect dial ok, RESUME sent", sub=self._sub)
-        finally:
-            self._redial_in_flight = False
+            peer_id, through_relay = await self.conn.connect(self.addresses, p2p_name=self.p2p_name)
+        except Exception as e:
+            log.error(f"{self!r} reconnect dial raised: {e}", sub=self._sub)
+            peer_id, through_relay = None, False
+        if self.state != SessionState.RECONNECTING:
+            return  # grace expired (→ LOST) or otherwise advanced while awaiting
+        if peer_id is not None and through_relay and self._reject_relay:
+            peer_id = None  # relay-only reconnect disallowed; treat as a failed dial
+        if peer_id is None:
+            self._reconnect_attempts += 1
+            delay = min(_RETRY_BASE_S * (2 ** (self._reconnect_attempts - 1)), _RETRY_CAP_S)
+            self._next_redial_at = time.monotonic() + delay
+            log.session(f"{self!r} reconnect dial failed, next try in {delay:.1f}s", sub=self._sub)
+            return
+        if peer_id != self.peer_id:
+            self.peer_id = peer_id
+        # Transport back — try to resume the existing session before re-handshaking.
+        self._resume_nonce = secrets.token_bytes(8)
+        self._reconnect_substep = "resume_sent"
+        self._next_redial_at = time.monotonic() + _RESUME_ACK_TIMEOUT_S
+        await self._send_payload(SESSION_CONTROL_PROTOCOL, SessMsg(SessMsg.KIND_RESUME, {
+            "session_id": self.session_id, "nonce": self._resume_nonce,
+        }))
+        log.session(f"{self!r} reconnect dial ok, RESUME sent", sub=self._sub)
 
     # ── Internal FSM helpers ──────────────────────────────────────────────────
 

@@ -50,8 +50,26 @@ def full_profile_dict(node_id: str, **dynamic_overrides) -> dict:
     return {"static": static, "dynamic": dynamic, "cv": []}
 
 
+class _FakeBehav:
+    """The HSM slice leave()'s agent-restore path touches."""
+
+    def __init__(self):
+        self.actionable = None
+
+    def set_actionable(self, agent):
+        self.actionable = agent
+
+
+class _FakeRef:
+    """Bare object with a rebindable .agent (stands in for im / proc)."""
+
+    def __init__(self):
+        self.agent = None
+
+
 class FakeHosted:
-    """Stands in for the hosted Agent: records add/remove calls."""
+    """Stands in for the hosted Agent: records add/remove calls plus the
+    surface Node.leave() touches when tearing down a world membership."""
 
     HUMAN = "human"
 
@@ -60,6 +78,16 @@ class FakeHosted:
         self.added = []           # (peer_id, profile)
         self.removed = []         # peer_id
         self.all_agents = {}
+        # leave()/world-teardown surface
+        self.world_profile = None
+        self.policy_filter = None
+        self.policy_filter_lone_wolf = None
+        self.im = _FakeRef()
+        self.proc = _FakeRef()
+        self.behav = _FakeBehav()
+        self.behav_lone_wolf = _FakeBehav()
+        self.accepted_roles = []
+        self.world_data_clears = 0
 
     async def add_agent(self, peer_id, profile):
         self.added.append((peer_id, profile))
@@ -71,6 +99,15 @@ class FakeHosted:
         self.removed.append(peer_id)
         self.all_agents.pop(peer_id, None)
         return True
+
+    async def clear_world_related_data(self):
+        self.world_data_clears += 1
+
+    def accept_new_role(self, role):
+        self.accepted_roles.append(role)
+
+    def set_policy_filter(self, policy_filter, public=False):
+        pass
 
 
 class FakeNodeProfile:
@@ -204,6 +241,18 @@ class NodeFakeConn(FakeConn):
         self.world_agents_set.discard(peer_id)
         self.world_masters_set.discard(peer_id)
         self.world_roles.pop(peer_id, None)
+
+    def set_world_agents_list(self, peer_ids):
+        self.world_agents_set = set(peer_ids) if peer_ids else set()
+
+    def set_world_masters_list(self, peer_ids):
+        self.world_masters_set = set(peer_ids) if peer_ids else set()
+
+    async def remove_all_world_agents(self):
+        self.removed_all_world_agents = getattr(self, "removed_all_world_agents", 0) + 1
+
+    def reset_rendezvous_tag(self):
+        pass
 
     def set_addresses_in_peer_info(self, peer_id, addresses):
         self.addresses_set.append((peer_id, addresses))

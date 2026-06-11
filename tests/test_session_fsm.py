@@ -326,10 +326,10 @@ def test_tick_keepalive_sends_session_ping_when_due(alice_conn, alice_peer_id, b
         sess._set_state(SessionState.ESTABLISHED, None)
         sess.session_id = b"\x01" * 16
         sess._last_ping_at = time.monotonic() - 30.0   # well past 15s threshold
-        ev = sess.tick_keepalive()
+        ev = await sess.tick_keepalive()
         assert ev is None
         assert sess._ping_in_flight is True
-        await asyncio.sleep(0.05)   # let the fire-and-forget send run
+        # The PING is sent inline by the tick: no extra loop yield needed.
         return sess
     sess = asyncio.run(_runner())
     last = _last_sent(alice_conn, SESSION_CONTROL_PROTOCOL)
@@ -376,12 +376,12 @@ def test_keepalive_two_misses_trigger_reconnecting(alice_conn, alice_peer_id, bo
     sess._ping_in_flight = True
     sess._ping_deadline = now - 1.0
     sess._last_ping_at = now            # not due to send a fresh one this tick
-    ev = sess.tick_keepalive(now)
+    ev = _run(sess.tick_keepalive(now))
     assert ev is None and sess._consecutive_ping_failures == 1
     # Second miss.
     sess._ping_in_flight = True
     sess._ping_deadline = now - 1.0
-    ev = sess.tick_keepalive(now)
+    ev = _run(sess.tick_keepalive(now))
     assert ev is not None and ev.type == SessionEventType.RECONNECTING
     assert sess.state == SessionState.RECONNECTING
 
@@ -479,7 +479,7 @@ def test_tick_reconnect_responder_does_not_redial(bob_conn, bob_peer_id, alice_p
     """A responder (no addresses) cannot re-dial; it rides the grace timer to LOST."""
     sess = _mk(alice_peer_id, SessionRole.RESPONDER, bob_conn, bob_peer_id)
     sess._set_state(SessionState.RECONNECTING, 10.0)
-    assert sess.tick_reconnect() is None
+    assert _run(sess.tick_reconnect()) is None
     assert bob_conn.connect_calls == []
 
 
@@ -492,8 +492,8 @@ def test_tick_reconnect_initiator_redials_and_sends_resume(alice_conn, alice_pee
         sess._set_state(SessionState.RECONNECTING, 45.0)
         sess._reconnect_substep = "redial"
         sess._next_redial_at = 0.0
-        sess.tick_reconnect()
-        await asyncio.sleep(0.05)   # let the fire-and-forget re-dial+resume run
+        # The re-dial + RESUME runs inline within the tick: no loop yield needed.
+        await sess.tick_reconnect()
         return sess
     sess = asyncio.run(_runner())
     assert alice_conn.connect_calls          # a re-dial happened

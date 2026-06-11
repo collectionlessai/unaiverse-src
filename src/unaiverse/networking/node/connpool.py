@@ -255,7 +255,9 @@ class ConnectionPools:
             return None, False
 
         try:
-            winning_addr_info_dict = p2p.connect_to(addresses)
+            # Off the event loop: the dial can block up to its timeout, and other
+            # sessions must keep ticking meanwhile (e.g. during a re-dial).
+            winning_addr_info_dict = await asyncio.to_thread(p2p.connect_to, addresses)
             peer_id = winning_addr_info_dict.get('ID')
             addrs = winning_addr_info_dict.get('Addrs')
             assert addrs is not None and isinstance(addrs, (tuple, list))
@@ -615,7 +617,10 @@ class ConnectionPools:
             log.error(f"send_session({peer_id[-5:]}…, {protocol_id}) encode failed: {e}", sub=p2p.log_sub)
             return False
         try:
-            return p2p.send_on_protocol(peer_id, protocol_id, payload)
+            # Off the event loop (same pattern as `send`): the Go side opens a
+            # fresh stream and can block for seconds toward a dead peer, which
+            # would freeze every other session's keep-alive.
+            return await asyncio.to_thread(p2p.send_on_protocol, peer_id, protocol_id, payload)
         except Exception as e:
             log.error(f"send_session({peer_id[-5:]}…, {protocol_id}) failed: {e}", sub=p2p.log_sub)
             return False

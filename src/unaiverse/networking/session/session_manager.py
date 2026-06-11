@@ -319,10 +319,10 @@ class SessionManager:
             t_event = sess.check_timeout(now)
             if t_event is not None:
                 events.append(t_event)
-            r_event = sess.tick_reconnect(now)
+            r_event = await sess.tick_reconnect(now)
             if r_event is not None:
                 events.append(r_event)
-            k_event = sess.tick_keepalive(now)
+            k_event = await sess.tick_keepalive(now)
             if k_event is not None:
                 events.append(k_event)
 

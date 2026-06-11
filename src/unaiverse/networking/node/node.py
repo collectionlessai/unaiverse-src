@@ -884,6 +884,11 @@ class Node:
                     else:
                         setattr(new_agent, key, value)
 
+            # Fixing internal references to agent (im/proc were cloned from the
+            # in-world instance and still point at it)
+            new_agent.im.agent = new_agent
+            new_agent.proc.agent = new_agent
+
             # Telling the FSM that actions are related to this new agent
             new_agent.behav.set_actionable(new_agent)
             new_agent.behav_lone_wolf.set_actionable(new_agent)
@@ -1255,9 +1260,9 @@ class Node:
 
                 # Move to the next cycle. The wait must be an ASYNC sleep: the
                 # main loop is mostly synchronous (FFI calls), so this is where
-                # fire-and-forget session tasks (keep-alive PING, re-dial) get
-                # their chance to run — a blocking sleep here starves them for
-                # tens of seconds and the keep-alive collapses.
+                # asyncio.to_thread completions (conn.send/send_session/connect)
+                # and loop-level callbacks (e.g. signal handlers) get their
+                # chance to run — a blocking sleep here would starve them.
                 while not clock.next_cycle():
                     await asyncio.sleep(0.001)  # Seconds (lowest possible granularity level)
 
@@ -1744,11 +1749,6 @@ class Node:
             await self._dispatch_session_event(ev)
         for ev in await self._sm_world.tick(_now):
             await self._dispatch_session_event(ev)
-        # Let the fire-and-forget tasks the ticks just scheduled (keep-alive
-        # PING, re-dial + RESUME) actually start: without an explicit yield they
-        # would wait for the next real await point of the main loop, which under
-        # clock catch-up can be many cycles away.
-        await asyncio.sleep(0)
 
         # Sorting messages
         public_messages = self.__sort_messages_by_priority(public_messages)
@@ -2330,6 +2330,7 @@ class Node:
             if public_peer_id is not None:
                 self._pending_world_handoff.pop(public_peer_id, None)
             self._world_host_unlist_member(ev)
+            await self._maybe_leave_world_on_session_end(ev)
             log.error(f"[session] handshake to {ev.peer_id[-5:]}… failed "
                       f"(p2p={ev.p2p_name}, reason={ev.data.get('reason', 'unknown')})",
                       sub="prv" if "world" in ev.p2p_name else "pub")
@@ -2340,10 +2341,36 @@ class Node:
                     "WORLD_HANDOFF_COMPLETE" in ev.data.get("reason", "")):
                 return
             self._world_host_unlist_member(ev)
+            if await self._maybe_leave_world_on_session_end(ev):
+                return
             try:
                 await self.__purge(ev.peer_id)
             except Exception as e:
                 log.error(f"[session] dispatch LOST/CLOSED purge failed for {ev.peer_id[-5:]}…: {e}")
+
+    async def _maybe_leave_world_on_session_end(self, ev) -> bool:
+        """Joiner side: a terminal event on the Session toward the CURRENT world
+        host means we are out of the world — run the full leave_world cleanup
+        (world lists, profile connections, role, agent-instance restore, code
+        bundle unload) instead of a plain purge, otherwise the agent keeps
+        believing it is in-world (in_world() reads the role bit) and e.g. the
+        stats sender fires against a dead peer forever. A CLOSED caused by our
+        own leave() does not match: leave() clears world_peer_id synchronously,
+        before its CLOSED event surfaces through the pump."""
+        if self.node_type is not Node.AGENT:
+            return False
+        if not (NodeConn.P2P_WORLD == ev.p2p_name or "world" in ev.p2p_name):
+            return False
+        world_peer_id = self.profile.get_dynamic_profile()['connections']['world_peer_id']
+        if world_peer_id is None or ev.peer_id != world_peer_id:
+            return False
+        log.misc(f"[session] world link terminated ({ev.type.value}, "
+                 f"reason={ev.data.get('reason', 'unknown')}) → leaving world", sub="prv")
+        try:
+            await self.leave_world()
+        except Exception as e:
+            log.error(f"[session] leave_world after world-session end failed: {e}")
+        return True
 
     def _world_host_unlist_member(self, ev) -> None:
         """World host only: a member's world Session terminated — stop advertising

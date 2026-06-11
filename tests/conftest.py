@@ -247,9 +247,9 @@ def make_session():
 async def apump(inbox: deque, sm) -> list:
     """Drain everything currently in `inbox` into `sm.deliver` from within an
     already-running event loop. Unlike `_pump_call` (one asyncio.run per
-    message), this keeps the loop alive, so the fire-and-forget tasks spawned
-    by tick_keepalive / tick_reconnect survive across pumps. Returns the
-    concatenated list of SessionEvents."""
+    message), this keeps the loop alive across pumps, mirroring how the node's
+    main loop drives the SessionManagers. Returns the concatenated list of
+    SessionEvents."""
     events = []
     while inbox:
         peer_id, protocol_id, payload = inbox.popleft()
