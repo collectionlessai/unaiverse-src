@@ -2213,9 +2213,10 @@ class Node:
         with the deferred auth model and are intentionally light for v1.
         """
 
-        # Allow-list gate (node-id based; node-id comes from the JWT-bound hint).
-        if (self.allowed_node_ids is not None and remote_node_id is not None and
-                remote_node_id not in self.allowed_node_ids):
+        # Allow-list gate (node-id based). A peer whose node-id could not be
+        # determined must NOT slip past a configured allow-list.
+        if (self.allowed_node_ids is not None and
+                (remote_node_id is None or remote_node_id not in self.allowed_node_ids)):
             log.misc(f"[session] decision: {peer_id[:12]}… node_id not in allow-list → reject")
             return ProfileDecisionResult(accepted=False, reason_code=NOT_IN_ALLOW_LIST)
 
@@ -2240,6 +2241,20 @@ class Node:
                 return ProfileDecisionResult(accepted=False, reason_code=ROLE_INCOMPATIBLE)
             role = self.world.ROLE_STR_TO_BITS[role_str]
             role = role | (Agent.ROLE_WORLD_MASTER if is_world_master else Agent.ROLE_WORLD_AGENT)
+
+            # Admit the joiner's world-side identity BEFORE it dials the private
+            # instance: conn_routing_fcn disconnects unknown peers on the world
+            # network, and the post-PRIVATE_JOIN registration
+            # (_world_host_register_agent) would come too late to save the
+            # in-flight world handshake. The legacy flow did this at approval time.
+            joiner_dyn = profile.get_dynamic_profile()
+            joiner_private_peer_id = joiner_dyn.get('private_peer_id')
+            joiner_private_addr = joiner_dyn.get('private_peer_addresses')
+            if joiner_private_peer_id:
+                if is_world_master:
+                    self.conn.add_to_world_masters_list(joiner_private_peer_id, joiner_private_addr, role)
+                else:
+                    self.conn.add_to_world_agents_list(joiner_private_peer_id, joiner_private_addr, role)
 
             is_human = profile.get_static_profile().get("node_type") == self.hosted.HUMAN
             code_bundle = json.dumps({

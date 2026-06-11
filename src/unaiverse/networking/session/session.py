@@ -101,7 +101,12 @@ _RESUME_ACK_TIMEOUT_S = 3.0  # RESUME sent; if un-acked within this, re-dial + r
 # from a live one. A PONG with ok=false (peer holds no matching Session) is treated
 # as a hard liveness failure → reconnect → RESUME → re-handshake.
 _KEEPALIVE_PERIOD_S = 15.0
-_PING_RTT_TIMEOUT_S = 5.0
+# The RTT window must absorb the full polling chain on BOTH sides (our send is a
+# fire-and-forget task dispatched on the next loop turn; the peer answers on its
+# next pump; we read the PONG on ours), so it is sized for slow main loops
+# (clock slowed to 2s cycles plus blocking work per cycle), not for network RTT.
+# Must stay below _KEEPALIVE_PERIOD_S (one ping in flight at a time).
+_PING_RTT_TIMEOUT_S = 10.0
 _KEEPALIVE_FAIL_THRESHOLD = 2
 
 # ── Misc ─────────────────────────────────────────────────────────────────────
@@ -482,8 +487,11 @@ class Session:
         # WorldGrant signature to the joiner — the joiner verifies that signature
         # against its own local_node_id (see _responder_issue_world_grant /
         # _initiator_on_world_grant), so the two must agree on this value.
+        # NodeProfile.get_all_profile() nests it under "static"; bare test
+        # profiles may carry it top-level.
         if not self.remote_node_id_hint:
-            nid = self.remote_profile.get("node_id")
+            nid = (self.remote_profile.get("node_id") or
+                   (self.remote_profile.get("static") or {}).get("node_id"))
             if isinstance(nid, str) and nid:
                 self.remote_node_id_hint = nid
 
@@ -730,7 +738,8 @@ class Session:
             return await self._on_remote_goaway(msg)
         if msg.kind == SessMsg.KIND_GOAWAY_ACK and self.state == SessionState.CLOSING:
             if msg.get("received"):
-                return [self._finalize_close("local_goaway_acked")]
+                return [self._finalize_close(
+                    f"local_goaway_acked:{getattr(self, '_local_goaway_reason', '')}")]
             return []
         if msg.kind == SessMsg.KIND_PING:
             return await self._on_ping(msg)
@@ -753,11 +762,12 @@ class Session:
         on its behalf."""
         ok = (bytes(msg.get("session_id") or b"") == self.session_id and
               self.state in (SessionState.ESTABLISHED, SessionState.RECONNECTING))
-        await self._send_payload(SESSION_CONTROL_PROTOCOL, SessMsg(SessMsg.KIND_PONG, {
+        if not await self._send_payload(SESSION_CONTROL_PROTOCOL, SessMsg(SessMsg.KIND_PONG, {
             "session_id": self.session_id,
             "nonce": bytes(msg.get("nonce") or b""),
             "ok": ok,
-        }))
+        })):
+            log.session(f"{self!r} PONG send failed", sub=self._sub)
         return []
 
     def _on_pong(self, msg: SessMsg) -> Optional[SessionEvent]:
@@ -845,8 +855,12 @@ class Session:
         await self._send_payload(SESSION_CONTROL_PROTOCOL, SessMsg(SessMsg.KIND_GOAWAY, {
             "reason": reason_code, "drain_window_ms": 0, "session_id": self.session_id,
         }))
+        # Remembered so the local CLOSED event carries the same reason the remote
+        # sees — the application dispatch branches on it symmetrically (e.g.
+        # WORLD_HANDOFF_COMPLETE must not purge on either side).
+        self._local_goaway_reason = reason_name(reason_code)
         self._set_state(SessionState.CLOSING, _TIMEOUT_CLOSING_S)
-        log.session(f"{self!r} GOAWAY sent (reason={reason_name(reason_code)})", sub=self._sub)
+        log.session(f"{self!r} GOAWAY sent (reason={self._local_goaway_reason})", sub=self._sub)
 
     async def _on_remote_goaway(self, ga: SessMsg) -> List[SessionEvent]:
         await self._send_payload(SESSION_CONTROL_PROTOCOL, SessMsg(SessMsg.KIND_GOAWAY_ACK,
@@ -883,7 +897,8 @@ class Session:
             return self._emit(SessionEventType.LOST, {"reason": "grace_period_expired"})
 
         if self.state == SessionState.CLOSING:
-            return self._finalize_close("goaway_ack_timeout")
+            return self._finalize_close(
+                f"goaway_ack_timeout:{getattr(self, '_local_goaway_reason', '')}")
 
         return None
 
@@ -944,10 +959,16 @@ class Session:
             self._ping_in_flight = True
             self._ping_nonce = secrets.token_bytes(8)
             self._ping_deadline = now + _PING_RTT_TIMEOUT_S
-            asyncio.create_task(self._send_payload(SESSION_CONTROL_PROTOCOL, SessMsg(SessMsg.KIND_PING, {
-                "session_id": self.session_id, "nonce": self._ping_nonce,
-            })))
+            asyncio.create_task(self._send_ping())
         return None
+
+    async def _send_ping(self) -> None:
+        """Fire-and-forget keep-alive PING; a send failure would otherwise be
+        invisible until it surfaces as a ping miss, so log it here."""
+        if not await self._send_payload(SESSION_CONTROL_PROTOCOL, SessMsg(SessMsg.KIND_PING, {
+            "session_id": self.session_id, "nonce": self._ping_nonce,
+        })):
+            log.session(f"{self!r} keepalive PING send failed", sub=self._sub)
 
     # ── Active re-dial + RESUME (initiator-driven recovery) ──────────────────
 

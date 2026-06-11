@@ -148,7 +148,9 @@ class SessionManager:
         )
         self._sessions[peer_id] = sess
         log.session(f"initiating Session to {peer_id[:12]}…", sub=self._label)
-        return await sess.start()
+        events = await sess.start()
+        self._evict_if_terminal(peer_id, sess)
+        return events
 
     # ── Inbound dispatch ──────────────────────────────────────────────────────
 
@@ -160,6 +162,14 @@ class SessionManager:
             return []
 
         sess = self._sessions.get(peer_id)
+
+        # A terminal Session must not shadow new traffic from the peer (an
+        # inbound HELLO routed to a dead FSM is silently ignored, blocking any
+        # re-handshake initiated by the remote): evict it and fall through to
+        # the no-session paths.
+        if sess is not None and sess.state in (SessionState.FAILED, SessionState.CLOSED):
+            self._sessions.pop(peer_id, None)
+            sess = None
 
         if sess is None:
             if protocol_id == SESSION_HELLO_PROTOCOL and sess_msg.kind == SessMsg.KIND_HELLO_REQ:
@@ -199,7 +209,17 @@ class SessionManager:
             else:
                 return events  # type: ignore[return-value]
 
-        return await sess.process_inbound(protocol_id, sess_msg)
+        events = await sess.process_inbound(protocol_id, sess_msg)
+        self._evict_if_terminal(peer_id, sess)
+        return events
+
+    def _evict_if_terminal(self, peer_id: str, sess: Session) -> None:
+        """Drop a Session that just reached FAILED/CLOSED outside the tick path,
+        so the registry never holds a dead FSM that would shadow later inbound
+        traffic from the same peer. Quarantine stays a tick-path concern."""
+        if (sess.state in (SessionState.FAILED, SessionState.CLOSED) and
+                self._sessions.get(peer_id) is sess):
+            self._sessions.pop(peer_id, None)
 
     def _spawn_responder(self, peer_id: str, remote_other_peer_id_hint: Optional[str]) -> Session:
         sess = Session(
@@ -394,6 +414,14 @@ class SessionManager:
     def all_established_peer_ids(self) -> List[str]:
         return [pid for pid, s in self._sessions.items()
                 if s.state == SessionState.ESTABLISHED]
+
+    def has_active_sessions(self) -> bool:
+        """True while any Session is ESTABLISHED or riding its reconnect grace.
+        The Node uses this to keep the main loop at full speed: the keep-alive
+        RTT window assumes a responsive pump, so a node with live sessions must
+        never be treated as idle."""
+        return any(s.state in (SessionState.ESTABLISHED, SessionState.RECONNECTING)
+                   for s in self._sessions.values())
 
     def __len__(self) -> int:
         return len(self._sessions)
