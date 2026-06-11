@@ -270,6 +270,12 @@ class Session:
         self._ping_in_flight: bool = False
         self._ping_nonce: bytes = b""
         self._ping_deadline: float = 0.0
+        # Reason string of the GOAWAY we sent (close()), echoed in the local
+        # CLOSED event so both sides observe the same close reason.
+        self._local_goaway_reason: str = ""
+        # WORLD_GRANT that overtook the PROFILE_DECISION (no cross-protocol
+        # ordering); consumed as soon as the decision lands.
+        self._early_world_grant: Optional[SessMsg] = None
 
         # Active re-dial + RESUME state (initiator drives recovery while RECONNECTING).
         self._reconnect_substep: str = ""   # "" | "redial" | "resume_sent"
@@ -565,10 +571,17 @@ class Session:
         except Exception as e:
             return [self._fail(f"profile_decision_bad_profile_b:{e}")]
 
-        # World joiner on the PUBLIC Session: expect a WORLD_GRANT next.
+        # World joiner on the PUBLIC Session: expect a WORLD_GRANT next. The host
+        # sends DECISION and GRANT back-to-back on different protocols, so the
+        # grant can be popped first — consume a buffered one right away.
         if self.is_world_join:
             self._set_state(SessionState.AWAITING_WORLD_GRANT, _TIMEOUT_WORLD_S)
             log.session(f"{self!r} PROFILE accepted, awaiting WORLD_GRANT", sub=self._sub)
+            if self._early_world_grant is not None:
+                grant, self._early_world_grant = self._early_world_grant, None
+                log.session(f"{self!r} consuming WORLD_GRANT buffered ahead of the decision",
+                            sub=self._sub)
+                return await self._initiator_on_world_grant(grant)
             return []
 
         # World joiner on the WORLD Session (carries a grant): redeem it via
@@ -625,6 +638,16 @@ class Session:
         if (msg.kind == SessMsg.KIND_WORLD_GRANT and
                 self.role == SessionRole.INITIATOR and self.state == SessionState.AWAITING_WORLD_GRANT):
             return await self._initiator_on_world_grant(msg)
+
+        # WORLD and PROFILE ride different libp2p protocols, so the pump gives no
+        # cross-protocol ordering: the grant routinely lands BEFORE the decision.
+        # Buffer it; _initiator_on_profile_decision consumes it.
+        if (msg.kind == SessMsg.KIND_WORLD_GRANT and self.role == SessionRole.INITIATOR and
+                self.is_world_join and self.state == SessionState.PROFILE_SENT):
+            self._early_world_grant = msg
+            log.session(f"{self!r} buffered WORLD_GRANT that arrived before the profile decision",
+                        sub=self._sub)
+            return []
 
         if (msg.kind == SessMsg.KIND_PRIVATE_JOIN and
                 self.role == SessionRole.RESPONDER and self.state == SessionState.AWAITING_PRIVATE_JOIN):

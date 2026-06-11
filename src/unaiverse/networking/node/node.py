@@ -1253,9 +1253,13 @@ class Node:
                             await self.conn.get_messages(p2p_name=NodeConn.P2P_WORLD)  # Just draining
                             await asyncio.sleep(0.1)  # Don't block the loop
 
-                # Move to the next cycle
+                # Move to the next cycle. The wait must be an ASYNC sleep: the
+                # main loop is mostly synchronous (FFI calls), so this is where
+                # fire-and-forget session tasks (keep-alive PING, re-dial) get
+                # their chance to run — a blocking sleep here starves them for
+                # tens of seconds and the keep-alive collapses.
                 while not clock.next_cycle():
-                    time.sleep(0.001)  # Seconds (lowest possible granularity level)
+                    await asyncio.sleep(0.001)  # Seconds (lowest possible granularity level)
 
                 log.misc(f"=== Starting clock cycle {clock.get_cycle()} ===")
 
@@ -1740,6 +1744,11 @@ class Node:
             await self._dispatch_session_event(ev)
         for ev in await self._sm_world.tick(_now):
             await self._dispatch_session_event(ev)
+        # Let the fire-and-forget tasks the ticks just scheduled (keep-alive
+        # PING, re-dial + RESUME) actually start: without an explicit yield they
+        # would wait for the next real await point of the main loop, which under
+        # clock catch-up can be many cycles away.
+        await asyncio.sleep(0)
 
         # Sorting messages
         public_messages = self.__sort_messages_by_priority(public_messages)
