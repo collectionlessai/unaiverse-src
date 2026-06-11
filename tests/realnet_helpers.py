@@ -44,7 +44,7 @@ def build_real_node(identity_dir: str, port: int = 0, listen_ip: str = "0.0.0.0"
         dht_enabled=False, dht_keep=False, webrtc_enabled=False, flood_sub=False,
         log_sub=log_sub,
     )
-    nid = node_id or ("test-" + p2p.peer_id[-8:])
+    nid = node_id or ("test-" + p2p.peer_id[-5:])
     conn = NodeConn(max_connections=16, p2p_u=p2p, p2p_w=p2p,
                     is_world_node=False, public_key=None, token=None)
     sm = SessionManager(

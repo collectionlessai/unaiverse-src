@@ -688,12 +688,12 @@ class P2P:
             )
             result = P2P._type_interface.from_go_ptr_to_json(result_ptr)
             if result is None or result.get('state') == 'Error':
-                logger.warning(f"send_on_protocol({peer_id[:12]}…, {protocol_id}) failed: "
+                logger.warning(f"send_on_protocol({peer_id[-5:]}…, {protocol_id}) failed: "
                                f"{result.get('message') if result else 'null result'}")
                 return False
             return True
         except Exception as e:
-            logger.error(f"send_on_protocol({peer_id[:12]}…, {protocol_id}) exception: {e}")
+            logger.error(f"send_on_protocol({peer_id[-5:]}…, {protocol_id}) exception: {e}")
             return False
 
     def generate_signed_peer_record(self) -> Optional[bytes]:
