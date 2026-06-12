@@ -371,6 +371,7 @@ func setupWebRTCSignalHandler(ni *NodeInstance) {
 //  4. Send complete SDP answer (with all ICE candidates embedded).
 //  5. Wait for the offerer's DataChannel to open, then register it.
 func handleSignalingStream(ni *NodeInstance, s network.Stream) {
+	defer recoverGoroutine("handleSignalingStream")
 	defer s.Close()
 
 	remotePeer := s.Conn().RemotePeer()

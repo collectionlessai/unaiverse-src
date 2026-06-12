@@ -82,6 +82,7 @@ func readFromSubscription(
 	ni *NodeInstance,
 	sub *pubsub.Subscription,
 ) {
+	defer recoverGoroutine("readFromSubscription")
 	// Get the topic string directly from the subscription object.
 	topic := sub.Topic()
 
@@ -223,6 +224,7 @@ func connDirection(s network.Stream) string {
 // It expects the stream to start with a 4-byte length prefix, followed by a 1-byte channel name length,
 // the channel name itself, and finally the Protobuf-encoded payload.
 func handleStream(ni *NodeInstance, s network.Stream) {
+	defer recoverGoroutine("handleStream")
 	senderPeerID := s.Conn().RemotePeer()
 	streamID := s.ID()
 	// Delegate peer promotion and address updates to the helper function.
@@ -344,6 +346,7 @@ func setupDirectMessageHandler(
 // no persistent stream, no per-stream channel header. Framing: 4-byte big-endian
 // uint32 length, then the protobuf payload.
 func handleSessionStream(ni *NodeInstance, s network.Stream, protocolID string) {
+	defer recoverGoroutine("handleSessionStream")
 	senderPeerID := s.Conn().RemotePeer()
 	streamID := s.ID()
 	defer s.Close()

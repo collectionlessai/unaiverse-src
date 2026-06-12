@@ -325,6 +325,7 @@ class P2P:
             elif not initial_addresses:
                 err_msg = "Received empty addresses list from Go CreateNode."
                 logger.error(f"[Instance {self._instance}] {err_msg}")
+                raise P2PError(f"[Instance {self._instance}] {err_msg}")
 
             self._peer_id = initial_addresses[0].split("/")[-1]
 

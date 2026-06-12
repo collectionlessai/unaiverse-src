@@ -194,6 +194,7 @@ func setupNotifiers(ni *NodeInstance) {
 
 					// Run cleanup in a goroutine
 					go func() {
+						defer recoverGoroutine("disconnectionGracePeriod")
 						select {
 						case <-time.After(DisconnectionGracePeriod):
 							// Timer expired! Proceed to cleanup.
@@ -275,6 +276,7 @@ func enforceProtocolCompliance(ni *NodeInstance) {
 	logger.Infof("[GO] 🛡️ Instance %d: Strict Isolation ENABLED. Monitoring for non-compliant peers.", ni.instanceIndex)
 
 	go func() {
+		defer recoverGoroutine("enforceProtocolCompliance")
 		defer sub.Close()
 		for {
 			select {
@@ -325,6 +327,7 @@ func autoUpgradeWebRTC(ni *NodeInstance) {
 	}
 
 	go func() {
+		defer recoverGoroutine("autoUpgradeWebRTC")
 		defer sub.Close()
 		for {
 			select {
@@ -405,6 +408,7 @@ func autoUpgradeWebRTC(ni *NodeInstance) {
 
 				// Fire the timeout and upgrade asynchronously so we don't block the event loop
 				go func(pid peer.ID, wait time.Duration) {
+					defer recoverGoroutine("autoUpgradeWebRTC.upgrade")
 					// Wait for native DCUtR holepunching to do its thing
 					select {
 					case <-time.After(wait):
@@ -440,6 +444,7 @@ func autoUpgradeWebRTC(ni *NodeInstance) {
 
 // handleAddressUpdateEvents listens for libp2p address changes and updates the local cache.
 func handleAddressUpdateEvents(ni *NodeInstance, sub event.Subscription) {
+	defer recoverGoroutine("handleAddressUpdateEvents")
 	defer sub.Close()
 
 	// Initialize cache immediately with current state to avoid race conditions at startup
@@ -677,13 +682,17 @@ func (ni *NodeInstance) Close() error {
 	ni.disconnectionTimers = nil // Clear the map
 	ni.disconnectionMutex.Unlock()
 
-	// Nil out components to signify the instance is fully closed
-	ni.host = nil
-	ni.pubsub = nil
-	ni.ctx = nil
-	ni.cancel = nil
-	ni.certManager = nil
-	ni.messageStore = nil
+	// Deliberately DO NOT nil out host/pubsub/ctx/cancel/messageStore here.
+	// A call already in flight (e.g. SendMessageToPeer blocked up to 20s in
+	// NewStream, or ConnectTo, or a listener goroutine calling storeReceivedMessage)
+	// still holds this *NodeInstance and would dereference a nil field → panic →
+	// dead Python process. Instead we rely on:
+	//   - ctx already cancelled (cancel() above): select-on-Done goroutines exit;
+	//   - host already Close()d: in-flight transport ops return clean errors;
+	//   - the slot in allInstances[] set to nil by the caller (CloseNode): a NEW
+	//     CreateNode builds a fresh instance, this one is left orphaned but valid.
+	// host.Close() turning subsequent ops into errors (not panics) is exactly the
+	// behaviour we want for the close-while-busy race.
 
 	if hostErr != nil {
 		return hostErr

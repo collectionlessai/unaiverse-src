@@ -95,3 +95,13 @@ func newMessageStore() *MessageStore {
 		messagesByChannel: make(map[string]*list.List),
 	}
 }
+
+// recoverGoroutine is a defer helper for long-running goroutines. A panic in a
+// goroutine of a c-shared library aborts the whole hosting process (Python),
+// with no recoverable boundary. Catching it here keeps a single misbehaving
+// goroutine from taking everything down: we log and let that goroutine exit.
+func recoverGoroutine(name string) {
+	if r := recover(); r != nil {
+		logger.Errorf("[GO] 🛑 Recovered panic in goroutine %s: %v", name, r)
+	}
+}

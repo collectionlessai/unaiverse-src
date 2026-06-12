@@ -49,10 +49,11 @@ func SendOnProtocol(
 	protocolIDC *C.char,
 	payloadC *C.char,
 	payloadLenC C.int,
-) *C.char {
+) (ret *C.char) {
+	defer recoverToCString(&ret, "SendOnProtocol")
 	ni, err := getInstance(int(instanceIndexC))
 	if err != nil {
-		return C.CString(jsonErrorResponse("Invalid instance", err))
+		return C.CString(jsonErrorResponse(fmt.Sprintf("Invalid instance index: %d", int(instanceIndexC)), err))
 	}
 
 	peerIDStr := C.GoString(peerIDC)
@@ -113,10 +114,11 @@ func SendOnProtocol(
 //export GenerateSignedPeerRecord
 func GenerateSignedPeerRecord(
 	instanceIndexC C.int,
-) *C.char {
+) (ret *C.char) {
+	defer recoverToCString(&ret, "GenerateSignedPeerRecord")
 	ni, err := getInstance(int(instanceIndexC))
 	if err != nil {
-		return C.CString(jsonErrorResponse("Invalid instance", err))
+		return C.CString(jsonErrorResponse(fmt.Sprintf("Invalid instance index: %d", int(instanceIndexC)), err))
 	}
 	if ni.host == nil {
 		return C.CString(jsonErrorResponse("GenerateSignedPeerRecord: host not initialised", nil))
@@ -157,7 +159,8 @@ func GenerateSignedPeerRecord(
 func VerifySignedPeerRecord(
 	envelopeB64C *C.char,
 	expectedPeerIDC *C.char,
-) *C.char {
+) (ret *C.char) {
+	defer recoverToCString(&ret, "VerifySignedPeerRecord")
 	envB64 := C.GoString(envelopeB64C)
 	expectedStr := C.GoString(expectedPeerIDC)
 
@@ -202,10 +205,11 @@ func SignWithHostKey(
 	instanceIndexC C.int,
 	dataC *C.char,
 	dataLenC C.int,
-) *C.char {
+) (ret *C.char) {
+	defer recoverToCString(&ret, "SignWithHostKey")
 	ni, err := getInstance(int(instanceIndexC))
 	if err != nil {
-		return C.CString(jsonErrorResponse("Invalid instance", err))
+		return C.CString(jsonErrorResponse(fmt.Sprintf("Invalid instance index: %d", int(instanceIndexC)), err))
 	}
 	if ni.host == nil {
 		return C.CString(jsonErrorResponse("SignWithHostKey: host not initialised", nil))
@@ -234,7 +238,8 @@ func VerifyPeerSignature(
 	peerIDC *C.char,
 	dataC *C.char, dataLenC C.int,
 	sigB64C *C.char,
-) *C.char {
+) (ret *C.char) {
+	defer recoverToCString(&ret, "VerifyPeerSignature")
 	pid, err := peer.Decode(C.GoString(peerIDC))
 	if err != nil {
 		return C.CString(jsonErrorResponse("VerifyPeerSignature: bad peerID", err))
