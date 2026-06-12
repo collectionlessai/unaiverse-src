@@ -11,12 +11,13 @@ import (
 	"log"
 	"time"
 	"unsafe"
+	"bytes"
 	"context"
 	"strings"
 	"crypto/tls"
 	"encoding/json"
 	"path/filepath"
-	"encoding/base64"
+	"encoding/binary"
 	"github.com/caddyserver/certmagic"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -1586,28 +1587,34 @@ func PopMessages(
 		return C.CString(`{"state":"Empty"}`)
 	}
 
-	// Marshal the slice of popped messages into a JSON array.
-	// We create a temporary structure for JSON marshalling to include the base64-encoded data.
-	payloads := make([]map[string]interface{}, len(poppedMessages))
-	for i, msg := range poppedMessages {
-		payloads[i] = map[string]interface{}{
-			"from":     msg.From,
-			"data":     base64.StdEncoding.EncodeToString(msg.Data),
-			"protocol": msg.Protocol,
-		}
+	// Serialize the popped messages as a single binary buffer instead of JSON +
+	// base64. This avoids the +33% base64 blow-up and the extra string copies that
+	// hurt large image/tensor payloads; the queues already hold raw []byte. Layout
+	// (see popBinaryMagic in types.go): [1B magic][uint32 totalBytes][uint32 count]
+	// then per message [uint32 fromLen][from][uint32 protoLen][proto][uint32 dataLen][data].
+	// `from` is the textual peer-id (msg.From.String()), matching what the JSON path
+	// used to emit and what Python compares against the in-payload sender.
+	buf := new(bytes.Buffer)
+	buf.WriteByte(popBinaryMagic)
+	buf.Write([]byte{0, 0, 0, 0}) // totalBytes placeholder, patched below
+	_ = binary.Write(buf, binary.BigEndian, uint32(len(poppedMessages)))
+	for _, msg := range poppedMessages {
+		fromBytes := []byte(msg.From.String())
+		protoBytes := []byte(msg.Protocol)
+		_ = binary.Write(buf, binary.BigEndian, uint32(len(fromBytes)))
+		buf.Write(fromBytes)
+		_ = binary.Write(buf, binary.BigEndian, uint32(len(protoBytes)))
+		buf.Write(protoBytes)
+		_ = binary.Write(buf, binary.BigEndian, uint32(len(msg.Data)))
+		buf.Write(msg.Data)
 	}
+	out := buf.Bytes()
+	binary.BigEndian.PutUint32(out[1:5], uint32(len(out))) // patch totalBytes
 
-	jsonBytes, err := json.Marshal(payloads)
-	if err != nil {
-		logger.Errorf("[GO] ❌ Instance %d: PopMessages: Failed to marshal messages to JSON: %v\n", ni.instanceIndex, err)
-		// Messages have already been popped from the queue at this point.
-		// Returning an error is the best we can do.
-		return C.CString(jsonErrorResponse(
-			fmt.Sprintf("Instance %d: Failed to marshal popped messages", ni.instanceIndex), err,
-		))
-	}
-
-	return C.CString(string(jsonBytes))
+	// C.CBytes copies into the C heap with malloc, so FreeString (C.free) frees it
+	// just like a C.CString. The leading magic byte distinguishes this from the
+	// JSON Empty/Error responses on the Python side.
+	return (*C.char)(C.CBytes(out))
 }
 
 // CloseNode gracefully shuts down the libp2p host, cancels subscriptions, closes connections,

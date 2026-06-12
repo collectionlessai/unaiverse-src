@@ -111,6 +111,19 @@ const (
 	webRTCMaxChunkPayload = WebRTCMaxChunkSize - 1
 )
 
+// popBinaryMagic is the first byte of the binary buffer returned by PopMessages
+// when there is at least one message. It lets the Python side tell the binary
+// message buffer apart from the JSON status responses (Empty/Error), which always
+// start with '{' (0x7B). The binary layout avoids the base64 (+33%) and the extra
+// string copies that JSON marshalling imposed on large image/tensor payloads:
+//
+//	[1B magic=0xB1][uint32 totalBytes][uint32 count]
+//	then per message: [uint32 fromLen][from][uint32 protoLen][proto][uint32 dataLen][data]
+//
+// totalBytes is the size of the whole buffer (magic + header + all frames). All
+// integers are big-endian. `from` is the textual peer-id, `data` is raw bytes.
+const popBinaryMagic byte = 0xB1
+
 // --- Create a package-level logger ---
 var logger = golog.Logger("unailib")
 

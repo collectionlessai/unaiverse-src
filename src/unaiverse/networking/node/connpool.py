@@ -16,7 +16,6 @@ import asyncio
 import time
 import math
 import json
-import base64
 import binascii
 from collections import namedtuple
 from unaiverse.utils.logger import log
@@ -515,14 +514,12 @@ class ConnectionPools:
         for i, msg_dict in enumerate(byte_messages):
             msg_dict: dict
             try:
-                # Extract and validate required fields from the Go message structure
-                # Go structure: {"from":"Qm...", "data":"BASE64_ENCODED_DATA", "protocol":"..."}
+                # Extract and validate required fields from the Go message structure.
+                # The binary transport delivers "data" already as raw bytes (no base64).
+                # Go structure: {"from":"Qm...", "data":<bytes>, "protocol":"..."}
                 verified_sender_id = msg_dict.get("from")
-                base64_data = msg_dict.get("data")
+                decoded_data = msg_dict.get("data")
                 protocol_id = msg_dict.get("protocol") or ""
-
-                # Decode data
-                decoded_data = base64.b64decode(base64_data)  # noqa
 
                 # ── Session-protocol fast path ────────────────────────────────
                 # Bypass Msg.from_bytes + JWT verify; Session handshake establishes

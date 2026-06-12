@@ -8,7 +8,6 @@ Confirms that:
   * The SessMsg ↔ protobuf codec round-trips.
 """
 
-import base64
 import asyncio
 from unittest.mock import MagicMock
 
@@ -41,10 +40,6 @@ def pools_with_one_p2p():
         p2p_name_to_p2p={NodeConn.P2P_PUBLIC: fake_p2p},
     )
     return pools, fake_p2p
-
-
-def _b64(b: bytes) -> str:
-    return base64.b64encode(b).decode("ascii")
 
 
 def _run(coro):
@@ -93,7 +88,7 @@ def test_session_protocol_messages_are_partitioned(pools_with_one_p2p):
     }))
     fake._batch = [{
         "from": "12D3KooWRemote",
-        "data": _b64(wire),
+        "data": wire,
         "protocol": "/unaiverse/session/hello/1.0.0",
     }]
     chat, session = _run(pools.get_messages(p2p_name=NodeConn.P2P_PUBLIC))
@@ -126,7 +121,7 @@ def test_chat_message_still_uses_legacy_path(pools_with_one_p2p, monkeypatch):
 
     fake._batch = [{
         "from": "12D3KooWChat",
-        "data": _b64(b"any-bytes"),
+        "data": b"any-bytes",
         "protocol": "",   # chat path
     }]
     chat, session = _run(pools.get_messages(p2p_name=NodeConn.P2P_PUBLIC))
@@ -156,10 +151,10 @@ def test_mixed_batch_split_correctly(pools_with_one_p2p, monkeypatch):
     offer_wire = SessMsg.to_bytes(SessMsg(SessMsg.KIND_PROFILE_OFFER, {"sig_a": b"s"}))
     goaway_wire = SessMsg.to_bytes(SessMsg(SessMsg.KIND_GOAWAY, {"reason": 9}))
     fake._batch = [
-        {"from": "12D3KooWChat", "data": _b64(b"x"), "protocol": ""},
-        {"from": "12D3KooWRemote", "data": _b64(offer_wire),
+        {"from": "12D3KooWChat", "data": b"x", "protocol": ""},
+        {"from": "12D3KooWRemote", "data": offer_wire,
          "protocol": "/unaiverse/session/profile/1.0.0"},
-        {"from": "12D3KooWRemote", "data": _b64(goaway_wire),
+        {"from": "12D3KooWRemote", "data": goaway_wire,
          "protocol": "/unaiverse/session/control/1.0.0"},
     ]
     chat, session = _run(pools.get_messages(p2p_name=NodeConn.P2P_PUBLIC))

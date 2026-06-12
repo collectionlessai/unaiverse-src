@@ -561,8 +561,10 @@ class P2P:
 
             result_ptr = P2P.libp2p.PopMessages(go_instance_c)
 
-            # From_go_ptr_to_json should handle freeing result_ptr
-            raw_result = P2P._type_interface.from_go_ptr_to_json(result_ptr)
+            # Binary message buffer (success) or JSON status dict (Empty/Error);
+            # from_go_pop_messages decodes either and frees result_ptr. On the binary
+            # path each message's "data" is already raw bytes (no base64).
+            raw_result = P2P._type_interface.from_go_pop_messages(result_ptr)
 
             if raw_result is None:
 

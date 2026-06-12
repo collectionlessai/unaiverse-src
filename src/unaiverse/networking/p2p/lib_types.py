@@ -13,6 +13,7 @@
                  Main Developers:    Stefano Melacci (Project Leader), Christian Di Maio, Tommaso Guidi
 """
 import json
+import struct
 import ctypes
 import logging
 from typing import List, Any
@@ -21,6 +22,12 @@ from .golibp2p import GoLibP2P  # Assuming this class loads the library
 
 logger = logging.getLogger('LIB-TYPES')
 logger.setLevel(logging.WARNING)
+
+# First byte of the binary buffer returned by PopMessages when it carries at least
+# one message. The JSON status responses (Empty/Error) start with '{' (0x7B), so a
+# single peek byte tells the two apart. Keep in sync with popBinaryMagic in
+# unailib/types.go.
+_POP_BINARY_MAGIC = 0xB1
 
 
 class TypeInterface:
@@ -218,6 +225,70 @@ class TypeInterface:
             except Exception as free_err:
                 logger.critical(f"🚨 FAILED TO FREE C MEMORY for pointer "
                                 f"{hex(c_void_ptr_val)} via FreeString: {free_err}", exc_info=True)
+
+    def from_go_pop_messages(self, c_void_ptr_val: int) -> Any:
+        """
+        Reads the result of PopMessages, which is either:
+          * a binary message buffer (starts with the magic byte 0xB1), or
+          * a JSON status string (Empty/Error), which starts with '{'.
+
+        Returns a list of ``{"from": str, "data": bytes, "protocol": str}`` dicts for
+        the binary case (``data`` is already raw bytes, no base64), or the parsed JSON
+        status dict for the JSON case. Always frees the C memory, like
+        ``from_go_ptr_to_json``.
+        """
+        if not c_void_ptr_val:
+            raise Exception("Received a NULL pointer from Go PopMessages")
+
+        try:
+            first = ctypes.string_at(c_void_ptr_val, 1)
+            if first and first[0] == _POP_BINARY_MAGIC:
+                # Binary path. Read the fixed header (magic + totalBytes) with a
+                # known length, then the whole buffer — string_at without a length
+                # would stop at the first interior NUL of the binary payload.
+                header = ctypes.string_at(c_void_ptr_val, 5)
+                total = struct.unpack_from(">I", header, 1)[0]
+                blob = ctypes.string_at(c_void_ptr_val, total)
+                return self._parse_pop_binary(blob)
+
+            # JSON path (Empty/Error): NUL-terminated, safe to read without length.
+            raw_bytes = ctypes.string_at(c_void_ptr_val)
+            return json.loads(raw_bytes.decode("utf-8"))
+
+        finally:
+            try:
+                self.libp2p.FreeString(c_void_ptr_val)
+            except Exception as free_err:
+                logger.critical(f"🚨 FAILED TO FREE C MEMORY for pointer "
+                                f"{hex(c_void_ptr_val)} via FreeString: {free_err}", exc_info=True)
+
+    @staticmethod
+    def _parse_pop_binary(blob: bytes) -> List[dict]:
+        """Parse the PopMessages binary buffer into a list of message dicts.
+
+        Layout: ``[1B magic][uint32 total][uint32 count]`` then, per message,
+        ``[uint32 fromLen][from][uint32 protoLen][proto][uint32 dataLen][data]``.
+        All integers big-endian. Mirrors the writer in unailib/api.go::PopMessages.
+        """
+        off = 5  # skip magic (1) + totalBytes (4)
+        (count,) = struct.unpack_from(">I", blob, off)
+        off += 4
+        messages: List[dict] = []
+        for _ in range(count):
+            (from_len,) = struct.unpack_from(">I", blob, off)
+            off += 4
+            frm = blob[off:off + from_len].decode("utf-8")
+            off += from_len
+            (proto_len,) = struct.unpack_from(">I", blob, off)
+            off += 4
+            proto = blob[off:off + proto_len].decode("utf-8")
+            off += proto_len
+            (data_len,) = struct.unpack_from(">I", blob, off)
+            off += 4
+            data = blob[off:off + data_len]
+            off += data_len
+            messages.append({"from": frm, "data": data, "protocol": proto})
+        return messages
 
     def to_go_json(self, data: Any) -> bytes:
         """
