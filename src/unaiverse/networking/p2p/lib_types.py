@@ -15,7 +15,6 @@
 import json
 import ctypes
 import logging
-from threading import Lock
 from typing import List, Any
 
 from .golibp2p import GoLibP2P  # Assuming this class loads the library
@@ -29,8 +28,6 @@ class TypeInterface:
     Helper class for converting between Python types and Go types using ctypes.
     """
     def __init__(self, libp2p_instance: GoLibP2P):
-        self.__freed_pointers: set[int] = set()  # Track freed pointers to prevent double-free errors
-        self.__freed_pointers_lock: Any = Lock()  # A threading lock
         self.libp2p: GoLibP2P = libp2p_instance  # Store the shared library object instance
 
     def to_go_string(self, s: str) -> bytes:
@@ -187,100 +184,40 @@ class TypeInterface:
             TypeError: When go_lib is not a valid ctypes library object.
         """
 
-        if not c_void_ptr_val:  # Check if the address is NULL (0)
-            print("Received a NULL pointer from Go function")
+        if not c_void_ptr_val:  # NULL (0): nothing to read or free.
             raise Exception("Received a NULL pointer from Go function")
 
         try:
-
-            # --- Double-Free Check (Before Reading/Casting) ---
-            self.__freed_pointers_lock.acquire()  # Acquire lock if using threading
-            if c_void_ptr_val in self.__freed_pointers:
-
-                # This indicates a serious logic error elsewhere - the pointer
-                # was already freed but somehow passed here again.
-                logger.warning(f"🔥🔥🔥 ATTEMPT TO PROCESS ALREADY FREED POINTER {hex(c_void_ptr_val)}! 🔥🔥🔥")
-
-                # Raising an error is safer than trying to read potentially invalid memory.
-                logger.error(f"Attempt to process pointer {hex(c_void_ptr_val)} which was already freed")
-                raise Exception(f"Attempt to process pointer {hex(c_void_ptr_val)} which was already freed")
-            self.__freed_pointers_lock.release()  # Release lock if using threading
-
-            # --- Cast void* to c_char_p and Read String ---
+            # --- Cast void* to c_char_p and read the string ---
             try:
-
-                # Perform the cast only when needed for reading
                 c_char_ptr_for_read = ctypes.cast(c_void_ptr_val, ctypes.c_char_p)
                 raw_bytes = ctypes.string_at(c_char_ptr_for_read)
                 json_string = raw_bytes.decode('utf-8')
-
-                # Logger.debug(f"Read string (len={len(json_string)})
-                # from pointer {hex(c_void_ptr_val)}: %.100s...", json_string)
             except (ctypes.ArgumentError, ValueError, UnicodeDecodeError) as read_err:
                 logger.error(f"Failed to read/decode string from pointer {hex(c_void_ptr_val)}: "
                              f"{read_err}", exc_info=False)
-
-                # Even if reading fails, the pointer itself *might* still be valid C memory
-                # that Go expects us to free. We will proceed to free it in finally.
-                raise Exception(f"Failed to read string from pointer {hex(c_void_ptr_val)}: {read_err}") from read_err
-            except Exception as unexpected_read_err:  # Catch other potential ctypes issues
-                logger.error(f"Unexpected error reading C string from pointer {hex(c_void_ptr_val)}: "
-                             f"{unexpected_read_err}", exc_info=True)
-                raise Exception(f"Unexpected error reading C string from pointer {hex(c_void_ptr_val)}: "
-                                f"{unexpected_read_err}") from unexpected_read_err
-
-            # --- Check for Empty String ---
+                raise Exception(f"Failed to read string from pointer "
+                                f"{hex(c_void_ptr_val)}: {read_err}") from read_err
 
             # --- Parse JSON ---
             try:
-
-                # Now that we have the string, parse it
-                logger.debug(f"Parsing JSON from string: {json_string}")
-                parsed_data = json.loads(json_string)
-                logger.debug(f"Parsed JSON data: {parsed_data}")
-
-                # Logger.debug(f"Successfully parsed JSON from pointer {hex(c_void_ptr_val)}")
-                return parsed_data  # Return the parsed Python object
-
+                return json.loads(json_string)
             except json.JSONDecodeError as json_err:
                 logger.error(f"Failed to decode JSON from pointer {hex(c_void_ptr_val)}: {json_err}", exc_info=False)
-
-                # Again, the pointer is likely valid C memory, but the content is bad.
-                # Let the block handle freeing.
-                raise Exception(f"Failed to decode JSON from pointer {hex(c_void_ptr_val)}: {json_err}") from json_err
+                raise Exception(f"Failed to decode JSON from pointer "
+                                f"{hex(c_void_ptr_val)}: {json_err}") from json_err
 
         finally:
 
-            # --- CRITICAL: Free C Memory ---
-            # This block executes even if errors occurred during read/parse,
-            # ensuring we attempt to free any non-NULL pointer received from Go.
-            with self.__freed_pointers_lock:
-                if c_void_ptr_val:
-                    logger.info(f"🐍 FINALLY: Freeing pointer {hex(c_void_ptr_val)}...")
-                    if c_void_ptr_val in self.__freed_pointers:
-
-                        # This check is technically redundant if the initial check worked,
-                        # but provides an extra safety layer in case of concurrency issues
-                        # (if freed_pointers is shared without locks - which it shouldn't be).
-                        logger.warning(f"🔥🔥🔥 DOUBLE FREE DETECTED in finally block for "
-                                       f"{hex(c_void_ptr_val)}! Skipping FreeString call again. 🔥🔥🔥")
-                    else:
-
-                        # Add before calling free
-                        try:
-                            self.libp2p.FreeString(c_void_ptr_val)  # Pass the original void* value
-                            # self.__freed_pointers_lock.add(c_void_ptr_val)  # TODO do we still need this?
-                            logger.info(f"✅ FINALLY: FreeString successful for {hex(c_void_ptr_val)}.")
-                        except Exception as free_err:
-
-                            # Log if FreeString fails, but don't raise from finally
-                            # as it might hide the original error.
-                            logger.critical(f"🚨 FAILED TO FREE C MEMORY for pointer "
-                                            f"{hex(c_void_ptr_val)} via FreeString: {free_err}", exc_info=True)
-
-                            # Consider removing from freed_pointers if free failed?
-                            # freed_pointers.discard(c_void_ptr_val) # Maybe, to allow retry? Risky.
-                            # But if FreeString fails, the pointer is likely invalid anyway.
+            # --- Free C memory allocated by Go (C.CString) ---
+            # Each pointer crosses this boundary exactly once, so no double-free
+            # tracking is needed; FreeString -> C.free is thread-safe for distinct
+            # pointers. We never raise from here, to preserve the original error.
+            try:
+                self.libp2p.FreeString(c_void_ptr_val)
+            except Exception as free_err:
+                logger.critical(f"🚨 FAILED TO FREE C MEMORY for pointer "
+                                f"{hex(c_void_ptr_val)} via FreeString: {free_err}", exc_info=True)
 
     def to_go_json(self, data: Any) -> bytes:
         """

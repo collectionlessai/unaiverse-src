@@ -78,14 +78,6 @@ class GoLibP2P:
         """
         ...
 
-    def MessageQueueLength(self, instance: int) -> int:
-        """
-        MessageQueueLength(instance: int) -> int
-
-        Returns the current length of the message queue.
-        """
-        ...
-
     def PopMessages(self, instance: int) -> int:
         """
         PopNMessages(instance: int) -> bytes

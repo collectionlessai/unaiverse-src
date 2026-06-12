@@ -1530,43 +1530,6 @@ func UnsubscribeFromTopic(
 	)) // Caller frees.
 }
 
-// MessageQueueLength returns the total number of messages waiting across all channel queues for a specific instance.
-// Parameters:
-//   - instanceIndexC (C.int): The index of the node instance.
-//
-// Returns:
-//   - C.int: The total number of messages. Returns -1 if instance index is invalid.
-//
-//export MessageQueueLength
-func MessageQueueLength(
-	instanceIndexC C.int,
-) C.int {
-
-	ni, err := getInstance(int(instanceIndexC))
-	if err != nil {
-		logger.Errorf("[GO] ❌ MessageQueueLength: %v\n", err)
-		return -1 // Return -1 if instance isn't valid
-	}
-
-	// Get the message store for this instance
-	store := ni.messageStore
-	if store == nil {
-		logger.Errorf("[GO] ❌ Instance %d: Message store not initialized.\n", ni.instanceIndex)
-		return 0 // Return 0 if store is nil (effectively empty)
-	}
-
-	store.mu.Lock()
-	defer store.mu.Unlock()
-
-	totalLength := 0
-	// TODO: this makes sense but not for the check we are doing from python, think about it
-	for _, messageList := range store.messagesByChannel {
-		totalLength += messageList.Len()
-	}
-
-	return C.int(totalLength)
-}
-
 // PopMessages retrieves the oldest message from each channel's queue for a specific instance.
 // This function always pops one message per channel that has messages.
 // Parameters:

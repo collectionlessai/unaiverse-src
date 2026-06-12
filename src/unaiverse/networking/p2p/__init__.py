@@ -135,9 +135,6 @@ _shared_lib.SendMessageToPeer.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.
 _shared_lib.SendMessageToPeer.restype = ctypes.c_void_p  # Returns status code, not pointer
 
 # Message Queue
-_shared_lib.MessageQueueLength.argtypes = [ctypes.c_int]
-_shared_lib.MessageQueueLength.restype = ctypes.c_int  # Returns length, not pointer
-
 _shared_lib.PopMessages.argtypes = [ctypes.c_int]
 _shared_lib.PopMessages.restype = ctypes.c_void_p  # Treat returned *C.char as opaque pointer
 
@@ -183,9 +180,6 @@ _shared_lib.VerifyPeerSignature.argtypes = [
     ctypes.c_char_p,   # sigB64
 ]
 _shared_lib.VerifyPeerSignature.restype = ctypes.c_void_p
-
-_shared_lib.VerifySignedPeerRecord.argtypes = [ctypes.c_char_p, ctypes.c_char_p]
-_shared_lib.VerifySignedPeerRecord.restype = ctypes.c_void_p
 
 # Memory Management
 # FreeString now accepts the opaque pointer directly

@@ -158,6 +158,14 @@ class P2P:
             _max_queue = max_queue_per_channel if max_queue_per_channel is not None else cls._MAX_QUEUE_PER_CHANNEL
             _max_msg_size = max_message_size if max_message_size is not None else cls._MAX_MESSAGE_SIZE
 
+            # Validate the message-size cap: it is passed to Go as a C int and there
+            # reinterpreted as uint32. A non-positive or >2^31-1 value would wrap to a
+            # negative C int and then to a huge uint32, silently lifting the cap.
+            if not (0 < _max_msg_size <= 2 ** 31 - 1):
+                raise ValueError(
+                    f"max_message_size must be a positive int <= 2^31-1, got {_max_msg_size}."
+                )
+
             # Update class attributes if they were overridden
             cls._MAX_INSTANCES = _max_instances
             cls._instance_ids = [False, ] * _max_instances  # Resize the tracking list
@@ -346,7 +354,7 @@ class P2P:
                                 f"Reclaimed instance ID {self._instance} due to creation failure.")
             raise  # Re-raise the exception that caused the failure
 
-        logger.info("🎉 Node created successfully and background polling started.")
+        logger.info("🎉 Node created successfully.")
 
     # --- Core P2P Operations ---
     def connect_to(self, multiaddrs: list[str]) -> Dict[str, Any]:
@@ -450,6 +458,10 @@ class P2P:
         if not channel or not isinstance(channel, str):
             logger.error("Invalid channel provided.")
             raise ValueError("Invalid channel provided.")
+        if "::dm:" not in channel:
+            # Guard the split below: without "::dm:" it would raise a raw IndexError.
+            logger.error(f"Invalid direct-message channel format: '{channel}'.")
+            raise ValueError(f"Invalid direct-message channel format: '{channel}'.")
 
         # Serialize the entire message object to bytes using Protobuf.
         payload_len = len(msg_bytes)
@@ -497,6 +509,10 @@ class P2P:
         """
         if not channel or not isinstance(channel, str):
             raise ValueError("Invalid channel provided.")
+        
+        if "::ps:" not in channel:
+            logger.error(f"Invalid pubsub channel format: '{channel}'.")
+            raise ValueError(f"Invalid pubsub channel format: '{channel}'.")
 
         # Serialize the entire message object to bytes using Protobuf.
         payload_len = len(msg_bytes)
@@ -1050,32 +1066,9 @@ class P2P:
             # Avoid crashing the polling thread, just log the error
             logger.error(f"❌ Error fetching rendezvous peers info: {e}")
 
-            # Optionally raise P2PError(f"Failed to get rendezvous peers info") from e if called directly
-            return None  # Return empty list on error during polling
-
-    def get_message_queue_length(self) -> int:
-        """
-        Gets the current number of messages in the incoming queue.
-
-        Returns:
-            The number of messages waiting.
-
-        Raises:
-            P2PError: If querying the length fails (should be rare).
-        """
-        try:
-
-            # Call Go function, returns C.int directly
-            length_cint = P2P.libp2p.MessageQueueLength(P2P._type_interface.to_go_int(self._instance))
-            length = P2P._type_interface.from_go_int(length_cint)
-
-            # Print(f"  Current Message Queue Len: {length}") # Can be noisy
-            return length
-        except Exception as e:
-
-            # Avoid crashing polling thread
-            logger.error(f"❌ Error fetching message queue length: {e}")
-            return -1  # Indicate error
+            # Return None (not []) on error: the rest of this method uses None for
+            # "no data yet", and callers branch on `is None`.
+            return None
 
     # --- Lifecycle Management ---
 
