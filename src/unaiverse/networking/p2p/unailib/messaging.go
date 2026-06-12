@@ -22,6 +22,18 @@ import (
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
 )
 
+// isSessionProtocol reports whether protocolID is one of the per-stage Session
+// handshake protocols. Session traffic is privileged in the message store so a
+// flood of attacker-chosen chat channels cannot starve the handshake.
+func isSessionProtocol(protocolID string) bool {
+	switch protocolID {
+	case SessionHelloProtocol, SessionProfileProtocol, SessionWorldProtocol, SessionControlProtocol:
+		return true
+	default:
+		return false
+	}
+}
+
 // storeReceivedMessage processes a raw message received either from a direct stream
 // or a PubSub topic. The libp2p protocol ID is preserved on the queued message so
 // Python can route by protocol instead of by content_type. Pass an empty string
@@ -54,8 +66,12 @@ func storeReceivedMessage(
 	// Check if this channel already has a message list.
 	messageList, channelExists := store.messagesByChannel[channel]
 	if !channelExists {
-		// If the channel does not exist, check if we can create a new message queue.
-		if len(store.messagesByChannel) >= maxUniqueChannels {
+		// Session-protocol channels are privileged and bypass the channel-count
+		// cap: their key is the protocol ID itself (a small fixed set), so they
+		// cannot cause unbounded growth. The cap exists to contain attacker-chosen
+		// chat/pubsub channel names; a flood of junk chat channels must never be
+		// able to evict (by exhausting maxUniqueChannels) an incoming handshake.
+		if !isSessionProtocol(protocolID) && len(store.messagesByChannel) >= maxUniqueChannels {
 			logger.Warnf("[GO] 🗑️ Instance %d: Message store full. Discarding message for new channel '%s'.\n", ni.instanceIndex, channel)
 			return
 		}
@@ -250,6 +266,14 @@ func handleStream(ni *NodeInstance, s network.Stream) {
 	}()
 
 	for {
+		// Renew the idle deadline on each frame: a peer that opens the stream and
+		// then stops sending must not pin this goroutine forever (slow-loris). The
+		// existing net.Error/Timeout branch below turns the expiry into a clean
+		// return with stream cleanup via the defer above.
+		if err := s.SetReadDeadline(time.Now().Add(ChatStreamIdleTimeout)); err != nil {
+			logger.Warnf("[GO] ⚠️ Instance %d: SetReadDeadline failed on chat stream %s: %v\n", ni.instanceIndex, streamID, err)
+		}
+
 		// Read 4-byte total length
 		var totalLen uint32
 		if err := binary.Read(s, binary.BigEndian, &totalLen); err != nil {

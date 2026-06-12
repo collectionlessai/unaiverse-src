@@ -63,6 +63,22 @@ const RelayReservationTimeout = 60 * time.Second
 // StreamCreationTimeout is the timeout for opening a new libp2p stream to a peer.
 const StreamCreationTimeout = 20 * time.Second
 
+// ChatStreamIdleTimeout bounds how long a persistent chat stream may stay silent
+// before we reset it. The chat stream is long-lived and bidirectional, so we do
+// not set a hard one-shot deadline (unlike session streams); instead we renew an
+// idle deadline on every frame. A peer that opens the stream and then goes quiet
+// (slow-loris) gets pinned no longer than this. The window is a per-frame budget,
+// so it must comfortably exceed the time to transfer one MaxMessageSize frame on
+// a slow link.
+const ChatStreamIdleTimeout = 5 * time.Minute
+
+// WebRTCReassemblyTimeout bounds how long a multi-chunk DataChannel message may
+// take between its START and END chunks. Past this, the partial reassembly buffer
+// is discarded so a peer cannot pin up to MaxMessageSize of memory by sending a
+// START and then dribbling (or never finishing). Checked lazily on each incoming
+// chunk; a peer that goes fully silent is reclaimed via OnConnectionStateChange.
+const WebRTCReassemblyTimeout = 120 * time.Second
+
 // WebRTC DataChannel chunking constants.
 // Browser SCTP implementations cap individual DataChannel messages at ~64KB.
 // We split large frames into chunks of at most WebRTCMaxChunkPayload bytes
@@ -306,6 +322,11 @@ type WebRTCConn struct {
 	// Pion delivers OnMessage callbacks sequentially for a single DataChannel,
 	// so no mutex is needed here.
 	reassemblyBuf []byte
+
+	// reassemblyStart is when the current multi-chunk reassembly began (set on the
+	// START chunk). Used to enforce WebRTCReassemblyTimeout. Touched only inside the
+	// sequential OnMessage callback, like reassemblyBuf, so it needs no mutex.
+	reassemblyStart time.Time
 }
 
 // Define the list of default STUN servers to use if none are provided in the config.
