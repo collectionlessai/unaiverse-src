@@ -1404,6 +1404,7 @@ class InteractionManager:
             interaction: The Interaction to set as current.
         """
         self.current = interaction
+        first_time = interaction is not None and not interaction.running
 
         # Default stream bindings (this also automatically switches from private to public and vice versa)
         self.agent.set_default_stream_binding()
@@ -1414,9 +1415,10 @@ class InteractionManager:
             if len(interaction.stream_proxy) > 0:
 
                 # Restart buffered streams and activate them if they were off
-                for stream in interaction.stream_proxy:
-                    if isinstance(stream, BufferedStream):
-                        stream.restart(interaction.uuid)
+                if first_time:
+                    for stream in interaction.stream_proxy:
+                        if isinstance(stream, BufferedStream):
+                            stream.restart(interaction.uuid)
 
                 # Every interaction with some-streams-specified forces the interaction-described bindings
                 self.agent.stdin.bind(interaction.stdin_streams, uuid=interaction.uuid)

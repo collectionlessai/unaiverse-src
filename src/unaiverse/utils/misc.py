@@ -21,6 +21,7 @@ import math
 import gzip
 import random
 import base64
+import hashlib
 import threading
 import importlib
 import importlib.abc
@@ -312,8 +313,7 @@ class FileTracker:
                 if ((file.is_file() and file.suffix.lower() == self.ext and
                         (self.skip is None or file.name != self.skip)) and
                         (self.prefix is None or file.name.startswith(self.prefix))):
-                    # state[file.name] = os.path.getmtime(file) # this is less stable than what you see below
-                    state[file.name] = file.stat().st_mtime_ns
+                    state[file.resolve()] = hashlib.md5(file.read_bytes()).hexdigest()  # Content!
             except Exception:
                 pass
         return state
