@@ -1257,6 +1257,8 @@ class Node:
                                         self.agent.stdin.set([msg], uuid=uuid, force=True)
                                     else:
                                         self.agent.stdin.set([msg, image_pil, whatever], uuid=uuid, force=True)
+                                else:
+                                    log.error("Empty stdin!")
                         except queue.Empty:
                             pass  # If nothing has been typed (+ enter)
 
