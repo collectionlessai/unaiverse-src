@@ -27,6 +27,7 @@ from unaiverse.agent_basics import AgentBasics
 from unaiverse.networking.p2p.messages import Msg
 from unaiverse.custom import Custom, GenException
 from unaiverse.streams.dataprops import DataProps
+from unaiverse.modules.utils import ModuleWrapper
 from unaiverse.streams.streams import BufferedStream, Stream
 
 
@@ -121,8 +122,6 @@ class Agent(AgentBasics):
         self._found_agents = set()  # Peer IDs discovered
         self._valid_cmp_agents = set()  # Agents for which the last evaluation was positive
         self._engaged_agents = set()
-        self._agents_who_completed_what_they_were_asked = set()
-        self._agents_who_were_asked = set()
         self._eval_results = {}
 
         # Status variables (assumed to start with "_"): Recordings
@@ -200,6 +199,7 @@ class Agent(AgentBasics):
         assert self.stats is not None
         self.stats.update_view(received_view, overwrite)
 
+    @action
     async def suggest_role_to_world(self, agent: str | None, role: str) -> bool:
         """Suggests a role change for one or more agents to the world master. It iterates through the involved agents,
         checks if their current role differs from the suggested one, and sends a role suggestion message to the
@@ -238,6 +238,7 @@ class Agent(AgentBasics):
                 return False
         return True
 
+    @action
     async def suggest_badges_to_world(self, agent: str | None = None,
                                       score: float = -1.0, badge_type: str = "completed",
                                       badge_description: str | None = None) -> bool:
@@ -389,13 +390,16 @@ class Agent(AgentBasics):
             else:
                 if system_interaction:
                     assert isinstance(system_interaction.action_ref, Action)
-                    system_interaction.action_ref.set_timeout(-1.)  # Clear timeouts to ensure it is not pedantic
+                    if not system_interaction.action_ref.is_pedantic_by_default():
+                        system_interaction.action_ref.set_timeout(-1.)  # Clear timeouts to ensure it is not pedantic
                 return sent_interaction is not None
         else:
             assert system_interaction is not None
             sent_interaction = system_interaction.get_mark()  # Loading the interaction that was sent at the first run
             sent_interaction: Interaction
             if sent_interaction.is_completed():
+                if not system_interaction.action_ref.is_pedantic_by_default():
+                    system_interaction.action_ref.set_timeout(-1.)  # Clear timeouts to ensure it is not pedantic
                 return True  # The mark will be automatically cleared by the Action class
             else:
                 return False
@@ -500,7 +504,7 @@ class Agent(AgentBasics):
 
             # Learning from the last performed inference and the current targets
             try:
-                assert self.proc is not None
+                assert isinstance(self.proc, ModuleWrapper)
                 loss_values = self.proc.learn_backward(target_data)
             except Exception as e:
                 log.error(f"Error while learning: {e}")
@@ -566,9 +570,11 @@ class Agent(AgentBasics):
         my_role_str = self.node_profile.get_dynamic_profile()['connections']['role']
         ret = await self.send(target=self._found_agents, action_name="engage",
                               action_kwargs={"sender_role": my_role_str}, wait_completion=True,
+                              timeout=Custom.DEFAULT_TIMEOUT,
                               interaction=self.im.get_current())
         if ret:
-            engaged = self.last_sent_interaction.target if self.last_sent_interaction is not None else None
+            marked = self.im.get_current().get_mark()  # the exact interaction this "send" dispatched
+            engaged = marked.target if marked is not None else None
             if (engaged is not None) and isinstance(engaged, list) and len(engaged) > 0:
                 for eng in engaged:
                     self._engaged_agents.add(eng)
@@ -736,7 +742,6 @@ class Agent(AgentBasics):
         return True
 
     @action
-    @action
     async def disconnected(self, agent: str | None = None, handshake_completed: bool = False) -> bool:
         """Checks if a specific set of agents (by ID or wildcard) are no longer connected to the agent.
         It returns False if any of the specified agents are still connected (async).
@@ -862,17 +867,6 @@ class Agent(AgentBasics):
         return True
 
     @action
-    async def all_asked_finished(self) -> bool:
-        """Checks if all agents that were previously asked to perform a task (e.g., generate or learn) have sent a
-        completion confirmation. It compares the set of agents asked with the set of agents that have completed
-        the task (async).
-
-        Returns:
-            True if all agents are done, False otherwise.
-        """
-        return self._agents_who_were_asked == self._agents_who_completed_what_they_were_asked
-
-    @action
     async def all_engagements_completed(self) -> bool:
         """Checks if all engagement requests that were sent have been confirmed. It returns True if there are no agents
         remaining in the `_found_agents` list, implying all have been engaged with or discarded (async).
@@ -938,23 +932,14 @@ class Agent(AgentBasics):
 
         what = "subscribe to" if not unsubscribe else "unsubscribe from "
         log.misc(f"Asking {', '.join(involved_agents)} to {what} {stream_hashes}")
-        self._agents_who_completed_what_they_were_asked = set()
-        self._agents_who_were_asked = set()
-        correctly_asked = []
-        for agent in involved_agents:
-            if await self._send(target=agent, action_name="subscribe",
-                                action_kwargs={"stream_owners": stream_owners,
-                                               "stream_props": stream_props,
-                                               "unsubscribe": unsubscribe}):
-                self._agents_who_were_asked.add(agent)
-                ret = True
-            else:
-                what = "subscribe" if not unsubscribe else "unsubscribe"
-                log.error(f"Unable to ask {agent} to {what}")
-                ret = False
-            log.debug(f"[send_subscribe] Asking {agent} returned {ret}")
-            if ret:
-                correctly_asked.append(agent)
+        interaction = await self._send(target=involved_agents, action_name="subscribe",
+                                       action_kwargs={"stream_owners": stream_owners,
+                                                      "stream_props": stream_props,
+                                                      "unsubscribe": unsubscribe})
+        if interaction is not None:
+            correctly_asked = list(interaction.target)
+        else:
+            correctly_asked = []
 
         log.debug(f"[send_subscribe] Overall, the action send_subscribe (unsubscribe: {unsubscribe})"
                   f" will return {len(correctly_asked) > 0}")
@@ -1097,16 +1082,20 @@ class Agent(AgentBasics):
             return True
 
     @action
-    async def connect_by_role(self, role: str | list[str], filter_fcn: str | None = None) -> bool:
+    async def connect_by_role(self, role: str | list[str], filter_fcn: str | None = None,
+                              accept_already_connected: bool = False) -> bool:
         """Finds and attempts to connect with agents whose profiles match a specific role. It can be optionally
         filtered by a custom function. It returns True if at least one valid agent is found (async).
 
         Args:
             role: The role or list of roles to search for.
             filter_fcn: The name of an optional filter function.
+            accept_already_connected: If you want to consider the already connected peers as valid to make this method
+                return True.
 
         Returns:
-            True if at least one agent is found and a NEW connection request is made, False otherwise.
+            True if at least one agent is found and a NEW connection request is made (and also if it was already
+                established - if return_true_if_already_connected=True), False otherwise.
         """
         log.misc(f"Asking to get in touch with all agents whose role is {role}")
 
@@ -1127,12 +1116,14 @@ class Agent(AgentBasics):
             found_peer_ids = found_peer_ids1 + found_peer_ids2
 
             if filter_fcn is not None:
-                if hasattr(self, filter_fcn):
-                    filter_fcn = getattr(self, filter_fcn)
-                    if callable(filter_fcn):
-                        found_addresses, found_peer_ids = filter_fcn(found_addresses, found_peer_ids)
-                else:
-                    log.error(f"Filter function not found: {filter_fcn}")
+                if isinstance(filter_fcn, str):
+                    if hasattr(self, filter_fcn):
+                        filter_fcn = getattr(self, filter_fcn)
+                    else:
+                        log.error(f"Filter function not found: {filter_fcn}")
+                        return False
+                if callable(filter_fcn):
+                    found_addresses, found_peer_ids = filter_fcn(found_addresses, found_peer_ids)
 
             log.misc(f"Found addresses ({len(found_addresses)}) with role: {role}")
             for f_addr, f_peer_id in zip(found_addresses, found_peer_ids):
@@ -1146,6 +1137,9 @@ class Agent(AgentBasics):
                     log.misc(f"Not-asking to get in touch with {f_addr}, "
                              f"since I am already connected to the corresponding peer...")
                     peer_id = f_peer_id
+                    if accept_already_connected:
+                        at_least_one_is_valid = True
+                        self._found_agents.add(peer_id)
                 log.misc(f"...returned {peer_id}")
         return at_least_one_is_valid
 
@@ -1287,8 +1281,7 @@ class Agent(AgentBasics):
             steps: The number of steps to perform the evaluation.
             re_offset: A boolean to indicate whether to re-offset the streams.
             agents_to_evaluate: peer ID or list of peer IDs of agents that returned streams that were buffered, and
-                that we are going to evaluate (default is None, meaning the agents in
-                self._agents_who_completed_what_they_were_asked are considered).
+                that we are going to evaluate (default is None, meaning: "take the engaged agents").
 
         Returns:
             True if the evaluation is successful, False otherwise.

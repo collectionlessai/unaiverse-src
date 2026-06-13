@@ -44,7 +44,7 @@ class _Clock:
         self.cycle = -1  # Internal index, not shared outside (the value -1 is only used at creation/reset time)
         self.__servers = [
             'pool.ntp.org',
-            'north-america.pool.ntp.org'
+            'north-america.pool.ntp.org',
             'asia.pool.ntp.org',
             'europe.pool.ntp.org',
         ]
@@ -133,9 +133,9 @@ class _Clock:
         """
         if delta is not None and delta > 0:
             passed = self.get_time() - timestamp  # Precision: microseconds
-            return self.cycle - int(passed * delta)
+            return self.cycle - int(passed / delta)
         else:
-            self.__time2cycle_cache = Clock.__search(self.__timestamps, timestamp, self.__time2cycle_cache)
+            self.__time2cycle_cache = _Clock._search(self.__timestamps, timestamp, self.__time2cycle_cache)
             return self.__time2cycle_cache
 
     def cycle2time(self, cycle: int, delta: float | None = None) -> float:
@@ -220,7 +220,7 @@ class _Clock:
             return True
 
     @staticmethod
-    def __search(_list, _target, _last_pos):
+    def _search(_list, _target, _last_pos):
         """Search for a target value in the list of timestamps and return the index of the corresponding cycle.
 
         Args:

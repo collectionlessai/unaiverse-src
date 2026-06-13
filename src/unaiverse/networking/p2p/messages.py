@@ -294,12 +294,12 @@ class Msg:
         """Helper to convert a Python type into a google.protobuf.Value."""
         if py_val is None:
             return Value(null_value=NULL_VALUE)
+        if isinstance(py_val, bool):
+            return Value(bool_value=py_val)
         if isinstance(py_val, (int, float)):
             return Value(number_value=py_val)
         if isinstance(py_val, str):
             return Value(string_value=py_val)
-        if isinstance(py_val, bool):
-            return Value(bool_value=py_val)
         if isinstance(py_val, list):
             lv = ListValue()
             for item in py_val:

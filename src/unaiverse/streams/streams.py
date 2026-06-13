@@ -21,13 +21,11 @@ import json
 import torch
 import base64
 import random
+from torch import Tensor
 from PIL.Image import Image
 from typing import TYPE_CHECKING
-
-from torch import Tensor
-
-from .dataprops import DataProps, TensorLabels
 from unaiverse.clock import clock
+from .dataprops import DataProps, TensorLabels
 from unaiverse.utils.misc import show_images_grid
 from unaiverse.custom import Custom, GenException
 
@@ -579,7 +577,7 @@ class Stream:
                 to_remove.append(uuid)
 
         for uuid in to_remove:
-            del self.data_by_uuid[uuid]
+            self.remove_data(uuid)  # Overwritten in BufferedStream
             if uuid in self.interactions_by_uuid:
                 del self.interactions_by_uuid[uuid]
         return to_remove
@@ -615,7 +613,7 @@ class Stream:
             interaction: The Interaction object to remove.
         """
         uuid = interaction.uuid
-        if uuid in self.interactions_by_uuid:
+        if self.interactions_by_uuid.get(uuid) is interaction:
             del self.interactions_by_uuid[uuid]
             self.limit_data_without_interactions()
 
@@ -757,6 +755,17 @@ class BufferedStream(Stream):
 
         self.restart_before_next_get_by_uuid: dict[None | str, set] = {None: set()}  # set()
 
+    def has_data(self, uuid: str | None) -> bool:
+        """Check whether data is stored for the given UUID.
+
+        Args:
+            uuid: The UUID to look up.
+
+        Returns:
+            True if data exists for that UUID, False otherwise.
+        """
+        return uuid in self.data_buffer_by_uuid
+
     def get_data_uuids(self):
         """Return the set of UUIDs for which buffered data exists.
 
@@ -796,19 +805,31 @@ class BufferedStream(Stream):
         if uuid not in self.buffered_data_index_by_uuid:
             self.buffered_data_index_by_uuid[uuid] = -1  # Keep it to -1, it will be incremented then used
 
-    def get(self, requested_by: str | None = None, uuid: str | None = None, **kwargs) \
+    def get(self, requested_by: str | None = None, uuid: str | None = None, all_uuids: bool = False) \
             -> str | Image | Tensor | None | list[tuple[str | Image | Tensor | None, int, float]]:
         """Get the current data sample based on cycle and buffer.
 
         Args:
             requested_by: Identifier of the caller for per-caller deduplication.
             uuid: UUID of the interaction to retrieve data for (defaults to the last set UUID).
+            all_uuids: Whether to return a list with all the data samples for all the existing UUIDs (default: False).
+                In this case, the uuid argument is ignored.
 
         Returns:
             The current buffered sample, or None if no new data is available for this caller.
+            If all_uuids is True, then it returns a list of tuples (data_sample, tag, timestamp),
+                where each data_sample has the just mentioned properties.
         """
-        if len(kwargs) > 0:
-            raise GenException(f"Unsupported arguments in calling 'get' for BufferedStreams: {kwargs}")
+        if all_uuids:
+            samples = []
+            for _uuid in list(self.get_data_uuids()):  # Keep "list(...)" to avoid a rare but possible issue
+                sample = self.get(requested_by, _uuid)
+                if sample is None:
+                    continue
+                tag = self.get_tag(_uuid)
+                timestamp = self.get_timestamp(_uuid)
+                samples.append((sample, tag, timestamp))
+            return samples
 
         if (requested_by is not None and uuid in self.restart_before_next_get_by_uuid and
                 requested_by in self.restart_before_next_get_by_uuid[uuid]):
@@ -1205,11 +1226,12 @@ class Dataset(BufferedStream):
 
         for i in range(0, nb):
             batch = []
+            base = i * b
             if i == (nb - 1):
                 b = r
 
             for j in range(0, b):
-                sample = tensor_dataset[i * b + j][index]
+                sample = tensor_dataset[base + j][index]
                 if isinstance(sample, (int, float)):
                     sample = torch.tensor(sample, dtype=dtype)
                 batch.append(sample)

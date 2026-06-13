@@ -84,7 +84,7 @@ class World(AgentBasics):
 
         # Currently, roles are only world masters and world agents
         if is_world_master:
-            if len(self.world_masters) <= 1:
+            if len(self.world_masters) < 1:
                 return AgentBasics.ROLE_BITS_TO_STR[AgentBasics.ROLE_WORLD_MASTER]
             else:
                 return AgentBasics.ROLE_BITS_TO_STR[AgentBasics.ROLE_WORLD_AGENT]

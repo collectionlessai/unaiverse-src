@@ -879,7 +879,7 @@ class P2P:
             logger.error(f"❌ Error fetching rendezvous peers info: {e}")
 
             # Optionally raise P2PError(f"Failed to get rendezvous peers info") from e if called directly
-            return []  # Return empty list on error during polling
+            return None  # Return empty list on error during polling
 
     def get_message_queue_length(self) -> int:
         """
@@ -946,19 +946,20 @@ class P2P:
         except Exception as e:
             logger.error(f"❌ Error closing node: {e}")
             raise P2PError(f"Error closing node: {e}") from e
+        finally:
 
-        # 4. Clear internal state
-        self._peer_id = None
-        with P2P._instance_lock:
-            if close_all:
+            # 4. Clear internal state
+            self._peer_id = None
+            with P2P._instance_lock:
+                if close_all:
 
-                # Also apply the lock here and use the corrected logic
-                P2P._instance_ids = [False] * P2P._MAX_INSTANCES
-                logger.info("🐍 All instance slots have been marked as free.")
-            else:
-                if self._instance != -1:  # Ensure instance was set
-                    P2P._instance_ids[self._instance] = False
-                    logger.info(f"🐍 Instance slot {self._instance} has been marked as free.")
+                    # Also apply the lock here and use the corrected logic
+                    P2P._instance_ids = [False] * P2P._MAX_INSTANCES
+                    logger.info("🐍 All instance slots have been marked as free.")
+                else:
+                    if self._instance != -1:  # Ensure instance was set
+                        P2P._instance_ids[self._instance] = False
+                        logger.info(f"🐍 Instance slot {self._instance} has been marked as free.")
 
         logger.info("🐍 Python P2P object state cleared.")
 

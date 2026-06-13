@@ -87,7 +87,9 @@ class Interaction:
         """
         # Participants
         self.requester: str | None = requester
-        self.target: list[str | None] = target if isinstance(target, list) else [target]
+
+        # Shallow copy targets, since they will be resolved later
+        self.target: list[str | None] = list(target) if isinstance(target, list) else [target]
 
         # Identity
         self.id = _uuid.uuid4().hex[0:8] if (id is not None and id == 'random') else id \
@@ -136,7 +138,10 @@ class Interaction:
             log.error("You are not expected to build an interaction object specifying both streams and data_samples. "
                       "Keeping streams only!")
 
-        if len(self.streams) == 0 and (data_samples is not None and len(data_samples) > 0):
+        # Ensure all data-involving-interactions have at least self.num_steps = 1
+        if len(self.streams) > 0 and (not isinstance(self.num_steps, str) and self.num_steps < 0):  # Could be wildcard
+            self.num_steps = 1
+        elif len(self.streams) == 0 and (data_samples is not None and len(data_samples) > 0):
             self.data_samples = data_samples  # List of PIL.Image, torch.Tensor, str, or dict user hash -> sample
             self.num_steps = 1
 
@@ -193,6 +198,9 @@ class Interaction:
         # Checking
         if self.callback is not None and self.volatile:
             raise GenException("You cannot set a callback on a volatile interaction")
+
+    def set_status_to_created(self) -> None:
+        self.status = InteractionStatus.CREATED
 
     @staticmethod
     def build_uuid(id: str | None, requester: str | None = None) -> str:
@@ -550,6 +558,7 @@ class Interaction:
             self.target: list
             for i, tar in enumerate(self.target):
                 if self.target_completion_reason[i] is None:
+                    self.target_destination_state[i] = dest_state
                     self.target_completion_reason[i] = reason  # The completion reason of the whole interaction
                     self.target_timestamp_completed[i] = _time
                     self.target_cycle_completed[i] = _cycle
@@ -566,7 +575,7 @@ class Interaction:
                 if self.target_completion_reason[i] is not None:
                     num_completed += 1
             if num_completed == len(self.target):
-                self.mark_completed(reason)  # The completion reason of the last target who completed
+                self.mark_completed(reason, dest_state)  # The completion reason of the last target who completed
 
     def clear_from_action(self) -> None:
         """Deregister this interaction from its action's interaction list."""
@@ -621,8 +630,13 @@ class Interaction:
 
             # Check if stream has data with a tag not yet consumed by this interaction
             current_tag = stream_obj.get_tag(self.uuid)
+            if current_tag is None and self.is_system():
+                # Lazy/system interactions may read sources that publish under uuid=None
+                # (e.g. 'record' with record_uuid=None reading world streams): evaluate
+                # freshness on the None slot in that case.
+                current_tag = stream_obj.get_tag(None)
 
-            if last_handled_data_tag is not None and current_tag == last_handled_data_tag:
+            if current_tag is None or (last_handled_data_tag is not None and current_tag == last_handled_data_tag):
                 if all_fresh_or_fail:
                     return None
                 else:
@@ -924,13 +938,13 @@ class InteractionManager:
         interaction.clear_from_action()
         self.clear_from_all_streams(interaction)
         found = False
-        if interaction.uuid in self.sent and self.sent[interaction.uuid].requester == interaction.requester:
+        if self.sent.get(interaction.uuid) is interaction:
             del self.sent[interaction.uuid]
             found = True
-        if interaction.uuid in self.received and self.received[interaction.uuid].requester == interaction.requester:
+        if self.received.get(interaction.uuid) is interaction:
             del self.received[interaction.uuid]
             found = True
-        if interaction.uuid in self.lazy and self.lazy[interaction.uuid].requester == interaction.requester:
+        if self.lazy.get(interaction.uuid) is interaction:
             del self.lazy[interaction.uuid]
             found = True
         return found
@@ -945,6 +959,11 @@ class InteractionManager:
         Returns:
             True if registration succeeded; False if there is no room or the streams are invalid.
         """
+        existing = self.sent.get(interaction.uuid)
+        if existing is not None and existing is not interaction:
+            log.error(f"UUID collision on {interaction.uuid}, refusing to evict an in-flight interaction")
+            return False
+
         self.__check_callback_method(interaction)
         if not self.room_for_registration():
             log.error(f"No more room for interactions (limit: {self.max_interactions})")
@@ -1070,6 +1089,11 @@ class InteractionManager:
         Returns:
             True if registration succeeded; False if there is no room, streams are invalid, or matching failed.
         """
+        existing = self.received.get(interaction.uuid)
+        if existing is not None and existing is not interaction:
+            log.error(f"UUID collision on {interaction.uuid}, refusing to evict an in-flight interaction")
+            return False
+
         if self.__register_received_or_lazy(interaction, public):
             self.received[interaction.uuid] = interaction
 
@@ -1089,6 +1113,11 @@ class InteractionManager:
         Returns:
             True if registration succeeded; False if there is no room or the streams are invalid.
         """
+        existing = self.lazy.get(interaction.uuid)
+        if existing is not None and existing is not interaction:
+            log.error(f"UUID collision on {interaction.uuid}, refusing to evict an in-flight interaction")
+            return False
+
         if self.__register_received_or_lazy(interaction, public):
             self.lazy[interaction.uuid] = interaction
 
@@ -1445,20 +1474,17 @@ class InteractionManager:
             dest_state: The destination state reached, if any.
             target: The target agent who completed the interaction (Default: None).
         """
-        if interaction is not None:
+        if interaction is not None and not interaction.completed:
             interaction.mark_completed(reason, dest_state=dest_state, target=target)
             interaction.clear_from_action()  # We do not remove it from streams yet - it might be needed for sending
             if interaction.completed:
-                if (interaction.uuid in self.sent and
-                        interaction.requester == self.sent[interaction.uuid].requester):  # Distinguish chained
+                if self.sent.get(interaction.uuid) is interaction:
                     self.sent_recently_completed.add(interaction)
                     del self.sent[interaction.uuid]
-                if (interaction.uuid in self.received and
-                        interaction.requester == self.received[interaction.uuid].requester):  # Distinguish chained
+                if self.received.get(interaction.uuid) is interaction:
                     self.received_recently_completed.add(interaction)
                     del self.received[interaction.uuid]
-                if (interaction.uuid in self.lazy and
-                        interaction.requester == self.lazy[interaction.uuid].requester):  # Distinguish chained
+                if self.lazy.get(interaction.uuid) is interaction:
                     self.lazy_recently_completed.add(interaction)
                     del self.lazy[interaction.uuid]
 
@@ -1473,7 +1499,7 @@ class InteractionManager:
                         if self.agent.in_world():
                             self.agent.behav.enable(True)
 
-                            await callback_method(interaction=interaction)  # "Calling callback!"
+                    await callback_method(interaction=interaction)  # "Calling callback!"
 
                     self.agent.behav_lone_wolf.enable(False)
                     self.agent.behav.enable(False)

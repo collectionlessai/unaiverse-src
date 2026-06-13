@@ -54,26 +54,33 @@ class TokenVerifier:
 
         # Decoding token using the public key
         try:
-            payload = jwt.decode(token, self.public_key, algorithms=["RS256"])
+            payload = jwt.decode(token, self.public_key, algorithms=["RS256"], options={"require": ["exp"]})
         except jwt.DecodeError:
             return None, None
         except jwt.ExpiredSignatureError:  # This checks expiration time (required)
             return None, None
+        except jwt.InvalidTokenError:
+            return None, None
+        except jwt.InvalidKeyError:
+            return None, None
+        except Exception:
+            return None, None
 
         # Checking optional information
-        if node_id is not None and payload["node_id"] != node_id:
+        if node_id is not None and payload.get("node_id", None) != node_id:
             return None, None
-        if ip is not None and payload["ip"] != ip:
+        if ip is not None and payload.get("ip", None) != ip:
             return None, None
-        if hostname is not None and payload["hostname"] != hostname:
+        if hostname is not None and payload.get("hostname", None) != hostname:
             return None, None
-        if port is not None and payload["port"] != port:
+        if port is not None and payload.get("port", None) != port:
             return None, None
-        if p2p_peer is not None and p2p_peer not in payload["p2p_peers"]:
+        if p2p_peer is not None and p2p_peer not in payload.get("p2p_peers", ()):
             return None, None
 
         # All ok
-        return payload["node_id"], payload["cv_hash"]
+        return payload.get("node_id", None), payload.get("cv_hash", None)
 
     def __str__(self):
-        return f"[{self.__class__.__name__}] public_key: {self.public_key[0:50] + b'...'}"
+        key_str = self.public_key.decode("utf-8") if isinstance(self.public_key, bytes) else self.public_key
+        return f"[{self.__class__.__name__}] public_key: {key_str + '...'}"

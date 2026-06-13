@@ -74,13 +74,14 @@ class RNNTokenLM(ModuleWrapper):
 
 
 class RNN(ModuleWrapper):
-    def __init__(self, u_shape: tuple[int], d_dim: int, y_dim: int, h_dim: int, batch_size: int = 1, *args, **kwargs):
+    def __init__(self, u_shape: tuple[int], d_dim: int, y_dim: int, h_dim: int, batch_size: int = 1, device=None,
+                 *args, **kwargs):
         u_shape = torch.Size(u_shape)
         u_dim = u_shape.numel()
         du_dim = d_dim
 
         class Net(torch.nn.Module):
-            def __init__(self):
+            def __init__(self, _device):
                 super().__init__()
                 self.A = torch.nn.Linear(h_dim, h_dim, bias=False)
                 self.B = torch.nn.Linear(u_dim + du_dim, h_dim, bias=False)
@@ -89,6 +90,7 @@ class RNN(ModuleWrapper):
                 self.h = None
                 self.u_dim = u_dim
                 self.du_dim = du_dim
+                self._device = _device
 
             def forward(self, u: torch.Tensor, du: torch.Tensor, first: bool = True):
                 if first:
@@ -96,20 +98,24 @@ class RNN(ModuleWrapper):
                 else:
                     h = self.h.detach()
                 if u is None:
-                    u = torch.zeros((h.shape[0], self.u_dim), dtype=torch.float32, device=self.device)
+                    u = torch.zeros((h.shape[0], self.u_dim), dtype=torch.float32, device=self._device)
                 else:
-                    u = u.to(self.device)
+                    u = u.to(self._device)
                 if du is None:
-                    du = torch.zeros((h.shape[0], self.du_dim), dtype=torch.float32, device=self.device)
+                    du = torch.zeros((h.shape[0], self.du_dim), dtype=torch.float32, device=self._device)
                 else:
-                    du = du.to(self.device)
+                    du = du.to(self._device)
 
                 self.h = torch.tanh(self.A(h) + self.B(torch.cat([du, u], dim=1)))
                 y = self.C(self.h)
                 return y
 
+        # Populate self.device
+        self.guess_device(device)
+
         proc_inputs, proc_outputs = get_proc_inputs_and_proc_outputs_for_rnn(u_shape, du_dim, y_dim)
-        super(RNN, self).__init__(module=Net(), proc_inputs=proc_inputs, proc_outputs=proc_outputs, *args, **kwargs)
+        super(RNN, self).__init__(module=Net(self.device), proc_inputs=proc_inputs, proc_outputs=proc_outputs,
+                                  *args, **kwargs)
 
 
 class CSSM(ModuleWrapper):
@@ -975,7 +981,10 @@ class DenseNet(ModuleWrapper):
 class EfficientNet(ModuleWrapper):
     def __init__(self, d_dim: int = -1, *args, **kwargs):
         weights = torchvision.models.EfficientNet_B0_Weights.IMAGENET1K_V1
-        transforms = weights.transforms
+        transforms = torchvision.transforms.Compose([
+            weights.transforms(),
+            torchvision.transforms.Lambda(lambda x: x.unsqueeze(0))  # Add batch dimension
+        ])
         effnet = torchvision.models.efficientnet_b0(weights=weights)
 
         if d_dim > 0:
@@ -1569,8 +1578,8 @@ class FeatherlessAPI(ModuleWrapper):
     def close(self) -> None:
         """Close both the request and the persistent registration socket, releasing this caller's interest."""
         assert self.module is not None
-        assert isinstance(self.module, ModuleWrapper)
-        self.module.close()
+        if hasattr(self.module, 'close'):
+            self.module.close()
 
     def __enter__(self) -> 'FeatherlessAPI':
         """Enter the context manager, returning this handle."""
