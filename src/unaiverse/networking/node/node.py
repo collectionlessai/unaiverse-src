@@ -797,7 +797,7 @@ class Node:
 
             # Clearing all joining options
             assert self.agent is not None
-            await self.agent.clear_world_related_data()
+            await self.agent.clear_world_related_data(peer_id)
             self.joining_world_info = None
 
             if self.agent.__class__.__name__ == "WAgent":
@@ -1154,7 +1154,8 @@ class Node:
                                             "Inspector command was not sent by the expected inspector node ID "
                                             "or no inspector connected")
                                         await self.__purge(msg.sender)
-                            time.sleep(0.1)
+                            await self.conn.get_messages(p2p_name=NodeConn.P2P_WORLD)  # Just draining
+                            await asyncio.sleep(0.1)  # Don't block the loop
 
                 # Move to the next cycle
                 while not clock.next_cycle():
@@ -1326,7 +1327,7 @@ class Node:
                         self.profile.mark_change_in_connections()
 
                         world_peer_id = (self.profile.get_dynamic_profile().
-                                         get('connections', {}).get('world_peer_id'), None)
+                                         get('connections', {}).get('world_peer_id', None))
                         if (world_peer_id is not None and isinstance(world_peer_id, str) and
                                 self.node_type is Node.AGENT and world_peer_id):
                             log.misc("Notifying world of address change...")
@@ -2550,7 +2551,7 @@ class Node:
             elif _msg.content_type == Msg.AGENT_APPROVAL:
                 _agent_approval_messages.append(_msg)
             elif _msg.content_type == Msg.INTERACTION:
-                _agent_approval_messages.append(_msg)
+                _action_messages.append(_msg)
             else:
                 _other_messages.append(_msg)
         return _world_approval_messages + _agent_approval_messages + _action_messages + _other_messages

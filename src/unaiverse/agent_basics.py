@@ -13,6 +13,7 @@
                  Main Developers:    Stefano Melacci (Project Leader), Christian Di Maio, Tommaso Guidi
 """
 import os
+import json
 import torch
 import pickle
 import uuid as _uuid
@@ -157,6 +158,7 @@ class AgentBasics:
 
         # Internal properties about the way streams are used
         self.last_buffered_peer_id_to_info = {}  # If buffering was turned on
+        self.last_buffered_id_counter = 0
         self.last_ref_uuid = None
         self.overridden_action_step = None
         self.locked_set_proc_input = False
@@ -309,6 +311,12 @@ class AgentBasics:
                             del self.proc_in_streams[net_hash]
                 if user_hash in self.proc_in_streams_by_user_hash:
                     del self.proc_in_streams_by_user_hash[user_hash]
+                self.__proc_streams_by_user_hash_pub.pop(user_hash, None)
+                self.__proc_streams_by_user_hash_prv.pop(user_hash, None)
+                self.__proc_in_streams_by_user_hash_pub.pop(user_hash, None)
+                self.__proc_in_streams_by_user_hash_prv.pop(user_hash, None)
+                self.__env_streams_by_user_hash_pub.pop(user_hash, None)
+                self.__env_streams_by_user_hash_prv.pop(user_hash, None)
                 log.misc(f"Successfully removed known stream with network hash {net_hash}, stream name: {name}")
 
         # World only: loading action files and refactoring (or building) JSON files of the different roles.
@@ -528,7 +536,7 @@ class AgentBasics:
         for k, v in role_str_to_bits.items():
             self.ROLE_STR_TO_BITS[k] = v
 
-    async def clear_world_related_data(self):
+    async def clear_world_related_data(self, world_peer_id: str):
         """Destroy all the cached information that is about a world (useful when leaving a world) (async)."""
 
         # Clearing status variables
@@ -538,6 +546,7 @@ class AgentBasics:
         await self.__remove_all_world_private_streams()
         await self.__remove_all_world_related_agents()
         self.node_conn.reset_rendezvous_tag()
+        await self.node_conn.unsubscribe(world_peer_id, channel=f"{world_peer_id}::ps:rv")  # Special rendezvous (ps:rv)
 
     def load_and_refactor_action_file_and_behav_files(self, force_save: bool = False):
         """This method is called when building a world object. It loads the behavior files and refactors them.
@@ -672,11 +681,10 @@ class AgentBasics:
             is_augmented = "~" in role
             role_int = self.ROLE_STR_TO_BITS[role]
             if not is_augmented:
-                role_int = self.ROLE_STR_TO_BITS[role]
                 for role_prefix_int in {AgentBasics.ROLE_WORLD_AGENT, AgentBasics.ROLE_WORLD_MASTER}:
                     searched_roles_int.add(role_prefix_int | role_int)
             else:
-                searched_roles_int = {role_int}
+                searched_roles_int.add(role_int)
 
         found_agents = []
         for role_int in searched_roles_int:
@@ -729,9 +737,53 @@ class AgentBasics:
         Returns:
             True if the agent was successfully added, False otherwise.
         """
+        must_remove_agent_before_adding_again = False
 
-        # If the agent was already there, we remove it and add it again (in case of changes)
-        await self.remove_agent(peer_id)  # It has no effects if the agent is not existing
+        # Re-adding an existing agent might happen, for example when the profile of a known agent changed and was
+        # sent again (e.g., changes of addresses, ...).
+        # If the profile only changed from the point of view of innocent properties (connections, role, addresses, ...)
+        # then we can overwrite the existing one with no issues. If streams changed, then we remove the agent and add
+        # it again.
+        if peer_id in self.all_agents:
+
+            if profile.get_static_profile()["node_type"] != self.all_agents[peer_id].get_static_profile()["node_type"]:
+                must_remove_agent_before_adding_again = True
+
+            dynamic_profile = profile.get_dynamic_profile()
+            environmental_streams = dynamic_profile['streams']
+            proc_streams = dynamic_profile['proc_outputs']
+
+            _dynamic_profile = self.all_agents[peer_id].get_dynamic_profile()
+            _environmental_streams = _dynamic_profile['streams']
+            _proc_streams = _dynamic_profile['proc_outputs']
+
+            def compare(A: list[dict] | None, B: list[dict] | None):
+                set_A = {json.dumps(d, sort_keys=True) for d in (A or [])}
+                set_B = {json.dumps(d, sort_keys=True) for d in (B or [])}
+                return set_A - set_B, set_B - set_A
+
+            added, lost = compare(environmental_streams, _environmental_streams)
+            if (add_env_streams and len(added) > 0) or len(lost) > 0:
+                must_remove_agent_before_adding_again = True
+
+            added, lost = compare(proc_streams, _proc_streams)
+            if (add_proc_streams and len(added) > 0) or len(lost) > 0:
+                must_remove_agent_before_adding_again = True
+
+            if must_remove_agent_before_adding_again:
+                # If the agent was already there, we remove it and add will add it again (in case of changes)
+                await self.remove_agent(peer_id)  # It has no effects if the agent is not existing
+            else:
+                # If nothing structural changed, do not try to deal with streams
+                if add_env_streams:
+                    add_env_streams = False
+                if add_proc_streams:
+                    add_proc_streams = False
+
+                # Temporarily remove the agent from these dicts, since they depend on the role, that might have changed
+                self.public_agents.pop(peer_id, None)
+                self.world_agents.pop(peer_id, None)
+                self.world_masters.pop(peer_id, None)
 
         # Guessing the type of agent to add (accordingly to the default roles shared by every agent)
         role = self.node_conn.get_role(peer_id)
@@ -834,6 +886,10 @@ class AgentBasics:
             # Updating buffered stream index
             if peer_id in self.last_buffered_peer_id_to_info:
                 del self.last_buffered_peer_id_to_info[peer_id]  # Only if present
+
+            # Resetting counter, if needed
+            if len(self.last_buffered_peer_id_to_info) == 0:
+                self.last_buffered_id_counter = 0
 
             # Clearing pending interactions
             await self.im.remove_interactions_of_agent(peer_id)
@@ -1074,7 +1130,7 @@ class AgentBasics:
         """
         if not owned_too:
             self.known_streams = {k: v for k, v in self.owned_streams.items()}
-            self.known_streams_by_user_hash = {k: v for k, v in self.known_streams_by_user_hash.items()}
+            self.known_streams_by_user_hash = {k: v for k, v in self.owned_streams_by_user_hash.items()}
         else:
             self.known_streams = {}
             self.owned_streams = {}
@@ -1875,8 +1931,8 @@ class AgentBasics:
                             self.last_buffered_peer_id_to_info[_peer_id] = {"uuid_to_id": {}, "net_hash": None}
                         _buffered_uuid_to_id = self.last_buffered_peer_id_to_info[_peer_id]["uuid_to_id"]
                         if data_uuid not in _buffered_uuid_to_id:
-                            _buffered_uuid_to_id[data_uuid] = sum(
-                                len(v["uuid_to_id"]) for v in self.last_buffered_peer_id_to_info.values()) + 1
+                            self.last_buffered_id_counter += 1
+                            _buffered_uuid_to_id[data_uuid] = self.last_buffered_id_counter
                         _buffered_id = _buffered_uuid_to_id[data_uuid]
 
                         # Building net hash to retrieve the buffered stream
@@ -1962,25 +2018,26 @@ class AgentBasics:
 
             # For each stream within this net hash...
             for name, stream in streams_dict.items():
-                if stream.is_pubsub():
-                    uuids = stream.get_data_uuids()  # We send by PubSub whenever there is some data
-                else:
-                    uuids = stream.get_interaction_uuids()  # We send direct messages only if there is an interaction
+                uuids = stream.get_interaction_uuids()  # We send direct messages only if there is an interaction
 
-                # For each agent who triggered the interaction that generated this data (recipient)
+                # We do not consider UUID not-paired with interaction in the case of BufferedStream's
+                if stream.is_pubsub() and not isinstance(stream, BufferedStream):
+                    uuids = list(uuids) + [u for u in stream.get_data_uuids() if u is not None and u not in uuids]
 
                 # Set None as last UUID (it is present in pre-built BufferedStreams)
                 # since it is sometimes replaced by the last set reference,
                 # and we prefer to give priority to the not-None cases
-                if None in uuids:
-                    uuids = [x for x in uuids if x is not None] + [None]
+                if stream.is_pubsub() and stream.has_data(None):
+                    uuids = list(uuids) + [None]  # We send by PubSub whenever there is some data with None UUID
 
+                # For each agent who triggered the interaction that generated this data (recipient)
                 for uuid in uuids:
                     interaction = stream.get_interaction(uuid)
                     recipient = None
 
                     # Invalid agent? Skip!
                     if not stream.is_pubsub():
+                        assert interaction is not None
                         recipient = self.im.get_recipients(interaction)
                         if len(recipient) == 0:
                             continue
@@ -1993,6 +2050,7 @@ class AgentBasics:
                     data = stream.get(requested_by="send_stream_samples", uuid=uuid)
                     data_tag = stream.get_tag(uuid=uuid)
 
+                    assert stream.props is not None
                     log.debug(f"[send_stream_sample] data from stream {stream.props.get_name()} = {data}")
 
                     if data is not None:
@@ -2604,7 +2662,7 @@ class AgentBasics:
             to_state: Optional destination state. Ignored when a pre-built Interaction provided.
             callback: Callback action.
             forced_uuid: A very custom option to force a specific UUID, that is by default a mixture of the id (below)
-                and the target fields. To be used only in very special cases. Defaults to None, meaning "don't force".
+                and the target fields. To be used only in very special cases. Defaults to "do_not_force".
             id: Optional ID of the interaction. Ignored when a pre-built Interaction is provided.
             copy_sys: True if the interaction must copy the last added stream data (with system UUID)
                 to prepare initial data form the current interaction.

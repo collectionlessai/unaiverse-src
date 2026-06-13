@@ -385,9 +385,12 @@ class HybridStateMachine:
         Returns:
             An integer representing the current step, or -1 if no action is running.
         """
-        assert isinstance(self.__cur_feasible_actions_status, dict)
-        return self.__cur_feasible_actions_status['selected_interaction'].get_step_idx() \
-            if self.__action is not None else -1
+        assert self.__action is None or isinstance(self.__cur_feasible_actions_status, dict)
+        if self.__action is None:
+            return -1
+        else:
+            assert isinstance(self.__cur_feasible_actions_status, dict)
+            return self.__cur_feasible_actions_status['selected_interaction'].get_step_idx()
 
     def is_busy_acting(self) -> bool:
         """Checks if the state machine is currently executing an action. This is determined by checking if the action
@@ -527,10 +530,12 @@ class HybridStateMachine:
         self.limbo_state = None
         self.prev_state = None
         self.__action = None
+        self.__cur_feasible_actions_status = None
         for act in self.__id_to_action:
             act.clear_interactions()
             act.system_interaction.reset_state()
         for s in self.__id_to_state:
+            s.reset()
             if s.action is not None:
                 s.action.clear_interactions()
                 s.action.system_interaction.reset_state()
@@ -557,8 +562,9 @@ class HybridStateMachine:
             self.state = state
             if self.__action is not None:
                 assert isinstance(self.__cur_feasible_actions_status, dict)
-                self.__cur_feasible_actions_status['selected_interaction'].reset_status()
+                self.__cur_feasible_actions_status['selected_interaction'].reset_state()
                 self.__action = None
+                self.__cur_feasible_actions_status = None
             if self.initial_state is None:
                 self.initial_state = state
         else:
@@ -1055,10 +1061,12 @@ class HybridStateMachine:
                     _interaction = self.__action.system_interaction
 
                 _interaction.reset_state()  # Resetting
+                assert self.__cur_feasible_actions_status is not None
                 self.__cur_feasible_actions_status['selected_idx'] = _idx
                 self.__cur_feasible_actions_status['selected_interaction'] = _interaction
 
             # References
+            assert self.__cur_feasible_actions_status is not None
             action = self.__action
             idx = self.__cur_feasible_actions_status['selected_idx']
             interaction: Interaction = self.__cur_feasible_actions_status['selected_interaction']
@@ -1120,23 +1128,6 @@ class HybridStateMachine:
                     # for to_state, action_list in self.transitions[self.state].items():
                     #    for i, act in enumerate(action_list):
                     #        act.clear_requests()
-
-                    # Propagating (trying to propagate forward the residual requests)
-                    list_of_residual_interactions = self.__action.get_list_of_interactions()
-                    propagated_requests = []
-                    for interaction in list_of_residual_interactions:
-                        interaction.from_state = None
-                        interaction.to_state = None
-                        if self.request_action(interaction):
-                            _interaction = Interaction()
-                            propagated_requests.append(_interaction.from_dict(interaction.to_dict()))
-                    for _interaction in propagated_requests:
-                        list_of_residual_interactions.remove(_interaction)  # Clearing propagated requests
-
-                    # if len(propagated_requests) > 0:
-                    #    print(f"Reached state {self.state}, "
-                    #          f"propagated these requests taken from {self.__action.name}, and
-                    #          now starting from here {propagated_requests}")
 
                 self.states[self.prev_state].reset(self.__state_changed)  # Reset starting time
                 interaction.reset_state()

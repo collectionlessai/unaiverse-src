@@ -245,7 +245,7 @@ def set_seed(seed: int) -> None:
     if seed >= 0:
         torch.manual_seed(seed)
         random.seed(seed)
-        np.random.seed(0)
+        np.random.seed(seed)
 
 
 def get_proc_inputs_and_proc_outputs_for_rnn(u_shape: torch.Size | tuple, du_dim: int,
@@ -335,15 +335,16 @@ def error_rate_mnist_test_set(network: torch.nn.Module, mnist_data_save_path: st
     training_flag_backup = network.training
     network.eval()
     device = next(network.parameters()).device
-    for x, y in mnist_test:
-        x = x.to(device)
-        y = y.to(device)
-        o = network(x)
-        c = torch.argmax(o, dim=1)
-        error_rate += float(torch.sum(c != y).item())
-        n += x.shape[0]
+    with torch.no_grad():
+        for x, y in mnist_test:
+            x = x.to(device)
+            y = y.to(device)
+            o = network(x)
+            c = torch.argmax(o, dim=1)
+            error_rate += float(torch.sum(c != y).item())
+            n += x.shape[0]
     error_rate /= n
-    network.training = training_flag_backup
+    network.train(training_flag_backup)
 
     return error_rate
 

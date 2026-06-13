@@ -591,7 +591,12 @@ class Logger:
 
     def __getattr__(self, name):
         if self.__instance is None:
-            return print
+            if name == "critical":
+                def _crit(msg, *a, **k):
+                    print(msg)
+                    raise GenException(str(msg))     # Preserve the raising contract
+                return _crit
+            return lambda *args, **kwargs: print(*args)   # Swallow logger-specific kwargs
         return getattr(self.__instance, name)
 
 

@@ -422,9 +422,9 @@ class StreamProxy:
         self.replace_none_samples_with = {}
         if self.replace_none_samples_with_list is not None:
             for i, k in enumerate(self._streams.keys()):
-                self.replace_none_samples_with[k] = self.replace_none_samples_with_list[i]
                 if i >= len(self.replace_none_samples_with_list):
                     break
+                self.replace_none_samples_with[k] = self.replace_none_samples_with_list[i]
 
     def __replace_none_samples_if_possible(self, data: object | None | list[object], key: int | str):
         if data is not None or not self.replace_none_samples_with_list:

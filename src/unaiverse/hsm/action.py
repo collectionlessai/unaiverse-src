@@ -101,6 +101,8 @@ class Action:
         self.__action_retry_timeout = retry_timeout  # A retry_timeout <= 0 means "no total time at all"
         self.__action_retry_timeout_with_wildcard = retry_timeout if isinstance(retry_timeout, str) else None
         self.__guess_timeout(self.args)  # This will "guess" the value of self.__action_retry_timeout from the args dict
+        self.__action_pedantic_by_default = (
+            self.is_pedantic()) if not isinstance(self.__action_retry_timeout, str) else False
 
         # Time-based metrics
         self.__delay = delay
@@ -133,13 +135,13 @@ class Action:
         # at the very end of __init__.
         self.__build_system_interaction()
 
-    async def __on_lazy_done(self) -> None:
+    async def __on_lazy_done(self, reason: CompletionReason = CompletionReason.OK) -> None:
         """Complete the current lazy system_interaction and rebuild a fresh one so the next round
         starts with a brand-new uuid. No-op for dummy (non-registered) system_interactions; expired
         lazy interactions are also caught by `InteractionManager.complete_expired()` every cycle."""
         if not self._lazy_registered:
             return
-        await self.agent.im.complete(self.system_interaction, CompletionReason.OK)
+        await self.agent.im.complete(self.system_interaction, reason)
         self.__build_system_interaction()
 
     @property
@@ -225,15 +227,20 @@ class Action:
         assert interaction is not None
         if interaction.get_starting_time() <= 0:
             interaction.set_starting_time(time.perf_counter())
+            if self.is_pedantic() and not interaction.is_multi_steps():
+                interaction.set_timeout_starting_time(time.perf_counter())
 
         if interaction.is_timed_out():
             interaction.clear_mark()
             if interaction.is_single_step():
+                await self.__on_lazy_done(CompletionReason.DISCARDED)
                 return 2
             if interaction.is_multi_steps():
                 if interaction.was_at_least_one_step_done():
+                    await self.__on_lazy_done()
                     return 0
                 else:
+                    await self.__on_lazy_done(CompletionReason.DISCARDED)
                     return 2
 
         if interaction.is_multi_steps() and interaction.was_at_least_one_step_done():
@@ -261,6 +268,7 @@ class Action:
                     return 1
                 else:
                     interaction.clear_mark()
+                    await self.__on_lazy_done(CompletionReason.DISCARDED)
                     return 2
             if interaction.is_multi_steps():
                 if interaction.was_at_least_one_step_done():
@@ -271,6 +279,7 @@ class Action:
                     return 0
                 else:
                     interaction.clear_mark()
+                    await self.__on_lazy_done(CompletionReason.DISCARDED)
                     return 2
 
         # If it went OK, we reset the time counter that is related to the retry_timeout
@@ -365,10 +374,13 @@ class Action:
     def set_timeout(self, retry_timeout: float) -> None:
         """Sets the retry_timeout to a custom value."""
         self.__action_retry_timeout = retry_timeout
+        if retry_timeout > 0.:
+            self.__action_pedantic_by_default = False
 
     def set_default_timeout(self) -> None:
         """Sets the retry_timeout to the class-level default value (``Custom.DEFAULT_TIMEOUT``)."""
-        self.__action_retry_timeout = Custom.DEFAULT_TIMEOUT
+        if not self.is_pedantic():
+            self.__action_retry_timeout = Custom.DEFAULT_TIMEOUT
 
     def is_pedantic(self) -> bool:
         """Checks if a retry_timeout has been configured for the Custom.
@@ -377,6 +389,14 @@ class Action:
             A boolean indicating if a retry_timeout is set.
         """
         return self.__action_retry_timeout > 0
+
+    def is_pedantic_by_default(self) -> bool:
+        """Checks if an action was pedantic at construction time.
+
+        Returns:
+            A boolean indicating if the action was pedantic since when it was generated.
+        """
+        return self.__action_pedantic_by_default
 
     def get_total_time(self) -> float | str:
         """Returns the total execution time configured for this action (0 means no limit)."""
@@ -583,10 +603,13 @@ class Action:
 
         action_kwargs = {k: v for k, v in self.args.items() if k not in interaction_kwargs}
 
+        added_kwargs_count = 0
         if "id" not in interaction_kwargs and "forced_uuid" not in interaction_kwargs:
             interaction_kwargs["id"] = Custom.SYSTEM_INTERACTION_ID
+            added_kwargs_count += 1
         if "target" not in interaction_kwargs:
             interaction_kwargs["target"] = Custom.SYSTEM_INTERACTION_LABEL
+            added_kwargs_count += 1
 
         self.system_interaction = Interaction(
             requester=Custom.SYSTEM_INTERACTION_LABEL,
@@ -596,8 +619,9 @@ class Action:
         )
         self.system_interaction.set_action_ref(self)
         self._lazy_registered = False
-        self._must_lazy_register = (len(interaction_kwargs) > 0 and
-                                    (self.system_interaction.streams or self.system_interaction.num_steps > 0))
+        self._must_lazy_register = ((len(interaction_kwargs) - added_kwargs_count) > 0 and
+                                    (self.system_interaction.streams or self.system_interaction.data_samples or
+                                     self.system_interaction.num_steps > 0))  # num_steps = -1 by default
 
     def __action_name_to_callable(self, action_name: str):
         """A private helper method that resolves a string action name into a callable method on the `agent`
@@ -698,6 +722,7 @@ class Action:
                     wildcard_from in self.__action_retry_timeout_with_wildcard):
                 self.__action_retry_timeout = (
                     float(self.__action_retry_timeout_with_wildcard.replace(wildcard_from, str(wildcard_to))))
+                self.__action_pedantic_by_default = self.is_pedantic()
             if self.__delay_with_wildcard is not None and wildcard_from in self.__delay_with_wildcard:
                 self.__delay = float(self.__delay_with_wildcard.replace(wildcard_from, str(wildcard_to)))
 

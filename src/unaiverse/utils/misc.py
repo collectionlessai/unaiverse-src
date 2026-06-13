@@ -850,8 +850,31 @@ def analyze_code(files_in_memory: dict[str, str]) -> bool:
         Returns:
             True if the code is considered safe, otherwise False.
         """
-    dangerous_functions = {"eval", "exec", "compile", "system", "__import__", "input"}
-    dangerous_modules = {"subprocess"}
+
+    dangerous_modules = {"subprocess", "ctypes", "pty", "socket", "pickle", "marshal", "importlib"}
+    modules_with_dangerous_functions = {"os", "shutil", "sys", "signal"}
+    dangerous_functions = {
+        # Core Builtins / Code Execution
+        "eval", "exec", "compile", "__import__", "input",
+
+        # OS Commands & Process Execution (os, subprocess)
+        "system", "popen", "subprocess.Popen", "subprocess.run", "subprocess.call",
+
+        # The exec() Family
+        "execl", "execle", "execlp", "execlpe",
+        "execv", "execve", "execvp", "execvpe",
+
+        # The spawn() Family
+        "spawnl", "spawnle", "spawnlp", "spawnlpe",
+        "spawnv", "spawnve", "spawnvp", "spawnvpe",
+        "posix_spawn", "posix_spawnp",
+
+        # Process Management
+        "fork", "kill",
+
+        # File System Destruction (os, shutil)
+        "remove", "unlink", "rmdir", "removedirs", "rmtree"
+    }
 
     def is_suspicious(ast_node):
 
@@ -869,14 +892,15 @@ def analyze_code(files_in_memory: dict[str, str]) -> bool:
                     value = ast_node.func.value
                     # example: os.system(...)  => ast.Name(id='os')
                     if isinstance(value, ast.Name):
-                        if value.id in dangerous_modules:
+                        if value.id in dangerous_modules or value.id in modules_with_dangerous_functions:
                             return True
                     # example: package.subpackage.func(...) => ast.Attribute
                     # check top-level name if possible: walk down to the leftmost Name
                     left = value
                     while isinstance(left, ast.Attribute):
                         left = left.value
-                    if isinstance(left, ast.Name) and left.id in dangerous_modules:
+                    if isinstance(left, ast.Name) and (
+                            left.id in dangerous_modules or left.id in modules_with_dangerous_functions):
                         return True
                 # 2) Also catch explicit module imports used directly:
                 #    subprocess.run(...), os.system(...), etc.

@@ -71,14 +71,10 @@ def sandbox(file_to_run: str,
     cleanup_docker_artifacts(where=abspath_of_unaiverse_code)
 
     # Requirements
-    echoed_contents_of_requirements = 'printf "'
     with open(os.path.join(abspath_of_unaiverse_code, "requirements.txt"), 'r') as req_file:
         req_lines = req_file.readlines()
-    for i, req_line in enumerate(req_lines):
-        if i != (len(req_lines) - 1) and len(req_line.strip()) > 0:
-            echoed_contents_of_requirements += req_line.strip() + "\\n"
-        else:
-            echoed_contents_of_requirements += req_line.strip() + "\\n\" > requirements.txt"
+    lines = [l.strip() for l in req_lines if l.strip()]
+    echoed_contents_of_requirements = 'printf "' + "\\n".join(lines) + '\\n" > requirements.txt'
 
     # Create Dockerfile
     print("Creating Dockerfile...")

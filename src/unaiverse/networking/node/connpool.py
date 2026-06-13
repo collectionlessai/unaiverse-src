@@ -445,7 +445,7 @@ class ConnectionPools:
                     for new_peer_id in new_peer_ids:
                         peer_info = connected_peer_ids_to_connected_peer_infos[new_peer_id]
                         if not self.add(peer_info, pool_name=pool_name):
-                            break
+                            continue
                         self.pool_name_to_added_in_last_update.setdefault(pool_name, set()).add(new_peer_id)
 
         return self.pool_name_to_added_in_last_update, self.pool_name_to_removed_in_last_update
@@ -725,10 +725,11 @@ class ConnectionPools:
         if p2p is None and peer_id in self.peer_id_to_p2p:
             p2p = self.peer_id_to_p2p[peer_id]
         if p2p is None:
-            if default_p2p_name is not None:
-                p2p = self.p2p_name_to_p2p[default_p2p_name]
-            else:
-                return False
+            if default_p2p_name is None:
+                default_p2p_name = NodeConn.P2P_WORLD
+            p2p = self.p2p_name_to_p2p[default_p2p_name]
+        if p2p is None:
+            return False
 
         try:
             p2p.unsubscribe_from_topic(channel)
