@@ -1992,7 +1992,7 @@ class AgentBasics:
 
         # If this stream is not known at all...
         else:
-            log.misc(f"Skipping sample from {net_hash} (data stream is unknown)")
+            log.user(f"Skipping sample from {net_hash} (data stream is unknown)")  # Misc
             return added_data
 
     async def send_stream_samples(self):
@@ -2012,8 +2012,6 @@ class AgentBasics:
             contents_data_by_uuid = {}
 
             # Preparing content to send
-            empty_contents: dict[str, dict | None] = {name: None for name in streams_dict.keys()}
-            empty_data = {name: None for name in streams_dict.keys()}
             valid_samples_count = {}
 
             # For each stream within this net hash...
@@ -2061,8 +2059,9 @@ class AgentBasics:
                         if uuid not in contents_by_uuid:
                             interactions_by_uuid[uuid] = interaction
                             recipients_by_uuid[uuid] = recipient
-                            contents_by_uuid[uuid] = empty_contents.copy()
-                            contents_data_by_uuid[uuid] = empty_data.copy()
+                            contents_by_uuid[uuid] = {name: {'data': None, 'data_tag': None, 'data_uuid': None}
+                                                      for name in streams_dict.keys()}
+                            contents_data_by_uuid[uuid] = {name: None for name in streams_dict.keys()}
                             valid_samples_count[uuid] = 0
 
                         # Pack into the prepared data structures
@@ -2072,13 +2071,12 @@ class AgentBasics:
                         contents_data_by_uuid[uuid][name] = data
                         valid_samples_count[uuid] += 1
                     else:
-                        log.debug(
-                            f"[send_stream_samples] None data in stream {stream.props.get_name()} uuid={uuid}")
+                        log.debug(f"[send_stream_samples] None data in stream {stream.props.get_name()} uuid={uuid}")
 
             # Remove recipients of not-net-hash-full-of-contents messages
             uuid_to_remove = []
             for uuid, count in valid_samples_count.items():
-                if count != len(streams_dict):
+                if count == 0:
                     uuid_to_remove.append(uuid)
                     log.debug(f"[send_stream_samples] Cannot send data for {net_hash}, uuid {uuid}, "
                               f"since it is incomplete ({valid_samples_count[uuid]} vs {len(streams_dict)})")
