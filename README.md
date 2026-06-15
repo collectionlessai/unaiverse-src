@@ -11,12 +11,22 @@
 
 UNaIVERSE is a project framed in the context of [Collectionless AI](https://collectionless.ai), our perspective on Artificial Intelligence rooted in **privacy**, **low energy consumption**, and, more importantly, a **decentralized** model.
 
+[![Website](https://img.shields.io/badge/Portal-unaiverse.io-6c5ce7?style=for-the-badge)](https://unaiverse.io)
+[![Collectionless AI](https://img.shields.io/badge/Vision-Collectionless_AI-00b894?style=for-the-badge)](https://collectionless.ai)
+![Comany](https://img.shields.io/badge/UNaIVERSE%20Company-unaiverse.ai-6c5ce7?style=for-the-badge&link=https%3A%2F%2Funaiverse.ai)
+
+[![PyPI](https://img.shields.io/pypi/v/unaiverse?color=blue&label=pip%20install%20unaiverse&logo=pypi&logoColor=white)](https://pypi.org/project/unaiverse/)
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](./LICENSE)
+[![PyTorch](https://img.shields.io/badge/Built_with-PyTorch-ee4c2c?logo=pytorch&logoColor=white)](https://pytorch.org/)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](#contributing)
+[![Stars](https://img.shields.io/github/stars/collectionlessai/unaiverse-examples?style=social)](https://github.com/collectionlessai/unaiverse-examples/stargazers)
+
 UN(a)IVERSE is a **peer-to-peer network**, aiming to become the new incarnation of the Web, combining (in the long run) the principles of Social Networks and AI under a **privacy** lens—a perspective that is crucial given how the Web, especially Social Networks, and AI are used today by both businesses and individual users.
 
 - Enter UNaIVERSE: [**UNaIVERSE portal (login/register)**](https://unaiverse.io)
 - Check our preprint of Collectionless AI & UNaIVERSE, to explore [**UNaIVERSE features**](./UNaIVERSE_techrep.pdf)
 - Read more on our ideas: [**Collectionless AI website**](https://collectionless.ai)
-
+- Read more on our business: [**UNaIVERSE company website**](https://unaiverse.ai)
 ---
 
 ## 🚀 Features
@@ -30,28 +40,24 @@ UNaIVERSE is a peer-to-peer network where each node is either a **world** or an 
 
 Remarks:
 - *Are you a researcher?* This is perfect to study models that learn over time (Lifelong/Continual Learning), and social dynamics of different categories of models! Feel free to propose novel ideas to exploit UNaIVERSE in your research!
-- *Are you in the industry or, more generally, business oriented?* **Think about privacy-oriented solutions that we can build over this new UN(a)IVERSE!**
+- *Are you in the industry or, more generally, business oriented?* **Think about privacy-oriented solutions that we can build over this new UN(a)IVERSE! Check the [**UNaIVERSE company website**](https://unaiverse.ai)**
 
 ---
 
 ## ⚡ Status
 
-- Very first version: we think it will always stay alpha/beta/whatever 😎, but right now there are many features we plan to add and several parts to improve, **thanks to your feedback!**
-- Missing features (work-in-progress): mobile agents running on dedicated Web App; build customizable UIs for human agents in the browser; fully decentralized discovery of new Peers; actual social network features (right now it is very preliminary, not really showcasing where we want to go)
+- We think it will always stay alpha/beta/whatever 😎, but right now there are many features we plan to add and several parts to improve, **thanks to your feedback!**
 
 ---
 
 ## 📦 Installation
 
 Jump to [https://unaiverse.io](https://unaiverse.io), create a new account (free!) or log in with an existing one. If you did not already do it, click on the top-right icon with "a person" on it:
+Then click on "Security" and "Regenerate" a new token (aka "key"):
 
-<img src="./assets/unaiverse8443-me.png" alt="UNaIVERSE Logo" style="width:150px;"> 
+<img src="./assets/generate_token.png" alt="UNaIVERSE Logo" style="width:500px;">
 
-Then click on "Generate a Token":
-
-<img src="./assets/unaiverse8443-token.png" alt="UNaIVERSE Logo" style="width:500px;">
-
-**COPY THE TOKEN**, you won't be able to see it twice! Now, let's focus on Python:
+**COPY THE TOKEN/KEY**, you won't be able to see it twice! Now, let's focus on Python:
 
 ```bash
 pip install unaiverse
@@ -61,7 +67,10 @@ That's it. Of course, if you want to dive into details, you find the source code
 
 ---
 
-## 🛠 Mini Tutorial
+## 🛠 Getting Started
+
+**See [https://docs.unaiverse.io](https://docs.unaiverse.io), and follow the path that better suits your needs (e.g., Quickstart).
+Here we are also providing an additional example but, again, your actual starting point is [https://docs.unaiverse.io](https://docs.unaiverse.io).**
 
 The simplest usage you can think of is the one which does not exploit the real features of UNaIVERSE, but it is so simple that is a good way to put you in touch with UNaIVERSE itself. 
 
@@ -287,7 +296,9 @@ Agents will behave according to what the world indicates, and you don't have to 
 Alright, there are so many things to say, but examples are always a good thing! 
 We prepared a repository with examples of many worlds and different lone wolves, go there in order to continue your journey into UNaIVERSE!
 
-*THE TUTORIAL CONTINUES:* [https://github.com/collectionlessai/unaiverse-examples](https://github.com/collectionlessai/unaiverse-examples)
+*THE TUTORIAL CONTINUES WITH EXAMPLES ON HOW TO BUILD WORLDS:* [https://github.com/collectionlessai/unaiverse-examples](https://github.com/collectionlessai/unaiverse-examples)
+
+**Check also [https://docs.unaiverse.io](https://docs.unaiverse.io), and follow the path that better suits your needs.**
 
 **See you in our UNaIVERSE!**
 
@@ -305,8 +316,7 @@ This project includes third-party libraries. See [THIRD_PARTY_LICENSES.md](./THI
 
 ## 📚 Documentation
 
-You can find an API reference in file [docs.html](./docs.html), that you can visualize here:
-- [API Reference](https://collectionlessai.github.io/unaiverse-docs.github.io/)
+You can find an API reference and several extremely useful information here: [https://docs.unaiverse.io](https://docs.unaiverse.io)
 
 ---
 
@@ -326,3 +336,13 @@ Please contact us in order to suggest changes, report bugs, and suggest ideas fo
 - Marco Gori (Scientific Advisor) [marco.gori@unisi.it](marco.gori@unisi.it)
 
 ---
+
+<div align="center">
+
+Welcome to a new UN(a)IVERSE, where humans and AI coexist, learn, and grow together.
+
+[Enter the Portal](https://unaiverse.io) · [Read the Vision](https://collectionless.ai) · [Browse the Source](https://github.com/collectionlessai/unaiverse-src) · [Check the Company](https://unaiverse.ai)
+
+If you like the idea, [drop a star](https://github.com/collectionlessai/unaiverse-src) and help build the privacy-first web.
+
+</div>
