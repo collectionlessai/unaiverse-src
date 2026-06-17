@@ -15,28 +15,28 @@
             "action_kwargs": {},
             "msg": null,
             "blocking": true,
-            "time_to_wait_for_interactions": 0.0
+            "time_to_wait_before_acting": 0.0
         },
         "generated": {
             "action": null,
             "action_kwargs": {},
             "msg": null,
             "blocking": false,
-            "time_to_wait_for_interactions": 0.0
+            "time_to_wait_before_acting": 0.0
         },
         "self_generated": {
             "action": null,
             "action_kwargs": {},
             "msg": null,
             "blocking": false,
-            "time_to_wait_for_interactions": 0.0
+            "time_to_wait_before_acting": 0.0
         },
         "asked": {
             "action": null,
             "action_kwargs": {},
             "msg": null,
             "blocking": false,
-            "time_to_wait_for_interactions": 0.0
+            "time_to_wait_before_acting": 0.0
         }
     },
     "transitions": {
@@ -49,7 +49,7 @@
                     "ready": false,
                     "max_duration": 0.0,
                     "retry_timeout": 0.0,
-                    "time_to_wait_before_running": 0.0
+                    "delay": 0.0
                 },
                 "goto": "generated"
             },
@@ -61,7 +61,7 @@
                     "ready": true,
                     "max_duration": 0.0,
                     "retry_timeout": 0.0,
-                    "time_to_wait_before_running": 0.0
+                    "delay": 0.0
                 },
                 "goto": "self_generated"
             }
@@ -75,7 +75,7 @@
                     "ready": true,
                     "max_duration": 0.0,
                     "retry_timeout": 0.0,
-                    "time_to_wait_before_running": 0.0
+                    "delay": 0.0
                 },
                 "goto": "ready"
             }
@@ -90,7 +90,6 @@
                         "streams": [
                             "<agent>:processor"
                         ],
-                        "id": "pub",
                         "copy_sys": true,
                         "callback": "show"
                     },
@@ -98,7 +97,7 @@
                     "ready": true,
                     "max_duration": 0.0,
                     "retry_timeout": 0.0,
-                    "time_to_wait_before_running": 0.0
+                    "delay": 0.0
                 },
                 "goto": "asked"
             },
@@ -110,7 +109,7 @@
                     "ready": true,
                     "max_duration": 0.0,
                     "retry_timeout": 0.0,
-                    "time_to_wait_before_running": 0.0
+                    "delay": 0.0
                 },
                 "goto": "ready"
             }
@@ -124,7 +123,7 @@
                     "ready": true,
                     "max_duration": 0.0,
                     "retry_timeout": 0.0,
-                    "time_to_wait_before_running": 0.0
+                    "delay": 0.0
                 },
                 "goto": "ready"
             }
