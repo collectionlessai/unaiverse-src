@@ -151,7 +151,7 @@ async def _drain_loop(conn, sm, stop_event: asyncio.Event):
 
 
 def _print_event(ev) -> None:
-    log.session(f"[SessionEvent] {ev.type.value:<12} peer={ev.peer_id[-5:]}… "
+    log.session(f"[SessionEvent] {ev.type.value:<12} peer=...{ev.peer_id[-5:]} "
                 f"session={ev.session_id[:8]}… role={ev.role.value:<9} data={ev.data}")
 
 

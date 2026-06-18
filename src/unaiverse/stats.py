@@ -1668,7 +1668,7 @@ class Stats:
                 x, y = get_xy(p_data)
                 if x:
                     c = color_override or self._get_consistent_color(pid)
-                    panel.add_line(x, y, name=f'{pid[-5:]}', color=c,
+                    panel.add_line(x, y, name=f'...{pid[-5:]}', color=c,
                                    legend_group=pid, show_legend=show_legend)
 
     # noinspection PyMethodMayBeStatic

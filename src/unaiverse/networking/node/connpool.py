@@ -611,7 +611,7 @@ class ConnectionPools:
         try:
             payload = sess_msg.to_bytes()
         except Exception as e:
-            log.error(f"send_session({peer_id[-5:]}…, {protocol_id}) encode failed: {e}", sub=p2p.log_sub)
+            log.error(f"send_session(...{peer_id[-5:]}, {protocol_id}) encode failed: {e}", sub=p2p.log_sub)
             return False
         try:
             # Off the event loop (same pattern as `send`): the Go side opens a
@@ -619,7 +619,7 @@ class ConnectionPools:
             # would freeze every other session's keep-alive.
             return await asyncio.to_thread(p2p.send_on_protocol, peer_id, protocol_id, payload)
         except Exception as e:
-            log.error(f"send_session({peer_id[-5:]}…, {protocol_id}) failed: {e}", sub=p2p.log_sub)
+            log.error(f"send_session(...{peer_id[-5:]}, {protocol_id}) failed: {e}", sub=p2p.log_sub)
             return False
 
     # ── Async crypto / ping interface (Session calls only these; the JS NodeConn

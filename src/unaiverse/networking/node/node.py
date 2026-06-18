@@ -2235,13 +2235,13 @@ class Node:
         # determined must NOT slip past a configured allow-list.
         if (self.allowed_node_ids is not None and
                 (remote_node_id is None or remote_node_id not in self.allowed_node_ids)):
-            log.misc(f"[session] decision: {peer_id[-5:]}… node_id not in allow-list → reject")
+            log.misc(f"[session] decision: node_id {remote_node_id} not in allow-list → reject")
             return ProfileDecisionResult(accepted=False, reason_code=NOT_IN_ALLOW_LIST)
 
         try:
             profile = NodeProfile.from_dict(remote_profile)
         except Exception as e:
-            log.error(f"[session] decision: bad remote profile from {peer_id[-5:]}…: {e}")
+            log.error(f"[session] decision: bad remote profile from peer_id ...{peer_id[-5:]}: {e}")
             return ProfileDecisionResult(accepted=False, reason_code=HOSTED_REJECTED)
 
         # ── World host ────────────────────────────────────────────────────────
@@ -2291,7 +2291,7 @@ class Node:
             # No role stash: the grant signature binds (joiner world peer-id,
             # role, expiry), and the world-side ESTABLISHED reads the role back
             # from the verified PRIVATE_JOIN.
-            log.misc(f"[session] decision: granting world role '{role_str}' to {peer_id[-5:]}…")
+            log.misc(f"[session] decision: granting world role '{role_str}' to ...{peer_id[-5:]}")
             return ProfileDecisionResult(accepted=True, world_grant=spec)
 
         # ── Agent host ────────────────────────────────────────────────────────
@@ -2309,7 +2309,7 @@ class Node:
         LOST/CLOSED purge; FAILED is surfaced as an error (the handshake is
         fire-and-forget, so a failure that surfaces here is asynchronous)."""
         try:
-            log.misc(f"[session] {ev.type.value} peer={ev.peer_id[-5:]}… session={ev.session_id[:8]}… "
+            log.misc(f"[session] {ev.type.value} peer=...{ev.peer_id[-5:]} session={ev.session_id[:8]}… "
                      f"role={ev.role.value} p2p={ev.p2p_name}",
                      sub="prv" if "world" in ev.p2p_name else "pub")
         except Exception:
@@ -2331,7 +2331,7 @@ class Node:
                 self._pending_world_handoff.pop(public_peer_id, None)
             self._world_host_unlist_member(ev)
             await self._maybe_leave_world_on_session_end(ev)
-            log.error(f"[session] handshake to {ev.peer_id[-5:]}… failed "
+            log.error(f"[session] handshake to ...{ev.peer_id[-5:]} failed "
                       f"(p2p={ev.p2p_name}, reason={ev.data.get('reason', 'unknown')})",
                       sub="prv" if "world" in ev.p2p_name else "pub")
         elif ev.type in (SessionEventType.LOST, SessionEventType.CLOSED):
@@ -2346,7 +2346,7 @@ class Node:
             try:
                 await self.__purge(ev.peer_id)
             except Exception as e:
-                log.error(f"[session] dispatch LOST/CLOSED purge failed for {ev.peer_id[-5:]}…: {e}")
+                log.error(f"[session] dispatch LOST/CLOSED purge failed for ...{ev.peer_id[-5:]}: {e}")
 
     async def _maybe_leave_world_on_session_end(self, ev) -> bool:
         """Joiner side: a terminal event on the Session toward the CURRENT world
@@ -2381,7 +2381,7 @@ class Node:
             try:
                 self.conn.remove_from_world_lists(ev.peer_id)
             except Exception as e:
-                log.error(f"[session] world unlist failed for {ev.peer_id[-5:]}…: {e}")
+                log.error(f"[session] world unlist failed for ...{ev.peer_id[-5:]}: {e}")
 
     async def _on_session_resumed(self, ev) -> None:
         """A Session survived a transport drop (RESUME acked). The pool-removal
@@ -2405,13 +2405,13 @@ class Node:
         try:
             profile = NodeProfile.from_dict(profile_dict)
         except Exception as e:
-            log.error(f"[session] resumed: bad stored profile for {ev.peer_id[-5:]}…: {e}")
+            log.error(f"[session] resumed: bad stored profile for ...{ev.peer_id[-5:]}: {e}")
             return
         try:
             if not (await self.hosted.add_agent(peer_id=ev.peer_id, profile=profile)):
                 await self.__purge(ev.peer_id, reason=LOCAL_ERROR)
         except Exception as e:
-            log.error(f"[session] resumed: re-enrol failed for {ev.peer_id[-5:]}…: {e}")
+            log.error(f"[session] resumed: re-enrol failed for ...{ev.peer_id[-5:]}: {e}")
 
     async def _on_session_established(self, ev) -> None:
         """Run the application side-effects for an ESTABLISHED Session, branching on
@@ -2430,7 +2430,7 @@ class Node:
                 try:
                     await self.__join_agent(profile=NodeProfile.from_dict(profile_b), peer_id=ev.peer_id)
                 except Exception as e:
-                    log.error(f"[session] __join_agent failed for {ev.peer_id[-5:]}…: {e}")
+                    log.error(f"[session] __join_agent failed for ...{ev.peer_id[-5:]}: {e}")
             return
 
         # ── Initiator on the WORLD instance ───────────────────────────────────
@@ -2444,14 +2444,14 @@ class Node:
                     try:
                         await self.__join_agent(profile=NodeProfile.from_dict(profile_b), peer_id=ev.peer_id)
                     except Exception as e:
-                        log.error(f"[session] __join_agent failed for {ev.peer_id[-5:]}…: {e}")
+                        log.error(f"[session] __join_agent failed for ...{ev.peer_id[-5:]}: {e}")
                 return
             # We joined a world: run the join body and retire the public Session.
             ok = False
             try:
                 ok = await self._join_world_after_session(ev.peer_id, ev.data, grant)
             except Exception as e:
-                log.error(f"[session] __join_world failed for {ev.peer_id[-5:]}…: {e}")
+                log.error(f"[session] __join_world failed for ...{ev.peer_id[-5:]}: {e}")
             # Whether or not the join body fully succeeded, the public Session has
             # done its job — close it (GOAWAY) so the host tears it down cleanly.
             public_peer_id = self._world_to_public.pop(ev.peer_id, None)
@@ -2471,7 +2471,7 @@ class Node:
                                                         profile=NodeProfile.from_dict(profile_b))):
                         await self.__purge(ev.peer_id, reason=LOCAL_ERROR)
                 except Exception as e:
-                    log.error(f"[session] add_agent failed for {ev.peer_id[-5:]}…: {e}")
+                    log.error(f"[session] add_agent failed for ...{ev.peer_id[-5:]}: {e}")
             return
 
         # ── Responder on the WORLD instance: a joiner redeemed a grant ────────
@@ -2527,7 +2527,7 @@ class Node:
         role = int(ev.data.get("private_join", {}).get("role") or 0)
         if role & Agent.ROLE_WORLD_AGENT != Agent.ROLE_WORLD_AGENT:
             log.error(f"[session] world register: grant role {role} lacks the world "
-                      f"bit for {ev.peer_id[-5:]}…; purging")
+                      f"bit for ...{ev.peer_id[-5:]}; purging")
             await self.__purge(ev.peer_id, reason=LOCAL_ERROR)
             return
         private_peer_id = ev.peer_id
@@ -2542,10 +2542,10 @@ class Node:
             if private_addr:
                 self.conn.set_addresses_in_peer_info(private_peer_id, private_addr)
             if not (await self.world.add_agent(peer_id=private_peer_id, profile=profile)):
-                log.error(f"[session] world.add_agent rejected {private_peer_id[-5:]}…; purging")
+                log.error(f"[session] world.add_agent rejected ...{private_peer_id[-5:]}; purging")
                 await self.__purge(private_peer_id, reason=LOCAL_ERROR)
         except Exception as e:
-            log.error(f"[session] world register failed for {private_peer_id[-5:]}…: {e}")
+            log.error(f"[session] world register failed for ...{private_peer_id[-5:]}: {e}")
 
     async def _join_world_after_session(self, world_peer_id: str, ev_data: dict, grant) -> bool:
         """Joiner side: run the world-join body against an already-connected world

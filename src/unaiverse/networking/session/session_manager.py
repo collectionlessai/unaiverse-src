@@ -116,7 +116,7 @@ class SessionManager:
         # Quarantine check.
         ban_until = self._quarantine.get(peer_id, 0.0)
         if ban_until > now:
-            log.session(f"initiate({peer_id[-5:]}…) refused: quarantined for {ban_until - now:.1f}s", sub=self._label)
+            log.session(f"initiate(...{peer_id[-5:]}) refused: quarantined for {ban_until - now:.1f}s", sub=self._label)
             ev = SessionEvent(
                 type=SessionEventType.FAILED, session_id="",
                 peer_id=peer_id, role=SessionRole.INITIATOR,
@@ -126,7 +126,7 @@ class SessionManager:
 
         existing = self._sessions.get(peer_id)
         if existing is not None and existing.state not in (SessionState.FAILED, SessionState.CLOSED):
-            log.session(f"initiate({peer_id[-5:]}…): "
+            log.session(f"initiate(...{peer_id[-5:]}): "
                       f"already have Session in state {existing.state.value} — no-op", sub=self._label)
             return []
 
@@ -147,7 +147,7 @@ class SessionManager:
             reject_relay=reject_relay,
         )
         self._sessions[peer_id] = sess
-        log.session(f"initiating Session to {peer_id[-5:]}…", sub=self._label)
+        log.session(f"initiating Session to ...{peer_id[-5:]}", sub=self._label)
         events = await sess.start()
         self._evict_if_terminal(peer_id, sess)
         return events
@@ -187,7 +187,7 @@ class SessionManager:
                 return []
             else:
                 log.session(f"{protocol_id}/{sess_msg.kind} from unknown peer "
-                          f"{peer_id[-5:]}… — dropped", sub=self._label)
+                          f"...{peer_id[-5:]} — dropped", sub=self._label)
                 return []
 
         # Tie-breaker — only when the inbound is a competing HelloRequest (its
@@ -234,7 +234,7 @@ class SessionManager:
             decision_hook=self._decision_hook,
         )
         self._sessions[peer_id] = sess
-        log.session(f"spawned responder Session for {peer_id[-5:]}…", sub=self._label)
+        log.session(f"spawned responder Session for ...{peer_id[-5:]}", sub=self._label)
         return sess
 
     async def _send_unknown_session_reply(self, peer_id: str, sess_msg: SessMsg) -> None:
@@ -260,7 +260,7 @@ class SessionManager:
                 sess_msg=reply, p2p_name=self.p2p_name,
             )
         except Exception as e:
-            log.error(f"unknown-session reply to {peer_id[-5:]}… failed: {e}", sub=self._label)
+            log.error(f"unknown-session reply to ...{peer_id[-5:]} failed: {e}", sub=self._label)
 
     async def _handle_simultaneous_open(self, peer_id: str):
         """Deterministic tie-breaker: smaller peer-id keeps initiator, larger
@@ -293,12 +293,12 @@ class SessionManager:
                     p2p_name=self.p2p_name,
                 )
             except Exception as e:
-                log.error(f"simultaneous-open reject to {peer_id[-5:]}… failed: {e}", sub=self._label)
-            log.session(f"simultaneous-open with {peer_id[-5:]}…: kept initiator", sub=self._label)
+                log.error(f"simultaneous-open reject to ...{peer_id[-5:]} failed: {e}", sub=self._label)
+            log.session(f"simultaneous-open with ...{peer_id[-5:]}: kept initiator", sub=self._label)
             return "_proceed_with_existing_"
 
         # We yield: drop our initiator, spawn a fresh responder for the inbound HELLO.
-        log.session(f"simultaneous-open with {peer_id[-5:]}…: yielding to responder", sub=self._label)
+        log.session(f"simultaneous-open with ...{peer_id[-5:]}: yielding to responder", sub=self._label)
         existing.abort_silently("simultaneous_open_yielded")
         del self._sessions[peer_id]
         self._spawn_responder(peer_id, remote_other_peer_id_hint=existing.remote_other_peer_id_hint)
@@ -385,7 +385,7 @@ class SessionManager:
     ) -> List[SessionEvent]:
         sess = self._sessions.get(peer_id)
         if sess is None:
-            log.session(f"close_session({peer_id[-5:]}…): no Session — no-op", sub=self._label)
+            log.session(f"close_session(...{peer_id[-5:]}): no Session — no-op", sub=self._label)
             return []
         await sess.close(reason_code)
         return []  # CLOSED event will arrive via process_inbound(GoawayAck) or tick
@@ -399,7 +399,7 @@ class SessionManager:
             try:
                 await sess.close(reason_code)
             except Exception as e:
-                log.error(f"close_all: close({sess.peer_id[-5:]}…) failed: {e}", sub=self._label)
+                log.error(f"close_all: close(...{sess.peer_id[-5:]}) failed: {e}", sub=self._label)
         return []
 
     # ── Accessors ─────────────────────────────────────────────────────────────

@@ -292,7 +292,7 @@ class Session:
     # ── repr ─────────────────────────────────────────────────────────────────
 
     def __repr__(self) -> str:
-        return (f"Session({self.peer_id[-5:]}… role={self.role.value} "
+        return (f"Session(...{self.peer_id[-5:]} role={self.role.value} "
                 f"state={self.state.value} p2p={self.p2p_name})")
 
     # ── Initiator entry point ─────────────────────────────────────────────────
@@ -336,7 +336,7 @@ class Session:
         # If the dial returned a different peer-id than we expected (e.g., relayed
         # multiaddr without /p2p hop), update it.
         if peer_id != self.peer_id:
-            log.session(f"{self!r} peer_id updated from {self.peer_id[-5:]}… → {peer_id[-5:]}…", sub=self._sub)
+            log.session(f"{self!r} peer_id updated from ...{self.peer_id[-5:]} → ...{peer_id[-5:]}", sub=self._sub)
             self.peer_id = peer_id
 
         return await self._send_hello()
