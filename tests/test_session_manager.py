@@ -153,7 +153,7 @@ def test_tick_drains_timeouts_and_cleans_terminal_sessions(alice_conn, alice_pee
     sessions are removed from the registry on the same tick."""
     sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
     sess = _mk_session(alice_conn, bob_peer_id, alice_peer_id)
-    sm._sessions[bob_peer_id] = sess
+    sm._set_active(bob_peer_id, sess)
     sess._set_state(SessionState.HELLO_SENT, 0.001)
     time.sleep(0.005)
     events = _run(sm.tick())
@@ -165,7 +165,7 @@ def test_lost_event_enters_quarantine(alice_conn, alice_peer_id, bob_peer_id):
     """A Lost event from grace expiry must put the peer in quarantine."""
     sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
     sess = _mk_session(alice_conn, bob_peer_id, alice_peer_id)
-    sm._sessions[bob_peer_id] = sess
+    sm._set_active(bob_peer_id, sess)
     sess._set_state(SessionState.RECONNECTING, 0.001)
     time.sleep(0.005)
     events = _run(sm.tick())
@@ -356,3 +356,63 @@ def test_spawn_responder_starts_in_init(alice_conn, alice_peer_id, bob_peer_id):
     sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
     sess = sm._spawn_responder(bob_peer_id, remote_other_peer_id_hint=None)
     assert sess.state == SessionState.INIT
+
+
+# ── Double view: tick-active vs known (U8.1) ─────────────────────────────────
+
+def test_ensure_keeps_known_out_of_active_view(alice_conn, alice_peer_id, bob_peer_id):
+    """A KNOWN Session lives in the full registry but not in the tick-active view, so
+    the per-cycle tick skips it in O(1)."""
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    sess = sm.ensure(bob_peer_id, ["/ip4/127.0.0.1/tcp/0"])
+    assert sess.state == SessionState.KNOWN
+    assert bob_peer_id in sm._sessions
+    assert bob_peer_id not in sm._active_sessions
+
+
+def test_activate_promotes_known_into_active_view(alice_conn, alice_peer_id, bob_peer_id):
+    """activate() moves a started initiator out of KNOWN into the tick-active view."""
+    alice_conn.connect_returns = (bob_peer_id, False)
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    sm.ensure(bob_peer_id, ["/ip4/127.0.0.1/tcp/0"])
+    assert bob_peer_id not in sm._active_sessions
+    _run(sm.activate(bob_peer_id))
+    assert bob_peer_id in sm._active_sessions
+    assert sm._active_sessions[bob_peer_id] is sm.get_session(bob_peer_id)
+
+
+def test_spawn_responder_is_tick_active(alice_conn, alice_peer_id, bob_peer_id):
+    """A responder is engaged from the start, so it enters the tick-active view."""
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    sm._spawn_responder(bob_peer_id, remote_other_peer_id_hint=None)
+    assert bob_peer_id in sm._active_sessions
+
+
+def test_tick_does_not_sweep_known_sessions(alice_conn, alice_peer_id, bob_peer_id):
+    """The tick iterates only the active view: a KNOWN Session's tick hooks are never
+    invoked (here they would raise), so a large KNOWN roster costs nothing per cycle."""
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    sess = sm.ensure(bob_peer_id, ["/ip4/127.0.0.1/tcp/0"])
+    assert sess.state == SessionState.KNOWN
+
+    def _boom(*a, **k):
+        raise AssertionError("tick touched a KNOWN session")
+    sess.check_timeout = _boom
+    sess.tick_reconnect = _boom
+    sess.tick_keepalive = _boom
+
+    events = _run(sm.tick())
+    assert events == []
+    assert sess.state == SessionState.KNOWN
+
+
+def test_terminal_session_leaves_both_views(alice_conn, alice_peer_id, bob_peer_id):
+    """A Session that fails (here via a transport drop mid-handshake) is removed from
+    both the full registry and the tick-active view, so neither leaks a dead FSM."""
+    alice_conn.connect_returns = (bob_peer_id, False)
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    _run(sm.initiate(bob_peer_id, ["/ip4/127.0.0.1/tcp/0"]))
+    assert bob_peer_id in sm._active_sessions
+    _run(sm.on_peer_disconnected(bob_peer_id))
+    assert bob_peer_id not in sm._sessions
+    assert bob_peer_id not in sm._active_sessions

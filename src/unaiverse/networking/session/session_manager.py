@@ -107,10 +107,41 @@ class SessionManager:
         self._label = _p2p_label(p2p_name)
 
         # peer_id → Session (at most one Session per peer in this p2p instance).
+        # Two views: `_sessions` is the full registry (including inert KNOWN
+        # Sessions for known-but-not-dialed peers); `_active_sessions` mirrors only
+        # the ones the per-cycle tick must sweep (anything past KNOWN), so a large
+        # roster of KNOWN peers costs O(1) per cycle instead of O(N).
         self._sessions: Dict[str, Session] = {}
+        self._active_sessions: Dict[str, Session] = {}
 
         # peer_id → monotonic timestamp until which dials are refused.
         self._quarantine: Dict[str, float] = {}
+
+    # ── Session registry (keep the two views consistent) ──────────────────────
+    #
+    # Every mutation of the session store goes through these helpers so the
+    # tick-active view never drifts from the full registry.
+
+    def _set_known(self, peer_id: str, sess: "Session") -> None:
+        """Register/replace an inert KNOWN Session: in the full registry, out of the
+        tick-active view."""
+        self._sessions[peer_id] = sess
+        self._active_sessions.pop(peer_id, None)
+
+    def _set_active(self, peer_id: str, sess: "Session") -> None:
+        """Register a Session the tick must sweep (a responder, or a started initiator)."""
+        self._sessions[peer_id] = sess
+        self._active_sessions[peer_id] = sess
+
+    def _promote(self, peer_id: str, sess: "Session") -> None:
+        """Move a just-started initiator out of KNOWN into the tick-active view."""
+        if self._sessions.get(peer_id) is sess and sess.state != SessionState.KNOWN:
+            self._active_sessions[peer_id] = sess
+
+    def _drop_session(self, peer_id: str) -> None:
+        """Remove a Session from both views."""
+        self._sessions.pop(peer_id, None)
+        self._active_sessions.pop(peer_id, None)
 
     # ── Per-instance reconcile (routing + perimeter) ──────────────────────────
 
@@ -174,7 +205,7 @@ class SessionManager:
             reject_relay=reject_relay,
             xcrypto=self._xcrypto,
         )
-        self._sessions[peer_id] = sess
+        self._set_known(peer_id, sess)
         return sess
 
     async def activate(self, peer_id: str) -> List[SessionEvent]:
@@ -186,6 +217,7 @@ class SessionManager:
             return []
         log.session(f"activating Session to ...{peer_id[-5:]}", sub=self._label)
         events = await sess.start()
+        self._promote(peer_id, sess)
         self._evict_if_terminal(peer_id, sess)
         return events
 
@@ -242,7 +274,7 @@ class SessionManager:
         # re-handshake initiated by the remote): evict it and fall through to
         # the no-session paths.
         if sess is not None and sess.state in (SessionState.FAILED, SessionState.CLOSED):
-            self._sessions.pop(peer_id, None)
+            self._drop_session(peer_id)
             sess = None
 
         if sess is None:
@@ -293,7 +325,7 @@ class SessionManager:
         traffic from the same peer. Quarantine stays a tick-path concern."""
         if (sess.state in (SessionState.FAILED, SessionState.CLOSED) and
                 self._sessions.get(peer_id) is sess):
-            self._sessions.pop(peer_id, None)
+            self._drop_session(peer_id)
 
     def _spawn_responder(self, peer_id: str, remote_other_peer_id_hint: Optional[str]) -> Session:
         sess = Session(
@@ -308,7 +340,7 @@ class SessionManager:
             decision_hook=self._decision_hook,
             xcrypto=self._xcrypto,
         )
-        self._sessions[peer_id] = sess
+        self._set_active(peer_id, sess)
         log.session(f"spawned responder Session for ...{peer_id[-5:]}", sub=self._label)
         return sess
 
@@ -374,7 +406,7 @@ class SessionManager:
         # We yield: drop our initiator, spawn a fresh responder for the inbound HELLO.
         log.session(f"simultaneous-open with ...{peer_id[-5:]}: yielding to responder", sub=self._label)
         existing.abort_silently("simultaneous_open_yielded")
-        del self._sessions[peer_id]
+        self._drop_session(peer_id)
         self._spawn_responder(peer_id, remote_other_peer_id_hint=existing.remote_other_peer_id_hint)
         return "_replaced_with_responder_"
 
@@ -389,7 +421,7 @@ class SessionManager:
         # Snapshot of values; mutation during iteration is safe because we operate
         # on the snapshot only (per-session state changes happen synchronously and
         # don't add new sessions inside tick).
-        for sess in list(self._sessions.values()):
+        for sess in list(self._active_sessions.values()):
             t_event = sess.check_timeout(now)
             if t_event is not None:
                 events.append(t_event)
@@ -420,7 +452,7 @@ class SessionManager:
                 # Only drop from registry if the session is genuinely terminal.
                 sess = self._sessions.get(ev.peer_id)
                 if sess is not None and sess.state in (SessionState.FAILED, SessionState.CLOSED):
-                    self._sessions.pop(ev.peer_id, None)
+                    self._drop_session(ev.peer_id)
 
     # ── Transport events ──────────────────────────────────────────────────────
 
@@ -495,7 +527,7 @@ class SessionManager:
         RTT window assumes a responsive pump, so a node with live sessions must
         never be treated as idle."""
         return any(s.state in (SessionState.ESTABLISHED, SessionState.RECONNECTING)
-                   for s in self._sessions.values())
+                   for s in self._active_sessions.values())
 
     def __len__(self) -> int:
         return len(self._sessions)
