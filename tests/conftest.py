@@ -65,8 +65,6 @@ class FakeP2P:
         # Capture.
         self.sent: list[tuple[str, str, bytes]] = []  # (peer_id, protocol_id, payload)
         self.pinged: list[tuple[str, int]] = []      # (peer_id, timeout_ms)
-        # The other-network twin, registered via set_twin (cross-instance crypto).
-        self._twin: Optional["FakeP2P"] = None
 
     # ── Synchronous Go-FFI primitives (named like the real P2P) ──────────────
     def _sign_with_host_key_sync(self, data: bytes) -> Optional[bytes]:
@@ -88,16 +86,6 @@ class FakeP2P:
     def send_on_protocol(self, peer_id: str, protocol_id: str, payload: bytes) -> bool:
         self.sent.append((peer_id, protocol_id, payload))
         return self.send_returns
-
-    # ── Twin (cross-instance) ─────────────────────────────────────────────────
-    def set_twin(self, twin: "FakeP2P") -> None:
-        self._twin = twin
-
-    @property
-    def twin(self) -> "FakeP2P":
-        # Single-instance tests don't wire a twin: fall back to self so the
-        # cross-instance SPR / grant signing resolves to the same canned values.
-        return self._twin if self._twin is not None else self
 
     # ── High-level async surface (Session/SessionManager call these) ──────────
     async def sign_with_host_key(self, data: bytes) -> Optional[bytes]:
@@ -146,8 +134,6 @@ class FakeConn:
         }
         if p2p_world is not None:
             self.p2p_name_to_p2p[NodeConn.P2P_WORLD] = p2p_world
-            p2p_public.set_twin(p2p_world)
-            p2p_world.set_twin(p2p_public)
         # ``my_peer_id`` is the sender identity used when forwarding into the
         # other side's inbox.
         self.my_peer_id: str = p2p_public.peer_id
@@ -160,13 +146,15 @@ class FakeConn:
         self.send_inbox: Optional[deque] = None
         self.sent: list[tuple[str, str, object]] = []
 
-    # ── Twin (cross-instance crypto) ─────────────────────────────────────────
-    @property
-    def twin(self) -> FakeP2P:
-        # The Session reaches the other network for the SignedPeerRecord / grant
-        # signature via p2p.twin. Single-instance tests have no second network:
-        # fall back to the underlying FakeP2P (same canned values).
-        return self._p2p_self.twin
+    # ── Cross-instance crypto capability ─────────────────────────────────────
+    def xcrypto_for(self, p2p_name: str):
+        """The capability to inject into the SessionManager on `p2p_name`: wraps the
+        *other* network's FakeP2P, or this single network when there is no second one
+        (mirroring the old twin→self behavior)."""
+        from unaiverse.networking.node.connpool import NodeConn
+        from unaiverse.networking.p2p import CrossInstanceCrypto
+        other = NodeConn.P2P_WORLD if p2p_name == NodeConn.P2P_PUBLIC else NodeConn.P2P_PUBLIC
+        return CrossInstanceCrypto(self.p2p_name_to_p2p.get(other, self._p2p_self))
 
     async def connect(self, addresses):
         self.connect_calls.append(list(addresses))
@@ -218,10 +206,6 @@ class _FakeConnView:
         self._p2p_name = p2p_name
         self._fake = parent.p2p_name_to_p2p[p2p_name]
         self.my_peer_id = self._fake.peer_id
-
-    @property
-    def twin(self) -> FakeP2P:
-        return self._fake.twin
 
     async def connect(self, addresses):
         self._parent.connect_calls.append(list(addresses))
@@ -310,9 +294,10 @@ def profile_factory():
 
 def _make_session(role, p2p, p2p_name, local_peer_id, addresses=None,
                   remote_other_peer_id_hint=None, is_world_join=False,
-                  peer_id="12D3KooWRemote"):
+                  peer_id="12D3KooWRemote", xcrypto=None):
     """Construct a Session with sane defaults for testing."""
     from unaiverse.networking.session import Session, SessionRole
+    from unaiverse.networking.p2p import CrossInstanceCrypto
     return Session(
         peer_id=peer_id,
         role=role,
@@ -324,6 +309,9 @@ def _make_session(role, p2p, p2p_name, local_peer_id, addresses=None,
         remote_other_peer_id_hint=remote_other_peer_id_hint,
         addresses=list(addresses or []),
         is_world_join=is_world_join,
+        # Single-instance test default: the cross-instance crypto is the same fake
+        # (mirrors the old twin→self). Two-instance tests pass an explicit capability.
+        xcrypto=xcrypto if xcrypto is not None else CrossInstanceCrypto(p2p),
     )
 
 

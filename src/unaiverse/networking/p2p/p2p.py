@@ -823,26 +823,10 @@ class P2P:
     # connpool, plus thread offload for the blocking Go calls. The crypto wrappers
     # are async so session.py `await`s the same way in CPython and in Pyodide/JS.
     #
-    # An agent owns two P2P instances (public + world). A few Session operations are
-    # cross-instance (the SignedPeerRecord and grant signature for the *other*
-    # peer-id), so each P2P keeps a reference to its twin via `set_twin`. The Session
-    # reaches the other network through `self.p2p.twin`.
-
-    _twin: 'P2P' = None
-
-    def set_twin(self, twin: 'P2P') -> None:
-        """Register this node's other-network P2P instance (public ↔ world). The
-        Session uses `self.p2p.twin` for the cross-instance SignedPeerRecord and the
-        world-grant signature, which must be sealed under the *other* host key."""
-        self._twin = twin
-
-    @property
-    def twin(self) -> 'P2P':
-        """The agent's other-network P2P instance (p2p_world when this is p2p_public
-        and vice-versa). Set via `set_twin`."""
-        if self._twin is None:
-            raise P2PError("P2P.twin requested but no twin instance was registered (call set_twin).")
-        return self._twin
+    # Cross-instance operations (the SignedPeerRecord and grant signature for the
+    # node's *other* peer-id) are not P2P's concern: the layer that owns both
+    # instances injects a CrossInstanceCrypto capability into each Session. A P2P
+    # never holds a reference to its twin.
 
     async def connect(self, addresses: list[str]) -> tuple[str | None, bool]:
         """Establish a connection to a peer, trying its addresses in priority order

@@ -87,9 +87,7 @@ class SessionManager:
                 PROFILE_OFFER and (for a world host) produce the WorldGrant spec.
                 None ⇒ Sessions accept by default (v1 agent happy-path).
             xcrypto: cross-instance crypto capability (the agent's *other* P2P
-                instance), injected into every Session this manager builds. None
-                while the twin bridge is still in place — the Session then falls
-                back to ``p2p.twin``.
+                instance), injected into every Session this manager builds.
         """
         self.p2p = p2p
         self.p2p_name = p2p_name

@@ -17,6 +17,7 @@ from unaiverse.networking.session import (
 )
 from unaiverse.networking.session.sess_msg import SIMULTANEOUS_OPEN_LOSS, WORLD_DISENGAGEMENT
 from unaiverse.networking.node.connpool import NodeConn
+from unaiverse.networking.p2p import CrossInstanceCrypto
 
 
 def _run(coro):
@@ -30,6 +31,7 @@ def _make_sm(p2p, p2p_name, local_peer_id, profile_factory=None):
         local_peer_id=local_peer_id,
         local_node_id="local-node-id",
         local_profile_factory=profile_factory or (lambda: {"node_id": "local"}),
+        xcrypto=CrossInstanceCrypto(p2p),
     )
 
 
@@ -38,6 +40,7 @@ def _mk_session(p2p, peer_id, local_peer_id, role=SessionRole.INITIATOR):
         peer_id=peer_id, role=role, p2p=p2p,
         p2p_name=NodeConn.P2P_PUBLIC, local_peer_id=local_peer_id,
         local_node_id="alice", local_profile_factory=lambda: {},
+        xcrypto=CrossInstanceCrypto(p2p),
     )
 
 
@@ -292,9 +295,9 @@ def test_cross_instance_crypto_delegates_to_other_instance(alice_p2p, bob_p2p):
 
 
 def test_session_manager_injects_xcrypto_into_sessions(alice_p2p, bob_p2p, alice_peer_id, bob_peer_id):
-    """The manager hands its injected capability to every Session it builds; with
-    no capability the Session falls back to ``p2p.twin`` (the bridge)."""
-    from unaiverse.networking.p2p import CrossInstanceCrypto
+    """The manager hands its injected capability to every Session it builds, and
+    that capability resolves to the *other* instance (the cross direction). With no
+    capability there is no silent fallback now that the twin is gone."""
     xc = CrossInstanceCrypto(bob_p2p)
     sm = SessionManager(
         p2p=alice_p2p, p2p_name=NodeConn.P2P_PUBLIC, local_peer_id=alice_peer_id,
@@ -302,12 +305,15 @@ def test_session_manager_injects_xcrypto_into_sessions(alice_p2p, bob_p2p, alice
     )
     sess = sm._spawn_responder(bob_peer_id, remote_other_peer_id_hint=None)
     assert sess.xcrypto is xc
+    # Directional: the cross-instance identity is the *other* instance (bob), never
+    # our own (alice) — the public↔world crossing must not be inverted.
+    assert _run(sess.xcrypto.get_local_peer_id()) == bob_p2p.peer_id
+    assert _run(sess.xcrypto.get_local_peer_id()) != alice_p2p.peer_id
 
-    # No capability injected: the Session resolves the cross-instance crypto to the
-    # twin (single-instance FakeP2P twin falls back to self).
+    # No capability injected: there is no silent fallback (the twin is removed).
     sm_no_xc = SessionManager(
         p2p=alice_p2p, p2p_name=NodeConn.P2P_PUBLIC, local_peer_id=alice_peer_id,
         local_node_id="alice", local_profile_factory=lambda: {},
     )
     sess2 = sm_no_xc._spawn_responder(bob_peer_id, remote_other_peer_id_hint=None)
-    assert sess2.xcrypto is alice_p2p.twin
+    assert sess2.xcrypto is None

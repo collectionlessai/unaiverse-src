@@ -29,7 +29,8 @@ the transport/crypto only through the high-level async ``P2P`` surface injected 
 ``self.p2p`` (``connect`` / ``send_session`` / ``get_local_peer_id`` /
 ``sign_with_host_key`` / ``verify_peer_signature`` / ``verify_signed_peer_record`` /
 ``generate_signed_peer_record``). Cross-instance operations (the SignedPeerRecord
-and grant signature for the agent's *other* peer-id) go through ``self.p2p.twin``.
+and grant signature for the agent's *other* peer-id) go through ``self.xcrypto``,
+the capability injected by the layer that owns both P2P instances.
 That is exactly the surface a JS ``OP2P`` mirror exposes, so this file runs
 unchanged in Pyodide. The wire (de)serialization lives inside ``P2P.send_session``
 (via ``SessMsg.to_bytes``) in CPython and in ``session_pb.js`` in the browser.
@@ -61,7 +62,7 @@ from typing import Optional, Dict, Any, List, Callable, Awaitable, TYPE_CHECKING
 from unaiverse.networking.session.sess_msg import (
     SessMsg, reason_name, ProfileDecisionResult, WorldGrantSpec,
     OK, VERSION_UNSUPPORTED, NOT_AUTHORIZED, LOCAL_ERROR, GRACEFUL_SHUTDOWN,
-    SIMULTANEOUS_OPEN_LOSS, SESSION_UNKNOWN, GRANT_EXPIRED, P2P_PUBLIC, P2P_WORLD,
+    SIMULTANEOUS_OPEN_LOSS, SESSION_UNKNOWN, GRANT_EXPIRED, P2P_PUBLIC,
 )
 from unaiverse.utils.logger import log
 
@@ -215,9 +216,9 @@ class Session:
             role: INITIATOR or RESPONDER.
             p2p: the P2P instance this Session runs on (or a JS OP2P mirror in
                 Pyodide). The Session reaches the transport and crypto through it,
-                and the agent's *other* network through ``p2p.twin``.
+                and the agent's *other* network through the injected ``xcrypto``.
             p2p_name: the label of the P2P instance this Session lives on (used for
-                events and for picking the cross-instance ``twin``).
+                events).
             local_peer_id: our libp2p peer-id on `p2p_name`.
             local_node_id: our application-level node-id (the JWT-bound identity).
             local_profile_factory: zero-arg callable returning the current NodeProfile
@@ -236,18 +237,16 @@ class Session:
             xcrypto: crypto capability for the agent's *other* P2P instance (the
                 cross-instance SignedPeerRecord / world-grant signer, sealed under
                 the other host key). Injected from the layer that owns both
-                instances. When omitted it falls back to ``self.p2p.twin`` (the
-                bridge kept while the twin is still wired; removed once all
-                cross-instance call-sites use the capability).
+                instances (the Coordinator / Node).
         """
         self.peer_id = peer_id
         self.role = role
         self.p2p = p2p
         self.p2p_name = p2p_name
-        # Cross-instance crypto capability (other-network host key). Falls back to
-        # the twin while the bridge is in place; the cross-instance call-sites are
-        # switched onto ``self.xcrypto`` and the twin removed in the next step.
-        self.xcrypto = xcrypto if xcrypto is not None else self.p2p.twin
+        # Cross-instance crypto capability (other-network host key), injected by the
+        # layer that owns both P2P instances. The cross-instance call-sites use it
+        # for the SignedPeerRecord and the world-grant signature.
+        self.xcrypto = xcrypto
         self._sub = "pub" if p2p_name == P2P_PUBLIC else "prv"
         self.local_peer_id = local_peer_id
         self.local_node_id = local_node_id
@@ -463,8 +462,8 @@ class Session:
             return [self._fail("profile_offer_sign_failed")]
         # SignedPeerRecord for our *other* peer-id, fetched lazily/async at offer
         # time (sealed over current addresses; must not be precomputed sync). Sealed
-        # under the *other* network's host key — hence p2p.twin, not p2p.
-        spr_other = await self.p2p.twin.generate_signed_peer_record() or b""
+        # sealed under the *other* network's host key — hence xcrypto, not p2p.
+        spr_other = await self.xcrypto.generate_signed_peer_record() or b""
         profile_bytes = json.dumps(self._local_profile_factory()).encode("utf-8")
         offer = SessMsg(SessMsg.KIND_PROFILE_OFFER, {
             "profile": profile_bytes,
@@ -624,14 +623,14 @@ class Session:
         if not joiner_world_peer_id:
             return [self._fail("world_grant_missing_joiner_world_peer_id")]
         # Signed with the WORLD-side (other-network) host key so the joiner can bind
-        # it to the private identity it will dial — hence p2p.twin.
-        grant_sig = await self.p2p.twin.sign_with_host_key(
+        # it to the private identity it will dial — hence xcrypto.
+        grant_sig = await self.xcrypto.sign_with_host_key(
             _grant_sign_payload(self.grant_id, joiner_world_peer_id, spec.role,
                                 self.grant_expiry_unix_ms),
         )
         if grant_sig is None:
             return [self._fail("world_grant_sign_failed")]
-        world_spr = await self.p2p.twin.generate_signed_peer_record() or b""
+        world_spr = await self.xcrypto.generate_signed_peer_record() or b""
 
         grant = SessMsg(SessMsg.KIND_WORLD_GRANT, {
             "grant_id": self.grant_id,
@@ -705,10 +704,10 @@ class Session:
             return [self._fail("world_grant_bad_spr")]
         grant_sig = bytes(grant.get("grant_sig") or b"")
         # The grant binds our WORLD-side peer-id (the one we will dial from), so the
-        # local-peer-id used in the sign-payload comes from p2p.twin.
+        # local-peer-id used in the sign-payload comes from xcrypto.
         if not await self.p2p.verify_peer_signature(
             expected_world_peer_id,
-            _grant_sign_payload(grant_id, await self.p2p.twin.get_local_peer_id(),
+            _grant_sign_payload(grant_id, await self.xcrypto.get_local_peer_id(),
                                 int(grant.get("role", 0)), expiry),
             grant_sig,
         ):
@@ -1125,15 +1124,6 @@ class Session:
         log.session(f"{self!r} reconnect dial ok, RESUME sent", sub=self._sub)
 
     # ── Internal FSM helpers ──────────────────────────────────────────────────
-
-    def _other_p2p_name(self) -> str:
-        """The agent's *other* p2p instance name (p2p_world when this Session runs
-        on p2p_public and vice-versa). Used for cross-instance SPR / grant signing.
-        Uses the protobuf-free constants from sess_msg so the FSM never imports the
-        conn layer (which would pull protobuf into the Pyodide import graph)."""
-        if self.p2p_name == P2P_PUBLIC:
-            return P2P_WORLD
-        return P2P_PUBLIC
 
     def _set_state(self, state: SessionState, timeout_s: Optional[float]) -> None:
         prev = self.state

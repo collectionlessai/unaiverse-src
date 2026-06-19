@@ -46,15 +46,7 @@ class RouterP2P:
         self.connect_returns = (None, False)
         # inbox = deque of (sender_peer_id, protocol_id, sess_msg) for this instance.
         self.inbox = deque()
-        self._twin = None      # the other-network RouterP2P of the same node
         self.peer_p2p = None   # the same-network RouterP2P of the peer node
-
-    def set_twin(self, twin):
-        self._twin = twin
-
-    @property
-    def twin(self):
-        return self._twin
 
     async def connect(self, addresses):
         return self.connect_returns
@@ -88,11 +80,16 @@ class RouterNode:
     def __init__(self, pub_peer_id, world_peer_id):
         self.public = RouterP2P(NodeConn.P2P_PUBLIC, pub_peer_id, log_sub="pub")
         self.world = RouterP2P(NodeConn.P2P_WORLD, world_peer_id, log_sub="prv")
-        self.public.set_twin(self.world)
-        self.world.set_twin(self.public)
 
     def by_name(self, p2p_name):
         return self.public if p2p_name == NodeConn.P2P_PUBLIC else self.world
+
+    def xcrypto_for(self, p2p_name):
+        """Cross-instance capability for the SessionManager on `p2p_name`: wraps the
+        node's *other* RouterP2P (public↔world)."""
+        from unaiverse.networking.p2p import CrossInstanceCrypto
+        other = self.world if p2p_name == NodeConn.P2P_PUBLIC else self.public
+        return CrossInstanceCrypto(other)
 
     def wire_to(self, other: "RouterNode"):
         self.public.peer_p2p = other.public
@@ -130,15 +127,19 @@ def test_world_join_full_handoff():
     joiner_profile = {"node_id": "joiner-node", "dynamic": {"private_peer_id": joiner_world_id}}
     host_profile = {"node_id": "host-node", "dynamic": {"private_peer_id": host_world_id}}
     j_pub = SessionManager(joiner.public, NodeConn.P2P_PUBLIC, joiner_pub_id, "joiner-node",
-                           local_profile_factory=lambda: joiner_profile)
+                           local_profile_factory=lambda: joiner_profile,
+                           xcrypto=joiner.xcrypto_for(NodeConn.P2P_PUBLIC))
     j_world = SessionManager(joiner.world, NodeConn.P2P_WORLD, joiner_world_id, "joiner-node",
-                             local_profile_factory=lambda: joiner_profile)
+                             local_profile_factory=lambda: joiner_profile,
+                             xcrypto=joiner.xcrypto_for(NodeConn.P2P_WORLD))
     h_pub = SessionManager(host.public, NodeConn.P2P_PUBLIC, host_pub_id, "host-node",
                            local_profile_factory=lambda: host_profile,
-                           decision_hook=_host_decision_hook)
+                           decision_hook=_host_decision_hook,
+                           xcrypto=host.xcrypto_for(NodeConn.P2P_PUBLIC))
     h_world = SessionManager(host.world, NodeConn.P2P_WORLD, host_world_id, "host-node",
                              local_profile_factory=lambda: host_profile,
-                             decision_hook=_host_decision_hook)
+                             decision_hook=_host_decision_hook,
+                             xcrypto=host.xcrypto_for(NodeConn.P2P_WORLD))
 
     managers = {
         (joiner, NodeConn.P2P_PUBLIC): j_pub, (joiner, NodeConn.P2P_WORLD): j_world,
@@ -222,15 +223,19 @@ def test_private_join_with_expired_grant_is_rejected():
     joiner_profile = {"node_id": "joiner-node", "dynamic": {"private_peer_id": joiner_world_id}}
     host_profile = {"node_id": "host-node", "dynamic": {"private_peer_id": host_world_id}}
     j_pub = SessionManager(joiner.public, NodeConn.P2P_PUBLIC, joiner_pub_id, "joiner-node",
-                           local_profile_factory=lambda: joiner_profile)
+                           local_profile_factory=lambda: joiner_profile,
+                           xcrypto=joiner.xcrypto_for(NodeConn.P2P_PUBLIC))
     j_world = SessionManager(joiner.world, NodeConn.P2P_WORLD, joiner_world_id, "joiner-node",
-                             local_profile_factory=lambda: joiner_profile)
+                             local_profile_factory=lambda: joiner_profile,
+                             xcrypto=joiner.xcrypto_for(NodeConn.P2P_WORLD))
     h_pub = SessionManager(host.public, NodeConn.P2P_PUBLIC, host_pub_id, "host-node",
                            local_profile_factory=lambda: host_profile,
-                           decision_hook=_host_decision_hook)
+                           decision_hook=_host_decision_hook,
+                           xcrypto=host.xcrypto_for(NodeConn.P2P_PUBLIC))
     h_world = SessionManager(host.world, NodeConn.P2P_WORLD, host_world_id, "host-node",
                              local_profile_factory=lambda: host_profile,
-                             decision_hook=_host_decision_hook)
+                             decision_hook=_host_decision_hook,
+                             xcrypto=host.xcrypto_for(NodeConn.P2P_WORLD))
 
     managers = {
         (joiner, NodeConn.P2P_PUBLIC): j_pub, (joiner, NodeConn.P2P_WORLD): j_world,
