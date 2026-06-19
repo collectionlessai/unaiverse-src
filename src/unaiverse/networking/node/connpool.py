@@ -748,6 +748,13 @@ class ConnectionPools:
                 c += len(v[0])
             return c
 
+    def _p2p_of(self, peer_id: str) -> "P2P | None":
+        """Resolve which P2P instance a peer is reachable on, for the peer_id-only I/O
+        (send / subscribe / publish). The base pool only knows the connection index;
+        NodeConn overrides this to ask the SessionManagers first (Session-anchored
+        routing), so the index can later be derived from the Sessions entirely."""
+        return self.peer_id_to_p2p.get(peer_id)
+
     async def send(self, peer_id: str, channel_trail: str | None,
                    content_type: str, content: bytes | dict | str | None = None, p2p: P2P | None = None) -> bool:
         """Sends a direct message to a specific peer (async).
@@ -767,7 +774,7 @@ class ConnectionPools:
 
         # Getting the right p2p object
         if p2p is None:
-            p2p = self.peer_id_to_p2p[peer_id] if peer_id in self.peer_id_to_p2p else None
+            p2p = self._p2p_of(peer_id)
             if p2p is None:
                 log.error("P2P non found for peer id: " + str(peer_id))
                 return False
@@ -813,8 +820,8 @@ class ConnectionPools:
             if _p2p.peer_id == peer_id:
                 p2p = _p2p
                 break
-        if p2p is None and peer_id in self.peer_id_to_p2p:
-            p2p = self.peer_id_to_p2p[peer_id]
+        if p2p is None:
+            p2p = self._p2p_of(peer_id)
         if p2p is None:
             if default_p2p_name is not None:
                 p2p = self.p2p_name_to_p2p[default_p2p_name]
@@ -845,8 +852,8 @@ class ConnectionPools:
             if _p2p.peer_id == peer_id:
                 p2p = _p2p
                 break
-        if p2p is None and peer_id in self.peer_id_to_p2p:
-            p2p = self.peer_id_to_p2p[peer_id]
+        if p2p is None:
+            p2p = self._p2p_of(peer_id)
         if p2p is None:
             if default_p2p_name is None:
                 default_p2p_name = NodeConn.P2P_WORLD
@@ -881,7 +888,7 @@ class ConnectionPools:
                 p2p = _p2p
                 break
         if p2p is None:
-            p2p = self.peer_id_to_p2p[peer_id]
+            p2p = self._p2p_of(peer_id)
         if p2p is None:
             return False
 
@@ -1070,6 +1077,18 @@ class NodeConn(ConnectionPools):
                                   SessionState.CLOSED):
                 return True
         return False
+
+    def _p2p_of(self, peer_id: str):
+        """Resolve a peer's P2P instance by asking the SessionManagers first: the SM
+        that holds a Session for this peer-id owns the instance the peer lives on
+        (public before world, matching the cross-pool first-network-wins). Falls back
+        to the connection index for peers that are connected but have no Session yet.
+        This anchors the peer_id -> instance routing to the Sessions, so the separate
+        peer_id_to_p2p index can be retired once every connected peer has a Session."""
+        for sm in (self._sm_public, self._sm_world):
+            if sm is not None and sm.get_session(peer_id) is not None:
+                return sm.p2p
+        return super()._p2p_of(peer_id)
 
     def reset_rendezvous_tag(self) -> None:
         """Resets the rendezvous tag to its initial state."""

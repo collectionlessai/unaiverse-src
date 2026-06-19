@@ -406,3 +406,21 @@ def test_char_unchanged_pool_absent_from_diff():
     added2, removed2 = _run(conn.update())
     assert NodeConn.IN_PUBLIC not in added2
     assert NodeConn.IN_PUBLIC not in removed2
+
+
+def test_p2p_of_prefers_session_then_index():
+    """_p2p_of resolves the peer's instance from the SessionManager that holds its
+    Session (public before world), falling back to the connection index for peers that
+    are connected but have no Session yet, and None when nothing knows the peer."""
+    conn, pub, world = _make_node_conn()
+    # A Session on the world manager resolves to the world instance.
+    conn._sm_world._sessions["w1"] = object()
+    assert conn._p2p_of("w1") is world
+    # A Session on the public manager resolves to the public instance.
+    conn._sm_public._sessions["p1"] = object()
+    assert conn._p2p_of("p1") is pub
+    # No Session: fall back to the connection index.
+    conn.peer_id_to_p2p["idx"] = world
+    assert conn._p2p_of("idx") is world
+    # Unknown to both Sessions and index.
+    assert conn._p2p_of("nope") is None
