@@ -535,6 +535,8 @@ def test_char_update_registers_known_world_sessions_off_diff():
     added, removed = _run(conn.update())
     sess = conn._sm_world.get_session("wa")
     assert sess is not None and sess.state == SessionState.KNOWN
+    assert sess.app_role == ROLE_WORLD_AGENT          # role carried through from the rendezvous
+    assert sess.addresses == ["/ip4/1.1.1.1/tcp/1"]
     assert conn.is_connected("wa") is False
     assert all("wa" not in s for s in added.values())
     assert all("wa" not in s for s in removed.values())

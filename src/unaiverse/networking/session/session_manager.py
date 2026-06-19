@@ -169,19 +169,28 @@ class SessionManager:
             classified.setdefault(pool_name, {})[c['id']] = c
         return classified
 
-    def sync_known_peers(self, known: Dict[str, List[str]]) -> None:
+    def sync_known_peers(self, known: Dict[str, tuple]) -> None:
         """Reconcile the inert KNOWN roster against the peers currently advertised by
-        the rendezvous (``peer_id -> addresses``). Registers a KNOWN Session for every
-        known peer that has no Session yet, and prunes KNOWN Sessions whose peer has
-        vanished. Never touches a non-KNOWN Session: an in-transit / established /
-        terminal Session owns its own lifecycle, so an ESTABLISHED peer that drops out
-        of the rendezvous keeps its live Session until the transport tears it down, and
-        a FAILED / CLOSED one is left to the normal evict path (it reappears as KNOWN
-        only once that path has cleared it). KNOWN Sessions live solely in the registry,
-        never in a pool, so this cannot perturb the per-cycle diff or the perimeter."""
-        for peer_id, addrs in known.items():
-            if peer_id not in self._sessions:
-                self.ensure(peer_id, list(addrs) if addrs else [])
+        the rendezvous (``peer_id -> (addresses, app_role)``). Registers a KNOWN Session
+        for every known peer that has no Session yet, refreshes the rendezvous-sourced
+        metadata (addresses + applicative role) on the Sessions that already exist, and
+        prunes KNOWN Sessions whose peer has vanished.
+
+        The metadata refresh touches a Session's addresses/app_role only, never its FSM
+        state, so an active (established / in-transit) Session keeps running while its
+        role/addrs stay current. Pruning is still KNOWN-only: an ESTABLISHED peer that
+        drops out of the rendezvous keeps its live Session until the transport tears it
+        down, and a FAILED / CLOSED one is left to the normal evict path. KNOWN Sessions
+        live solely in the registry, never in a pool, so this cannot perturb the
+        per-cycle diff or the perimeter."""
+        for peer_id, (addrs, app_role) in known.items():
+            addrs = list(addrs) if addrs else []
+            sess = self._sessions.get(peer_id)
+            if sess is None:
+                self.ensure(peer_id, addrs, app_role=app_role)
+            else:
+                sess.addresses = addrs
+                sess.app_role = app_role
         stale = [pid for pid, s in self._sessions.items()
                  if s.state == SessionState.KNOWN and pid not in known]
         for peer_id in stale:
@@ -198,6 +207,7 @@ class SessionManager:
         remote_node_id_hint: Optional[str] = None,
         grant: Optional[dict] = None,
         reject_relay: bool = False,
+        app_role: int = 0,
     ) -> Session:
         """Register an initiator Session to `peer_id` in the KNOWN state WITHOUT
         starting it (no dial yet). Idempotent: a non-terminal existing Session is
@@ -222,6 +232,7 @@ class SessionManager:
             grant=grant,
             reject_relay=reject_relay,
             xcrypto=self._xcrypto,
+            app_role=app_role,
         )
         self._set_known(peer_id, sess)
         return sess
@@ -265,9 +276,13 @@ class SessionManager:
             return [ev]
 
         existing = self._sessions.get(peer_id)
+        app_role = 0
         if existing is not None and existing.state == SessionState.KNOWN:
             # A KNOWN is a rendezvous placeholder, not a dial in flight: drop it so the
-            # caller's addresses / grant / is_world_join / hints take effect below.
+            # caller's addresses / grant / is_world_join / hints take effect below. Carry
+            # its rendezvous role across the replacement so the dialed Session is not
+            # blank on app_role until the next sync refresh.
+            app_role = existing.app_role
             self._drop_session(peer_id)
         elif existing is not None and existing.state not in (SessionState.FAILED, SessionState.CLOSED):
             log.session(f"initiate(...{peer_id[-5:]}): "
@@ -276,7 +291,8 @@ class SessionManager:
 
         self.ensure(peer_id, addresses, is_world_join=is_world_join,
                     remote_other_peer_id_hint=remote_other_peer_id_hint,
-                    remote_node_id_hint=remote_node_id_hint, grant=grant, reject_relay=reject_relay)
+                    remote_node_id_hint=remote_node_id_hint, grant=grant, reject_relay=reject_relay,
+                    app_role=app_role)
         log.session(f"initiating Session to ...{peer_id[-5:]}", sub=self._label)
         return await self.activate(peer_id)
 

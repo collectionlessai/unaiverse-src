@@ -1143,25 +1143,28 @@ class NodeConn(ConnectionPools):
         return None
 
     async def update(self) -> tuple[dict, dict]:
-        """Coordinator per-cycle update: run the transport-driven per-instance reconcile
-        (base class), then reconcile the world SessionManager's inert KNOWN roster
-        against the peers currently known from the rendezvous. The KNOWN sync is kept
-        out of the pool/diff path on purpose: KNOWN Sessions are a registry of known
-        peers, never pool members, so they cannot leak into the added/removed diff nor
-        the perimeter."""
-        added, removed = await super().update()
+        """Coordinator per-cycle update: first refresh the world SessionManager's KNOWN
+        roster (and the role/addrs it carries) from the rendezvous, THEN run the
+        transport-driven per-instance reconcile (base class). The sync runs before the
+        membership snapshot so the perimeter and facade, once sourced from Sessions, see
+        this cycle's roster rather than the previous one. The KNOWN sync stays out of the
+        pool/diff path: KNOWN Sessions are a registry of known peers, never pool members,
+        so they cannot leak into the added/removed diff nor the perimeter."""
         self._sync_known_world_peers()
+        added, removed = await super().update()
         return added, removed
 
     def _sync_known_world_peers(self) -> None:
         """Feed the world SessionManager the peers currently advertised by the rendezvous
-        (``peer_id -> addresses``, minus ourselves) so it registers a KNOWN Session per
-        known peer and prunes the vanished ones. World-only: the public instance carries
-        no rendezvous membership."""
+        (``peer_id -> (addresses, app_role)``, minus ourselves) so it registers a KNOWN
+        Session per known peer, refreshes role/addrs on the Sessions that exist, and
+        prunes the vanished ones. World-only: the public instance carries no rendezvous
+        membership."""
         if self._sm_world is None:
             return
         self_peer_id = self.p2p_world.peer_id
-        known = {peer_id: addrs for peer_id, addrs in self.peer_id_to_addrs.items()
+        known = {peer_id: (addrs, self.peer_id_to_misc.get(peer_id, 0))
+                 for peer_id, addrs in self.peer_id_to_addrs.items()
                  if peer_id != self_peer_id}
         self._sm_world.sync_known_peers(known)
 

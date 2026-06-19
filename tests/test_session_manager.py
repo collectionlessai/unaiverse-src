@@ -457,16 +457,18 @@ def test_known_session_survives_inbound_ping(alice_conn, alice_peer_id, bob_peer
     assert sent[-1][2].fields["ok"] is False
 
 
-# ── Known roster sync from rendezvous (U8.3) ─────────────────────────────────
+# ── Known roster sync from rendezvous (U8.3 / U8.4a) ─────────────────────────
 
 def test_sync_known_peers_registers_inert_known(alice_conn, alice_peer_id, bob_peer_id):
     """sync_known_peers registers a KNOWN Session (inert: not dialed, not tick-active)
-    for each known peer that has no Session yet, carrying its rendezvous addresses."""
+    for each known peer that has no Session yet, carrying its rendezvous addresses and
+    applicative role."""
     sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
-    sm.sync_known_peers({bob_peer_id: ["/ip4/1.1.1.1/tcp/1"]})
+    sm.sync_known_peers({bob_peer_id: (["/ip4/1.1.1.1/tcp/1"], 1)})
     sess = sm.get_session(bob_peer_id)
     assert sess is not None and sess.state == SessionState.KNOWN
     assert sess.addresses == ["/ip4/1.1.1.1/tcp/1"]
+    assert sess.app_role == 1
     assert bob_peer_id not in sm._active_sessions
     assert alice_conn.connect_calls == []
 
@@ -474,16 +476,43 @@ def test_sync_known_peers_registers_inert_known(alice_conn, alice_peer_id, bob_p
 def test_sync_known_peers_is_idempotent(alice_conn, alice_peer_id, bob_peer_id):
     """A second sync with the same peer keeps the existing KNOWN Session, not a fresh one."""
     sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
-    sm.sync_known_peers({bob_peer_id: ["/ip4/1.1.1.1/tcp/1"]})
+    sm.sync_known_peers({bob_peer_id: (["/ip4/1.1.1.1/tcp/1"], 1)})
     s1 = sm.get_session(bob_peer_id)
-    sm.sync_known_peers({bob_peer_id: ["/ip4/1.1.1.1/tcp/1"]})
+    sm.sync_known_peers({bob_peer_id: (["/ip4/1.1.1.1/tcp/1"], 1)})
     assert sm.get_session(bob_peer_id) is s1
+
+
+def test_sync_known_peers_refreshes_role_and_addrs_on_existing(alice_conn, alice_peer_id, bob_peer_id):
+    """A later sync refreshes addresses and app_role on the existing Session without
+    replacing it or touching its FSM state."""
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    sm.sync_known_peers({bob_peer_id: (["/ip4/1.1.1.1/tcp/1"], 1)})
+    sess = sm.get_session(bob_peer_id)
+    sm.sync_known_peers({bob_peer_id: (["/ip4/2.2.2.2/tcp/2"], 3)})   # promoted to master
+    assert sm.get_session(bob_peer_id) is sess        # same Session, not replaced
+    assert sess.app_role == 3
+    assert sess.addresses == ["/ip4/2.2.2.2/tcp/2"]
+    assert sess.state == SessionState.KNOWN           # FSM untouched
+
+
+def test_sync_known_peers_refreshes_active_session_metadata(alice_conn, alice_peer_id, bob_peer_id):
+    """The metadata refresh reaches an active (non-KNOWN) Session too: its app_role and
+    addresses update while its FSM state is left untouched."""
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    sess = _mk_session(alice_conn, bob_peer_id, alice_peer_id)
+    sm._set_active(bob_peer_id, sess)
+    sess._set_state(SessionState.ESTABLISHED, None)
+    sm.sync_known_peers({bob_peer_id: (["/ip4/3.3.3.3/tcp/3"], 3)})
+    assert sm.get_session(bob_peer_id) is sess
+    assert sess.app_role == 3
+    assert sess.addresses == ["/ip4/3.3.3.3/tcp/3"]
+    assert sess.state == SessionState.ESTABLISHED
 
 
 def test_sync_known_peers_prunes_vanished_known(alice_conn, alice_peer_id, bob_peer_id):
     """A KNOWN Session whose peer is no longer advertised is pruned on the next sync."""
     sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
-    sm.sync_known_peers({bob_peer_id: ["/ip4/1.1.1.1/tcp/1"]})
+    sm.sync_known_peers({bob_peer_id: (["/ip4/1.1.1.1/tcp/1"], 1)})
     assert sm.get_session(bob_peer_id) is not None
     sm.sync_known_peers({})
     assert sm.get_session(bob_peer_id) is None
@@ -505,10 +534,11 @@ def test_initiate_activates_existing_known_placeholder(alice_conn, alice_peer_id
     no-op'ing: the placeholder is replaced by the caller's parameters and started."""
     alice_conn.connect_returns = (bob_peer_id, False)
     sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
-    sm.sync_known_peers({bob_peer_id: ["/ip4/1.1.1.1/tcp/1"]})
+    sm.sync_known_peers({bob_peer_id: (["/ip4/1.1.1.1/tcp/1"], 1)})
     assert sm.get_session(bob_peer_id).state == SessionState.KNOWN
     _run(sm.initiate(bob_peer_id, ["/ip4/2.2.2.2/tcp/2"]))
     assert len(alice_conn.connect_calls) == 1
     sess = sm.get_session(bob_peer_id)
     assert sess is not None and sess.state != SessionState.KNOWN
+    assert sess.app_role == 1                          # rendezvous role carried across the replacement
     assert bob_peer_id in sm._active_sessions

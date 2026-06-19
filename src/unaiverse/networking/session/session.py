@@ -210,6 +210,7 @@ class Session:
         grant: Optional[dict] = None,
         reject_relay: bool = False,
         xcrypto: Optional["CrossInstanceCrypto"] = None,
+        app_role: int = 0,
     ):
         """
         Args:
@@ -239,6 +240,10 @@ class Session:
                 cross-instance SignedPeerRecord / world-grant signer, sealed under
                 the other host key). Injected from the layer that owns both
                 instances (the Coordinator / Node).
+            app_role: Applicative world role (the rendezvous `misc` bitmask: 1=agent, 3=master),
+                refreshed by SessionManager.sync_known_peers and used as the source for the
+                role/addrs facade and the world perimeter. Distinct from self.role
+                (SessionRole, which is directional). 0 means public / unknown.
         """
         self.peer_id = peer_id
         self.role = role
@@ -255,6 +260,7 @@ class Session:
         self.remote_node_id_hint = remote_node_id_hint
         self.remote_other_peer_id_hint = remote_other_peer_id_hint
         self.addresses = list(addresses or [])
+        self.app_role = app_role
         self.is_world_join = is_world_join
         self._decision_hook = decision_hook
         self._grant = grant  # initiator world Session: redeem this after PROFILE
