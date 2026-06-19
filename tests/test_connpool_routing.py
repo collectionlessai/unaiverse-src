@@ -237,12 +237,15 @@ def test_is_peer_session_pending():
     conn = NodeConn.__new__(NodeConn)  # bypass the heavy P2P-bound __init__
     conn.set_session_managers(_FakeSM({
         "pending": _FakeSess(SessionState.HELLO_SENT),
+        "known": _FakeSess(SessionState.KNOWN),
         "reconnecting": _FakeSess(SessionState.RECONNECTING),
         "established": _FakeSess(SessionState.ESTABLISHED),
         "failed": _FakeSess(SessionState.FAILED),
         "closed": _FakeSess(SessionState.CLOSED),
     }))
     assert conn.is_peer_session_pending("pending") is True
+    # KNOWN is a known-but-not-dialed peer: no handshake in flight → not pending.
+    assert conn.is_peer_session_pending("known") is False
     # RECONNECTING was already established once → not "waiting to be managed".
     assert conn.is_peer_session_pending("reconnecting") is False
     assert conn.is_peer_session_pending("established") is False

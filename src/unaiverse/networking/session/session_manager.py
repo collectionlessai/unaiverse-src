@@ -277,10 +277,16 @@ class SessionManager:
             self._drop_session(peer_id)
             sess = None
 
-        if sess is None:
+        # A KNOWN Session could be an initiator that has not dialed yet: it is not an
+        # in-flight handshake, so route inbound traffic as if there were no Session.
+        # The peer dialed us first, so an inbound HELLO makes us the responder
+        # (spawn_responder overwrites the KNOWN registry entry); a KNOWN never reaches
+        # the tie-breaker below because it didn't dial yet, and on PING/RESUME
+        # the no-session path replies "unknown session" while the KNOWN intent stays put for a later dial.
+        if sess is None or sess.state == SessionState.KNOWN:
             if protocol_id == SESSION_HELLO_PROTOCOL and sess_msg.kind == SessMsg.KIND_HELLO_REQ:
-                # Inbound HELLO from an unknown peer → spawn a responder Session
-                # (no tie-breaker possible: we have no in-flight initiator for them).
+                # Unknown peer, or a KNOWN intent that never dialed → spawn a responder
+                # Session (no tie-breaker possible: no in-flight initiator for them).
                 sess = self._spawn_responder(peer_id, remote_other_peer_id_hint=None)
             elif (protocol_id == SESSION_CONTROL_PROTOCOL and
                   sess_msg.kind in (SessMsg.KIND_PING, SessMsg.KIND_RESUME)):
@@ -298,7 +304,9 @@ class SessionManager:
 
         # Tie-breaker — only when the inbound is a competing HelloRequest (its
         # explicit kind tag distinguishes it from the HelloResponse coming back to
-        # our own dial; both travel on the same protocol_id).
+        # our own dial; both travel on the same protocol_id). A KNOWN Session is also
+        # role=INITIATOR, but it is not an in-flight dial: the state guard keeps it out
+        # of the tie-breaker (and the no-session branch above has already handled it).
         elif (protocol_id == SESSION_HELLO_PROTOCOL and
               sess_msg.kind == SessMsg.KIND_HELLO_REQ and
               sess.role == SessionRole.INITIATOR and

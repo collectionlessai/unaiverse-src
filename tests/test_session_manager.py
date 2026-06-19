@@ -416,3 +416,42 @@ def test_terminal_session_leaves_both_views(alice_conn, alice_peer_id, bob_peer_
     _run(sm.on_peer_disconnected(bob_peer_id))
     assert bob_peer_id not in sm._sessions
     assert bob_peer_id not in sm._active_sessions
+
+
+# ── KNOWN is not an in-flight handshake on inbound (U8.2) ─────────────────────
+
+def test_known_session_yields_to_responder_on_inbound_hello(alice_conn, alice_peer_id, bob_peer_id):
+    """A KNOWN initiator (registered, not yet dialed) that receives an inbound HELLO
+    yields: the peer dialed us first, so the KNOWN intent is dropped and a responder
+    takes over the inbound session — no simultaneous-open tie-breaker, nothing was in
+    flight."""
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    known = sm.ensure(bob_peer_id, ["/ip4/127.0.0.1/tcp/0"])
+    assert known.state == SessionState.KNOWN
+    hello = SessMsg(SessMsg.KIND_HELLO_REQ, {
+        "session_id": b"\x42" * 16, "nonce_a": b"\xaa" * 32, "protocol_versions": ["1.0"],
+    })
+    _run(sm.deliver(bob_peer_id, SESSION_HELLO_PROTOCOL, hello))
+    sess = sm.get_session(bob_peer_id)
+    assert sess is not None and sess is not known          # KNOWN replaced
+    assert sess.role == SessionRole.RESPONDER
+    assert sess.session_id == b"\x42" * 16                 # adopted the inbound session
+    assert bob_peer_id in sm._active_sessions              # responder is tick-active
+
+
+def test_known_session_survives_inbound_ping(alice_conn, alice_peer_id, bob_peer_id):
+    """A liveness PING for a session we never established does not destroy a standing
+    KNOWN intent: we reply 'unknown session' and keep the KNOWN (which a later
+    activate() can still dial)."""
+    from unaiverse.networking.session.sess_msg import SESSION_UNKNOWN
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    known = sm.ensure(bob_peer_id, ["/ip4/127.0.0.1/tcp/0"])
+    ping = SessMsg(SessMsg.KIND_PING, {"session_id": b"\x02" * 16, "nonce": b"\xbb"})
+    events = _run(sm.deliver(bob_peer_id, SESSION_CONTROL_PROTOCOL, ping))
+    assert events == []
+    assert sm.get_session(bob_peer_id) is known            # KNOWN intact
+    assert known.state == SessionState.KNOWN
+    assert bob_peer_id not in sm._active_sessions          # still inert
+    sent = [s for s in alice_conn.sent if s[1] == SESSION_CONTROL_PROTOCOL]
+    assert sent[-1][2].kind == SessMsg.KIND_PONG
+    assert sent[-1][2].fields["ok"] is False

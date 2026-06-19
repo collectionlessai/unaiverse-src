@@ -266,8 +266,13 @@ class Session:
         self.nonce_a: bytes = b""
         self.nonce_b: bytes = b""
 
-        # FSM state. An initiator starts KNOWN (registered, not yet dialed); a
-        # responder starts INIT (already engaged, awaiting the inbound HELLO).
+        # FSM state, derived from the role: an initiator starts KNOWN (registered, not
+        # yet dialed); a responder starts INIT (already engaged, awaiting the inbound
+        # HELLO). Role is the direction (who dials) and is fixed for life; state is the
+        # progress. Hence a KNOWN Session is always an INITIATOR (a dial we intend to
+        # make), while a responder is never registered ahead of time and so is never
+        # KNOWN. Consumers that read role==INITIATOR therefore pair it with a state
+        # guard to exclude the not-yet-dialed KNOWN (see the deliver() tie-breaker).
         self.state: SessionState = (SessionState.KNOWN if role == SessionRole.INITIATOR
                                     else SessionState.INIT)
         self._state_entered_at: float = time.monotonic()

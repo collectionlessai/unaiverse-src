@@ -1064,14 +1064,17 @@ class NodeConn(ConnectionPools):
 
         RECONNECTING is deliberately excluded: such a peer was already established
         (already managed) and is merely re-establishing, so it is not "waiting to
-        be managed". Returns False for no Session / ESTABLISHED / RECONNECTING /
-        terminal (FAILED, CLOSED)."""
+        be managed". KNOWN is excluded too: it is a peer known from the rendezvous
+        whose initiator has not dialed yet, so no handshake is in flight. Returns
+        False for no Session / KNOWN / ESTABLISHED / RECONNECTING / terminal
+        (FAILED, CLOSED)."""
         from unaiverse.networking.session.session import SessionState
         for sm in self._session_managers:
             sess = sm.get_session(peer_id)
             if sess is None:
                 continue
-            if sess.state not in (SessionState.ESTABLISHED,
+            if sess.state not in (SessionState.KNOWN,
+                                  SessionState.ESTABLISHED,
                                   SessionState.RECONNECTING,
                                   SessionState.FAILED,
                                   SessionState.CLOSED):
