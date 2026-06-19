@@ -72,6 +72,8 @@ class SessionManager:
         local_profile_factory: Callable[[], dict],
         decision_hook: Optional[DecisionHook] = None,
         xcrypto: Optional["CrossInstanceCrypto"] = None,
+        routing_classifier=None,
+        perimeter_disconnect=None,
     ):
         """
         Args:
@@ -96,6 +98,12 @@ class SessionManager:
         self._local_profile_factory = local_profile_factory
         self._decision_hook = decision_hook
         self._xcrypto = xcrypto
+        # Per-instance perimeter routing, injected by the Coordinator (which owns the
+        # pool taxonomy): a pure classifier (peer_info, membership) -> pool_name | None,
+        # and an async callable used to cut unclassifiable world peers. The SM stays
+        # free of the conn layer: it only applies what it is given.
+        self._routing_classifier = routing_classifier
+        self._perimeter_disconnect = perimeter_disconnect
         self._label = _p2p_label(p2p_name)
 
         # peer_id → Session (at most one Session per peer in this p2p instance).
@@ -103,6 +111,32 @@ class SessionManager:
 
         # peer_id → monotonic timestamp until which dials are refused.
         self._quarantine: Dict[str, float] = {}
+
+    # ── Per-instance reconcile (routing + perimeter) ──────────────────────────
+
+    async def reconcile(self, connected_peer_infos: list, membership) -> dict:
+        """Classify this instance's connected peers into pools, returning a dict
+        ``pool_name -> {peer_id -> peer_info}``.
+
+        Uses the injected per-instance classifier. When a membership snapshot is given
+        (the world instance) an unclassifiable peer is cut from the perimeter
+        (disconnected) and left out; the public instance has no membership and never
+        cuts (an undefined-direction peer is simply skipped). Empty pools are absent
+        from the result: the Coordinator iterates its own pools and treats a missing
+        pool as empty, so removals are still detected.
+        """
+        classified: dict = {}
+        if connected_peer_infos is None or self._routing_classifier is None:
+            return classified
+        for c in connected_peer_infos:
+            pool_name = self._routing_classifier(c, membership)
+            if pool_name is None:
+                if membership is not None and self._perimeter_disconnect is not None:
+                    log.session(f"perimeter: cutting unclassifiable peer ...{c['id'][-5:]}", sub=self._label)
+                    await self._perimeter_disconnect(c['id'])
+                continue
+            classified.setdefault(pool_name, {})[c['id']] = c
+        return classified
 
     # ── Initiator API ─────────────────────────────────────────────────────────
 

@@ -335,6 +335,8 @@ def _make_node_conn():
     pub, world = _UpdP2P("pub"), _UpdP2P("world")
     conn = NodeConn(max_connections=16, p2p_u=pub, p2p_w=world,
                     is_world_node=False, public_key=None, token=None, local_node_id="n")
+    # Build the per-instance SessionManagers (update() routes through sm.reconcile).
+    conn.attach_session_policy(local_profile_factory=lambda: {}, decision_hook=None)
     return conn, pub, world
 
 

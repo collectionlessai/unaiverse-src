@@ -456,53 +456,6 @@ class ConnectionPools:
         """
         return list(self.peer_id_to_pool_name.keys())
 
-    async def _reconcile_instance(self, p2p_name: str, p2p: P2P, membership) -> tuple[dict, dict]:
-        """Reconcile ONE P2P instance against the membership snapshot and report its
-        per-pool added/removed diff.
-
-        Routes the instance's connected peers (conn_routing_fcn, including the world
-        perimeter cut), then for each of this instance's pools computes the new/lost
-        set-difference and admits the new peers via add() — which keeps the cross-pool
-        guard and the shared peer_id_to_* indices in the Coordinator. Returns two dicts
-        keyed by pool_name, containing only the pools of this instance that changed
-        (empty pools are omitted, like the legacy update()).
-
-        This is the per-instance reconcile that will move into the SessionManager: the
-        loop body is unchanged, only lifted out of update() and returning a local diff
-        instead of writing the shared one directly.
-        """
-        added_local: dict = {}
-        removed_local: dict = {}
-
-        connected_peer_infos = p2p.get_connected_peers_info()
-        if connected_peer_infos is None:
-            return added_local, removed_local
-
-        # Routing to the right queue / filtering
-        pool_name_and_peer_ids_to_peer_info = await self.conn_routing_fcn(
-            connected_peer_infos, p2p, membership)
-
-        # Parsing the generated index
-        for pool_name, connected_peer_ids_to_connected_peer_infos \
-                in pool_name_and_peer_ids_to_peer_info.items():
-            pool, _, pool_p2p = self.p2p_name_and_pool_name_to_pool_triple[p2p_name][pool_name]
-            connected_peer_ids = connected_peer_ids_to_connected_peer_infos.keys()
-            new_peer_ids = connected_peer_ids - pool
-            lost_peer_ids = pool - connected_peer_ids
-
-            # Clearing disconnected agents
-            for lost_peer_id in lost_peer_ids:
-                removed_local.setdefault(pool_name, set()).add(lost_peer_id)
-
-            # Adding new agents
-            for new_peer_id in new_peer_ids:
-                peer_info = connected_peer_ids_to_connected_peer_infos[new_peer_id]
-                if not self.add(peer_info, pool_name=pool_name):
-                    continue
-                added_local.setdefault(pool_name, set()).add(new_peer_id)
-
-        return added_local, removed_local
-
     async def update(self) -> tuple[dict, dict]:
         """Refreshes the connection pools by checking for new and lost connections (async).
 
@@ -1063,6 +1016,9 @@ class NodeConn(ConnectionPools):
         / world-grant) with the WORLD host key and vice-versa."""
         from unaiverse.networking.session import SessionManager
         from unaiverse.networking.p2p import CrossInstanceCrypto
+        # Per-instance perimeter routing injected into each manager: the public one
+        # routes by direction (no membership, never cuts); the world one classifies
+        # against the snapshot and cuts unclassifiable peers on its P2P instance.
         self._sm_public = SessionManager(
             p2p=self.p2p_public,
             p2p_name=NodeConn.P2P_PUBLIC,
@@ -1071,6 +1027,8 @@ class NodeConn(ConnectionPools):
             local_profile_factory=local_profile_factory,
             decision_hook=decision_hook,
             xcrypto=CrossInstanceCrypto(self.p2p_world),
+            routing_classifier=NodeConn._route_public,
+            perimeter_disconnect=None,
         )
         self._sm_world = SessionManager(
             p2p=self.p2p_world,
@@ -1080,6 +1038,8 @@ class NodeConn(ConnectionPools):
             local_profile_factory=local_profile_factory,
             decision_hook=decision_hook,
             xcrypto=CrossInstanceCrypto(self.p2p_public),
+            routing_classifier=NodeConn._route_world,
+            perimeter_disconnect=lambda peer_id: ConnectionPools.disconnect(self.p2p_world, peer_id),
         )
         self.set_session_managers(self._sm_public, self._sm_world)
 
@@ -1126,6 +1086,85 @@ class NodeConn(ConnectionPools):
             inspector_peer_id=self.inspector_peer_id,
         )
 
+    @staticmethod
+    def _route_public(peer_info: dict, membership) -> "str | None":
+        """Per-instance routing for the public network: by direction only, no
+        membership and no perimeter cut. Returns the pool name, or None for an
+        undefined direction (the caller skips it without disconnecting)."""
+        direction = peer_info['direction']
+        if direction == "inbound":
+            return NodeConn.IN_PUBLIC
+        if direction == "outbound":
+            return NodeConn.OUT_PUBLIC
+        return None
+
+    @staticmethod
+    def _route_world(peer_info: dict, membership: WorldMembership) -> "str | None":
+        """Per-instance routing for the world network: classify the peer against the
+        membership snapshot (precedence agent > node > master) and return its pool
+        name, or None when the peer is not a known world member (the caller cuts it
+        from the perimeter) or has an undefined direction."""
+        peer_id = peer_info['id']
+        is_agent = peer_id in membership.world_agents
+        is_master = peer_id in membership.world_masters
+        is_node = membership.world_node_peer_id is not None and peer_id == membership.world_node_peer_id
+        is_inspector = membership.inspector_peer_id is not None and peer_id == membership.inspector_peer_id
+        if not (is_node or is_master or is_agent or is_inspector):
+            return None
+        direction = peer_info['direction']
+        if direction == "inbound":
+            return NodeConn.IN_WORLD_AGENTS if is_agent else (
+                NodeConn.IN_WORLD_NODE if is_node else NodeConn.IN_WORLD_MASTERS)
+        if direction == "outbound":
+            return NodeConn.OUT_WORLD_AGENTS if is_agent else (
+                NodeConn.OUT_WORLD_NODE if is_node else NodeConn.OUT_WORLD_MASTERS)
+        return None
+
+    async def _reconcile_instance(self, p2p_name: str, p2p: P2P, membership) -> tuple[dict, dict]:
+        """Reconcile ONE P2P instance and report its per-pool added/removed diff.
+
+        Asks this instance's SessionManager to classify its connected peers
+        (sm.reconcile, which also applies the world perimeter cut), then for each of
+        this instance's pools computes the new/lost set-difference and admits the new
+        peers via add() — which keeps the cross-pool guard and the shared peer_id_to_*
+        indices here in the Coordinator. Returns two dicts keyed by pool_name with only
+        the pools that changed (empty pools omitted), like the legacy update().
+        """
+        added_local: dict = {}
+        removed_local: dict = {}
+
+        connected_peer_infos = p2p.get_connected_peers_info()
+        if connected_peer_infos is None:
+            return added_local, removed_local
+
+        # The world manager classifies against the snapshot (and cuts the perimeter);
+        # the public manager has no membership.
+        if p2p_name == NodeConn.P2P_WORLD:
+            sm, sm_membership = self._sm_world, membership
+        else:
+            sm, sm_membership = self._sm_public, None
+        classified = await sm.reconcile(connected_peer_infos, sm_membership)
+
+        # Iterate this instance's own pools (the Coordinator owns them), treating a
+        # pool absent from `classified` as empty so removals are still detected.
+        for pool_name, (pool, _, pool_p2p) in self.p2p_name_and_pool_name_to_pool_triple[p2p_name].items():
+            connected_peer_ids = classified.get(pool_name, {}).keys()
+            new_peer_ids = connected_peer_ids - pool
+            lost_peer_ids = pool - connected_peer_ids
+
+            # Clearing disconnected agents
+            for lost_peer_id in lost_peer_ids:
+                removed_local.setdefault(pool_name, set()).add(lost_peer_id)
+
+            # Adding new agents
+            for new_peer_id in new_peer_ids:
+                peer_info = classified[pool_name][new_peer_id]
+                if not self.add(peer_info, pool_name=pool_name):
+                    continue
+                added_local.setdefault(pool_name, set()).add(new_peer_id)
+
+        return added_local, removed_local
+
     async def conn_routing_fcn(self, connected_peer_infos: list, p2p: P2P,
                                membership: WorldMembership = None) -> dict:
         """Routes connected peers to the correct connection pool based on their network and role (async).
@@ -1142,49 +1181,19 @@ class NodeConn(ConnectionPools):
         """
         if membership is None:
             membership = self.membership_snapshot()
-        pool_name_and_peer_id_to_peer_info = {k: {} for k in self.p2p_to_pool_names[p2p]}
         public = p2p == self.p2p_public
-
+        classify = self._route_public if public else self._route_world
+        result = {k: {} for k in self.p2p_to_pool_names[p2p]}
         for c in connected_peer_infos:
-            inbound = c['direction'] == "inbound"
-            outbound = c['direction'] == "outbound"
-            peer_id = c['id']  # Other fields are: c['addrs'], c['connected_at']
-
-            if public:
-                if inbound:
-                    pool_name_and_peer_id_to_peer_info[NodeConn.IN_PUBLIC][peer_id] = c
-                elif outbound:
-                    pool_name_and_peer_id_to_peer_info[NodeConn.OUT_PUBLIC][peer_id] = c
-                else:
-                    log.critical(f"Connection direction is undefined: {c['direction']}", sub=p2p.log_sub)
-            else:
-                is_world_agent = peer_id in membership.world_agents
-                is_world_master = peer_id in membership.world_masters
-                is_world_node = membership.world_node_peer_id is not None and peer_id == membership.world_node_peer_id
-                is_inspector = membership.inspector_peer_id is not None and peer_id == membership.inspector_peer_id
-                if not is_world_node and not is_world_master and not is_world_agent and not is_inspector:
-                    log.cpool("World agents list:  " + str(membership.world_agents), sub=p2p.log_sub)
-                    log.cpool("World masters list: " + str(membership.world_masters), sub=p2p.log_sub)
-                    log.cpool("World node peer id: " + str(membership.world_node_peer_id), sub=p2p.log_sub)
-                    log.cpool("Inspector peer id: " + str(membership.inspector_peer_id), sub=p2p.log_sub)
-                    log.cpool(f"Unable to determine the peer type for {peer_id}: "
-                              f"cannot say if world agent, master, world node, inspector (disconnecting it)",
-                              sub=p2p.log_sub)
-                    await ConnectionPools.disconnect(p2p, peer_id)
-                    continue
-
-                if inbound:
-                    pool_name_and_peer_id_to_peer_info[NodeConn.IN_WORLD_AGENTS if is_world_agent else (
-                        NodeConn.IN_WORLD_NODE if is_world_node else
-                        NodeConn.IN_WORLD_MASTERS)][peer_id] = c
-                elif outbound:
-                    pool_name_and_peer_id_to_peer_info[NodeConn.OUT_WORLD_AGENTS if is_world_agent else (
-                        NodeConn.OUT_WORLD_NODE if is_world_node else
-                        NodeConn.OUT_WORLD_MASTERS)][peer_id] = c
-                else:
-                    log.critical(f"Connection direction is undefined: {c}", sub=p2p.log_sub)
-
-        return pool_name_and_peer_id_to_peer_info
+            pool_name = classify(c, membership)
+            if pool_name is None:
+                # A world peer that is not a known member gets cut from the perimeter;
+                # the public side never returns None for a real (in/out) connection.
+                if not public:
+                    await ConnectionPools.disconnect(p2p, c['id'])
+                continue
+            result[pool_name][c['id']] = c
+        return result
 
     def set_world(self, world_peer_id: str | None) -> None:
         """Sets the peer ID of the world node.
