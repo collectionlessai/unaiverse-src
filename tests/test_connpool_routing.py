@@ -424,3 +424,97 @@ def test_p2p_of_prefers_session_then_index():
     assert conn._p2p_of("idx") is world
     # Unknown to both Sessions and index.
     assert conn._p2p_of("nope") is None
+
+
+# ── Characterization oracle for the facade contract (U8 baseline) ─────────────
+#
+# These freeze the role/addrs/is_connected facade that U8.3 (a KNOWN Session per
+# rendezvous peer) and U8.4 (role/addrs sourced from the Sessions) must preserve
+# bit-for-bit. They drive the real rendezvous writers (set_world_*_list /
+# add_to_world_*_list / set_role) and read back through the public facade, so they
+# stay valid across the data-source migration: writer and reader move together.
+# The load-bearing invariant is that "known" is not "connected": a peer known from
+# the rendezvous exposes role/addrs but stays out of is_connected and the
+# connected-peer infos until the transport actually admits it to a pool.
+
+ROLE_WORLD_AGENT = 1    # bit0=1 (world member), bit1=0 (agent)
+ROLE_WORLD_MASTER = 3   # bit0=1 (world member), bit1=1 (master)
+
+
+def test_char_known_peer_has_role_and_addrs_but_is_not_connected():
+    """A peer known from the rendezvous exposes role and addrs through the facade,
+    yet is_connected stays False and it never appears in get_all_connected_peer_infos.
+    This is the invariant that U8.3's KNOWN Sessions must not break."""
+    conn, pub, world = _make_node_conn()
+    conn.set_world_agents_list([{"id": "wa", "addrs": ["/ip4/1.1.1.1/tcp/1"], "misc": ROLE_WORLD_AGENT}])
+
+    assert conn.get_role("wa") == ROLE_WORLD_AGENT
+    assert conn.get_addrs("wa") == ["/ip4/1.1.1.1/tcp/1"]
+    assert conn.count_by_role(ROLE_WORLD_AGENT) == 1
+    assert conn.find_addrs_by_role(ROLE_WORLD_AGENT) == [["/ip4/1.1.1.1/tcp/1"]]
+    # Known is not connected.
+    assert conn.is_connected("wa") is False
+    assert conn.get_all_connected_peer_infos(NodeConn.WORLD) == []
+
+
+def test_char_connected_peer_is_connected_and_in_infos():
+    """Mirror of the 'known is not connected' test: a peer actually admitted to a pool
+    by update() reports is_connected True and shows up in get_all_connected_peer_infos.
+    Freezes that the connected view stays transport/pool-driven, not session-driven."""
+    conn, pub, world = _make_node_conn()
+    conn.world_agents_set = {"wc"}
+    world._infos = [_info("wc", "inbound")]
+    _run(conn.update())
+    assert conn.is_connected("wc") is True
+    infos = conn.get_all_connected_peer_infos(NodeConn.WORLD)
+    assert any(i["id"] == "wc" for i in infos)
+
+
+def test_char_unknown_peer_facade_defaults():
+    """The facade's unknown-peer contract: role 0 (public), addrs None, empty role
+    query (both arities), count 0, not connected."""
+    conn, pub, world = _make_node_conn()
+    assert conn.get_role("ghost") == 0
+    assert conn.get_addrs("ghost") is None
+    assert conn.find_addrs_by_role(ROLE_WORLD_AGENT) == []
+    assert conn.find_addrs_by_role(ROLE_WORLD_AGENT, return_peer_ids_too=True) == ([], [])
+    assert conn.count_by_role(ROLE_WORLD_AGENT) == 0
+    assert conn.is_connected("ghost") is False
+
+
+def test_char_find_addrs_by_role_returns_peer_ids_aligned():
+    """find_addrs_by_role(return_peer_ids_too=True) returns addrs-lists and peer-ids
+    positionally aligned, over all peers of that role (connected or not). Order follows
+    set iteration, so assert as an aligned mapping, not a fixed sequence."""
+    conn, pub, world = _make_node_conn()
+    conn.set_world_masters_list([
+        {"id": "m1", "addrs": ["/ip4/10.0.0.1/tcp/1"], "misc": ROLE_WORLD_MASTER},
+        {"id": "m2", "addrs": ["/ip4/10.0.0.2/tcp/1"], "misc": ROLE_WORLD_MASTER},
+    ])
+    addrs, peer_ids = conn.find_addrs_by_role(ROLE_WORLD_MASTER, return_peer_ids_too=True)
+    assert dict(zip(peer_ids, addrs)) == {
+        "m1": ["/ip4/10.0.0.1/tcp/1"], "m2": ["/ip4/10.0.0.2/tcp/1"],
+    }
+    assert conn.count_by_role(ROLE_WORLD_MASTER) == 2
+
+
+def test_char_find_addrs_by_role_skips_peers_without_addrs():
+    """A peer that has a role but no stored addresses is skipped by find_addrs_by_role
+    (the addrs-None filter), though count_by_role still counts it."""
+    conn, pub, world = _make_node_conn()
+    conn.set_role("noaddr", ROLE_WORLD_AGENT)  # role set, but no peer_id_to_addrs entry
+    assert conn.count_by_role(ROLE_WORLD_AGENT) == 1
+    assert conn.find_addrs_by_role(ROLE_WORLD_AGENT) == []
+    assert conn.find_addrs_by_role(ROLE_WORLD_AGENT, return_peer_ids_too=True) == ([], [])
+
+
+def test_char_world_host_writer_feeds_same_facade():
+    """The world-host writer add_to_world_agents_list feeds role/addrs into the same
+    facade as the rendezvous writer (the two-writers invariant): a peer added this way
+    is visible through get_role/get_addrs/find_addrs_by_role but still not connected."""
+    conn, pub, world = _make_node_conn()
+    conn.add_to_world_agents_list("wh", ["/ip4/2.2.2.2/tcp/9"], role=ROLE_WORLD_AGENT)
+    assert conn.get_role("wh") == ROLE_WORLD_AGENT
+    assert conn.get_addrs("wh") == ["/ip4/2.2.2.2/tcp/9"]
+    assert conn.find_addrs_by_role(ROLE_WORLD_AGENT) == [["/ip4/2.2.2.2/tcp/9"]]
+    assert conn.is_connected("wh") is False
