@@ -301,3 +301,106 @@ def test_conn_routing_classifies_against_passed_snapshot():
     infos = [{"id": "agentX", "direction": "inbound", "addrs": [], "connected_at": 0}]
     routed = _run(conn.conn_routing_fcn(infos, world_p2p, membership))
     assert "agentX" in routed[NodeConn.IN_WORLD_AGENTS]
+
+
+# ── Characterization oracle for update()/conn_routing_fcn (U6 baseline) ───────
+#
+# These freeze the exact contract of the per-cycle diff and the world perimeter so
+# the U6 refactor (per-instance reconcile in the SessionManagers) can be checked
+# bit-for-bit against them. They drive the real ConnectionPools.update() through fake
+# P2Ps (the NodeConn constructor never calls P2P methods, so fakes are enough).
+
+class _UpdP2P:
+    """Fake P2P for driving update(): serves planted connected-peer infos and records
+    perimeter disconnects (conn_routing_fcn -> ConnectionPools.disconnect)."""
+    def __init__(self, log_sub):
+        self.log_sub = log_sub
+        self.peer_id = log_sub + "-self"
+        self._infos = []
+        self.disconnected = []
+
+    def get_connected_peers_info(self):
+        return list(self._infos)
+
+    def disconnect_from(self, peer_id):
+        self.disconnected.append(peer_id)
+        return True
+
+
+def _info(peer_id, direction):
+    return {"id": peer_id, "direction": direction, "addrs": [], "connected_at": 0}
+
+
+def _make_node_conn():
+    pub, world = _UpdP2P("pub"), _UpdP2P("world")
+    conn = NodeConn(max_connections=16, p2p_u=pub, p2p_w=world,
+                    is_world_node=False, public_key=None, token=None, local_node_id="n")
+    return conn, pub, world
+
+
+def test_char_public_peer_routes_to_in_out_public():
+    """A public inbound peer lands in IN_PUBLIC, an outbound one in OUT_PUBLIC."""
+    conn, pub, world = _make_node_conn()
+    pub._infos = [_info("pin", "inbound"), _info("pout", "outbound")]
+    added, removed = _run(conn.update())
+    assert added[NodeConn.IN_PUBLIC] == {"pin"}
+    assert added[NodeConn.OUT_PUBLIC] == {"pout"}
+
+
+def test_char_world_classification_precedence_agent_over_node():
+    """A world peer that is at once agent, node and inspector is classified as agent
+    (the ternary precedence agent > node > master): inbound -> IN_WORLD_AGENTS."""
+    conn, pub, world = _make_node_conn()
+    conn.world_agents_set = {"w"}
+    conn.world_node_peer_id = "w"
+    conn.inspector_peer_id = "w"
+    world._infos = [_info("w", "inbound")]
+    added, removed = _run(conn.update())
+    assert added.get(NodeConn.IN_WORLD_AGENTS) == {"w"}
+    assert "w" not in added.get(NodeConn.IN_WORLD_NODE, set())
+
+
+def test_char_world_perimeter_cuts_unclassifiable():
+    """An unknown world peer (not in the membership) is disconnected and never enters
+    a pool nor the diff. This is the security perimeter."""
+    conn, pub, world = _make_node_conn()
+    world._infos = [_info("ghost", "inbound")]
+    added, removed = _run(conn.update())
+    assert "ghost" in world.disconnected
+    assert all("ghost" not in s for s in added.values())
+    assert "ghost" not in conn.peer_id_to_pool_name
+
+
+def test_char_full_pool_truncates_diff_added():
+    """When more peers are offered than the pool's max size, only max-size of them are
+    admitted: the overflow is rejected by add() and never enters the diff added."""
+    conn, pub, world = _make_node_conn()
+    cap = conn.pool_name_to_pool_triple[NodeConn.IN_WORLD_AGENTS][1]
+    names = [f"a{i}" for i in range(cap + 2)]
+    conn.world_agents_set = set(names)
+    world._infos = [_info(n, "inbound") for n in names]
+    added, removed = _run(conn.update())
+    assert len(added[NodeConn.IN_WORLD_AGENTS]) == cap
+
+
+def test_char_same_peer_both_networks_enters_once():
+    """The same peer-id seen on both networks enters exactly one pool: public is
+    processed first, and the world add() is refused by the cross-pool guard."""
+    conn, pub, world = _make_node_conn()
+    conn.world_agents_set = {"dual"}
+    pub._infos = [_info("dual", "inbound")]
+    world._infos = [_info("dual", "inbound")]
+    added, removed = _run(conn.update())
+    assert added[NodeConn.IN_PUBLIC] == {"dual"}
+    assert "dual" not in added.get(NodeConn.IN_WORLD_AGENTS, set())
+
+
+def test_char_unchanged_pool_absent_from_diff():
+    """A pool with no change in a cycle is not even a key of the diff (setdefault only
+    creates the key on a successful add/remove)."""
+    conn, pub, world = _make_node_conn()
+    pub._infos = [_info("pin", "inbound")]
+    _run(conn.update())
+    added2, removed2 = _run(conn.update())
+    assert NodeConn.IN_PUBLIC not in added2
+    assert NodeConn.IN_PUBLIC not in removed2
