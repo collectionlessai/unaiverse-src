@@ -103,7 +103,6 @@ class ConnectionPools:
 
         # Indices rooted around the peer ID
         self.peer_id_to_pool_name = {}
-        self.peer_id_to_p2p = {}
         self.peer_id_to_misc = {}
         self.peer_id_to_token = {}
 
@@ -384,7 +383,6 @@ class ConnectionPools:
                 return False
 
             self.peer_id_to_pool_name[peer_id] = pool_name
-            self.peer_id_to_p2p[peer_id] = p2p
 
             # Setting 'misc' field (default is 0, where 0 means public)
             peer_info['misc'] = self.peer_id_to_misc.get(peer_id, 0)
@@ -414,7 +412,6 @@ class ConnectionPools:
             pool.remove(peer_id)
             del self.pool_name_to_peer_infos[pool_name][peer_id]
             del self.peer_id_to_pool_name[peer_id]
-            del self.peer_id_to_p2p[peer_id]
             if peer_id in self.peer_id_to_token:
                 del self.peer_id_to_token[peer_id]
 
@@ -725,10 +722,13 @@ class ConnectionPools:
 
     def _p2p_of(self, peer_id: str) -> "P2P | None":
         """Resolve which P2P instance a peer is reachable on, for the peer_id-only I/O
-        (send / subscribe / publish). The base pool only knows the connection index;
-        NodeConn overrides this to ask the SessionManagers first (Session-anchored
-        routing), so the index can later be derived from the Sessions entirely."""
-        return self.peer_id_to_p2p.get(peer_id)
+        (send / subscribe / publish). The base pool resolves it from the pool a connected
+        peer lives in (each pool is bound to one P2P instance); NodeConn overrides this to
+        ask the SessionManagers first (Session-anchored routing) and falls back here."""
+        pool_name = self.peer_id_to_pool_name.get(peer_id)
+        if pool_name is None:
+            return None
+        return self.pool_name_to_pool_triple[pool_name][2]
 
     async def send(self, peer_id: str, channel_trail: str | None,
                    content_type: str, content: bytes | dict | str | None = None, p2p: P2P | None = None) -> bool:
@@ -1058,10 +1058,9 @@ class NodeConn(ConnectionPools):
     def _p2p_of(self, peer_id: str):
         """Resolve a peer's P2P instance by asking the SessionManagers first: the SM
         that holds a Session for this peer-id owns the instance the peer lives on
-        (public before world, matching the cross-pool first-network-wins). Falls back
-        to the connection index for peers that are connected but have no Session yet.
-        This anchors the peer_id -> instance routing to the Sessions, so the separate
-        peer_id_to_p2p index can be retired once every connected peer has a Session."""
+        (public before world, matching the cross-pool first-network-wins). Falls back to
+        the base resolution from the connection pool for a peer that is connected but has
+        no Session yet (an in-flight or just-evicted handshake)."""
         for sm in (self._sm_public, self._sm_world):
             if sm is not None and sm.get_session(peer_id) is not None:
                 return sm.p2p

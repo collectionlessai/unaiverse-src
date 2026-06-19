@@ -422,10 +422,10 @@ def test_p2p_of_prefers_session_then_index():
     # A Session on the public manager resolves to the public instance.
     conn._sm_public._sessions["p1"] = object()
     assert conn._p2p_of("p1") is pub
-    # No Session: fall back to the connection index.
-    conn.peer_id_to_p2p["idx"] = world
+    # No Session: fall back to the pool a connected peer lives in (no Session yet).
+    conn.peer_id_to_pool_name["idx"] = NodeConn.IN_WORLD_AGENTS
     assert conn._p2p_of("idx") is world
-    # Unknown to both Sessions and index.
+    # Unknown to both Sessions and pools.
     assert conn._p2p_of("nope") is None
 
 
