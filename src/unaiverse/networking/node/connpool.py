@@ -456,11 +456,61 @@ class ConnectionPools:
         """
         return list(self.peer_id_to_pool_name.keys())
 
+    async def _reconcile_instance(self, p2p_name: str, p2p: P2P, membership) -> tuple[dict, dict]:
+        """Reconcile ONE P2P instance against the membership snapshot and report its
+        per-pool added/removed diff.
+
+        Routes the instance's connected peers (conn_routing_fcn, including the world
+        perimeter cut), then for each of this instance's pools computes the new/lost
+        set-difference and admits the new peers via add() — which keeps the cross-pool
+        guard and the shared peer_id_to_* indices in the Coordinator. Returns two dicts
+        keyed by pool_name, containing only the pools of this instance that changed
+        (empty pools are omitted, like the legacy update()).
+
+        This is the per-instance reconcile that will move into the SessionManager: the
+        loop body is unchanged, only lifted out of update() and returning a local diff
+        instead of writing the shared one directly.
+        """
+        added_local: dict = {}
+        removed_local: dict = {}
+
+        connected_peer_infos = p2p.get_connected_peers_info()
+        if connected_peer_infos is None:
+            return added_local, removed_local
+
+        # Routing to the right queue / filtering
+        pool_name_and_peer_ids_to_peer_info = await self.conn_routing_fcn(
+            connected_peer_infos, p2p, membership)
+
+        # Parsing the generated index
+        for pool_name, connected_peer_ids_to_connected_peer_infos \
+                in pool_name_and_peer_ids_to_peer_info.items():
+            pool, _, pool_p2p = self.p2p_name_and_pool_name_to_pool_triple[p2p_name][pool_name]
+            connected_peer_ids = connected_peer_ids_to_connected_peer_infos.keys()
+            new_peer_ids = connected_peer_ids - pool
+            lost_peer_ids = pool - connected_peer_ids
+
+            # Clearing disconnected agents
+            for lost_peer_id in lost_peer_ids:
+                removed_local.setdefault(pool_name, set()).add(lost_peer_id)
+
+            # Adding new agents
+            for new_peer_id in new_peer_ids:
+                peer_info = connected_peer_ids_to_connected_peer_infos[new_peer_id]
+                if not self.add(peer_info, pool_name=pool_name):
+                    continue
+                added_local.setdefault(pool_name, set()).add(new_peer_id)
+
+        return added_local, removed_local
+
     async def update(self) -> tuple[dict, dict]:
         """Refreshes the connection pools by checking for new and lost connections (async).
 
-        Args:
-            None.
+        Orchestrates the per-instance reconcile: builds one membership snapshot for the
+        whole cycle and fans out to each P2P instance in turn (public then world,
+        insertion order), merging the per-instance diffs. The pool_name keys are
+        disjoint between the two instances (IN/OUT_PUBLIC vs IN/OUT_WORLD_*), so the
+        merge is a plain dict.update — asserted to be sure no key is overwritten.
 
         Returns:
             A tuple containing two dictionaries: one for newly added peers and one for removed peers, both keyed by
@@ -474,32 +524,13 @@ class ConnectionPools:
         membership = self.membership_snapshot()
 
         for p2p_name, p2p in self.p2p_name_to_p2p.items():
-            connected_peer_infos = p2p.get_connected_peers_info()
-
-            if connected_peer_infos is not None:
-
-                # Routing to the right queue / filtering
-                pool_name_and_peer_ids_to_peer_info = await self.conn_routing_fcn(
-                    connected_peer_infos, p2p, membership)
-
-                # Parsing the generated index
-                for pool_name, connected_peer_ids_to_connected_peer_infos \
-                        in pool_name_and_peer_ids_to_peer_info.items():
-                    pool, _, pool_p2p = self.p2p_name_and_pool_name_to_pool_triple[p2p_name][pool_name]
-                    connected_peer_ids = connected_peer_ids_to_connected_peer_infos.keys()
-                    new_peer_ids = connected_peer_ids - pool
-                    lost_peer_ids = pool - connected_peer_ids
-
-                    # Clearing disconnected agents
-                    for lost_peer_id in lost_peer_ids:
-                        self.pool_name_to_removed_in_last_update.setdefault(pool_name, set()).add(lost_peer_id)
-
-                    # Adding new agents
-                    for new_peer_id in new_peer_ids:
-                        peer_info = connected_peer_ids_to_connected_peer_infos[new_peer_id]
-                        if not self.add(peer_info, pool_name=pool_name):
-                            continue
-                        self.pool_name_to_added_in_last_update.setdefault(pool_name, set()).add(new_peer_id)
+            added_local, removed_local = await self._reconcile_instance(p2p_name, p2p, membership)
+            assert self.pool_name_to_added_in_last_update.keys().isdisjoint(added_local.keys()), \
+                "pool_name keys must be disjoint across P2P instances"
+            assert self.pool_name_to_removed_in_last_update.keys().isdisjoint(removed_local.keys()), \
+                "pool_name keys must be disjoint across P2P instances"
+            self.pool_name_to_added_in_last_update.update(added_local)
+            self.pool_name_to_removed_in_last_update.update(removed_local)
 
         return self.pool_name_to_added_in_last_update, self.pool_name_to_removed_in_last_update
 
