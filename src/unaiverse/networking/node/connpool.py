@@ -993,7 +993,6 @@ class NodeConn(ConnectionPools):
         # These are the list of all the possible agents that might try to connect when we are in world
         self.world_agents_set = set()
         self.world_masters_set = set()
-        self.world_masters_first = None
         self.world_agents_and_world_masters_set = set()
         self.world_node_peer_id = None
         self.inspector_peer_id = None
@@ -1251,14 +1250,6 @@ class NodeConn(ConnectionPools):
         """
         self.world_node_peer_id = world_peer_id
 
-    def set_inspector(self, inspector_peer_id: str | None) -> None:
-        """Sets the peer ID of the inspector.
-
-        Args:
-            inspector_peer_id: The peer ID of the inspector node.
-        """
-        self.inspector_peer_id = inspector_peer_id
-
     def get_world_peer_id(self) -> str | None:
         """Returns the peer ID of the world node.
 
@@ -1269,9 +1260,6 @@ class NodeConn(ConnectionPools):
             The world node's peer ID.
         """
         return self.world_node_peer_id
-
-    def get_first_world_master(self) -> str | None:
-        return self.world_masters_first
 
     def set_addresses_in_peer_info(self, peer_id: str, addresses: list[str]) -> None:
         """Updates the list of addresses for a given peer.
@@ -1345,10 +1333,6 @@ class NodeConn(ConnectionPools):
 
         self.world_agents_and_world_masters_set = self.world_agents_set | self.world_masters_set
 
-    def get_world_masters(self) -> set[str]:
-        """Returns the set of world masters."""
-        return self.world_masters_set
-
     def remove_from_world_lists(self, peer_id: str) -> None:
         """Drops a peer from the world agents/masters lists and the role/address
         bookkeeping. The world host calls this when a member's world Session
@@ -1356,8 +1340,6 @@ class NodeConn(ConnectionPools):
         advertising it."""
         self.world_agents_set.discard(peer_id)
         self.world_masters_set.discard(peer_id)
-        if self.world_masters_first == peer_id:
-            self.world_masters_first = next(iter(self.world_masters_set), None)
         self.world_agents_and_world_masters_set = self.world_agents_set | self.world_masters_set
         self.peer_id_to_addrs.pop(peer_id, None)
         misc = self.peer_id_to_misc.pop(peer_id, None)
@@ -1387,13 +1369,11 @@ class NodeConn(ConnectionPools):
 
         # Setting new information
         if world_masters_list_peer_infos is not None and len(world_masters_list_peer_infos) > 0:
-            self.world_masters_first = world_masters_list_peer_infos[0]['id']
             self.world_masters_set = {x['id'] for x in world_masters_list_peer_infos}
             for x in world_masters_list_peer_infos:
                 self.peer_id_to_addrs[x['id']] = x['addrs']
                 self.set_role(x['id'], x['misc'])
         else:
-            self.world_masters_first = None
             self.world_masters_set = set()
 
         self.world_agents_and_world_masters_set = self.world_agents_set | self.world_masters_set
@@ -1424,9 +1404,6 @@ class NodeConn(ConnectionPools):
             role: The role assigned to the master.
         """
         self.world_masters_set.add(peer_id)
-
-        if len(self.world_masters_set) == 1:
-            self.world_masters_first = peer_id
 
         # This assumes that the WORLD MASTER/AGENT BIT is the first one
         assert role & 1 == 1, "Expecting the first bit of the role to be 1 for world masters"
