@@ -457,35 +457,10 @@ class ConnectionPools:
         return list(self.peer_id_to_pool_name.keys())
 
     async def update(self) -> tuple[dict, dict]:
-        """Refreshes the connection pools by checking for new and lost connections (async).
-
-        Orchestrates the per-instance reconcile: builds one membership snapshot for the
-        whole cycle and fans out to each P2P instance in turn (public then world,
-        insertion order), merging the per-instance diffs. The pool_name keys are
-        disjoint between the two instances (IN/OUT_PUBLIC vs IN/OUT_WORLD_*), so the
-        merge is a plain dict.update — asserted to be sure no key is overwritten.
-
-        Returns:
-            A tuple containing two dictionaries: one for newly added peers and one for removed peers, both keyed by
-            pool name.
-        """
-        self.pool_name_to_added_in_last_update = {}
-        self.pool_name_to_removed_in_last_update = {}
-
-        # One immutable membership view for the whole cycle: both instances are routed
-        # against the same snapshot, with no skew if the membership mutates afterwards.
-        membership = self.membership_snapshot()
-
-        for p2p_name, p2p in self.p2p_name_to_p2p.items():
-            added_local, removed_local = await self._reconcile_instance(p2p_name, p2p, membership)
-            assert self.pool_name_to_added_in_last_update.keys().isdisjoint(added_local.keys()), \
-                "pool_name keys must be disjoint across P2P instances"
-            assert self.pool_name_to_removed_in_last_update.keys().isdisjoint(removed_local.keys()), \
-                "pool_name keys must be disjoint across P2P instances"
-            self.pool_name_to_added_in_last_update.update(added_local)
-            self.pool_name_to_removed_in_last_update.update(removed_local)
-
-        return self.pool_name_to_added_in_last_update, self.pool_name_to_removed_in_last_update
+        """Per-cycle reconcile of the connection pools. The base pool has no world
+        membership nor per-instance reconcile; the real loop is implemented by NodeConn
+        (the Coordinator), which owns the SessionManagers and the membership snapshot."""
+        raise NotImplementedError("ConnectionPools.update is implemented by NodeConn")
 
     async def get_messages(
         self,
@@ -1142,16 +1117,30 @@ class NodeConn(ConnectionPools):
         return None
 
     async def update(self) -> tuple[dict, dict]:
-        """Coordinator per-cycle update: first refresh the world SessionManager's KNOWN
-        roster (and the role/addrs it carries) from the rendezvous, THEN run the
-        transport-driven per-instance reconcile (base class). The sync runs before the
-        membership snapshot so the perimeter and facade, once sourced from Sessions, see
-        this cycle's roster rather than the previous one. The KNOWN sync stays out of the
-        pool/diff path: KNOWN Sessions are a registry of known peers, never pool members,
-        so they cannot leak into the added/removed diff nor the perimeter."""
+        """Coordinator per-cycle update. First refresh the world SessionManager's KNOWN
+        roster (and the role/addrs it carries) from the rendezvous, so the perimeter and
+        facade see this cycle's roster rather than the previous one and the KNOWN sync
+        stays out of the pool/diff path. Then run the transport-driven per-instance
+        reconcile: one immutable membership snapshot for the whole cycle, fanned out to
+        each P2P instance in insertion order (public then world), merging the per-instance
+        diffs. The pool_name keys are disjoint across the two instances (IN/OUT_PUBLIC vs
+        IN/OUT_WORLD_*), so the merge is a plain dict.update, asserted to be sure."""
         self._sync_known_world_peers()
-        added, removed = await super().update()
-        return added, removed
+
+        self.pool_name_to_added_in_last_update = {}
+        self.pool_name_to_removed_in_last_update = {}
+        membership = self.membership_snapshot()
+
+        for p2p_name, p2p in self.p2p_name_to_p2p.items():
+            added_local, removed_local = await self._reconcile_instance(p2p_name, p2p, membership)
+            assert self.pool_name_to_added_in_last_update.keys().isdisjoint(added_local.keys()), \
+                "pool_name keys must be disjoint across P2P instances"
+            assert self.pool_name_to_removed_in_last_update.keys().isdisjoint(removed_local.keys()), \
+                "pool_name keys must be disjoint across P2P instances"
+            self.pool_name_to_added_in_last_update.update(added_local)
+            self.pool_name_to_removed_in_last_update.update(removed_local)
+
+        return self.pool_name_to_added_in_last_update, self.pool_name_to_removed_in_last_update
 
     def _sync_known_world_peers(self) -> None:
         """Feed the world SessionManager the peers currently advertised by the rendezvous
