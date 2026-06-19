@@ -140,7 +140,7 @@ class SessionManager:
 
     # ── Initiator API ─────────────────────────────────────────────────────────
 
-    async def initiate(
+    def ensure(
         self,
         peer_id: str,
         addresses: List[str],
@@ -149,28 +149,14 @@ class SessionManager:
         remote_node_id_hint: Optional[str] = None,
         grant: Optional[dict] = None,
         reject_relay: bool = False,
-    ) -> List[SessionEvent]:
-        """Open a new initiator Session to `peer_id`. Idempotent if the peer
-        already has a healthy Session — returns []. If a stale FAILED/CLOSED
-        Session exists, it is replaced."""
-        now = time.monotonic()
-        # Quarantine check.
-        ban_until = self._quarantine.get(peer_id, 0.0)
-        if ban_until > now:
-            log.session(f"initiate(...{peer_id[-5:]}) refused: quarantined for {ban_until - now:.1f}s", sub=self._label)
-            ev = SessionEvent(
-                type=SessionEventType.FAILED, session_id="",
-                peer_id=peer_id, role=SessionRole.INITIATOR,
-                p2p_name=self.p2p_name, data={"reason": "quarantined"},
-            )
-            return [ev]
-
+    ) -> Session:
+        """Register an initiator Session to `peer_id` in the KNOWN state WITHOUT
+        starting it (no dial yet). Idempotent: a non-terminal existing Session is
+        returned unchanged; a FAILED/CLOSED one is replaced. ``activate`` dials it
+        later. This lets a caller know a peer without committing to a connection."""
         existing = self._sessions.get(peer_id)
         if existing is not None and existing.state not in (SessionState.FAILED, SessionState.CLOSED):
-            log.session(f"initiate(...{peer_id[-5:]}): "
-                      f"already have Session in state {existing.state.value} — no-op", sub=self._label)
-            return []
-
+            return existing
         sess = Session(
             peer_id=peer_id,
             role=SessionRole.INITIATOR,
@@ -189,10 +175,56 @@ class SessionManager:
             xcrypto=self._xcrypto,
         )
         self._sessions[peer_id] = sess
-        log.session(f"initiating Session to ...{peer_id[-5:]}", sub=self._label)
+        return sess
+
+    async def activate(self, peer_id: str) -> List[SessionEvent]:
+        """Start the (initiator) Session for `peer_id`: dial + HELLO, then evict it if
+        the dial fails terminally. Returns the events from start (typically [] until
+        ESTABLISHED arrives). No-op ([]) if there is no Session for the peer."""
+        sess = self._sessions.get(peer_id)
+        if sess is None:
+            return []
+        log.session(f"activating Session to ...{peer_id[-5:]}", sub=self._label)
         events = await sess.start()
         self._evict_if_terminal(peer_id, sess)
         return events
+
+    async def initiate(
+        self,
+        peer_id: str,
+        addresses: List[str],
+        is_world_join: bool = False,
+        remote_other_peer_id_hint: Optional[str] = None,
+        remote_node_id_hint: Optional[str] = None,
+        grant: Optional[dict] = None,
+        reject_relay: bool = False,
+    ) -> List[SessionEvent]:
+        """Open a new initiator Session to `peer_id` and start it. Idempotent if the
+        peer already has a healthy Session — returns []. A stale FAILED/CLOSED Session
+        is replaced. initiate() = ensure() + activate()."""
+        now = time.monotonic()
+        # Quarantine check.
+        ban_until = self._quarantine.get(peer_id, 0.0)
+        if ban_until > now:
+            log.session(f"initiate(...{peer_id[-5:]}) refused: quarantined for {ban_until - now:.1f}s", sub=self._label)
+            ev = SessionEvent(
+                type=SessionEventType.FAILED, session_id="",
+                peer_id=peer_id, role=SessionRole.INITIATOR,
+                p2p_name=self.p2p_name, data={"reason": "quarantined"},
+            )
+            return [ev]
+
+        existing = self._sessions.get(peer_id)
+        if existing is not None and existing.state not in (SessionState.FAILED, SessionState.CLOSED):
+            log.session(f"initiate(...{peer_id[-5:]}): "
+                      f"already have Session in state {existing.state.value} — no-op", sub=self._label)
+            return []
+
+        self.ensure(peer_id, addresses, is_world_join=is_world_join,
+                    remote_other_peer_id_hint=remote_other_peer_id_hint,
+                    remote_node_id_hint=remote_node_id_hint, grant=grant, reject_relay=reject_relay)
+        log.session(f"initiating Session to ...{peer_id[-5:]}", sub=self._label)
+        return await self.activate(peer_id)
 
     # ── Inbound dispatch ──────────────────────────────────────────────────────
 

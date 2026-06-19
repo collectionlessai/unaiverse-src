@@ -121,7 +121,8 @@ _GRANT_ID_BYTES = 32
 # ── State / Role / Event enums ────────────────────────────────────────────────
 
 class SessionState(str, Enum):
-    INIT = "init"
+    KNOWN = "known"                     # initiator: peer known, not yet started (no dial)
+    INIT = "init"                       # responder: spawned, awaiting inbound HELLO
     CONNECTING = "connecting"           # initiator: dialing
     HELLO_SENT = "hello_sent"           # initiator: HELLO out, awaiting HELLO_ACK
     HELLO_ACK_SENT = "hello_ack_sent"   # responder: HELLO_ACK out, awaiting PROFILE_OFFER
@@ -265,8 +266,10 @@ class Session:
         self.nonce_a: bytes = b""
         self.nonce_b: bytes = b""
 
-        # FSM state.
-        self.state: SessionState = SessionState.INIT
+        # FSM state. An initiator starts KNOWN (registered, not yet dialed); a
+        # responder starts INIT (already engaged, awaiting the inbound HELLO).
+        self.state: SessionState = (SessionState.KNOWN if role == SessionRole.INITIATOR
+                                    else SessionState.INIT)
         self._state_entered_at: float = time.monotonic()
         self._timeout_s: Optional[float] = None
 

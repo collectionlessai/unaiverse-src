@@ -317,3 +317,42 @@ def test_session_manager_injects_xcrypto_into_sessions(alice_p2p, bob_p2p, alice
     )
     sess2 = sm_no_xc._spawn_responder(bob_peer_id, remote_other_peer_id_hint=None)
     assert sess2.xcrypto is None
+
+
+# ── KNOWN state and ensure()/activate() split (U7) ───────────────────────────
+
+def test_ensure_creates_known_session_without_dialing(alice_conn, alice_peer_id, bob_peer_id):
+    """ensure() registers an initiator Session in KNOWN without dialing; activate() is
+    what starts it."""
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    sess = sm.ensure(bob_peer_id, ["/ip4/127.0.0.1/tcp/0"])
+    assert sess.state == SessionState.KNOWN
+    assert alice_conn.connect_calls == []          # no dial yet
+    assert sm.get_session(bob_peer_id) is sess     # registered
+
+
+def test_ensure_is_idempotent_for_healthy_session(alice_conn, alice_peer_id, bob_peer_id):
+    """A second ensure() returns the same (non-terminal) Session, not a fresh one."""
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    s1 = sm.ensure(bob_peer_id, ["/ip4/127.0.0.1/tcp/0"])
+    s2 = sm.ensure(bob_peer_id, ["/ip4/127.0.0.1/tcp/0"])
+    assert s1 is s2
+
+
+def test_initiate_is_ensure_plus_activate(alice_conn, alice_peer_id, bob_peer_id):
+    """initiate() = ensure() + activate(): the Session is dialed and moves past KNOWN,
+    unchanged from before the split."""
+    alice_conn.connect_returns = (bob_peer_id, False)
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    _run(sm.initiate(bob_peer_id, ["/ip4/127.0.0.1/tcp/0"]))
+    assert len(alice_conn.connect_calls) == 1
+    sess = sm.get_session(bob_peer_id)
+    assert sess is not None and sess.state != SessionState.KNOWN
+
+
+def test_spawn_responder_starts_in_init(alice_conn, alice_peer_id, bob_peer_id):
+    """A responder is engaged from the start (awaiting HELLO), so it lives in INIT,
+    not KNOWN."""
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    sess = sm._spawn_responder(bob_peer_id, remote_other_peer_id_hint=None)
+    assert sess.state == SessionState.INIT
