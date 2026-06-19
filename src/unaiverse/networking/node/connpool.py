@@ -940,7 +940,8 @@ class NodeConn(ConnectionPools):
     INCOMING = {IN_PUBLIC, IN_WORLD_NODE, IN_WORLD_AGENTS, IN_WORLD_MASTERS}
 
     def __init__(self, max_connections: int, p2p_u: P2P, p2p_w: P2P,
-                 is_world_node: bool, public_key: str, token: str) -> None:
+                 is_world_node: bool, public_key: str, token: str,
+                 local_node_id: str = None) -> None:
         """Initializes a new instance of the NodeConn class.
 
         Args:
@@ -950,6 +951,8 @@ class NodeConn(ConnectionPools):
             is_world_node: A boolean flag indicating if this node is a world node.
             public_key: The public key for token verification.
             token: The node's authentication token.
+            local_node_id: this node's application node-id, used when building the
+                per-instance SessionManagers in attach_session_policy.
         """
         super().__init__(max_connections=max_connections,
                          p2p_name_to_p2p={
@@ -985,15 +988,50 @@ class NodeConn(ConnectionPools):
         # Rendezvous
         self.rendezvous_tag = -1
 
-        # Per-instance SessionManagers, registered by Node after construction via
-        # set_session_managers. conn does not own them — it only consults them so
-        # the hosted entity (which holds conn, not the managers) can ask about
+        # Application node-id, used when this Coordinator builds the SessionManagers.
+        self._local_node_id = local_node_id
+
+        # Per-instance SessionManagers. The Coordinator owns them: it builds both in
+        # attach_session_policy (once the Node policy is available) and consults them
+        # so the hosted entity (which holds conn, not the managers) can ask about
         # per-peer Session state (see is_peer_session_pending).
+        self._sm_public = None
+        self._sm_world = None
         self._session_managers = []
+
+    def attach_session_policy(self, local_profile_factory, decision_hook) -> None:
+        """Build and own the two per-instance SessionManagers, now that the Node
+        policy born late is available (the profile factory samples self.profile, the
+        decision hook reads world/agent/allow-list state). Each manager owns its P2P
+        instance and receives a cross-instance crypto capability over the *other*
+        instance: a public Session signs its other-network artifacts (SignedPeerRecord
+        / world-grant) with the WORLD host key and vice-versa."""
+        from unaiverse.networking.session import SessionManager
+        from unaiverse.networking.p2p import CrossInstanceCrypto
+        self._sm_public = SessionManager(
+            p2p=self.p2p_public,
+            p2p_name=NodeConn.P2P_PUBLIC,
+            local_peer_id=self.p2p_public.peer_id,
+            local_node_id=self._local_node_id,
+            local_profile_factory=local_profile_factory,
+            decision_hook=decision_hook,
+            xcrypto=CrossInstanceCrypto(self.p2p_world),
+        )
+        self._sm_world = SessionManager(
+            p2p=self.p2p_world,
+            p2p_name=NodeConn.P2P_WORLD,
+            local_peer_id=self.p2p_world.peer_id,
+            local_node_id=self._local_node_id,
+            local_profile_factory=local_profile_factory,
+            decision_hook=decision_hook,
+            xcrypto=CrossInstanceCrypto(self.p2p_public),
+        )
+        self.set_session_managers(self._sm_public, self._sm_world)
 
     def set_session_managers(self, *session_managers) -> None:
         """Register the per-instance SessionManagers so conn can answer per-peer
-        Session-state queries on behalf of the hosted entity. Called once by Node."""
+        Session-state queries on behalf of the hosted entity. Called by
+        attach_session_policy (and directly by unit tests with stub managers)."""
         self._session_managers = [sm for sm in session_managers if sm is not None]
 
     def is_peer_session_pending(self, peer_id: str) -> bool:

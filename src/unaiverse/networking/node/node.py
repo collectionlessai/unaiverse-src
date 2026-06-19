@@ -36,10 +36,10 @@ from collections.abc import Callable
 from datetime import datetime, timezone
 from unaiverse.networking.p2p.messages import Msg
 from unaiverse.custom import Custom, GenException
-from unaiverse.networking.p2p import P2P, P2PError, CrossInstanceCrypto
+from unaiverse.networking.p2p import P2P, P2PError
 from unaiverse.networking.node.connpool import NodeConn
 from unaiverse.networking.node.profile import NodeProfile
-from unaiverse.networking.session import (SessionManager, ProfileDecisionResult, WorldGrantSpec,
+from unaiverse.networking.session import (ProfileDecisionResult, WorldGrantSpec,
                                           SessionEventType, SessionRole)
 from unaiverse.networking.session.sess_msg import (WORLD_DISENGAGEMENT, WORLD_HANDOFF_COMPLETE,
                                                    LOCAL_ERROR, NOT_IN_ALLOW_LIST, ROLE_INCOMPATIBLE,
@@ -376,40 +376,21 @@ class Node:
                              p2p_w=p2p_w,
                              is_world_node=self.node_type is Node.WORLD,
                              public_key=self.public_key,
-                             token=self.node_token)
+                             token=self.node_token,
+                             local_node_id=self.node_id)
 
-        # Per-instance SessionManagers — own the FSM for every per-peer Session on
-        # their P2P instance, and inject that P2P into each Session. The decision
-        # hook lets a responder accept/reject an offer and (world host) mint a grant.
-        # Cross-instance crypto capability for each manager: a public Session signs
-        # its other-network artifacts (SignedPeerRecord / world-grant) with the WORLD
-        # host key and vice-versa, so the public session manager gets a capability
-        # over p2p_w and the world session manager over p2p_u. Built here for now;
-        # ownership moves to the Coordinator in a later step.
-        self._sm_public = SessionManager(
-            p2p=p2p_u,
-            p2p_name=NodeConn.P2P_PUBLIC,
-            local_peer_id=p2p_u.peer_id,
-            local_node_id=self.node_id,
+        # The Coordinator (NodeConn) owns the two per-instance SessionManagers: it
+        # builds them from its own P2P handles and the cross-instance capability, and
+        # only needs the Node policy that is born late — the profile factory (self.
+        # profile is set further down) and the responder decision hook. Node keeps a
+        # convenience reference to each manager for its loop methods; conn can also
+        # consult them on behalf of the hosted entity (is_peer_session_pending).
+        self.conn.attach_session_policy(
             local_profile_factory=lambda: (self.profile.get_all_profile() if self.profile is not None else {}),
             decision_hook=self._session_decision_hook,
-            xcrypto=CrossInstanceCrypto(p2p_w),
         )
-        self._sm_world = SessionManager(
-            p2p=p2p_w,
-            p2p_name=NodeConn.P2P_WORLD,
-            local_peer_id=p2p_w.peer_id,
-            local_node_id=self.node_id,
-            local_profile_factory=lambda: (self.profile.get_all_profile() if self.profile is not None else {}),
-            decision_hook=self._session_decision_hook,
-            xcrypto=CrossInstanceCrypto(p2p_u),
-        )
-
-        # Let conn consult per-peer Session state. The hosted entity only holds a
-        # reference to conn (not to the SessionManagers), so this is how actions
-        # like Agent.agents_are_waiting learn whether a peer's handshake is still
-        # in flight (see NodeConn.is_peer_session_pending).
-        self.conn.set_session_managers(self._sm_public, self._sm_world)
+        self._sm_public = self.conn._sm_public
+        self._sm_world = self.conn._sm_world
 
         # Get CV
         cv = self.get_cv()
