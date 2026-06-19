@@ -378,13 +378,20 @@ class Node:
                              public_key=self.public_key,
                              token=self.node_token)
 
+        # Cross-link the two P2P instances so each can reach the other's host key
+        # (the Session signs the SignedPeerRecord / world-grant for its *other*
+        # peer-id via ``p2p.twin``).
+        p2p_u.set_twin(p2p_w)
+        p2p_w.set_twin(p2p_u)
+
         # Per-instance SessionManagers — own the FSM for every per-peer Session on
-        # their P2P instance. The SignedPeerRecord for the *other* peer-id is fetched
-        # lazily/async by the Session at PROFILE_OFFER time (via conn), so no SPR
-        # factory is passed here. The decision hook lets a responder accept/reject an
-        # offer and (world host) mint a grant.
+        # their P2P instance, and inject that P2P into each Session. The
+        # SignedPeerRecord for the *other* peer-id is fetched lazily/async by the
+        # Session at PROFILE_OFFER time (via ``p2p.twin``), so no SPR factory is
+        # passed here. The decision hook lets a responder accept/reject an offer and
+        # (world host) mint a grant.
         self._sm_public = SessionManager(
-            conn=self.conn,
+            p2p=p2p_u,
             p2p_name=NodeConn.P2P_PUBLIC,
             local_peer_id=p2p_u.peer_id,
             local_node_id=self.node_id,
@@ -392,7 +399,7 @@ class Node:
             decision_hook=self._session_decision_hook,
         )
         self._sm_world = SessionManager(
-            conn=self.conn,
+            p2p=p2p_w,
             p2p_name=NodeConn.P2P_WORLD,
             local_peer_id=p2p_w.peer_id,
             local_node_id=self.node_id,

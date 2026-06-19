@@ -36,9 +36,9 @@ def _pump(inbox: deque, sm: SessionManager) -> list:
     return events
 
 
-def _make_sm(conn, p2p_name, local_peer_id, node_id):
+def _make_sm(p2p, p2p_name, local_peer_id, node_id):
     return SessionManager(
-        conn=conn,
+        p2p=p2p,
         p2p_name=p2p_name,
         local_peer_id=local_peer_id,
         local_node_id=node_id,

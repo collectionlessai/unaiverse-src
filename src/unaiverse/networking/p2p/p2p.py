@@ -14,6 +14,7 @@
 """
 import os
 import base64
+import asyncio
 import logging
 import threading
 from .lib_types import TypeInterface
@@ -715,7 +716,7 @@ class P2P:
             logger.error(f"send_on_protocol(...{peer_id[-5:]}, {protocol_id}) exception: {e}")
             return False
 
-    def generate_signed_peer_record(self) -> Optional[bytes]:
+    def _generate_signed_peer_record_sync(self) -> Optional[bytes]:
         """
         Build a libp2p SignedPeerRecord over the host's current listen addresses,
         sealed under the host private key. Returns the raw envelope bytes (the
@@ -746,7 +747,7 @@ class P2P:
             logger.error(f"generate_signed_peer_record exception: {e}")
             return None
 
-    def sign_with_host_key(self, data: bytes) -> Optional[bytes]:
+    def _sign_with_host_key_sync(self, data: bytes) -> Optional[bytes]:
         """Sign `data` with the host's libp2p private key (Ed25519 by default).
         Returns the raw signature bytes, or None on error. Used by Session to
         produce sig_a / sig_b over (nonce || session_id) for replay defence."""
@@ -767,7 +768,7 @@ class P2P:
             logger.error(f"sign_with_host_key exception: {e}")
             return None
 
-    def verify_peer_signature(self, peer_id: str, data: bytes, signature: bytes) -> bool:
+    def _verify_peer_signature_sync(self, peer_id: str, data: bytes, signature: bytes) -> bool:
         """Verify that `signature` over `data` is valid under the public key derivable
         from `peer_id`. Works for Ed25519 peer-ids (libp2p default — pubkey is
         embedded in the id); fails for RSA peer-ids."""
@@ -789,7 +790,7 @@ class P2P:
             logger.error(f"verify_peer_signature exception: {e}")
             return False
 
-    def verify_signed_peer_record(self, envelope_bytes: bytes, expected_peer_id: str) -> bool:
+    def _verify_signed_peer_record_sync(self, envelope_bytes: bytes, expected_peer_id: str) -> bool:
         """
         Verify a SignedPeerRecord envelope and assert that its inner PeerRecord
         names `expected_peer_id`. Used by the Session responder to validate the
@@ -812,6 +813,155 @@ class P2P:
         except Exception as e:
             logger.error(f"verify_signed_peer_record exception: {e}")
             return False
+
+    # --- High-level Session transport surface (CPython twin of OP2P.js) ──────────
+    #
+    # These are the methods the Session/SessionManager call directly on their
+    # injected P2P instance, with no p2p_name argument (each P2P is already a single
+    # instance). They wrap the raw Go primitives above, adding the address
+    # sorting/retry/relay logic and the SessMsg serialization that used to live in
+    # connpool, plus thread offload for the blocking Go calls. The crypto wrappers
+    # are async so session.py `await`s the same way in CPython and in Pyodide/JS.
+    #
+    # An agent owns two P2P instances (public + world). A few Session operations are
+    # cross-instance (the SignedPeerRecord and grant signature for the *other*
+    # peer-id), so each P2P keeps a reference to its twin via `set_twin`. The Session
+    # reaches the other network through `self.p2p.twin`.
+
+    _twin: 'P2P' = None
+
+    def set_twin(self, twin: 'P2P') -> None:
+        """Register this node's other-network P2P instance (public ↔ world). The
+        Session uses `self.p2p.twin` for the cross-instance SignedPeerRecord and the
+        world-grant signature, which must be sealed under the *other* host key."""
+        self._twin = twin
+
+    @property
+    def twin(self) -> 'P2P':
+        """The agent's other-network P2P instance (p2p_world when this is p2p_public
+        and vice-versa). Set via `set_twin`."""
+        if self._twin is None:
+            raise P2PError("P2P.twin requested but no twin instance was registered (call set_twin).")
+        return self._twin
+
+    async def connect(self, addresses: list[str]) -> tuple[str | None, bool]:
+        """Establish a connection to a peer, trying its addresses in priority order
+        (udp > ws > tcp), discarding loopback, and retrying on the de-prioritized
+        TCP-only addresses if the preferred set fails. Returns (peer_id, through_relay).
+
+        Migrated from connpool.__connect — same sorting, discard and retry logic. The
+        blocking dial runs off the event loop so other sessions keep ticking.
+        """
+        force: str | None = None
+        # force: str | None = '/tcp'
+        if force is not None:
+            _addresses = [a for a in addresses if force in a]
+            addresses.clear()
+            for a in _addresses:
+                addresses.append(a)
+
+        def sort_priority(s):
+            if "/udp/" in s:
+                return 0  # Highest priority
+            elif "/ws/" in s:
+                return 1  # Middle priority
+            else:
+                return 2  # Lowest priority
+
+        # Sort in place (sorting does not seem to have an effect, but it makes things more readable)
+        kept_addresses = sorted(
+            [s for s in addresses if "127.0.0.1" not in s and ("/tcp/" not in s or "/ws/" in s)],
+            key=sort_priority
+        )
+        discarded_addresses = sorted(
+            [s for s in addresses if "127.0.0.1" not in s and ("/tcp/" in s and "/ws/" not in s)],
+            key=sort_priority
+        )
+        if len(kept_addresses) > 0:
+            addresses = kept_addresses
+        else:
+            addresses = discarded_addresses
+            discarded_addresses = []
+
+        logger.info(f"Connecting to {addresses}")
+
+        if addresses is None or len(addresses) == 0:
+            logger.error(f"Connection failed! (not-event tried, invalid addresses: {addresses})")
+            return None, False
+
+        try:
+            # Off the event loop: the dial can block up to its timeout, and other
+            # sessions must keep ticking meanwhile (e.g. during a re-dial).
+            winning_addr_info_dict = await asyncio.to_thread(self.connect_to, addresses)
+            peer_id = winning_addr_info_dict.get('ID')
+            addrs = winning_addr_info_dict.get('Addrs')
+            assert addrs is not None and isinstance(addrs, (tuple, list))
+            connected_addr_str = addrs[0]
+            through_relay = '/p2p-circuit/' in connected_addr_str
+            logger.info(f"Connected to peer {peer_id} via {connected_addr_str} "
+                        f"(through relay: {through_relay})")
+            return peer_id, through_relay
+        except P2PError:
+            logger.error("Connection failed!")
+            if len(discarded_addresses) > 0:
+                return await self.connect(discarded_addresses)
+            else:
+                return None, False
+
+    async def disconnect(self, peer_id: str) -> bool:
+        """Close the connection to `peer_id`. Returns True on success, False on a
+        transport-level failure. High-level wrapper over `disconnect_from` used by
+        the Session for per-peer teardown."""
+        try:
+            self.disconnect_from(peer_id)
+        except P2PError:
+            return False
+        return True
+
+    async def send_session(self, peer_id: str, protocol_id: str, sess_msg) -> bool:
+        """Serialize `sess_msg` via its own `to_bytes()` and open a fresh outbound
+        stream on `protocol_id` to `peer_id`, writing one length-prefixed payload and
+        closing the stream. Returns True on send success.
+
+        The Session FSM passes a `SessMsg` value object (not bytes), so this method
+        stays protobuf-free: it just calls `.to_bytes()` on whatever it receives. The
+        Go call runs off the event loop, same as `send`.
+        """
+        try:
+            payload = sess_msg.to_bytes()
+        except Exception as e:
+            logger.error(f"send_session(...{peer_id[-5:]}, {protocol_id}) encode failed: {e}")
+            return False
+        try:
+            return await asyncio.to_thread(self.send_on_protocol, peer_id, protocol_id, payload)
+        except Exception as e:
+            logger.error(f"send_session(...{peer_id[-5:]}, {protocol_id}) failed: {e}")
+            return False
+
+    async def get_local_peer_id(self) -> str:
+        """Our own libp2p peer-id on this instance. Async for portability with the
+        JS twin (where the equivalent call is async)."""
+        return self.peer_id
+
+    # --- Async crypto wrappers (Session awaits these) ────────────────────────────
+    # Thin async wrappers over the synchronous Go FFI primitives above so session.py
+    # `await`s identically in CPython and in Pyodide-over-JS.
+
+    async def generate_signed_peer_record(self) -> Optional[bytes]:
+        """Async wrapper over the SignedPeerRecord generator (see sync impl)."""
+        return self._generate_signed_peer_record_sync()
+
+    async def sign_with_host_key(self, data: bytes) -> Optional[bytes]:
+        """Async wrapper over the host-key signer (see sync impl)."""
+        return self._sign_with_host_key_sync(data)
+
+    async def verify_peer_signature(self, peer_id: str, data: bytes, signature: bytes) -> bool:
+        """Async wrapper over the peer-signature verifier (see sync impl)."""
+        return self._verify_peer_signature_sync(peer_id, data, signature)
+
+    async def verify_signed_peer_record(self, envelope_bytes: bytes, expected_peer_id: str) -> bool:
+        """Async wrapper over the SignedPeerRecord verifier (see sync impl)."""
+        return self._verify_signed_peer_record_sync(envelope_bytes, expected_peer_id)
 
     # --- Relay Operations ---
     def reserve_on_relay(self, relay_peer_id: str) -> str:

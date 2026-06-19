@@ -26,9 +26,9 @@ from unaiverse.networking.node.connpool import NodeConn
 from conftest import apump, establish_pair
 
 
-def _make_sm(conn, local_peer_id, node_id):
+def _make_sm(p2p, local_peer_id, node_id):
     return SessionManager(
-        conn=conn,
+        p2p=p2p,
         p2p_name=NodeConn.P2P_PUBLIC,
         local_peer_id=local_peer_id,
         local_node_id=node_id,

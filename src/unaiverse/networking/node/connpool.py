@@ -622,11 +622,12 @@ class ConnectionPools:
             log.error(f"send_session(...{peer_id[-5:]}, {protocol_id}) failed: {e}", sub=p2p.log_sub)
             return False
 
-    # ── Async crypto / ping interface (Session calls only these; the JS NodeConn
-    # mirror implements the same signatures). Each is a thin async wrapper over the
-    # synchronous Go FFI so the same session.py source `await`s identically in
-    # CPython and in Pyodide-over-JS. p2p access is keyed by `p2p_name` (string)
-    # because the browser side has no Python `P2P` object. ─────────────────────────
+    # ── Async crypto / ping interface (legacy seam) ──────────────────────────────
+    # The Session/SessionManager no longer reach the transport through these conn
+    # wrappers: they call the high-level methods on their injected `P2P` instance
+    # directly (see p2p.py). These thin wrappers are kept for now (orphaned) to
+    # minimise churn in this step; they delegate to the synchronous Go FFI on the
+    # `p2p_name` instance, keyed by name. ─────────────────────────────────────────
 
     def get_local_peer_id(self, p2p_name: str) -> str:
         """Our own libp2p peer-id on the `p2p_name` instance."""
@@ -634,21 +635,21 @@ class ConnectionPools:
 
     async def sign_with_host_key(self, p2p_name: str, data: bytes):
         """Ed25519-sign `data` with the host key of the `p2p_name` instance."""
-        return self[p2p_name].sign_with_host_key(data)
+        return self[p2p_name]._sign_with_host_key_sync(data)
 
     async def verify_peer_signature(self, p2p_name: str, peer_id: str,
                                     data: bytes, signature: bytes) -> bool:
         """Verify `signature` over `data` under `peer_id`'s public key."""
-        return self[p2p_name].verify_peer_signature(peer_id, data, signature)
+        return self[p2p_name]._verify_peer_signature_sync(peer_id, data, signature)
 
     async def verify_signed_peer_record(self, p2p_name: str, envelope: bytes,
                                         expected_peer_id: str) -> bool:
         """Verify a SignedPeerRecord envelope binds `expected_peer_id`."""
-        return self[p2p_name].verify_signed_peer_record(envelope, expected_peer_id)
+        return self[p2p_name]._verify_signed_peer_record_sync(envelope, expected_peer_id)
 
     async def generate_signed_peer_record(self, p2p_name: str):
         """SignedPeerRecord envelope bytes over the `p2p_name` host's addresses."""
-        return self[p2p_name].generate_signed_peer_record()
+        return self[p2p_name]._generate_signed_peer_record_sync()
 
     def passed_time_since_last_communication(self):
         passed = time.time() - max(self.__last_sent_time, self.__last_recv_time)

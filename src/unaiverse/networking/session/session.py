@@ -2,7 +2,7 @@
 Session — per-peer connection lifecycle FSM.
 
 Each Session owns the entire lifecycle of a connection to one remote peer:
-  dial (via conn.connect) → 4-stage handshake → established → session-level
+  dial (via p2p.connect) → 4-stage handshake → established → session-level
   PING/PONG keep-alive → active re-dial + RESUME on loss → intentional GOAWAY
   close. Liveness/recovery are session-aware (bound to session_id), so a peer
   that restarts and forgets the session is detected and re-handshaked rather
@@ -14,7 +14,7 @@ The FSM is *synchronous* with async send helpers: ``process_inbound()`` and
 ``check_timeout()`` are called from the polling loop (Node's
 ``__handle_network_messages`` / main loop) and advance state immediately.
 ``process_inbound()`` is async only because some transitions need to
-``await conn.send_session()`` / ``await conn.<crypto>()``.
+``await p2p.send_session()`` / ``await p2p.<crypto>()``.
 
 No asyncio.Queue, no background Task at all — the polling loop drives
 everything, and all I/O (sends, keep-alive PING, re-dial + RESUME) happens
@@ -24,15 +24,15 @@ which a mostly-synchronous main loop cannot guarantee.
 
 Portability (CPython + Pyodide)
 -------------------------------
-This module is **protobuf-free** and never holds a Python ``P2P`` handle: it
-speaks ``SessMsg`` value objects and reaches the transport/crypto only through
-the async ``conn`` interface (``send_session`` / ``connect`` / ``sign_with_host_key`` /
-``verify_peer_signature`` / ``verify_signed_peer_record`` /
-``generate_signed_peer_record``, plus the sync ``get_local_peer_id``), all keyed
-by ``p2p_name`` (a string). That is
-exactly the surface a JS ``NodeConn`` mirror exposes, so this file runs unchanged
-in Pyodide. The wire (de)serialization lives in the conn layer (``connpool.py``
-in CPython; ``session_pb.js`` in the browser).
+This module is **protobuf-free**: it speaks ``SessMsg`` value objects and reaches
+the transport/crypto only through the high-level async ``P2P`` surface injected as
+``self.p2p`` (``connect`` / ``send_session`` / ``get_local_peer_id`` /
+``sign_with_host_key`` / ``verify_peer_signature`` / ``verify_signed_peer_record`` /
+``generate_signed_peer_record``). Cross-instance operations (the SignedPeerRecord
+and grant signature for the agent's *other* peer-id) go through ``self.p2p.twin``.
+That is exactly the surface a JS ``OP2P`` mirror exposes, so this file runs
+unchanged in Pyodide. The wire (de)serialization lives inside ``P2P.send_session``
+(via ``SessMsg.to_bytes``) in CPython and in ``session_pb.js`` in the browser.
 
 Each stage runs on its own libp2p protocol:
   /unaiverse/session/hello/1.0.0     -- HelloRequest / HelloResponse
@@ -66,7 +66,7 @@ from unaiverse.networking.session.sess_msg import (
 from unaiverse.utils.logger import log
 
 if TYPE_CHECKING:
-    from unaiverse.networking.node.connpool import ConnectionPools
+    from unaiverse.networking.p2p.p2p import P2P
 
 # ── Protocol IDs (keep in sync with unailib/types.go + connpool SESSION_PROTOCOL_IDS) ─
 SESSION_HELLO_PROTOCOL   = "/unaiverse/session/hello/1.0.0"
@@ -195,7 +195,7 @@ class Session:
         self,
         peer_id: str,
         role: SessionRole,
-        conn: "ConnectionPools",
+        p2p: "P2P",
         p2p_name: str,
         local_peer_id: str,
         local_node_id: str,
@@ -212,8 +212,11 @@ class Session:
         Args:
             peer_id: libp2p peer-id of the remote (on this p2p instance).
             role: INITIATOR or RESPONDER.
-            conn: the ConnectionPools instance (or a JS NodeConn mirror in Pyodide).
-            p2p_name: the P2P instance this Session lives on.
+            p2p: the P2P instance this Session runs on (or a JS OP2P mirror in
+                Pyodide). The Session reaches the transport and crypto through it,
+                and the agent's *other* network through ``p2p.twin``.
+            p2p_name: the label of the P2P instance this Session lives on (used for
+                events and for picking the cross-instance ``twin``).
             local_peer_id: our libp2p peer-id on `p2p_name`.
             local_node_id: our application-level node-id (the JWT-bound identity).
             local_profile_factory: zero-arg callable returning the current NodeProfile
@@ -232,7 +235,7 @@ class Session:
         """
         self.peer_id = peer_id
         self.role = role
-        self.conn = conn
+        self.p2p = p2p
         self.p2p_name = p2p_name
         self._sub = "pub" if p2p_name == P2P_PUBLIC else "prv"
         self.local_peer_id = local_peer_id
@@ -311,9 +314,9 @@ class Session:
         log.session(f"{self!r} dial attempt {self._dial_attempts}/{_MAX_DIAL_ATTEMPTS}", sub=self._sub)
 
         try:
-            peer_id, through_relay = await self.conn.connect(self.addresses, p2p_name=self.p2p_name)
+            peer_id, through_relay = await self.p2p.connect(self.addresses)
         except Exception as e:
-            log.error(f"{self!r} conn.connect raised: {e}", sub=self._sub)
+            log.error(f"{self!r} p2p.connect raised: {e}", sub=self._sub)
             peer_id, through_relay = None, False
 
         if peer_id is not None and through_relay and self._reject_relay:
@@ -410,7 +413,7 @@ class Session:
             return [self._fail("version_unsupported")]
 
         self.nonce_b = secrets.token_bytes(_NONCE_BYTES)
-        sig_b = await self.conn.sign_with_host_key(self.p2p_name, _sign_payload(self.nonce_a, self.session_id))
+        sig_b = await self.p2p.sign_with_host_key(_sign_payload(self.nonce_a, self.session_id))
         if sig_b is None:
             return [self._fail("hello_sign_failed")]
 
@@ -432,8 +435,8 @@ class Session:
             return [self._fail(f"hello_ack_bad_version:{resp.get('chosen_version')}")]
 
         # Verify sig_b under the responder's peer-id (libp2p host key).
-        if not await self.conn.verify_peer_signature(
-            self.p2p_name, self.peer_id,
+        if not await self.p2p.verify_peer_signature(
+            self.peer_id,
             _sign_payload(bytes(self.nonce_a), self.session_id), bytes(resp.get("sig_b") or b""),
         ):
             return [self._fail("hello_ack_bad_sig_b")]
@@ -444,12 +447,13 @@ class Session:
     # ── Stage-2: PROFILE ──────────────────────────────────────────────────────
 
     async def _initiator_send_profile_offer(self) -> List[SessionEvent]:
-        sig_a = await self.conn.sign_with_host_key(self.p2p_name, _sign_payload(self.nonce_b, self.session_id))
+        sig_a = await self.p2p.sign_with_host_key(_sign_payload(self.nonce_b, self.session_id))
         if sig_a is None:
             return [self._fail("profile_offer_sign_failed")]
         # SignedPeerRecord for our *other* peer-id, fetched lazily/async at offer
-        # time (sealed over current addresses; must not be precomputed sync).
-        spr_other = await self.conn.generate_signed_peer_record(self._other_p2p_name()) or b""
+        # time (sealed over current addresses; must not be precomputed sync). Sealed
+        # under the *other* network's host key — hence p2p.twin, not p2p.
+        spr_other = await self.p2p.twin.generate_signed_peer_record() or b""
         profile_bytes = json.dumps(self._local_profile_factory()).encode("utf-8")
         offer = SessMsg(SessMsg.KIND_PROFILE_OFFER, {
             "profile": profile_bytes,
@@ -477,8 +481,8 @@ class Session:
 
     async def _responder_on_profile_offer(self, offer: SessMsg) -> List[SessionEvent]:
         # Verify sig_a under the initiator's peer-id.
-        if not await self.conn.verify_peer_signature(
-            self.p2p_name, self.peer_id,
+        if not await self.p2p.verify_peer_signature(
+            self.peer_id,
             _sign_payload(bytes(self.nonce_b), self.session_id), bytes(offer.get("sig_a") or b""),
         ):
             return await self._reject_profile(NOT_AUTHORIZED, "bad_sig_a")
@@ -488,8 +492,8 @@ class Session:
         # side may not be a dual-key agent.
         spr = offer.get("signed_peer_record") or b""
         if self.remote_other_peer_id_hint and spr:
-            if not await self.conn.verify_signed_peer_record(
-                self.p2p_name, bytes(spr), self.remote_other_peer_id_hint,
+            if not await self.p2p.verify_signed_peer_record(
+                bytes(spr), self.remote_other_peer_id_hint,
             ):
                 return await self._reject_profile(NOT_AUTHORIZED, "bad_signed_peer_record")
 
@@ -608,14 +612,15 @@ class Session:
         joiner_world_peer_id = (self.remote_profile.get("dynamic") or {}).get("private_peer_id") or ""
         if not joiner_world_peer_id:
             return [self._fail("world_grant_missing_joiner_world_peer_id")]
-        grant_sig = await self.conn.sign_with_host_key(
-            self._other_p2p_name(),
+        # Signed with the WORLD-side (other-network) host key so the joiner can bind
+        # it to the private identity it will dial — hence p2p.twin.
+        grant_sig = await self.p2p.twin.sign_with_host_key(
             _grant_sign_payload(self.grant_id, joiner_world_peer_id, spec.role,
                                 self.grant_expiry_unix_ms),
         )
         if grant_sig is None:
             return [self._fail("world_grant_sign_failed")]
-        world_spr = await self.conn.generate_signed_peer_record(self._other_p2p_name()) or b""
+        world_spr = await self.p2p.twin.generate_signed_peer_record() or b""
 
         grant = SessMsg(SessMsg.KIND_WORLD_GRANT, {
             "grant_id": self.grant_id,
@@ -683,14 +688,16 @@ class Session:
                 expected_world_peer_id = ""
         if not expected_world_peer_id:
             return [self._fail("world_grant_unverifiable_identity")]
-        if world_spr and not await self.conn.verify_signed_peer_record(
-            self.p2p_name, world_spr, expected_world_peer_id,
+        if world_spr and not await self.p2p.verify_signed_peer_record(
+            world_spr, expected_world_peer_id,
         ):
             return [self._fail("world_grant_bad_spr")]
         grant_sig = bytes(grant.get("grant_sig") or b"")
-        if not await self.conn.verify_peer_signature(
-            self.p2p_name, expected_world_peer_id,
-            _grant_sign_payload(grant_id, self.conn.get_local_peer_id(self._other_p2p_name()),
+        # The grant binds our WORLD-side peer-id (the one we will dial from), so the
+        # local-peer-id used in the sign-payload comes from p2p.twin.
+        if not await self.p2p.verify_peer_signature(
+            expected_world_peer_id,
+            _grant_sign_payload(grant_id, await self.p2p.twin.get_local_peer_id(),
                                 int(grant.get("role", 0)), expiry),
             grant_sig,
         ):
@@ -732,7 +739,7 @@ class Session:
         grant_id = grant.get("grant_id_bytes") or b""
         if not grant_id:
             return [self._fail("private_join_missing_grant")]
-        sig_init = await self.conn.sign_with_host_key(self.p2p_name, bytes(grant_id))
+        sig_init = await self.p2p.sign_with_host_key(bytes(grant_id))
         if sig_init is None:
             return [self._fail("private_join_sign_failed")]
         try:
@@ -782,8 +789,8 @@ class Session:
         # dialed, role, expiry): proves we minted this grant for this exact
         # world-side identity with this role — no server-side stash needed, and a
         # grant lifted from another joiner cannot be redeemed.
-        if not await self.conn.verify_peer_signature(
-            self.p2p_name, self.local_peer_id,
+        if not await self.p2p.verify_peer_signature(
+            self.local_peer_id,
             _grant_sign_payload(grant_id, self.peer_id, role, expiry),
             bytes(join.get("grant_sig") or b""),
         ):
@@ -791,8 +798,8 @@ class Session:
 
         # Verify sig_init over grant_id under the joiner's world-side peer-id
         # (the transport identity of this very Session): proof of key possession.
-        if not await self.conn.verify_peer_signature(
-            self.p2p_name, self.peer_id, grant_id, bytes(join.get("sig_init") or b""),
+        if not await self.p2p.verify_peer_signature(
+            self.peer_id, grant_id, bytes(join.get("sig_init") or b""),
         ):
             return await _nack(NOT_AUTHORIZED, "private_join_bad_sig")
 
@@ -1081,7 +1088,7 @@ class Session:
         session_id. Outcome is observed on the next tick / inbound RESUME_ACK.
         Backoff is stored in _next_redial_at, never slept."""
         try:
-            peer_id, through_relay = await self.conn.connect(self.addresses, p2p_name=self.p2p_name)
+            peer_id, through_relay = await self.p2p.connect(self.addresses)
         except Exception as e:
             log.error(f"{self!r} reconnect dial raised: {e}", sub=self._sub)
             peer_id, through_relay = None, False
@@ -1145,11 +1152,10 @@ class Session:
         )
 
     async def _send_payload(self, protocol_id: str, msg: SessMsg) -> bool:
-        return await self.conn.send_session(
+        return await self.p2p.send_session(
             peer_id=self.peer_id,
             protocol_id=protocol_id,
             sess_msg=msg,
-            p2p_name=self.p2p_name,
         )
 
     # ── Silent abort (used by SessionManager tie-breaker) ────────────────────

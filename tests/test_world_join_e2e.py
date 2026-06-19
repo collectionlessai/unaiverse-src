@@ -34,51 +34,69 @@ def _run(coro):
     return asyncio.run(coro)
 
 
-class RouterConn:
-    """A conn spanning both p2p instances of one node. send_session routes by
-    p2p_name into the peer node's per-instance inbox; crypto is delegated to a
-    per-instance FakeP2P."""
+class RouterP2P:
+    """P2P-per-instance injected into one SessionManager. send_session routes into
+    the peer node's same-instance inbox; crypto is delegated to a FakeP2P. The
+    cross-instance ``twin`` is the other network of the *same* node."""
 
-    def __init__(self, pub_peer_id, world_peer_id):
-        self.p2p_name_to_p2p = {
-            NodeConn.P2P_PUBLIC: FakeP2P(peer_id=pub_peer_id, log_sub="pub"),
-            NodeConn.P2P_WORLD:  FakeP2P(peer_id=world_peer_id, log_sub="prv"),
-        }
-        self.peer_on = {NodeConn.P2P_PUBLIC: pub_peer_id, NodeConn.P2P_WORLD: world_peer_id}
-        self.connect_returns_by_p2p = {}
-        # inbox[p2p_name] = deque of (sender_peer_id, protocol_id, sess_msg)
-        self.inbox = {NodeConn.P2P_PUBLIC: deque(), NodeConn.P2P_WORLD: deque()}
-        self.peer_conn = None  # set to the other RouterConn
+    def __init__(self, p2p_name, peer_id, log_sub):
+        self.p2p_name = p2p_name
+        self.peer_id = peer_id
+        self._fake = FakeP2P(peer_id=peer_id, log_sub=log_sub)
+        self.connect_returns = (None, False)
+        # inbox = deque of (sender_peer_id, protocol_id, sess_msg) for this instance.
+        self.inbox = deque()
+        self._twin = None      # the other-network RouterP2P of the same node
+        self.peer_p2p = None   # the same-network RouterP2P of the peer node
 
-    def _p2p(self, p2p_name):
-        return self.p2p_name_to_p2p[p2p_name]
+    def set_twin(self, twin):
+        self._twin = twin
 
-    async def connect(self, addresses, p2p_name):
-        return self.connect_returns_by_p2p.get(p2p_name, (None, False))
+    @property
+    def twin(self):
+        return self._twin
 
-    async def send_session(self, peer_id, protocol_id, sess_msg, p2p_name):
+    async def connect(self, addresses):
+        return self.connect_returns
+
+    async def send_session(self, peer_id, protocol_id, sess_msg):
         # Deliver into the peer node's inbox for the same instance; the sender as
         # seen by the receiver is *our* peer-id on that instance.
-        self.peer_conn.inbox[p2p_name].append((self.peer_on[p2p_name], protocol_id, sess_msg))
+        self.peer_p2p.inbox.append((self.peer_id, protocol_id, sess_msg))
         return True
 
-    async def sign_with_host_key(self, p2p_name, data):
-        return self._p2p(p2p_name).sign_with_host_key(data)
+    async def sign_with_host_key(self, data):
+        return await self._fake.sign_with_host_key(data)
 
-    async def verify_peer_signature(self, p2p_name, peer_id, data, signature):
-        return self._p2p(p2p_name).verify_peer_signature(peer_id, data, signature)
+    async def verify_peer_signature(self, peer_id, data, signature):
+        return await self._fake.verify_peer_signature(peer_id, data, signature)
 
-    async def verify_signed_peer_record(self, p2p_name, envelope, expected_peer_id):
-        return self._p2p(p2p_name).verify_signed_peer_record(envelope, expected_peer_id)
+    async def verify_signed_peer_record(self, envelope, expected_peer_id):
+        return await self._fake.verify_signed_peer_record(envelope, expected_peer_id)
 
-    async def ping_peer(self, p2p_name, peer_id, timeout_ms=5000):
-        return self._p2p(p2p_name).ping_peer(peer_id, timeout_ms)
+    async def generate_signed_peer_record(self):
+        return await self._fake.generate_signed_peer_record()
 
-    async def generate_signed_peer_record(self, p2p_name):
-        return self._p2p(p2p_name).generate_signed_peer_record()
+    async def get_local_peer_id(self):
+        return self.peer_id
 
-    def get_local_peer_id(self, p2p_name):
-        return self.peer_on[p2p_name]
+
+class RouterNode:
+    """A node spanning both p2p instances. Holds a RouterP2P per network and
+    cross-links them as twins; ``wire_to`` connects the two nodes per network."""
+
+    def __init__(self, pub_peer_id, world_peer_id):
+        self.public = RouterP2P(NodeConn.P2P_PUBLIC, pub_peer_id, log_sub="pub")
+        self.world = RouterP2P(NodeConn.P2P_WORLD, world_peer_id, log_sub="prv")
+        self.public.set_twin(self.world)
+        self.world.set_twin(self.public)
+
+    def by_name(self, p2p_name):
+        return self.public if p2p_name == NodeConn.P2P_PUBLIC else self.world
+
+    def wire_to(self, other: "RouterNode"):
+        self.public.peer_p2p = other.public
+        self.world.peer_p2p = other.world
 
 
 def _host_decision_hook(peer_id, remote_node_id, remote_profile, p2p_name):
@@ -100,25 +118,25 @@ def test_world_join_full_handoff():
     joiner_pub_id, joiner_world_id = "12D3Joiner_PUB", "12D3Joiner_WORLD"
     host_pub_id, host_world_id = "12D3Host_PUB", "12D3Host_WORLD"
 
-    joiner = RouterConn(joiner_pub_id, joiner_world_id)
-    host = RouterConn(host_pub_id, host_world_id)
-    joiner.peer_conn = host
-    host.peer_conn = joiner
-    joiner.connect_returns_by_p2p[NodeConn.P2P_PUBLIC] = (host_pub_id, False)
-    joiner.connect_returns_by_p2p[NodeConn.P2P_WORLD] = (host_world_id, False)
+    joiner = RouterNode(joiner_pub_id, joiner_world_id)
+    host = RouterNode(host_pub_id, host_world_id)
+    joiner.wire_to(host)
+    host.wire_to(joiner)
+    joiner.public.connect_returns = (host_pub_id, False)
+    joiner.world.connect_returns = (host_world_id, False)
 
     # Profiles carry the world-side identity like real ones do: the host binds
     # the grant signature to the joiner's dynamic.private_peer_id.
     joiner_profile = {"node_id": "joiner-node", "dynamic": {"private_peer_id": joiner_world_id}}
     host_profile = {"node_id": "host-node", "dynamic": {"private_peer_id": host_world_id}}
-    j_pub = SessionManager(joiner, NodeConn.P2P_PUBLIC, joiner_pub_id, "joiner-node",
+    j_pub = SessionManager(joiner.public, NodeConn.P2P_PUBLIC, joiner_pub_id, "joiner-node",
                            local_profile_factory=lambda: joiner_profile)
-    j_world = SessionManager(joiner, NodeConn.P2P_WORLD, joiner_world_id, "joiner-node",
+    j_world = SessionManager(joiner.world, NodeConn.P2P_WORLD, joiner_world_id, "joiner-node",
                              local_profile_factory=lambda: joiner_profile)
-    h_pub = SessionManager(host, NodeConn.P2P_PUBLIC, host_pub_id, "host-node",
+    h_pub = SessionManager(host.public, NodeConn.P2P_PUBLIC, host_pub_id, "host-node",
                            local_profile_factory=lambda: host_profile,
                            decision_hook=_host_decision_hook)
-    h_world = SessionManager(host, NodeConn.P2P_WORLD, host_world_id, "host-node",
+    h_world = SessionManager(host.world, NodeConn.P2P_WORLD, host_world_id, "host-node",
                              local_profile_factory=lambda: host_profile,
                              decision_hook=_host_decision_hook)
 
@@ -158,7 +176,7 @@ def test_world_join_full_handoff():
             guard += 1
             for conn in (joiner, host):
                 for p2p_name in (NodeConn.P2P_PUBLIC, NodeConn.P2P_WORLD):
-                    inbox = conn.inbox[p2p_name]
+                    inbox = conn.by_name(p2p_name).inbox
                     if inbox:
                         progressed = True
                         sender, proto, msg = inbox.popleft()
@@ -194,23 +212,23 @@ def test_private_join_with_expired_grant_is_rejected():
     joiner_pub_id, joiner_world_id = "12D3Joiner_PUB", "12D3Joiner_WORLD"
     host_pub_id, host_world_id = "12D3Host_PUB", "12D3Host_WORLD"
 
-    joiner = RouterConn(joiner_pub_id, joiner_world_id)
-    host = RouterConn(host_pub_id, host_world_id)
-    joiner.peer_conn = host
-    host.peer_conn = joiner
-    joiner.connect_returns_by_p2p[NodeConn.P2P_PUBLIC] = (host_pub_id, False)
-    joiner.connect_returns_by_p2p[NodeConn.P2P_WORLD] = (host_world_id, False)
+    joiner = RouterNode(joiner_pub_id, joiner_world_id)
+    host = RouterNode(host_pub_id, host_world_id)
+    joiner.wire_to(host)
+    host.wire_to(joiner)
+    joiner.public.connect_returns = (host_pub_id, False)
+    joiner.world.connect_returns = (host_world_id, False)
 
     joiner_profile = {"node_id": "joiner-node", "dynamic": {"private_peer_id": joiner_world_id}}
     host_profile = {"node_id": "host-node", "dynamic": {"private_peer_id": host_world_id}}
-    j_pub = SessionManager(joiner, NodeConn.P2P_PUBLIC, joiner_pub_id, "joiner-node",
+    j_pub = SessionManager(joiner.public, NodeConn.P2P_PUBLIC, joiner_pub_id, "joiner-node",
                            local_profile_factory=lambda: joiner_profile)
-    j_world = SessionManager(joiner, NodeConn.P2P_WORLD, joiner_world_id, "joiner-node",
+    j_world = SessionManager(joiner.world, NodeConn.P2P_WORLD, joiner_world_id, "joiner-node",
                              local_profile_factory=lambda: joiner_profile)
-    h_pub = SessionManager(host, NodeConn.P2P_PUBLIC, host_pub_id, "host-node",
+    h_pub = SessionManager(host.public, NodeConn.P2P_PUBLIC, host_pub_id, "host-node",
                            local_profile_factory=lambda: host_profile,
                            decision_hook=_host_decision_hook)
-    h_world = SessionManager(host, NodeConn.P2P_WORLD, host_world_id, "host-node",
+    h_world = SessionManager(host.world, NodeConn.P2P_WORLD, host_world_id, "host-node",
                              local_profile_factory=lambda: host_profile,
                              decision_hook=_host_decision_hook)
 
@@ -238,7 +256,7 @@ def test_private_join_with_expired_grant_is_rejected():
             progressed, guard = False, guard + 1
             for conn in (joiner, host):
                 for p2p_name in (NodeConn.P2P_PUBLIC, NodeConn.P2P_WORLD):
-                    inbox = conn.inbox[p2p_name]
+                    inbox = conn.by_name(p2p_name).inbox
                     if inbox:
                         progressed = True
                         sender, proto, msg = inbox.popleft()

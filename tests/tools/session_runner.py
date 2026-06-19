@@ -116,8 +116,10 @@ def _build_node(identity_dir: str, port: int, listen_ip: str = "0.0.0.0"):
         public_key=None, token=None,
     )
 
+    # Single-instance runner: the cross-instance twin is itself.
+    p2p.set_twin(p2p)
     sm = SessionManager(
-        conn=conn,
+        p2p=p2p,
         p2p_name=NodeConn.P2P_PUBLIC,
         local_peer_id=p2p.peer_id,
         local_node_id="runner-" + p2p.peer_id[-5:],

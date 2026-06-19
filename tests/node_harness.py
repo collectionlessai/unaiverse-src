@@ -292,7 +292,7 @@ def build_agent_node_shell(node_peer_id: str, node_id: str = "shell-node",
     node._world_to_public = {}
 
     node._sm_public = SessionManager(
-        conn=conn,
+        p2p=conn.as_p2p(NodeConn.P2P_PUBLIC),
         p2p_name=NodeConn.P2P_PUBLIC,
         local_peer_id=node_peer_id,
         local_node_id=node_id,
@@ -300,7 +300,7 @@ def build_agent_node_shell(node_peer_id: str, node_id: str = "shell-node",
         decision_hook=node._session_decision_hook,
     )
     node._sm_world = SessionManager(
-        conn=conn,
+        p2p=conn.as_p2p(NodeConn.P2P_WORLD),
         p2p_name=NodeConn.P2P_WORLD,
         local_peer_id=node_peer_id + "-w",
         local_node_id=node_id,
@@ -318,8 +318,10 @@ def make_remote_peer(remote_peer_id: str, node_id: str, node_inbox: deque,
     remote_conn = FakeConn(p2p_public=FakeP2P(peer_id=remote_peer_id, log_sub="remote"))
     remote_conn.send_inbox = node_inbox
     remote_inbox = deque()
+    # The remote lives on a single network: its FakeConn doubles as the injected
+    # P2P (its own peer-id is the on-wire sender). p2p_name is just the label.
     sm = SessionManager(
-        conn=remote_conn,
+        p2p=remote_conn,
         p2p_name=p2p_name,
         local_peer_id=remote_peer_id,
         local_node_id=node_id,

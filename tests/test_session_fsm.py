@@ -47,10 +47,10 @@ def _run(coro):
     return asyncio.run(coro)
 
 
-def _mk(peer_id, role, conn, local_peer_id, local_node_id="local-node",
+def _mk(peer_id, role, p2p, local_peer_id, local_node_id="local-node",
         local_profile_factory=lambda: {}, addresses=None):
     return Session(
-        peer_id=peer_id, role=role, conn=conn,
+        peer_id=peer_id, role=role, p2p=p2p,
         p2p_name=NodeConn.P2P_PUBLIC, local_peer_id=local_peer_id,
         local_node_id=local_node_id, local_profile_factory=local_profile_factory,
         addresses=addresses,
@@ -69,7 +69,7 @@ def test_initiator_start_sends_hello(alice_conn, alice_p2p, alice_peer_id, bob_p
     events = _run(sess.start())
     assert events == []
     assert sess.state == SessionState.HELLO_SENT
-    assert alice_conn.connect_calls == [(["/ip4/127.0.0.1/tcp/0/p2p/" + bob_peer_id], NodeConn.P2P_PUBLIC)]
+    assert alice_conn.connect_calls == [["/ip4/127.0.0.1/tcp/0/p2p/" + bob_peer_id]]
     last = _last_sent(alice_conn, SESSION_HELLO_PROTOCOL)
     assert last is not None, "HelloRequest must be sent on the hello protocol"
     hello = last[2]
@@ -461,7 +461,7 @@ def test_resume_ack_nack_replays_handshake_for_plain_session(alice_conn, alice_p
 def test_resume_ack_nack_world_session_is_lost(alice_conn, alice_peer_id, bob_peer_id):
     """A world-join session cannot transparently re-handshake (double-join risk) → LOST."""
     sess = Session(
-        peer_id=bob_peer_id, role=SessionRole.INITIATOR, conn=alice_conn,
+        peer_id=bob_peer_id, role=SessionRole.INITIATOR, p2p=alice_conn,
         p2p_name=NodeConn.P2P_PUBLIC, local_peer_id=alice_peer_id,
         local_node_id="ln", local_profile_factory=lambda: {}, is_world_join=True,
     )
@@ -595,7 +595,7 @@ def test_world_grant_arriving_before_decision_is_buffered(alice_conn, alice_peer
     stranding the joiner in awaiting_world_grant until timeout)."""
     alice_conn.connect_returns = (bob_peer_id, False)
     sess = Session(
-        peer_id=bob_peer_id, role=SessionRole.INITIATOR, conn=alice_conn,
+        peer_id=bob_peer_id, role=SessionRole.INITIATOR, p2p=alice_conn,
         p2p_name=NodeConn.P2P_PUBLIC, local_peer_id=alice_peer_id,
         local_node_id="local-node", local_profile_factory=lambda: {},
         addresses=["/ip4/127.0.0.1/tcp/0"], is_world_join=True,

@@ -51,7 +51,7 @@ from unaiverse.networking.session.sess_msg import (
 from unaiverse.utils.logger import log
 
 if TYPE_CHECKING:
-    from unaiverse.networking.node.connpool import ConnectionPools
+    from unaiverse.networking.p2p.p2p import P2P
 
 _QUARANTINE_S = 30.0
 
@@ -65,7 +65,7 @@ class SessionManager:
 
     def __init__(
         self,
-        conn: "ConnectionPools",
+        p2p: "P2P",
         p2p_name: str,
         local_peer_id: str,
         local_node_id: str,
@@ -74,8 +74,11 @@ class SessionManager:
     ):
         """
         Args:
-            conn: the ConnectionPools instance (or a JS NodeConn mirror in Pyodide).
-            p2p_name: the P2P instance this manager owns (e.g. "p2p_public").
+            p2p: the P2P instance this manager owns and injects into each Session
+                (or a JS OP2P mirror in Pyodide). The manager no longer reaches the
+                transport through ConnectionPools — it speaks to its P2P directly.
+            p2p_name: the label of the P2P instance this manager owns (e.g.
+                "p2p_public"), used for SessionEvent tagging.
             local_peer_id: our libp2p peer-id on `p2p_name` (used for tie-breaker).
             local_node_id: our application node-id (passed into each Session).
             local_profile_factory: () -> NodeProfile dict snapshot (JSON-serializable).
@@ -83,7 +86,7 @@ class SessionManager:
                 PROFILE_OFFER and (for a world host) produce the WorldGrant spec.
                 None ⇒ Sessions accept by default (v1 agent happy-path).
         """
-        self.conn = conn
+        self.p2p = p2p
         self.p2p_name = p2p_name
         self.local_peer_id = local_peer_id
         self.local_node_id = local_node_id
@@ -133,7 +136,7 @@ class SessionManager:
         sess = Session(
             peer_id=peer_id,
             role=SessionRole.INITIATOR,
-            conn=self.conn,
+            p2p=self.p2p,
             p2p_name=self.p2p_name,
             local_peer_id=self.local_peer_id,
             local_node_id=self.local_node_id,
@@ -225,7 +228,7 @@ class SessionManager:
         sess = Session(
             peer_id=peer_id,
             role=SessionRole.RESPONDER,
-            conn=self.conn,
+            p2p=self.p2p,
             p2p_name=self.p2p_name,
             local_peer_id=self.local_peer_id,
             local_node_id=self.local_node_id,
@@ -255,9 +258,9 @@ class SessionManager:
                 "accepted": False, "reason_code": SESSION_UNKNOWN,
             })
         try:
-            await self.conn.send_session(
+            await self.p2p.send_session(
                 peer_id=peer_id, protocol_id=SESSION_CONTROL_PROTOCOL,
-                sess_msg=reply, p2p_name=self.p2p_name,
+                sess_msg=reply,
             )
         except Exception as e:
             log.error(f"unknown-session reply to ...{peer_id[-5:]} failed: {e}", sub=self._label)
@@ -286,11 +289,10 @@ class SessionManager:
                     "chosen_version": "", "capabilities": 0, "nonce_b": b"",
                     "sig_b": b"", "reason_code": SIMULTANEOUS_OPEN_LOSS,
                 })
-                await self.conn.send_session(
+                await self.p2p.send_session(
                     peer_id=peer_id,
                     protocol_id=SESSION_HELLO_PROTOCOL,
                     sess_msg=reject,
-                    p2p_name=self.p2p_name,
                 )
             except Exception as e:
                 log.error(f"simultaneous-open reject to ...{peer_id[-5:]} failed: {e}", sub=self._label)

@@ -23,9 +23,9 @@ def _run(coro):
     return asyncio.run(coro)
 
 
-def _make_sm(conn, p2p_name, local_peer_id, profile_factory=None):
+def _make_sm(p2p, p2p_name, local_peer_id, profile_factory=None):
     return SessionManager(
-        conn=conn,
+        p2p=p2p,
         p2p_name=p2p_name,
         local_peer_id=local_peer_id,
         local_node_id="local-node-id",
@@ -33,9 +33,9 @@ def _make_sm(conn, p2p_name, local_peer_id, profile_factory=None):
     )
 
 
-def _mk_session(conn, peer_id, local_peer_id, role=SessionRole.INITIATOR):
+def _mk_session(p2p, peer_id, local_peer_id, role=SessionRole.INITIATOR):
     return Session(
-        peer_id=peer_id, role=role, conn=conn,
+        peer_id=peer_id, role=role, p2p=p2p,
         p2p_name=NodeConn.P2P_PUBLIC, local_peer_id=local_peer_id,
         local_node_id="alice", local_profile_factory=lambda: {},
     )
