@@ -249,3 +249,55 @@ def test_is_peer_session_pending():
     assert conn.is_peer_session_pending("failed") is False
     assert conn.is_peer_session_pending("closed") is False
     assert conn.is_peer_session_pending("unknown") is False
+
+
+# ── Membership snapshot (perimeter seam) ─────────────────────────────────────
+
+def test_membership_snapshot_is_immutable():
+    """membership_snapshot freezes the live sets so a snapshot already handed to the
+    routing cannot change if the membership mutates afterwards."""
+    from unaiverse.networking.node.connpool import WorldMembership
+
+    conn = NodeConn.__new__(NodeConn)  # bypass the heavy P2P-bound __init__
+    conn.world_agents_set = {"a"}
+    conn.world_masters_set = {"m"}
+    conn.world_node_peer_id = "wn"
+    conn.inspector_peer_id = "insp"
+    snap = conn.membership_snapshot()
+    assert isinstance(snap, WorldMembership)
+    assert snap.world_agents == frozenset({"a"})
+    assert snap.world_masters == frozenset({"m"})
+    assert snap.world_node_peer_id == "wn" and snap.inspector_peer_id == "insp"
+    # Mutating the live set afterwards must not touch the already-taken snapshot.
+    conn.world_agents_set.add("b")
+    assert "b" not in snap.world_agents
+
+
+def test_conn_routing_classifies_against_passed_snapshot():
+    """conn_routing_fcn classifies world peers against the *passed* membership
+    snapshot, not the Coordinator's live sets. With empty live sets, a peer the
+    snapshot calls a world agent is still routed (proving the seam is the snapshot)."""
+    from unaiverse.networking.node.connpool import WorldMembership
+
+    class _WP2P:
+        log_sub = "world"
+    world_p2p = _WP2P()
+
+    conn = NodeConn.__new__(NodeConn)  # bypass the heavy P2P-bound __init__
+    conn.p2p_public = object()
+    conn.p2p_to_pool_names = {world_p2p: [
+        NodeConn.IN_WORLD_AGENTS, NodeConn.OUT_WORLD_AGENTS,
+        NodeConn.IN_WORLD_NODE, NodeConn.OUT_WORLD_NODE,
+        NodeConn.IN_WORLD_MASTERS, NodeConn.OUT_WORLD_MASTERS,
+    ]}
+    # Live sets are EMPTY: reading self.* would make the peer unclassifiable.
+    conn.world_agents_set = set()
+    conn.world_masters_set = set()
+    conn.world_node_peer_id = None
+    conn.inspector_peer_id = None
+
+    membership = WorldMembership(world_agents=frozenset({"agentX"}), world_masters=frozenset(),
+                                world_node_peer_id=None, inspector_peer_id=None)
+    infos = [{"id": "agentX", "direction": "inbound", "addrs": [], "connected_at": 0}]
+    routed = _run(conn.conn_routing_fcn(infos, world_p2p, membership))
+    assert "agentX" in routed[NodeConn.IN_WORLD_AGENTS]

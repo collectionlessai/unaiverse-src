@@ -50,6 +50,17 @@ from unaiverse.networking.session.sess_msg import SessMsg  # noqa: E402
 from unaiverse.networking.session import sess_msg as _sess_msg  # noqa: E402
 
 
+# Immutable per-cycle view of the world membership that the perimeter routing
+# classifies against. Built once per update cycle so conn_routing_fcn reads a single
+# consistent snapshot instead of the Coordinator's mutable sets — and so the same view
+# can be handed down to each per-instance reconcile when the perimeter moves into the
+# SessionManagers. The world side is fed by the rendezvous; the public side ignores it.
+WorldMembership = namedtuple(
+    "WorldMembership",
+    ["world_agents", "world_masters", "world_node_peer_id", "inspector_peer_id"],
+)
+
+
 class ConnectionPools:
 
     def __init__(self, max_connections: int, pool_name_to_p2p_name_and_ratio: dict[str, list[str | float]],
@@ -192,12 +203,20 @@ class ConnectionPools:
         """
         return self.p2p_name_to_p2p[p2p_name]
 
-    async def conn_routing_fcn(self, connected_peer_infos: list, p2p: P2P) -> dict:
+    def membership_snapshot(self) -> "WorldMembership | None":
+        """The immutable per-cycle world-membership view handed to conn_routing_fcn.
+        The base pool has no world membership, so it returns None; NodeConn overrides
+        it with the real snapshot."""
+        return None
+
+    async def conn_routing_fcn(self, connected_peer_infos: list, p2p: P2P,
+                               membership: "WorldMembership | None" = None) -> dict:
         """A placeholder function that must be implemented to route connected peers to the correct pool (async).
 
         Args:
             connected_peer_infos: A list of dictionaries containing information about connected peers.
             p2p: The P2P network object from which the peers were connected.
+            membership: the immutable world-membership snapshot to classify against.
 
         Returns:
             A dictionary mapping pool names to a dictionary of peer IDs and their information.
@@ -450,13 +469,18 @@ class ConnectionPools:
         self.pool_name_to_added_in_last_update = {}
         self.pool_name_to_removed_in_last_update = {}
 
+        # One immutable membership view for the whole cycle: both instances are routed
+        # against the same snapshot, with no skew if the membership mutates afterwards.
+        membership = self.membership_snapshot()
+
         for p2p_name, p2p in self.p2p_name_to_p2p.items():
             connected_peer_infos = p2p.get_connected_peers_info()
 
             if connected_peer_infos is not None:
 
                 # Routing to the right queue / filtering
-                pool_name_and_peer_ids_to_peer_info = await self.conn_routing_fcn(connected_peer_infos, p2p)
+                pool_name_and_peer_ids_to_peer_info = await self.conn_routing_fcn(
+                    connected_peer_infos, p2p, membership)
 
                 # Parsing the generated index
                 for pool_name, connected_peer_ids_to_connected_peer_infos \
@@ -1060,16 +1084,33 @@ class NodeConn(ConnectionPools):
         """Resets the rendezvous tag to its initial state."""
         self.rendezvous_tag = -1
 
-    async def conn_routing_fcn(self, connected_peer_infos: list, p2p: P2P) -> dict:
+    def membership_snapshot(self) -> WorldMembership:
+        """Freeze the current world membership into an immutable per-cycle view. The
+        sets are copied into frozensets so a snapshot already taken cannot change if
+        the membership mutates later (and cannot be mutated by the routing itself)."""
+        return WorldMembership(
+            world_agents=frozenset(self.world_agents_set),
+            world_masters=frozenset(self.world_masters_set),
+            world_node_peer_id=self.world_node_peer_id,
+            inspector_peer_id=self.inspector_peer_id,
+        )
+
+    async def conn_routing_fcn(self, connected_peer_infos: list, p2p: P2P,
+                               membership: WorldMembership = None) -> dict:
         """Routes connected peers to the correct connection pool based on their network and role (async).
 
         Args:
             connected_peer_infos: A list of dictionaries with information about connected peers.
             p2p: The P2P network object where the connections were found.
+            membership: the immutable world-membership snapshot to classify against.
+                Defaults to a fresh snapshot of the current membership when not passed
+                (so a standalone call still works); update() passes the per-cycle one.
 
         Returns:
             A dictionary mapping pool names to a dictionary of peer IDs and their information.
         """
+        if membership is None:
+            membership = self.membership_snapshot()
         pool_name_and_peer_id_to_peer_info = {k: {} for k in self.p2p_to_pool_names[p2p]}
         public = p2p == self.p2p_public
 
@@ -1086,15 +1127,15 @@ class NodeConn(ConnectionPools):
                 else:
                     log.critical(f"Connection direction is undefined: {c['direction']}", sub=p2p.log_sub)
             else:
-                is_world_agent = peer_id in self.world_agents_set
-                is_world_master = peer_id in self.world_masters_set
-                is_world_node = self.world_node_peer_id is not None and peer_id == self.world_node_peer_id
-                is_inspector = self.inspector_peer_id is not None and peer_id == self.inspector_peer_id
+                is_world_agent = peer_id in membership.world_agents
+                is_world_master = peer_id in membership.world_masters
+                is_world_node = membership.world_node_peer_id is not None and peer_id == membership.world_node_peer_id
+                is_inspector = membership.inspector_peer_id is not None and peer_id == membership.inspector_peer_id
                 if not is_world_node and not is_world_master and not is_world_agent and not is_inspector:
-                    log.cpool("World agents list:  " + str(self.world_agents_set), sub=p2p.log_sub)
-                    log.cpool("World masters list: " + str(self.world_masters_set), sub=p2p.log_sub)
-                    log.cpool("World node peer id: " + str(self.world_node_peer_id), sub=p2p.log_sub)
-                    log.cpool("Inspector peer id: " + str(self.inspector_peer_id), sub=p2p.log_sub)
+                    log.cpool("World agents list:  " + str(membership.world_agents), sub=p2p.log_sub)
+                    log.cpool("World masters list: " + str(membership.world_masters), sub=p2p.log_sub)
+                    log.cpool("World node peer id: " + str(membership.world_node_peer_id), sub=p2p.log_sub)
+                    log.cpool("Inspector peer id: " + str(membership.inspector_peer_id), sub=p2p.log_sub)
                     log.cpool(f"Unable to determine the peer type for {peer_id}: "
                               f"cannot say if world agent, master, world node, inspector (disconnecting it)",
                               sub=p2p.log_sub)
