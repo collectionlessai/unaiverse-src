@@ -1289,3 +1289,32 @@ class P2P:
     def __exit__(self, exc_type, exc_val, exc_tb):
         """Exit context manager, ensuring node closure."""
         self.close()
+
+
+class CrossInstanceCrypto:
+    """Crypto capability bound to this node's *other* local P2P instance.
+
+    A node owns two P2P instances (public and world). During the handshake a
+    Session running on one instance must occasionally sign, mint a
+    SignedPeerRecord, or read the peer-id under the host-key of the *other*
+    instance, to bind the node's two identities together (the cross-instance
+    SignedPeerRecord in the profile offer and the world-grant signature).
+
+    The capability is built by the layer that owns both instances (the
+    Coordinator / Node) and injected into each Session, so a P2P never needs a
+    reference to its twin: the cross-instance link lives one level up, not
+    laterally between the two transports. The Session depends only on these three
+    async methods, which a Pyodide build can back with its own JS equivalent.
+    """
+
+    def __init__(self, other_p2p: "P2P"):
+        self._other = other_p2p
+
+    async def sign_with_host_key(self, data: bytes) -> Optional[bytes]:
+        return await self._other.sign_with_host_key(data)
+
+    async def generate_signed_peer_record(self) -> Optional[bytes]:
+        return await self._other.generate_signed_peer_record()
+
+    async def get_local_peer_id(self) -> str:
+        return await self._other.get_local_peer_id()

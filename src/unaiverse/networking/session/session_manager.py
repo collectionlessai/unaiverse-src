@@ -51,7 +51,7 @@ from unaiverse.networking.session.sess_msg import (
 from unaiverse.utils.logger import log
 
 if TYPE_CHECKING:
-    from unaiverse.networking.p2p.p2p import P2P
+    from unaiverse.networking.p2p.p2p import P2P, CrossInstanceCrypto
 
 _QUARANTINE_S = 30.0
 
@@ -71,6 +71,7 @@ class SessionManager:
         local_node_id: str,
         local_profile_factory: Callable[[], dict],
         decision_hook: Optional[DecisionHook] = None,
+        xcrypto: Optional["CrossInstanceCrypto"] = None,
     ):
         """
         Args:
@@ -85,6 +86,10 @@ class SessionManager:
             decision_hook: responder side — async callback to accept/reject an inbound
                 PROFILE_OFFER and (for a world host) produce the WorldGrant spec.
                 None ⇒ Sessions accept by default (v1 agent happy-path).
+            xcrypto: cross-instance crypto capability (the agent's *other* P2P
+                instance), injected into every Session this manager builds. None
+                while the twin bridge is still in place — the Session then falls
+                back to ``p2p.twin``.
         """
         self.p2p = p2p
         self.p2p_name = p2p_name
@@ -92,6 +97,7 @@ class SessionManager:
         self.local_node_id = local_node_id
         self._local_profile_factory = local_profile_factory
         self._decision_hook = decision_hook
+        self._xcrypto = xcrypto
         self._label = _p2p_label(p2p_name)
 
         # peer_id → Session (at most one Session per peer in this p2p instance).
@@ -148,6 +154,7 @@ class SessionManager:
             decision_hook=self._decision_hook,
             grant=grant,
             reject_relay=reject_relay,
+            xcrypto=self._xcrypto,
         )
         self._sessions[peer_id] = sess
         log.session(f"initiating Session to ...{peer_id[-5:]}", sub=self._label)
@@ -235,6 +242,7 @@ class SessionManager:
             local_profile_factory=self._local_profile_factory,
             remote_other_peer_id_hint=remote_other_peer_id_hint,
             decision_hook=self._decision_hook,
+            xcrypto=self._xcrypto,
         )
         self._sessions[peer_id] = sess
         log.session(f"spawned responder Session for ...{peer_id[-5:]}", sub=self._label)

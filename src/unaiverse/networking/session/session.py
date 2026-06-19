@@ -66,7 +66,7 @@ from unaiverse.networking.session.sess_msg import (
 from unaiverse.utils.logger import log
 
 if TYPE_CHECKING:
-    from unaiverse.networking.p2p.p2p import P2P
+    from unaiverse.networking.p2p.p2p import P2P, CrossInstanceCrypto
 
 # ── Protocol IDs (keep in sync with unailib/types.go + connpool SESSION_PROTOCOL_IDS) ─
 SESSION_HELLO_PROTOCOL   = "/unaiverse/session/hello/1.0.0"
@@ -207,6 +207,7 @@ class Session:
         decision_hook: Optional[DecisionHook] = None,
         grant: Optional[dict] = None,
         reject_relay: bool = False,
+        xcrypto: Optional["CrossInstanceCrypto"] = None,
     ):
         """
         Args:
@@ -232,11 +233,21 @@ class Session:
             grant: initiator only, world Session — the grant blob obtained on the
                 public Session; when present this Session redeems it via PRIVATE_JOIN
                 after the normal HELLO+PROFILE handshake on p2p_world.
+            xcrypto: crypto capability for the agent's *other* P2P instance (the
+                cross-instance SignedPeerRecord / world-grant signer, sealed under
+                the other host key). Injected from the layer that owns both
+                instances. When omitted it falls back to ``self.p2p.twin`` (the
+                bridge kept while the twin is still wired; removed once all
+                cross-instance call-sites use the capability).
         """
         self.peer_id = peer_id
         self.role = role
         self.p2p = p2p
         self.p2p_name = p2p_name
+        # Cross-instance crypto capability (other-network host key). Falls back to
+        # the twin while the bridge is in place; the cross-instance call-sites are
+        # switched onto ``self.xcrypto`` and the twin removed in the next step.
+        self.xcrypto = xcrypto if xcrypto is not None else self.p2p.twin
         self._sub = "pub" if p2p_name == P2P_PUBLIC else "prv"
         self.local_peer_id = local_peer_id
         self.local_node_id = local_node_id

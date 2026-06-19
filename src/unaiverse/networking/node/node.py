@@ -36,7 +36,7 @@ from collections.abc import Callable
 from datetime import datetime, timezone
 from unaiverse.networking.p2p.messages import Msg
 from unaiverse.custom import Custom, GenException
-from unaiverse.networking.p2p import P2P, P2PError
+from unaiverse.networking.p2p import P2P, P2PError, CrossInstanceCrypto
 from unaiverse.networking.node.connpool import NodeConn
 from unaiverse.networking.node.profile import NodeProfile
 from unaiverse.networking.session import (SessionManager, ProfileDecisionResult, WorldGrantSpec,
@@ -390,6 +390,11 @@ class Node:
         # Session at PROFILE_OFFER time (via ``p2p.twin``), so no SPR factory is
         # passed here. The decision hook lets a responder accept/reject an offer and
         # (world host) mint a grant.
+        # Cross-instance crypto capability for each manager: a public Session signs
+        # its other-network artifacts with the WORLD host key and vice-versa, so the
+        # public session manager gets a capability over p2p_w and the world session
+        # manager over p2p_u (the same instance ``p2p.twin`` points at). Built here
+        # for now; ownership moves to the Coordinator in a later step.
         self._sm_public = SessionManager(
             p2p=p2p_u,
             p2p_name=NodeConn.P2P_PUBLIC,
@@ -397,6 +402,7 @@ class Node:
             local_node_id=self.node_id,
             local_profile_factory=lambda: (self.profile.get_all_profile() if self.profile is not None else {}),
             decision_hook=self._session_decision_hook,
+            xcrypto=CrossInstanceCrypto(p2p_w),
         )
         self._sm_world = SessionManager(
             p2p=p2p_w,
@@ -405,6 +411,7 @@ class Node:
             local_node_id=self.node_id,
             local_profile_factory=lambda: (self.profile.get_all_profile() if self.profile is not None else {}),
             decision_hook=self._session_decision_hook,
+            xcrypto=CrossInstanceCrypto(p2p_u),
         )
 
         # Let conn consult per-peer Session state. The hosted entity only holds a
