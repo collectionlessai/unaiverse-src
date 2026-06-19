@@ -172,7 +172,7 @@ def test_lost_event_enters_quarantine(alice_conn, alice_peer_id, bob_peer_id):
     assert any(e.type == SessionEventType.LOST for e in events)
     ban_until = sm._quarantine.get(bob_peer_id)
     assert ban_until is not None
-    assert ban_until > time.monotonic() + 25.0
+    assert ban_until > time.monotonic() + 20.0
 
 
 # ── on_peer_disconnected() ──────────────────────────────────────────────────
@@ -542,3 +542,58 @@ def test_initiate_activates_existing_known_placeholder(alice_conn, alice_peer_id
     assert sess is not None and sess.state != SessionState.KNOWN
     assert sess.app_role == 1                          # rendezvous role carried across the replacement
     assert bob_peer_id in sm._active_sessions
+
+
+# ── Quarantine gate in activate(), FAILED-quarantines (U8.5) ─────────────────
+
+def test_activate_refused_during_quarantine(alice_conn, alice_peer_id, bob_peer_id):
+    """activate() is the single dial gate: a quarantined peer is refused immediately
+    with FAILED(quarantined), without dialing, and the inert KNOWN stays in place for a
+    later activate after the window."""
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    sm.sync_known_peers({bob_peer_id: (["/ip4/1.1.1.1/tcp/1"], 1)})   # KNOWN exists
+    sm._quarantine[bob_peer_id] = time.monotonic() + 30.0
+    events = _run(sm.activate(bob_peer_id))
+    assert len(events) == 1 and events[0].type == SessionEventType.FAILED
+    assert events[0].data["reason"] == "quarantined"
+    assert alice_conn.connect_calls == []
+    assert sm.get_session(bob_peer_id).state == SessionState.KNOWN   # still inert, not dialed
+
+
+def test_failed_event_enters_quarantine(alice_conn, alice_peer_id, bob_peer_id):
+    """A FAILED event (here a handshake timeout) puts the peer in quarantine like a LOST,
+    so a just-failed peer is not immediately re-dialed."""
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    sess = _mk_session(alice_conn, bob_peer_id, alice_peer_id)
+    sm._set_active(bob_peer_id, sess)
+    sess._set_state(SessionState.HELLO_SENT, 0.001)
+    time.sleep(0.005)
+    events = _run(sm.tick())
+    assert any(e.type == SessionEventType.FAILED for e in events)
+    assert sm._quarantine.get(bob_peer_id, 0.0) > time.monotonic() + 20.0
+
+
+def test_failed_then_known_recreated_then_gated_then_dials(alice_conn, alice_peer_id, bob_peer_id):
+    """Full cycle: a FAILED quarantines and drops the Session; the rendezvous still
+    advertises the peer so the next sync recreates an inert KNOWN; activating it is
+    refused until the window expires, then dials."""
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    sess = _mk_session(alice_conn, bob_peer_id, alice_peer_id)
+    sm._set_active(bob_peer_id, sess)
+    sess._set_state(SessionState.HELLO_SENT, 0.001)
+    time.sleep(0.005)
+    _run(sm.tick())
+    assert sm.get_session(bob_peer_id) is None                       # dropped on FAILED
+    assert sm._quarantine.get(bob_peer_id, 0.0) > time.monotonic()   # quarantined
+
+    sm.sync_known_peers({bob_peer_id: (["/ip4/1.1.1.1/tcp/1"], 1)})  # rendezvous still has bob
+    assert sm.get_session(bob_peer_id).state == SessionState.KNOWN
+
+    events = _run(sm.activate(bob_peer_id))                          # gated
+    assert events[0].type == SessionEventType.FAILED and events[0].data["reason"] == "quarantined"
+    assert alice_conn.connect_calls == []
+
+    sm._quarantine[bob_peer_id] = time.monotonic() - 1.0            # window expired
+    alice_conn.connect_returns = (bob_peer_id, False)
+    _run(sm.activate(bob_peer_id))
+    assert len(alice_conn.connect_calls) == 1                        # dials now

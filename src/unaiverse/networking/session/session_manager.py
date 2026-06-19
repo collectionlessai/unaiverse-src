@@ -53,7 +53,10 @@ from unaiverse.utils.logger import log
 if TYPE_CHECKING:
     from unaiverse.networking.p2p.p2p import P2P, CrossInstanceCrypto
 
-_QUARANTINE_S = 30.0
+# Anti-flap quarantine window after a LOST/FAILED. Kept below the world rejoin delay
+# (Custom.REJOINING_WAIT, 30s) so a scheduled rejoin lands after the window has expired
+# instead of racing it and bouncing on the gate.
+_QUARANTINE_S = 25.0
 
 
 def _p2p_label(name: str) -> str:
@@ -244,6 +247,19 @@ class SessionManager:
         sess = self._sessions.get(peer_id)
         if sess is None:
             return []
+        # Quarantine gate (single dial door): a peer that recently went LOST/FAILED is
+        # refused immediately, without dialing, until its window expires. Non-blocking:
+        # we return FAILED(quarantined) at once and leave the (inert KNOWN) Session in
+        # place, so a later activate after the window can dial it.
+        now = time.monotonic()
+        ban_until = self._quarantine.get(peer_id, 0.0)
+        if ban_until > now:
+            log.session(f"activate(...{peer_id[-5:]}) refused: quarantined for {ban_until - now:.1f}s", sub=self._label)
+            return [SessionEvent(
+                type=SessionEventType.FAILED, session_id="",
+                peer_id=peer_id, role=SessionRole.INITIATOR,
+                p2p_name=self.p2p_name, data={"reason": "quarantined"},
+            )]
         log.session(f"activating Session to ...{peer_id[-5:]}", sub=self._label)
         events = await sess.start()
         self._promote(peer_id, sess)
@@ -263,18 +279,8 @@ class SessionManager:
         """Open a new initiator Session to `peer_id` and start it. Idempotent if the
         peer already has a healthy Session — returns []. A stale FAILED/CLOSED Session
         is replaced. initiate() = ensure() + activate()."""
-        now = time.monotonic()
-        # Quarantine check.
-        ban_until = self._quarantine.get(peer_id, 0.0)
-        if ban_until > now:
-            log.session(f"initiate(...{peer_id[-5:]}) refused: quarantined for {ban_until - now:.1f}s", sub=self._label)
-            ev = SessionEvent(
-                type=SessionEventType.FAILED, session_id="",
-                peer_id=peer_id, role=SessionRole.INITIATOR,
-                p2p_name=self.p2p_name, data={"reason": "quarantined"},
-            )
-            return [ev]
-
+        # The quarantine gate lives in activate() (the single dial door), so a
+        # quarantined peer is refused there, even on a direct activate.
         existing = self._sessions.get(peer_id)
         app_role = 0
         if existing is not None and existing.state == SessionState.KNOWN:
@@ -490,7 +496,10 @@ class SessionManager:
 
     def _post_dispatch_cleanup(self, events: List[SessionEvent], now: float) -> None:
         for ev in events:
-            if ev.type == SessionEventType.LOST:
+            # Quarantine a peer that just failed (handshake/timeout) or was lost
+            # (reconnect grace expired), so we don't immediately re-dial it. An
+            # intentional CLOSED is not a failure and is not quarantined.
+            if ev.type in (SessionEventType.LOST, SessionEventType.FAILED):
                 self._quarantine[ev.peer_id] = now + _QUARANTINE_S
             if ev.type in (SessionEventType.LOST,
                            SessionEventType.CLOSED,
