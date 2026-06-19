@@ -100,7 +100,7 @@ class FakeHosted:
         self.all_agents.pop(peer_id, None)
         return True
 
-    async def clear_world_related_data(self):
+    async def clear_world_related_data(self, world_peer_id=None):
         self.world_data_clears += 1
 
     def accept_new_role(self, role):
