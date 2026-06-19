@@ -169,6 +169,24 @@ class SessionManager:
             classified.setdefault(pool_name, {})[c['id']] = c
         return classified
 
+    def sync_known_peers(self, known: Dict[str, List[str]]) -> None:
+        """Reconcile the inert KNOWN roster against the peers currently advertised by
+        the rendezvous (``peer_id -> addresses``). Registers a KNOWN Session for every
+        known peer that has no Session yet, and prunes KNOWN Sessions whose peer has
+        vanished. Never touches a non-KNOWN Session: an in-transit / established /
+        terminal Session owns its own lifecycle, so an ESTABLISHED peer that drops out
+        of the rendezvous keeps its live Session until the transport tears it down, and
+        a FAILED / CLOSED one is left to the normal evict path (it reappears as KNOWN
+        only once that path has cleared it). KNOWN Sessions live solely in the registry,
+        never in a pool, so this cannot perturb the per-cycle diff or the perimeter."""
+        for peer_id, addrs in known.items():
+            if peer_id not in self._sessions:
+                self.ensure(peer_id, list(addrs) if addrs else [])
+        stale = [pid for pid, s in self._sessions.items()
+                 if s.state == SessionState.KNOWN and pid not in known]
+        for peer_id in stale:
+            self._drop_session(peer_id)
+
     # ── Initiator API ─────────────────────────────────────────────────────────
 
     def ensure(
@@ -247,7 +265,11 @@ class SessionManager:
             return [ev]
 
         existing = self._sessions.get(peer_id)
-        if existing is not None and existing.state not in (SessionState.FAILED, SessionState.CLOSED):
+        if existing is not None and existing.state == SessionState.KNOWN:
+            # A KNOWN is a rendezvous placeholder, not a dial in flight: drop it so the
+            # caller's addresses / grant / is_world_join / hints take effect below.
+            self._drop_session(peer_id)
+        elif existing is not None and existing.state not in (SessionState.FAILED, SessionState.CLOSED):
             log.session(f"initiate(...{peer_id[-5:]}): "
                       f"already have Session in state {existing.state.value} — no-op", sub=self._label)
             return []

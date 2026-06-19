@@ -1142,6 +1142,29 @@ class NodeConn(ConnectionPools):
                 NodeConn.OUT_WORLD_NODE if is_node else NodeConn.OUT_WORLD_MASTERS)
         return None
 
+    async def update(self) -> tuple[dict, dict]:
+        """Coordinator per-cycle update: run the transport-driven per-instance reconcile
+        (base class), then reconcile the world SessionManager's inert KNOWN roster
+        against the peers currently known from the rendezvous. The KNOWN sync is kept
+        out of the pool/diff path on purpose: KNOWN Sessions are a registry of known
+        peers, never pool members, so they cannot leak into the added/removed diff nor
+        the perimeter."""
+        added, removed = await super().update()
+        self._sync_known_world_peers()
+        return added, removed
+
+    def _sync_known_world_peers(self) -> None:
+        """Feed the world SessionManager the peers currently advertised by the rendezvous
+        (``peer_id -> addresses``, minus ourselves) so it registers a KNOWN Session per
+        known peer and prunes the vanished ones. World-only: the public instance carries
+        no rendezvous membership."""
+        if self._sm_world is None:
+            return
+        self_peer_id = self.p2p_world.peer_id
+        known = {peer_id: addrs for peer_id, addrs in self.peer_id_to_addrs.items()
+                 if peer_id != self_peer_id}
+        self._sm_world.sync_known_peers(known)
+
     async def _reconcile_instance(self, p2p_name: str, p2p: P2P, membership) -> tuple[dict, dict]:
         """Reconcile ONE P2P instance and report its per-pool added/removed diff.
 

@@ -455,3 +455,60 @@ def test_known_session_survives_inbound_ping(alice_conn, alice_peer_id, bob_peer
     sent = [s for s in alice_conn.sent if s[1] == SESSION_CONTROL_PROTOCOL]
     assert sent[-1][2].kind == SessMsg.KIND_PONG
     assert sent[-1][2].fields["ok"] is False
+
+
+# ── Known roster sync from rendezvous (U8.3) ─────────────────────────────────
+
+def test_sync_known_peers_registers_inert_known(alice_conn, alice_peer_id, bob_peer_id):
+    """sync_known_peers registers a KNOWN Session (inert: not dialed, not tick-active)
+    for each known peer that has no Session yet, carrying its rendezvous addresses."""
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    sm.sync_known_peers({bob_peer_id: ["/ip4/1.1.1.1/tcp/1"]})
+    sess = sm.get_session(bob_peer_id)
+    assert sess is not None and sess.state == SessionState.KNOWN
+    assert sess.addresses == ["/ip4/1.1.1.1/tcp/1"]
+    assert bob_peer_id not in sm._active_sessions
+    assert alice_conn.connect_calls == []
+
+
+def test_sync_known_peers_is_idempotent(alice_conn, alice_peer_id, bob_peer_id):
+    """A second sync with the same peer keeps the existing KNOWN Session, not a fresh one."""
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    sm.sync_known_peers({bob_peer_id: ["/ip4/1.1.1.1/tcp/1"]})
+    s1 = sm.get_session(bob_peer_id)
+    sm.sync_known_peers({bob_peer_id: ["/ip4/1.1.1.1/tcp/1"]})
+    assert sm.get_session(bob_peer_id) is s1
+
+
+def test_sync_known_peers_prunes_vanished_known(alice_conn, alice_peer_id, bob_peer_id):
+    """A KNOWN Session whose peer is no longer advertised is pruned on the next sync."""
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    sm.sync_known_peers({bob_peer_id: ["/ip4/1.1.1.1/tcp/1"]})
+    assert sm.get_session(bob_peer_id) is not None
+    sm.sync_known_peers({})
+    assert sm.get_session(bob_peer_id) is None
+
+
+def test_sync_known_peers_does_not_prune_active_session(alice_conn, alice_peer_id, bob_peer_id):
+    """sync never prunes a non-KNOWN Session: an ESTABLISHED peer that drops out of the
+    rendezvous keeps its live Session (the transport, not the roster, ends it)."""
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    sess = _mk_session(alice_conn, bob_peer_id, alice_peer_id)
+    sm._set_active(bob_peer_id, sess)
+    sess._set_state(SessionState.ESTABLISHED, None)
+    sm.sync_known_peers({})
+    assert sm.get_session(bob_peer_id) is sess
+
+
+def test_initiate_activates_existing_known_placeholder(alice_conn, alice_peer_id, bob_peer_id):
+    """initiate() on a peer that already has a KNOWN placeholder dials it instead of
+    no-op'ing: the placeholder is replaced by the caller's parameters and started."""
+    alice_conn.connect_returns = (bob_peer_id, False)
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    sm.sync_known_peers({bob_peer_id: ["/ip4/1.1.1.1/tcp/1"]})
+    assert sm.get_session(bob_peer_id).state == SessionState.KNOWN
+    _run(sm.initiate(bob_peer_id, ["/ip4/2.2.2.2/tcp/2"]))
+    assert len(alice_conn.connect_calls) == 1
+    sess = sm.get_session(bob_peer_id)
+    assert sess is not None and sess.state != SessionState.KNOWN
+    assert bob_peer_id in sm._active_sessions

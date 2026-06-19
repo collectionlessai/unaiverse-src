@@ -521,3 +521,41 @@ def test_char_world_host_writer_feeds_same_facade():
     assert conn.get_addrs("wh") == ["/ip4/2.2.2.2/tcp/9"]
     assert conn.find_addrs_by_role(ROLE_WORLD_AGENT) == [["/ip4/2.2.2.2/tcp/9"]]
     assert conn.is_connected("wh") is False
+
+
+# ── KNOWN roster from the rendezvous via update() (U8.3) ─────────────────────
+
+def test_char_update_registers_known_world_sessions_off_diff():
+    """update() registers a KNOWN Session in the world SessionManager for each peer the
+    rendezvous advertises (here via set_world_agents_list), without that peer entering a
+    pool, the added/removed diff, or is_connected. KNOWN is a registry, not a connection."""
+    from unaiverse.networking.session import SessionState
+    conn, pub, world = _make_node_conn()
+    conn.set_world_agents_list([{"id": "wa", "addrs": ["/ip4/1.1.1.1/tcp/1"], "misc": ROLE_WORLD_AGENT}])
+    added, removed = _run(conn.update())
+    sess = conn._sm_world.get_session("wa")
+    assert sess is not None and sess.state == SessionState.KNOWN
+    assert conn.is_connected("wa") is False
+    assert all("wa" not in s for s in added.values())
+    assert all("wa" not in s for s in removed.values())
+    assert "wa" not in conn.peer_id_to_pool_name
+
+
+def test_char_update_excludes_self_from_known_sessions():
+    """The world instance never registers a KNOWN Session toward our own peer-id."""
+    conn, pub, world = _make_node_conn()
+    self_id = conn.p2p_world.peer_id
+    conn.set_world_agents_list([{"id": self_id, "addrs": ["/ip4/9.9.9.9/tcp/9"], "misc": ROLE_WORLD_AGENT}])
+    _run(conn.update())
+    assert conn._sm_world.get_session(self_id) is None
+
+
+def test_char_update_prunes_known_when_peer_leaves_rendezvous():
+    """A KNOWN world Session is pruned once the rendezvous stops advertising the peer."""
+    conn, pub, world = _make_node_conn()
+    conn.set_world_agents_list([{"id": "wa", "addrs": ["/ip4/1.1.1.1/tcp/1"], "misc": ROLE_WORLD_AGENT}])
+    _run(conn.update())
+    assert conn._sm_world.get_session("wa") is not None
+    conn.set_world_agents_list([])
+    _run(conn.update())
+    assert conn._sm_world.get_session("wa") is None
