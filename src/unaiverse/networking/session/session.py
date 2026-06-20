@@ -263,10 +263,13 @@ class Session:
         self.remote_other_peer_id_hint = remote_other_peer_id_hint
         self.addresses = list(addresses or [])
         self.app_role = app_role
-        # Token capabilities (RT plumbing), injected by the layer that owns them
-        # (Coordinator/Node). token_verifier(token, p2p_peer) -> (node_id, cv_hash)
-        # backed by the root TokenVerifier; token_factory() -> our current node token.
-        # NOT consumed yet: RT.1/RT.2 verify the peer token and present ours in-band.
+        # Token capabilities (RT), injected by the layer that owns them
+        # (Coordinator/Node). token_verifier(token, p2p_peer) -> (node_id, cv_hash,
+        # p2p_peers) backed by the root TokenVerifier; token_factory() -> our current
+        # node token. RT.1b consumes these: the initiator presents token_factory() in
+        # the PROFILE_OFFER and the responder verifies it against the transport
+        # peer-id, trusting the attested node_id. The cv_hash / p2p_peers claims feed
+        # the decision hook in RT.2.
         self.token_verifier = token_verifier
         self.token_factory = token_factory
         self.is_world_join = is_world_join
@@ -492,6 +495,10 @@ class Session:
             "sig_a": sig_a,
             "signed_peer_record": spr_other,
             "session_id": self.session_id,
+            # RT: present our root-issued node token in-band. The responder verifies
+            # it against our transport peer-id and trusts the attested node_id. Empty
+            # when no token_factory is injected (the v1 / FSM-test path).
+            "token": self.token_factory() if self.token_factory is not None else "",
         })
         if not await self._send_payload(SESSION_PROFILE_PROTOCOL, offer):
             return [self._fail("profile_offer_send_failed")]
@@ -518,6 +525,17 @@ class Session:
             _sign_payload(bytes(self.nonce_b), self.session_id), bytes(offer.get("sig_a") or b""),
         ):
             return await self._reject_profile(NOT_AUTHORIZED, "bad_sig_a")
+
+        # RT credential check. When a root token-verifier is configured, the offer
+        # must carry a token the root vouches for, bound to this transport peer-id
+        # (already proven by sig_a). The root-attested node_id then supersedes the
+        # self-asserted profile node_id for the allow-list / grant binding below.
+        # No verifier (the v1 / FSM-test path) → skip, keeping the profile-based path.
+        if self.token_verifier is not None:
+            node_id, _, _ = await self.token_verifier(offer.get("token") or "", self.peer_id)
+            if not node_id:
+                return await self._reject_profile(NOT_AUTHORIZED, "bad_token")
+            self.remote_node_id_hint = node_id
 
         # If we know the initiator's other peer-id, verify the signed peer record
         # binds those bytes to that id. If we don't have a hint, skip — the other

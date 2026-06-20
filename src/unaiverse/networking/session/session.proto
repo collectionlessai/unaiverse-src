@@ -62,6 +62,9 @@ message ProfileOffer {
   bytes sig_a               = 2;  // Ed25519(local_key, nonce_b || session_id)
   bytes signed_peer_record  = 3;  // libp2p SignedPeerRecord (other peer-id)
   bytes session_id          = 4;
+  string token              = 5;  // root-server JWT (RT): node_id + p2p_peers + cv_hash + exp;
+                                  // the responder verifies it against the transport peer-id,
+                                  // then trusts node_id / cv_hash / the public<->world binding.
 }
 
 message ProfileDecision {

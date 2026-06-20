@@ -216,7 +216,7 @@ _KIND_SPEC = {
     SessMsg.KIND_HELLO_RESP:       (0x02, "HelloResponse",
                                     ["chosen_version", "capabilities", "nonce_b", "sig_b", "reason_code"]),
     SessMsg.KIND_PROFILE_OFFER:    (0x03, "ProfileOffer",
-                                    ["profile", "sig_a", "signed_peer_record", "session_id"]),
+                                    ["profile", "sig_a", "signed_peer_record", "session_id", "token"]),
     SessMsg.KIND_PROFILE_DECISION: (0x04, "ProfileDecision",
                                     ["accepted", "profile_b", "reason_code", "hint_addrs", "retry_after_ms",
                                      "session_id"]),

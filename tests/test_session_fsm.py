@@ -49,12 +49,14 @@ def _run(coro):
 
 
 def _mk(peer_id, role, p2p, local_peer_id, local_node_id="local-node",
-        local_profile_factory=lambda: {}, addresses=None):
+        local_profile_factory=lambda: {}, addresses=None,
+        token_verifier=None, token_factory=None):
     return Session(
         peer_id=peer_id, role=role, p2p=p2p,
         p2p_name=NodeConn.P2P_PUBLIC, local_peer_id=local_peer_id,
         local_node_id=local_node_id, local_profile_factory=local_profile_factory,
         addresses=addresses, xcrypto=CrossInstanceCrypto(p2p),
+        token_verifier=token_verifier, token_factory=token_factory,
     )
 
 
@@ -222,6 +224,83 @@ def test_responder_rejects_bad_sig_a(bob_conn, bob_p2p, bob_peer_id, alice_peer_
     assert decision.kind == SessMsg.KIND_PROFILE_DECISION
     assert decision.fields["accepted"] is False
     assert decision.fields["reason_code"] == NOT_AUTHORIZED
+
+
+# ── Stage-2 responder: RT token consumption ─────────────────────────────────
+
+def _drive_responder_to_offer_wait(sess):
+    """Push a HelloRequest so the responder parks in HELLO_ACK_SENT, ready for an offer."""
+    _run(sess.process_inbound(SESSION_HELLO_PROTOCOL, SessMsg(SessMsg.KIND_HELLO_REQ, {
+        "session_id": b"\x01" * 16, "nonce_a": b"\xaa" * 32, "protocol_versions": ["1.0"],
+    })))
+    assert sess.state == SessionState.HELLO_ACK_SENT
+
+
+def test_initiator_offer_carries_token(alice_conn, alice_p2p, alice_peer_id, bob_peer_id):
+    """With a token_factory injected, the PROFILE_OFFER carries the node token."""
+    alice_conn.connect_returns = (bob_peer_id, False)
+    sess = _mk(bob_peer_id, SessionRole.INITIATOR, alice_conn, alice_peer_id,
+               addresses=["/ip4/127.0.0.1/tcp/0"], token_factory=lambda: "tok-abc")
+    _run(sess.start())
+    _run(sess.process_inbound(SESSION_HELLO_PROTOCOL, SessMsg(SessMsg.KIND_HELLO_RESP, {
+        "chosen_version": "1.0", "nonce_b": b"\xbb" * 32, "sig_b": b"sig", "reason_code": OK,
+    })))
+    offer = _last_sent(alice_conn, SESSION_PROFILE_PROTOCOL)[2]
+    assert offer.kind == SessMsg.KIND_PROFILE_OFFER
+    assert offer.fields["token"] == "tok-abc"
+
+
+def test_initiator_offer_token_empty_without_factory(alice_conn, alice_p2p, alice_peer_id, bob_peer_id):
+    """No token_factory → the offer carries an empty token (the v1 / no-RT path)."""
+    alice_conn.connect_returns = (bob_peer_id, False)
+    sess = _mk(bob_peer_id, SessionRole.INITIATOR, alice_conn, alice_peer_id,
+               addresses=["/ip4/127.0.0.1/tcp/0"])
+    _run(sess.start())
+    _run(sess.process_inbound(SESSION_HELLO_PROTOCOL, SessMsg(SessMsg.KIND_HELLO_RESP, {
+        "chosen_version": "1.0", "nonce_b": b"\xbb" * 32, "sig_b": b"sig", "reason_code": OK,
+    })))
+    assert _last_sent(alice_conn, SESSION_PROFILE_PROTOCOL)[2].fields["token"] == ""
+
+
+def test_responder_rejects_invalid_token(bob_conn, bob_p2p, bob_peer_id, alice_peer_id):
+    """A configured verifier that rejects the token → reject(NOT_AUTHORIZED) + FAILED,
+    before the application decision is ever reached."""
+    async def _verifier(token, peer_id):
+        return (None, None, ())   # verification failure
+    sess = _mk(alice_peer_id, SessionRole.RESPONDER, bob_conn, bob_peer_id,
+               local_node_id="bob-node", token_verifier=_verifier)
+    _drive_responder_to_offer_wait(sess)
+    offer = SessMsg(SessMsg.KIND_PROFILE_OFFER, {
+        "profile": json.dumps({"node_id": "claimed"}).encode(), "sig_a": b"ok",
+        "signed_peer_record": b"", "session_id": sess.session_id, "token": "bad-tok",
+    })
+    events = _run(sess.process_inbound(SESSION_PROFILE_PROTOCOL, offer))
+    assert len(events) == 1 and events[0].type == SessionEventType.FAILED
+    assert "bad_token" in events[0].data["reason"]
+    decision = _last_sent(bob_conn, SESSION_PROFILE_PROTOCOL)[2]
+    assert decision.fields["accepted"] is False
+    assert decision.fields["reason_code"] == NOT_AUTHORIZED
+
+
+def test_responder_valid_token_overrides_profile_node_id(bob_conn, bob_p2p, bob_peer_id, alice_peer_id):
+    """A valid token is verified against the transport peer-id, and the root-attested
+    node_id wins over the self-asserted profile node_id; the handshake then reaches
+    ESTABLISHED (agent host, no decision hook)."""
+    seen = {}
+    async def _verifier(token, peer_id):
+        seen["token"], seen["peer_id"] = token, peer_id
+        return ("root-attested-node", "cv-hash", (peer_id,))
+    sess = _mk(alice_peer_id, SessionRole.RESPONDER, bob_conn, bob_peer_id,
+               local_node_id="bob-node", token_verifier=_verifier)
+    _drive_responder_to_offer_wait(sess)
+    offer = SessMsg(SessMsg.KIND_PROFILE_OFFER, {
+        "profile": json.dumps({"node_id": "self-claimed"}).encode(), "sig_a": b"ok",
+        "signed_peer_record": b"", "session_id": sess.session_id, "token": "good-tok",
+    })
+    events = _run(sess.process_inbound(SESSION_PROFILE_PROTOCOL, offer))
+    assert seen == {"token": "good-tok", "peer_id": alice_peer_id}
+    assert sess.remote_node_id_hint == "root-attested-node"
+    assert len(events) == 1 and events[0].type == SessionEventType.ESTABLISHED
 
 
 # ── Timeouts ────────────────────────────────────────────────────────────────
