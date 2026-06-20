@@ -174,9 +174,9 @@ def test_initiator_completes_through_profile_decision(alice_conn, alice_p2p, ali
     assert last is not None
     offer = last[2]
     assert offer.kind == SessMsg.KIND_PROFILE_OFFER
-    # signed_peer_record fetched lazily from the (fake) other instance.
-    assert offer.fields["signed_peer_record"] == b"spr-bytes"
     assert offer.fields["sig_a"] == b"sig-bytes"
+    # RT.3a: the offer no longer carries a signed_peer_record (binding via p2p_peers).
+    assert "signed_peer_record" not in offer.fields
 
     decision = SessMsg(SessMsg.KIND_PROFILE_DECISION, {
         "accepted": True, "profile_b": json.dumps({"node_id": "bob-node"}).encode(),

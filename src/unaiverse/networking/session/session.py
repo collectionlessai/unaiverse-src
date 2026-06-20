@@ -489,19 +489,16 @@ class Session:
         sig_a = await self.p2p.sign_with_host_key(_sign_payload(self.nonce_b, self.session_id))
         if sig_a is None:
             return [self._fail("profile_offer_sign_failed")]
-        # SignedPeerRecord for our *other* peer-id, fetched lazily/async at offer
-        # time (sealed over current addresses; must not be precomputed sync). Sealed
-        # sealed under the *other* network's host key — hence xcrypto, not p2p.
-        spr_other = await self.xcrypto.generate_signed_peer_record() or b""
         profile_bytes = json.dumps(self._local_profile_factory()).encode("utf-8")
         offer = SessMsg(SessMsg.KIND_PROFILE_OFFER, {
             "profile": profile_bytes,
             "sig_a": sig_a,
-            "signed_peer_record": spr_other,
             "session_id": self.session_id,
             # RT: present our root-issued node token in-band. The responder verifies
             # it against our transport peer-id and trusts the attested node_id. Empty
-            # when no token_factory is injected (the v1 / FSM-test path).
+            # when no token_factory is injected (the v1 / FSM-test path). The public
+            # <-> world binding the SignedPeerRecord used to carry now rides the
+            # token's p2p_peers, so the offer no longer ships a signed_peer_record.
             "token": self.token_factory() if self.token_factory is not None else "",
         })
         if not await self._send_payload(SESSION_PROFILE_PROTOCOL, offer):
@@ -559,15 +556,9 @@ class Session:
         if terr:
             return await self._reject_profile(NOT_AUTHORIZED, terr)
 
-        # If we know the initiator's other peer-id, verify the signed peer record
-        # binds those bytes to that id. If we don't have a hint, skip — the other
-        # side may not be a dual-key agent.
-        spr = offer.get("signed_peer_record") or b""
-        if self.remote_other_peer_id_hint and spr:
-            if not await self.p2p.verify_signed_peer_record(
-                bytes(spr), self.remote_other_peer_id_hint,
-            ):
-                return await self._reject_profile(NOT_AUTHORIZED, "bad_signed_peer_record")
+        # The initiator's public<->world binding is consumed from the verified token's
+        # p2p_peers (see the decision hook), so the offer no longer carries a
+        # SignedPeerRecord to verify here.
 
         try:
             self.remote_profile = json.loads(bytes(offer.get("profile") or b"").decode("utf-8"))

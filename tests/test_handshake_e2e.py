@@ -167,40 +167,6 @@ def test_simultaneous_open_collapses_to_one_session(bidirectional_fakeconns,
         assert s_b.state in (SessionState.ESTABLISHED, SessionState.FAILED)
 
 
-def test_responder_rejects_when_signed_peer_record_invalid(bidirectional_fakeconns,
-                                                            alice_peer_id, bob_peer_id,
-                                                            alice_p2p, bob_p2p):
-    """If Alice's signed_peer_record fails verification on Bob, the offer is
-    rejected and Alice fails with a NOT_AUTHORIZED reason."""
-    alice_conn, bob_conn, alice_inbox, bob_inbox = bidirectional_fakeconns
-    alice_conn.connect_returns = (bob_peer_id, False)
-
-    sm_alice = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id, "alice")
-    sm_bob   = _make_sm(bob_conn,   NodeConn.P2P_PUBLIC, bob_peer_id,   "bob")
-
-    # Give Bob a hint that he should be verifying Alice's other peer-id. The
-    # FakeP2P will then route through verify_signed_peer_record — which we
-    # flip to return False.
-    # Plant the hint on the responder session at spawn time by intercepting the
-    # spawn helper. Easiest path: monkey-patch _spawn_responder.
-    orig_spawn = sm_bob._spawn_responder
-
-    def _spawn_with_hint(peer_id, remote_other_peer_id_hint=None):
-        return orig_spawn(peer_id, remote_other_peer_id_hint="12D3AliceOther")
-    sm_bob._spawn_responder = _spawn_with_hint
-
-    bob_p2p.verify_spr_returns = False
-
-    _run(sm_alice.initiate(bob_peer_id, ["/ip4/127.0.0.1/tcp/0"]))
-    _pump(bob_inbox, sm_bob)
-    _pump(alice_inbox, sm_alice)
-    bob_events = _pump(bob_inbox, sm_bob)
-    # Bob FAILED on bad SPR.
-    bob_failures = [e for e in bob_events if e.type == SessionEventType.FAILED]
-    assert len(bob_failures) == 1
-    assert "bad_signed_peer_record" in bob_failures[0].data["reason"]
-    # Alice receives the rejection and also FAILs.
-    alice_events = _pump(alice_inbox, sm_alice)
-    alice_failures = [e for e in alice_events if e.type == SessionEventType.FAILED]
-    assert len(alice_failures) == 1
-    assert "NOT_AUTHORIZED" in alice_failures[0].data["reason"]
+# RT.3a removed the offer-side SignedPeerRecord check (the public<->world binding
+# now rides the verified token's p2p_peers), so the test that exercised a bad
+# offer SPR was dropped with it.
