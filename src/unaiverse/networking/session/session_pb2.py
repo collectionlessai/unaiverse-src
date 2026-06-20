@@ -14,15 +14,15 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\rsession.proto\x12\x14unaiverse.session.v1\"w\n\x0cHelloRequest\x12\x12\n\nsession_id\x18\x01 \x01(\x0c\x12\x0f\n\x07nonce_a\x18\x02 \x01(\x0c\x12\x19\n\x11protocol_versions\x18\x03 \x03(\t\x12\x14\n\x0c\x63\x61pabilities\x18\x04 \x01(\r\x12\x11\n\tclient_id\x18\x05 \x01(\t\"\x94\x01\n\rHelloResponse\x12\x16\n\x0e\x63hosen_version\x18\x01 \x01(\t\x12\x14\n\x0c\x63\x61pabilities\x18\x02 \x01(\r\x12\x0f\n\x07nonce_b\x18\x03 \x01(\x0c\x12\r\n\x05sig_b\x18\x04 \x01(\x0c\x12\x35\n\x0breason_code\x18\x05 \x01(\x0e\x32 .unaiverse.session.v1.ReasonCode\"m\n\x0cProfileOffer\x12\x0f\n\x07profile\x18\x01 \x01(\x0c\x12\r\n\x05sig_a\x18\x02 \x01(\x0c\x12\x1a\n\x12signed_peer_record\x18\x03 \x01(\x0c\x12\x12\n\nsession_id\x18\x04 \x01(\x0c\x12\r\n\x05token\x18\x05 \x01(\t\"\xad\x01\n\x0fProfileDecision\x12\x10\n\x08\x61\x63\x63\x65pted\x18\x01 \x01(\x08\x12\x11\n\tprofile_b\x18\x02 \x01(\x0c\x12\x35\n\x0breason_code\x18\x03 \x01(\x0e\x32 .unaiverse.session.v1.ReasonCode\x12\x12\n\nhint_addrs\x18\x04 \x03(\t\x12\x16\n\x0eretry_after_ms\x18\x05 \x01(\r\x12\x12\n\nsession_id\x18\x06 \x01(\x0c\"\xd5\x01\n\nWorldGrant\x12\x10\n\x08grant_id\x18\x01 \x01(\x0c\x12\x11\n\tgrant_sig\x18\x02 \x01(\x0c\x12\x16\n\x0e\x65xpiry_unix_ms\x18\x03 \x01(\x04\x12\x15\n\rworld_profile\x18\x04 \x01(\x0c\x12!\n\x19world_private_peer_record\x18\x05 \x01(\x0c\x12\x0c\n\x04role\x18\x06 \x01(\r\x12\x13\n\x0b\x63ode_bundle\x18\x07 \x01(\x0c\x12\x15\n\rinitial_stats\x18\x08 \x01(\x0c\x12\x16\n\x0erendezvous_tag\x18\t \x01(\x04\"!\n\rWorldGrantAck\x12\x10\n\x08received\x18\x01 \x01(\x08\"I\n\x0bPrivateJoin\x12\x10\n\x08grant_id\x18\x01 \x01(\x0c\x12\x10\n\x08sig_init\x18\x02 \x01(\x0c\x12\x16\n\x0ejoiner_node_id\x18\x03 \x01(\t\"s\n\x0ePrivateJoinAck\x12\x10\n\x08\x61\x63\x63\x65pted\x18\x01 \x01(\x08\x12\x35\n\x0breason_code\x18\x02 \x01(\x0e\x32 .unaiverse.session.v1.ReasonCode\x12\x18\n\x10rendezvous_topic\x18\x03 \x01(\t\"g\n\x06Goaway\x12\x30\n\x06reason\x18\x01 \x01(\x0e\x32 .unaiverse.session.v1.ReasonCode\x12\x17\n\x0f\x64rain_window_ms\x18\x02 \x01(\r\x12\x12\n\nsession_id\x18\x03 \x01(\x0c\"\x1d\n\tGoawayAck\x12\x10\n\x08received\x18\x01 \x01(\x08\")\n\x04Ping\x12\x12\n\nsession_id\x18\x01 \x01(\x0c\x12\r\n\x05nonce\x18\x02 \x01(\x0c\"5\n\x04Pong\x12\x12\n\nsession_id\x18\x01 \x01(\x0c\x12\r\n\x05nonce\x18\x02 \x01(\x0c\x12\n\n\x02ok\x18\x03 \x01(\x08\"+\n\x06Resume\x12\x12\n\nsession_id\x18\x01 \x01(\x0c\x12\r\n\x05nonce\x18\x02 \x01(\x0c\"w\n\tResumeAck\x12\x12\n\nsession_id\x18\x01 \x01(\x0c\x12\r\n\x05nonce\x18\x02 \x01(\x0c\x12\x10\n\x08\x61\x63\x63\x65pted\x18\x03 \x01(\x08\x12\x35\n\x0breason_code\x18\x04 \x01(\x0e\x32 .unaiverse.session.v1.ReasonCode*\x94\x03\n\nReasonCode\x12\x06\n\x02OK\x10\x00\x12\x17\n\x13VERSION_UNSUPPORTED\x10\x01\x12\x0e\n\nOVERLOADED\x10\x02\x12\x12\n\x0eNOT_AUTHORIZED\x10\x03\x12\x15\n\x11NOT_IN_ALLOW_LIST\x10\x04\x12\x14\n\x10\x43V_HASH_MISMATCH\x10\x05\x12\x15\n\x11ROLE_INCOMPATIBLE\x10\x06\x12\x0e\n\nWORLD_BUSY\x10\x07\x12\x13\n\x0fHOSTED_REJECTED\x10\x08\x12\x15\n\x11GRACEFUL_SHUTDOWN\x10\t\x12\x17\n\x13WORLD_DISENGAGEMENT\x10\n\x12\x1a\n\x16WORLD_HANDOFF_COMPLETE\x10\x0b\x12\x10\n\x0cROLE_REVOKED\x10\x0c\x12\x11\n\rTOKEN_REVOKED\x10\r\x12\x12\n\x0eKICKED_BY_HOST\x10\x0e\x12\x0f\n\x0bLOCAL_ERROR\x10\x0f\x12\x11\n\rGRANT_EXPIRED\x10\x10\x12\x1a\n\x16SIMULTANEOUS_OPEN_LOSS\x10\x11\x12\x13\n\x0fSESSION_UNKNOWN\x10\x12\x62\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\rsession.proto\x12\x14unaiverse.session.v1\"w\n\x0cHelloRequest\x12\x12\n\nsession_id\x18\x01 \x01(\x0c\x12\x0f\n\x07nonce_a\x18\x02 \x01(\x0c\x12\x19\n\x11protocol_versions\x18\x03 \x03(\t\x12\x14\n\x0c\x63\x61pabilities\x18\x04 \x01(\r\x12\x11\n\tclient_id\x18\x05 \x01(\t\"\x94\x01\n\rHelloResponse\x12\x16\n\x0e\x63hosen_version\x18\x01 \x01(\t\x12\x14\n\x0c\x63\x61pabilities\x18\x02 \x01(\r\x12\x0f\n\x07nonce_b\x18\x03 \x01(\x0c\x12\r\n\x05sig_b\x18\x04 \x01(\x0c\x12\x35\n\x0breason_code\x18\x05 \x01(\x0e\x32 .unaiverse.session.v1.ReasonCode\"m\n\x0cProfileOffer\x12\x0f\n\x07profile\x18\x01 \x01(\x0c\x12\r\n\x05sig_a\x18\x02 \x01(\x0c\x12\x1a\n\x12signed_peer_record\x18\x03 \x01(\x0c\x12\x12\n\nsession_id\x18\x04 \x01(\x0c\x12\r\n\x05token\x18\x05 \x01(\t\"\xbc\x01\n\x0fProfileDecision\x12\x10\n\x08\x61\x63\x63\x65pted\x18\x01 \x01(\x08\x12\x11\n\tprofile_b\x18\x02 \x01(\x0c\x12\x35\n\x0breason_code\x18\x03 \x01(\x0e\x32 .unaiverse.session.v1.ReasonCode\x12\x12\n\nhint_addrs\x18\x04 \x03(\t\x12\x16\n\x0eretry_after_ms\x18\x05 \x01(\r\x12\x12\n\nsession_id\x18\x06 \x01(\x0c\x12\r\n\x05token\x18\x07 \x01(\t\"\xd5\x01\n\nWorldGrant\x12\x10\n\x08grant_id\x18\x01 \x01(\x0c\x12\x11\n\tgrant_sig\x18\x02 \x01(\x0c\x12\x16\n\x0e\x65xpiry_unix_ms\x18\x03 \x01(\x04\x12\x15\n\rworld_profile\x18\x04 \x01(\x0c\x12!\n\x19world_private_peer_record\x18\x05 \x01(\x0c\x12\x0c\n\x04role\x18\x06 \x01(\r\x12\x13\n\x0b\x63ode_bundle\x18\x07 \x01(\x0c\x12\x15\n\rinitial_stats\x18\x08 \x01(\x0c\x12\x16\n\x0erendezvous_tag\x18\t \x01(\x04\"!\n\rWorldGrantAck\x12\x10\n\x08received\x18\x01 \x01(\x08\"I\n\x0bPrivateJoin\x12\x10\n\x08grant_id\x18\x01 \x01(\x0c\x12\x10\n\x08sig_init\x18\x02 \x01(\x0c\x12\x16\n\x0ejoiner_node_id\x18\x03 \x01(\t\"s\n\x0ePrivateJoinAck\x12\x10\n\x08\x61\x63\x63\x65pted\x18\x01 \x01(\x08\x12\x35\n\x0breason_code\x18\x02 \x01(\x0e\x32 .unaiverse.session.v1.ReasonCode\x12\x18\n\x10rendezvous_topic\x18\x03 \x01(\t\"g\n\x06Goaway\x12\x30\n\x06reason\x18\x01 \x01(\x0e\x32 .unaiverse.session.v1.ReasonCode\x12\x17\n\x0f\x64rain_window_ms\x18\x02 \x01(\r\x12\x12\n\nsession_id\x18\x03 \x01(\x0c\"\x1d\n\tGoawayAck\x12\x10\n\x08received\x18\x01 \x01(\x08\")\n\x04Ping\x12\x12\n\nsession_id\x18\x01 \x01(\x0c\x12\r\n\x05nonce\x18\x02 \x01(\x0c\"5\n\x04Pong\x12\x12\n\nsession_id\x18\x01 \x01(\x0c\x12\r\n\x05nonce\x18\x02 \x01(\x0c\x12\n\n\x02ok\x18\x03 \x01(\x08\"+\n\x06Resume\x12\x12\n\nsession_id\x18\x01 \x01(\x0c\x12\r\n\x05nonce\x18\x02 \x01(\x0c\"w\n\tResumeAck\x12\x12\n\nsession_id\x18\x01 \x01(\x0c\x12\r\n\x05nonce\x18\x02 \x01(\x0c\x12\x10\n\x08\x61\x63\x63\x65pted\x18\x03 \x01(\x08\x12\x35\n\x0breason_code\x18\x04 \x01(\x0e\x32 .unaiverse.session.v1.ReasonCode*\x94\x03\n\nReasonCode\x12\x06\n\x02OK\x10\x00\x12\x17\n\x13VERSION_UNSUPPORTED\x10\x01\x12\x0e\n\nOVERLOADED\x10\x02\x12\x12\n\x0eNOT_AUTHORIZED\x10\x03\x12\x15\n\x11NOT_IN_ALLOW_LIST\x10\x04\x12\x14\n\x10\x43V_HASH_MISMATCH\x10\x05\x12\x15\n\x11ROLE_INCOMPATIBLE\x10\x06\x12\x0e\n\nWORLD_BUSY\x10\x07\x12\x13\n\x0fHOSTED_REJECTED\x10\x08\x12\x15\n\x11GRACEFUL_SHUTDOWN\x10\t\x12\x17\n\x13WORLD_DISENGAGEMENT\x10\n\x12\x1a\n\x16WORLD_HANDOFF_COMPLETE\x10\x0b\x12\x10\n\x0cROLE_REVOKED\x10\x0c\x12\x11\n\rTOKEN_REVOKED\x10\r\x12\x12\n\x0eKICKED_BY_HOST\x10\x0e\x12\x0f\n\x0bLOCAL_ERROR\x10\x0f\x12\x11\n\rGRANT_EXPIRED\x10\x10\x12\x1a\n\x16SIMULTANEOUS_OPEN_LOSS\x10\x11\x12\x13\n\x0fSESSION_UNKNOWN\x10\x12\x62\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
 _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'session_pb2', _globals)
 if _descriptor._USE_C_DESCRIPTORS == False:
   DESCRIPTOR._options = None
-  _globals['_REASONCODE']._serialized_start=1442
-  _globals['_REASONCODE']._serialized_end=1846
+  _globals['_REASONCODE']._serialized_start=1457
+  _globals['_REASONCODE']._serialized_end=1861
   _globals['_HELLOREQUEST']._serialized_start=39
   _globals['_HELLOREQUEST']._serialized_end=158
   _globals['_HELLORESPONSE']._serialized_start=161
@@ -30,25 +30,25 @@ if _descriptor._USE_C_DESCRIPTORS == False:
   _globals['_PROFILEOFFER']._serialized_start=311
   _globals['_PROFILEOFFER']._serialized_end=420
   _globals['_PROFILEDECISION']._serialized_start=423
-  _globals['_PROFILEDECISION']._serialized_end=596
-  _globals['_WORLDGRANT']._serialized_start=599
-  _globals['_WORLDGRANT']._serialized_end=812
-  _globals['_WORLDGRANTACK']._serialized_start=814
-  _globals['_WORLDGRANTACK']._serialized_end=847
-  _globals['_PRIVATEJOIN']._serialized_start=849
-  _globals['_PRIVATEJOIN']._serialized_end=922
-  _globals['_PRIVATEJOINACK']._serialized_start=924
-  _globals['_PRIVATEJOINACK']._serialized_end=1039
-  _globals['_GOAWAY']._serialized_start=1041
-  _globals['_GOAWAY']._serialized_end=1144
-  _globals['_GOAWAYACK']._serialized_start=1146
-  _globals['_GOAWAYACK']._serialized_end=1175
-  _globals['_PING']._serialized_start=1177
-  _globals['_PING']._serialized_end=1218
-  _globals['_PONG']._serialized_start=1220
-  _globals['_PONG']._serialized_end=1273
-  _globals['_RESUME']._serialized_start=1275
-  _globals['_RESUME']._serialized_end=1318
-  _globals['_RESUMEACK']._serialized_start=1320
-  _globals['_RESUMEACK']._serialized_end=1439
+  _globals['_PROFILEDECISION']._serialized_end=611
+  _globals['_WORLDGRANT']._serialized_start=614
+  _globals['_WORLDGRANT']._serialized_end=827
+  _globals['_WORLDGRANTACK']._serialized_start=829
+  _globals['_WORLDGRANTACK']._serialized_end=862
+  _globals['_PRIVATEJOIN']._serialized_start=864
+  _globals['_PRIVATEJOIN']._serialized_end=937
+  _globals['_PRIVATEJOINACK']._serialized_start=939
+  _globals['_PRIVATEJOINACK']._serialized_end=1054
+  _globals['_GOAWAY']._serialized_start=1056
+  _globals['_GOAWAY']._serialized_end=1159
+  _globals['_GOAWAYACK']._serialized_start=1161
+  _globals['_GOAWAYACK']._serialized_end=1190
+  _globals['_PING']._serialized_start=1192
+  _globals['_PING']._serialized_end=1233
+  _globals['_PONG']._serialized_start=1235
+  _globals['_PONG']._serialized_end=1288
+  _globals['_RESUME']._serialized_start=1290
+  _globals['_RESUME']._serialized_end=1333
+  _globals['_RESUMEACK']._serialized_start=1335
+  _globals['_RESUMEACK']._serialized_end=1454
 # @@protoc_insertion_point(module_scope)

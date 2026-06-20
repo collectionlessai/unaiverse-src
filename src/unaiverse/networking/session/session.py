@@ -269,10 +269,11 @@ class Session:
         # Token capabilities (RT), injected by the layer that owns them
         # (Coordinator/Node). token_verifier(token, p2p_peer) -> (node_id, cv_hash,
         # p2p_peers) backed by the root TokenVerifier; token_factory() -> our current
-        # node token. RT.1b consumes these: the initiator presents token_factory() in
-        # the PROFILE_OFFER and the responder verifies it against the transport
-        # peer-id, trusting the attested node_id. The cv_hash / p2p_peers claims feed
-        # the decision hook in RT.2.
+        # node token. Both directions present and verify: the initiator's token rides
+        # the PROFILE_OFFER and the responder's the PROFILE_DECISION, each verified by
+        # the other against the transport peer-id (see _verify_peer_token). The
+        # responder additionally feeds the attested cv_hash / p2p_peers to its
+        # decision hook.
         self.token_verifier = token_verifier
         self.token_factory = token_factory
         self.is_world_join = is_world_join
@@ -521,6 +522,26 @@ class Session:
         log.session(f"{self!r} ignored PROFILE-protocol {msg.kind} in state {self.state.value}", sub=self._sub)
         return []
 
+    async def _verify_peer_token(self, token: str):
+        """Verify an in-band peer token (RT) against the transport peer-id, shared by
+        both handshake directions (responder at PROFILE_OFFER, initiator at
+        PROFILE_DECISION). Returns ``(claims, None)`` on success, ``(None, reason)``
+        on a verification or cross-check failure, and ``(None, None)`` when no verifier
+        is configured (the v1 path). On success the root-attested node-id is adopted
+        into ``remote_node_id_hint``; when we already expected a specific node-id at
+        this peer, a mismatch is rejected (we reached the right peer-id but the wrong
+        node)."""
+        if self.token_verifier is None:
+            return None, None
+        node_id, cv_hash, p2p_peers = await self.token_verifier(token or "", self.peer_id)
+        if not node_id:
+            return None, "bad_token"
+        if self.remote_node_id_hint and self.remote_node_id_hint != node_id:
+            return None, "token_node_id_mismatch"
+        self.remote_node_id_hint = node_id
+        return VerifiedTokenClaims(node_id=node_id, cv_hash=cv_hash,
+                                   p2p_peers=tuple(p2p_peers)), None
+
     async def _responder_on_profile_offer(self, offer: SessMsg) -> List[SessionEvent]:
         # Verify sig_a under the initiator's peer-id.
         if not await self.p2p.verify_peer_signature(
@@ -534,14 +555,9 @@ class Session:
         # (already proven by sig_a). The root-attested node_id then supersedes the
         # self-asserted profile node_id for the allow-list / grant binding below.
         # No verifier (the v1 / FSM-test path) → skip, keeping the profile-based path.
-        verified_claims = None
-        if self.token_verifier is not None:
-            node_id, cv_hash, p2p_peers = await self.token_verifier(offer.get("token") or "", self.peer_id)
-            if not node_id:
-                return await self._reject_profile(NOT_AUTHORIZED, "bad_token")
-            self.remote_node_id_hint = node_id
-            verified_claims = VerifiedTokenClaims(node_id=node_id, cv_hash=cv_hash,
-                                                  p2p_peers=tuple(p2p_peers))
+        verified_claims, terr = await self._verify_peer_token(offer.get("token") or "")
+        if terr:
+            return await self._reject_profile(NOT_AUTHORIZED, terr)
 
         # If we know the initiator's other peer-id, verify the signed peer record
         # binds those bytes to that id. If we don't have a hint, skip — the other
@@ -588,12 +604,14 @@ class Session:
         if not decision.accepted:
             return await self._reject_profile(decision.reason_code, "decision_rejected")
 
-        # Send the (positive) decision carrying our profile.
+        # Send the (positive) decision carrying our profile and, for RT mutual auth,
+        # our own token so the initiator can verify us against our peer-id in turn.
         dec_msg = SessMsg(SessMsg.KIND_PROFILE_DECISION, {
             "accepted": True,
             "profile_b": json.dumps(self._local_profile_factory()).encode("utf-8"),
             "reason_code": OK,
             "session_id": self.session_id,
+            "token": self.token_factory() if self.token_factory is not None else "",
         })
         if not await self._send_payload(SESSION_PROFILE_PROTOCOL, dec_msg):
             return [self._fail("profile_decision_send_failed")]
@@ -627,6 +645,13 @@ class Session:
         if not decision.get("accepted"):
             reason = reason_name(decision.get("reason_code", 0))
             return [self._fail(f"profile_rejected:{reason}")]
+        # RT mutual auth: verify the responder's in-band token against its peer-id
+        # (it verified ours at PROFILE_OFFER). A bad token, or one whose attested
+        # node-id is not the node we meant to reach, fails the handshake. No verifier
+        # (the v1 path) → skip.
+        _claims, terr = await self._verify_peer_token(decision.get("token") or "")
+        if terr:
+            return [self._fail(f"profile_decision_{terr}")]
         try:
             self.remote_profile = json.loads(bytes(decision.get("profile_b") or b"").decode("utf-8"))
         except Exception as e:

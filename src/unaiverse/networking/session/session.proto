@@ -74,6 +74,9 @@ message ProfileDecision {
   repeated string hint_addrs = 4;
   uint32 retry_after_ms     = 5;
   bytes session_id          = 6;
+  string token              = 7;  // root-server JWT (RT, mutual): the responder's own token,
+                                  // verified by the initiator against the responder's peer-id
+                                  // so both ends end up with a root-attested peer identity.
 }
 
 // ── Stage 3 (world join) ────────────────────────────────────────────────────

@@ -50,13 +50,14 @@ def _run(coro):
 
 def _mk(peer_id, role, p2p, local_peer_id, local_node_id="local-node",
         local_profile_factory=lambda: {}, addresses=None,
-        token_verifier=None, token_factory=None):
+        token_verifier=None, token_factory=None, remote_node_id_hint=None):
     return Session(
         peer_id=peer_id, role=role, p2p=p2p,
         p2p_name=NodeConn.P2P_PUBLIC, local_peer_id=local_peer_id,
         local_node_id=local_node_id, local_profile_factory=local_profile_factory,
         addresses=addresses, xcrypto=CrossInstanceCrypto(p2p),
         token_verifier=token_verifier, token_factory=token_factory,
+        remote_node_id_hint=remote_node_id_hint,
     )
 
 
@@ -301,6 +302,89 @@ def test_responder_valid_token_overrides_profile_node_id(bob_conn, bob_p2p, bob_
     assert seen == {"token": "good-tok", "peer_id": alice_peer_id}
     assert sess.remote_node_id_hint == "root-attested-node"
     assert len(events) == 1 and events[0].type == SessionEventType.ESTABLISHED
+
+
+# ── Stage-2: RT mutual auth (responder token verified by the initiator) ──────
+
+def test_responder_decision_carries_token(bob_conn, bob_p2p, bob_peer_id, alice_peer_id):
+    """RT mutual: the responder's PROFILE_DECISION carries its own token."""
+    sess = _mk(alice_peer_id, SessionRole.RESPONDER, bob_conn, bob_peer_id,
+               local_node_id="bob-node", token_factory=lambda: "bob-tok")
+    _drive_responder_to_offer_wait(sess)
+    offer = SessMsg(SessMsg.KIND_PROFILE_OFFER, {
+        "profile": json.dumps({"node_id": "alice"}).encode(), "sig_a": b"ok",
+        "signed_peer_record": b"", "session_id": sess.session_id, "token": "",
+    })
+    events = _run(sess.process_inbound(SESSION_PROFILE_PROTOCOL, offer))
+    assert len(events) == 1 and events[0].type == SessionEventType.ESTABLISHED
+    dec = _last_sent(bob_conn, SESSION_PROFILE_PROTOCOL)[2]
+    assert dec.kind == SessMsg.KIND_PROFILE_DECISION
+    assert dec.fields["token"] == "bob-tok"
+
+
+def _drive_initiator_to_decision(sess, p2p):
+    """Start the initiator and feed a valid HELLO_ACK so it parks in PROFILE_SENT."""
+    _run(sess.start())
+    _run(sess.process_inbound(SESSION_HELLO_PROTOCOL, SessMsg(SessMsg.KIND_HELLO_RESP, {
+        "chosen_version": "1.0", "nonce_b": b"\xbb" * 32, "sig_b": b"sig", "reason_code": OK,
+    })))
+
+
+def test_initiator_verifies_responder_token(alice_conn, alice_p2p, alice_peer_id, bob_peer_id):
+    """RT mutual: the initiator verifies the responder's token from PROFILE_DECISION
+    against the responder's peer-id, adopts the attested node-id, and completes."""
+    seen = {}
+    async def _verifier(token, peer_id):
+        seen["token"], seen["peer_id"] = token, peer_id
+        return ("bob-attested", "cv", (peer_id,))
+    alice_conn.connect_returns = (bob_peer_id, False)
+    sess = _mk(bob_peer_id, SessionRole.INITIATOR, alice_conn, alice_peer_id,
+               addresses=["/ip4/127.0.0.1/tcp/0"], token_verifier=_verifier)
+    _drive_initiator_to_decision(sess, alice_p2p)
+    decision = SessMsg(SessMsg.KIND_PROFILE_DECISION, {
+        "accepted": True, "profile_b": json.dumps({"node_id": "bob"}).encode(),
+        "reason_code": OK, "session_id": sess.session_id, "token": "bob-tok",
+    })
+    events = _run(sess.process_inbound(SESSION_PROFILE_PROTOCOL, decision))
+    assert seen == {"token": "bob-tok", "peer_id": bob_peer_id}
+    assert sess.remote_node_id_hint == "bob-attested"
+    assert len(events) == 1 and events[0].type == SessionEventType.ESTABLISHED
+
+
+def test_initiator_rejects_bad_responder_token(alice_conn, alice_p2p, alice_peer_id, bob_peer_id):
+    """RT mutual: an invalid responder token fails the initiator's handshake."""
+    async def _verifier(token, peer_id):
+        return (None, None, ())
+    alice_conn.connect_returns = (bob_peer_id, False)
+    sess = _mk(bob_peer_id, SessionRole.INITIATOR, alice_conn, alice_peer_id,
+               addresses=["/ip4/127.0.0.1/tcp/0"], token_verifier=_verifier)
+    _drive_initiator_to_decision(sess, alice_p2p)
+    decision = SessMsg(SessMsg.KIND_PROFILE_DECISION, {
+        "accepted": True, "profile_b": json.dumps({"node_id": "bob"}).encode(),
+        "reason_code": OK, "session_id": sess.session_id, "token": "bad",
+    })
+    events = _run(sess.process_inbound(SESSION_PROFILE_PROTOCOL, decision))
+    assert len(events) == 1 and events[0].type == SessionEventType.FAILED
+    assert "bad_token" in events[0].data["reason"]
+
+
+def test_initiator_rejects_responder_node_id_mismatch(alice_conn, alice_p2p, alice_peer_id, bob_peer_id):
+    """RT mutual: when the initiator expected a specific node-id at this peer and the
+    responder's token attests a different one, the handshake fails."""
+    async def _verifier(token, peer_id):
+        return ("someone-else", "cv", (peer_id,))
+    alice_conn.connect_returns = (bob_peer_id, False)
+    sess = _mk(bob_peer_id, SessionRole.INITIATOR, alice_conn, alice_peer_id,
+               addresses=["/ip4/127.0.0.1/tcp/0"], token_verifier=_verifier,
+               remote_node_id_hint="expected-bob")
+    _drive_initiator_to_decision(sess, alice_p2p)
+    decision = SessMsg(SessMsg.KIND_PROFILE_DECISION, {
+        "accepted": True, "profile_b": json.dumps({"node_id": "bob"}).encode(),
+        "reason_code": OK, "session_id": sess.session_id, "token": "tok",
+    })
+    events = _run(sess.process_inbound(SESSION_PROFILE_PROTOCOL, decision))
+    assert len(events) == 1 and events[0].type == SessionEventType.FAILED
+    assert "token_node_id_mismatch" in events[0].data["reason"]
 
 
 # ── Timeouts ────────────────────────────────────────────────────────────────

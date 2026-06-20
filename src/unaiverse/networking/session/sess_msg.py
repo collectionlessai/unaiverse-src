@@ -219,7 +219,7 @@ _KIND_SPEC = {
                                     ["profile", "sig_a", "signed_peer_record", "session_id", "token"]),
     SessMsg.KIND_PROFILE_DECISION: (0x04, "ProfileDecision",
                                     ["accepted", "profile_b", "reason_code", "hint_addrs", "retry_after_ms",
-                                     "session_id"]),
+                                     "session_id", "token"]),
     SessMsg.KIND_WORLD_GRANT:      (0x05, "WorldGrant",
                                     ["grant_id", "grant_sig", "expiry_unix_ms", "world_profile",
                                      "world_private_peer_record", "role", "code_bundle", "initial_stats",
