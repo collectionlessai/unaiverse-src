@@ -332,6 +332,19 @@ class ConnectionPools:
             node_id, cv_hash = self.__token_verifier.verify_token(token, p2p_peer=peer_id)
             return node_id, cv_hash  # If the verification fails, this is None, None
 
+    async def verify_token_claims(self, token: str, peer_id: str) -> tuple:
+        """Verify a token and return the full claims, including the root-attested
+        `p2p_peers` binding, for the Session handshake (RT). The `p2p_peer` check is
+        always against `peer_id` (the transport-verified peer-id of the speaker).
+
+        Returns:
+            ``(node_id, cv_hash, p2p_peers)`` on success, ``(None, None, ())`` on
+            failure or when no verifier is configured.
+        """
+        if self.__token_verifier is None:
+            return None, None, ()
+        return self.__token_verifier.verify_token_claims(token, p2p_peer=peer_id)
+
     async def connect(self, addresses: list[str], p2p_name: str) -> tuple[str | None, bool]:
         """Connects to a peer on a specified P2P network (async).
 
@@ -1008,7 +1021,7 @@ class NodeConn(ConnectionPools):
             local_profile_factory=local_profile_factory,
             decision_hook=decision_hook,
             xcrypto=CrossInstanceCrypto(self.p2p_world),
-            token_verifier=self.verify_token,
+            token_verifier=self.verify_token_claims,
             token_factory=token_factory,
             routing_classifier=NodeConn._route_public,
             perimeter_disconnect=None,
@@ -1021,7 +1034,7 @@ class NodeConn(ConnectionPools):
             local_profile_factory=local_profile_factory,
             decision_hook=decision_hook,
             xcrypto=CrossInstanceCrypto(self.p2p_public),
-            token_verifier=self.verify_token,
+            token_verifier=self.verify_token_claims,
             token_factory=token_factory,
             routing_classifier=NodeConn._route_world,
             perimeter_disconnect=lambda peer_id: ConnectionPools.disconnect(self.p2p_world, peer_id),
