@@ -319,6 +319,33 @@ def test_session_manager_injects_xcrypto_into_sessions(alice_p2p, bob_p2p, alice
     assert sess2.xcrypto is None
 
 
+def test_session_manager_injects_token_capabilities_into_sessions(alice_p2p, alice_peer_id, bob_peer_id):
+    """RT plumbing: the manager forwards token_verifier and token_factory to every
+    Session it builds, on both the initiator path (ensure) and the responder path
+    (spawn). Not consumed yet — they must just reach the Session. With none injected
+    the Sessions carry None (no silent default)."""
+    verifier = object()            # sentinel; identity-checked, not called here
+    factory = lambda: "tok-123"    # noqa: E731
+    sm = SessionManager(
+        p2p=alice_p2p, p2p_name=NodeConn.P2P_PUBLIC, local_peer_id=alice_peer_id,
+        local_node_id="alice", local_profile_factory=lambda: {},
+        token_verifier=verifier, token_factory=factory,
+    )
+    initiator = sm.ensure(bob_peer_id, ["/ip4/127.0.0.1/tcp/0"])
+    responder = sm._spawn_responder(bob_peer_id, remote_other_peer_id_hint=None)
+    for sess in (initiator, responder):
+        assert sess.token_verifier is verifier
+        assert sess.token_factory is factory
+        assert sess.token_factory() == "tok-123"
+
+    sm_bare = SessionManager(
+        p2p=alice_p2p, p2p_name=NodeConn.P2P_PUBLIC, local_peer_id=alice_peer_id,
+        local_node_id="alice", local_profile_factory=lambda: {},
+    )
+    bare = sm_bare._spawn_responder(bob_peer_id, remote_other_peer_id_hint=None)
+    assert bare.token_verifier is None and bare.token_factory is None
+
+
 # ── KNOWN state and ensure()/activate() split (U7) ───────────────────────────
 
 def test_ensure_creates_known_session_without_dialing(alice_conn, alice_peer_id, bob_peer_id):

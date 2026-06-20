@@ -75,6 +75,8 @@ class SessionManager:
         local_profile_factory: Callable[[], dict],
         decision_hook: Optional[DecisionHook] = None,
         xcrypto: Optional["CrossInstanceCrypto"] = None,
+        token_verifier: Optional[Callable] = None,
+        token_factory: Optional[Callable[[], str]] = None,
         routing_classifier=None,
         perimeter_disconnect=None,
     ):
@@ -101,6 +103,11 @@ class SessionManager:
         self._local_profile_factory = local_profile_factory
         self._decision_hook = decision_hook
         self._xcrypto = xcrypto
+        # Token capabilities (RT plumbing), forwarded into every Session this manager
+        # builds. token_verifier(token, p2p_peer) -> (node_id, cv_hash); token_factory()
+        # -> our current node token (re-sampled per handshake so periodic refresh shows).
+        self._token_verifier = token_verifier
+        self._token_factory = token_factory
         # Per-instance perimeter routing, injected by the Coordinator (which owns the
         # pool taxonomy): a pure classifier (peer_info, membership) -> pool_name | None,
         # and an async callable used to cut unclassifiable world peers. The SM stays
@@ -236,6 +243,8 @@ class SessionManager:
             reject_relay=reject_relay,
             xcrypto=self._xcrypto,
             app_role=app_role,
+            token_verifier=self._token_verifier,
+            token_factory=self._token_factory,
         )
         self._set_known(peer_id, sess)
         return sess
@@ -391,6 +400,8 @@ class SessionManager:
             remote_other_peer_id_hint=remote_other_peer_id_hint,
             decision_hook=self._decision_hook,
             xcrypto=self._xcrypto,
+            token_verifier=self._token_verifier,
+            token_factory=self._token_factory,
         )
         self._set_active(peer_id, sess)
         log.session(f"spawned responder Session for ...{peer_id[-5:]}", sub=self._label)

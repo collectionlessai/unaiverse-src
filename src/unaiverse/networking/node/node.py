@@ -392,6 +392,7 @@ class Node:
         self.conn.attach_session_policy(
             local_profile_factory=lambda: (self.profile.get_all_profile() if self.profile is not None else {}),
             decision_hook=self._session_decision_hook,
+            token_factory=lambda: self.node_token,
         )
         self._sm_public = self.conn._sm_public
         self._sm_world = self.conn._sm_world

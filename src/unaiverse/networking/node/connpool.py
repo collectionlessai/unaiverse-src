@@ -988,7 +988,7 @@ class NodeConn(ConnectionPools):
         self._sm_world = None
         self._session_managers = []
 
-    def attach_session_policy(self, local_profile_factory, decision_hook) -> None:
+    def attach_session_policy(self, local_profile_factory, decision_hook, token_factory=None) -> None:
         """Build and own the two per-instance SessionManagers, now that the Node
         policy born late is available (the profile factory samples self.profile, the
         decision hook reads world/agent/allow-list state). Each manager owns its P2P
@@ -1008,6 +1008,8 @@ class NodeConn(ConnectionPools):
             local_profile_factory=local_profile_factory,
             decision_hook=decision_hook,
             xcrypto=CrossInstanceCrypto(self.p2p_world),
+            token_verifier=self.verify_token,
+            token_factory=token_factory,
             routing_classifier=NodeConn._route_public,
             perimeter_disconnect=None,
         )
@@ -1019,6 +1021,8 @@ class NodeConn(ConnectionPools):
             local_profile_factory=local_profile_factory,
             decision_hook=decision_hook,
             xcrypto=CrossInstanceCrypto(self.p2p_public),
+            token_verifier=self.verify_token,
+            token_factory=token_factory,
             routing_classifier=NodeConn._route_world,
             perimeter_disconnect=lambda peer_id: ConnectionPools.disconnect(self.p2p_world, peer_id),
         )

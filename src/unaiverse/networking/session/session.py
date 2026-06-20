@@ -211,6 +211,8 @@ class Session:
         reject_relay: bool = False,
         xcrypto: Optional["CrossInstanceCrypto"] = None,
         app_role: int = 0,
+        token_verifier: Optional[Callable] = None,
+        token_factory: Optional[Callable[[], str]] = None,
     ):
         """
         Args:
@@ -261,6 +263,12 @@ class Session:
         self.remote_other_peer_id_hint = remote_other_peer_id_hint
         self.addresses = list(addresses or [])
         self.app_role = app_role
+        # Token capabilities (RT plumbing), injected by the layer that owns them
+        # (Coordinator/Node). token_verifier(token, p2p_peer) -> (node_id, cv_hash)
+        # backed by the root TokenVerifier; token_factory() -> our current node token.
+        # NOT consumed yet: RT.1/RT.2 verify the peer token and present ours in-band.
+        self.token_verifier = token_verifier
+        self.token_factory = token_factory
         self.is_world_join = is_world_join
         self._decision_hook = decision_hook
         self._grant = grant  # initiator world Session: redeem this after PROFILE
