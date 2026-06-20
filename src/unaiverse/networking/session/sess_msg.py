@@ -295,3 +295,16 @@ class ProfileDecisionResult:
     reason_code: int = OK
     world_grant: Optional[WorldGrantSpec] = None
     await_private_join: bool = False
+
+
+@dataclass(frozen=True)
+class VerifiedTokenClaims:
+    """Root-attested claims from a verified node token (RT). The responder builds
+    this after verifying an inbound token against the transport peer-id, then passes
+    it to the decision hook, which trusts these over the self-asserted profile:
+    ``node_id`` for the allow-list, ``cv_hash`` for the profile-CV integrity check,
+    and ``p2p_peers`` (the root-attested [public, world] peer-ids) for the
+    public<->world binding."""
+    node_id: str
+    cv_hash: str
+    p2p_peers: tuple = ()

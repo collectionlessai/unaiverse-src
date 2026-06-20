@@ -96,7 +96,7 @@ class RouterNode:
         self.world.peer_p2p = other.world
 
 
-def _host_decision_hook(peer_id, remote_node_id, remote_profile, p2p_name):
+def _host_decision_hook(peer_id, remote_node_id, remote_profile, p2p_name, verified_claims=None):
     async def _hook():
         if p2p_name == NodeConn.P2P_WORLD:
             return ProfileDecisionResult(accepted=True, await_private_join=True)

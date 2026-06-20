@@ -44,7 +44,7 @@ from realnet_helpers import pick_dialable_addr, pump_until
 pytestmark = pytest.mark.p2p
 
 
-def _host_decision_hook(peer_id, remote_node_id, remote_profile, p2p_name):
+def _host_decision_hook(peer_id, remote_node_id, remote_profile, p2p_name, verified_claims=None):
     """Host accepts on both instances; mints a WorldGrant on the public side and
     awaits the PRIVATE_JOIN on the world side. (Same shape as the go-mocked test.)"""
     async def _hook():

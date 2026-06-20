@@ -39,11 +39,11 @@ from unaiverse.custom import Custom, GenException
 from unaiverse.networking.p2p import P2P, P2PError
 from unaiverse.networking.node.connpool import NodeConn
 from unaiverse.networking.node.profile import NodeProfile
-from unaiverse.networking.session import (ProfileDecisionResult, WorldGrantSpec,
+from unaiverse.networking.session import (ProfileDecisionResult, WorldGrantSpec, VerifiedTokenClaims,
                                           SessionEventType, SessionRole, SessionState)
 from unaiverse.networking.session.sess_msg import (WORLD_DISENGAGEMENT, WORLD_HANDOFF_COMPLETE,
                                                    LOCAL_ERROR, NOT_IN_ALLOW_LIST, ROLE_INCOMPATIBLE,
-                                                   HOSTED_REJECTED)
+                                                   HOSTED_REJECTED, CV_HASH_MISMATCH, NOT_AUTHORIZED)
 from unaiverse.streams.streams import DataProps, BufferedStream
 from unaiverse.utils.logger import log, ALWAYS_ON_CHANNELS, ALL_CHANNELS
 from unaiverse.utils.misc import (get_key_considering_multiple_sources, save_node_addresses_to_file,
@@ -2233,15 +2233,22 @@ class Node:
     # with the deferred auth model and is intentionally light in the hook for now.
 
     async def _session_decision_hook(self, peer_id: str, remote_node_id, remote_profile: dict,
-                                     p2p_name: str):
+                                     p2p_name: str,
+                                     verified_claims: VerifiedTokenClaims | None = None):
         """Responder decision hook called by a Session on an inbound PROFILE_OFFER.
 
         Returns a ProfileDecisionResult: accept/reject + (world host, public
         instance) a WorldGrantSpec, or (world host, world instance) the
         ``await_private_join`` flag. This is the Session-era replacement for the
         legacy interview/approval block — the role-assignment and grant payload
-        assembly are ported here; the cv_hash / per-token / certified checks ride
-        with the deferred auth model and are intentionally light for v1.
+        assembly are ported here.
+
+        ``verified_claims`` carries the root-attested token claims (RT) when a
+        token-verifier vouched for the peer: ``remote_node_id`` is then the attested
+        node-id, the offered profile's CV is checked against the attested cv_hash,
+        and the joiner's world-side peer-id is bound to the attested p2p_peers. None
+        on the v1 / no-verifier path, where the checks below fall back to the
+        self-asserted profile.
         """
 
         # Allow-list gate (node-id based). A peer whose node-id could not be
@@ -2256,6 +2263,16 @@ class Node:
         except Exception as e:
             log.error(f"[session] decision: bad remote profile from peer_id ...{peer_id[-5:]}: {e}")
             return ProfileDecisionResult(accepted=False, reason_code=HOSTED_REJECTED)
+
+        # RT profile-integrity gate: the root attests the node's cv_hash, so an
+        # offered profile whose CV does not hash to the attested value is forged →
+        # reject (this restores the world access filter the profile alone cannot be
+        # trusted for). Skipped on the v1 / no-verifier path.
+        if verified_claims is not None:
+            match, _ = profile.verify_cv_hash(verified_claims.cv_hash)
+            if not match:
+                log.misc(f"[session] decision: cv_hash mismatch for ...{peer_id[-5:]} → reject")
+                return ProfileDecisionResult(accepted=False, reason_code=CV_HASH_MISMATCH)
 
         # ── World host ────────────────────────────────────────────────────────
         if self.node_type is Node.WORLD:
@@ -2281,6 +2298,14 @@ class Node:
             joiner_dyn = profile.get_dynamic_profile()
             joiner_private_peer_id = joiner_dyn.get('private_peer_id')
             joiner_private_addr = joiner_dyn.get('private_peer_addresses')
+            # RT binding: the joiner's world-side peer-id must be one the root
+            # attested in p2p_peers, so the host preregisters a root-vouched identity
+            # instead of a self-claimed one (the public peer-id was already checked
+            # inside the token verification). Skipped on the v1 / no-verifier path.
+            if (verified_claims is not None and joiner_private_peer_id and
+                    joiner_private_peer_id not in verified_claims.p2p_peers):
+                log.misc(f"[session] decision: world binding mismatch for ...{peer_id[-5:]} → reject")
+                return ProfileDecisionResult(accepted=False, reason_code=NOT_AUTHORIZED)
             if joiner_private_peer_id:
                 if is_world_master:
                     self.conn.add_to_world_masters_list(joiner_private_peer_id, joiner_private_addr, role)

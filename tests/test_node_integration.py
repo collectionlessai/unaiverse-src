@@ -19,8 +19,11 @@ import asyncio
 import pytest
 
 from unaiverse.networking.node.connpool import NodeConn
-from unaiverse.networking.session import SessionState, SessionEventType, SessionRole
+from unaiverse.networking.node.profile import NodeProfile
+from unaiverse.networking.session import (SessionState, SessionEventType, SessionRole,
+                                          VerifiedTokenClaims)
 from unaiverse.networking.session.session import SessionEvent
+from unaiverse.networking.session.sess_msg import CV_HASH_MISMATCH, NOT_AUTHORIZED
 
 from conftest import apump
 from node_harness import (
@@ -259,6 +262,76 @@ def test_decision_hook_rejects_malformed_profile():
         assert [e.type for e in remote_events] == [SessionEventType.FAILED]
         assert "HOSTED_REJECTED" in remote_events[0].data["reason"]
         assert node.hosted.added == []
+
+    asyncio.run(_scenario())
+
+
+def test_decision_hook_rejects_cv_hash_mismatch():
+    """RT: with verified claims present, a profile whose CV does not hash to the
+    attested cv_hash is forged → reject CV_HASH_MISMATCH, before any accept/grant."""
+    async def _scenario():
+        node, conn = build_agent_node_shell(NODE_PEER)
+        profile = full_profile_dict("joiner-node")
+        claims = VerifiedTokenClaims(node_id="joiner-node", cv_hash="not-the-real-hash",
+                                     p2p_peers=("joiner-node-world-peer",))
+        decision = await node._session_decision_hook(
+            REMOTE_PEER, "joiner-node", profile, NodeConn.P2P_PUBLIC, claims)
+        assert decision.accepted is False
+        assert decision.reason_code == CV_HASH_MISMATCH
+
+    asyncio.run(_scenario())
+
+
+def test_decision_hook_accepts_matching_cv_hash():
+    """RT: a profile whose CV matches the attested cv_hash passes the integrity gate
+    (agent host → accept)."""
+    async def _scenario():
+        node, conn = build_agent_node_shell(NODE_PEER)
+        profile = full_profile_dict("joiner-node")
+        _, (_, real_hash) = NodeProfile.from_dict(profile).verify_cv_hash("")
+        claims = VerifiedTokenClaims(node_id="joiner-node", cv_hash=real_hash,
+                                     p2p_peers=("joiner-node-world-peer",))
+        decision = await node._session_decision_hook(
+            REMOTE_PEER, "joiner-node", profile, NodeConn.P2P_PUBLIC, claims)
+        assert decision.accepted is True
+
+    asyncio.run(_scenario())
+
+
+def test_world_host_rejects_unbound_world_peer():
+    """RT binding: the world host rejects a joiner whose offered private (world-side)
+    peer-id is NOT in the root-attested p2p_peers (NOT_AUTHORIZED), so it never
+    preregisters a self-claimed world identity."""
+    async def _scenario():
+        world = FakeWorld()
+        node, conn = build_agent_node_shell(NODE_PEER, world=world)
+        profile = full_profile_dict("joiner-node")  # private_peer_id = joiner-node-world-peer
+        _, (_, real_hash) = NodeProfile.from_dict(profile).verify_cv_hash("")
+        claims = VerifiedTokenClaims(node_id="joiner-node", cv_hash=real_hash,
+                                     p2p_peers=("joiner-node-pub-peer", "some-other-world-peer"))
+        decision = await node._session_decision_hook(
+            REMOTE_PEER, "joiner-node", profile, NodeConn.P2P_PUBLIC, claims)
+        assert decision.accepted is False
+        assert decision.reason_code == NOT_AUTHORIZED
+        assert "joiner-node-world-peer" not in conn.world_agents_set
+
+    asyncio.run(_scenario())
+
+
+def test_world_host_grants_when_world_peer_bound():
+    """RT binding: when the offered world-side peer-id IS in the attested p2p_peers,
+    the binding passes and the host mints the grant + preregisters the joiner."""
+    async def _scenario():
+        world = FakeWorld()
+        node, conn = build_agent_node_shell(NODE_PEER, world=world)
+        profile = full_profile_dict("joiner-node")
+        _, (_, real_hash) = NodeProfile.from_dict(profile).verify_cv_hash("")
+        claims = VerifiedTokenClaims(node_id="joiner-node", cv_hash=real_hash,
+                                     p2p_peers=("joiner-node-pub-peer", "joiner-node-world-peer"))
+        decision = await node._session_decision_hook(
+            REMOTE_PEER, "joiner-node", profile, NodeConn.P2P_PUBLIC, claims)
+        assert decision.accepted and decision.world_grant is not None
+        assert "joiner-node-world-peer" in conn.world_agents_set
 
     asyncio.run(_scenario())
 

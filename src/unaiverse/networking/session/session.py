@@ -60,7 +60,7 @@ from enum import Enum
 from typing import Optional, Dict, Any, List, Callable, Awaitable, TYPE_CHECKING
 
 from unaiverse.networking.session.sess_msg import (
-    SessMsg, reason_name, ProfileDecisionResult, WorldGrantSpec,
+    SessMsg, reason_name, ProfileDecisionResult, WorldGrantSpec, VerifiedTokenClaims,
     OK, VERSION_UNSUPPORTED, NOT_AUTHORIZED, LOCAL_ERROR, GRACEFUL_SHUTDOWN,
     SIMULTANEOUS_OPEN_LOSS, SESSION_UNKNOWN, GRANT_EXPIRED, P2P_PUBLIC,
 )
@@ -162,8 +162,11 @@ class SessionEvent:
     data: Dict[str, Any] = field(default_factory=dict)
 
 
-# Type alias for the responder decision hook (see SessionManager).
-DecisionHook = Callable[[str, Optional[str], dict, str], Awaitable[ProfileDecisionResult]]
+# Type alias for the responder decision hook (see SessionManager). The trailing
+# argument carries the root-attested claims (RT) when a token-verifier vouched for
+# the peer, or None on the v1 / no-verifier path.
+DecisionHook = Callable[[str, Optional[str], dict, str, Optional[VerifiedTokenClaims]],
+                        Awaitable[ProfileDecisionResult]]
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -531,11 +534,14 @@ class Session:
         # (already proven by sig_a). The root-attested node_id then supersedes the
         # self-asserted profile node_id for the allow-list / grant binding below.
         # No verifier (the v1 / FSM-test path) → skip, keeping the profile-based path.
+        verified_claims = None
         if self.token_verifier is not None:
-            node_id, _, _ = await self.token_verifier(offer.get("token") or "", self.peer_id)
+            node_id, cv_hash, p2p_peers = await self.token_verifier(offer.get("token") or "", self.peer_id)
             if not node_id:
                 return await self._reject_profile(NOT_AUTHORIZED, "bad_token")
             self.remote_node_id_hint = node_id
+            verified_claims = VerifiedTokenClaims(node_id=node_id, cv_hash=cv_hash,
+                                                  p2p_peers=tuple(p2p_peers))
 
         # If we know the initiator's other peer-id, verify the signed peer record
         # binds those bytes to that id. If we don't have a hint, skip — the other
@@ -571,7 +577,8 @@ class Session:
         if self._decision_hook is not None:
             try:
                 decision = await self._decision_hook(
-                    self.peer_id, self.remote_node_id_hint, self.remote_profile, self.p2p_name)
+                    self.peer_id, self.remote_node_id_hint, self.remote_profile, self.p2p_name,
+                    verified_claims)
             except Exception as e:
                 log.error(f"{self!r} decision_hook raised: {e}", sub=self._sub)
                 return await self._reject_profile(LOCAL_ERROR, f"decision_hook_error:{e}")
