@@ -219,11 +219,13 @@ def test_decision_hook_rejects_malformed_profile():
     asyncio.run(_scenario())
 
 
-def test_pool_removal_while_established_reconnects_session_and_purges():
-    """Contract of __handle_network_connections on a pool drop: the session
-    moves to RECONNECTING (grace) but the peer is purged from hosted and pools
-    immediately. The RESUMED dispatch is what re-enrols the agent afterwards
-    (see test_resumed_session_readds_purged_agent)."""
+def test_pool_removal_while_established_keeps_enrolment_during_grace():
+    """Contract of __handle_network_connections on a pool drop: the session moves
+    to RECONNECTING (grace) and the peer is KEPT in hosted (all_agents), so an
+    interaction arriving mid-grace is not rejected as coming from an unknown node.
+    Only the transport-level pool state is cleared here; the hosted purge is driven
+    by the terminal LOST/CLOSED dispatch (see
+    test_session_lost_while_peer_still_in_pool_purges_and_quarantines)."""
     async def _scenario():
         node, conn, remote_sm, remote_inbox = _agent_pair()
         await _establish_inbound(node, conn, remote_sm, remote_inbox)
@@ -233,27 +235,32 @@ def test_pool_removal_while_established_reconnects_session_and_purges():
 
         sess = node._sm_public.get_session(REMOTE_PEER)
         assert sess is not None and sess.state == SessionState.RECONNECTING
-        assert REMOTE_PEER in node.hosted.removed
+        # Enrolment survives the grace window...
+        assert REMOTE_PEER in node.hosted.all_agents
+        assert REMOTE_PEER not in node.hosted.removed
+        # ...but the transport-level pool state is cleared.
         assert REMOTE_PEER in conn.removed_calls
 
     asyncio.run(_scenario())
 
 
-def test_resumed_session_readds_purged_agent():
-    """After the pool-drop purge, a successful RESUME must re-enrol the agent:
-    the remote initiator re-dials and RESUMEs, the node (responder, still in
-    grace) ACKs, and the RESUMED dispatch re-adds the agent from the profile
-    the session kept."""
+def test_resumed_session_keeps_enrolment_without_readd():
+    """With the grace-aware drop the agent is NOT purged when the link blips: it
+    stays enrolled through RECONNECTING, so a successful RESUME finds it already
+    present and does not re-add it (no double enrolment). This is the happy
+    reconnect path; purge-then-readd only happens on a terminal LOST followed by a
+    fresh handshake."""
     async def _scenario():
         node, conn, remote_sm, remote_inbox = _agent_pair()
         await _establish_inbound(node, conn, remote_sm, remote_inbox)
         assert REMOTE_PEER in node.hosted.all_agents
 
-        # Transport drop seen by both sides; the node purges immediately.
+        # Transport drop seen by both sides: enrolment survives the grace window.
         conn.next_removed = {NodeConn.OUT_PUBLIC: {REMOTE_PEER}}
         await node._Node__handle_network_connections()
         await remote_sm.on_peer_disconnected(NODE_PEER)
-        assert REMOTE_PEER not in node.hosted.all_agents
+        assert REMOTE_PEER in node.hosted.all_agents
+        assert REMOTE_PEER not in node.hosted.removed
         assert node._sm_public.get_session(REMOTE_PEER).state == SessionState.RECONNECTING
 
         # The remote initiator re-dials and RESUMEs; the node pump processes it.
@@ -264,10 +271,9 @@ def test_resumed_session_readds_purged_agent():
 
         assert node._sm_public.is_established(REMOTE_PEER)
         assert remote_sm.is_established(NODE_PEER)
-        # The agent was re-enrolled by the RESUMED dispatch.
+        # Still enrolled, and NOT re-added (it was never purged): one add total.
         assert REMOTE_PEER in node.hosted.all_agents
-        assert len(node.hosted.added) == 2
-        assert node.hosted.added[1][1].get_static_profile()["node_id"] == "remote-node"
+        assert len(node.hosted.added) == 1
 
     asyncio.run(_scenario())
 

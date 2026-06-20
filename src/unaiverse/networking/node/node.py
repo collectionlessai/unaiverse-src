@@ -40,7 +40,7 @@ from unaiverse.networking.p2p import P2P, P2PError
 from unaiverse.networking.node.connpool import NodeConn
 from unaiverse.networking.node.profile import NodeProfile
 from unaiverse.networking.session import (ProfileDecisionResult, WorldGrantSpec,
-                                          SessionEventType, SessionRole)
+                                          SessionEventType, SessionRole, SessionState)
 from unaiverse.networking.session.sess_msg import (WORLD_DISENGAGEMENT, WORLD_HANDOFF_COMPLETE,
                                                    LOCAL_ERROR, NOT_IN_ALLOW_LIST, ROLE_INCOMPATIBLE,
                                                    HOSTED_REJECTED)
@@ -1577,7 +1577,24 @@ class Node:
                     await self._dispatch_session_event(ev)
                 for ev in await self._sm_world.on_peer_disconnected(peer_id):
                     await self._dispatch_session_event(ev)
-                await self.__purge(peer_id)
+
+                # A Session riding its grace period (RECONNECTING) is not gone yet.
+                # Keep the enrolment (all_agents) alive across the blip so an
+                # INTERACTION arriving mid-grace is not rejected as coming from an
+                # unknown node: only clear the transport-level pool state here. The
+                # hosted purge is then driven solely by the terminal LOST/CLOSED
+                # Session event (see _dispatch_session_event). When no Session is in
+                # grace for this peer, fall back to the full purge as before.
+                in_grace = False
+                for sm in (self._sm_public, self._sm_world):
+                    sess = sm.get_session(peer_id)
+                    if sess is not None and sess.state == SessionState.RECONNECTING:
+                        in_grace = True
+                        break
+                if in_grace:
+                    await self.conn.remove(peer_id)
+                else:
+                    await self.__purge(peer_id)
 
                 # Checking if we removed an agent from this world
                 if self.node_type is Node.WORLD and pool_name in self.conn.WORLD:
