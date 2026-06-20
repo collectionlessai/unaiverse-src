@@ -889,7 +889,7 @@ class Agent(AgentBasics):
         # agent is "waiting" while its per-peer Session exists but has not yet
         # reached ESTABLISHED (handshake in flight). The hosted entity only holds
         # `conn`, so this state is queried through NodeConn.is_peer_session_pending.
-        waiting = [a for a in self._found_agents if self._node_conn.is_peer_session_pending(a)]
+        waiting = [a for a in self._found_agents if self.node_conn.is_peer_session_pending(a)]
         log.misc(f"Current set of {len(waiting)} found agents with an in-flight (not yet "
                  f"established) session: {waiting}")
         return len(waiting) > 0
