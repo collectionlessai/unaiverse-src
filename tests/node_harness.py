@@ -290,6 +290,7 @@ def build_agent_node_shell(node_peer_id: str, node_id: str = "shell-node",
     node.memory_finder = None
     node._pending_world_handoff = {}
     node._world_to_public = {}
+    node._interact_mode_opts = None
 
     node._sm_public = SessionManager(
         p2p=conn.as_p2p(NodeConn.P2P_PUBLIC),

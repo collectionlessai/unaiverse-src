@@ -153,6 +153,10 @@ class Node:
         # world peer-id -> public peer-id, the reverse map used to GOAWAY the public
         # Session once the world Session establishes.
         self._world_to_public: dict[str, str] = {}
+        # Interactive-mode options dict (built in run() when interact_mode is on),
+        # surfaced on self so the SessionEvent pump can flip ready_to_interact on
+        # handshake completion. None outside interactive mode.
+        self._interact_mode_opts: dict | None = None
         self.memory_finder = None
         self.world_agent_files = None
         self.talk_to_relay_based_nodes = talk_to_relay_based_nodes
@@ -1088,6 +1092,11 @@ class Node:
                     interact_mode_opts["world_peer_id"] = joined_this_world
                 elif waiting_for_lone_wolves:
                     interact_mode_opts["lone_wolf_peer_id"] = None
+
+                # Share the (mutable) dict with the SessionEvent pump so
+                # _on_session_established can flip ready_to_interact when the
+                # handshake completes (same object, mutations are visible here).
+                self._interact_mode_opts = interact_mode_opts
 
                 public_streams = "lone_wolf_peer_id" in interact_mode_opts
                 assert self.agent is not None
@@ -2434,6 +2443,11 @@ class Node:
                     await self.__join_agent(profile=NodeProfile.from_dict(profile_b), peer_id=ev.peer_id)
                 except Exception as e:
                     log.error(f"[session] __join_agent failed for ...{ev.peer_id[-5:]}: {e}")
+                # Interactive lone-wolf mode: the targeted peer we dialed is now
+                # connected (mirrors the pre-Session AGENT_APPROVAL handler).
+                opts = self._interact_mode_opts
+                if isinstance(opts, dict) and 'lone_wolf_peer_id' in opts:
+                    opts['ready_to_interact'] = True
             return
 
         # ── Initiator on the WORLD instance ───────────────────────────────────
@@ -2455,6 +2469,13 @@ class Node:
                 ok = await self._join_world_after_session(ev.peer_id, ev.data, grant)
             except Exception as e:
                 log.error(f"[session] __join_world failed for ...{ev.peer_id[-5:]}: {e}")
+            if ok:
+                # Interactive world mode: we are in the world now (mirrors the
+                # pre-Session WORLD_APPROVAL handler). Gated on a successful join
+                # so we never enter the REPL against a world we failed to join.
+                opts = self._interact_mode_opts
+                if isinstance(opts, dict) and 'world_peer_id' in opts:
+                    opts['ready_to_interact'] = True
             # Whether or not the join body fully succeeded, the public Session has
             # done its job — close it (GOAWAY) so the host tears it down cleanly.
             public_peer_id = self._world_to_public.pop(ev.peer_id, None)
@@ -2469,12 +2490,24 @@ class Node:
         # handled below; everything else lands here.
         if ev.role == SessionRole.RESPONDER and (not is_world or self.node_type is not Node.WORLD):
             if profile_b is not None and self.node_type is Node.AGENT:
+                added = False
                 try:
-                    if not (await self.hosted.add_agent(peer_id=ev.peer_id,
-                                                        profile=NodeProfile.from_dict(profile_b))):
+                    if await self.hosted.add_agent(peer_id=ev.peer_id,
+                                                   profile=NodeProfile.from_dict(profile_b)):
+                        added = True
+                    else:
                         await self.__purge(ev.peer_id, reason=LOCAL_ERROR)
                 except Exception as e:
                     log.error(f"[session] add_agent failed for ...{ev.peer_id[-5:]}: {e}")
+                # Interactive mode waiting for a lone wolf: latch onto the first
+                # inbound peer and arm interactive mode (mirrors the pre-Session
+                # PROFILE handler). Only after a successful enrolment.
+                if added:
+                    opts = self._interact_mode_opts
+                    if (isinstance(opts, dict) and 'lone_wolf_peer_id' in opts and
+                            opts['lone_wolf_peer_id'] is None):
+                        opts['lone_wolf_peer_id'] = ev.peer_id
+                        opts['ready_to_interact'] = True
             return
 
         # ── Responder on the WORLD instance: a joiner redeemed a grant ────────

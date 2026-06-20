@@ -131,6 +131,50 @@ def test_inworld_outbound_agent_connection_joins_agent():
     asyncio.run(_scenario())
 
 
+def test_inbound_handshake_arms_interactive_lone_wolf_latch():
+    """Interactive agent waiting for a lone wolf: the first inbound peer that
+    completes the handshake is latched as lone_wolf_peer_id and arms
+    ready_to_interact (restores the pre-Session PROFILE-handler flip)."""
+    async def _scenario():
+        node, conn, remote_sm, remote_inbox = _agent_pair()
+        node._interact_mode_opts = {"ready_to_interact": False, "lone_wolf_peer_id": None}
+
+        await _establish_inbound(node, conn, remote_sm, remote_inbox)
+
+        assert node._sm_public.is_established(REMOTE_PEER)
+        assert node._interact_mode_opts["lone_wolf_peer_id"] == REMOTE_PEER
+        assert node._interact_mode_opts["ready_to_interact"] is True
+
+    asyncio.run(_scenario())
+
+
+def test_outbound_public_handshake_arms_interactive_ready():
+    """Interactive agent that dialed a specific lone wolf: when the public
+    Session to that peer establishes, ready_to_interact is armed (restores the
+    pre-Session AGENT_APPROVAL-handler flip)."""
+    async def _scenario():
+        node, conn = build_agent_node_shell(NODE_PEER)
+        remote_sm, remote_conn, remote_inbox = make_remote_peer(
+            REMOTE_PEER, "remote-node", conn.inbox_by_p2p[NodeConn.P2P_PUBLIC])
+        conn.send_inbox = remote_inbox
+        conn.connect_returns = (REMOTE_PEER, False)
+        node._interact_mode_opts = {"ready_to_interact": False, "lone_wolf_peer_id": REMOTE_PEER}
+
+        ok = await node.connect_via_session(peer_id=REMOTE_PEER,
+                                            addresses=["/ip4/127.0.0.1/tcp/0"],
+                                            p2p_name=NodeConn.P2P_PUBLIC)
+        assert ok
+        await apump(remote_inbox, remote_sm)          # HELLO → HELLO_ACK
+        await node._Node__handle_network_messages()   # HELLO_ACK → PROFILE_OFFER
+        await apump(remote_inbox, remote_sm)          # OFFER → DECISION
+        await node._Node__handle_network_messages()   # DECISION → ESTABLISHED dispatch
+
+        assert node._sm_public.is_established(REMOTE_PEER)
+        assert node._interact_mode_opts["ready_to_interact"] is True
+
+    asyncio.run(_scenario())
+
+
 def test_world_session_goaway_triggers_full_world_leave():
     """A terminal event on the Session toward the CURRENT world host must run
     the full leave_world cleanup (profile, world lists, role restore), not a
