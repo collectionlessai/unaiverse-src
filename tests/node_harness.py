@@ -229,6 +229,9 @@ class NodeFakeConn(FakeConn):
     def set_world(self, world_peer_id):
         self.set_world_calls.append(world_peer_id)
 
+    def get_role(self, peer_id):
+        return self.world_roles.get(peer_id, 0)
+
     def add_to_world_agents_list(self, peer_id, addrs, role=-1):
         self.world_agents_set.add(peer_id)
         self.world_roles[peer_id] = role

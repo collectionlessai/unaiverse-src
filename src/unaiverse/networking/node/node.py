@@ -2576,9 +2576,10 @@ class Node:
     async def _world_host_register_agent(self, ev, profile_b) -> None:
         """World host: a joiner completed PRIVATE_JOIN on the world instance — add
         it to the world agents/masters list (replaces the legacy post-approval
-        bookkeeping). The role comes from the PRIVATE_JOIN event: the Session
-        already verified our own grant signature over it, so it is exactly the
-        role this host assigned at decision time."""
+        bookkeeping). RT.3b: the grant is unsigned, so the authoritative role is read
+        from the host's own pre-admission record (set at the public decision), not
+        from the join echo. A peer that was never pre-admitted reads role 0 here and
+        is purged by the world-bit check below."""
         if profile_b is None:
             return
         try:
@@ -2586,7 +2587,7 @@ class Node:
         except Exception as e:
             log.error(f"[session] world register: bad joiner profile: {e}")
             return
-        role = int(ev.data.get("private_join", {}).get("role") or 0)
+        role = self.conn.get_role(ev.peer_id)
         if role & Agent.ROLE_WORLD_AGENT != Agent.ROLE_WORLD_AGENT:
             log.error(f"[session] world register: grant role {role} lacks the world "
                       f"bit for ...{ev.peer_id[-5:]}; purging")

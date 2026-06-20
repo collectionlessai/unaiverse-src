@@ -560,9 +560,9 @@ def test_world_host_detects_master_from_profile_static_node_id():
 
 
 def test_world_host_registers_joiner_with_grant_role():
-    """At PRIVATE_JOIN the world host must register the joiner with the role
-    carried by the (signature-verified) grant echo — no server-side stash, no
-    silent fallback. Master bits land the joiner in the masters list."""
+    """At PRIVATE_JOIN the world host must register the joiner with the role from
+    its own pre-admission record (RT.3b: the grant is unsigned, so the role is not
+    echoed/trusted from the join). Master bits land the joiner in the masters list."""
     async def _scenario():
         world = FakeWorld()
         node, conn = build_agent_node_shell(NODE_PEER, world=world)
@@ -575,9 +575,11 @@ def test_world_host_registers_joiner_with_grant_role():
 
         from unaiverse.agent import Agent
         role = (FakeWorld.ROLE_STR_TO_BITS["player"] | Agent.ROLE_WORLD_MASTER)
+        # RT.3b: the authoritative role comes from the host pre-admission (the public
+        # decision), not the join echo. Simulate that pre-admission here.
+        conn.add_to_world_masters_list(REMOTE_PEER, [], role)
         blob = {"grant_id_bytes": b"g" * 32, "role": role,
-                "expiry_unix_ms": int(time.time() * 1000) + 30_000,
-                "grant_sig": b"sig-bytes".hex()}
+                "expiry_unix_ms": int(time.time() * 1000) + 30_000}
 
         await remote_sm.initiate(node_world_peer, ["/ip4/127.0.0.1/tcp/0"],
                                  remote_other_peer_id_hint=node_world_peer,
@@ -599,6 +601,41 @@ def test_world_host_registers_joiner_with_grant_role():
     asyncio.run(_scenario())
 
 
+def test_world_host_purges_non_preadmitted_joiner():
+    """RT.3b: a joiner reaching PRIVATE_JOIN without a host pre-admission reads role 0
+    (no world bit) and is purged, never registered. The unsigned grant carries no
+    trust of its own; admission comes only from the public-decision pre-admission."""
+    async def _scenario():
+        world = FakeWorld()
+        node, conn = build_agent_node_shell(NODE_PEER, world=world)
+        node_world_peer = NODE_PEER + "-w"
+        remote_sm, remote_conn, remote_inbox = make_remote_peer(
+            REMOTE_PEER, "joiner-node", conn.inbox_by_p2p[NodeConn.P2P_WORLD],
+            p2p_name=NodeConn.P2P_WORLD)
+        conn.send_inbox = remote_inbox
+        remote_conn.connect_returns = (node_world_peer, False)
+
+        # NO pre-admission: conn.get_role(REMOTE_PEER) == 0. The joiner even claims a
+        # role in the blob, but the host ignores it.
+        blob = {"grant_id_bytes": b"g" * 32,
+                "role": FakeWorld.ROLE_STR_TO_BITS["player"],
+                "expiry_unix_ms": int(time.time() * 1000) + 30_000}
+        await remote_sm.initiate(node_world_peer, ["/ip4/127.0.0.1/tcp/0"],
+                                 remote_other_peer_id_hint=node_world_peer, grant=blob)
+        await node._Node__handle_network_messages()
+        await apump(remote_inbox, remote_sm)
+        await node._Node__handle_network_messages()
+        await apump(remote_inbox, remote_sm)
+        await node._Node__handle_network_messages()
+        await apump(remote_inbox, remote_sm)
+
+        assert REMOTE_PEER not in conn.world_agents_set
+        assert REMOTE_PEER not in conn.world_masters_set
+        assert not world.added
+
+    asyncio.run(_scenario())
+
+
 def test_world_host_unlists_member_when_world_session_ends():
     """When a member's world Session terminates (remote GOAWAY here), the world
     host must drop it from the world agents/masters lists too, or routing and
@@ -615,9 +652,10 @@ def test_world_host_unlists_member_when_world_session_ends():
 
         from unaiverse.agent import Agent
         role = FakeWorld.ROLE_STR_TO_BITS["player"] | Agent.ROLE_WORLD_AGENT
+        # RT.3b: role is authoritative from the host pre-admission, not the join echo.
+        conn.add_to_world_agents_list(REMOTE_PEER, [], role)
         blob = {"grant_id_bytes": b"g" * 32, "role": role,
-                "expiry_unix_ms": int(time.time() * 1000) + 30_000,
-                "grant_sig": b"sig-bytes".hex()}
+                "expiry_unix_ms": int(time.time() * 1000) + 30_000}
         await remote_sm.initiate(node_world_peer, ["/ip4/127.0.0.1/tcp/0"],
                                  remote_other_peer_id_hint=node_world_peer,
                                  grant=blob)
