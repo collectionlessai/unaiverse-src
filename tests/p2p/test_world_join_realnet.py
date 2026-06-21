@@ -13,7 +13,7 @@ Flow:
      host's **world** key (cross-instance, real Ed25519) → joiner.public
      ESTABLISHED carries the grant blob.
   3. orchestrator (mirrors node._dispatch_session_event) opens joiner.world with
-     the grant → real HELLO/PROFILE → both world sides ESTABLISHED (RT.3c: no PRIVATE_JOIN).
+     the grant → real HELLO/PROFILE → both world sides ESTABLISHED (no PRIVATE_JOIN).
   4. orchestrator GOAWAYs joiner.public (WORLD_HANDOFF_COMPLETE) → host.public CLOSED.
 
 This is the highest-value real-net check: the WorldGrant is signed/verified with
@@ -21,7 +21,7 @@ the world-side key across two P2P instances, with *real* crypto — validating t
 ``instanceIndex``-keyed FFI that the mocked suite can only stub.
 
 The world-side dial address is handed to the orchestrator via closure (the test
-owns both nodes). RT.3b dropped the grant's SignedPeerRecord, so the binding to
+owns both nodes). The grant's SignedPeerRecord was dropped, so the binding to
 the world identity now comes from the verified token; the full real PROFILE
 handshake still runs.
 
@@ -134,7 +134,7 @@ def test_real_world_join_full_handoff(real_nodes):
     assert world_established and world_established[0].data.get("rendezvous_topic")
 
 
-# RT.3b removed the world-grant signature: the role is no longer carried/trusted in
+# The world-grant signature was removed: the role is no longer carried/trusted in
 # the grant (the host reads it from its own pre-admission), so a tampered-role grant
 # simply has no effect and there is nothing to reject. The former
 # test_real_world_join_rejects_tampered_role was dropped with that behaviour.

@@ -88,7 +88,7 @@ _TIMEOUT_RECONNECT_S = 45.0 # Session-level reconnect ceiling before Session.Los
                             # Go transport grace (DisconnectionGracePeriod) so several backoff'd
                             # re-dial + RESUME cycles fit inside the window (see tick_reconnect).
 _TIMEOUT_CLOSING_S = 10.0   # GOAWAY sent; wait for GOAWAY_ACK
-# RT.4: how long past the peer's attested token exp we keep the session before a
+# How long past the peer's attested token exp we keep the session before a
 # GOAWAY(TOKEN_EXPIRED). Generous on purpose — PING/PONG liveness is the primary
 # signal and a refresh (TOKEN_UPDATE) normally lands ~30min before exp; this only
 # fires when refreshes are missed AND no re-handshake happened.
@@ -250,7 +250,7 @@ class Session:
         self.token_verifier = token_verifier
         self.token_factory = token_factory
         # Per-Session view of the peer's verified token, captured at handshake and
-        # refreshed in-session by TOKEN_UPDATE (RT.4). exp 0 = no verifier / not yet seen.
+        # refreshed in-session by TOKEN_UPDATE. exp 0 = no verifier / not yet seen.
         self.remote_token_exp: int = 0
         self.remote_cv_hash: Optional[str] = None
         # A TOKEN_UPDATE that arrived before ESTABLISHED is buffered and applied on tick.
@@ -507,7 +507,7 @@ class Session:
         this peer, a mismatch is rejected (we reached the right peer-id but the wrong
         node). On success the peer's attested token expiry / cv_hash are captured on
         the Session (``remote_token_exp`` / ``remote_cv_hash``) for the in-session
-        refresh (RT.4)."""
+        refresh."""
         if self.token_verifier is None:
             return None, None
         node_id, cv_hash, p2p_peers, exp = await self.token_verifier(token or "", self.peer_id)
@@ -597,8 +597,8 @@ class Session:
 
         # Agent host, or world host on its WORLD instance (the joiner redeeming a
         # grant): established immediately. The world host registers the agent on this
-        # ESTABLISHED event (role from its own pre-admission); RT.3c dropped the extra
-        # PRIVATE_JOIN round-trip since the grant is unsigned and the world Session is
+        # ESTABLISHED event (role from its own pre-admission); the extra PRIVATE_JOIN
+        # round-trip was dropped since the grant is unsigned and the world Session is
         # already mutually token-authenticated.
         self._set_state(SessionState.ESTABLISHED, None)
         log.session(f"{self!r} ESTABLISHED (responder)", sub=self._sub)
@@ -643,7 +643,7 @@ class Session:
         # Plain agent connection, or a world joiner on the WORLD Session redeeming a
         # grant: established immediately. node.py branches on the Session's `_grant`
         # (set at spawn) to run the world-join body and retire the public Session.
-        # RT.3c dropped the PRIVATE_JOIN round-trip the world joiner used to send here.
+        # The PRIVATE_JOIN round-trip the world joiner used to send here was dropped.
         self._set_state(SessionState.ESTABLISHED, None)
         log.session(f"{self!r} ESTABLISHED (initiator)", sub=self._sub)
         self._last_ping_at = time.monotonic()
@@ -702,7 +702,7 @@ class Session:
         if expiry < int(time.time() * 1000):
             return [self._fail("world_grant_expired")]
 
-        # RT.3b: the grant is unsigned. The public Session is already mutually
+        # The grant is unsigned. The public Session is already mutually
         # token-authenticated, so the joiner trusts the grant without verifying a
         # host signature; the world Session re-verifies tokens on its own handshake.
         self.grant_id = bytes(grant_id)
@@ -754,7 +754,7 @@ class Session:
         log.session(f"{self!r} unrecognised CONTROL {msg.kind} in state {self.state.value}", sub=self._sub)
         return []
 
-    # ── Control: token refresh (RT.4) ────────────────────────────────────────
+    # ── Control: token refresh ────────────────────────────────────────────────
 
     async def send_token_update(self, token: str) -> None:
         """Push our refreshed root token to this peer (ESTABLISHED only). The peer
@@ -982,12 +982,12 @@ class Session:
         if now is None:
             now = time.monotonic()
 
-        # RT.4: apply a TOKEN_UPDATE that arrived before we were ESTABLISHED.
+        # Apply a TOKEN_UPDATE that arrived before we were ESTABLISHED.
         if self._buffered_token_update is not None and self.state == SessionState.ESTABLISHED:
             buf, self._buffered_token_update = self._buffered_token_update, None
             await self._apply_token_update(buf)
 
-        # RT.4: GOAWAY a session whose peer token has lapsed past the grace window.
+        # GOAWAY a session whose peer token has lapsed past the grace window.
         # Uses wall-clock (the JWT exp is unix seconds), unlike the monotonic ping
         # timers. The generous grace + PING/PONG liveness mean this rarely fires.
         if (self.state == SessionState.ESTABLISHED and self.remote_token_exp > 0 and

@@ -108,7 +108,7 @@ class TokenVerifier:
         Returns:
             A tuple `(node_id, cv_hash, p2p_peers, exp)` if all checks pass, otherwise
             `(None, None, (), 0)`. `p2p_peers` is a tuple of the node's peer-ids and
-            `exp` is the JWT expiry (unix seconds), used by the in-session refresh (RT.4).
+            `exp` is the JWT expiry (unix seconds), used by the in-session refresh.
         """
         payload = self._decode(token, node_id=node_id, ip=ip, hostname=hostname, port=port, p2p_peer=p2p_peer)
         if payload is None:

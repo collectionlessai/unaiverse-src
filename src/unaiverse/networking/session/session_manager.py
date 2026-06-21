@@ -104,7 +104,7 @@ class SessionManager:
         # -> our current node token (re-sampled per handshake so periodic refresh shows).
         self._token_verifier = token_verifier
         self._token_factory = token_factory
-        # RT.4: last node token broadcast to peers; tick() pushes a TOKEN_UPDATE when
+        # Last node token broadcast to peers; tick() pushes a TOKEN_UPDATE when
         # token_factory() (i.e. self.node_token) changes. Seed with the current value
         # so the initial token is not re-broadcast.
         self._last_pushed_token = token_factory() if token_factory is not None else None
@@ -475,9 +475,9 @@ class SessionManager:
             now = time.monotonic()
         events: List[SessionEvent] = []
 
-        # RT.4: our root token refreshed (token_factory reflects self.node_token) →
-        # push it in-band to every ESTABLISHED peer so their cached expiry advances
-        # without a re-handshake. Detected by comparing against the last pushed value.
+        # Our root token refreshed (token_factory reflects self.node_token): push it
+        # in-band to every ESTABLISHED peer so their cached expiry advances without a
+        # re-handshake. Detected by comparing against the last pushed value.
         if self._token_factory is not None:
             tok = self._token_factory()
             if tok != self._last_pushed_token:

@@ -2277,7 +2277,7 @@ class Node:
         if self.node_type is Node.WORLD:
             # On the private world instance, an inbound offer is a joiner redeeming
             # a grant: accept (no new grant). The Session ESTABLISHes on PROFILE and
-            # the agent is registered on that event; RT.3c dropped the PRIVATE_JOIN.
+            # the agent is registered on that event; PRIVATE_JOIN was dropped.
             if p2p_name == NodeConn.P2P_WORLD:
                 return ProfileDecisionResult(accepted=True)
 
@@ -2575,8 +2575,8 @@ class Node:
     async def _world_host_register_agent(self, ev, profile_b) -> None:
         """World host: a joiner's world Session reached ESTABLISHED on the world
         instance — add it to the world agents/masters list (replaces the legacy
-        post-approval bookkeeping). RT.3b/RT.3c: the grant is unsigned and there is no
-        PRIVATE_JOIN, so the authoritative role is read from the host's own
+        post-approval bookkeeping). The grant is unsigned and there is no PRIVATE_JOIN,
+        so the authoritative role is read from the host's own
         pre-admission record (set at the public decision), not from any join echo. A
         peer that was never pre-admitted reads role 0 here and is purged by the
         world-bit check below."""

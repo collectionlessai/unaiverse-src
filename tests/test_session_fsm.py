@@ -174,7 +174,7 @@ def test_initiator_completes_through_profile_decision(alice_conn, alice_p2p, ali
     offer = last[2]
     assert offer.kind == SessMsg.KIND_PROFILE_OFFER
     assert offer.fields["sig_a"] == b"sig-bytes"
-    # RT.3a: the offer no longer carries a signed_peer_record (binding via p2p_peers).
+    # The offer no longer carries a signed_peer_record (binding via p2p_peers).
     assert "signed_peer_record" not in offer.fields
 
     decision = SessMsg(SessMsg.KIND_PROFILE_DECISION, {
@@ -300,7 +300,7 @@ def test_responder_valid_token_overrides_profile_node_id(bob_conn, bob_p2p, bob_
     events = _run(sess.process_inbound(SESSION_PROFILE_PROTOCOL, offer))
     assert seen == {"token": "good-tok", "peer_id": alice_peer_id}
     assert sess.remote_node_id_hint == "root-attested-node"
-    # RT.4a: the peer's attested token expiry / cv_hash are captured on the Session.
+    # The peer's attested token expiry / cv_hash are captured on the Session.
     assert sess.remote_token_exp == 9999999999
     assert sess.remote_cv_hash == "cv-hash"
     assert len(events) == 1 and events[0].type == SessionEventType.ESTABLISHED
@@ -793,8 +793,8 @@ def test_world_grant_arriving_before_decision_is_buffered(alice_conn, alice_peer
 
 def test_initiator_rejects_expired_world_grant(alice_conn, alice_peer_id, bob_peer_id):
     """The world joiner re-checks the grant expiry when the WORLD_GRANT lands on its
-    public Session: a stale grant fails the handshake (RT.3c moved the only expiry
-    check here, since the PRIVATE_JOIN redemption round-trip is gone)."""
+    public Session: a stale grant fails the handshake (the only expiry check is here,
+    since the PRIVATE_JOIN redemption round-trip is gone)."""
     alice_conn.connect_returns = (bob_peer_id, False)
     sess = Session(
         peer_id=bob_peer_id, role=SessionRole.INITIATOR, p2p=alice_conn,
@@ -820,7 +820,7 @@ def test_initiator_rejects_expired_world_grant(alice_conn, alice_peer_id, bob_pe
     assert "world_grant_expired" in events[0].data["reason"]
 
 
-# ── RT.4: in-session token refresh (TOKEN_UPDATE) + expiry ───────────────────
+# ── In-session token refresh (TOKEN_UPDATE) + expiry ─────────────────────────
 
 def _established_responder(bob_conn, bob_peer_id, alice_peer_id, verifier, node_hint="node-X"):
     sess = _mk(alice_peer_id, SessionRole.RESPONDER, bob_conn, bob_peer_id,

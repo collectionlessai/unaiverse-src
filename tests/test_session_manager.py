@@ -300,7 +300,7 @@ def test_session_manager_injects_token_capabilities_into_sessions(alice_p2p, ali
     assert bare.token_verifier is None and bare.token_factory is None
 
 
-# ── KNOWN state and ensure()/activate() split (U7) ───────────────────────────
+# ── KNOWN state and ensure()/activate() split ────────────────────────────────
 
 def test_ensure_creates_known_session_without_dialing(alice_conn, alice_peer_id, bob_peer_id):
     """ensure() registers an initiator Session in KNOWN without dialing; activate() is
@@ -339,7 +339,7 @@ def test_spawn_responder_starts_in_init(alice_conn, alice_peer_id, bob_peer_id):
     assert sess.state == SessionState.INIT
 
 
-# ── Double view: tick-active vs known (U8.1) ─────────────────────────────────
+# ── Double view: tick-active vs known ────────────────────────────────────────
 
 def test_ensure_keeps_known_out_of_active_view(alice_conn, alice_peer_id, bob_peer_id):
     """A KNOWN Session lives in the full registry but not in the tick-active view, so
@@ -399,7 +399,7 @@ def test_terminal_session_leaves_both_views(alice_conn, alice_peer_id, bob_peer_
     assert bob_peer_id not in sm._active_sessions
 
 
-# ── KNOWN is not an in-flight handshake on inbound (U8.2) ─────────────────────
+# ── KNOWN is not an in-flight handshake on inbound ────────────────────────────
 
 def test_known_session_yields_to_responder_on_inbound_hello(alice_conn, alice_peer_id, bob_peer_id):
     """A KNOWN initiator (registered, not yet dialed) that receives an inbound HELLO
@@ -438,7 +438,7 @@ def test_known_session_survives_inbound_ping(alice_conn, alice_peer_id, bob_peer
     assert sent[-1][2].fields["ok"] is False
 
 
-# ── Known roster sync from rendezvous (U8.3 / U8.4a) ─────────────────────────
+# ── Known roster sync from rendezvous ─────────────────────────────────────────
 
 def test_sync_known_peers_registers_inert_known(alice_conn, alice_peer_id, bob_peer_id):
     """sync_known_peers registers a KNOWN Session (inert: not dialed, not tick-active)
@@ -525,7 +525,7 @@ def test_initiate_activates_existing_known_placeholder(alice_conn, alice_peer_id
     assert bob_peer_id in sm._active_sessions
 
 
-# ── Quarantine gate in activate(), FAILED-quarantines (U8.5) ─────────────────
+# ── Quarantine gate in activate(), FAILED-quarantines ─────────────────────────
 
 def test_activate_refused_during_quarantine(alice_conn, alice_peer_id, bob_peer_id):
     """activate() is the single dial gate: a quarantined peer is refused immediately

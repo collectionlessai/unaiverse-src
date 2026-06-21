@@ -35,7 +35,7 @@ enum ReasonCode {
   GRANT_EXPIRED            = 16;
   SIMULTANEOUS_OPEN_LOSS   = 17;
   SESSION_UNKNOWN          = 18;  // liveness: peer holds no Session for this session_id
-  TOKEN_EXPIRED            = 19;  // RT.4: peer's root token lapsed past the grace window
+  TOKEN_EXPIRED            = 19;  // peer's root token lapsed past the grace window
 }
 
 // ── Stage 1 ──────────────────────────────────────────────────────────────────
@@ -95,7 +95,7 @@ message WorldGrantAck {
   bool received             = 1;
 }
 
-// RT.3c removed PrivateJoin / PrivateJoinAck: the world join completes on the normal
+// PrivateJoin / PrivateJoinAck were removed: the world join completes on the normal
 // PROFILE handshake of the world Session (mutually token-authenticated, gated by the
 // host pre-admission), with no separate grant-redemption round-trip.
 
@@ -148,7 +148,7 @@ message ResumeAck {
   ReasonCode reason_code    = 4;  // SESSION_UNKNOWN when accepted=false
 }
 
-// RT.4: one-way in-session refresh of the sender's root token (JSON-encoded like
+// One-way in-session refresh of the sender's root token (JSON-encoded like
 // the other control messages). The receiver re-verifies it against the same
 // transport peer-id and advances its cached expiry monotonically.
 message TokenUpdate {

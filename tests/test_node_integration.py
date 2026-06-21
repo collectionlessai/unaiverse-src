@@ -559,7 +559,7 @@ def test_world_host_detects_master_from_profile_static_node_id():
 
 def test_world_host_registers_joiner_with_grant_role():
     """When a joiner's world Session establishes, the world host must register it with the role from
-    its own pre-admission record (RT.3b: the grant is unsigned, so the role is not
+    its own pre-admission record (the grant is unsigned, so the role is not
     echoed/trusted from the join). Master bits land the joiner in the masters list."""
     async def _scenario():
         world = FakeWorld()
@@ -573,7 +573,7 @@ def test_world_host_registers_joiner_with_grant_role():
 
         from unaiverse.agent import Agent
         role = (FakeWorld.ROLE_STR_TO_BITS["player"] | Agent.ROLE_WORLD_MASTER)
-        # RT.3b: the authoritative role comes from the host pre-admission (the public
+        # The authoritative role comes from the host pre-admission (the public
         # decision), not the join echo. Simulate that pre-admission here.
         conn.add_to_world_masters_list(REMOTE_PEER, [], role)
         blob = {"grant_id_bytes": b"g" * 32, "role": role,
@@ -584,7 +584,7 @@ def test_world_host_registers_joiner_with_grant_role():
         await node._Node__handle_network_messages()   # HELLO → HELLO_ACK
         await apump(remote_inbox, remote_sm)          # HELLO_ACK → PROFILE_OFFER
         await node._Node__handle_network_messages()   # OFFER → host ESTABLISHED + register, DECISION sent
-        remote_events = await apump(remote_inbox, remote_sm)  # DECISION → joiner ESTABLISHED (RT.3c: no PRIVATE_JOIN)
+        remote_events = await apump(remote_inbox, remote_sm)  # DECISION → joiner ESTABLISHED (no PRIVATE_JOIN)
 
         assert any(e.type == SessionEventType.ESTABLISHED for e in remote_events), \
             f"joiner never established: {[e.type.value for e in remote_events]}"
@@ -597,7 +597,7 @@ def test_world_host_registers_joiner_with_grant_role():
 
 
 def test_world_host_purges_non_preadmitted_joiner():
-    """RT.3b: a joiner reaching PRIVATE_JOIN without a host pre-admission reads role 0
+    """A joiner reaching PRIVATE_JOIN without a host pre-admission reads role 0
     (no world bit) and is purged, never registered. The unsigned grant carries no
     trust of its own; admission comes only from the public-decision pre-admission."""
     async def _scenario():
@@ -647,7 +647,7 @@ def test_world_host_unlists_member_when_world_session_ends():
 
         from unaiverse.agent import Agent
         role = FakeWorld.ROLE_STR_TO_BITS["player"] | Agent.ROLE_WORLD_AGENT
-        # RT.3b: role is authoritative from the host pre-admission, not the join echo.
+        # Role is authoritative from the host pre-admission, not the join echo.
         conn.add_to_world_agents_list(REMOTE_PEER, [], role)
         blob = {"grant_id_bytes": b"g" * 32, "role": role,
                 "expiry_unix_ms": int(time.time() * 1000) + 30_000}

@@ -12,7 +12,7 @@ Flow:
   2. host.public decision hook mints a WorldGrant → joiner.public ESTABLISHED
      carries the grant blob.
   3. orchestrator (mirrors node._dispatch_session_event) opens joiner.world with
-     the grant → HELLO/PROFILE → both world sides ESTABLISHED (RT.3c: no PRIVATE_JOIN).
+     the grant → HELLO/PROFILE → both world sides ESTABLISHED (no PRIVATE_JOIN).
   4. orchestrator GOAWAYs joiner.public (WORLD_HANDOFF_COMPLETE) → host.public CLOSED.
 """
 
@@ -181,13 +181,13 @@ def test_world_join_full_handoff():
     host_closed = [e for e in closed if e.p2p_name == NodeConn.P2P_PUBLIC]
     assert any("WORLD_HANDOFF_COMPLETE" in e.data.get("reason", "") for e in host_closed)
 
-    # The joiner's world Session established as initiator. RT.3c: the join completes on
+    # The joiner's world Session established as initiator. The join completes on
     # the normal PROFILE handshake (no PRIVATE_JOIN, no rendezvous_topic in the event).
     assert any(e.p2p_name == NodeConn.P2P_WORLD and e.role.value == "initiator"
                for e in established)
 
 
-# RT.3c removed PRIVATE_JOIN: the grant expiry is no longer re-checked at
+# PRIVATE_JOIN was removed: the grant expiry is no longer re-checked at
 # redemption (there is no redemption round-trip). The joiner still rejects an
 # expired WORLD_GRANT on its public Session — see test_session_fsm
 # test_initiator_rejects_expired_world_grant. The former

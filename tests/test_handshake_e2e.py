@@ -165,6 +165,6 @@ def test_simultaneous_open_collapses_to_one_session(bidirectional_fakeconns,
         assert s_b.state in (SessionState.ESTABLISHED, SessionState.FAILED)
 
 
-# RT.3a removed the offer-side SignedPeerRecord check (the public<->world binding
+# The offer-side SignedPeerRecord check was removed (the public<->world binding
 # now rides the verified token's p2p_peers), so the test that exercised a bad
 # offer SPR was dropped with it.

@@ -306,12 +306,12 @@ def test_conn_routing_classifies_against_passed_snapshot():
     assert "agentX" in routed[NodeConn.IN_WORLD_AGENTS]
 
 
-# ── Characterization oracle for update()/conn_routing_fcn (U6 baseline) ───────
+# ── Characterization oracle for update()/conn_routing_fcn ─────────────────────
 #
 # These freeze the exact contract of the per-cycle diff and the world perimeter so
-# the U6 refactor (per-instance reconcile in the SessionManagers) can be checked
-# bit-for-bit against them. They drive the real ConnectionPools.update() through fake
-# P2Ps (the NodeConn constructor never calls P2P methods, so fakes are enough).
+# the per-instance reconcile in the SessionManagers can be checked bit-for-bit
+# against them. They drive the real ConnectionPools.update() through fake P2Ps
+# (the NodeConn constructor never calls P2P methods, so fakes are enough).
 
 class _UpdP2P:
     """Fake P2P for driving update(): serves planted connected-peer infos and records
@@ -429,16 +429,16 @@ def test_p2p_of_prefers_session_then_index():
     assert conn._p2p_of("nope") is None
 
 
-# ── Characterization oracle for the facade contract (U8 baseline) ─────────────
+# ── Characterization oracle for the facade contract ────────────────────────────
 #
-# These freeze the role/addrs/is_connected facade that U8.3 (a KNOWN Session per
-# rendezvous peer) and U8.4 (role/addrs sourced from the Sessions) must preserve
-# bit-for-bit. They drive the real rendezvous writers (set_world_*_list /
-# add_to_world_*_list / set_role) and read back through the public facade, so they
-# stay valid across the data-source migration: writer and reader move together.
-# The load-bearing invariant is that "known" is not "connected": a peer known from
-# the rendezvous exposes role/addrs but stays out of is_connected and the
-# connected-peer infos until the transport actually admits it to a pool.
+# These freeze the role/addrs/is_connected facade (KNOWN Session per rendezvous
+# peer, role/addrs sourced from the Sessions) bit-for-bit. They drive the real
+# rendezvous writers (set_world_*_list / add_to_world_*_list / set_role) and read
+# back through the public facade, so they stay valid across the data-source
+# migration: writer and reader move together. The load-bearing invariant is that
+# "known" is not "connected": a peer known from the rendezvous exposes role/addrs
+# but stays out of is_connected and the connected-peer infos until the transport
+# actually admits it to a pool.
 
 ROLE_WORLD_AGENT = 1    # bit0=1 (world member), bit1=0 (agent)
 ROLE_WORLD_MASTER = 3   # bit0=1 (world member), bit1=1 (master)
@@ -447,7 +447,7 @@ ROLE_WORLD_MASTER = 3   # bit0=1 (world member), bit1=1 (master)
 def test_char_known_peer_has_role_and_addrs_but_is_not_connected():
     """A peer known from the rendezvous exposes role and addrs through the facade,
     yet is_connected stays False and it never appears in get_all_connected_peer_infos.
-    This is the invariant that U8.3's KNOWN Sessions must not break."""
+    This is the invariant that KNOWN Sessions must not break."""
     conn, pub, world = _make_node_conn()
     conn.set_world_agents_list([{"id": "wa", "addrs": ["/ip4/1.1.1.1/tcp/1"], "misc": ROLE_WORLD_AGENT}])
 
@@ -523,7 +523,7 @@ def test_char_world_host_writer_feeds_same_facade():
     assert conn.is_connected("wh") is False
 
 
-# ── KNOWN roster from the rendezvous via update() (U8.3) ─────────────────────
+# ── KNOWN roster from the rendezvous via update() ────────────────────────────
 
 def test_char_update_registers_known_world_sessions_off_diff():
     """update() registers a KNOWN Session in the world SessionManager for each peer the

@@ -61,7 +61,7 @@ LOCAL_ERROR            = 15
 GRANT_EXPIRED          = 16
 SIMULTANEOUS_OPEN_LOSS = 17
 SESSION_UNKNOWN        = 18  # liveness: peer holds no Session for this session_id
-TOKEN_EXPIRED          = 19  # RT.4: peer's root token lapsed past the grace window
+TOKEN_EXPIRED          = 19  # peer's root token lapsed past the grace window
 
 REASON_NAME: Dict[int, str] = {
     OK: "OK",
@@ -122,7 +122,7 @@ class SessMsg:
     KIND_PONG             = "pong"          # {session_id: bytes, nonce: bytes, ok: bool}
     KIND_RESUME           = "resume"        # {session_id: bytes, nonce: bytes}
     KIND_RESUME_ACK       = "resume_ack"    # {session_id, nonce, accepted: bool, reason_code: int}
-    KIND_TOKEN_UPDATE     = "token_update"  # RT.4: {session_id: bytes, token: str} refreshed root token
+    KIND_TOKEN_UPDATE     = "token_update"  # {session_id: bytes, token: str} refreshed root token
 
     def get(self, key: str, default: Any = None) -> Any:
         return self.fields.get(key, default)
@@ -282,8 +282,8 @@ class ProfileDecisionResult:
 
     * ``world_grant`` set ⇒ responder is a world host on its PUBLIC instance: mint
       and send a WorldGrant; the joiner redeems it on a separate world Session.
-    On the world instance the world host just accepts and ESTABLISHes (RT.3c removed
-    the extra PRIVATE_JOIN round-trip); the agent is registered on that ESTABLISHED.
+    On the world instance the world host just accepts and ESTABLISHes (the extra
+    PRIVATE_JOIN round-trip was removed); the agent is registered on that ESTABLISHED.
     """
     accepted: bool
     reason_code: int = OK
@@ -297,7 +297,7 @@ class VerifiedTokenClaims:
     it to the decision hook, which trusts these over the self-asserted profile:
     ``node_id`` for the allow-list, ``cv_hash`` for the profile-CV integrity check,
     ``p2p_peers`` (the root-attested [public, world] peer-ids) for the public<->world
-    binding, and ``exp`` (JWT expiry, unix seconds) for the in-session refresh (RT.4)."""
+    binding, and ``exp`` (JWT expiry, unix seconds) for the in-session refresh."""
     node_id: str
     cv_hash: str
     p2p_peers: tuple = ()
