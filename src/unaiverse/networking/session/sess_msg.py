@@ -61,6 +61,7 @@ LOCAL_ERROR            = 15
 GRANT_EXPIRED          = 16
 SIMULTANEOUS_OPEN_LOSS = 17
 SESSION_UNKNOWN        = 18  # liveness: peer holds no Session for this session_id
+TOKEN_EXPIRED          = 19  # RT.4: peer's root token lapsed past the grace window
 
 REASON_NAME: Dict[int, str] = {
     OK: "OK",
@@ -82,6 +83,7 @@ REASON_NAME: Dict[int, str] = {
     GRANT_EXPIRED: "GRANT_EXPIRED",
     SIMULTANEOUS_OPEN_LOSS: "SIMULTANEOUS_OPEN_LOSS",
     SESSION_UNKNOWN: "SESSION_UNKNOWN",
+    TOKEN_EXPIRED: "TOKEN_EXPIRED",
 }
 
 
@@ -120,6 +122,7 @@ class SessMsg:
     KIND_PONG             = "pong"          # {session_id: bytes, nonce: bytes, ok: bool}
     KIND_RESUME           = "resume"        # {session_id: bytes, nonce: bytes}
     KIND_RESUME_ACK       = "resume_ack"    # {session_id, nonce, accepted: bool, reason_code: int}
+    KIND_TOKEN_UPDATE     = "token_update"  # RT.4: {session_id: bytes, token: str} refreshed root token
 
     def get(self, key: str, default: Any = None) -> Any:
         return self.fields.get(key, default)
@@ -238,6 +241,7 @@ _JSON_KIND_TO_TAG = {
     SessMsg.KIND_PONG:         0x0C,
     SessMsg.KIND_RESUME:       0x0D,
     SessMsg.KIND_RESUME_ACK:   0x0E,
+    SessMsg.KIND_TOKEN_UPDATE: 0x0F,
 }
 _JSON_TAG_TO_KIND = {tag: kind for kind, tag in _JSON_KIND_TO_TAG.items()}
 # Field name -> True if it is a `bytes` field (hex-encoded in the JSON envelope).
@@ -247,9 +251,10 @@ _JSON_KIND_FIELDS = {
     SessMsg.KIND_RESUME:       {"session_id": True, "nonce": True},
     SessMsg.KIND_RESUME_ACK:   {"session_id": True, "nonce": True,
                                 "accepted": False, "reason_code": False},
+    SessMsg.KIND_TOKEN_UPDATE: {"session_id": True, "token": False},
 }
 # Decode defaults for missing non-bytes JSON fields (bytes default to b"").
-_JSON_FIELD_DEFAULTS = {"ok": False, "accepted": False, "joiner_node_id": ""}
+_JSON_FIELD_DEFAULTS = {"ok": False, "accepted": False, "joiner_node_id": "", "token": ""}
 
 
 # ── Application decision types (returned by the responder decision hook) ──────

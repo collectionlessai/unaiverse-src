@@ -59,7 +59,7 @@ from typing import Optional, Dict, Any, List, Callable, Awaitable, TYPE_CHECKING
 from unaiverse.networking.session.sess_msg import (
     SessMsg, reason_name, ProfileDecisionResult, WorldGrantSpec, VerifiedTokenClaims,
     OK, VERSION_UNSUPPORTED, NOT_AUTHORIZED, LOCAL_ERROR, GRACEFUL_SHUTDOWN,
-    SIMULTANEOUS_OPEN_LOSS, SESSION_UNKNOWN, GRANT_EXPIRED, P2P_PUBLIC,
+    SIMULTANEOUS_OPEN_LOSS, SESSION_UNKNOWN, GRANT_EXPIRED, TOKEN_EXPIRED, P2P_PUBLIC,
 )
 from unaiverse.utils.logger import log
 
@@ -88,6 +88,11 @@ _TIMEOUT_RECONNECT_S = 45.0 # Session-level reconnect ceiling before Session.Los
                             # Go transport grace (DisconnectionGracePeriod) so several backoff'd
                             # re-dial + RESUME cycles fit inside the window (see tick_reconnect).
 _TIMEOUT_CLOSING_S = 10.0   # GOAWAY sent; wait for GOAWAY_ACK
+# RT.4: how long past the peer's attested token exp we keep the session before a
+# GOAWAY(TOKEN_EXPIRED). Generous on purpose — PING/PONG liveness is the primary
+# signal and a refresh (TOKEN_UPDATE) normally lands ~30min before exp; this only
+# fires when refreshes are missed AND no re-handshake happened.
+_TOKEN_EXP_GRACE_S = 3600.0
 
 # ── Retry / backoff ──────────────────────────────────────────────────────────
 _MAX_DIAL_ATTEMPTS = 4
@@ -248,6 +253,8 @@ class Session:
         # refreshed in-session by TOKEN_UPDATE (RT.4). exp 0 = no verifier / not yet seen.
         self.remote_token_exp: int = 0
         self.remote_cv_hash: Optional[str] = None
+        # A TOKEN_UPDATE that arrived before ESTABLISHED is buffered and applied on tick.
+        self._buffered_token_update: Optional[SessMsg] = None
         self.is_world_join = is_world_join
         self._decision_hook = decision_hook
         self._grant = grant  # initiator world Session: redeem this after PROFILE
@@ -742,8 +749,50 @@ class Session:
             return await self._on_resume(msg)
         if msg.kind == SessMsg.KIND_RESUME_ACK:
             return await self._on_resume_ack(msg)
+        if msg.kind == SessMsg.KIND_TOKEN_UPDATE:
+            return await self._on_token_update(msg)
         log.session(f"{self!r} unrecognised CONTROL {msg.kind} in state {self.state.value}", sub=self._sub)
         return []
+
+    # ── Control: token refresh (RT.4) ────────────────────────────────────────
+
+    async def send_token_update(self, token: str) -> None:
+        """Push our refreshed root token to this peer (ESTABLISHED only). The peer
+        re-verifies it and advances its cached expiry for us, so the session does not
+        have to re-handshake just because our JWT rolled over."""
+        if self.state != SessionState.ESTABLISHED:
+            return
+        await self._send_payload(SESSION_CONTROL_PROTOCOL, SessMsg(SessMsg.KIND_TOKEN_UPDATE, {
+            "session_id": self.session_id, "token": token or "",
+        }))
+
+    async def _on_token_update(self, msg: SessMsg) -> List[SessionEvent]:
+        """Inbound refreshed peer token. Buffer it until ESTABLISHED, else apply now."""
+        if self.token_verifier is None:
+            return []
+        if self.state != SessionState.ESTABLISHED:
+            self._buffered_token_update = msg
+            return []
+        await self._apply_token_update(msg)
+        return []
+
+    async def _apply_token_update(self, msg: SessMsg) -> None:
+        """Re-verify the pushed token against the same transport peer-id, require the
+        attested node-id to be unchanged (a divergent one rejects the update, not the
+        session), and advance the cached expiry MONOTONICALLY so a replayed older
+        token cannot shrink the validity window."""
+        node_id, cv_hash, _p2p_peers, exp = await self.token_verifier(msg.get("token") or "", self.peer_id)
+        if not node_id:
+            log.session(f"{self!r} TOKEN_UPDATE failed verification — ignored", sub=self._sub)
+            return
+        if self.remote_node_id_hint and node_id != self.remote_node_id_hint:
+            log.session(f"{self!r} TOKEN_UPDATE node_id mismatch — ignored", sub=self._sub)
+            return
+        if int(exp) > self.remote_token_exp:
+            self.remote_token_exp = int(exp)
+        if cv_hash:
+            self.remote_cv_hash = cv_hash
+        log.session(f"{self!r} TOKEN_UPDATE applied (exp={self.remote_token_exp})", sub=self._sub)
 
     # ── Control: session-level liveness (PING/PONG) ──────────────────────────
 
@@ -932,6 +981,20 @@ class Session:
         mostly-synchronous main loop cannot guarantee."""
         if now is None:
             now = time.monotonic()
+
+        # RT.4: apply a TOKEN_UPDATE that arrived before we were ESTABLISHED.
+        if self._buffered_token_update is not None and self.state == SessionState.ESTABLISHED:
+            buf, self._buffered_token_update = self._buffered_token_update, None
+            await self._apply_token_update(buf)
+
+        # RT.4: GOAWAY a session whose peer token has lapsed past the grace window.
+        # Uses wall-clock (the JWT exp is unix seconds), unlike the monotonic ping
+        # timers. The generous grace + PING/PONG liveness mean this rarely fires.
+        if (self.state == SessionState.ESTABLISHED and self.remote_token_exp > 0 and
+                time.time() > self.remote_token_exp + _TOKEN_EXP_GRACE_S):
+            log.session(f"{self!r} peer token expired past grace → GOAWAY(TOKEN_EXPIRED)", sub=self._sub)
+            await self.close(TOKEN_EXPIRED)
+            return None
 
         # An in-flight ping that has not been PONGed within the RTT window is a miss.
         if self._ping_in_flight and now >= self._ping_deadline:

@@ -27,7 +27,7 @@ from unaiverse.networking.session import (
 )
 from unaiverse.networking.session.sess_msg import (
     OK, VERSION_UNSUPPORTED, NOT_AUTHORIZED, GRACEFUL_SHUTDOWN, WORLD_DISENGAGEMENT,
-    SESSION_UNKNOWN,
+    SESSION_UNKNOWN, TOKEN_EXPIRED,
 )
 from unaiverse.networking.node.connpool import NodeConn
 
@@ -818,3 +818,91 @@ def test_initiator_rejects_expired_world_grant(alice_conn, alice_peer_id, bob_pe
     events = _run(sess.process_inbound(SESSION_WORLD_PROTOCOL, expired))
     assert len(events) == 1 and events[0].type == SessionEventType.FAILED
     assert "world_grant_expired" in events[0].data["reason"]
+
+
+# ── RT.4: in-session token refresh (TOKEN_UPDATE) + expiry ───────────────────
+
+def _established_responder(bob_conn, bob_peer_id, alice_peer_id, verifier, node_hint="node-X"):
+    sess = _mk(alice_peer_id, SessionRole.RESPONDER, bob_conn, bob_peer_id,
+               token_verifier=verifier, remote_node_id_hint=node_hint)
+    sess._set_state(SessionState.ESTABLISHED, None)
+    return sess
+
+
+def test_token_update_advances_expiry_monotonically(bob_conn, bob_p2p, bob_peer_id, alice_peer_id):
+    """An ESTABLISHED peer's TOKEN_UPDATE advances the cached exp; a replayed older
+    token cannot shrink it (monotonic). The fake verifier reads exp from the token."""
+    async def _verifier(token, peer_id):
+        return ("node-X", "cv2", (peer_id,), int(token))
+    sess = _established_responder(bob_conn, bob_peer_id, alice_peer_id, _verifier)
+    sess.remote_token_exp = 1000
+    _run(sess.process_inbound(SESSION_CONTROL_PROTOCOL, SessMsg(SessMsg.KIND_TOKEN_UPDATE, {
+        "session_id": sess.session_id, "token": "2000"})))
+    assert sess.remote_token_exp == 2000 and sess.remote_cv_hash == "cv2"
+    _run(sess.process_inbound(SESSION_CONTROL_PROTOCOL, SessMsg(SessMsg.KIND_TOKEN_UPDATE, {
+        "session_id": sess.session_id, "token": "1500"})))
+    assert sess.remote_token_exp == 2000   # not moved backwards
+
+
+def test_token_update_rejects_node_id_mismatch(bob_conn, bob_p2p, bob_peer_id, alice_peer_id):
+    """A TOKEN_UPDATE whose token attests a different node-id is ignored — the update
+    is dropped, the session is not."""
+    async def _verifier(token, peer_id):
+        return ("intruder", "cv", (peer_id,), 9999999999)
+    sess = _established_responder(bob_conn, bob_peer_id, alice_peer_id, _verifier)
+    sess.remote_token_exp = 1000
+    _run(sess.process_inbound(SESSION_CONTROL_PROTOCOL, SessMsg(SessMsg.KIND_TOKEN_UPDATE, {
+        "session_id": sess.session_id, "token": "x"})))
+    assert sess.remote_token_exp == 1000
+    assert sess.state == SessionState.ESTABLISHED
+
+
+def test_token_update_buffered_until_established(bob_conn, bob_p2p, bob_peer_id, alice_peer_id):
+    """A TOKEN_UPDATE arriving before ESTABLISHED is buffered and applied on the next
+    tick once established."""
+    async def _verifier(token, peer_id):
+        return ("node-X", "cv", (peer_id,), 5000)
+    sess = _mk(alice_peer_id, SessionRole.RESPONDER, bob_conn, bob_peer_id,
+               token_verifier=_verifier, remote_node_id_hint="node-X")
+    sess._set_state(SessionState.RECONNECTING, 10.0)
+    _run(sess.process_inbound(SESSION_CONTROL_PROTOCOL, SessMsg(SessMsg.KIND_TOKEN_UPDATE, {
+        "session_id": sess.session_id, "token": "x"})))
+    assert sess.remote_token_exp == 0 and sess._buffered_token_update is not None
+    sess._set_state(SessionState.ESTABLISHED, None)
+    _run(sess.tick_keepalive())
+    assert sess.remote_token_exp == 5000 and sess._buffered_token_update is None
+
+
+def test_tick_goaways_on_expired_token(bob_conn, bob_p2p, bob_peer_id, alice_peer_id):
+    """An ESTABLISHED session whose peer token lapsed past the grace window is closed
+    with a GOAWAY(TOKEN_EXPIRED)."""
+    sess = _mk(alice_peer_id, SessionRole.RESPONDER, bob_conn, bob_peer_id)
+    sess._set_state(SessionState.ESTABLISHED, None)
+    sess.remote_token_exp = 1   # 1970 — far past + grace
+    _run(sess.tick_keepalive())
+    assert sess.state == SessionState.CLOSING
+    last = _last_sent(bob_conn, SESSION_CONTROL_PROTOCOL)
+    assert last is not None and last[2].kind == SessMsg.KIND_GOAWAY
+    assert last[2].fields["reason"] == TOKEN_EXPIRED
+
+
+def test_session_manager_pushes_token_update_on_token_change(bob_conn, bob_p2p, bob_peer_id, alice_peer_id):
+    """SessionManager.tick pushes a TOKEN_UPDATE to ESTABLISHED sessions when its
+    token_factory() (self.node_token) changes; the seeded value is not re-broadcast."""
+    from unaiverse.networking.session import SessionManager
+    tok = ["tok-1"]
+    sm = SessionManager(p2p=bob_conn, p2p_name=NodeConn.P2P_PUBLIC, local_peer_id=alice_peer_id,
+                        local_node_id="alice", local_profile_factory=lambda: {},
+                        token_factory=lambda: tok[0])
+    sess = sm._spawn_responder(bob_peer_id)
+    sess._set_state(SessionState.ESTABLISHED, None)
+
+    def _updates():
+        return [e[2] for e in bob_conn.sent if e[1] == SESSION_CONTROL_PROTOCOL
+                and e[2].kind == SessMsg.KIND_TOKEN_UPDATE]
+
+    _run(sm.tick())
+    assert _updates() == []          # no change yet → no push
+    tok[0] = "tok-2"
+    _run(sm.tick())
+    assert _updates() and _updates()[-1].fields["token"] == "tok-2"

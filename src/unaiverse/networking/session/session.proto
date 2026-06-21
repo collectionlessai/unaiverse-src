@@ -35,6 +35,7 @@ enum ReasonCode {
   GRANT_EXPIRED            = 16;
   SIMULTANEOUS_OPEN_LOSS   = 17;
   SESSION_UNKNOWN          = 18;  // liveness: peer holds no Session for this session_id
+  TOKEN_EXPIRED            = 19;  // RT.4: peer's root token lapsed past the grace window
 }
 
 // ── Stage 1 ──────────────────────────────────────────────────────────────────
@@ -145,4 +146,12 @@ message ResumeAck {
   bytes nonce               = 2;
   bool  accepted            = 3;
   ReasonCode reason_code    = 4;  // SESSION_UNKNOWN when accepted=false
+}
+
+// RT.4: one-way in-session refresh of the sender's root token (JSON-encoded like
+// the other control messages). The receiver re-verifies it against the same
+// transport peer-id and advances its cached expiry monotonically.
+message TokenUpdate {
+  bytes session_id          = 1;
+  string token              = 2;
 }
