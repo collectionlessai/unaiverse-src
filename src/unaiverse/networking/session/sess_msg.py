@@ -111,8 +111,6 @@ class SessMsg:
     KIND_PROFILE_DECISION = "profile_decision"
     KIND_WORLD_GRANT      = "world_grant"
     KIND_WORLD_GRANT_ACK  = "world_grant_ack"
-    KIND_PRIVATE_JOIN     = "private_join"   # JSON envelope (rides JSON, not protobuf; see _JSON_KIND_FIELDS)
-    KIND_PRIVATE_JOIN_ACK = "private_join_ack"
     KIND_GOAWAY           = "goaway"
     KIND_GOAWAY_ACK       = "goaway_ack"
     # Liveness / resume control messages (post-date session.proto; the conn-layer
@@ -225,21 +223,17 @@ _KIND_SPEC = {
                                      "role", "code_bundle", "initial_stats",
                                      "rendezvous_tag"]),
     SessMsg.KIND_WORLD_GRANT_ACK:  (0x06, "WorldGrantAck", ["received"]),
-    SessMsg.KIND_PRIVATE_JOIN_ACK: (0x08, "PrivateJoinAck", ["accepted", "reason_code", "rendezvous_topic"]),
     SessMsg.KIND_GOAWAY:           (0x09, "Goaway", ["reason", "drain_window_ms", "session_id"]),
     SessMsg.KIND_GOAWAY_ACK:       (0x0A, "GoawayAck", ["received"]),
 }
 _TAG_TO_KIND = {tag: kind for kind, (tag, _cls, _f) in _KIND_SPEC.items()}
 _REPEATED_FIELDS = frozenset({"protocol_versions", "hint_addrs"})
 
-# JSON-envelope codec (protobuf-free): the liveness/resume control messages plus
-# PrivateJoin, which rides the JSON envelope rather than session.proto. RT.3b made
-# the grant unsigned, so the join just carries the grant id, the joiner node-id and
-# the grant expiry. `bytes` fields are hex-encoded so they survive JSON; the codec
-# restores them to `bytes` on decode so the FSM sees the same value types as for
-# protobuf messages.
+# JSON-envelope codec (protobuf-free): the liveness/resume control messages ride a
+# small JSON envelope rather than protobuf. `bytes` fields are hex-encoded so they
+# survive JSON; the codec restores them to `bytes` on decode so the FSM sees the same
+# value types as for protobuf messages.
 _JSON_KIND_TO_TAG = {
-    SessMsg.KIND_PRIVATE_JOIN: 0x07,
     SessMsg.KIND_PING:         0x0B,
     SessMsg.KIND_PONG:         0x0C,
     SessMsg.KIND_RESUME:       0x0D,
@@ -248,8 +242,6 @@ _JSON_KIND_TO_TAG = {
 _JSON_TAG_TO_KIND = {tag: kind for kind, tag in _JSON_KIND_TO_TAG.items()}
 # Field name -> True if it is a `bytes` field (hex-encoded in the JSON envelope).
 _JSON_KIND_FIELDS = {
-    SessMsg.KIND_PRIVATE_JOIN: {"grant_id": True, "joiner_node_id": False,
-                                "expiry_unix_ms": False},
     SessMsg.KIND_PING:         {"session_id": True, "nonce": True},
     SessMsg.KIND_PONG:         {"session_id": True, "nonce": True, "ok": False},
     SessMsg.KIND_RESUME:       {"session_id": True, "nonce": True},
@@ -284,16 +276,13 @@ class ProfileDecisionResult:
     """Return value of the responder decision hook (see SessionManager).
 
     * ``world_grant`` set ⇒ responder is a world host on its PUBLIC instance: mint
-      and send a WorldGrant, then await the joiner's PRIVATE_JOIN on the world
-      instance.
-    * ``await_private_join`` ⇒ responder is a world host on its WORLD instance: the
-      peer is redeeming a grant, so do not ESTABLISH on PROFILE — wait for the
-      PRIVATE_JOIN that follows.
+      and send a WorldGrant; the joiner redeems it on a separate world Session.
+    On the world instance the world host just accepts and ESTABLISHes (RT.3c removed
+    the extra PRIVATE_JOIN round-trip); the agent is registered on that ESTABLISHED.
     """
     accepted: bool
     reason_code: int = OK
     world_grant: Optional[WorldGrantSpec] = None
-    await_private_join: bool = False
 
 
 @dataclass(frozen=True)

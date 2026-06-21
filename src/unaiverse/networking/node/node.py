@@ -792,7 +792,7 @@ class Node:
 
         # Start the public-network Session to the world. Fire-and-forget: the dial
         # happens here (so an unreachable world fails synchronously), but the world
-        # handshake — PROFILE → WORLD_GRANT → private world Session + PRIVATE_JOIN →
+        # handshake — PROFILE → WORLD_GRANT → private world Session →
         # join_world body — completes asynchronously in the main loop via the Session
         # ESTABLISHED dispatch.
         peer_id = await self.ask_to_get_in_touch(node_name=node_name, addresses=addresses,
@@ -1798,7 +1798,7 @@ class Node:
 
             # (A–D) legacy PROFILE / WORLD_APPROVAL / AGENT_APPROVAL / PROFILE_REQUEST
             # handshake — REMOVED. The per-peer Session now carries all of it
-            # (PROFILE_OFFER/DECISION, WORLD_GRANT, PRIVATE_JOIN) and runs the role
+            # (PROFILE_OFFER/DECISION, WORLD_GRANT) and runs the role
             # assignment + add_agent + join_world side-effects via
             # _dispatch_session_event. These chat content-types are no longer sent;
             # ignore any that arrive from a not-yet-migrated peer.
@@ -2238,8 +2238,7 @@ class Node:
         """Responder decision hook called by a Session on an inbound PROFILE_OFFER.
 
         Returns a ProfileDecisionResult: accept/reject + (world host, public
-        instance) a WorldGrantSpec, or (world host, world instance) the
-        ``await_private_join`` flag. This is the Session-era replacement for the
+        instance) a WorldGrantSpec. This is the Session-era replacement for the
         legacy interview/approval block — the role-assignment and grant payload
         assembly are ported here.
 
@@ -2277,9 +2276,10 @@ class Node:
         # ── World host ────────────────────────────────────────────────────────
         if self.node_type is Node.WORLD:
             # On the private world instance, an inbound offer is a joiner redeeming
-            # a grant: accept and wait for its PRIVATE_JOIN (no new grant).
+            # a grant: accept (no new grant). The Session ESTABLISHes on PROFILE and
+            # the agent is registered on that event; RT.3c dropped the PRIVATE_JOIN.
             if p2p_name == NodeConn.P2P_WORLD:
-                return ProfileDecisionResult(accepted=True, await_private_join=True)
+                return ProfileDecisionResult(accepted=True)
 
             # On the public instance: assign a role and mint a grant.
             is_world_master = (self.world_masters_node_ids is not None and
@@ -2292,7 +2292,7 @@ class Node:
 
             # Admit the joiner's world-side identity BEFORE it dials the private
             # instance: conn_routing_fcn disconnects unknown peers on the world
-            # network, and the post-PRIVATE_JOIN registration
+            # network, and the post-handshake registration
             # (_world_host_register_agent) would come too late to save the
             # in-flight world handshake. The legacy flow did this at approval time.
             joiner_dyn = profile.get_dynamic_profile()
@@ -2573,12 +2573,13 @@ class Node:
             await self._dispatch_session_event(ev)
 
     async def _world_host_register_agent(self, ev, profile_b) -> None:
-        """World host: a joiner completed PRIVATE_JOIN on the world instance — add
-        it to the world agents/masters list (replaces the legacy post-approval
-        bookkeeping). RT.3b: the grant is unsigned, so the authoritative role is read
-        from the host's own pre-admission record (set at the public decision), not
-        from the join echo. A peer that was never pre-admitted reads role 0 here and
-        is purged by the world-bit check below."""
+        """World host: a joiner's world Session reached ESTABLISHED on the world
+        instance — add it to the world agents/masters list (replaces the legacy
+        post-approval bookkeeping). RT.3b/RT.3c: the grant is unsigned and there is no
+        PRIVATE_JOIN, so the authoritative role is read from the host's own
+        pre-admission record (set at the public decision), not from any join echo. A
+        peer that was never pre-admitted reads role 0 here and is purged by the
+        world-bit check below."""
         if profile_b is None:
             return
         try:

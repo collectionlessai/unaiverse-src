@@ -5,14 +5,14 @@ Topology (4 SessionManagers):
 
     joiner.public  ─┐   ┌─  host.public   (world host: issues WorldGrant)
                     │   │
-    joiner.world   ─┘   └─  host.world     (world host: redeems via PRIVATE_JOIN)
+    joiner.world   ─┘   └─  host.world     (world host: redeems the grant)
 
 Flow:
   1. joiner.public dials host.public (is_world_join) → HELLO/PROFILE.
   2. host.public decision hook mints a WorldGrant → joiner.public ESTABLISHED
      carries the grant blob.
   3. orchestrator (mirrors node._dispatch_session_event) opens joiner.world with
-     the grant → HELLO/PROFILE then PRIVATE_JOIN → both world sides ESTABLISHED.
+     the grant → HELLO/PROFILE → both world sides ESTABLISHED (RT.3c: no PRIVATE_JOIN).
   4. orchestrator GOAWAYs joiner.public (WORLD_HANDOFF_COMPLETE) → host.public CLOSED.
 """
 
@@ -84,7 +84,7 @@ class RouterNode:
 def _host_decision_hook(peer_id, remote_node_id, remote_profile, p2p_name, verified_claims=None):
     async def _hook():
         if p2p_name == NodeConn.P2P_WORLD:
-            return ProfileDecisionResult(accepted=True, await_private_join=True)
+            return ProfileDecisionResult(accepted=True)
         spec = WorldGrantSpec(
             role=3,
             world_profile_bytes=json.dumps({"node_id": "world-node"}).encode(),
@@ -181,74 +181,14 @@ def test_world_join_full_handoff():
     host_closed = [e for e in closed if e.p2p_name == NodeConn.P2P_PUBLIC]
     assert any("WORLD_HANDOFF_COMPLETE" in e.data.get("reason", "") for e in host_closed)
 
-    # The joiner world session carries the rendezvous topic from the host.
-    world_established = [e for e in established
-                        if e.p2p_name == NodeConn.P2P_WORLD and e.role.value == "initiator"]
-    assert world_established and world_established[0].data.get("rendezvous_topic")
+    # The joiner's world Session established as initiator. RT.3c: the join completes on
+    # the normal PROFILE handshake (no PRIVATE_JOIN, no rendezvous_topic in the event).
+    assert any(e.p2p_name == NodeConn.P2P_WORLD and e.role.value == "initiator"
+               for e in established)
 
 
-def test_private_join_with_expired_grant_is_rejected():
-    """The world host re-checks the grant expiry at redemption time: a stale
-    grant echoed back in PRIVATE_JOIN must be NACKed with GRANT_EXPIRED."""
-    joiner_pub_id, joiner_world_id = "12D3Joiner_PUB", "12D3Joiner_WORLD"
-    host_pub_id, host_world_id = "12D3Host_PUB", "12D3Host_WORLD"
-
-    joiner = RouterNode(joiner_pub_id, joiner_world_id)
-    host = RouterNode(host_pub_id, host_world_id)
-    joiner.wire_to(host)
-    host.wire_to(joiner)
-    joiner.public.connect_returns = (host_pub_id, False)
-    joiner.world.connect_returns = (host_world_id, False)
-
-    joiner_profile = {"node_id": "joiner-node", "dynamic": {"private_peer_id": joiner_world_id}}
-    host_profile = {"node_id": "host-node", "dynamic": {"private_peer_id": host_world_id}}
-    j_pub = SessionManager(joiner.public, NodeConn.P2P_PUBLIC, joiner_pub_id, "joiner-node",
-                           local_profile_factory=lambda: joiner_profile)
-    j_world = SessionManager(joiner.world, NodeConn.P2P_WORLD, joiner_world_id, "joiner-node",
-                             local_profile_factory=lambda: joiner_profile)
-    h_pub = SessionManager(host.public, NodeConn.P2P_PUBLIC, host_pub_id, "host-node",
-                           local_profile_factory=lambda: host_profile,
-                           decision_hook=_host_decision_hook)
-    h_world = SessionManager(host.world, NodeConn.P2P_WORLD, host_world_id, "host-node",
-                             local_profile_factory=lambda: host_profile,
-                             decision_hook=_host_decision_hook)
-
-    managers = {
-        (joiner, NodeConn.P2P_PUBLIC): j_pub, (joiner, NodeConn.P2P_WORLD): j_world,
-        (host, NodeConn.P2P_PUBLIC): h_pub,   (host, NodeConn.P2P_WORLD): h_world,
-    }
-    failures = []
-
-    def _orchestrate(ev):
-        if ev.type == SessionEventType.ESTABLISHED and ev.data.get("world_grant"):
-            blob = dict(ev.data["world_grant"])
-            blob["grant_id_bytes"] = bytes.fromhex(blob["grant_id"])
-            blob["expiry_unix_ms"] = 1  # long past
-            for e in _run(j_world.initiate(host_world_id, ["/world/addr"],
-                                           grant=blob)):
-                _orchestrate(e)
-        elif ev.type == SessionEventType.FAILED:
-            failures.append(ev)
-
-    def pump():
-        progressed, guard = True, 0
-        while progressed and guard < 50:
-            progressed, guard = False, guard + 1
-            for conn in (joiner, host):
-                for p2p_name in (NodeConn.P2P_PUBLIC, NodeConn.P2P_WORLD):
-                    inbox = conn.by_name(p2p_name).inbox
-                    if inbox:
-                        progressed = True
-                        sender, proto, msg = inbox.popleft()
-                        for ev in _run(managers[(conn, p2p_name)].deliver(sender, proto, msg)):
-                            _orchestrate(ev)
-
-    for ev in _run(j_pub.initiate(host_pub_id, ["/pub/addr"], is_world_join=True)):
-        _orchestrate(ev)
-    pump()
-
-    assert not j_world.is_established(host_world_id)
-    assert not h_world.is_established(joiner_world_id)
-    reasons = [e.data.get("reason", "") for e in failures if e.p2p_name == NodeConn.P2P_WORLD]
-    assert any("private_join_grant_expired" in r for r in reasons), reasons
-    assert any("GRANT_EXPIRED" in r for r in reasons), reasons
+# RT.3c removed PRIVATE_JOIN: the grant expiry is no longer re-checked at
+# redemption (there is no redemption round-trip). The joiner still rejects an
+# expired WORLD_GRANT on its public Session — see test_session_fsm
+# test_initiator_rejects_expired_world_grant. The former
+# test_private_join_with_expired_grant_is_rejected was dropped with that path.

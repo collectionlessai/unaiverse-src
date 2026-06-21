@@ -521,7 +521,7 @@ class SessionManager:
                           SessionState.HELLO_ACK_SENT,
                           SessionState.PROFILE_SENT,
                           SessionState.AWAITING_WORLD_GRANT,
-                          SessionState.AWAITING_PRIVATE_JOIN):
+                          SessionState.AWAITING_HANDOFF):
             # Handshake can't continue without a live connection — fail fast.
             ev = sess._fail("connection_dropped_during_handshake")
             self._post_dispatch_cleanup([ev], time.monotonic())

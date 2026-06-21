@@ -35,8 +35,7 @@ unchanged in Pyodide. The wire (de)serialization lives inside ``P2P.send_session
 Each stage runs on its own libp2p protocol:
   /unaiverse/session/hello/1.0.0     -- HelloRequest / HelloResponse
   /unaiverse/session/profile/1.0.0   -- ProfileOffer / ProfileDecision
-  /unaiverse/session/world/1.0.0     -- WorldGrant / WorldGrantAck,
-                                        PrivateJoin / PrivateJoinAck
+  /unaiverse/session/world/1.0.0     -- WorldGrant / WorldGrantAck
   /unaiverse/session/control/1.0.0   -- Goaway / GoawayAck
 
 Identity is bound by ``sig_b`` (Stage-1, responder over ``nonce_a||session_id``)
@@ -126,8 +125,7 @@ class SessionState(str, Enum):
     HELLO_ACK_SENT = "hello_ack_sent"   # responder: HELLO_ACK out, awaiting PROFILE_OFFER
     PROFILE_SENT = "profile_sent"       # initiator: PROFILE_OFFER out, awaiting PROFILE_DECISION
     AWAITING_WORLD_GRANT = "awaiting_world_grant"  # initiator: world joiner expecting WORLD_GRANT
-    AWAITING_PRIVATE_JOIN = "awaiting_private_join"  # responder world: WORLD_GRANT out, awaiting PRIVATE_JOIN
-    PRIVATE_JOIN_SENT = "private_join_sent"  # initiator on p2p_world: PRIVATE_JOIN out, awaiting ACK
+    AWAITING_HANDOFF = "awaiting_handoff"  # responder public: WORLD_GRANT out (grant carrier), awaiting the joiner's GOAWAY
     ESTABLISHED = "established"
     RECONNECTING = "reconnecting"       # link dropped, within grace period
     CLOSING = "closing"                 # sent GOAWAY, awaiting GOAWAY_ACK
@@ -217,8 +215,9 @@ class Session:
             decision_hook: responder only — async callback to accept/reject an offer
                 and (for a world host) produce the WorldGrant spec.
             grant: initiator only, world Session — the grant blob obtained on the
-                public Session; when present this Session redeems it via PRIVATE_JOIN
-                after the normal HELLO+PROFILE handshake on p2p_world.
+                public Session; when present this Session is a world-join redeemer, so
+                node.py runs the world-join body once it reaches ESTABLISHED after the
+                normal HELLO+PROFILE handshake on p2p_world.
             app_role: Applicative world role (the rendezvous `misc` bitmask: 1=agent, 3=master),
                 refreshed by SessionManager.sync_known_peers and used as the source for the
                 role/addrs facade and the world perimeter. Distinct from self.role
@@ -581,14 +580,11 @@ class Session:
         if decision.world_grant is not None:
             return await self._responder_issue_world_grant(decision.world_grant)
 
-        # World host on its WORLD instance: the peer is redeeming a grant. Do not
-        # ESTABLISH yet — wait for the PRIVATE_JOIN that follows on this Session.
-        if decision.await_private_join:
-            self._set_state(SessionState.AWAITING_PRIVATE_JOIN, _TIMEOUT_WORLD_S)
-            log.session(f"{self!r} PROFILE accepted, awaiting PRIVATE_JOIN (world responder)", sub=self._sub)
-            return []
-
-        # Agent host: established immediately.
+        # Agent host, or world host on its WORLD instance (the joiner redeeming a
+        # grant): established immediately. The world host registers the agent on this
+        # ESTABLISHED event (role from its own pre-admission); RT.3c dropped the extra
+        # PRIVATE_JOIN round-trip since the grant is unsigned and the world Session is
+        # already mutually token-authenticated.
         self._set_state(SessionState.ESTABLISHED, None)
         log.session(f"{self!r} ESTABLISHED (responder)", sub=self._sub)
         self._last_ping_at = time.monotonic()
@@ -629,11 +625,10 @@ class Session:
                 return await self._initiator_on_world_grant(grant)
             return []
 
-        # World joiner on the WORLD Session (carries a grant): redeem it via
-        # PRIVATE_JOIN instead of going ESTABLISHED now.
-        if self._grant is not None:
-            return await self._initiator_send_private_join()
-
+        # Plain agent connection, or a world joiner on the WORLD Session redeeming a
+        # grant: established immediately. node.py branches on the Session's `_grant`
+        # (set at spawn) to run the world-join body and retire the public Session.
+        # RT.3c dropped the PRIVATE_JOIN round-trip the world joiner used to send here.
         self._set_state(SessionState.ESTABLISHED, None)
         log.session(f"{self!r} ESTABLISHED (initiator)", sub=self._sub)
         self._last_ping_at = time.monotonic()
@@ -660,8 +655,10 @@ class Session:
         })
         if not await self._send_payload(SESSION_WORLD_PROTOCOL, grant):
             return [self._fail("world_grant_send_failed")]
-        self._set_state(SessionState.AWAITING_PRIVATE_JOIN, _TIMEOUT_WORLD_S)
-        log.session(f"{self!r} WORLD_GRANT sent, awaiting PRIVATE_JOIN", sub=self._sub)
+        # Park as the grant carrier: the joiner redeems on a separate world Session and
+        # then GOAWAYs this public one (WORLD_HANDOFF_COMPLETE). No PRIVATE_JOIN here.
+        self._set_state(SessionState.AWAITING_HANDOFF, _TIMEOUT_WORLD_S)
+        log.session(f"{self!r} WORLD_GRANT sent, awaiting handoff GOAWAY", sub=self._sub)
         return []
 
     async def _on_world_protocol(self, msg: SessMsg) -> List[SessionEvent]:
@@ -678,14 +675,6 @@ class Session:
             log.session(f"{self!r} buffered WORLD_GRANT that arrived before the profile decision",
                         sub=self._sub)
             return []
-
-        if (msg.kind == SessMsg.KIND_PRIVATE_JOIN and
-                self.role == SessionRole.RESPONDER and self.state == SessionState.AWAITING_PRIVATE_JOIN):
-            return await self._responder_on_private_join(msg)
-
-        if (msg.kind == SessMsg.KIND_PRIVATE_JOIN_ACK and
-                self.role == SessionRole.INITIATOR and self.state == SessionState.PRIVATE_JOIN_SENT):
-            return await self._initiator_on_private_join_ack(msg)
 
         log.session(f"{self!r} ignored WORLD-protocol {msg.kind} in state {self.state.value}", sub=self._sub)
         return []
@@ -724,72 +713,6 @@ class Session:
                 "code_bundle": bytes(grant.get("code_bundle") or b""),
                 "initial_stats": bytes(grant.get("initial_stats") or b""),
             },
-        })]
-
-    async def _initiator_send_private_join(self) -> List[SessionEvent]:
-        """World Session initiator: after PROFILE_DECISION, redeem the grant. RT.3b:
-        the grant is unsigned and this world Session is already mutually
-        token-authenticated, so the join only carries the grant id, our node-id and
-        the grant expiry (the host gates on its own pre-admission, not a signature)."""
-        grant = self._grant or {}
-        grant_id = grant.get("grant_id_bytes") or b""
-        if not grant_id:
-            return [self._fail("private_join_missing_grant")]
-        join = SessMsg(SessMsg.KIND_PRIVATE_JOIN, {
-            "grant_id": bytes(grant_id),
-            "joiner_node_id": self.local_node_id,
-            "expiry_unix_ms": int(grant.get("expiry_unix_ms", 0)),
-        })
-        if not await self._send_payload(SESSION_WORLD_PROTOCOL, join):
-            return [self._fail("private_join_send_failed")]
-        self._set_state(SessionState.PRIVATE_JOIN_SENT, _TIMEOUT_WORLD_S)
-        log.session(f"{self!r} PRIVATE_JOIN sent", sub=self._sub)
-        return []
-
-    async def _initiator_on_private_join_ack(self, ack: SessMsg) -> List[SessionEvent]:
-        if not ack.get("accepted"):
-            return [self._fail(f"private_join_rejected:{reason_name(ack.get('reason_code', 0))}")]
-        self._set_state(SessionState.ESTABLISHED, None)
-        self._last_ping_at = time.monotonic()
-        log.session(f"{self!r} ESTABLISHED (world initiator)", sub=self._sub)
-        return [self._emit(SessionEventType.ESTABLISHED, {
-            "profile_b": self.remote_profile,
-            "rendezvous_topic": ack.get("rendezvous_topic", ""),
-        })]
-
-    async def _responder_on_private_join(self, join: SessMsg) -> List[SessionEvent]:
-        grant_id = bytes(join.get("grant_id") or b"")
-        expiry = int(join.get("expiry_unix_ms") or 0)
-
-        async def _nack(reason_code: int, fail_reason: str) -> List[SessionEvent]:
-            await self._send_payload(SESSION_WORLD_PROTOCOL, SessMsg(SessMsg.KIND_PRIVATE_JOIN_ACK, {
-                "accepted": False, "reason_code": reason_code, "rendezvous_topic": "",
-            }))
-            return [self._fail(fail_reason)]
-
-        if expiry < int(time.time() * 1000):
-            return await _nack(GRANT_EXPIRED, "private_join_grant_expired")
-
-        # RT.3b: the grant is unsigned. This world Session is already mutually
-        # token-authenticated (the joiner's token was verified against this transport
-        # peer-id at PROFILE) and the host pre-admission (conn_routing) keeps only
-        # pre-admitted world peers, so no grant signature or sig_init is checked. The
-        # authoritative role is read from the pre-admission record by node.py.
-        rendezvous_topic = f"world::{self.peer_id}::ps:rv"
-        ack = SessMsg(SessMsg.KIND_PRIVATE_JOIN_ACK, {
-            "accepted": True, "reason_code": OK, "rendezvous_topic": rendezvous_topic,
-        })
-        if not await self._send_payload(SESSION_WORLD_PROTOCOL, ack):
-            return [self._fail("private_join_ack_send_failed")]
-
-        self._set_state(SessionState.ESTABLISHED, None)
-        self._last_ping_at = time.monotonic()
-        log.session(f"{self!r} ESTABLISHED (world responder)", sub=self._sub)
-        return [self._emit(SessionEventType.ESTABLISHED, {
-            "profile_b": self.remote_profile,
-            "rendezvous_topic": rendezvous_topic,
-            "private_join": {"grant_id": grant_id.hex(),
-                             "joiner_node_id": join.get("joiner_node_id", "")},
         })]
 
     # ── Control: GOAWAY ──────────────────────────────────────────────────────
@@ -949,8 +872,7 @@ class Session:
                           SessionState.PROFILE_SENT,
                           SessionState.HELLO_ACK_SENT,
                           SessionState.AWAITING_WORLD_GRANT,
-                          SessionState.AWAITING_PRIVATE_JOIN,
-                          SessionState.PRIVATE_JOIN_SENT):
+                          SessionState.AWAITING_HANDOFF):
             return self._fail(f"timeout:{self.state.value}")
 
         if self.state == SessionState.RECONNECTING:

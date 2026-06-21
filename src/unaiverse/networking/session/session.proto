@@ -4,7 +4,7 @@
 //
 // Stage 1: /unaiverse/session/hello/1.0.0     -> HelloRequest / HelloResponse
 // Stage 2: /unaiverse/session/profile/1.0.0   -> ProfileOffer / ProfileDecision
-// Stage 3: /unaiverse/session/world/1.0.0     -> WorldGrant / WorldGrantAck, PrivateJoin / PrivateJoinAck
+// Stage 3: /unaiverse/session/world/1.0.0     -> WorldGrant / WorldGrantAck
 // Control: /unaiverse/session/control/1.0.0   -> Goaway / GoawayAck
 
 syntax = "proto3";
@@ -94,21 +94,9 @@ message WorldGrantAck {
   bool received             = 1;
 }
 
-// NOTE: PrivateJoin no longer rides protobuf — it moved to the JSON control
-// envelope (see sess_msg.py). RT.3b dropped the signature echo: the world Session
-// is mutually token-authenticated and the host gates on its own pre-admission, so
-// the join carries only the grant id, the joiner node-id and the grant expiry.
-// Kept here for reference only.
-message PrivateJoin {
-  bytes grant_id            = 1;
-  string joiner_node_id     = 2;
-}
-
-message PrivateJoinAck {
-  bool accepted             = 1;
-  ReasonCode reason_code    = 2;
-  string rendezvous_topic   = 3;
-}
+// RT.3c removed PrivateJoin / PrivateJoinAck: the world join completes on the normal
+// PROFILE handshake of the world Session (mutually token-authenticated, gated by the
+// host pre-admission), with no separate grant-redemption round-trip.
 
 // ── Control ──────────────────────────────────────────────────────────────────
 

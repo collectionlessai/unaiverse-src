@@ -558,7 +558,7 @@ def test_world_host_detects_master_from_profile_static_node_id():
 
 
 def test_world_host_registers_joiner_with_grant_role():
-    """At PRIVATE_JOIN the world host must register the joiner with the role from
+    """When a joiner's world Session establishes, the world host must register it with the role from
     its own pre-admission record (RT.3b: the grant is unsigned, so the role is not
     echoed/trusted from the join). Master bits land the joiner in the masters list."""
     async def _scenario():
@@ -583,10 +583,8 @@ def test_world_host_registers_joiner_with_grant_role():
                                  grant=blob)
         await node._Node__handle_network_messages()   # HELLO → HELLO_ACK
         await apump(remote_inbox, remote_sm)          # HELLO_ACK → PROFILE_OFFER
-        await node._Node__handle_network_messages()   # OFFER → await_private_join
-        await apump(remote_inbox, remote_sm)          # DECISION → PRIVATE_JOIN
-        await node._Node__handle_network_messages()   # JOIN → ACK + register
-        remote_events = await apump(remote_inbox, remote_sm)
+        await node._Node__handle_network_messages()   # OFFER → host ESTABLISHED + register, DECISION sent
+        remote_events = await apump(remote_inbox, remote_sm)  # DECISION → joiner ESTABLISHED (RT.3c: no PRIVATE_JOIN)
 
         assert any(e.type == SessionEventType.ESTABLISHED for e in remote_events), \
             f"joiner never established: {[e.type.value for e in remote_events]}"

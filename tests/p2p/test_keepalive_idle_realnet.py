@@ -105,7 +105,7 @@ def test_real_idle_keepalive_stays_established(real_nodes, transport):
 def _host_decision_hook(peer_id, remote_node_id, remote_profile, p2p_name, verified_claims=None):
     async def _hook():
         if p2p_name == NodeConn.P2P_WORLD:
-            return ProfileDecisionResult(accepted=True, await_private_join=True)
+            return ProfileDecisionResult(accepted=True)
         spec = WorldGrantSpec(
             role=3,
             world_profile_bytes=json.dumps({"node_id": "world-node"}).encode(),
@@ -118,7 +118,7 @@ def _host_decision_hook(peer_id, remote_node_id, remote_profile, p2p_name, verif
 
 
 def test_real_world_link_idle_keepalive_after_handoff(real_nodes):
-    """Field topology: full world-join handoff (grant on public, PRIVATE_JOIN on
+    """Field topology: full world-join handoff (grant on public, PROFILE on
     world, GOAWAY of the public session), then 42s of idle on the world link.
     The world dial uses QUIC when available, like NodeConn.__connect does with
     profile addresses."""

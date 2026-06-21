@@ -786,3 +786,32 @@ def test_world_grant_arriving_before_decision_is_buffered(alice_conn, alice_peer
     assert sess.state == SessionState.ESTABLISHED
     established = [e for e in events if e.type == SessionEventType.ESTABLISHED]
     assert established and established[0].data.get("world_grant") is not None
+
+
+def test_initiator_rejects_expired_world_grant(alice_conn, alice_peer_id, bob_peer_id):
+    """The world joiner re-checks the grant expiry when the WORLD_GRANT lands on its
+    public Session: a stale grant fails the handshake (RT.3c moved the only expiry
+    check here, since the PRIVATE_JOIN redemption round-trip is gone)."""
+    alice_conn.connect_returns = (bob_peer_id, False)
+    sess = Session(
+        peer_id=bob_peer_id, role=SessionRole.INITIATOR, p2p=alice_conn,
+        p2p_name=NodeConn.P2P_PUBLIC, local_peer_id=alice_peer_id,
+        local_node_id="local-node", local_profile_factory=lambda: {},
+        addresses=["/ip4/127.0.0.1/tcp/0"], is_world_join=True,
+    )
+    _run(sess.start())
+    _run(sess.process_inbound(SESSION_HELLO_PROTOCOL, SessMsg(SessMsg.KIND_HELLO_RESP, {
+        "chosen_version": "1.0", "nonce_b": b"\xbb" * 32, "sig_b": b"sig", "reason_code": OK,
+    })))
+    _run(sess.process_inbound(SESSION_PROFILE_PROTOCOL, SessMsg(SessMsg.KIND_PROFILE_DECISION, {
+        "accepted": True, "profile_b": b"{}", "reason_code": OK, "session_id": sess.session_id,
+    })))
+    assert sess.state == SessionState.AWAITING_WORLD_GRANT
+    expired = SessMsg(SessMsg.KIND_WORLD_GRANT, {
+        "grant_id": b"\x05" * 32, "expiry_unix_ms": 1,  # long past
+        "world_profile": json.dumps({"dynamic": {"private_peer_id": "12D3WorldPriv"}}).encode(),
+        "role": 3, "code_bundle": b"", "initial_stats": b"", "rendezvous_tag": 0,
+    })
+    events = _run(sess.process_inbound(SESSION_WORLD_PROTOCOL, expired))
+    assert len(events) == 1 and events[0].type == SessionEventType.FAILED
+    assert "world_grant_expired" in events[0].data["reason"]

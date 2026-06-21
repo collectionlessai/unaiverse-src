@@ -5,7 +5,7 @@ Real-transport port of the go-mocked ``tests/test_world_join_e2e.py``. Topology
 
     joiner.public  ─┐   ┌─  host.public   (world host: issues WorldGrant)
                     │   │
-    joiner.world   ─┘   └─  host.world     (world host: redeems via PRIVATE_JOIN)
+    joiner.world   ─┘   └─  host.world     (world host: redeems the grant)
 
 Flow:
   1. joiner.public dials host.public (is_world_join) → real HELLO/PROFILE.
@@ -13,7 +13,7 @@ Flow:
      host's **world** key (cross-instance, real Ed25519) → joiner.public
      ESTABLISHED carries the grant blob.
   3. orchestrator (mirrors node._dispatch_session_event) opens joiner.world with
-     the grant → real HELLO/PROFILE then PRIVATE_JOIN → both world sides ESTABLISHED.
+     the grant → real HELLO/PROFILE → both world sides ESTABLISHED (RT.3c: no PRIVATE_JOIN).
   4. orchestrator GOAWAYs joiner.public (WORLD_HANDOFF_COMPLETE) → host.public CLOSED.
 
 This is the highest-value real-net check: the WorldGrant is signed/verified with
@@ -22,7 +22,7 @@ the world-side key across two P2P instances, with *real* crypto — validating t
 
 The world-side dial address is handed to the orchestrator via closure (the test
 owns both nodes). RT.3b dropped the grant's SignedPeerRecord, so the binding to
-the world identity now comes from the verified token; the full real PRIVATE_JOIN
+the world identity now comes from the verified token; the full real PROFILE
 handshake still runs.
 
 Run with:  ``uv run pytest -m p2p tests/p2p/test_world_join_realnet.py -v``
@@ -46,10 +46,10 @@ pytestmark = pytest.mark.p2p
 
 def _host_decision_hook(peer_id, remote_node_id, remote_profile, p2p_name, verified_claims=None):
     """Host accepts on both instances; mints a WorldGrant on the public side and
-    awaits the PRIVATE_JOIN on the world side. (Same shape as the go-mocked test.)"""
+    accepts on the world side. (Same shape as the go-mocked test.)"""
     async def _hook():
         if p2p_name == NodeConn.P2P_WORLD:
-            return ProfileDecisionResult(accepted=True, await_private_join=True)
+            return ProfileDecisionResult(accepted=True)
         spec = WorldGrantSpec(
             role=3,
             world_profile_bytes=json.dumps({"node_id": "world-node"}).encode(),

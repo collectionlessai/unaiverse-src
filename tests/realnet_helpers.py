@@ -79,7 +79,7 @@ def build_real_world_node(idir_pub: str, idir_world: str, decision_hook=None,
                     is_world_node=False, public_key=None, token=None)
     # The profile must advertise the world-side peer-id: the world host pre-admits
     # the joiner's dynamic.private_peer_id (from the root-attested p2p_peers) and the
-    # world Session re-verifies the joiner token at PRIVATE_JOIN.
+    # world Session re-verifies the joiner token on its PROFILE handshake.
     sm_pub = SessionManager(p2p=p2p_pub, p2p_name=NodeConn.P2P_PUBLIC,
                             local_peer_id=p2p_pub.peer_id, local_node_id=node_id,
                             local_profile_factory=_profile_factory(node_id, p2p_world.peer_id),
