@@ -90,7 +90,7 @@ def test_real_world_join_full_handoff(real_nodes):
                 blob["grant_id_bytes"] = bytes.fromhex(grant["grant_id"])
                 evs = await j_world.initiate(
                     host_world_id, [host_world_addr],
-                    remote_other_peer_id_hint=host_world_id, grant=blob)
+                    grant=blob)
                 for e in evs:
                     await orchestrate(e)
             elif ev.p2p_name == NodeConn.P2P_WORLD and ev.role.value == "initiator":
@@ -102,8 +102,7 @@ def test_real_world_join_full_handoff(real_nodes):
             closed.append(ev)
 
     async def _scenario():
-        evs = await j_pub.initiate(host_pub_id, [host_pub_addr], is_world_join=True,
-                                   remote_other_peer_id_hint=host_world_id)
+        evs = await j_pub.initiate(host_pub_id, [host_pub_addr], is_world_join=True)
         for e in evs:
             await orchestrate(e)
         await pump_until(

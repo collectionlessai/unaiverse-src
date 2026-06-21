@@ -141,7 +141,7 @@ def test_world_join_full_handoff():
                 blob["grant_id_bytes"] = bytes.fromhex(grant["grant_id"])
                 evs = _run(j_world.initiate(
                     host_world_id, ["/world/addr"],
-                    remote_other_peer_id_hint=host_world_id, grant=blob))
+                    grant=blob))
                 for e in evs:
                     _orchestrate(e)
             elif ev.p2p_name == NodeConn.P2P_WORLD and ev.role.value == "initiator":
@@ -167,8 +167,7 @@ def test_world_join_full_handoff():
                             _orchestrate(ev)
 
     # 1. Joiner starts the public world-join handshake.
-    for ev in _run(j_pub.initiate(host_pub_id, ["/pub/addr"], is_world_join=True,
-                                  remote_other_peer_id_hint=host_world_id)):
+    for ev in _run(j_pub.initiate(host_pub_id, ["/pub/addr"], is_world_join=True)):
         _orchestrate(ev)
     pump()
 
@@ -226,7 +225,6 @@ def test_private_join_with_expired_grant_is_rejected():
             blob["grant_id_bytes"] = bytes.fromhex(blob["grant_id"])
             blob["expiry_unix_ms"] = 1  # long past
             for e in _run(j_world.initiate(host_world_id, ["/world/addr"],
-                                           remote_other_peer_id_hint=host_world_id,
                                            grant=blob)):
                 _orchestrate(e)
         elif ev.type == SessionEventType.FAILED:
@@ -245,8 +243,7 @@ def test_private_join_with_expired_grant_is_rejected():
                         for ev in _run(managers[(conn, p2p_name)].deliver(sender, proto, msg)):
                             _orchestrate(ev)
 
-    for ev in _run(j_pub.initiate(host_pub_id, ["/pub/addr"], is_world_join=True,
-                                  remote_other_peer_id_hint=host_world_id)):
+    for ev in _run(j_pub.initiate(host_pub_id, ["/pub/addr"], is_world_join=True)):
         _orchestrate(ev)
     pump()
 

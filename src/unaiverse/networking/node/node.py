@@ -2568,8 +2568,7 @@ class Node:
         self._pending_world_handoff[public_peer_id] = world_world_peer_id
         self._world_to_public[world_world_peer_id] = public_peer_id
         for ev in await self._sm_world.initiate(
-                world_world_peer_id, list(world_addrs),
-                remote_other_peer_id_hint=world_world_peer_id, grant=blob,
+                world_world_peer_id, list(world_addrs), grant=blob,
                 reject_relay=not self.talk_to_relay_based_nodes):
             await self._dispatch_session_event(ev)
 
@@ -2656,7 +2655,6 @@ class Node:
         addresses: list[str],
         p2p_name: str = NodeConn.P2P_PUBLIC,
         is_world_join: bool = False,
-        remote_other_peer_id_hint: str | None = None,
         remote_node_id_hint: str | None = None,
         reject_relay: bool = False,
     ) -> bool:
@@ -2674,7 +2672,6 @@ class Node:
             peer_id=peer_id,
             addresses=addresses,
             is_world_join=is_world_join,
-            remote_other_peer_id_hint=remote_other_peer_id_hint,
             remote_node_id_hint=remote_node_id_hint,
             reject_relay=reject_relay,
         )

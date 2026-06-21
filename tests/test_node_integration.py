@@ -580,7 +580,6 @@ def test_world_host_registers_joiner_with_grant_role():
                 "expiry_unix_ms": int(time.time() * 1000) + 30_000}
 
         await remote_sm.initiate(node_world_peer, ["/ip4/127.0.0.1/tcp/0"],
-                                 remote_other_peer_id_hint=node_world_peer,
                                  grant=blob)
         await node._Node__handle_network_messages()   # HELLO → HELLO_ACK
         await apump(remote_inbox, remote_sm)          # HELLO_ACK → PROFILE_OFFER
@@ -619,7 +618,7 @@ def test_world_host_purges_non_preadmitted_joiner():
                 "role": FakeWorld.ROLE_STR_TO_BITS["player"],
                 "expiry_unix_ms": int(time.time() * 1000) + 30_000}
         await remote_sm.initiate(node_world_peer, ["/ip4/127.0.0.1/tcp/0"],
-                                 remote_other_peer_id_hint=node_world_peer, grant=blob)
+                                 grant=blob)
         await node._Node__handle_network_messages()
         await apump(remote_inbox, remote_sm)
         await node._Node__handle_network_messages()
@@ -655,7 +654,6 @@ def test_world_host_unlists_member_when_world_session_ends():
         blob = {"grant_id_bytes": b"g" * 32, "role": role,
                 "expiry_unix_ms": int(time.time() * 1000) + 30_000}
         await remote_sm.initiate(node_world_peer, ["/ip4/127.0.0.1/tcp/0"],
-                                 remote_other_peer_id_hint=node_world_peer,
                                  grant=blob)
         await node._Node__handle_network_messages()
         await apump(remote_inbox, remote_sm)

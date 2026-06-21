@@ -189,7 +189,6 @@ class Session:
         local_node_id: str,
         local_profile_factory: Callable[[], dict],
         remote_node_id_hint: Optional[str] = None,
-        remote_other_peer_id_hint: Optional[str] = None,
         addresses: Optional[List[str]] = None,
         is_world_join: bool = False,
         decision_hook: Optional[DecisionHook] = None,
@@ -212,8 +211,6 @@ class Session:
             local_profile_factory: zero-arg callable returning the current NodeProfile
                 dict (must be plain JSON-serializable — sampled fresh at offer time).
             remote_node_id_hint: optional; the remote's application node-id when known.
-            remote_other_peer_id_hint: optional; the remote's *other* peer-id, needed
-                to verify the inbound SignedPeerRecord / a world PRIVATE_JOIN sig.
             addresses: initiator only — peer multiaddrs from root server / cache.
             is_world_join: initiator only — if True on a public Session, expect a
                 WORLD_GRANT (Stage-3) after PROFILE_DECISION.
@@ -236,7 +233,6 @@ class Session:
         self.local_node_id = local_node_id
         self._local_profile_factory = local_profile_factory
         self.remote_node_id_hint = remote_node_id_hint
-        self.remote_other_peer_id_hint = remote_other_peer_id_hint
         self.addresses = list(addresses or [])
         self.app_role = app_role
         # Token capabilities (RT), injected by the layer that owns them

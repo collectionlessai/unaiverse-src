@@ -149,7 +149,7 @@ def test_real_world_link_idle_keepalive_after_handoff(real_nodes):
                 blob["grant_id_bytes"] = bytes.fromhex(grant["grant_id"])
                 for e in await j_world.initiate(
                         host_world_id, [host_world_addr],
-                        remote_other_peer_id_hint=host_world_id, grant=blob):
+                        grant=blob):
                     await orchestrate(e)
             elif ev.p2p_name == NodeConn.P2P_WORLD and ev.role.value == "initiator":
                 for e in await j_pub.close_session(host_pub_id, WORLD_HANDOFF_COMPLETE):
@@ -159,8 +159,7 @@ def test_real_world_link_idle_keepalive_after_handoff(real_nodes):
 
     async def _scenario():
         nonlocal captured
-        for e in await j_pub.initiate(host_pub_id, [host_pub_addr], is_world_join=True,
-                                      remote_other_peer_id_hint=host_world_id):
+        for e in await j_pub.initiate(host_pub_id, [host_pub_addr], is_world_join=True):
             await orchestrate(e)
         await pump_until(
             targets,

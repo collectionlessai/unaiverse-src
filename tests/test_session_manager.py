@@ -286,7 +286,7 @@ def test_session_manager_injects_token_capabilities_into_sessions(alice_p2p, ali
         token_verifier=verifier, token_factory=factory,
     )
     initiator = sm.ensure(bob_peer_id, ["/ip4/127.0.0.1/tcp/0"])
-    responder = sm._spawn_responder(bob_peer_id, remote_other_peer_id_hint=None)
+    responder = sm._spawn_responder(bob_peer_id)
     for sess in (initiator, responder):
         assert sess.token_verifier is verifier
         assert sess.token_factory is factory
@@ -296,7 +296,7 @@ def test_session_manager_injects_token_capabilities_into_sessions(alice_p2p, ali
         p2p=alice_p2p, p2p_name=NodeConn.P2P_PUBLIC, local_peer_id=alice_peer_id,
         local_node_id="alice", local_profile_factory=lambda: {},
     )
-    bare = sm_bare._spawn_responder(bob_peer_id, remote_other_peer_id_hint=None)
+    bare = sm_bare._spawn_responder(bob_peer_id)
     assert bare.token_verifier is None and bare.token_factory is None
 
 
@@ -335,7 +335,7 @@ def test_spawn_responder_starts_in_init(alice_conn, alice_peer_id, bob_peer_id):
     """A responder is engaged from the start (awaiting HELLO), so it lives in INIT,
     not KNOWN."""
     sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
-    sess = sm._spawn_responder(bob_peer_id, remote_other_peer_id_hint=None)
+    sess = sm._spawn_responder(bob_peer_id)
     assert sess.state == SessionState.INIT
 
 
@@ -365,7 +365,7 @@ def test_activate_promotes_known_into_active_view(alice_conn, alice_peer_id, bob
 def test_spawn_responder_is_tick_active(alice_conn, alice_peer_id, bob_peer_id):
     """A responder is engaged from the start, so it enters the tick-active view."""
     sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
-    sm._spawn_responder(bob_peer_id, remote_other_peer_id_hint=None)
+    sm._spawn_responder(bob_peer_id)
     assert bob_peer_id in sm._active_sessions
 
 

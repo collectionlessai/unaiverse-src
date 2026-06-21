@@ -246,8 +246,7 @@ def profile_factory():
 # ── Helpers used across tests ───────────────────────────────────────────────
 
 def _make_session(role, p2p, p2p_name, local_peer_id, addresses=None,
-                  remote_other_peer_id_hint=None, is_world_join=False,
-                  peer_id="12D3KooWRemote"):
+                  is_world_join=False, peer_id="12D3KooWRemote"):
     """Construct a Session with sane defaults for testing."""
     from unaiverse.networking.session import Session, SessionRole
     return Session(
@@ -258,7 +257,6 @@ def _make_session(role, p2p, p2p_name, local_peer_id, addresses=None,
         local_peer_id=local_peer_id,
         local_node_id="local-node-id",
         local_profile_factory=lambda: {"node_id": "local-node-id"},
-        remote_other_peer_id_hint=remote_other_peer_id_hint,
         addresses=list(addresses or []),
         is_world_join=is_world_join,
     )

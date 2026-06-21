@@ -209,7 +209,6 @@ class SessionManager:
         peer_id: str,
         addresses: List[str],
         is_world_join: bool = False,
-        remote_other_peer_id_hint: Optional[str] = None,
         remote_node_id_hint: Optional[str] = None,
         grant: Optional[dict] = None,
         reject_relay: bool = False,
@@ -231,7 +230,6 @@ class SessionManager:
             local_node_id=self.local_node_id,
             local_profile_factory=self._local_profile_factory,
             remote_node_id_hint=remote_node_id_hint,
-            remote_other_peer_id_hint=remote_other_peer_id_hint,
             addresses=addresses,
             is_world_join=is_world_join,
             decision_hook=self._decision_hook,
@@ -275,7 +273,6 @@ class SessionManager:
         peer_id: str,
         addresses: List[str],
         is_world_join: bool = False,
-        remote_other_peer_id_hint: Optional[str] = None,
         remote_node_id_hint: Optional[str] = None,
         grant: Optional[dict] = None,
         reject_relay: bool = False,
@@ -300,7 +297,6 @@ class SessionManager:
             return []
 
         self.ensure(peer_id, addresses, is_world_join=is_world_join,
-                    remote_other_peer_id_hint=remote_other_peer_id_hint,
                     remote_node_id_hint=remote_node_id_hint, grant=grant, reject_relay=reject_relay,
                     app_role=app_role)
         log.session(f"initiating Session to ...{peer_id[-5:]}", sub=self._label)
@@ -335,7 +331,7 @@ class SessionManager:
             if protocol_id == SESSION_HELLO_PROTOCOL and sess_msg.kind == SessMsg.KIND_HELLO_REQ:
                 # Unknown peer, or a KNOWN intent that never dialed → spawn a responder
                 # Session (no tie-breaker possible: no in-flight initiator for them).
-                sess = self._spawn_responder(peer_id, remote_other_peer_id_hint=None)
+                sess = self._spawn_responder(peer_id)
             elif (protocol_id == SESSION_CONTROL_PROTOCOL and
                   sess_msg.kind in (SessMsg.KIND_PING, SessMsg.KIND_RESUME)):
                 # We are (most likely) the restarted peer: we hold no Session for
@@ -383,7 +379,7 @@ class SessionManager:
                 self._sessions.get(peer_id) is sess):
             self._drop_session(peer_id)
 
-    def _spawn_responder(self, peer_id: str, remote_other_peer_id_hint: Optional[str]) -> Session:
+    def _spawn_responder(self, peer_id: str) -> Session:
         sess = Session(
             peer_id=peer_id,
             role=SessionRole.RESPONDER,
@@ -392,7 +388,6 @@ class SessionManager:
             local_peer_id=self.local_peer_id,
             local_node_id=self.local_node_id,
             local_profile_factory=self._local_profile_factory,
-            remote_other_peer_id_hint=remote_other_peer_id_hint,
             decision_hook=self._decision_hook,
             token_verifier=self._token_verifier,
             token_factory=self._token_factory,
@@ -464,7 +459,7 @@ class SessionManager:
         log.session(f"simultaneous-open with ...{peer_id[-5:]}: yielding to responder", sub=self._label)
         existing.abort_silently("simultaneous_open_yielded")
         self._drop_session(peer_id)
-        self._spawn_responder(peer_id, remote_other_peer_id_hint=existing.remote_other_peer_id_hint)
+        self._spawn_responder(peer_id)
         return "_replaced_with_responder_"
 
     # ── Per-cycle tick (timeouts + keep-alive) ────────────────────────────────
