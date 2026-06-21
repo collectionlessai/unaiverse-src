@@ -25,7 +25,7 @@ import warnings
 import itertools
 from typing import cast
 from .messages import Msg
-from .p2p import P2P, P2PError, CrossInstanceCrypto
+from .p2p import P2P, P2PError
 from .golibp2p import GoLibP2P  # Your stub interface definition
 from .lib_types import TypeInterface  # Assuming TypeInterface handles the void* results
 
@@ -220,6 +220,5 @@ TypeInterface.libp2p = _shared_lib_typed  # Attach to TypeInterface if needed
 __all__ = [
     "P2P",
     "P2PError",
-    "CrossInstanceCrypto",
     "TypeInterface"  # Expose TypeInterface if users need its conversion helpers directly
 ]

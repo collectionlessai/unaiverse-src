@@ -51,7 +51,7 @@ from unaiverse.networking.session.sess_msg import (
 from unaiverse.utils.logger import log
 
 if TYPE_CHECKING:
-    from unaiverse.networking.p2p.p2p import P2P, CrossInstanceCrypto
+    from unaiverse.networking.p2p.p2p import P2P
 
 # Anti-flap quarantine window after a LOST/FAILED. Kept below the world rejoin delay
 # (Custom.REJOINING_WAIT, 30s) so a scheduled rejoin lands after the window has expired
@@ -74,7 +74,6 @@ class SessionManager:
         local_node_id: str,
         local_profile_factory: Callable[[], dict],
         decision_hook: Optional[DecisionHook] = None,
-        xcrypto: Optional["CrossInstanceCrypto"] = None,
         token_verifier: Optional[Callable] = None,
         token_factory: Optional[Callable[[], str]] = None,
         routing_classifier=None,
@@ -93,8 +92,6 @@ class SessionManager:
             decision_hook: responder side — async callback to accept/reject an inbound
                 PROFILE_OFFER and (for a world host) produce the WorldGrant spec.
                 None ⇒ Sessions accept by default (v1 agent happy-path).
-            xcrypto: cross-instance crypto capability (the agent's *other* P2P
-                instance), injected into every Session this manager builds.
         """
         self.p2p = p2p
         self.p2p_name = p2p_name
@@ -102,7 +99,6 @@ class SessionManager:
         self.local_node_id = local_node_id
         self._local_profile_factory = local_profile_factory
         self._decision_hook = decision_hook
-        self._xcrypto = xcrypto
         # Token capabilities (RT plumbing), forwarded into every Session this manager
         # builds. token_verifier(token, p2p_peer) -> (node_id, cv_hash); token_factory()
         # -> our current node token (re-sampled per handshake so periodic refresh shows).
@@ -241,7 +237,6 @@ class SessionManager:
             decision_hook=self._decision_hook,
             grant=grant,
             reject_relay=reject_relay,
-            xcrypto=self._xcrypto,
             app_role=app_role,
             token_verifier=self._token_verifier,
             token_factory=self._token_factory,
@@ -399,7 +394,6 @@ class SessionManager:
             local_profile_factory=self._local_profile_factory,
             remote_other_peer_id_hint=remote_other_peer_id_hint,
             decision_hook=self._decision_hook,
-            xcrypto=self._xcrypto,
             token_verifier=self._token_verifier,
             token_factory=self._token_factory,
         )

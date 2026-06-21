@@ -22,7 +22,6 @@ from unaiverse.networking.session import (
 )
 from unaiverse.networking.session.sess_msg import WORLD_DISENGAGEMENT
 from unaiverse.networking.node.connpool import NodeConn
-from unaiverse.networking.p2p import CrossInstanceCrypto
 
 from conftest import apump, establish_pair
 
@@ -34,7 +33,6 @@ def _make_sm(p2p, local_peer_id, node_id):
         local_peer_id=local_peer_id,
         local_node_id=node_id,
         local_profile_factory=lambda: {"node_id": node_id, "ver": "test"},
-        xcrypto=CrossInstanceCrypto(p2p),
     )
 
 

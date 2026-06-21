@@ -302,7 +302,6 @@ def build_agent_node_shell(node_peer_id: str, node_id: str = "shell-node",
         local_node_id=node_id,
         local_profile_factory=lambda: node.profile.get_all_profile(),
         decision_hook=node._session_decision_hook,
-        xcrypto=conn.xcrypto_for(NodeConn.P2P_PUBLIC),
     )
     node._sm_world = SessionManager(
         p2p=conn.as_p2p(NodeConn.P2P_WORLD),
@@ -311,7 +310,6 @@ def build_agent_node_shell(node_peer_id: str, node_id: str = "shell-node",
         local_node_id=node_id,
         local_profile_factory=lambda: node.profile.get_all_profile(),
         decision_hook=node._session_decision_hook,
-        xcrypto=conn.xcrypto_for(NodeConn.P2P_WORLD),
     )
     return node, conn
 
@@ -332,6 +330,5 @@ def make_remote_peer(remote_peer_id: str, node_id: str, node_inbox: deque,
         local_peer_id=remote_peer_id,
         local_node_id=node_id,
         local_profile_factory=profile_factory or (lambda: full_profile_dict(node_id)),
-        xcrypto=remote_conn.xcrypto_for(p2p_name),
     )
     return sm, remote_conn, remote_inbox

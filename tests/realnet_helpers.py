@@ -47,12 +47,9 @@ def build_real_node(identity_dir: str, port: int = 0, listen_ip: str = "0.0.0.0"
     nid = node_id or ("test-" + p2p.peer_id[-5:])
     conn = NodeConn(max_connections=16, p2p_u=p2p, p2p_w=p2p,
                     is_world_node=False, public_key=None, token=None)
-    # Single-instance node: the cross-instance capability wraps the same instance.
-    from unaiverse.networking.p2p import CrossInstanceCrypto
     sm = SessionManager(
         p2p=p2p, p2p_name=NodeConn.P2P_PUBLIC, local_peer_id=p2p.peer_id,
         local_node_id=nid, local_profile_factory=_profile_factory(p2p.peer_id, p2p.peer_id),
-        xcrypto=CrossInstanceCrypto(p2p),
     )
     return p2p, conn, sm
 
@@ -80,21 +77,17 @@ def build_real_world_node(idir_pub: str, idir_world: str, decision_hook=None,
 
     conn = NodeConn(max_connections=16, p2p_u=p2p_pub, p2p_w=p2p_world,
                     is_world_node=False, public_key=None, token=None)
-    from unaiverse.networking.p2p import CrossInstanceCrypto
-    # The profile must advertise the world-side peer-id: the world host binds the
-    # WorldGrant signature to the joiner's dynamic.private_peer_id, and verifies
-    # it again at PRIVATE_JOIN against the peer that actually dialed. The public
-    # manager signs its cross-instance artifacts with the world key and vice-versa.
+    # The profile must advertise the world-side peer-id: the world host pre-admits
+    # the joiner's dynamic.private_peer_id (from the root-attested p2p_peers) and the
+    # world Session re-verifies the joiner token at PRIVATE_JOIN.
     sm_pub = SessionManager(p2p=p2p_pub, p2p_name=NodeConn.P2P_PUBLIC,
                             local_peer_id=p2p_pub.peer_id, local_node_id=node_id,
                             local_profile_factory=_profile_factory(node_id, p2p_world.peer_id),
-                            decision_hook=decision_hook,
-                            xcrypto=CrossInstanceCrypto(p2p_world))
+                            decision_hook=decision_hook)
     sm_world = SessionManager(p2p=p2p_world, p2p_name=NodeConn.P2P_WORLD,
                               local_peer_id=p2p_world.peer_id, local_node_id=node_id,
                               local_profile_factory=_profile_factory(node_id, p2p_world.peer_id),
-                              decision_hook=decision_hook,
-                              xcrypto=CrossInstanceCrypto(p2p_pub))
+                              decision_hook=decision_hook)
     return p2p_pub, p2p_world, conn, sm_pub, sm_world
 
 

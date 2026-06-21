@@ -1005,11 +1005,8 @@ class NodeConn(ConnectionPools):
         """Build and own the two per-instance SessionManagers, now that the Node
         policy born late is available (the profile factory samples self.profile, the
         decision hook reads world/agent/allow-list state). Each manager owns its P2P
-        instance and receives a cross-instance crypto capability over the *other*
-        instance: a public Session signs its other-network artifacts (SignedPeerRecord
-        / world-grant) with the WORLD host key and vice-versa."""
+        instance."""
         from unaiverse.networking.session import SessionManager
-        from unaiverse.networking.p2p import CrossInstanceCrypto
         # Per-instance perimeter routing injected into each manager: the public one
         # routes by direction (no membership, never cuts); the world one classifies
         # against the snapshot and cuts unclassifiable peers on its P2P instance.
@@ -1020,7 +1017,6 @@ class NodeConn(ConnectionPools):
             local_node_id=self._local_node_id,
             local_profile_factory=local_profile_factory,
             decision_hook=decision_hook,
-            xcrypto=CrossInstanceCrypto(self.p2p_world),
             token_verifier=self.verify_token_claims,
             token_factory=token_factory,
             routing_classifier=NodeConn._route_public,
@@ -1033,7 +1029,6 @@ class NodeConn(ConnectionPools):
             local_node_id=self._local_node_id,
             local_profile_factory=local_profile_factory,
             decision_hook=decision_hook,
-            xcrypto=CrossInstanceCrypto(self.p2p_public),
             token_verifier=self.verify_token_claims,
             token_factory=token_factory,
             routing_classifier=NodeConn._route_world,

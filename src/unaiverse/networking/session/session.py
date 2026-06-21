@@ -27,10 +27,7 @@ Portability (CPython + Pyodide)
 This module is **protobuf-free**: it speaks ``SessMsg`` value objects and reaches
 the transport/crypto only through the high-level async ``P2P`` surface injected as
 ``self.p2p`` (``connect`` / ``send_session`` / ``get_local_peer_id`` /
-``sign_with_host_key`` / ``verify_peer_signature`` / ``verify_signed_peer_record`` /
-``generate_signed_peer_record``). Cross-instance operations (the SignedPeerRecord
-and grant signature for the agent's *other* peer-id) go through ``self.xcrypto``,
-the capability injected by the layer that owns both P2P instances.
+``sign_with_host_key`` / ``verify_peer_signature``).
 That is exactly the surface a JS ``OP2P`` mirror exposes, so this file runs
 unchanged in Pyodide. The wire (de)serialization lives inside ``P2P.send_session``
 (via ``SessMsg.to_bytes``) in CPython and in ``session_pb.js`` in the browser.
@@ -67,7 +64,7 @@ from unaiverse.networking.session.sess_msg import (
 from unaiverse.utils.logger import log
 
 if TYPE_CHECKING:
-    from unaiverse.networking.p2p.p2p import P2P, CrossInstanceCrypto
+    from unaiverse.networking.p2p.p2p import P2P
 
 # ── Protocol IDs (keep in sync with unailib/types.go + connpool SESSION_PROTOCOL_IDS) ─
 SESSION_HELLO_PROTOCOL   = "/unaiverse/session/hello/1.0.0"
@@ -197,7 +194,6 @@ class Session:
         decision_hook: Optional[DecisionHook] = None,
         grant: Optional[dict] = None,
         reject_relay: bool = False,
-        xcrypto: Optional["CrossInstanceCrypto"] = None,
         app_role: int = 0,
         token_verifier: Optional[Callable] = None,
         token_factory: Optional[Callable[[], str]] = None,
@@ -207,8 +203,7 @@ class Session:
             peer_id: libp2p peer-id of the remote (on this p2p instance).
             role: INITIATOR or RESPONDER.
             p2p: the P2P instance this Session runs on (or a JS OP2P mirror in
-                Pyodide). The Session reaches the transport and crypto through it,
-                and the agent's *other* network through the injected ``xcrypto``.
+                Pyodide). The Session reaches the transport and crypto through it.
             p2p_name: the label of the P2P instance this Session lives on (used for
                 events).
             local_peer_id: our libp2p peer-id on `p2p_name`.
@@ -226,10 +221,6 @@ class Session:
             grant: initiator only, world Session — the grant blob obtained on the
                 public Session; when present this Session redeems it via PRIVATE_JOIN
                 after the normal HELLO+PROFILE handshake on p2p_world.
-            xcrypto: crypto capability for the agent's *other* P2P instance (the
-                cross-instance SignedPeerRecord / world-grant signer, sealed under
-                the other host key). Injected from the layer that owns both
-                instances (the Coordinator / Node).
             app_role: Applicative world role (the rendezvous `misc` bitmask: 1=agent, 3=master),
                 refreshed by SessionManager.sync_known_peers and used as the source for the
                 role/addrs facade and the world perimeter. Distinct from self.role
@@ -239,10 +230,6 @@ class Session:
         self.role = role
         self.p2p = p2p
         self.p2p_name = p2p_name
-        # Cross-instance crypto capability (other-network host key), injected by the
-        # layer that owns both P2P instances. The cross-instance call-sites use it
-        # for the SignedPeerRecord and the world-grant signature.
-        self.xcrypto = xcrypto
         self._sub = "pub" if p2p_name == P2P_PUBLIC else "prv"
         self.local_peer_id = local_peer_id
         self.local_node_id = local_node_id

@@ -30,7 +30,6 @@ from unaiverse.networking.session.sess_msg import (
     SESSION_UNKNOWN,
 )
 from unaiverse.networking.node.connpool import NodeConn
-from unaiverse.networking.p2p import CrossInstanceCrypto
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
@@ -55,7 +54,7 @@ def _mk(peer_id, role, p2p, local_peer_id, local_node_id="local-node",
         peer_id=peer_id, role=role, p2p=p2p,
         p2p_name=NodeConn.P2P_PUBLIC, local_peer_id=local_peer_id,
         local_node_id=local_node_id, local_profile_factory=local_profile_factory,
-        addresses=addresses, xcrypto=CrossInstanceCrypto(p2p),
+        addresses=addresses,
         token_verifier=token_verifier, token_factory=token_factory,
         remote_node_id_hint=remote_node_id_hint,
     )
@@ -628,7 +627,6 @@ def test_resume_ack_nack_world_session_is_lost(alice_conn, alice_peer_id, bob_pe
         peer_id=bob_peer_id, role=SessionRole.INITIATOR, p2p=alice_conn,
         p2p_name=NodeConn.P2P_PUBLIC, local_peer_id=alice_peer_id,
         local_node_id="ln", local_profile_factory=lambda: {}, is_world_join=True,
-        xcrypto=CrossInstanceCrypto(alice_conn),
     )
     sess._set_state(SessionState.RECONNECTING, 10.0)
     sess._reconnect_substep = "resume_sent"
@@ -764,7 +762,6 @@ def test_world_grant_arriving_before_decision_is_buffered(alice_conn, alice_peer
         p2p_name=NodeConn.P2P_PUBLIC, local_peer_id=alice_peer_id,
         local_node_id="local-node", local_profile_factory=lambda: {},
         addresses=["/ip4/127.0.0.1/tcp/0"], is_world_join=True,
-        xcrypto=CrossInstanceCrypto(alice_conn),
     )
     _run(sess.start())
     _run(sess.process_inbound(SESSION_HELLO_PROTOCOL, SessMsg(SessMsg.KIND_HELLO_RESP, {
