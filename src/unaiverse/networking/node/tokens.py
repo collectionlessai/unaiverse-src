@@ -106,14 +106,15 @@ class TokenVerifier:
         peer-id binding instead of trusting the offered profile.
 
         Returns:
-            A tuple `(node_id, cv_hash, p2p_peers)` if all checks pass, otherwise
-            `(None, None, ())`. `p2p_peers` is a tuple of the node's peer-ids.
+            A tuple `(node_id, cv_hash, p2p_peers, exp)` if all checks pass, otherwise
+            `(None, None, (), 0)`. `p2p_peers` is a tuple of the node's peer-ids and
+            `exp` is the JWT expiry (unix seconds), used by the in-session refresh (RT.4).
         """
         payload = self._decode(token, node_id=node_id, ip=ip, hostname=hostname, port=port, p2p_peer=p2p_peer)
         if payload is None:
-            return None, None, ()
+            return None, None, (), 0
         return (payload.get("node_id", None), payload.get("cv_hash", None),
-                tuple(payload.get("p2p_peers", ())))
+                tuple(payload.get("p2p_peers", ())), int(payload.get("exp", 0)))
 
     def __str__(self):
         key_str = self.public_key.decode("utf-8") if isinstance(self.public_key, bytes) else self.public_key

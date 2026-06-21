@@ -338,11 +338,11 @@ class ConnectionPools:
         always against `peer_id` (the transport-verified peer-id of the speaker).
 
         Returns:
-            ``(node_id, cv_hash, p2p_peers)`` on success, ``(None, None, ())`` on
-            failure or when no verifier is configured.
+            ``(node_id, cv_hash, p2p_peers, exp)`` on success, ``(None, None, (), 0)``
+            on failure or when no verifier is configured.
         """
         if self.__token_verifier is None:
-            return None, None, ()
+            return None, None, (), 0
         return self.__token_verifier.verify_token_claims(token, p2p_peer=peer_id)
 
     async def connect(self, addresses: list[str], p2p_name: str) -> tuple[str | None, bool]:

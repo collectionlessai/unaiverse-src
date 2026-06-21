@@ -291,8 +291,9 @@ class VerifiedTokenClaims:
     this after verifying an inbound token against the transport peer-id, then passes
     it to the decision hook, which trusts these over the self-asserted profile:
     ``node_id`` for the allow-list, ``cv_hash`` for the profile-CV integrity check,
-    and ``p2p_peers`` (the root-attested [public, world] peer-ids) for the
-    public<->world binding."""
+    ``p2p_peers`` (the root-attested [public, world] peer-ids) for the public<->world
+    binding, and ``exp`` (JWT expiry, unix seconds) for the in-session refresh (RT.4)."""
     node_id: str
     cv_hash: str
     p2p_peers: tuple = ()
+    exp: int = 0

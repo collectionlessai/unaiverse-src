@@ -266,7 +266,7 @@ def test_responder_rejects_invalid_token(bob_conn, bob_p2p, bob_peer_id, alice_p
     """A configured verifier that rejects the token → reject(NOT_AUTHORIZED) + FAILED,
     before the application decision is ever reached."""
     async def _verifier(token, peer_id):
-        return (None, None, ())   # verification failure
+        return (None, None, (), 0)   # verification failure
     sess = _mk(alice_peer_id, SessionRole.RESPONDER, bob_conn, bob_peer_id,
                local_node_id="bob-node", token_verifier=_verifier)
     _drive_responder_to_offer_wait(sess)
@@ -289,7 +289,7 @@ def test_responder_valid_token_overrides_profile_node_id(bob_conn, bob_p2p, bob_
     seen = {}
     async def _verifier(token, peer_id):
         seen["token"], seen["peer_id"] = token, peer_id
-        return ("root-attested-node", "cv-hash", (peer_id,))
+        return ("root-attested-node", "cv-hash", (peer_id,), 9999999999)
     sess = _mk(alice_peer_id, SessionRole.RESPONDER, bob_conn, bob_peer_id,
                local_node_id="bob-node", token_verifier=_verifier)
     _drive_responder_to_offer_wait(sess)
@@ -300,6 +300,9 @@ def test_responder_valid_token_overrides_profile_node_id(bob_conn, bob_p2p, bob_
     events = _run(sess.process_inbound(SESSION_PROFILE_PROTOCOL, offer))
     assert seen == {"token": "good-tok", "peer_id": alice_peer_id}
     assert sess.remote_node_id_hint == "root-attested-node"
+    # RT.4a: the peer's attested token expiry / cv_hash are captured on the Session.
+    assert sess.remote_token_exp == 9999999999
+    assert sess.remote_cv_hash == "cv-hash"
     assert len(events) == 1 and events[0].type == SessionEventType.ESTABLISHED
 
 
@@ -335,7 +338,7 @@ def test_initiator_verifies_responder_token(alice_conn, alice_p2p, alice_peer_id
     seen = {}
     async def _verifier(token, peer_id):
         seen["token"], seen["peer_id"] = token, peer_id
-        return ("bob-attested", "cv", (peer_id,))
+        return ("bob-attested", "cv", (peer_id,), 9999999999)
     alice_conn.connect_returns = (bob_peer_id, False)
     sess = _mk(bob_peer_id, SessionRole.INITIATOR, alice_conn, alice_peer_id,
                addresses=["/ip4/127.0.0.1/tcp/0"], token_verifier=_verifier)
@@ -353,7 +356,7 @@ def test_initiator_verifies_responder_token(alice_conn, alice_p2p, alice_peer_id
 def test_initiator_rejects_bad_responder_token(alice_conn, alice_p2p, alice_peer_id, bob_peer_id):
     """RT mutual: an invalid responder token fails the initiator's handshake."""
     async def _verifier(token, peer_id):
-        return (None, None, ())
+        return (None, None, (), 0)
     alice_conn.connect_returns = (bob_peer_id, False)
     sess = _mk(bob_peer_id, SessionRole.INITIATOR, alice_conn, alice_peer_id,
                addresses=["/ip4/127.0.0.1/tcp/0"], token_verifier=_verifier)
@@ -371,7 +374,7 @@ def test_initiator_rejects_responder_node_id_mismatch(alice_conn, alice_p2p, ali
     """RT mutual: when the initiator expected a specific node-id at this peer and the
     responder's token attests a different one, the handshake fails."""
     async def _verifier(token, peer_id):
-        return ("someone-else", "cv", (peer_id,))
+        return ("someone-else", "cv", (peer_id,), 9999999999)
     alice_conn.connect_returns = (bob_peer_id, False)
     sess = _mk(bob_peer_id, SessionRole.INITIATOR, alice_conn, alice_peer_id,
                addresses=["/ip4/127.0.0.1/tcp/0"], token_verifier=_verifier,

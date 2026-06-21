@@ -47,11 +47,12 @@ def test_verify_token_claims_returns_node_id_cv_hash_and_p2p_peers():
     # Back-compat: verify_token still returns exactly the 2-tuple.
     assert tv.verify_token(token, p2p_peer=PEERS[0]) == ("node-N", "cv-abc")
 
-    # RT: verify_token_claims additionally returns the binding.
-    node_id, cv_hash, peers = tv.verify_token_claims(token, p2p_peer=PEERS[1])
+    # RT: verify_token_claims additionally returns the binding and the JWT expiry.
+    node_id, cv_hash, peers, exp = tv.verify_token_claims(token, p2p_peer=PEERS[1])
     assert node_id == "node-N"
     assert cv_hash == "cv-abc"
     assert peers == tuple(PEERS)
+    assert isinstance(exp, int) and exp > 0
 
 
 def test_verify_token_claims_rejects_peer_not_in_binding():
@@ -59,7 +60,7 @@ def test_verify_token_claims_rejects_peer_not_in_binding():
     tv = TokenVerifier(pub)
     token = _mint(priv, **_valid_payload())
     # A speaker whose peer-id is not attested by the token fails the binding check.
-    assert tv.verify_token_claims(token, p2p_peer="12D3KooWintruder") == (None, None, ())
+    assert tv.verify_token_claims(token, p2p_peer="12D3KooWintruder") == (None, None, (), 0)
     assert tv.verify_token(token, p2p_peer="12D3KooWintruder") == (None, None)
 
 
@@ -67,7 +68,7 @@ def test_verify_token_claims_rejects_expired_token():
     priv, pub = _keypair()
     tv = TokenVerifier(pub)
     token = _mint(priv, **_valid_payload(exp=int(time.time()) - 10))
-    assert tv.verify_token_claims(token, p2p_peer=PEERS[0]) == (None, None, ())
+    assert tv.verify_token_claims(token, p2p_peer=PEERS[0]) == (None, None, (), 0)
 
 
 def test_verify_token_claims_rejects_wrong_signature():
@@ -75,4 +76,4 @@ def test_verify_token_claims_rejects_wrong_signature():
     _, other_pub = _keypair()
     tv = TokenVerifier(other_pub)   # verifier holds a DIFFERENT public key
     token = _mint(priv, **_valid_payload())
-    assert tv.verify_token_claims(token, p2p_peer=PEERS[0]) == (None, None, ())
+    assert tv.verify_token_claims(token, p2p_peer=PEERS[0]) == (None, None, (), 0)

@@ -244,6 +244,10 @@ class Session:
         # decision hook.
         self.token_verifier = token_verifier
         self.token_factory = token_factory
+        # Per-Session view of the peer's verified token, captured at handshake and
+        # refreshed in-session by TOKEN_UPDATE (RT.4). exp 0 = no verifier / not yet seen.
+        self.remote_token_exp: int = 0
+        self.remote_cv_hash: Optional[str] = None
         self.is_world_join = is_world_join
         self._decision_hook = decision_hook
         self._grant = grant  # initiator world Session: redeem this after PROFILE
@@ -494,17 +498,21 @@ class Session:
         is configured (the v1 path). On success the root-attested node-id is adopted
         into ``remote_node_id_hint``; when we already expected a specific node-id at
         this peer, a mismatch is rejected (we reached the right peer-id but the wrong
-        node)."""
+        node). On success the peer's attested token expiry / cv_hash are captured on
+        the Session (``remote_token_exp`` / ``remote_cv_hash``) for the in-session
+        refresh (RT.4)."""
         if self.token_verifier is None:
             return None, None
-        node_id, cv_hash, p2p_peers = await self.token_verifier(token or "", self.peer_id)
+        node_id, cv_hash, p2p_peers, exp = await self.token_verifier(token or "", self.peer_id)
         if not node_id:
             return None, "bad_token"
         if self.remote_node_id_hint and self.remote_node_id_hint != node_id:
             return None, "token_node_id_mismatch"
         self.remote_node_id_hint = node_id
+        self.remote_token_exp = int(exp)
+        self.remote_cv_hash = cv_hash
         return VerifiedTokenClaims(node_id=node_id, cv_hash=cv_hash,
-                                   p2p_peers=tuple(p2p_peers)), None
+                                   p2p_peers=tuple(p2p_peers), exp=int(exp)), None
 
     async def _responder_on_profile_offer(self, offer: SessMsg) -> List[SessionEvent]:
         # Verify sig_a under the initiator's peer-id.
