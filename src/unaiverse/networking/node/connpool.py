@@ -26,7 +26,7 @@ from unaiverse.networking.node.tokens import TokenVerifier
 
 # A SessionInbound is a per-stage Session message lifted off the inbound queue
 # without going through Msg.from_bytes or JWT verification. Identity is established
-# inside Stage-2 of the Session handshake (sig_a + signed_peer_record), not here.
+# inside Stage-2 of the Session handshake (sig_a + token), not here.
 # `sess_msg` is a decoded SessMsg (see SessMsg.from_bytes) — the Session FSM never
 # sees protobuf, which keeps session.py/session_manager.py Pyodide-portable.
 SessionInbound = namedtuple("SessionInbound", ["peer_id", "protocol_id", "sess_msg"])
@@ -485,7 +485,7 @@ class ConnectionPools:
           * `session_messages` are raw per-stage Session payloads delivered on one of
             the SESSION_PROTOCOL_IDS — these skip Msg decoding and JWT verification
             because identity is established cryptographically inside the Session
-            handshake (sig_b / sig_a / signed_peer_record).
+            handshake (sig_b / sig_a / token).
 
         Args:
             p2p_name: The name of the P2P network to fetch messages from.
@@ -516,7 +516,7 @@ class ConnectionPools:
 
                 # ── Session-protocol fast path ────────────────────────────────
                 # Bypass Msg.from_bytes + JWT verify; Session handshake establishes
-                # identity itself in Stage-2 (sig_a + signed_peer_record).
+                # identity itself in Stage-2 (sig_a + token).
                 if protocol_id in SESSION_PROTOCOL_IDS:
                     try:
                         sess_msg = SessMsg.from_bytes(decoded_data, protocol_id)
@@ -596,7 +596,7 @@ class ConnectionPools:
         The Session FSM passes a `SessMsg` (not bytes) and a `p2p_name` (not a P2P
         object) so it stays free of protobuf and of any Python-only P2P handle — the
         JS `NodeConn` mirror exposes the same signature. Identity is bound by the
-        Session handshake (sig + signed_peer_record), so no JWT piggyback is inserted.
+        Session handshake (sig + token), so no JWT piggyback is inserted.
         """
         if protocol_id not in SESSION_PROTOCOL_IDS:
             raise ValueError(f"send_session: protocol_id '{protocol_id}' is not a Session protocol")
@@ -614,35 +614,6 @@ class ConnectionPools:
         except Exception as e:
             log.error(f"send_session(...{peer_id[-5:]}, {protocol_id}) failed: {e}", sub=p2p.log_sub)
             return False
-
-    # ── Async crypto / ping interface (legacy seam) ──────────────────────────────
-    # The Session/SessionManager no longer reach the transport through these conn
-    # wrappers: they call the high-level methods on their injected `P2P` instance
-    # directly (see p2p.py). These thin wrappers are kept for now (orphaned) to
-    # minimise churn in this step; they delegate to the synchronous Go FFI on the
-    # `p2p_name` instance, keyed by name. ─────────────────────────────────────────
-
-    def get_local_peer_id(self, p2p_name: str) -> str:
-        """Our own libp2p peer-id on the `p2p_name` instance."""
-        return self[p2p_name].peer_id
-
-    async def sign_with_host_key(self, p2p_name: str, data: bytes):
-        """Ed25519-sign `data` with the host key of the `p2p_name` instance."""
-        return self[p2p_name]._sign_with_host_key_sync(data)
-
-    async def verify_peer_signature(self, p2p_name: str, peer_id: str,
-                                    data: bytes, signature: bytes) -> bool:
-        """Verify `signature` over `data` under `peer_id`'s public key."""
-        return self[p2p_name]._verify_peer_signature_sync(peer_id, data, signature)
-
-    async def verify_signed_peer_record(self, p2p_name: str, envelope: bytes,
-                                        expected_peer_id: str) -> bool:
-        """Verify a SignedPeerRecord envelope binds `expected_peer_id`."""
-        return self[p2p_name]._verify_signed_peer_record_sync(envelope, expected_peer_id)
-
-    async def generate_signed_peer_record(self, p2p_name: str):
-        """SignedPeerRecord envelope bytes over the `p2p_name` host's addresses."""
-        return self[p2p_name]._generate_signed_peer_record_sync()
 
     def passed_time_since_last_communication(self):
         passed = time.time() - max(self.__last_sent_time, self.__last_recv_time)

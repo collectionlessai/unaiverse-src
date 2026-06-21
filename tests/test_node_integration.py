@@ -444,12 +444,10 @@ def _world_grant_blob():
     world_profile = full_profile_dict("world-node-id")
     return {
         "grant_id": "ab" * 32,
-        "grant_sig": "cd" * 8,
         "expiry_unix_ms": int(time.time() * 1000) + 30000,
         "world_profile_bytes": json.dumps(world_profile).encode("utf-8"),
         "role": 1,
         "rendezvous_tag": 0,
-        "world_private_peer_record": b"",
         "code_bundle": b"",
         "initial_stats": b"",
     }

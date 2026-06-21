@@ -1,8 +1,7 @@
 // FFI exports backing the Python Session abstraction.
 //
-// These exports — SendOnProtocol, GenerateSignedPeerRecord,
-// VerifySignedPeerRecord (+ host-key signing/verification) — are what Python
-// needs on top of the existing chat/pubsub surface to drive per-stage Session
+// These exports — SendOnProtocol (+ host-key signing/verification) — are what
+// Python needs on top of the existing chat/pubsub surface to drive per-stage Session
 // handshakes (see session/session.proto and session/session.py). Liveness is a
 // session-level PING/PONG over the control protocol, not /ipfs/ping.
 package main
@@ -21,7 +20,6 @@ import (
 
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
-	"github.com/libp2p/go-libp2p/core/record"
 	libp2pproto "github.com/libp2p/go-libp2p/core/protocol"
 )
 
@@ -98,100 +96,6 @@ func SendOnProtocol(
 
 	logger.Infof("[GO] 📤 Instance %d: Sent %d bytes on %s to %s\n", ni.instanceIndex, len(payload), protocolIDStr, pid)
 	return C.CString(jsonSuccessResponse(fmt.Sprintf("Sent %d bytes on %s to %s", len(payload), protocolIDStr, pid)))
-}
-
-// GenerateSignedPeerRecord builds a libp2p PeerRecord over the host's currently
-// known listen addresses and wraps it in a SignedEnvelope sealed with the host
-// private key. The envelope binds the host's peer-id to its addresses with a
-// monotonic-timestamp sequence number.
-//
-// Returns:
-//
-//	`{"state":"Success","message":"<base64-envelope>"}` on success.
-//
-// Caller MUST FreeString the result.
-//
-//export GenerateSignedPeerRecord
-func GenerateSignedPeerRecord(
-	instanceIndexC C.int,
-) (ret *C.char) {
-	defer recoverToCString(&ret, "GenerateSignedPeerRecord")
-	ni, err := getInstance(int(instanceIndexC))
-	if err != nil {
-		return C.CString(jsonErrorResponse(fmt.Sprintf("Invalid instance index: %d", int(instanceIndexC)), err))
-	}
-	if ni.host == nil {
-		return C.CString(jsonErrorResponse("GenerateSignedPeerRecord: host not initialised", nil))
-	}
-
-	info := peer.AddrInfo{ID: ni.host.ID(), Addrs: ni.host.Addrs()}
-	rec := peer.PeerRecordFromAddrInfo(info)
-
-	priv := ni.host.Peerstore().PrivKey(ni.host.ID())
-	if priv == nil {
-		return C.CString(jsonErrorResponse("GenerateSignedPeerRecord: host private key not in peerstore", nil))
-	}
-	env, err := record.Seal(rec, priv)
-	if err != nil {
-		return C.CString(jsonErrorResponse("GenerateSignedPeerRecord: Seal failed", err))
-	}
-	envBytes, err := env.Marshal()
-	if err != nil {
-		return C.CString(jsonErrorResponse("GenerateSignedPeerRecord: Marshal failed", err))
-	}
-	return C.CString(jsonSuccessResponse(base64.StdEncoding.EncodeToString(envBytes)))
-}
-
-// VerifySignedPeerRecord parses and verifies a base64-encoded SignedEnvelope, and
-// asserts that the inner PeerRecord's PeerID matches expectedPeerID. This is how
-// the Session responder confirms that a SignedPeerRecord received in PROFILE_OFFER
-// — sealed under the joiner's OTHER peer-id (p2p_world key when the handshake runs
-// on p2p_public) — actually belongs to that joiner.
-//
-// Returns:
-//
-//	`{"state":"Success","message":"verified"}` on success;
-//	`{"state":"Error","message":"..."}` on signature / domain / id mismatch.
-//
-// Caller MUST FreeString the result.
-//
-//export VerifySignedPeerRecord
-func VerifySignedPeerRecord(
-	envelopeB64C *C.char,
-	expectedPeerIDC *C.char,
-) (ret *C.char) {
-	defer recoverToCString(&ret, "VerifySignedPeerRecord")
-	envB64 := C.GoString(envelopeB64C)
-	expectedStr := C.GoString(expectedPeerIDC)
-
-	expectedPID, err := peer.Decode(expectedStr)
-	if err != nil {
-		return C.CString(jsonErrorResponse(fmt.Sprintf("VerifySignedPeerRecord: bad expected peerID '%s'", expectedStr), err))
-	}
-
-	envBytes, err := base64.StdEncoding.DecodeString(envB64)
-	if err != nil {
-		return C.CString(jsonErrorResponse("VerifySignedPeerRecord: base64 decode failed", err))
-	}
-
-	// ConsumeEnvelope verifies the signature against the inner public key and
-	// returns the inner record (typed); the domain is checked against the value
-	// declared in the envelope.
-	_, rec, err := record.ConsumeEnvelope(envBytes, peer.PeerRecordEnvelopeDomain)
-	if err != nil {
-		return C.CString(jsonErrorResponse("VerifySignedPeerRecord: ConsumeEnvelope failed", err))
-	}
-	prec, ok := rec.(*peer.PeerRecord)
-	if !ok {
-		return C.CString(jsonErrorResponse("VerifySignedPeerRecord: inner record is not a PeerRecord", nil))
-	}
-	if prec.PeerID != expectedPID {
-		return C.CString(jsonErrorResponse(
-			fmt.Sprintf("VerifySignedPeerRecord: PeerID mismatch, want %s got %s", expectedPID, prec.PeerID),
-			nil,
-		))
-	}
-	return C.CString(jsonSuccessResponse("verified"))
 }
 
 // SignWithHostKey signs `data` with the host's libp2p private key (Ed25519 by default).

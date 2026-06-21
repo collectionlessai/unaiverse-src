@@ -63,15 +63,6 @@ class RouterP2P:
     async def verify_peer_signature(self, peer_id, data, signature):
         return await self._fake.verify_peer_signature(peer_id, data, signature)
 
-    async def verify_signed_peer_record(self, envelope, expected_peer_id):
-        return await self._fake.verify_signed_peer_record(envelope, expected_peer_id)
-
-    async def generate_signed_peer_record(self):
-        return await self._fake.generate_signed_peer_record()
-
-    async def get_local_peer_id(self):
-        return self.peer_id
-
 
 class RouterNode:
     """A node spanning both p2p instances. Holds a RouterP2P per network and

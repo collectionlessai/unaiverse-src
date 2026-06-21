@@ -716,37 +716,6 @@ class P2P:
             logger.error(f"send_on_protocol(...{peer_id[-5:]}, {protocol_id}) exception: {e}")
             return False
 
-    def _generate_signed_peer_record_sync(self) -> Optional[bytes]:
-        """
-        Build a libp2p SignedPeerRecord over the host's current listen addresses,
-        sealed under the host private key. Returns the raw envelope bytes (the
-        Go side returns it base64-encoded; we decode to bytes here).
-
-        Session includes this in PROFILE_OFFER so the responder can cryptographically
-        bind the agent's *other* peer-id (p2p_world key when the handshake runs on
-        p2p_public, and vice-versa).
-        """
-        try:
-            result_ptr = P2P.libp2p.GenerateSignedPeerRecord(
-                P2P._type_interface.to_go_int(self._instance),
-            )
-            result = P2P._type_interface.from_go_ptr_to_json(result_ptr)
-            if result is None or result.get('state') == 'Error':
-                logger.warning(f"generate_signed_peer_record failed: "
-                               f"{result.get('message') if result else 'null result'}")
-                return None
-            b64 = result.get('message', '')
-            if not b64:
-                return None
-            try:
-                return base64.b64decode(b64)
-            except Exception as e:
-                logger.error(f"generate_signed_peer_record: bad base64 from Go: {e}")
-                return None
-        except Exception as e:
-            logger.error(f"generate_signed_peer_record exception: {e}")
-            return None
-
     def _sign_with_host_key_sync(self, data: bytes) -> Optional[bytes]:
         """Sign `data` with the host's libp2p private key (Ed25519 by default).
         Returns the raw signature bytes, or None on error. Used by Session to
@@ -788,30 +757,6 @@ class P2P:
             return bool(result) and result.get('state') == 'Success'
         except Exception as e:
             logger.error(f"verify_peer_signature exception: {e}")
-            return False
-
-    def _verify_signed_peer_record_sync(self, envelope_bytes: bytes, expected_peer_id: str) -> bool:
-        """
-        Verify a SignedPeerRecord envelope and assert that its inner PeerRecord
-        names `expected_peer_id`. Used by the Session responder to validate the
-        `signed_peer_record` field of an incoming PROFILE_OFFER.
-        """
-        if not isinstance(envelope_bytes, (bytes, bytearray)):
-            raise TypeError("verify_signed_peer_record: envelope_bytes must be bytes")
-        if not expected_peer_id or not isinstance(expected_peer_id, str):
-            raise ValueError("verify_signed_peer_record: expected_peer_id must be a non-empty string")
-        try:
-            b64 = base64.b64encode(bytes(envelope_bytes)).decode("ascii")
-            result_ptr = P2P.libp2p.VerifySignedPeerRecord(
-                P2P._type_interface.to_go_string(b64),
-                P2P._type_interface.to_go_string(expected_peer_id),
-            )
-            result = P2P._type_interface.from_go_ptr_to_json(result_ptr)
-            if result is None or result.get('state') == 'Error':
-                return False
-            return True
-        except Exception as e:
-            logger.error(f"verify_signed_peer_record exception: {e}")
             return False
 
     # --- High-level Session transport surface (CPython twin of OP2P.js) ──────────
@@ -917,18 +862,9 @@ class P2P:
             logger.error(f"send_session(...{peer_id[-5:]}, {protocol_id}) failed: {e}")
             return False
 
-    async def get_local_peer_id(self) -> str:
-        """Our own libp2p peer-id on this instance. Async for portability with the
-        JS twin (where the equivalent call is async)."""
-        return self.peer_id
-
     # --- Async crypto wrappers (Session awaits these) ────────────────────────────
     # Thin async wrappers over the synchronous Go FFI primitives above so session.py
     # `await`s identically in CPython and in Pyodide-over-JS.
-
-    async def generate_signed_peer_record(self) -> Optional[bytes]:
-        """Async wrapper over the SignedPeerRecord generator (see sync impl)."""
-        return self._generate_signed_peer_record_sync()
 
     async def sign_with_host_key(self, data: bytes) -> Optional[bytes]:
         """Async wrapper over the host-key signer (see sync impl)."""
@@ -937,10 +873,6 @@ class P2P:
     async def verify_peer_signature(self, peer_id: str, data: bytes, signature: bytes) -> bool:
         """Async wrapper over the peer-signature verifier (see sync impl)."""
         return self._verify_peer_signature_sync(peer_id, data, signature)
-
-    async def verify_signed_peer_record(self, envelope_bytes: bytes, expected_peer_id: str) -> bool:
-        """Async wrapper over the SignedPeerRecord verifier (see sync impl)."""
-        return self._verify_signed_peer_record_sync(envelope_bytes, expected_peer_id)
 
     # --- Relay Operations ---
     def reserve_on_relay(self, relay_peer_id: str) -> str:

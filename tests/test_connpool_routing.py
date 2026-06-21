@@ -64,8 +64,8 @@ def test_codec_round_trips_hello_request():
 
 def test_codec_round_trips_world_grant():
     msg = SessMsg(SessMsg.KIND_WORLD_GRANT, {
-        "grant_id": b"\x05" * 32, "grant_sig": b"sig", "expiry_unix_ms": 1234567890123,
-        "world_profile": b'{"a":1}', "world_private_peer_record": b"spr",
+        "grant_id": b"\x05" * 32, "expiry_unix_ms": 1234567890123,
+        "world_profile": b'{"a":1}',
         "role": 3, "code_bundle": b"", "initial_stats": b"", "rendezvous_tag": 7,
     })
     back = SessMsg.from_bytes(SessMsg.to_bytes(msg), "/unaiverse/session/world/1.0.0")

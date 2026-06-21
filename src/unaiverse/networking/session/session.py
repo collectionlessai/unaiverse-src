@@ -26,8 +26,8 @@ Portability (CPython + Pyodide)
 -------------------------------
 This module is **protobuf-free**: it speaks ``SessMsg`` value objects and reaches
 the transport/crypto only through the high-level async ``P2P`` surface injected as
-``self.p2p`` (``connect`` / ``send_session`` / ``get_local_peer_id`` /
-``sign_with_host_key`` / ``verify_peer_signature``).
+``self.p2p`` (``connect`` / ``send_session`` / ``sign_with_host_key`` /
+``verify_peer_signature``).
 That is exactly the surface a JS ``OP2P`` mirror exposes, so this file runs
 unchanged in Pyodide. The wire (de)serialization lives inside ``P2P.send_session``
 (via ``SessMsg.to_bytes``) in CPython and in ``session_pb.js`` in the browser.
@@ -39,10 +39,11 @@ Each stage runs on its own libp2p protocol:
                                         PrivateJoin / PrivateJoinAck
   /unaiverse/session/control/1.0.0   -- Goaway / GoawayAck
 
-Identity is bound by ``sig_b`` (Stage-1, responder over ``nonce_a||session_id``),
-``sig_a`` (Stage-2, initiator over ``nonce_b||session_id``), and the libp2p
-SignedPeerRecord (Stage-2, binding the agent's *other* peer-id). No per-message
-JWT piggyback for session protocols.
+Identity is bound by ``sig_b`` (Stage-1, responder over ``nonce_a||session_id``)
+and ``sig_a`` (Stage-2, initiator over ``nonce_b||session_id``), each verified
+against the transport peer-id, plus the root token (RT) that attests node_id /
+cv_hash / the public<->world p2p_peers binding. No per-message JWT piggyback for
+session protocols.
 """
 
 from __future__ import annotations

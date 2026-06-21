@@ -214,7 +214,7 @@ def test_responder_rejects_bad_sig_a(bob_conn, bob_p2p, bob_peer_id, alice_peer_
     bob_p2p.verify_peer_sig_returns = False
     offer = SessMsg(SessMsg.KIND_PROFILE_OFFER, {
         "profile": json.dumps({}).encode(), "sig_a": b"bad",
-        "signed_peer_record": b"spr", "session_id": sess.session_id,
+        "session_id": sess.session_id,
     })
     events = _run(sess.process_inbound(SESSION_PROFILE_PROTOCOL, offer))
     assert len(events) == 1 and events[0].type == SessionEventType.FAILED
@@ -272,7 +272,7 @@ def test_responder_rejects_invalid_token(bob_conn, bob_p2p, bob_peer_id, alice_p
     _drive_responder_to_offer_wait(sess)
     offer = SessMsg(SessMsg.KIND_PROFILE_OFFER, {
         "profile": json.dumps({"node_id": "claimed"}).encode(), "sig_a": b"ok",
-        "signed_peer_record": b"", "session_id": sess.session_id, "token": "bad-tok",
+        "session_id": sess.session_id, "token": "bad-tok",
     })
     events = _run(sess.process_inbound(SESSION_PROFILE_PROTOCOL, offer))
     assert len(events) == 1 and events[0].type == SessionEventType.FAILED
@@ -295,7 +295,7 @@ def test_responder_valid_token_overrides_profile_node_id(bob_conn, bob_p2p, bob_
     _drive_responder_to_offer_wait(sess)
     offer = SessMsg(SessMsg.KIND_PROFILE_OFFER, {
         "profile": json.dumps({"node_id": "self-claimed"}).encode(), "sig_a": b"ok",
-        "signed_peer_record": b"", "session_id": sess.session_id, "token": "good-tok",
+        "session_id": sess.session_id, "token": "good-tok",
     })
     events = _run(sess.process_inbound(SESSION_PROFILE_PROTOCOL, offer))
     assert seen == {"token": "good-tok", "peer_id": alice_peer_id}
@@ -312,7 +312,7 @@ def test_responder_decision_carries_token(bob_conn, bob_p2p, bob_peer_id, alice_
     _drive_responder_to_offer_wait(sess)
     offer = SessMsg(SessMsg.KIND_PROFILE_OFFER, {
         "profile": json.dumps({"node_id": "alice"}).encode(), "sig_a": b"ok",
-        "signed_peer_record": b"", "session_id": sess.session_id, "token": "",
+        "session_id": sess.session_id, "token": "",
     })
     events = _run(sess.process_inbound(SESSION_PROFILE_PROTOCOL, offer))
     assert len(events) == 1 and events[0].type == SessionEventType.ESTABLISHED
@@ -677,7 +677,7 @@ def test_profile_offer_in_hello_sent_is_ignored(alice_conn, alice_peer_id, bob_p
     assert sess.state == SessionState.HELLO_SENT
     offer = SessMsg(SessMsg.KIND_PROFILE_OFFER, {
         "profile": json.dumps({}).encode(), "sig_a": b"sig",
-        "signed_peer_record": b"spr", "session_id": sess.session_id,
+        "session_id": sess.session_id,
     })
     events = _run(sess.process_inbound(SESSION_PROFILE_PROTOCOL, offer))
     assert events == []
@@ -732,9 +732,9 @@ def test_world_grant_to_plain_initiator_is_ignored(alice_conn, alice_peer_id, bo
     })))
     assert sess.state == SessionState.PROFILE_SENT
     grant = SessMsg(SessMsg.KIND_WORLD_GRANT, {
-        "grant_id": b"\x05" * 32, "grant_sig": b"sig",
+        "grant_id": b"\x05" * 32,
         "expiry_unix_ms": int(time.time() * 1000) + 30000,
-        "world_profile": b"{}", "world_private_peer_record": b"",
+        "world_profile": b"{}",
         "role": 1, "code_bundle": b"", "initial_stats": b"", "rendezvous_tag": 0,
     })
     events = _run(sess.process_inbound(SESSION_WORLD_PROTOCOL, grant))
@@ -771,9 +771,9 @@ def test_world_grant_arriving_before_decision_is_buffered(alice_conn, alice_peer
 
     world_profile = json.dumps({"dynamic": {"private_peer_id": "12D3WorldPriv"}}).encode()
     grant = SessMsg(SessMsg.KIND_WORLD_GRANT, {
-        "grant_id": b"\x05" * 32, "grant_sig": b"sig",
+        "grant_id": b"\x05" * 32,
         "expiry_unix_ms": int(time.time() * 1000) + 30000,
-        "world_profile": world_profile, "world_private_peer_record": b"",
+        "world_profile": world_profile,
         "role": 3, "code_bundle": b"", "initial_stats": b"", "rendezvous_tag": 0,
     })
     events = _run(sess.process_inbound(SESSION_WORLD_PROTOCOL, grant))

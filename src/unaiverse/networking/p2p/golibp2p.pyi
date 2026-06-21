@@ -151,15 +151,6 @@ class GoLibP2P:
         """
         ...
 
-    def GenerateSignedPeerRecord(self, instance: int) -> int:
-        """
-        GenerateSignedPeerRecord(self, instance: int) -> int
-
-        Build a libp2p SignedPeerRecord over the host's current listen addresses,
-        sealed under the host private key.
-        """
-        ...
-
     def SignWithHostKey(self, instance:int, data: bytes, len_data: int) -> int:
         """
         SignWithHostKey(self, instance:int, data: bytes, len_data: int) -> int
@@ -173,13 +164,5 @@ class GoLibP2P:
         VerifyPeerSignature(self, peer_id: bytes, data: bytes, len_data: int, signature: bytes) -> int
 
         Verify that `signature` over `data` is valid under the public key derivable from `peer_id`.
-        """
-        ...
-
-    def VerifySignedPeerRecord(self, envelope_bytes: bytes, expected_peer_id: bytes) -> int:
-        """
-        VerifySignedPeerRecord(self, envelope_bytes: bytes, expected_peer_id: bytes) -> int
-
-        Verify a SignedPeerRecord envelope and assert that its inner PeerRecord names `expected_peer_id`.
         """
         ...

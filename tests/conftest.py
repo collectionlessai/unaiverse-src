@@ -44,12 +44,10 @@ def _silence_unaiverse_logger():
 class FakeP2P:
     """Stand-in for ``unaiverse.networking.p2p.p2p.P2P`` in unit tests.
 
-    Records every send for inspection; signatures/ping/SPR helpers return
-    canned values by default and can be overridden per-test. The synchronous
-    Go-FFI surface (``sign_with_host_key`` etc., named ``_*_sync`` like the real
-    ``P2P``) is what the connpool wrappers call; the high-level async surface
-    (``connect`` / ``send_session`` / ``get_local_peer_id`` / async crypto) is what
-    the Session/SessionManager call on their injected instance.
+    Records every send for inspection; signature/ping helpers return canned
+    values by default and can be overridden per-test. The high-level async surface
+    (``connect`` / ``send_session`` / async crypto) is what the
+    Session/SessionManager call on their injected instance.
     """
 
     def __init__(self, peer_id: str = "12D3FakeSelf", log_sub: str = "fake"):
@@ -58,8 +56,6 @@ class FakeP2P:
         # Behavior knobs — flip to None / False to simulate failures.
         self.sign_returns: Optional[bytes] = b"sig-bytes"
         self.verify_peer_sig_returns: bool = True
-        self.verify_spr_returns: bool = True
-        self.spr_bytes: Optional[bytes] = b"spr-bytes"
         self.ping_returns: Optional[int] = 1  # ms
         self.send_returns: bool = True
         # Capture.
@@ -72,12 +68,6 @@ class FakeP2P:
 
     def _verify_peer_signature_sync(self, peer_id: str, data: bytes, signature: bytes) -> bool:
         return self.verify_peer_sig_returns
-
-    def _generate_signed_peer_record_sync(self) -> Optional[bytes]:
-        return self.spr_bytes
-
-    def _verify_signed_peer_record_sync(self, envelope_bytes: bytes, expected_peer_id: str) -> bool:
-        return self.verify_spr_returns
 
     def ping_peer(self, peer_id: str, timeout_ms: int = 5000) -> Optional[int]:
         self.pinged.append((peer_id, timeout_ms))
@@ -94,15 +84,6 @@ class FakeP2P:
     async def verify_peer_signature(self, peer_id: str, data: bytes, signature: bytes) -> bool:
         return self._verify_peer_signature_sync(peer_id, data, signature)
 
-    async def generate_signed_peer_record(self) -> Optional[bytes]:
-        return self._generate_signed_peer_record_sync()
-
-    async def verify_signed_peer_record(self, envelope_bytes: bytes, expected_peer_id: str) -> bool:
-        return self._verify_signed_peer_record_sync(envelope_bytes, expected_peer_id)
-
-    async def get_local_peer_id(self) -> str:
-        return self.peer_id
-
 
 # ── Fake ConnectionPools (mocks the connpool surface Session touches) ───────
 
@@ -111,7 +92,7 @@ class FakeConn:
 
     Each FakeConn models *one* network of a node (the public one in single-
     instance tests). It exposes the high-level P2P surface the Session calls
-    (``connect`` / ``send_session`` / ``get_local_peer_id`` / async crypto), with no
+    (``connect`` / ``send_session`` / async crypto), with no
     ``p2p_name`` argument, and delegates the crypto to its underlying FakeP2P so
     per-test knobs (set on ``alice_p2p`` etc.) still take effect. A queue-based
     ``send_session`` lets two FakeConns be wired bidirectionally in integration
@@ -159,21 +140,12 @@ class FakeConn:
             self.send_inbox.append((self.my_peer_id, protocol_id, sess_msg))
         return True
 
-    # ── Crypto / identity interface (delegates to the underlying FakeP2P) ────
-    async def get_local_peer_id(self) -> str:
-        return self._p2p_self.peer_id
-
+    # ── Crypto interface (delegates to the underlying FakeP2P) ────
     async def sign_with_host_key(self, data: bytes):
         return await self._p2p_self.sign_with_host_key(data)
 
     async def verify_peer_signature(self, peer_id: str, data: bytes, signature: bytes) -> bool:
         return await self._p2p_self.verify_peer_signature(peer_id, data, signature)
-
-    async def verify_signed_peer_record(self, envelope: bytes, expected_peer_id: str) -> bool:
-        return await self._p2p_self.verify_signed_peer_record(envelope, expected_peer_id)
-
-    async def generate_signed_peer_record(self):
-        return await self._p2p_self.generate_signed_peer_record()
 
     # ── Per-network view (multi-instance harness) ────────────────────────────
     def as_p2p(self, p2p_name: str) -> "_FakeConnView":
@@ -207,20 +179,11 @@ class _FakeConnView:
             self._parent.send_inbox.append((self.my_peer_id, protocol_id, sess_msg))
         return True
 
-    async def get_local_peer_id(self) -> str:
-        return self._fake.peer_id
-
     async def sign_with_host_key(self, data: bytes):
         return await self._fake.sign_with_host_key(data)
 
     async def verify_peer_signature(self, peer_id: str, data: bytes, signature: bytes) -> bool:
         return await self._fake.verify_peer_signature(peer_id, data, signature)
-
-    async def verify_signed_peer_record(self, envelope: bytes, expected_peer_id: str) -> bool:
-        return await self._fake.verify_signed_peer_record(envelope, expected_peer_id)
-
-    async def generate_signed_peer_record(self):
-        return await self._fake.generate_signed_peer_record()
 
 
 # ── Fixtures ────────────────────────────────────────────────────────────────

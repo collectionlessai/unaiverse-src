@@ -60,9 +60,8 @@ message HelloResponse {
 message ProfileOffer {
   bytes profile             = 1;  // serialized NodeProfile JSON
   bytes sig_a               = 2;  // Ed25519(local_key, nonce_b || session_id)
-  bytes signed_peer_record  = 3;  // libp2p SignedPeerRecord (other peer-id)
-  bytes session_id          = 4;
-  string token              = 5;  // root-server JWT (RT): node_id + p2p_peers + cv_hash + exp;
+  bytes session_id          = 3;
+  string token              = 4;  // root-server JWT (RT): node_id + p2p_peers + cv_hash + exp;
                                   // the responder verifies it against the transport peer-id,
                                   // then trusts node_id / cv_hash / the public<->world binding.
 }
@@ -83,14 +82,12 @@ message ProfileDecision {
 
 message WorldGrant {
   bytes grant_id            = 1;  // 32 bytes random
-  bytes grant_sig           = 2;  // Ed25519(world_key, grant_id || joiner_world_peer_id || role_be8 || expiry_be8)
-  uint64 expiry_unix_ms     = 3;
-  bytes world_profile       = 4;  // serialized WorldProfile JSON
-  bytes world_private_peer_record = 5;  // SignedPeerRecord for the world p2p_world peer-id
-  uint32 role               = 6;  // role bitmask
-  bytes code_bundle         = 7;  // optional
-  bytes initial_stats       = 8;  // optional
-  uint64 rendezvous_tag     = 9;
+  uint64 expiry_unix_ms     = 2;
+  bytes world_profile       = 3;  // serialized WorldProfile JSON
+  uint32 role               = 4;  // role bitmask
+  bytes code_bundle         = 5;  // optional
+  bytes initial_stats       = 6;  // optional
+  uint64 rendezvous_tag     = 7;
 }
 
 message WorldGrantAck {
@@ -98,13 +95,13 @@ message WorldGrantAck {
 }
 
 // NOTE: PrivateJoin no longer rides protobuf — it moved to the JSON control
-// envelope (see sess_msg.py) when it grew the signed-grant echo fields
-// (role, expiry_unix_ms, grant_sig) that let the world host verify its own
-// grant statelessly at redemption. Kept here for reference only.
+// envelope (see sess_msg.py). RT.3b dropped the signature echo: the world Session
+// is mutually token-authenticated and the host gates on its own pre-admission, so
+// the join carries only the grant id, the joiner node-id and the grant expiry.
+// Kept here for reference only.
 message PrivateJoin {
   bytes grant_id            = 1;
-  bytes sig_init            = 2;  // Ed25519(joiner_world_key, grant_id)
-  string joiner_node_id     = 3;
+  string joiner_node_id     = 2;
 }
 
 message PrivateJoinAck {

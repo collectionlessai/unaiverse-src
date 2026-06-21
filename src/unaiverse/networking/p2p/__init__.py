@@ -164,12 +164,6 @@ _shared_lib.SendOnProtocol.argtypes = [
 ]
 _shared_lib.SendOnProtocol.restype = ctypes.c_void_p
 
-_shared_lib.GenerateSignedPeerRecord.argtypes = [ctypes.c_int]
-_shared_lib.GenerateSignedPeerRecord.restype = ctypes.c_void_p
-
-_shared_lib.VerifySignedPeerRecord.argtypes = [ctypes.c_char_p, ctypes.c_char_p]
-_shared_lib.VerifySignedPeerRecord.restype = ctypes.c_void_p
-
 _shared_lib.SignWithHostKey.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int]
 _shared_lib.SignWithHostKey.restype = ctypes.c_void_p
 

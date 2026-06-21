@@ -111,7 +111,7 @@ class SessMsg:
     KIND_PROFILE_DECISION = "profile_decision"
     KIND_WORLD_GRANT      = "world_grant"
     KIND_WORLD_GRANT_ACK  = "world_grant_ack"
-    KIND_PRIVATE_JOIN     = "private_join"   # JSON envelope (grant echo fields post-date session.proto)
+    KIND_PRIVATE_JOIN     = "private_join"   # JSON envelope (rides JSON, not protobuf; see _JSON_KIND_FIELDS)
     KIND_PRIVATE_JOIN_ACK = "private_join_ack"
     KIND_GOAWAY           = "goaway"
     KIND_GOAWAY_ACK       = "goaway_ack"
@@ -216,13 +216,13 @@ _KIND_SPEC = {
     SessMsg.KIND_HELLO_RESP:       (0x02, "HelloResponse",
                                     ["chosen_version", "capabilities", "nonce_b", "sig_b", "reason_code"]),
     SessMsg.KIND_PROFILE_OFFER:    (0x03, "ProfileOffer",
-                                    ["profile", "sig_a", "signed_peer_record", "session_id", "token"]),
+                                    ["profile", "sig_a", "session_id", "token"]),
     SessMsg.KIND_PROFILE_DECISION: (0x04, "ProfileDecision",
                                     ["accepted", "profile_b", "reason_code", "hint_addrs", "retry_after_ms",
                                      "session_id", "token"]),
     SessMsg.KIND_WORLD_GRANT:      (0x05, "WorldGrant",
-                                    ["grant_id", "grant_sig", "expiry_unix_ms", "world_profile",
-                                     "world_private_peer_record", "role", "code_bundle", "initial_stats",
+                                    ["grant_id", "expiry_unix_ms", "world_profile",
+                                     "role", "code_bundle", "initial_stats",
                                      "rendezvous_tag"]),
     SessMsg.KIND_WORLD_GRANT_ACK:  (0x06, "WorldGrantAck", ["received"]),
     SessMsg.KIND_PRIVATE_JOIN_ACK: (0x08, "PrivateJoinAck", ["accepted", "reason_code", "rendezvous_topic"]),
@@ -233,11 +233,11 @@ _TAG_TO_KIND = {tag: kind for kind, (tag, _cls, _f) in _KIND_SPEC.items()}
 _REPEATED_FIELDS = frozenset({"protocol_versions", "hint_addrs"})
 
 # JSON-envelope codec (protobuf-free): the liveness/resume control messages plus
-# PrivateJoin, which outgrew its session.proto shape (it now echoes the signed
-# grant fields — role/expiry/grant_sig — so the world host can verify its own
-# grant statelessly at redemption; no protoc regen needed). `bytes` fields are
-# hex-encoded so they survive JSON; the codec restores them to `bytes` on decode
-# so the FSM sees the same value types as for protobuf messages.
+# PrivateJoin, which rides the JSON envelope rather than session.proto. RT.3b made
+# the grant unsigned, so the join just carries the grant id, the joiner node-id and
+# the grant expiry. `bytes` fields are hex-encoded so they survive JSON; the codec
+# restores them to `bytes` on decode so the FSM sees the same value types as for
+# protobuf messages.
 _JSON_KIND_TO_TAG = {
     SessMsg.KIND_PRIVATE_JOIN: 0x07,
     SessMsg.KIND_PING:         0x0B,
@@ -248,9 +248,8 @@ _JSON_KIND_TO_TAG = {
 _JSON_TAG_TO_KIND = {tag: kind for kind, tag in _JSON_KIND_TO_TAG.items()}
 # Field name -> True if it is a `bytes` field (hex-encoded in the JSON envelope).
 _JSON_KIND_FIELDS = {
-    SessMsg.KIND_PRIVATE_JOIN: {"grant_id": True, "sig_init": True,
-                                "joiner_node_id": False, "role": False,
-                                "expiry_unix_ms": False, "grant_sig": True},
+    SessMsg.KIND_PRIVATE_JOIN: {"grant_id": True, "joiner_node_id": False,
+                                "expiry_unix_ms": False},
     SessMsg.KIND_PING:         {"session_id": True, "nonce": True},
     SessMsg.KIND_PONG:         {"session_id": True, "nonce": True, "ok": False},
     SessMsg.KIND_RESUME:       {"session_id": True, "nonce": True},

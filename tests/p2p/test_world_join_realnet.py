@@ -21,9 +21,9 @@ the world-side key across two P2P instances, with *real* crypto — validating t
 ``instanceIndex``-keyed FFI that the mocked suite can only stub.
 
 The world-side dial address is handed to the orchestrator via closure (the test
-owns both nodes). Production extracts world addrs from the grant's
-``world_private_peer_record``; the simplification is harmless here — the full
-real PRIVATE_JOIN + grant crypto still runs.
+owns both nodes). RT.3b dropped the grant's SignedPeerRecord, so the binding to
+the world identity now comes from the verified token; the full real PRIVATE_JOIN
+handshake still runs.
 
 Run with:  ``uv run pytest -m p2p tests/p2p/test_world_join_realnet.py -v``
 """
@@ -135,55 +135,7 @@ def test_real_world_join_full_handoff(real_nodes):
     assert world_established and world_established[0].data.get("rendezvous_topic")
 
 
-def test_real_world_join_rejects_tampered_role(real_nodes):
-    """A joiner that redeems the grant with an inflated role must be rejected:
-    the host verifies its own Ed25519 grant signature over (grant_id, joiner
-    world peer-id, role, expiry) at PRIVATE_JOIN."""
-    j_pub_p2p, j_world_p2p, j_conn, j_pub, j_world = real_nodes.world_node("joiner")
-    h_pub_p2p, h_world_p2p, h_conn, h_pub, h_world = real_nodes.world_node(
-        "host", decision_hook=_host_decision_hook)
-
-    host_pub_addr = pick_dialable_addr(h_pub_p2p)
-    host_world_addr = pick_dialable_addr(h_world_p2p)
-    host_pub_id = h_pub_p2p.peer_id
-    host_world_id = h_world_p2p.peer_id
-    joiner_world_id = j_world_p2p.peer_id
-
-    targets = [
-        (j_conn, j_pub, NodeConn.P2P_PUBLIC), (j_conn, j_world, NodeConn.P2P_WORLD),
-        (h_conn, h_pub, NodeConn.P2P_PUBLIC), (h_conn, h_world, NodeConn.P2P_WORLD),
-    ]
-    failures = []
-
-    async def orchestrate(ev):
-        if ev.type == SessionEventType.ESTABLISHED and ev.data.get("world_grant"):
-            blob = dict(ev.data["world_grant"])
-            blob["grant_id_bytes"] = bytes.fromhex(blob["grant_id"])
-            blob["role"] = int(blob["role"]) | 4   # claim a custom-role bit not granted
-            for e in await j_world.initiate(
-                    host_world_id, [host_world_addr],
-                    remote_other_peer_id_hint=host_world_id, grant=blob):
-                await orchestrate(e)
-        elif ev.type == SessionEventType.FAILED:
-            failures.append(ev)
-
-    async def _scenario():
-        for e in await j_pub.initiate(host_pub_id, [host_pub_addr], is_world_join=True,
-                                      remote_other_peer_id_hint=host_world_id):
-            await orchestrate(e)
-        await pump_until(
-            targets,
-            predicate=lambda: any(e.p2p_name == NodeConn.P2P_WORLD
-                                  and e.peer_id == host_world_id for e in failures),
-            on_event=orchestrate,
-            timeout=60.0)
-
-    asyncio.run(_scenario())
-
-    assert not j_world.is_established(host_world_id)
-    assert not h_world.is_established(joiner_world_id)
-    reasons = [e.data.get("reason", "") for e in failures
-               if e.p2p_name == NodeConn.P2P_WORLD]
-    # Host side refuses its own forged-role grant; joiner side sees the NACK.
-    assert any("private_join_bad_grant_sig" in r for r in reasons), reasons
-    assert any("private_join_rejected" in r for r in reasons), reasons
+# RT.3b removed the world-grant signature: the role is no longer carried/trusted in
+# the grant (the host reads it from its own pre-admission), so a tampered-role grant
+# simply has no effect and there is nothing to reject. The former
+# test_real_world_join_rejects_tampered_role was dropped with that behaviour.
