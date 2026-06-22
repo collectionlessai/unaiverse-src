@@ -1024,6 +1024,16 @@ class NodeConn:
             result[pool_name][c['id']] = c
         return result
 
+    # ── World-roster writers (S9: writes are centralized here) ─────────────────
+    #
+    # set_world / set_world_agents_list / set_world_masters_list / add_to_world_agents_list /
+    # add_to_world_masters_list / remove_from_world_lists are the ONLY places the world roster
+    # is mutated. node.py never touches world_agents_set/world_masters_set/world_node_peer_id
+    # directly: it calls these Coordinator methods, which write sm_world. That is what keeps the
+    # membership single-sourced in sm_world (S8). The rendezvous READ stays on the Coordinator
+    # (set_world_agents_and_world_masters_lists_from_rendezvous, D-6); only the write lands here.
+    # If a new roster mutation is ever needed, add it as a method here, never as a direct set.
+
     def set_world(self, world_peer_id: str | None) -> None:
         """Sets the peer ID of the world node.
 
