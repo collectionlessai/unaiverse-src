@@ -24,27 +24,14 @@ from unaiverse.networking.p2p.p2p import P2P, P2PError
 from unaiverse.networking.node.tokens import TokenVerifier
 
 
-# A SessionInbound is a per-stage Session message lifted off the inbound queue
-# without going through Msg.from_bytes or JWT verification. Identity is established
-# inside Stage-2 of the Session handshake (sig_a + token), not here.
-# `sess_msg` is a decoded SessMsg (see SessMsg.from_bytes) — the Session FSM never
-# sees protobuf, which keeps session.py/session_manager.py Pyodide-portable.
-SessionInbound = namedtuple("SessionInbound", ["peer_id", "protocol_id", "sess_msg"])
-
-# libp2p protocol IDs that belong to the Session abstraction. Keep in sync with
-# session/session.py SESSION_PROTOCOL_IDS and unailib/types.go Session*Protocol.
-SESSION_PROTOCOL_IDS = frozenset({
-    "/unaiverse/session/hello/1.0.0",
-    "/unaiverse/session/profile/1.0.0",
-    "/unaiverse/session/world/1.0.0",
-    "/unaiverse/session/control/1.0.0",
-})
-
-
-# `SessMsg` owns its own wire codec now (SessMsg.to_bytes / SessMsg.from_bytes, in
-# session/sess_msg.py), so connpool no longer imports session_pb2: the protobuf
-# dependency lives inside those methods (lazy import) and never at this module top.
-from unaiverse.networking.session.sess_msg import SessMsg
+# The session-protocol wire codec, its protocol IDs and the SessionInbound value object
+# are the session layer's single source of truth (sess_msg.py, the leaf module). connpool
+# imports them rather than redefining them; the inbound codec itself (pop + decode) now
+# lives in P2P.get_messages, and connpool only runs the Node-bound chat path. The protobuf
+# dependency stays inside SessMsg.to_bytes/from_bytes (lazy import), never at this top.
+from unaiverse.networking.session.sess_msg import (
+    SessMsg, SESSION_PROTOCOL_IDS, SessionInbound,
+)
 
 
 # Immutable per-cycle view of the world membership that the perimeter routing
@@ -502,47 +489,28 @@ class NodeConn:
         allowed_not_connected_peers = (self._cycle_membership.world_agents
                                        | self._cycle_membership.world_masters)
 
-        # Pop all messages
+        # P2P pops this instance's inbound batch and decodes the Session-protocol frames
+        # (the wire codec lives in the transport tier); chat_raw stays raw for the
+        # Node-bound chat path below, and session_messages is passed straight through.
         p2p = self[p2p_name]
-        byte_messages = p2p.pop_messages()  # Pop all messages
-        # Process the list of message dictionaries
+        chat_raw, session_messages = p2p.get_messages()
         processed_messages: list[Msg] = []
-        session_messages: list[SessionInbound] = []
 
-        if len(byte_messages) > 0:
+        if chat_raw or session_messages:
             self.__last_recv_time = time.time()
 
-        for i, msg_dict in enumerate(byte_messages):
+        for i, msg_dict in enumerate(chat_raw):
             msg_dict: dict
             try:
-                # Extract and validate required fields from the Go message structure.
                 # The binary transport delivers "data" already as raw bytes (no base64).
                 # Go structure: {"from":"Qm...", "data":<bytes>, "protocol":"..."}
                 verified_sender_id = msg_dict.get("from")
                 decoded_data = msg_dict.get("data")
-                protocol_id = msg_dict.get("protocol") or ""
 
-                # ── Session-protocol fast path ────────────────────────────────
-                # Bypass Msg.from_bytes + JWT verify; Session handshake establishes
-                # identity itself in Stage-2 (sig_a + token).
-                if protocol_id in SESSION_PROTOCOL_IDS:
-                    try:
-                        sess_msg = SessMsg.from_bytes(decoded_data, protocol_id)
-                    except Exception as codec_err:
-                        log.error(f"Failed to decode session message on {protocol_id} "
-                                  f"from {verified_sender_id}: {codec_err}", sub=p2p.log_sub)
-                        continue
-                    session_messages.append(SessionInbound(
-                        peer_id=verified_sender_id,
-                        protocol_id=protocol_id,
-                        sess_msg=sess_msg,
-                    ))
-                    continue
-
-                # ── Legacy chat path ─────────────────────────────────────────
-                # Attempt to create the higher-level Msg object
-                # This assumes Msg.from_bytes can parse your message protocol from decoded_data
-                # and that Msg objects store sender, type, channel intrinsically or can be set.
+                # ── Chat path (Node-bound) ───────────────────────────────────
+                # Session-protocol frames were already split off and decoded by
+                # P2P.get_messages; everything here is a chat Msg that needs
+                # Msg.from_bytes + sender-mismatch + membership gate + JWT verify.
                 msg_obj = Msg.from_bytes(decoded_data)
 
                 log.network(f"<<< RECEIVED {msg_obj.content_type} through channel {msg_obj.channel}", sub=p2p.log_sub)

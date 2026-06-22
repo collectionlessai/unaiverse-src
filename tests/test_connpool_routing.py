@@ -16,10 +16,12 @@ from unaiverse.networking.node.connpool import (
     NodeConn, SessionInbound, SESSION_PROTOCOL_IDS,
 )
 from unaiverse.networking.session import SessMsg
+from unaiverse.networking.p2p.p2p import P2P
 
 
 class _FakeP2P:
-    """Minimal stand-in: only ``pop_messages`` is called by ``get_messages``."""
+    """Minimal stand-in: fakes pop_messages and reuses the real P2P.get_messages, so the
+    session/chat partition + SessMsg codec exercised here is the production one."""
     log_sub = "fake"
 
     def __init__(self, batch):
@@ -27,6 +29,8 @@ class _FakeP2P:
 
     def pop_messages(self):
         return self._batch
+
+    get_messages = P2P.get_messages
 
 
 @pytest.fixture
@@ -171,12 +175,6 @@ def test_mixed_batch_split_correctly(pools_with_one_p2p, monkeypatch):
     assert {s.sess_msg.kind for s in session} == {
         SessMsg.KIND_PROFILE_OFFER, SessMsg.KIND_GOAWAY,
     }
-
-
-def test_session_protocol_ids_match_constants():
-    """connpool's SESSION_PROTOCOL_IDS must match session.py's."""
-    from unaiverse.networking.session import SESSION_PROTOCOL_IDS as session_ids
-    assert SESSION_PROTOCOL_IDS == session_ids
 
 
 def test_session_inbound_namedtuple_shape():

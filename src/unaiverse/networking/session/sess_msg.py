@@ -28,8 +28,32 @@ The JS twin is a single ``sess_msg.js`` carrying both the value object and the c
 from __future__ import annotations
 
 import json
+from collections import namedtuple
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
+
+
+# ── Session protocol IDs (libp2p stream protocols that carry a SessMsg) ───────
+# Single source of truth, imported by session.py, session_manager.py, connpool.py
+# and p2p.py (the inbound/outbound codec). Keep in sync with unailib/types.go.
+SESSION_HELLO_PROTOCOL   = "/unaiverse/session/hello/1.0.0"
+SESSION_PROFILE_PROTOCOL = "/unaiverse/session/profile/1.0.0"
+SESSION_WORLD_PROTOCOL   = "/unaiverse/session/world/1.0.0"
+SESSION_CONTROL_PROTOCOL = "/unaiverse/session/control/1.0.0"
+
+SESSION_PROTOCOL_IDS = frozenset({
+    SESSION_HELLO_PROTOCOL,
+    SESSION_PROFILE_PROTOCOL,
+    SESSION_WORLD_PROTOCOL,
+    SESSION_CONTROL_PROTOCOL,
+})
+
+# A SessionInbound is a per-stage Session message lifted off the inbound queue and
+# decoded by SessMsg.from_bytes, carrying the transport-verified sender peer_id and the
+# protocol_id that SessionManager.deliver needs (the SessMsg payload itself has neither).
+# It is the inbound mirror of send_session(peer_id, protocol_id, sess_msg); the Session
+# FSM only ever sees the decoded SessMsg, never protobuf.
+SessionInbound = namedtuple("SessionInbound", ["peer_id", "protocol_id", "sess_msg"])
 
 
 # ── ReasonCode (verbatim from session.proto enum ReasonCode) ──────────────────

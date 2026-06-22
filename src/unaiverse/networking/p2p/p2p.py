@@ -20,6 +20,10 @@ import threading
 from .lib_types import TypeInterface
 from typing import Optional, List, Dict, Any, TYPE_CHECKING
 
+# The session-layer wire codec lives in the leaf module sess_msg (no FSM, no cycle back
+# into the conn layer): P2P.get_messages decodes inbound Session frames with it.
+from unaiverse.networking.session.sess_msg import SessMsg, SESSION_PROTOCOL_IDS, SessionInbound
+
 # FdCapture and Logger are optional — gracefully degrade if not present
 try:
     from unaiverse.utils.os_fd_capture import FdCapture
@@ -861,6 +865,33 @@ class P2P:
         except Exception as e:
             logger.error(f"send_session(...{peer_id[-5:]}, {protocol_id}) failed: {e}")
             return False
+
+    def get_messages(self) -> tuple:
+        """Pop this instance's inbound batch and split it. Session-protocol frames are
+        decoded here, in the transport tier, into SessionInbound(peer_id, protocol_id,
+        SessMsg) via the wire codec (SessMsg.from_bytes); everything else is returned as
+        raw transport dicts for the Node-bound chat path (Msg.from_bytes + JWT verify),
+        which must not move into the portable transport. Inbound mirror of send_session.
+
+        Returns (chat_raw, session_inbounds): chat_raw is a list of raw message dicts
+        ({"from","data","protocol"}), session_inbounds a list of SessionInbound.
+        """
+        chat_raw = []
+        session_inbounds = []
+        for msg_dict in self.pop_messages():
+            protocol_id = msg_dict.get("protocol") or ""
+            if protocol_id in SESSION_PROTOCOL_IDS:
+                try:
+                    sess_msg = SessMsg.from_bytes(msg_dict.get("data"), protocol_id)
+                except Exception as e:
+                    logger.error(f"get_messages: failed to decode session message on "
+                                 f"{protocol_id} from {msg_dict.get('from')}: {e}")
+                    continue
+                session_inbounds.append(SessionInbound(
+                    peer_id=msg_dict.get("from"), protocol_id=protocol_id, sess_msg=sess_msg))
+            else:
+                chat_raw.append(msg_dict)
+        return chat_raw, session_inbounds
 
     # --- Async crypto wrappers (Session awaits these) ────────────────────────────
     # Thin async wrappers over the synchronous Go FFI primitives above so session.py

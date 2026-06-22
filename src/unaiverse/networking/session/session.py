@@ -60,24 +60,13 @@ from unaiverse.networking.session.sess_msg import (
     SessMsg, reason_name, ProfileDecisionResult, WorldGrantSpec, VerifiedTokenClaims,
     OK, VERSION_UNSUPPORTED, NOT_AUTHORIZED, LOCAL_ERROR, GRACEFUL_SHUTDOWN,
     SIMULTANEOUS_OPEN_LOSS, SESSION_UNKNOWN, GRANT_EXPIRED, TOKEN_EXPIRED,
+    SESSION_HELLO_PROTOCOL, SESSION_PROFILE_PROTOCOL,
+    SESSION_WORLD_PROTOCOL, SESSION_CONTROL_PROTOCOL, SESSION_PROTOCOL_IDS,
 )
 from unaiverse.utils.logger import log
 
 if TYPE_CHECKING:
     from unaiverse.networking.p2p.p2p import P2P
-
-# ── Protocol IDs (keep in sync with unailib/types.go + connpool SESSION_PROTOCOL_IDS) ─
-SESSION_HELLO_PROTOCOL   = "/unaiverse/session/hello/1.0.0"
-SESSION_PROFILE_PROTOCOL = "/unaiverse/session/profile/1.0.0"
-SESSION_WORLD_PROTOCOL   = "/unaiverse/session/world/1.0.0"
-SESSION_CONTROL_PROTOCOL = "/unaiverse/session/control/1.0.0"
-
-SESSION_PROTOCOL_IDS = frozenset({
-    SESSION_HELLO_PROTOCOL,
-    SESSION_PROFILE_PROTOCOL,
-    SESSION_WORLD_PROTOCOL,
-    SESSION_CONTROL_PROTOCOL,
-})
 
 # ── Per-state timeouts (seconds) ──────────────────────────────────────────────
 _TIMEOUT_CONNECT_S = 35.0   # dial: PeerConnectionTimeout (30s Go) + 5s buffer
