@@ -436,7 +436,7 @@ class AgentBasics:
         self.set_default_stdin_binding(public)
 
         # Zero-step: if we are in a world, the peer ID used for indexing the interaction cache is the world peer ID
-        peer_id = peer_id if public else self.node_conn.get_world_peer_id()
+        peer_id = peer_id if public else self.node_conn.get_world_node_peer_id()
 
         # First of all, clearing residuals of interactions that were completed in the past
         to_remove = []

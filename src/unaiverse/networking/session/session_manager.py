@@ -127,6 +127,17 @@ class SessionManager:
         # peer_id → monotonic timestamp until which dials are refused.
         self._quarantine: Dict[str, float] = {}
 
+        # Pure world membership, owned here so it sits next to the Sessions it gates.
+        # Meaningful only on the world instance, where the Coordinator populates these
+        # from the rendezvous and the world-host writers; inert (empty) on the public
+        # instance. The Coordinator reads them back through membership_snapshot() to build
+        # the per-cycle WorldMembership the perimeter classifies against. The role/addrs
+        # indices and inspector_peer_id stay Coordinator-owned (D-2 / D-8a): only the two
+        # sets and the world node's peer-id live here.
+        self.world_agents_set: set = set()
+        self.world_masters_set: set = set()
+        self.world_node_peer_id: Optional[str] = None
+
     # ── Session registry (keep the two views consistent) ──────────────────────
     #
     # Every mutation of the session store goes through these helpers so the

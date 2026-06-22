@@ -263,14 +263,15 @@ def test_requires_fast_clock_aggregates_managers():
 # ── Membership snapshot (perimeter seam) ─────────────────────────────────────
 
 def test_membership_snapshot_is_immutable():
-    """membership_snapshot freezes the live sets so a snapshot already handed to the
-    routing cannot change if the membership mutates afterwards."""
+    """membership_snapshot freezes sm_world's live sets so a snapshot already handed to
+    the routing cannot change if the membership mutates afterwards. The pure membership
+    lives in sm_world now; inspector_peer_id stays the Coordinator's own field (D-8a)."""
+    from types import SimpleNamespace
     from unaiverse.networking.node.connpool import WorldMembership
 
     conn = NodeConn.__new__(NodeConn)  # bypass the heavy P2P-bound __init__
-    conn.world_agents_set = {"a"}
-    conn.world_masters_set = {"m"}
-    conn.world_node_peer_id = "wn"
+    conn._sm_world = SimpleNamespace(
+        world_agents_set={"a"}, world_masters_set={"m"}, world_node_peer_id="wn")
     conn.inspector_peer_id = "insp"
     snap = conn.membership_snapshot()
     assert isinstance(snap, WorldMembership)
@@ -278,14 +279,15 @@ def test_membership_snapshot_is_immutable():
     assert snap.world_masters == frozenset({"m"})
     assert snap.world_node_peer_id == "wn" and snap.inspector_peer_id == "insp"
     # Mutating the live set afterwards must not touch the already-taken snapshot.
-    conn.world_agents_set.add("b")
+    conn._sm_world.world_agents_set.add("b")
     assert "b" not in snap.world_agents
 
 
 def test_conn_routing_classifies_against_passed_snapshot():
-    """conn_routing_fcn classifies world peers against the *passed* membership
-    snapshot, not the Coordinator's live sets. With empty live sets, a peer the
-    snapshot calls a world agent is still routed (proving the seam is the snapshot)."""
+    """conn_routing_fcn classifies world peers against the *passed* membership snapshot.
+    The Coordinator holds no live roster (it lives in sm_world), so a peer the snapshot
+    calls a world agent is routed purely from the passed view, proving the seam is the
+    snapshot."""
     from unaiverse.networking.node.connpool import WorldMembership
 
     class _WP2P:
@@ -299,11 +301,8 @@ def test_conn_routing_classifies_against_passed_snapshot():
         NodeConn.IN_WORLD_NODE, NodeConn.OUT_WORLD_NODE,
         NodeConn.IN_WORLD_MASTERS, NodeConn.OUT_WORLD_MASTERS,
     ]}
-    # Live sets are EMPTY: reading self.* would make the peer unclassifiable.
-    conn.world_agents_set = set()
-    conn.world_masters_set = set()
-    conn.world_node_peer_id = None
-    conn.inspector_peer_id = None
+    # The Coordinator no longer holds any live roster (it lives in sm_world): the only
+    # classification source is the snapshot passed to conn_routing_fcn.
 
     membership = WorldMembership(world_agents=frozenset({"agentX"}), world_masters=frozenset(),
                                 world_node_peer_id=None, inspector_peer_id=None)
@@ -362,8 +361,8 @@ def test_char_world_classification_precedence_agent_over_node():
     """A world peer that is at once agent, node and inspector is classified as agent
     (the ternary precedence agent > node > master): inbound -> IN_WORLD_AGENTS."""
     conn, pub, world = _make_node_conn()
-    conn.world_agents_set = {"w"}
-    conn.world_node_peer_id = "w"
+    conn._sm_world.world_agents_set = {"w"}
+    conn._sm_world.world_node_peer_id = "w"
     conn.inspector_peer_id = "w"
     world._infos = [_info("w", "inbound")]
     added, removed = _run(conn.update())
@@ -388,7 +387,7 @@ def test_char_full_pool_truncates_diff_added():
     conn, pub, world = _make_node_conn()
     cap = conn.pool_name_to_pool_triple[NodeConn.IN_WORLD_AGENTS][1]
     names = [f"a{i}" for i in range(cap + 2)]
-    conn.world_agents_set = set(names)
+    conn._sm_world.world_agents_set = set(names)
     world._infos = [_info(n, "inbound") for n in names]
     added, removed = _run(conn.update())
     assert len(added[NodeConn.IN_WORLD_AGENTS]) == cap
@@ -398,7 +397,7 @@ def test_char_same_peer_both_networks_enters_once():
     """The same peer-id seen on both networks enters exactly one pool: public is
     processed first, and the world add() is refused by the cross-pool guard."""
     conn, pub, world = _make_node_conn()
-    conn.world_agents_set = {"dual"}
+    conn._sm_world.world_agents_set = {"dual"}
     pub._infos = [_info("dual", "inbound")]
     world._infos = [_info("dual", "inbound")]
     added, removed = _run(conn.update())
@@ -444,9 +443,9 @@ def test_cycle_snapshot_frozen_until_next_update():
     _run(conn.update())
     assert conn._cycle_membership.world_agents == frozenset()
 
-    # Mid-cycle pre-admission mutates the live roster...
+    # Mid-cycle pre-admission mutates the live roster (now in sm_world)...
     conn.add_to_world_agents_list("late", ["/ip4/9.9.9.9/tcp/9"], role=ROLE_WORLD_AGENT)
-    assert "late" in conn.world_agents_and_world_masters_set
+    assert "late" in conn._sm_world.world_agents_set
     # ...but the per-cycle snapshot stays frozen until the next update().
     assert "late" not in conn._cycle_membership.world_agents
 
@@ -473,10 +472,9 @@ def test_get_messages_gate_reads_cycle_snapshot(pools_with_one_p2p, monkeypatch)
         return ("node-late", None)
     monkeypatch.setattr(pools, "verify_token", _verify)
 
-    # The live roster admits "lateagent" (not in any pool), but this cycle's frozen
-    # snapshot does not, so the gate drops the message.
-    pools.world_agents_set = {"lateagent"}
-    pools.world_agents_and_world_masters_set = {"lateagent"}
+    # This cycle's frozen snapshot does not include "lateagent", so the gate drops the
+    # message. The live roster (now in sm_world) is irrelevant here: since S4 the gate
+    # reads only the per-cycle snapshot, never the live set.
     pools._cycle_membership = WorldMembership(frozenset(), frozenset(), None, None)
     fake._batch = [{"from": "lateagent", "data": b"x", "protocol": ""}]
     chat, _ = _run(pools.get_messages(p2p_name=NodeConn.P2P_PUBLIC))
@@ -525,7 +523,7 @@ def test_char_connected_peer_is_connected_and_in_infos():
     by update() reports is_connected True and shows up in get_all_connected_peer_infos.
     Freezes that the connected view stays transport/pool-driven, not session-driven."""
     conn, pub, world = _make_node_conn()
-    conn.world_agents_set = {"wc"}
+    conn._sm_world.world_agents_set = {"wc"}
     world._infos = [_info("wc", "inbound")]
     _run(conn.update())
     assert conn.is_connected("wc") is True

@@ -1903,7 +1903,7 @@ class Node:
                 log.misc("Received a role suggestion/new role...")
 
                 if self.node_type is Node.AGENT:
-                    if msg.sender == self.conn.get_world_peer_id():
+                    if msg.sender == self.conn.get_world_node_peer_id():
                         new_role_indication = msg.content
                         if new_role_indication['peer_id'] == self.get_world_peer_id():
                             self.__replace_agent_instance_by_role(role=new_role_indication['role'],
@@ -2038,7 +2038,7 @@ class Node:
             elif msg.content_type == Msg.STATS_RESPONSE:
                 log.misc("Received a stats response from " + msg.sender)
                 if self.node_type is Node.AGENT:
-                    if msg.sender == self.conn.get_world_peer_id():
+                    if msg.sender == self.conn.get_world_node_peer_id():
                         # self.agent.update_stats_view(msg.content, self.agent.overwrite_stats)
                         pass
                     else:
@@ -2795,7 +2795,7 @@ class Node:
             world_profile = self.agent.world_profile
 
         if world_peer_id is None:
-            world_peer_id = self.conn.get_world_peer_id()
+            world_peer_id = self.conn.get_world_node_peer_id()
 
         if self.world_agent_files is not None and len(self.world_agent_files) > 0:
 
@@ -2953,9 +2953,12 @@ class Node:
             all_agents_profiles = {k: v.get_all_profile() for k, v in self.hosted.all_agents.items()}
 
             # Inspector expects also to have access to the profile of the world,
-            # so we patch this thing by adding it here
-            if self.hosted.in_world() and self.conn.world_node_peer_id is not None:
-                all_agents_profiles[self.conn.world_node_peer_id] = self.hosted.world_profile.get_all_profile()
+            # so we patch this thing by adding it here. This is the REMOTE world-host's
+            # peer-id (conn.get_world_node_peer_id, i.e. _sm_world.world_node_peer_id), NOT
+            # our own local world peer-id (self.get_world_peer_id / conn[P2P_WORLD].peer_id).
+            world_node_peer_id = self.conn.get_world_node_peer_id()
+            if self.hosted.in_world() and world_node_peer_id is not None:
+                all_agents_profiles[world_node_peer_id] = self.hosted.world_profile.get_all_profile()
         else:
             all_agents_profiles = None
 

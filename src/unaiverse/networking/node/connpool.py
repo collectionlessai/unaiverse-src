@@ -128,19 +128,19 @@ class NodeConn:
         self.p2p_public = p2p_u
         self.p2p_world = p2p_w
 
-        # These are the list of all the possible agents that might try to connect when we are in world
-        self.world_agents_set = set()
-        self.world_masters_set = set()
-        self.world_agents_and_world_masters_set = set()
-        self.world_node_peer_id = None
+        # The pure world membership (world_agents_set / world_masters_set /
+        # world_node_peer_id) now lives in sm_world, next to the Sessions it gates (built
+        # in attach_session_policy); the Coordinator reads it back through
+        # membership_snapshot(). inspector_peer_id stays here: it is not pure world
+        # membership but an orthogonal, currently-inert chat exception (D-8a).
         self.inspector_peer_id = None
         # role_to_peer_ids and peer_id_to_addrs stay Coordinator-owned and do NOT descend
         # into sm_world with the world membership (D-2). role_to_peer_ids is the inverse
         # index of peer_id_to_misc (the global cross-pool taxonomy, kept here) and set_role
         # updates both together; find_addrs_by_role reads role_to_peer_ids and
         # peer_id_to_addrs jointly, and get_addrs feeds the dial path. Only the pure world
-        # membership above (the two sets + world_node_peer_id) is what the perimeter
-        # classifies against and what will later move into sm_world.
+        # membership (the two sets + world_node_peer_id, now in sm_world) is what the
+        # perimeter classifies against.
         self.role_to_peer_ids = {}
         self.peer_id_to_addrs = {}
 
@@ -148,9 +148,14 @@ class NodeConn:
         # and read by BOTH the perimeter (via _reconcile_instance) and the chat-admission
         # gate in get_messages, so the two views never diverge inside a cycle. A roster
         # mutation written mid-cycle (pre-admission) takes effect only at the next
-        # update()'s snapshot, for both views. Initialised empty so get_messages admits no
-        # not-yet-connected peer before the first update().
-        self._cycle_membership = self.membership_snapshot()
+        # update()'s snapshot, for both views. Bootstrapped to an explicit empty snapshot
+        # so get_messages admits no not-yet-connected peer before the first update(): the
+        # roster lives in sm_world, built later in attach_session_policy, so there is no
+        # manager to snapshot from yet.
+        self._cycle_membership = WorldMembership(
+            world_agents=frozenset(), world_masters=frozenset(),
+            world_node_peer_id=None, inspector_peer_id=None,
+        )
 
         # Rendezvous
         self.rendezvous_tag = -1
@@ -848,13 +853,24 @@ class NodeConn:
         self.rendezvous_tag = -1
 
     def membership_snapshot(self) -> WorldMembership:
-        """Freeze the current world membership into an immutable per-cycle view. The
-        sets are copied into frozensets so a snapshot already taken cannot change if
-        the membership mutates later (and cannot be mutated by the routing itself)."""
+        """Freeze the current world membership into an immutable per-cycle view. The pure
+        membership (the two sets + world_node_peer_id) is read from sm_world, where it now
+        lives next to the Sessions it gates; inspector_peer_id is the Coordinator's own
+        orthogonal exception (D-8a). The sets are copied into frozensets so a snapshot
+        already taken cannot change if the membership mutates later (and cannot be mutated
+        by the routing itself). Before attach_session_policy builds sm_world the membership
+        reads empty."""
+        sm = self._sm_world
+        if sm is None:
+            world_agents, world_masters, world_node_peer_id = frozenset(), frozenset(), None
+        else:
+            world_agents = frozenset(sm.world_agents_set)
+            world_masters = frozenset(sm.world_masters_set)
+            world_node_peer_id = sm.world_node_peer_id
         return WorldMembership(
-            world_agents=frozenset(self.world_agents_set),
-            world_masters=frozenset(self.world_masters_set),
-            world_node_peer_id=self.world_node_peer_id,
+            world_agents=world_agents,
+            world_masters=world_masters,
+            world_node_peer_id=world_node_peer_id,
             inspector_peer_id=self.inspector_peer_id,
         )
 
@@ -1014,18 +1030,22 @@ class NodeConn:
         Args:
             world_peer_id: The peer ID of the world node, or None to clear it.
         """
-        self.world_node_peer_id = world_peer_id
+        self._sm_world.world_node_peer_id = world_peer_id
 
-    def get_world_peer_id(self) -> str | None:
-        """Returns the peer ID of the world node.
+    def get_world_node_peer_id(self) -> str | None:
+        """Returns the PRIVATE peer ID of the world node, i.e. the REMOTE world host we joined,
+        as written by set_world. This is deliberately NOT our own world/private peer-id:
+        that one is Node.get_world_peer_id (conn[P2P_WORLD].peer_id). The name was
+        get_world_peer_id, renamed to drop the collision with Node's same-named accessor
+        that means the opposite thing.
 
         Args:
             None.
 
         Returns:
-            The world node's peer ID.
+            The world node's peer ID, or None before sm_world is built / when unset.
         """
-        return self.world_node_peer_id
+        return self._sm_world.world_node_peer_id if self._sm_world is not None else None
 
     def set_addresses_in_peer_info(self, peer_id: str, addresses: list[str]) -> None:
         """Updates the list of addresses for a given peer.
@@ -1090,23 +1110,20 @@ class NodeConn:
 
         # Setting new information
         if world_agents_list_peer_infos is not None and len(world_agents_list_peer_infos) > 0:
-            self.world_agents_set = {x['id'] for x in world_agents_list_peer_infos}
+            self._sm_world.world_agents_set = {x['id'] for x in world_agents_list_peer_infos}
             for x in world_agents_list_peer_infos:
                 self.peer_id_to_addrs[x['id']] = x['addrs']
                 self.set_role(x['id'], x['misc'])
         else:
-            self.world_agents_set = set()
-
-        self.world_agents_and_world_masters_set = self.world_agents_set | self.world_masters_set
+            self._sm_world.world_agents_set = set()
 
     def remove_from_world_lists(self, peer_id: str) -> None:
         """Drops a peer from the world agents/masters lists and the role/address
         bookkeeping. The world host calls this when a member's world Session
         terminates, so the routing pass and the rendezvous publish stop
         advertising it."""
-        self.world_agents_set.discard(peer_id)
-        self.world_masters_set.discard(peer_id)
-        self.world_agents_and_world_masters_set = self.world_agents_set | self.world_masters_set
+        self._sm_world.world_agents_set.discard(peer_id)
+        self._sm_world.world_masters_set.discard(peer_id)
         self.peer_id_to_addrs.pop(peer_id, None)
         misc = self.peer_id_to_misc.pop(peer_id, None)
         if misc in self.role_to_peer_ids:
@@ -1135,14 +1152,12 @@ class NodeConn:
 
         # Setting new information
         if world_masters_list_peer_infos is not None and len(world_masters_list_peer_infos) > 0:
-            self.world_masters_set = {x['id'] for x in world_masters_list_peer_infos}
+            self._sm_world.world_masters_set = {x['id'] for x in world_masters_list_peer_infos}
             for x in world_masters_list_peer_infos:
                 self.peer_id_to_addrs[x['id']] = x['addrs']
                 self.set_role(x['id'], x['misc'])
         else:
-            self.world_masters_set = set()
-
-        self.world_agents_and_world_masters_set = self.world_agents_set | self.world_masters_set
+            self._sm_world.world_masters_set = set()
 
     def add_to_world_agents_list(self, peer_id: str, addrs: list[str], role: int = -1) -> None:
         """Adds a new world agent to the list.
@@ -1152,14 +1167,13 @@ class NodeConn:
             addrs: A list of addresses for the new agent.
             role: The role assigned to the agent.
         """
-        self.world_agents_set.add(peer_id)
+        self._sm_world.world_agents_set.add(peer_id)
 
         # This assumes that the WORLD MASTER/AGENT BIT is the first one
         assert role & 1 == 1, "Expecting the first bit of the role to be 1 for world agents"
         assert role & 2 == 0, "Expecting the second bit of the role to be 0 for world agents"
         self.peer_id_to_addrs[peer_id] = addrs
         self.set_role(peer_id, role)
-        self.world_agents_and_world_masters_set = self.world_agents_set | self.world_masters_set
 
     def add_to_world_masters_list(self, peer_id: str, addrs: list[str], role: int = -1) -> None:
         """Adds a new world master to the list.
@@ -1169,14 +1183,13 @@ class NodeConn:
             addrs: A list of addresses for the new master.
             role: The role assigned to the master.
         """
-        self.world_masters_set.add(peer_id)
+        self._sm_world.world_masters_set.add(peer_id)
 
         # This assumes that the WORLD MASTER/AGENT BIT is the first one
         assert role & 1 == 1, "Expecting the first bit of the role to be 1 for world masters"
         assert role & 2 == 2, "Expecting the second bit of the role to be 1 for world masters"
         self.peer_id_to_addrs[peer_id] = addrs
         self.set_role(peer_id, role)
-        self.world_agents_and_world_masters_set = self.world_agents_set | self.world_masters_set
 
     def get_added_after_updating(self, pool_names: list[str] | None = None) -> dict[str, set] | set:
         """Retrieves the set of peers added after the last update cycle for specified pools.

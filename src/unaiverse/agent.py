@@ -169,7 +169,7 @@ class Agent(AgentBasics):
             log.debug("[send_stats_to_world] Not in a world, skipping stats send.")
             return
 
-        world_peer_id = self.node_conn.get_world_peer_id()
+        world_peer_id = self.node_conn.get_world_node_peer_id()
         if world_peer_id is None:
             log.error("Agent in world, but world_peer_id is None.")
             return
@@ -230,7 +230,7 @@ class Agent(AgentBasics):
                 content.append({'peer_id': _agent, 'role': role_bits})
 
         if len(content) > 0:
-            world_peer_id = self.node_conn.get_world_peer_id()
+            world_peer_id = self.node_conn.get_world_node_peer_id()
             if not (await self.node_conn.send(world_peer_id, channel_trail=None,
                                               content=content,
                                               content_type=Msg.ROLE_SUGGESTION)):
@@ -262,7 +262,7 @@ class Agent(AgentBasics):
             return False
 
         agents = self.__involved_agents(agent)
-        world_peer_id = self.node_conn.get_world_peer_id()
+        world_peer_id = self.node_conn.get_world_node_peer_id()
 
         if badge_type not in Agent.BADGE_TYPES:
             log.error(f"Unknown badge type: {badge_type}")
@@ -1748,7 +1748,7 @@ class Agent(AgentBasics):
         to_remove = []
 
         in_world = self.behaving_in_world()
-        world_peer_id = self.get_connection_pool_manager().get_world_peer_id()
+        world_peer_id = self.get_connection_pool_manager().get_world_node_peer_id()
 
         for _peer_id, _interaction in self.proc_human_peer_id_to_interaction.items():
 
@@ -1781,7 +1781,7 @@ class Agent(AgentBasics):
         if not interaction.is_system():
 
             # If we are in a world, the reference peer ID is the one of the world, no matter who sent the interaction
-            peer_id = interaction.requester if not in_world else self.get_connection_pool_manager().get_world_peer_id()
+            peer_id = interaction.requester if not in_world else self.get_connection_pool_manager().get_world_node_peer_id()
             self.proc_human_peer_id_to_interaction[peer_id] = interaction
 
         # Forcing default stdin binding (discarding the interaction-provided ones)
