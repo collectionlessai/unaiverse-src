@@ -32,15 +32,6 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 
 
-# ── p2p instance names ────────────────────────────────────────────────────────
-# The opaque discriminator strings that key the async conn/crypto interface
-# (a node has two libp2p instances). They live here — in the protobuf-free,
-# Pyodide-portable module — so the Session FSM can read them without importing
-# the conn layer (which pulls protobuf). NodeConn aliases these.
-P2P_PUBLIC = "p2p_public"
-P2P_WORLD = "p2p_world"
-
-
 # ── ReasonCode (verbatim from session.proto enum ReasonCode) ──────────────────
 OK                     = 0
 VERSION_UNSUPPORTED    = 1

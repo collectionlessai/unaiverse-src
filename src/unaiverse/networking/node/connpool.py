@@ -44,10 +44,7 @@ SESSION_PROTOCOL_IDS = frozenset({
 # `SessMsg` owns its own wire codec now (SessMsg.to_bytes / SessMsg.from_bytes, in
 # session/sess_msg.py), so connpool no longer imports session_pb2: the protobuf
 # dependency lives inside those methods (lazy import) and never at this module top.
-# These two imports are the session layer's portable seam — SessMsg for send/decode,
-# _sess_msg for the P2P_PUBLIC/P2P_WORLD aliases used below.
-from unaiverse.networking.session.sess_msg import SessMsg  # noqa: E402
-from unaiverse.networking.session import sess_msg as _sess_msg  # noqa: E402
+from unaiverse.networking.session.sess_msg import SessMsg
 
 
 # Immutable per-cycle view of the world membership that the perimeter routing
@@ -84,10 +81,9 @@ class NodeConn:
     __INBOUND = "in_"
     __OUTBOUND = "out_"
 
-    # P2p names (canonical strings live in the protobuf-free sess_msg so the
-    # Session FSM can read them without importing this conn layer)
-    P2P_PUBLIC = _sess_msg.P2P_PUBLIC
-    P2P_WORLD = _sess_msg.P2P_WORLD
+    # P2p names
+    P2P_PUBLIC = "p2p_public"
+    P2P_WORLD = "p2p_world"
 
     # All pools (prefix + basic name + suffix)
     IN_PUBLIC = __INBOUND + __ALL_UNIVERSE + __PUBLIC_NET

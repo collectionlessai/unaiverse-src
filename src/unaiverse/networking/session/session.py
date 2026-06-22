@@ -59,7 +59,7 @@ from typing import Optional, Dict, Any, List, Callable, Awaitable, TYPE_CHECKING
 from unaiverse.networking.session.sess_msg import (
     SessMsg, reason_name, ProfileDecisionResult, WorldGrantSpec, VerifiedTokenClaims,
     OK, VERSION_UNSUPPORTED, NOT_AUTHORIZED, LOCAL_ERROR, GRACEFUL_SHUTDOWN,
-    SIMULTANEOUS_OPEN_LOSS, SESSION_UNKNOWN, GRANT_EXPIRED, TOKEN_EXPIRED, P2P_PUBLIC,
+    SIMULTANEOUS_OPEN_LOSS, SESSION_UNKNOWN, GRANT_EXPIRED, TOKEN_EXPIRED,
 )
 from unaiverse.utils.logger import log
 
@@ -232,7 +232,7 @@ class Session:
         self.role = role
         self.p2p = p2p
         self.p2p_name = p2p_name
-        self._sub = "pub" if p2p_name == P2P_PUBLIC else "prv"
+        self._sub = "pub" if p2p_name == "p2p_public" else "prv"
         self.local_peer_id = local_peer_id
         self.local_node_id = local_node_id
         self._local_profile_factory = local_profile_factory
