@@ -85,7 +85,7 @@ class FakeP2P:
         return self._verify_peer_signature_sync(peer_id, data, signature)
 
 
-# ── Fake ConnectionPools (mocks the connpool surface Session touches) ───────
+# ── Fake conn layer (mocks the connpool surface Session touches) ────────────
 
 class FakeConn:
     """P2P-per-instance stand-in injected into Session/SessionManager as ``p2p=``.

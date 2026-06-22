@@ -83,7 +83,7 @@ class SessionManager:
         Args:
             p2p: the P2P instance this manager owns and injects into each Session
                 (or a JS OP2P mirror in Pyodide). The manager no longer reaches the
-                transport through ConnectionPools — it speaks to its P2P directly.
+                transport through the conn layer, it speaks to its P2P directly.
             p2p_name: the label of the P2P instance this manager owns (e.g.
                 "p2p_public"), used for SessionEvent tagging.
             local_peer_id: our libp2p peer-id on `p2p_name` (used for tie-breaker).

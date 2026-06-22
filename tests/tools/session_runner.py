@@ -58,7 +58,7 @@ from unaiverse.utils.logger import log
 
 
 def _build_node(identity_dir: str, port: int, listen_ip: str = "0.0.0.0"):
-    """Build a bare libp2p instance + ConnectionPools + SessionManager.
+    """Build a bare libp2p instance + NodeConn + SessionManager.
 
     Avoids the full ``Node`` constructor (which expects a root-server profile,
     a hosted Agent/World, etc.) — this harness is *only* about exercising the

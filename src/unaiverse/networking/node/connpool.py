@@ -61,12 +61,117 @@ WorldMembership = namedtuple(
 )
 
 
-class ConnectionPools:
+class NodeConn:
+    """The networking Coordinator. Owns the two per-instance P2P handles, the two
+    per-instance SessionManagers and the cross-instance world membership, and exposes
+    the pool/routing facade the hosted entity speaks to. This used to be a NodeConn
+    subclass over a generic ``ConnectionPools`` base, but the base was never
+    instantiated on its own (only NodeConn was), so the two have been collapsed into a
+    single class: the pool/transport primitives and the Coordinator logic now live
+    together here."""
 
-    def __init__(self, max_connections: int, pool_name_to_p2p_name_and_ratio: dict[str, list[str | float]],
-                 p2p_name_to_p2p: dict[str, P2P],
-                 public_key: str | None = None, token: str | None = None) -> None:
-        """Initializes a new instance of the ConnectionPools class.
+    # Basic name
+    __ALL_UNIVERSE = "all_universe"
+    __WORLD_AGENTS_ONLY = "world_agents"
+    __WORLD_NODE_ONLY = "world_node"
+    __WORLD_MASTERS_ONLY = "world_masters"
+
+    # Suffixes
+    __PUBLIC_NET = "_public"
+    __PRIVATE_NET = "_private"
+
+    # Prefixes
+    __INBOUND = "in_"
+    __OUTBOUND = "out_"
+
+    # P2p names (canonical strings live in the protobuf-free sess_msg so the
+    # Session FSM can read them without importing this conn layer)
+    P2P_PUBLIC = _sess_msg.P2P_PUBLIC
+    P2P_WORLD = _sess_msg.P2P_WORLD
+
+    # All pools (prefix + basic name + suffix)
+    IN_PUBLIC = __INBOUND + __ALL_UNIVERSE + __PUBLIC_NET
+    OUT_PUBLIC = __OUTBOUND + __ALL_UNIVERSE + __PUBLIC_NET
+    IN_WORLD_AGENTS = __INBOUND + __WORLD_AGENTS_ONLY + __PRIVATE_NET
+    OUT_WORLD_AGENTS = __OUTBOUND + __WORLD_AGENTS_ONLY + __PRIVATE_NET
+    IN_WORLD_NODE = __INBOUND + __WORLD_NODE_ONLY + __PRIVATE_NET
+    OUT_WORLD_NODE = __OUTBOUND + __WORLD_NODE_ONLY + __PRIVATE_NET
+    IN_WORLD_MASTERS = __INBOUND + __WORLD_MASTERS_ONLY + __PRIVATE_NET
+    OUT_WORLD_MASTERS = __OUTBOUND + __WORLD_MASTERS_ONLY + __PRIVATE_NET
+
+    # Aggregated pools
+    PUBLIC = {IN_PUBLIC, OUT_PUBLIC}
+    WORLD_NODE = {IN_WORLD_NODE, OUT_WORLD_NODE}
+    WORLD_AGENTS = {IN_WORLD_AGENTS, OUT_WORLD_AGENTS}
+    WORLD_MASTERS = {IN_WORLD_MASTERS, OUT_WORLD_MASTERS}
+    WORLD = WORLD_NODE | WORLD_AGENTS | WORLD_MASTERS
+    ALL = PUBLIC | WORLD
+    OUTGOING = {OUT_PUBLIC, OUT_WORLD_NODE, OUT_WORLD_AGENTS, OUT_WORLD_MASTERS}
+    INCOMING = {IN_PUBLIC, IN_WORLD_NODE, IN_WORLD_AGENTS, IN_WORLD_MASTERS}
+
+    def __init__(self, max_connections: int, p2p_u: P2P, p2p_w: P2P,
+                 is_world_node: bool, public_key: str, token: str,
+                 local_node_id: str = None) -> None:
+        """Initializes a new instance of the NodeConn class.
+
+        Args:
+            max_connections: The total number of connections the node can handle.
+            p2p_u: The P2P object for the public network.
+            p2p_w: The P2P object for the world/private network.
+            is_world_node: A boolean flag indicating if this node is a world node.
+            public_key: The public key for token verification.
+            token: The node's authentication token.
+            local_node_id: this node's application node-id, used when building the
+                per-instance SessionManagers in attach_session_policy.
+        """
+        self._init_pools(max_connections=max_connections,
+                         p2p_name_to_p2p={
+                             NodeConn.P2P_PUBLIC: p2p_u,
+                             NodeConn.P2P_WORLD: p2p_w,
+                         },
+                         pool_name_to_p2p_name_and_ratio={
+                             NodeConn.IN_PUBLIC: [NodeConn.P2P_PUBLIC, 0.25 / 2. if not is_world_node else 0.25 / 2.],
+                             NodeConn.OUT_PUBLIC: [NodeConn.P2P_PUBLIC, 0.25 / 2. if not is_world_node else 0.25 / 2.],
+                             NodeConn.IN_WORLD_AGENTS: [NodeConn.P2P_WORLD, .75 / 2. if not is_world_node else 0.5 / 2],
+                             NodeConn.OUT_WORLD_AGENTS: [NodeConn.P2P_WORLD, .75 / 2 if not is_world_node else 0.5 / 2],
+                             NodeConn.IN_WORLD_NODE: [NodeConn.P2P_WORLD, 0. if not is_world_node else -1.],
+                             NodeConn.OUT_WORLD_NODE: [NodeConn.P2P_WORLD, 0. if not is_world_node else -1.],
+                             NodeConn.IN_WORLD_MASTERS: [NodeConn.P2P_WORLD, 0. if not is_world_node else 0.25 / 2.],
+                             NodeConn.OUT_WORLD_MASTERS: [NodeConn.P2P_WORLD, 0. if not is_world_node else 0.25 / 2.]
+                         },
+                         public_key=public_key, token=token)
+
+        # Just for convenience
+        self.p2p_public = p2p_u
+        self.p2p_world = p2p_w
+
+        # These are the list of all the possible agents that might try to connect when we are in world
+        self.world_agents_set = set()
+        self.world_masters_set = set()
+        self.world_agents_and_world_masters_set = set()
+        self.world_node_peer_id = None
+        self.inspector_peer_id = None
+        self.role_to_peer_ids = {}
+        self.peer_id_to_addrs = {}
+
+        # Rendezvous
+        self.rendezvous_tag = -1
+
+        # Application node-id, used when this Coordinator builds the SessionManagers.
+        self._local_node_id = local_node_id
+
+        # Per-instance SessionManagers. The Coordinator owns them: it builds both in
+        # attach_session_policy (once the Node policy is available) and consults them
+        # so the hosted entity (which holds conn, not the managers) can ask about
+        # per-peer Session state (see is_peer_session_pending).
+        self._sm_public = None
+        self._sm_world = None
+        self._session_managers = []
+
+    def _init_pools(self, max_connections: int, pool_name_to_p2p_name_and_ratio: dict[str, list[str | float]],
+                    p2p_name_to_p2p: dict[str, P2P],
+                    public_key: str | None = None, token: str | None = None) -> None:
+        """Set up the pool triples and the per-peer / per-p2p indices for this Coordinator.
 
         Args:
             max_connections: The maximum total number of connections allowed across all pools.
@@ -201,26 +306,6 @@ class ConnectionPools:
             The P2P object.
         """
         return self.p2p_name_to_p2p[p2p_name]
-
-    def membership_snapshot(self) -> "WorldMembership | None":
-        """The immutable per-cycle world-membership view handed to conn_routing_fcn.
-        The base pool has no world membership, so it returns None; NodeConn overrides
-        it with the real snapshot."""
-        return None
-
-    async def conn_routing_fcn(self, connected_peer_infos: list, p2p: P2P,
-                               membership: "WorldMembership | None" = None) -> dict:
-        """A placeholder function that must be implemented to route connected peers to the correct pool (async).
-
-        Args:
-            connected_peer_infos: A list of dictionaries containing information about connected peers.
-            p2p: The P2P network object from which the peers were connected.
-            membership: the immutable world-membership snapshot to classify against.
-
-        Returns:
-            A dictionary mapping pool names to a dictionary of peer IDs and their information.
-        """
-        raise NotImplementedError("You must implement conn_routing_fcn!")
 
     async def __connect(self, p2p: P2P, addresses: list[str]) -> tuple[str | None, bool]:
         """Establishes a connection to a peer via a P2P network (async).
@@ -421,7 +506,7 @@ class ConnectionPools:
             pool, _, p2p = self.pool_name_to_pool_triple[pool_name]
 
             # Disconnecting
-            disc = await ConnectionPools.disconnect(p2p, peer_id)
+            disc = await NodeConn.disconnect(p2p, peer_id)
             pool.remove(peer_id)
             del self.pool_name_to_peer_infos[pool_name][peer_id]
             del self.peer_id_to_pool_name[peer_id]
@@ -432,17 +517,6 @@ class ConnectionPools:
             return disc
         else:
             return False
-
-    def get_all_connected_peer_infos(self, pool_name: str) -> list[dict]:
-        """Retrieves a list of peer information dictionaries for a given pool.
-
-        Args:
-            pool_name: The name of the pool to query.
-
-        Returns:
-            A list of dictionaries, each containing information about a peer in the pool.
-        """
-        return list(self.pool_name_to_peer_infos[pool_name].values())
 
     def get_pool_status(self) -> dict[str, set]:
         """Returns a dictionary showing the set of peer IDs in each pool.
@@ -466,12 +540,6 @@ class ConnectionPools:
         """
         return list(self.peer_id_to_pool_name.keys())
 
-    async def update(self) -> tuple[dict, dict]:
-        """Per-cycle reconcile of the connection pools. The base pool has no world
-        membership nor per-instance reconcile; the real loop is implemented by NodeConn
-        (the Coordinator), which owns the SessionManagers and the membership snapshot."""
-        raise NotImplementedError("ConnectionPools.update is implemented by NodeConn")
-
     async def get_messages(
         self,
         p2p_name: str,
@@ -489,11 +557,15 @@ class ConnectionPools:
 
         Args:
             p2p_name: The name of the P2P network to fetch messages from.
-            allowed_not_connected_peers: An optional set of peer IDs to allow chat
-                messages from even if they are not yet in the pools. Session messages
-                are never gated on pool membership — the handshake itself is what
-                enrols a peer.
+            allowed_not_connected_peers: must be None at the call site. The Coordinator
+                always admits chat from the world agents/masters roster (the peers known
+                from the rendezvous but not yet in a pool); Session messages are never
+                gated on pool membership, the handshake itself is what enrols a peer.
         """
+        assert allowed_not_connected_peers is None, \
+            "allowed_not_connected_peers is set by the Coordinator, not by the caller"
+        allowed_not_connected_peers = self.world_agents_and_world_masters_set
+
         # Pop all messages
         p2p = self[p2p_name]
         byte_messages = p2p.pop_messages()  # Pop all messages
@@ -619,34 +691,6 @@ class ConnectionPools:
         passed = time.time() - max(self.__last_sent_time, self.__last_recv_time)
         return 0. if passed < 0. else passed
 
-    def get_added_after_updating(self, pool_name: str | None = None) -> set | dict:
-        """Retrieves the peers that were added in the last update cycle.
-
-        Args:
-            pool_name: The name of a specific pool to query. If None, returns data for all pools.
-
-        Returns:
-            A set of added peer IDs for the specified pool, or a dictionary of sets for all pools.
-        """
-        if pool_name is not None:
-            return self.pool_name_to_added_in_last_update[pool_name]
-        else:
-            return self.pool_name_to_added_in_last_update
-
-    def get_removed_after_updating(self, pool_name: str | None = None) -> set | dict:
-        """Retrieves the peers that were removed in the last update cycle.
-
-        Args:
-            pool_name: The name of a specific pool to query. If None, returns data for all pools.
-
-        Returns:
-            A set of removed peer IDs for the specified pool, or a dictionary of sets for all pools.
-        """
-        if pool_name is not None:
-            return self.pool_name_to_removed_in_last_update[pool_name]
-        else:
-            return self.pool_name_to_removed_in_last_update
-
     def get_last_token(self, peer_id: str) -> str | None:
         """Retrieves the last known token for a given peer.
 
@@ -657,21 +701,6 @@ class ConnectionPools:
             The token string if found, otherwise None.
         """
         return self.peer_id_to_token[peer_id] if peer_id in self.peer_id_to_token else None
-
-    def is_connected(self, peer_id: str, pool_name: str | None = None) -> bool:
-        """Checks if a peer is currently connected, optionally in a specific pool.
-
-        Args:
-            peer_id: The peer ID to check.
-            pool_name: An optional pool name to check within.
-
-        Returns:
-            True if the peer is connected, otherwise False.
-        """
-        if pool_name is None:
-            return peer_id in self.peer_id_to_pool_name
-        else:
-            return peer_id in self.peer_id_to_pool_name and pool_name == self.peer_id_to_pool_name[peer_id]
 
     def get_pool_of(self, peer_id: str) -> str | None:
         """Gets the pool name for a given connected peer.
@@ -686,33 +715,6 @@ class ConnectionPools:
             return self.peer_id_to_pool_name[peer_id]
         else:
             return None
-
-    def size(self, pool_name: str | None = None) -> int:
-        """Returns the number of connections in a specific pool or the total number across all pools.
-
-        Args:
-            pool_name: An optional pool name to get the size of. If None, returns the total size.
-
-        Returns:
-            The size of the pool or the total number of connections.
-        """
-        if pool_name is not None:
-            return len(self.pool_name_to_pool_triple[pool_name][0])
-        else:
-            c = 0
-            for v in self.pool_name_to_pool_triple.values():
-                c += len(v[0])
-            return c
-
-    def _p2p_of(self, peer_id: str) -> "P2P | None":
-        """Resolve which P2P instance a peer is reachable on, for the peer_id-only I/O
-        (send / subscribe / publish). The base pool resolves it from the pool a connected
-        peer lives in (each pool is bound to one P2P instance); NodeConn overrides this to
-        ask the SessionManagers first (Session-anchored routing) and falls back here."""
-        pool_name = self.peer_id_to_pool_name.get(peer_id)
-        if pool_name is None:
-            return None
-        return self.pool_name_to_pool_triple[pool_name][2]
 
     async def send(self, peer_id: str, channel_trail: str | None,
                    content_type: str, content: bytes | dict | str | None = None, p2p: P2P | None = None) -> bool:
@@ -767,11 +769,14 @@ class ConnectionPools:
         Args:
             peer_id: The peer ID associated with the topic/channel.
             channel: The name of the channel to subscribe to.
-            default_p2p_name: An optional P2P network name to use if the peer's network is unknown.
+            default_p2p_name: The P2P network to fall back on when the peer's network is
+                unknown; defaults to the world network when not given.
 
         Returns:
             True if the subscription is successful, otherwise False.
         """
+        if default_p2p_name is None:
+            default_p2p_name = NodeConn.P2P_WORLD
 
         # Getting the right p2p object
         p2p = None
@@ -872,106 +877,6 @@ class ConnectionPools:
             # If send_message_to_peer fails, it will raise a P2PError. We catch it here.
             return False
 
-
-class NodeConn(ConnectionPools):
-    # Basic name
-    __ALL_UNIVERSE = "all_universe"
-    __WORLD_AGENTS_ONLY = "world_agents"
-    __WORLD_NODE_ONLY = "world_node"
-    __WORLD_MASTERS_ONLY = "world_masters"
-
-    # Suffixes
-    __PUBLIC_NET = "_public"
-    __PRIVATE_NET = "_private"
-
-    # Prefixes
-    __INBOUND = "in_"
-    __OUTBOUND = "out_"
-
-    # P2p names (canonical strings live in the protobuf-free sess_msg so the
-    # Session FSM can read them without importing this conn layer)
-    P2P_PUBLIC = _sess_msg.P2P_PUBLIC
-    P2P_WORLD = _sess_msg.P2P_WORLD
-
-    # All pools (prefix + basic name + suffix)
-    IN_PUBLIC = __INBOUND + __ALL_UNIVERSE + __PUBLIC_NET
-    OUT_PUBLIC = __OUTBOUND + __ALL_UNIVERSE + __PUBLIC_NET
-    IN_WORLD_AGENTS = __INBOUND + __WORLD_AGENTS_ONLY + __PRIVATE_NET
-    OUT_WORLD_AGENTS = __OUTBOUND + __WORLD_AGENTS_ONLY + __PRIVATE_NET
-    IN_WORLD_NODE = __INBOUND + __WORLD_NODE_ONLY + __PRIVATE_NET
-    OUT_WORLD_NODE = __OUTBOUND + __WORLD_NODE_ONLY + __PRIVATE_NET
-    IN_WORLD_MASTERS = __INBOUND + __WORLD_MASTERS_ONLY + __PRIVATE_NET
-    OUT_WORLD_MASTERS = __OUTBOUND + __WORLD_MASTERS_ONLY + __PRIVATE_NET
-
-    # Aggregated pools
-    PUBLIC = {IN_PUBLIC, OUT_PUBLIC}
-    WORLD_NODE = {IN_WORLD_NODE, OUT_WORLD_NODE}
-    WORLD_AGENTS = {IN_WORLD_AGENTS, OUT_WORLD_AGENTS}
-    WORLD_MASTERS = {IN_WORLD_MASTERS, OUT_WORLD_MASTERS}
-    WORLD = WORLD_NODE | WORLD_AGENTS | WORLD_MASTERS
-    ALL = PUBLIC | WORLD
-    OUTGOING = {OUT_PUBLIC, OUT_WORLD_NODE, OUT_WORLD_AGENTS, OUT_WORLD_MASTERS}
-    INCOMING = {IN_PUBLIC, IN_WORLD_NODE, IN_WORLD_AGENTS, IN_WORLD_MASTERS}
-
-    def __init__(self, max_connections: int, p2p_u: P2P, p2p_w: P2P,
-                 is_world_node: bool, public_key: str, token: str,
-                 local_node_id: str = None) -> None:
-        """Initializes a new instance of the NodeConn class.
-
-        Args:
-            max_connections: The total number of connections the node can handle.
-            p2p_u: The P2P object for the public network.
-            p2p_w: The P2P object for the world/private network.
-            is_world_node: A boolean flag indicating if this node is a world node.
-            public_key: The public key for token verification.
-            token: The node's authentication token.
-            local_node_id: this node's application node-id, used when building the
-                per-instance SessionManagers in attach_session_policy.
-        """
-        super().__init__(max_connections=max_connections,
-                         p2p_name_to_p2p={
-                             NodeConn.P2P_PUBLIC: p2p_u,
-                             NodeConn.P2P_WORLD: p2p_w,
-                         },
-                         pool_name_to_p2p_name_and_ratio={
-                             NodeConn.IN_PUBLIC: [NodeConn.P2P_PUBLIC, 0.25 / 2. if not is_world_node else 0.25 / 2.],
-                             NodeConn.OUT_PUBLIC: [NodeConn.P2P_PUBLIC, 0.25 / 2. if not is_world_node else 0.25 / 2.],
-                             NodeConn.IN_WORLD_AGENTS: [NodeConn.P2P_WORLD, .75 / 2. if not is_world_node else 0.5 / 2],
-                             NodeConn.OUT_WORLD_AGENTS: [NodeConn.P2P_WORLD, .75 / 2 if not is_world_node else 0.5 / 2],
-                             NodeConn.IN_WORLD_NODE: [NodeConn.P2P_WORLD, 0. if not is_world_node else -1.],
-                             NodeConn.OUT_WORLD_NODE: [NodeConn.P2P_WORLD, 0. if not is_world_node else -1.],
-                             NodeConn.IN_WORLD_MASTERS: [NodeConn.P2P_WORLD, 0. if not is_world_node else 0.25 / 2.],
-                             NodeConn.OUT_WORLD_MASTERS: [NodeConn.P2P_WORLD, 0. if not is_world_node else 0.25 / 2.]
-                         },
-                         public_key=public_key, token=token)
-
-        # Just for convenience
-        self.p2p_public = p2p_u
-        self.p2p_world = p2p_w
-
-        # These are the list of all the possible agents that might try to connect when we are in world
-        self.world_agents_set = set()
-        self.world_masters_set = set()
-        self.world_agents_and_world_masters_set = set()
-        self.world_node_peer_id = None
-        self.inspector_peer_id = None
-        self.role_to_peer_ids = {}
-        self.peer_id_to_addrs = {}
-
-        # Rendezvous
-        self.rendezvous_tag = -1
-
-        # Application node-id, used when this Coordinator builds the SessionManagers.
-        self._local_node_id = local_node_id
-
-        # Per-instance SessionManagers. The Coordinator owns them: it builds both in
-        # attach_session_policy (once the Node policy is available) and consults them
-        # so the hosted entity (which holds conn, not the managers) can ask about
-        # per-peer Session state (see is_peer_session_pending).
-        self._sm_public = None
-        self._sm_world = None
-        self._session_managers = []
-
     def attach_session_policy(self, local_profile_factory, decision_hook, token_factory=None) -> None:
         """Build and own the two per-instance SessionManagers, now that the Node
         policy born late is available (the profile factory samples self.profile, the
@@ -1003,7 +908,7 @@ class NodeConn(ConnectionPools):
             token_verifier=self.verify_token_claims,
             token_factory=token_factory,
             routing_classifier=NodeConn._route_world,
-            perimeter_disconnect=lambda peer_id: ConnectionPools.disconnect(self.p2p_world, peer_id),
+            perimeter_disconnect=lambda peer_id: NodeConn.disconnect(self.p2p_world, peer_id),
         )
         self.set_session_managers(self._sm_public, self._sm_world)
 
@@ -1038,16 +943,20 @@ class NodeConn(ConnectionPools):
                 return True
         return False
 
-    def _p2p_of(self, peer_id: str):
+    def _p2p_of(self, peer_id: str) -> "P2P | None":
         """Resolve a peer's P2P instance by asking the SessionManagers first: the SM
         that holds a Session for this peer-id owns the instance the peer lives on
         (public before world, matching the cross-pool first-network-wins). Falls back to
-        the base resolution from the connection pool for a peer that is connected but has
-        no Session yet (an in-flight or just-evicted handshake)."""
+        the connection pool for a peer that is connected but has no Session yet (an
+        in-flight or just-evicted handshake), and None when nothing knows the peer."""
         for sm in (self._sm_public, self._sm_world):
             if sm is not None and sm.get_session(peer_id) is not None:
                 return sm.p2p
-        return super()._p2p_of(peer_id)
+        # Each pool is bound to one P2P instance, so the peer's pool resolves it.
+        pool_name = self.peer_id_to_pool_name.get(peer_id)
+        if pool_name is None:
+            return None
+        return self.pool_name_to_pool_triple[pool_name][2]
 
     def reset_rendezvous_tag(self) -> None:
         """Resets the rendezvous tag to its initial state."""
@@ -1208,7 +1117,7 @@ class NodeConn(ConnectionPools):
                 # A world peer that is not a known member gets cut from the perimeter;
                 # the public side never returns None for a real (in/out) connection.
                 if not public:
-                    await ConnectionPools.disconnect(p2p, c['id'])
+                    await NodeConn.disconnect(p2p, c['id'])
                 continue
             result[pool_name][c['id']] = c
         return result
@@ -1387,35 +1296,37 @@ class NodeConn(ConnectionPools):
         """Retrieves the set of peers added after the last update cycle for specified pools.
 
         Args:
-            pool_names: A list of pool names to check. If None, checks all pools.
+            pool_names: A list of pool names to check. If None, returns the per-pool mapping.
 
         Returns:
-            A dictionary mapping pool names to sets of added peer IDs.
+            A dictionary mapping pool names to sets of added peer IDs, or the full per-pool
+            mapping when no pool names are given.
         """
         if pool_names is not None:
             ret = {}
             for p in pool_names:
-                ret[p] = super().get_added_after_updating(p)
+                ret[p] = self.pool_name_to_added_in_last_update[p]
             return ret
         else:
-            return super().get_added_after_updating()
+            return self.pool_name_to_added_in_last_update
 
     def get_removed_after_updating(self, pool_names: list[str] | None = None) -> dict[str, set] | set:
         """Retrieves the set of peers removed after the last update cycle for specified pools.
 
         Args:
-            pool_names: A list of pool names to check. If None, checks all pools.
+            pool_names: A list of pool names to check. If None, returns the per-pool mapping.
 
         Returns:
-            A dictionary mapping pool names to sets of removed peer IDs.
+            A dictionary mapping pool names to sets of removed peer IDs, or the full per-pool
+            mapping when no pool names are given.
         """
         if pool_names is not None:
             ret = {}
             for p in pool_names:
-                ret[p] = super().get_removed_after_updating(p)
+                ret[p] = self.pool_name_to_removed_in_last_update[p]
             return ret
         else:
-            return super().get_removed_after_updating()
+            return self.pool_name_to_removed_in_last_update
 
     def size(self, pool_names: list[str] | None = None) -> int:
         """Returns the total number of connections across all specified pools.
@@ -1427,11 +1338,14 @@ class NodeConn(ConnectionPools):
             The total number of connections.
         """
         if pool_names is None:
-            return super().size()
+            c = 0
+            for v in self.pool_name_to_pool_triple.values():
+                c += len(v[0])
+            return c
         else:
             c = 0
             for p in pool_names:
-                c += super().size(p)
+                c += len(self.pool_name_to_pool_triple[p][0])
             return c
 
     def is_connected(self, peer_id: str, pool_names: list[str] | None = None) -> bool:
@@ -1445,10 +1359,10 @@ class NodeConn(ConnectionPools):
             True if the peer is found in any of the pools, otherwise False.
         """
         if pool_names is None:
-            return super().is_connected(peer_id)
+            return peer_id in self.peer_id_to_pool_name
         else:
             for p in pool_names:
-                if super().is_connected(peer_id, p):
+                if peer_id in self.peer_id_to_pool_name and p == self.peer_id_to_pool_name[peer_id]:
                     return True
             return False
 
@@ -1597,7 +1511,7 @@ class NodeConn(ConnectionPools):
         """
         ret = []
         for p in pool_names:
-            ret += super().get_all_connected_peer_infos(p)
+            ret += list(self.pool_name_to_peer_infos[p].values())
         return ret
 
     async def set_world_agents_and_world_masters_lists_from_rendezvous(self) -> None:
@@ -1653,16 +1567,6 @@ class NodeConn(ConnectionPools):
         else:
             return None
 
-    async def remove(self, peer_id: str) -> None:
-        """Removes a peer and its associated information from all lists and pools (async).
-
-        Args:
-            peer_id: The peer ID to remove.
-        """
-        await super().remove(peer_id)
-        # if peer_id in self.peer_id_to_addrs:
-        #    del self.peer_id_to_addrs[peer_id]
-
     async def remove_all_world_agents(self) -> None:
         """Removes all connected world agents from the pools and role lists (async)."""
         peer_infos = self.get_all_connected_peer_infos(NodeConn.WORLD)
@@ -1676,33 +1580,3 @@ class NodeConn(ConnectionPools):
                     continue
                 if role & 1 == 1:
                     peer_ids.remove(peer_id)
-
-    async def subscribe(self, peer_id: str, channel: str, default_p2p_name: str | None = None) -> bool:
-        """Subscribes to a channel, defaulting to the world P2P network if a network is not specified (async).
-
-        Args:
-            peer_id: The peer ID associated with the channel.
-            channel: The channel to subscribe to.
-            default_p2p_name: An optional P2P name to use for the subscription.
-
-        Returns:
-            True if successful, False otherwise.
-        """
-        return await super().subscribe(peer_id, channel,
-                                       default_p2p_name=NodeConn.P2P_WORLD
-                                       if default_p2p_name is None else default_p2p_name)
-
-    async def get_messages(self, p2p_name: str, allowed_not_connected_peers: set | None = None) -> list[Msg]:
-        """Retrieves messages, allowing for messages from known world agents and masters even if not in a
-        connection pool (async).
-
-        Args:
-            p2p_name: The name of the P2P network to get messages from.
-            allowed_not_connected_peers: This parameter is ignored in this implementation.
-
-        Returns:
-            A list of verified and processed message objects.
-        """
-        assert allowed_not_connected_peers is None, "This param (allowed_not_connected_peers is ignored in NodeConn"
-        return await super().get_messages(p2p_name,
-                                          allowed_not_connected_peers=self.world_agents_and_world_masters_set)

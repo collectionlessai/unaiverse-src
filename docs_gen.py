@@ -98,7 +98,7 @@ MODULE_DESCRIPTIONS = {
         "including system specs, CV, location, and connection metadata."
     ),
     ("unaiverse", "networking", "node", "connpool"): (
-        "ConnectionPools and NodeConn classes for managing multiple connection pools "
+        "NodeConn (Coordinator) class for managing multiple connection pools "
         "across public and private P2P networks with token-based authentication."
     ),
     ("unaiverse", "networking", "node", "tokens"): (

@@ -14,7 +14,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from unaiverse.networking.node.connpool import (
-    ConnectionPools, NodeConn, SessionInbound, SESSION_PROTOCOL_IDS,
+    NodeConn, SessionInbound, SESSION_PROTOCOL_IDS,
 )
 from unaiverse.networking.session import SessMsg
 
@@ -32,12 +32,17 @@ class _FakeP2P:
 
 @pytest.fixture
 def pools_with_one_p2p():
-    """A ConnectionPools wrapper that returns whatever messages we plant."""
+    """A NodeConn whose public P2P returns whatever messages we plant. The world P2P is
+    a second fake we never feed: get_messages is only exercised on the public one. The
+    constructor never calls P2P methods, so the bare fakes are enough."""
     fake_p2p = _FakeP2P([])
-    pools = ConnectionPools(
-        max_connections=8,
-        pool_name_to_p2p_name_and_ratio={NodeConn.P2P_PUBLIC: [NodeConn.P2P_PUBLIC, 1.0]},
-        p2p_name_to_p2p={NodeConn.P2P_PUBLIC: fake_p2p},
+    pools = NodeConn(
+        max_connections=16,
+        p2p_u=fake_p2p,
+        p2p_w=_FakeP2P([]),
+        is_world_node=False,
+        public_key=None,
+        token=None,
     )
     return pools, fake_p2p
 
@@ -310,12 +315,12 @@ def test_conn_routing_classifies_against_passed_snapshot():
 #
 # These freeze the exact contract of the per-cycle diff and the world perimeter so
 # the per-instance reconcile in the SessionManagers can be checked bit-for-bit
-# against them. They drive the real ConnectionPools.update() through fake P2Ps
+# against them. They drive the real NodeConn.update() through fake P2Ps
 # (the NodeConn constructor never calls P2P methods, so fakes are enough).
 
 class _UpdP2P:
     """Fake P2P for driving update(): serves planted connected-peer infos and records
-    perimeter disconnects (conn_routing_fcn -> ConnectionPools.disconnect)."""
+    perimeter disconnects (conn_routing_fcn -> NodeConn.disconnect)."""
     def __init__(self, log_sub):
         self.log_sub = log_sub
         self.peer_id = log_sub + "-self"

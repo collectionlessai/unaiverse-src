@@ -16,7 +16,7 @@ import asyncio
 import pytest
 
 from unaiverse.networking.session import SessionState, SessionEventType
-from unaiverse.networking.node.connpool import ConnectionPools, NodeConn
+from unaiverse.networking.node.connpool import NodeConn
 
 from realnet_helpers import pick_dialable_addr, pump_until
 
@@ -49,7 +49,7 @@ def test_real_transport_drop_then_resume(real_nodes):
 
         # Drop the link for real, then feed both sides the disconnect signal the
         # Node loop would derive from its pool diff.
-        await ConnectionPools.disconnect(a_p2p, b_p2p.peer_id)
+        await NodeConn.disconnect(a_p2p, b_p2p.peer_id)
         await a_sm.on_peer_disconnected(b_p2p.peer_id)
         await b_sm.on_peer_disconnected(a_p2p.peer_id)
         assert a_sm.get_session(b_p2p.peer_id).state == SessionState.RECONNECTING
