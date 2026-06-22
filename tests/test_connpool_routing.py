@@ -416,6 +416,41 @@ def test_char_unchanged_pool_absent_from_diff():
     assert NodeConn.IN_PUBLIC not in removed2
 
 
+def test_char_removal_from_pool_absent_from_classified():
+    """A peer that leaves the network is reported in `removed` even though its pool is then
+    absent from the classified dict: _reconcile_instance iterates the instance's OWN pools, so
+    a pool that drops to empty still yields its lost peers. update() only REPORTS the loss (it
+    does not remove); the actual remove is Node's reaction to the diff. This must keep holding
+    once each SM owns its pools and produces its own partial diff (S10)."""
+    conn, pub, world = _make_node_conn()
+    conn._sm_world.world_agents_set = {"wa"}
+    world._infos = [_info("wa", "inbound")]
+    added, _ = _run(conn.update())
+    assert added[NodeConn.IN_WORLD_AGENTS] == {"wa"}
+    # Next cycle: the peer is gone from the transport; classified no longer has IN_WORLD_AGENTS.
+    world._infos = []
+    _, removed = _run(conn.update())
+    assert removed[NodeConn.IN_WORLD_AGENTS] == {"wa"}
+
+
+def test_char_remove_keeps_misc():
+    """remove() drops the peer from its pool and the connection indices but deliberately KEEPS
+    peer_id_to_misc (the role taxonomy), so the role survives a disconnect/re-add. This is part
+    of I-2 and must hold after the pool state descends into the SM while the role taxonomy stays
+    Coordinator-owned (D-2)."""
+    conn, pub, world = _make_node_conn()
+    # add_to_world_agents_list records the role in peer_id_to_misc (via set_role) and the roster.
+    conn.add_to_world_agents_list("wa", ["/ip4/1.1.1.1/tcp/1"], role=ROLE_WORLD_AGENT)
+    world._infos = [_info("wa", "inbound")]
+    _run(conn.update())
+    assert conn.is_connected("wa")
+    assert conn.get_role("wa") == ROLE_WORLD_AGENT
+    assert _run(conn.remove("wa"))
+    assert not conn.is_connected("wa")
+    # The pool / connection indices dropped it, but the role taxonomy is intentionally kept.
+    assert conn.get_role("wa") == ROLE_WORLD_AGENT
+
+
 def test_p2p_of_prefers_session_then_index():
     """_p2p_of resolves the peer's instance from the SessionManager that holds its
     Session (public before world), falling back to the connection index for peers that
