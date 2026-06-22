@@ -277,3 +277,30 @@ def test_has_active_sessions_tracks_lifecycle(bidirectional_fakeconns,
         assert sm_bob.has_active_sessions() is False
 
     asyncio.run(_scenario())
+
+
+def test_requires_fast_clock_covers_handshake_in_flight(bidirectional_fakeconns,
+                                                        alice_peer_id, bob_peer_id):
+    """A handshake in flight (HELLO_SENT, not yet ESTABLISHED) must keep the main loop
+    at full speed: requires_fast_clock is True while has_active_sessions is still False.
+    This is the bug S7 fixes — the old idle check counted only ESTABLISHED/RECONNECTING
+    and so let a slowed clock starve the handshake into a timeout."""
+    alice_conn, bob_conn, alice_inbox, bob_inbox = bidirectional_fakeconns
+    alice_conn.connect_returns = (bob_peer_id, False)
+
+    async def _scenario():
+        sm_alice = _make_sm(alice_conn, alice_peer_id, "alice")
+        # Idle: no Sessions yet.
+        assert sm_alice.requires_fast_clock() is False
+        assert sm_alice.has_active_sessions() is False
+
+        # Start the handshake but do not pump the peer: Alice sits in HELLO_SENT.
+        await sm_alice.initiate(bob_peer_id, ["/ip4/127.0.0.1/tcp/0"])
+        assert sm_alice.get_session(bob_peer_id).state == SessionState.HELLO_SENT
+
+        # The handshake in flight keeps the clock fast, even though has_active_sessions
+        # (which counts only ESTABLISHED/RECONNECTING) still reports idle.
+        assert sm_alice.requires_fast_clock() is True
+        assert sm_alice.has_active_sessions() is False
+
+    asyncio.run(_scenario())

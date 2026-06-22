@@ -840,6 +840,15 @@ class NodeConn:
                 return True
         return False
 
+    def requires_fast_clock(self) -> bool:
+        """True if any registered SessionManager has a Session that needs the main loop
+        at full speed (see SessionManager.requires_fast_clock). The Coordinator aggregates
+        across its instances so the Node's clock-pacing decision is one state-based query
+        instead of reaching into each manager. This supersedes the old idle check that
+        counted only ESTABLISHED/RECONNECTING and so let a slowed clock starve handshakes
+        in flight."""
+        return any(sm.requires_fast_clock() for sm in self._session_managers)
+
     def _p2p_of(self, peer_id: str) -> "P2P | None":
         """Resolve a peer's P2P instance by asking the SessionManagers first: the SM
         that holds a Session for this peer-id owns the instance the peer lives on

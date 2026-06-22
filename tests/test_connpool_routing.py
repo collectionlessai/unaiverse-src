@@ -245,6 +245,23 @@ def test_is_peer_session_pending():
     assert conn.is_peer_session_pending("unknown") is False
 
 
+def test_requires_fast_clock_aggregates_managers():
+    """NodeConn.requires_fast_clock is True iff any registered SessionManager reports a
+    fast-clock Session; the Coordinator just ORs the per-instance predicate."""
+    class _FakeSM:
+        def __init__(self, fast):
+            self._fast = fast
+
+        def requires_fast_clock(self):
+            return self._fast
+
+    conn = NodeConn.__new__(NodeConn)  # bypass the heavy P2P-bound __init__
+    conn.set_session_managers(_FakeSM(False), _FakeSM(False))
+    assert conn.requires_fast_clock() is False
+    conn.set_session_managers(_FakeSM(False), _FakeSM(True))
+    assert conn.requires_fast_clock() is True
+
+
 # ── Membership snapshot (perimeter seam) ─────────────────────────────────────
 
 def test_membership_snapshot_is_immutable():

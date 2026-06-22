@@ -1194,14 +1194,16 @@ class Node:
             while not must_quit and not self.stop_requested:
                 log.set_sub("gen")
 
-                # Tuning clock speed. A node with live Sessions is never idle:
-                # the keep-alive PING RTT window is sized for a full-speed pump,
-                # and a slowed clock (2s cycles) would starve it into false
-                # ping misses on both sides at once.
+                # Tuning clock speed. A node with a Session that needs a responsive
+                # pump is never idle: the keep-alive PING RTT window and a handshake
+                # in flight are both sized for a full-speed pump, and a slowed clock
+                # (2s cycles) would starve them into false ping misses / handshake
+                # timeouts. requires_fast_clock() covers every non-terminal, non-KNOWN
+                # Session, so handshakes in flight keep the clock fast too, not just
+                # ESTABLISHED/RECONNECTING.
                 if (self.conn.passed_time_since_last_communication() >= Custom.SLOW_DOWN_CLOCK_AFTER and
                         self.hosted.im.count_interactions() == 0 and
-                        not self._sm_public.has_active_sessions() and
-                        not self._sm_world.has_active_sessions()):
+                        not self.conn.requires_fast_clock()):
                     if not clock.is_slowed_down():
                         log.misc("Reducing clock speed (idle)")
                         clock.run_slower()

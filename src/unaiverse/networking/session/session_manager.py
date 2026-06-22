@@ -599,6 +599,16 @@ class SessionManager:
         return any(s.state in (SessionState.ESTABLISHED, SessionState.RECONNECTING)
                    for s in self._active_sessions.values())
 
+    def requires_fast_clock(self) -> bool:
+        """True while any Session needs the main loop at full speed: every
+        tick-active state except the terminals FAILED and CLOSED (KNOWN Sessions
+        are never in the tick-active view, so they are excluded for free). Unlike
+        has_active_sessions, which counts only ESTABLISHED/RECONNECTING, this also
+        covers handshakes in flight (CONNECTING/HELLO_*/PROFILE_SENT/AWAITING_*)
+        and CLOSING, whose RTT-sized timers would be starved by a slowed clock."""
+        return any(s.state not in (SessionState.FAILED, SessionState.CLOSED)
+                   for s in self._active_sessions.values())
+
     def __len__(self) -> int:
         return len(self._sessions)
 
