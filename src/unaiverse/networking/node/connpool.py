@@ -147,6 +147,13 @@ class NodeConn:
         self.world_agents_and_world_masters_set = set()
         self.world_node_peer_id = None
         self.inspector_peer_id = None
+        # role_to_peer_ids and peer_id_to_addrs stay Coordinator-owned and do NOT descend
+        # into sm_world with the world membership (D-2). role_to_peer_ids is the inverse
+        # index of peer_id_to_misc (the global cross-pool taxonomy, kept here) and set_role
+        # updates both together; find_addrs_by_role reads role_to_peer_ids and
+        # peer_id_to_addrs jointly, and get_addrs feeds the dial path. Only the pure world
+        # membership above (the two sets + world_node_peer_id) is what the perimeter
+        # classifies against and what will later move into sm_world.
         self.role_to_peer_ids = {}
         self.peer_id_to_addrs = {}
 
