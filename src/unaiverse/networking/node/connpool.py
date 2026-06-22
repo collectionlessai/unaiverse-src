@@ -157,6 +157,14 @@ class NodeConn:
         self.role_to_peer_ids = {}
         self.peer_id_to_addrs = {}
 
+        # The per-cycle world-membership snapshot, frozen at the start of each update()
+        # and read by BOTH the perimeter (via _reconcile_instance) and the chat-admission
+        # gate in get_messages, so the two views never diverge inside a cycle. A roster
+        # mutation written mid-cycle (pre-admission) takes effect only at the next
+        # update()'s snapshot, for both views. Initialised empty so get_messages admits no
+        # not-yet-connected peer before the first update().
+        self._cycle_membership = self.membership_snapshot()
+
         # Rendezvous
         self.rendezvous_tag = -1
 
@@ -483,13 +491,16 @@ class NodeConn:
         Args:
             p2p_name: The name of the P2P network to fetch messages from.
             allowed_not_connected_peers: must be None at the call site. The Coordinator
-                always admits chat from the world agents/masters roster (the peers known
-                from the rendezvous but not yet in a pool); Session messages are never
-                gated on pool membership, the handshake itself is what enrols a peer.
+                admits chat from the world agents/masters of THIS CYCLE'S membership
+                snapshot (the same frozen view the perimeter classifies against, not the
+                live mutable set), so a mid-cycle pre-admission only enables chat at the
+                next update(). Session messages are never gated on pool membership, the
+                handshake itself is what enrols a peer.
         """
         assert allowed_not_connected_peers is None, \
             "allowed_not_connected_peers is set by the Coordinator, not by the caller"
-        allowed_not_connected_peers = self.world_agents_and_world_masters_set
+        allowed_not_connected_peers = (self._cycle_membership.world_agents
+                                       | self._cycle_membership.world_masters)
 
         # Pop all messages
         p2p = self[p2p_name]
@@ -927,6 +938,7 @@ class NodeConn:
         self.pool_name_to_added_in_last_update = {}
         self.pool_name_to_removed_in_last_update = {}
         membership = self.membership_snapshot()
+        self._cycle_membership = membership  # publish this cycle's snapshot for get_messages' gate
 
         for p2p_name, p2p in self.p2p_name_to_p2p.items():
             added_local, removed_local = await self._reconcile_instance(p2p_name, p2p, membership)

@@ -437,6 +437,60 @@ def test_p2p_of_prefers_session_then_index():
     assert conn._p2p_of("nope") is None
 
 
+def test_cycle_snapshot_frozen_until_next_update():
+    """update() freezes the world membership for the whole cycle. A roster mutation
+    written after update() (a mid-cycle pre-admission) is invisible to _cycle_membership
+    until the next update() takes a fresh snapshot, so the perimeter and the get_messages
+    gate stay in lockstep (I-1)."""
+    conn, pub, world = _make_node_conn()
+    _run(conn.update())
+    assert conn._cycle_membership.world_agents == frozenset()
+
+    # Mid-cycle pre-admission mutates the live roster...
+    conn.add_to_world_agents_list("late", ["/ip4/9.9.9.9/tcp/9"], role=ROLE_WORLD_AGENT)
+    assert "late" in conn.world_agents_and_world_masters_set
+    # ...but the per-cycle snapshot stays frozen until the next update().
+    assert "late" not in conn._cycle_membership.world_agents
+
+    _run(conn.update())
+    assert "late" in conn._cycle_membership.world_agents
+
+
+def test_get_messages_gate_reads_cycle_snapshot(pools_with_one_p2p, monkeypatch):
+    """get_messages admits a not-yet-connected chat sender from the per-cycle snapshot,
+    not the live mutable roster: a sender present only in the live set (pre-admitted
+    mid-cycle) is dropped until the next update() refreshes the snapshot."""
+    from unaiverse.networking.node.connpool import WorldMembership
+    from unaiverse.networking.p2p import messages as msg_mod
+    pools, fake = pools_with_one_p2p
+
+    fake_msg = MagicMock()
+    fake_msg.content_type = "misc"
+    fake_msg.channel = "ch"
+    fake_msg.sender = "lateagent"
+    fake_msg.piggyback = "jwt0"
+    monkeypatch.setattr(msg_mod.Msg, "from_bytes", staticmethod(lambda _b: fake_msg))
+
+    async def _verify(token, sender):
+        return ("node-late", None)
+    monkeypatch.setattr(pools, "verify_token", _verify)
+
+    # The live roster admits "lateagent" (not in any pool), but this cycle's frozen
+    # snapshot does not, so the gate drops the message.
+    pools.world_agents_set = {"lateagent"}
+    pools.world_agents_and_world_masters_set = {"lateagent"}
+    pools._cycle_membership = WorldMembership(frozenset(), frozenset(), None, None)
+    fake._batch = [{"from": "lateagent", "data": b"x", "protocol": ""}]
+    chat, _ = _run(pools.get_messages(p2p_name=NodeConn.P2P_PUBLIC))
+    assert chat == []
+
+    # Once the next snapshot includes it, the same sender is admitted.
+    pools._cycle_membership = WorldMembership(frozenset({"lateagent"}), frozenset(), None, None)
+    fake._batch = [{"from": "lateagent", "data": b"x", "protocol": ""}]
+    chat, _ = _run(pools.get_messages(p2p_name=NodeConn.P2P_PUBLIC))
+    assert len(chat) == 1
+
+
 # ── Characterization oracle for the facade contract ────────────────────────────
 #
 # These freeze the role/addrs/is_connected facade (KNOWN Session per rendezvous
