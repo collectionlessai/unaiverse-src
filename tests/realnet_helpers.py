@@ -80,14 +80,27 @@ def build_real_world_node(idir_pub: str, idir_world: str, decision_hook=None,
     # The profile must advertise the world-side peer-id: the world host pre-admits
     # the joiner's dynamic.private_peer_id (from the root-attested p2p_peers) and the
     # world Session re-verifies the joiner token on its PROFILE handshake.
+    # Mirror attach_session_policy: the public manager routes by direction (no membership,
+    # never cuts), the world one classifies against the snapshot and cuts unclassifiable
+    # peers on its P2P instance. Without the routing_classifier, sm.reconcile short-circuits
+    # to empty and conn.update() produces no pool diff.
     sm_pub = SessionManager(p2p=p2p_pub, p2p_name=NodeConn.P2P_PUBLIC,
                             local_peer_id=p2p_pub.peer_id, local_node_id=node_id,
                             local_profile_factory=_profile_factory(node_id, p2p_world.peer_id),
-                            decision_hook=decision_hook)
+                            decision_hook=decision_hook,
+                            routing_classifier=NodeConn._route_public,
+                            perimeter_disconnect=None)
     sm_world = SessionManager(p2p=p2p_world, p2p_name=NodeConn.P2P_WORLD,
                               local_peer_id=p2p_world.peer_id, local_node_id=node_id,
                               local_profile_factory=_profile_factory(node_id, p2p_world.peer_id),
-                              decision_hook=decision_hook)
+                              decision_hook=decision_hook,
+                              routing_classifier=NodeConn._route_world,
+                              perimeter_disconnect=lambda peer_id: NodeConn.disconnect(p2p_world, peer_id))
+    # Wire the SMs into the conn so conn.update() / _reconcile_instance / _p2p_of see them.
+    # This builder bypasses Node.__init__, which is where attach_session_policy normally does
+    # this; without it conn._sm_* stay None and conn.update() trips over sm.reconcile.
+    conn._sm_public, conn._sm_world = sm_pub, sm_world
+    conn.set_session_managers(sm_pub, sm_world)
     return p2p_pub, p2p_world, conn, sm_pub, sm_world
 
 

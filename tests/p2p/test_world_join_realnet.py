@@ -128,10 +128,12 @@ def test_real_world_join_full_handoff(real_nodes):
     assert any("WORLD_HANDOFF_COMPLETE" in e.data.get("reason", "") for e in public_closed), \
         f"no public CLOSED with WORLD_HANDOFF_COMPLETE; closed={[(e.p2p_name, e.data.get('reason')) for e in closed]}"
 
-    # The joiner world ESTABLISHED event carries the rendezvous topic from the host.
-    world_established = [e for e in established
-                        if e.p2p_name == NodeConn.P2P_WORLD and e.role.value == "initiator"]
-    assert world_established and world_established[0].data.get("rendezvous_topic")
+    # The joiner's world Session established as initiator. The join completes on the normal
+    # PROFILE handshake (no PRIVATE_JOIN, no rendezvous_topic in the event): the rendezvous_tag
+    # travels inside the world_grant on the PUBLIC ESTABLISHED, not in the world one. Kept in
+    # lockstep with test_world_join_e2e.
+    assert any(e.p2p_name == NodeConn.P2P_WORLD and e.role.value == "initiator"
+               for e in established)
 
 
 # The world-grant signature was removed: the role is no longer carried/trusted in
