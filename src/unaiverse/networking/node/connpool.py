@@ -202,7 +202,14 @@ class NodeConn:
         self.pool_name_to_removed_in_last_update = {}
         self.pool_name_to_peer_infos = {p: {} for p in self.pool_names}
 
-        # Indices rooted around the peer ID
+        # Indices rooted around the peer ID. peer_id_to_pool_name is the connection
+        # index (which pool a connected peer lives in): it backs is_connected,
+        # get_pool_of, in_connection_queues, get_all_connected_peer_ids and the chat
+        # admission gate in get_messages. It is no longer the primary source of the
+        # peer -> instance routing: that is Session-anchored now (_p2p_of asks the
+        # SessionManagers first and only falls back to this map for a peer connected
+        # without a Session yet). So it stays load-bearing and must not be dropped when
+        # the world roster and the pool state later move down into the SessionManagers.
         self.peer_id_to_pool_name = {}
         self.peer_id_to_misc = {}
         self.peer_id_to_token = {}
