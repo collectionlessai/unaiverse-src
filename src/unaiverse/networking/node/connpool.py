@@ -303,75 +303,6 @@ class NodeConn:
         """
         return self.p2p_name_to_p2p[p2p_name]
 
-    async def __connect(self, p2p: P2P, addresses: list[str]) -> tuple[str | None, bool]:
-        """Establishes a connection to a peer via a P2P network (async).
-
-        Args:
-            p2p: The P2P network object to use for the connection.
-            addresses: A list of addresses of the peer to connect to.
-
-        Returns:
-            A tuple containing the peer ID and a boolean indicating if the connection was established through a relay.
-        """
-
-        force: str | None = None
-        # force: str | None = '/tcp'
-        if force is not None:
-            _addresses = [a for a in addresses if force in a]
-            addresses.clear()
-            for a in _addresses:
-                addresses.append(a)
-
-        def sort_priority(s):
-            if "/udp/" in s:
-                return 0  # Highest priority
-            elif "/ws/" in s:
-                return 1  # Middle priority
-            else:
-                return 2  # Lowest priority
-
-        # Sort in place (sorting does not seem to have an effect, but it makes things more readable)
-        kept_addresses = sorted(
-            [s for s in addresses if "127.0.0.1" not in s and ("/tcp/" not in s or "/ws/" in s)],
-            key=sort_priority
-        )
-        discarded_addresses = sorted(
-            [s for s in addresses if "127.0.0.1" not in s and ("/tcp/" in s and "/ws/" not in s)],
-            key=sort_priority
-        )
-        if len(kept_addresses) > 0:
-            addresses = kept_addresses
-        else:
-            addresses = discarded_addresses
-            discarded_addresses = []
-
-        log.cpool(f"Connecting to {addresses}", sub=p2p.log_sub)
-
-        if addresses is None or len(addresses) == 0:
-            log.error(f"Connection failed! (not-event tried, invalid addresses: {addresses})",
-                      sub=p2p.log_sub)
-            return None, False
-
-        try:
-            # Off the event loop: the dial can block up to its timeout, and other
-            # sessions must keep ticking meanwhile (e.g. during a re-dial).
-            winning_addr_info_dict = await asyncio.to_thread(p2p.connect_to, addresses)
-            peer_id = winning_addr_info_dict.get('ID')
-            addrs = winning_addr_info_dict.get('Addrs')
-            assert addrs is not None and isinstance(addrs, (tuple, list))
-            connected_addr_str = addrs[0]
-            through_relay = '/p2p-circuit/' in connected_addr_str
-            log.cpool(f"Connected to peer {peer_id} via {connected_addr_str} "
-                      f"(through relay: {through_relay})", sub=p2p.log_sub)
-
-            return peer_id, through_relay
-        except P2PError:
-            log.error(f"Connection failed!", sub=p2p.log_sub)
-            if len(discarded_addresses) > 0:
-                return await self.__connect(p2p, discarded_addresses)
-            else:
-                return None, False
-
     @staticmethod
     async def disconnect(p2p: P2P, peer_id: str) -> bool:
         """Disconnects from a specific peer on a P2P network (async).
@@ -426,22 +357,6 @@ class NodeConn:
             return None, None, (), 0
         return self.__token_verifier.verify_token_claims(token, p2p_peer=peer_id)
 
-    async def connect(self, addresses: list[str], p2p_name: str) -> tuple[str | None, bool]:
-        """Connects to a peer on a specified P2P network (async).
-
-        Args:
-            addresses: A list of addresses of the peer to connect to.
-            p2p_name: The name of the P2P network to use.
-
-        Returns:
-            A tuple containing the peer ID of the connected peer and a boolean indicating if a relay was used.
-        """
-        p2p = self.p2p_name_to_p2p[p2p_name]
-
-        # Connecting
-        peer_id, through_relay = await self.__connect(p2p, addresses)
-        return peer_id, through_relay
-    
     async def reserve(self, peer_id: str, p2p_name: str) -> str | None:
         """Attempts to reserve a slot on a specified relay node via a P2P network (async).
 
@@ -654,34 +569,6 @@ class NodeConn:
                 continue  # Skip problematic message
 
         return processed_messages, session_messages
-
-    async def send_session(self, peer_id: str, protocol_id: str, sess_msg: SessMsg,
-                           p2p_name: str) -> bool:
-        """Serialize `sess_msg` and open a fresh outbound libp2p stream on
-        `protocol_id` to `peer_id` on the `p2p_name` instance, writing a single
-        length-prefixed payload and closing the stream. Returns True on send success.
-
-        The Session FSM passes a `SessMsg` (not bytes) and a `p2p_name` (not a P2P
-        object) so it stays free of protobuf and of any Python-only P2P handle — the
-        JS `NodeConn` mirror exposes the same signature. Identity is bound by the
-        Session handshake (sig + token), so no JWT piggyback is inserted.
-        """
-        if protocol_id not in SESSION_PROTOCOL_IDS:
-            raise ValueError(f"send_session: protocol_id '{protocol_id}' is not a Session protocol")
-        p2p = self[p2p_name]
-        try:
-            payload = sess_msg.to_bytes()
-        except Exception as e:
-            log.error(f"send_session(...{peer_id[-5:]}, {protocol_id}) encode failed: {e}", sub=p2p.log_sub)
-            return False
-        try:
-            # Off the event loop (same pattern as `send`): the Go side opens a
-            # fresh stream and can block for seconds toward a dead peer, which
-            # would freeze every other session's keep-alive.
-            return await asyncio.to_thread(p2p.send_on_protocol, peer_id, protocol_id, payload)
-        except Exception as e:
-            log.error(f"send_session(...{peer_id[-5:]}, {protocol_id}) failed: {e}", sub=p2p.log_sub)
-            return False
 
     def passed_time_since_last_communication(self):
         passed = time.time() - max(self.__last_sent_time, self.__last_recv_time)

@@ -4,7 +4,6 @@ Confirms that:
   * Session-protocol messages skip ``Msg.from_bytes`` and JWT verification and are
     decoded into ``SessMsg`` value objects by the codec.
   * Non-session messages still go through the legacy chat path.
-  * ``send_session`` refuses non-session protocol IDs.
   * The SessMsg ↔ protobuf codec round-trips.
 """
 
@@ -172,19 +171,6 @@ def test_mixed_batch_split_correctly(pools_with_one_p2p, monkeypatch):
     assert {s.sess_msg.kind for s in session} == {
         SessMsg.KIND_PROFILE_OFFER, SessMsg.KIND_GOAWAY,
     }
-
-
-# ── send_session() ──────────────────────────────────────────────────────────
-
-def test_send_session_rejects_non_session_protocol(pools_with_one_p2p):
-    pools, _ = pools_with_one_p2p
-    with pytest.raises(ValueError, match="not a Session protocol"):
-        _run(pools.send_session(
-            peer_id="12D3KooWRemote",
-            protocol_id="/unaiverse/chat/1.0.0",   # not a session protocol
-            sess_msg=SessMsg(SessMsg.KIND_GOAWAY, {}),
-            p2p_name=NodeConn.P2P_PUBLIC,
-        ))
 
 
 def test_session_protocol_ids_match_constants():
