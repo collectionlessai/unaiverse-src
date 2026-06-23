@@ -1583,11 +1583,9 @@ class Node:
                 log.misc("Removing a not-connected-anymore peer, "
                          "pool_name: " + pool_name + ", peer_id: " + peer_id + "...",
                          sub="prv" if pool_name in self.conn.WORLD or pool_name in self.conn.WORLD_NODE else "pub")
-                # Inform SessionManagers — ESTABLISHED → RECONNECTING (grace),
-                # in-handshake states → FAILED immediately.
-                for ev in await self._sm_public.on_peer_disconnected(peer_id):
-                    await self._dispatch_session_event(ev)
-                for ev in await self._sm_world.on_peer_disconnected(peer_id):
+                # Inform the SessionManagers via the Coordinator — ESTABLISHED →
+                # RECONNECTING (grace), in-handshake states → FAILED immediately.
+                for ev in await self.conn.on_peer_disconnected(peer_id):
                     await self._dispatch_session_event(ev)
 
                 # A Session riding its grace period (RECONNECTING) is not gone yet.
@@ -1597,13 +1595,7 @@ class Node:
                 # hosted purge is then driven solely by the terminal LOST/CLOSED
                 # Session event (see _dispatch_session_event). When no Session is in
                 # grace for this peer, fall back to the full purge as before.
-                in_grace = False
-                for sm in (self._sm_public, self._sm_world):
-                    sess = sm.get_session(peer_id)
-                    if sess is not None and sess.state == SessionState.RECONNECTING:
-                        in_grace = True
-                        break
-                if in_grace:
+                if self.conn.is_in_grace(peer_id):
                     await self.conn.remove(peer_id)
                 else:
                     await self.__purge(peer_id)
@@ -1638,11 +1630,9 @@ class Node:
         for new_peer_ids in new_peer_ids_by_pool.values():
             self.reconnected.update(new_peer_ids)
         for r in self.reconnected:
-            # Tell SessionManagers — RECONNECTING → ESTABLISHED if grace period
-            # hasn't expired yet (otherwise no-op, the session is gone).
-            for ev in await self._sm_public.on_peer_reconnected(r):
-                await self._dispatch_session_event(ev)
-            for ev in await self._sm_world.on_peer_reconnected(r):
+            # Tell the SessionManagers via the Coordinator — RECONNECTING →
+            # ESTABLISHED if the grace period hasn't expired yet (else no-op).
+            for ev in await self.conn.on_peer_reconnected(r):
                 await self._dispatch_session_event(ev)
             pool_name = self.conn.get_pool_of(r)
             if pool_name is None:
@@ -1746,23 +1736,18 @@ class Node:
         log.misc("Got " + str(len(public_messages)) + " messages from the public net", sub="pub")
         log.misc("Got " + str(len(world_messages)) + " messages from the world/private net", sub="prv")
 
-        # ── Route per-stage Session messages through SessionManagers ──────────
+        # ── Pump the Sessions (deliver inbound + tick), Coordinator-owned ─────
         # SessionInbound items skip Msg.from_bytes / JWT verify; identity is
-        # established cryptographically by sig_a / sig_b inside the handshake.
-        for inb in public_session_inbound:
-            events = await self._sm_public.deliver(inb.peer_id, inb.protocol_id, inb.sess_msg)
-            for ev in events:
-                await self._dispatch_session_event(ev)
-        for inb in world_session_inbound:
-            events = await self._sm_world.deliver(inb.peer_id, inb.protocol_id, inb.sess_msg)
-            for ev in events:
-                await self._dispatch_session_event(ev)
-
-        # ── Per-cycle SessionManager tick: timeouts + session-level PING/PONG keep-alive ───
-        _now = time.monotonic()
-        for ev in await self._sm_public.tick(_now):
-            await self._dispatch_session_event(ev)
-        for ev in await self._sm_world.tick(_now):
+        # established cryptographically by sig_a / sig_b inside the handshake. The
+        # Coordinator delivers each inbound to its instance's manager and then ticks
+        # every manager, returning a flat 1:1 SessionEvent list in generation order
+        # (all delivers public-then-world, then all ticks); Node stays the single
+        # dispatch site.
+        events = await self.conn.pump_sessions(
+            {NodeConn.P2P_PUBLIC: public_session_inbound,
+             NodeConn.P2P_WORLD: world_session_inbound},
+            now=time.monotonic())
+        for ev in events:
             await self._dispatch_session_event(ev)
 
         # Sorting messages

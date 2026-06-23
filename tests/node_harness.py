@@ -195,6 +195,36 @@ class NodeFakeConn(FakeConn):
         self.world_masters_set = set()
         self.world_roles = {}
         self.addresses_set = []
+        # Registered by the harness after the SessionManagers are built, so the pump /
+        # on_peer / grace facades delegate to them exactly like the real NodeConn.
+        self._session_managers = []
+
+    def set_session_managers(self, *session_managers):
+        self._session_managers = [sm for sm in session_managers if sm is not None]
+
+    async def pump_sessions(self, inbound_by_p2p_name, now):
+        events = []
+        for sm in self._session_managers:
+            for inb in inbound_by_p2p_name.get(sm.p2p_name, []):
+                events.extend(await sm.deliver(inb.peer_id, inb.protocol_id, inb.sess_msg))
+        for sm in self._session_managers:
+            events.extend(await sm.tick(now))
+        return events
+
+    async def on_peer_disconnected(self, peer_id: str):
+        events = []
+        for sm in self._session_managers:
+            events.extend(await sm.on_peer_disconnected(peer_id))
+        return events
+
+    async def on_peer_reconnected(self, peer_id: str):
+        events = []
+        for sm in self._session_managers:
+            events.extend(await sm.on_peer_reconnected(peer_id))
+        return events
+
+    def is_in_grace(self, peer_id: str) -> bool:
+        return any(sm.is_in_grace(peer_id) for sm in self._session_managers)
 
     async def get_messages(self, p2p_name: str, allowed_not_connected_peers=None):
         inbox = self.inbox_by_p2p[p2p_name]
@@ -311,6 +341,9 @@ def build_agent_node_shell(node_peer_id: str, node_id: str = "shell-node",
         local_profile_factory=lambda: node.profile.get_all_profile(),
         decision_hook=node._session_decision_hook,
     )
+    # Register the managers on the fake conn so its pump_sessions / on_peer_* / is_in_grace
+    # facades delegate to them, mirroring NodeConn.attach_session_policy.
+    conn.set_session_managers(node._sm_public, node._sm_world)
     return node, conn
 
 

@@ -823,6 +823,50 @@ class NodeConn:
         in flight."""
         return any(sm.requires_fast_clock() for sm in self._session_managers)
 
+    async def pump_sessions(self, inbound_by_p2p_name: dict, now: float) -> list:
+        """Per-cycle Session pump, owned by the Coordinator: deliver every inbound
+        Session message to its instance's manager, then tick every manager, returning a
+        FLAT list of SessionEvent in generation order (all delivers, public before world,
+        then all ticks, same order). Node keeps the single dispatch site
+        (_dispatch_session_event), so this only moves the per-instance iteration off Node.
+
+        Mirrors the legacy order exactly: every deliver fires before any tick, and the
+        managers are swept in registration order (public then world). The SessionInbound
+        items are keyed by p2p_name; a manager with no inbound this cycle still ticks."""
+        events: list = []
+        # Deliver pass (public then world), every inbound of each instance in order.
+        for sm in self._session_managers:
+            for inb in inbound_by_p2p_name.get(sm.p2p_name, []):
+                events.extend(await sm.deliver(inb.peer_id, inb.protocol_id, inb.sess_msg))
+        # Tick pass (same order): timeouts + keep-alive PING/PONG.
+        for sm in self._session_managers:
+            events.extend(await sm.tick(now))
+        return events
+
+    async def on_peer_disconnected(self, peer_id: str) -> list:
+        """Fan a transport disconnect to every instance's manager and return the flat
+        list of resulting SessionEvent (public before world), for Node to dispatch.
+        ESTABLISHED -> RECONNECTING (grace), in-handshake states -> FAILED."""
+        events: list = []
+        for sm in self._session_managers:
+            events.extend(await sm.on_peer_disconnected(peer_id))
+        return events
+
+    async def on_peer_reconnected(self, peer_id: str) -> list:
+        """Fan a transport reconnect to every instance's manager and return the flat list
+        of resulting SessionEvent (public before world). A no-op unless a Session for the
+        peer is RECONNECTING (mid-grace), so feeding fresh first-time connections is safe."""
+        events: list = []
+        for sm in self._session_managers:
+            events.extend(await sm.on_peer_reconnected(peer_id))
+        return events
+
+    def is_in_grace(self, peer_id: str) -> bool:
+        """True if any instance holds a Session for this peer riding its reconnect grace
+        (RECONNECTING). The Node uses this to keep the enrolment alive across a transport
+        blip (pool-remove) instead of a full purge, without reaching into Session state."""
+        return any(sm.is_in_grace(peer_id) for sm in self._session_managers)
+
     def _p2p_of(self, peer_id: str) -> "P2P | None":
         """Resolve a peer's P2P instance by asking the SessionManagers first: the SM
         that holds a Session for this peer-id owns the instance the peer lives on

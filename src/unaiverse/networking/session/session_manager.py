@@ -602,6 +602,15 @@ class SessionManager:
         return [pid for pid, s in self._sessions.items()
                 if s.state == SessionState.ESTABLISHED]
 
+    def is_in_grace(self, peer_id: str) -> bool:
+        """True if this peer's Session is riding its reconnect grace window
+        (RECONNECTING): disconnected at the transport level but not yet gone. The
+        Coordinator aggregates this across its instances so the Node can choose
+        pool-remove (keep the enrolment across the blip) vs full purge without reaching
+        into Session state itself."""
+        sess = self._sessions.get(peer_id)
+        return sess is not None and sess.state == SessionState.RECONNECTING
+
     def has_active_sessions(self) -> bool:
         """True while any Session is ESTABLISHED or riding its reconnect grace.
         The Node uses this to keep the main loop at full speed: the keep-alive
