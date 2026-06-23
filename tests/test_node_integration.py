@@ -70,7 +70,7 @@ def test_inbound_handshake_through_node_pump_calls_add_agent():
         node, conn, remote_sm, remote_inbox = _agent_pair()
         remote_events = await _establish_inbound(node, conn, remote_sm, remote_inbox)
         assert [e.type for e in remote_events] == [SessionEventType.ESTABLISHED]
-        assert node._sm_public.is_established(REMOTE_PEER)
+        assert conn._sm_public.is_established(REMOTE_PEER)
         assert len(node.hosted.added) == 1
         peer_id, profile = node.hosted.added[0]
         assert peer_id == REMOTE_PEER
@@ -98,7 +98,7 @@ def test_inworld_inbound_agent_connection_calls_add_agent():
         remote_events = await apump(remote_inbox, remote_sm)
 
         assert [e.type for e in remote_events] == [SessionEventType.ESTABLISHED]
-        assert node._sm_world.is_established(REMOTE_PEER)
+        assert conn._sm_world.is_established(REMOTE_PEER)
         assert len(node.hosted.added) == 1
         assert node.hosted.added[0][0] == REMOTE_PEER
 
@@ -126,7 +126,7 @@ def test_inworld_outbound_agent_connection_joins_agent():
         await apump(remote_inbox, remote_sm)          # OFFER → DECISION
         await node._Node__handle_network_messages()   # DECISION → ESTABLISHED dispatch
 
-        assert node._sm_world.is_established(REMOTE_PEER)
+        assert conn._sm_world.is_established(REMOTE_PEER)
         assert len(node.hosted.added) == 1
         assert node.hosted.added[0][0] == REMOTE_PEER
         assert node.conn._pending_world_handoff == {} and node.conn._world_to_public == {}
@@ -144,7 +144,7 @@ def test_inbound_handshake_arms_interactive_lone_wolf_latch():
 
         await _establish_inbound(node, conn, remote_sm, remote_inbox)
 
-        assert node._sm_public.is_established(REMOTE_PEER)
+        assert conn._sm_public.is_established(REMOTE_PEER)
         assert node._interact_mode_opts["lone_wolf_peer_id"] == REMOTE_PEER
         assert node._interact_mode_opts["ready_to_interact"] is True
 
@@ -172,7 +172,7 @@ def test_outbound_public_handshake_arms_interactive_ready():
         await apump(remote_inbox, remote_sm)          # OFFER → DECISION
         await node._Node__handle_network_messages()   # DECISION → ESTABLISHED dispatch
 
-        assert node._sm_public.is_established(REMOTE_PEER)
+        assert conn._sm_public.is_established(REMOTE_PEER)
         assert node._interact_mode_opts["ready_to_interact"] is True
 
     asyncio.run(_scenario())
@@ -202,7 +202,7 @@ def test_world_session_goaway_triggers_full_world_leave():
         await node._Node__handle_network_messages()
         await apump(remote_inbox, remote_sm)
         await node._Node__handle_network_messages()
-        assert node._sm_world.is_established(REMOTE_PEER)
+        assert conn._sm_world.is_established(REMOTE_PEER)
 
         # Mark the remote as our current world host (what __join_world records).
         dyn = node.profile.get_dynamic_profile()
@@ -242,7 +242,7 @@ def test_decision_hook_rejects_node_not_in_allow_list():
         assert [e.type for e in remote_events] == [SessionEventType.FAILED]
         assert "NOT_IN_ALLOW_LIST" in remote_events[0].data["reason"]
         assert node.hosted.added == []
-        sess = node._sm_public.get_session(REMOTE_PEER)
+        sess = conn._sm_public.get_session(REMOTE_PEER)
         assert sess is None or sess.state == SessionState.FAILED
 
     asyncio.run(_scenario())
@@ -350,7 +350,7 @@ def test_pool_removal_while_established_keeps_enrolment_during_grace():
         conn.next_removed = {NodeConn.OUT_PUBLIC: {REMOTE_PEER}}
         await node._Node__handle_network_connections()
 
-        sess = node._sm_public.get_session(REMOTE_PEER)
+        sess = conn._sm_public.get_session(REMOTE_PEER)
         assert sess is not None and sess.state == SessionState.RECONNECTING
         # Enrolment survives the grace window...
         assert REMOTE_PEER in node.hosted.all_agents
@@ -378,7 +378,7 @@ def test_resumed_session_keeps_enrolment_without_readd():
         await remote_sm.on_peer_disconnected(NODE_PEER)
         assert REMOTE_PEER in node.hosted.all_agents
         assert REMOTE_PEER not in node.hosted.removed
-        assert node._sm_public.get_session(REMOTE_PEER).state == SessionState.RECONNECTING
+        assert conn._sm_public.get_session(REMOTE_PEER).state == SessionState.RECONNECTING
 
         # The remote initiator re-dials and RESUMEs; the node pump processes it.
         await remote_sm.tick()
@@ -386,7 +386,7 @@ def test_resumed_session_keeps_enrolment_without_readd():
         await node._Node__handle_network_messages()   # RESUME → ACK + RESUMED dispatch
         await apump(remote_inbox, remote_sm)           # remote absorbs the ACK
 
-        assert node._sm_public.is_established(REMOTE_PEER)
+        assert conn._sm_public.is_established(REMOTE_PEER)
         assert remote_sm.is_established(NODE_PEER)
         # Still enrolled, and NOT re-added (it was never purged): one add total.
         assert REMOTE_PEER in node.hosted.all_agents
@@ -402,14 +402,14 @@ def test_session_lost_while_peer_still_in_pool_purges_and_quarantines():
         node, conn, remote_sm, remote_inbox = _agent_pair()
         await _establish_inbound(node, conn, remote_sm, remote_inbox)
 
-        await node._sm_public.on_peer_disconnected(REMOTE_PEER)
-        sess = node._sm_public.get_session(REMOTE_PEER)
+        await conn._sm_public.on_peer_disconnected(REMOTE_PEER)
+        sess = conn._sm_public.get_session(REMOTE_PEER)
         assert sess.state == SessionState.RECONNECTING
         sess._state_entered_at -= 60.0   # blow past the 45s grace window
 
         await node._Node__handle_network_messages()   # tick → LOST → dispatch
-        assert node._sm_public.get_session(REMOTE_PEER) is None
-        assert REMOTE_PEER in node._sm_public._quarantine
+        assert conn._sm_public.get_session(REMOTE_PEER) is None
+        assert REMOTE_PEER in conn._sm_public._quarantine
         assert REMOTE_PEER in node.hosted.removed
         assert REMOTE_PEER in conn.removed_calls
 
@@ -423,8 +423,8 @@ def test_added_diff_kicks_resume_for_reconnecting_session():
         node, conn, remote_sm, remote_inbox = _agent_pair()
         await _establish_inbound(node, conn, remote_sm, remote_inbox)
 
-        await node._sm_public.on_peer_disconnected(REMOTE_PEER)
-        sess = node._sm_public.get_session(REMOTE_PEER)
+        await conn._sm_public.on_peer_disconnected(REMOTE_PEER)
+        sess = conn._sm_public.get_session(REMOTE_PEER)
         assert sess.state == SessionState.RECONNECTING
         # Dirty the recovery knobs so the reconnect kick is observable.
         sess._reconnect_substep = ""
@@ -467,11 +467,11 @@ def test_world_handoff_failure_cleans_pending_maps(failure_mode, monkeypatch):
                 return None
             monkeypatch.setattr("asyncio.sleep", _no_sleep)
         else:
-            node._sm_world._quarantine[world_world_peer] = time.monotonic() + 30.0
+            conn._sm_world._quarantine[world_world_peer] = time.monotonic() + 30.0
 
         await node._start_world_handoff("public-world-peer", _world_grant_blob())
 
-        assert node._sm_world.is_established(world_world_peer) is False
+        assert conn._sm_world.is_established(world_world_peer) is False
         assert node.conn._pending_world_handoff == {}
         assert node.conn._world_to_public == {}
 
@@ -588,7 +588,7 @@ def test_world_host_registers_joiner_with_grant_role():
 
         assert any(e.type == SessionEventType.ESTABLISHED for e in remote_events), \
             f"joiner never established: {[e.type.value for e in remote_events]}"
-        assert node._sm_world.is_established(REMOTE_PEER)
+        assert conn._sm_world.is_established(REMOTE_PEER)
         assert REMOTE_PEER in conn.world_masters_set
         assert conn.world_roles[REMOTE_PEER] == role
         assert world.added and world.added[0][0] == REMOTE_PEER
@@ -690,3 +690,15 @@ def test_local_closed_event_carries_goaway_reason():
             f"local CLOSED reason: {[e.data.get('reason') for e in closed]}"
 
     asyncio.run(_scenario())
+
+
+def test_s18_node_holds_no_session_manager_handle():
+    """Enforce the S18 contract on the Node side: Node caches no handle to the
+    SessionManagers. The managers are owned by the Coordinator (conn._sm_public /
+    conn._sm_world); Node drives every Session verb through conn facades. This fails if
+    Node ever regrows a node._sm_* attribute."""
+    node, conn = build_agent_node_shell(NODE_PEER)
+    assert not hasattr(node, "_sm_public")
+    assert not hasattr(node, "_sm_world")
+    # The managers live on the Coordinator instead.
+    assert conn._sm_public is not None and conn._sm_world is not None

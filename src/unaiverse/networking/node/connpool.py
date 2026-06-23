@@ -215,14 +215,16 @@ class NodeConn:
             assert isinstance(ratio, float)
             self.pool_ratios.append(ratio)
 
-        # Indices involving the P2P object or its name. p2p_name_to_p2p is kept as a
-        # constant 2-entry map (name -> P2P handle) for the pre-attach paths
-        # (__getitem__, reserve) and as the world/public anchors. The instance a pool
-        # belongs to is read off its own pool triple (the P2P handle is triple[2]) and,
-        # at routing time, off the SessionManager that owns that handle (sm.p2p): the
-        # SM is the instance, so the per-p2p-object indices p2p_to_pool_names /
-        # p2p_name_and_pool_name_to_pool_triple are gone (S10b reindex p2p -> sm).
-        self.p2p_name_to_p2p = p2p_name_to_p2p
+        # The SM is the instance: the per-instance index maps a p2p_name to its
+        # SessionManager, not to the raw P2P handle (S18). It is empty until
+        # set_session_managers runs (the SMs are built late in attach_session_policy),
+        # so it is seeded here and populated there. The pool->p2p_name mapping captured
+        # at init lets set_session_managers wire each pool triple's instance slot to the
+        # right SM. The raw P2P handles live on self.p2p_public/self.p2p_world purely as
+        # custody (to build the SMs and for the Coordinator's own internal reads), never
+        # exposed to callers as a channel.
+        self.p2p_name_to_sm = {}
+        self._pool_name_to_p2p_name = {}
 
         # Indices rooted around the pool name
         self.pool_name_to_pool_triple = {}
@@ -248,17 +250,20 @@ class NodeConn:
 
         # Checking
         for p2p_name_and_ratio in pool_name_to_p2p_name_and_ratio.values():
-            assert p2p_name_and_ratio[0] in self.p2p_name_to_p2p, f"Cannot find p2p named {p2p_name_and_ratio[0]} "
+            assert p2p_name_and_ratio[0] in p2p_name_to_p2p, f"Cannot find p2p named {p2p_name_and_ratio[0]} "
         assert self.max_con >= len(self.pool_names), "Too small number of max connections"
         assert sum([x for x in self.pool_ratios if x > 0]) == 1.0, "Pool ratios must sum to 1.0"
 
-        # Preparing the pool triples
+        # Preparing the pool triples. The instance slot (triple[2]) holds the
+        # SessionManager that owns the pool, but the SMs do not exist yet at __init__
+        # (they are built in attach_session_policy): seed it with None and remember which
+        # p2p_name each pool belongs to, so set_session_managers can wire the right SM in.
         self.pool_name_to_pool_triple = {}
         for k in self.pool_names:
             p2p_name = pool_name_to_p2p_name_and_ratio[k][0]
             assert isinstance(p2p_name, str)
-            p2p: P2P = self.p2p_name_to_p2p[p2p_name]
-            self.pool_name_to_pool_triple[k] = [set(), 0, p2p]
+            self._pool_name_to_p2p_name[k] = p2p_name
+            self.pool_name_to_pool_triple[k] = [set(), 0, None]
         num_zero_ratio_pools = len([x for x in self.pool_ratios if x == 0])
         assert num_zero_ratio_pools <= self.max_con, "Cannot create pools given the provided max connection count"
 
@@ -280,9 +285,9 @@ class NodeConn:
             "Cannot create pools given the provided max connection count"
         pools_max_sizes[self.pool_names[-1]] += (self.max_con - tot)
 
-        # Storing the fixed cap in each pool triple (triple = [peer_id set, cap, P2P]).
-        for pool_name, pool_contents_max_con_and_p2p in self.pool_name_to_pool_triple.items():
-            pool_contents_max_con_and_p2p[1] = pools_max_sizes[pool_name]  # Fixing the second element of the triple
+        # Storing the fixed cap in each pool triple (triple = [peer_id set, cap, SM]).
+        for pool_name, pool_contents_max_con_and_sm in self.pool_name_to_pool_triple.items():
+            pool_contents_max_con_and_sm[1] = pools_max_sizes[pool_name]  # Fixing the second element of the triple
 
         # Time markers
         self.__last_sent_time = 0.
@@ -313,16 +318,20 @@ class NodeConn:
             s += ss
         return s
 
-    def __getitem__(self, p2p_name: str) -> P2P:
-        """Retrieves a P2P object by its name.
+    def __getitem__(self, p2p_name: str) -> "SessionManager":
+        """Retrieves the SessionManager (the instance) for a named P2P network.
+
+        The SM is the instance: callers index the Coordinator by network name and get the
+        manager, not the raw P2P handle (which stays custody-only on the Coordinator). Only
+        valid after the managers are attached (set_session_managers / attach_session_policy).
 
         Args:
             p2p_name: The name of the P2P network.
 
         Returns:
-            The P2P object.
+            The SessionManager owning that instance.
         """
-        return self.p2p_name_to_p2p[p2p_name]
+        return self.p2p_name_to_sm[p2p_name]
 
     # Identity / posture facade over our OWN P2P instances. Node used to reach into the
     # P2P objects (conn[P2P_*].peer_id, conn.p2p_world.is_public, ...) to read these; the
@@ -354,6 +363,12 @@ class NodeConn:
     @property
     def world_relay_enabled(self) -> bool:
         return self.p2p_world.relay_is_enabled
+
+    def get_world_connected_peers_info(self) -> list:
+        """Raw transport-level connected peers on the world instance, for the stats path
+        (Agent.collect_and_store_own_stats). Reads our own world P2P as internal custody
+        and returns the data, not the handle, so callers stop reaching into conn[...].p2p."""
+        return self.p2p_world.get_connected_peers_info()
 
     @staticmethod
     async def disconnect(p2p: P2P, peer_id: str) -> bool:
@@ -438,7 +453,7 @@ class NodeConn:
             True if the peer is successfully added, otherwise False.
         """
         peer_id = peer_info['id']
-        pool, max_size, p2p = self.pool_name_to_pool_triple[pool_name]
+        pool, max_size, _ = self.pool_name_to_pool_triple[pool_name]
         if len(pool) < max_size:
 
             # "hoping" peer IDs are unique, and stopping duplicate cases
@@ -539,7 +554,9 @@ class NodeConn:
         # P2P pops this instance's inbound batch and decodes the Session-protocol frames
         # (the wire codec lives in the transport tier); chat_raw stays raw for the
         # Node-bound chat path below, and session_messages is passed straight through.
-        p2p = self[p2p_name]
+        # The instance is the SM; read its P2P handle for the transport pop (internal
+        # custody, not an exposed channel).
+        p2p = self._sm_by_name(p2p_name).p2p
         chat_raw, session_messages = p2p.get_messages()
         processed_messages: list[Msg] = []
 
@@ -811,8 +828,20 @@ class NodeConn:
     def set_session_managers(self, *session_managers) -> None:
         """Register the per-instance SessionManagers so conn can answer per-peer
         Session-state queries on behalf of the hosted entity. Called by
-        attach_session_policy (and directly by unit tests with stub managers)."""
+        attach_session_policy (and directly by unit tests with stub managers).
+
+        This is also where the SM (the instance) is wired into the per-instance index and
+        into each pool triple's instance slot, now that the managers exist: __init__ seeded
+        the triples with None and recorded each pool's p2p_name. Unit tests that build a
+        bare NodeConn via __new__ (no _init_pools) have no triples to wire, hence the
+        guard."""
         self._session_managers = [sm for sm in session_managers if sm is not None]
+        self.p2p_name_to_sm = {sm.p2p_name: sm for sm in self._session_managers
+                               if getattr(sm, "p2p_name", None) is not None}
+        triples = getattr(self, "pool_name_to_pool_triple", None)
+        if triples:
+            for pool_name, triple in triples.items():
+                triple[2] = self.p2p_name_to_sm.get(self._pool_name_to_p2p_name[pool_name])
 
     def is_peer_session_pending(self, peer_id: str) -> bool:
         """True if `peer_id` has a Session whose *first* handshake is still in
@@ -986,11 +1015,8 @@ class NodeConn:
         pool_name = self.peer_id_to_pool_name.get(peer_id)
         if pool_name is None:
             return None
-        p2p = self.pool_name_to_pool_triple[pool_name][2]
-        for sm in (self._sm_public, self._sm_world):
-            if sm is not None and sm.p2p is p2p:
-                return sm
-        return None
+        # The pool triple's instance slot already holds the owning SM (None pre-attach).
+        return self.pool_name_to_pool_triple[pool_name][2]
 
     def _p2p_of(self, peer_id: str) -> "P2P | None":
         """The P2P handle of the peer's owning instance, via _sm_of. None when nothing
@@ -999,11 +1025,9 @@ class NodeConn:
         return sm.p2p if sm is not None else None
 
     def _sm_by_name(self, p2p_name: str) -> "SessionManager | None":
-        """The SessionManager for a named instance (used by the relay / default paths)."""
-        for sm in (self._sm_public, self._sm_world):
-            if sm is not None and sm.p2p_name == p2p_name:
-                return sm
-        return None
+        """The SessionManager (the instance) for a named network, via the per-instance
+        index populated at attach time. None before the managers are registered."""
+        return self.p2p_name_to_sm.get(p2p_name)
 
     def _sm_for_topic(self, peer_id: str, default_p2p_name: "str | None" = None) -> "SessionManager | None":
         """The SessionManager to use for a topic/dm keyed by peer_id: the instance whose
@@ -1145,11 +1169,11 @@ class NodeConn:
         sm_membership = membership if sm.p2p_name == NodeConn.P2P_WORLD else None
         classified = await sm.reconcile(connected_peer_infos, sm_membership)
 
-        # This instance's own pools are the ones whose triple is bound to this manager's
-        # P2P handle (the SM is the instance). Treat a pool absent from `classified` as
-        # empty so removals are still detected.
-        for pool_name, (pool, _, pool_p2p) in self.pool_name_to_pool_triple.items():
-            if pool_p2p is not p2p:
+        # This instance's own pools are the ones whose triple is bound to this manager
+        # (the SM is the instance). Treat a pool absent from `classified` as empty so
+        # removals are still detected.
+        for pool_name, (pool, _, pool_sm) in self.pool_name_to_pool_triple.items():
+            if pool_sm is not sm:
                 continue
             connected_peer_ids = classified.get(pool_name, {}).keys()
             new_peer_ids = connected_peer_ids - pool
@@ -1186,8 +1210,10 @@ class NodeConn:
             membership = self.membership_snapshot()
         public = p2p == self.p2p_public
         classify = self._route_public if public else self._route_world
-        # This instance's pools = the ones whose triple is bound to this P2P handle.
-        result = {pool_name: {} for pool_name, (_, _, pp) in self.pool_name_to_pool_triple.items() if pp is p2p}
+        # This instance's pools = the ones whose owning SM rides this P2P handle (the SM is
+        # the instance; the incoming arg is still the raw P2P from the transport callback).
+        result = {pool_name: {} for pool_name, (_, _, pool_sm) in self.pool_name_to_pool_triple.items()
+                  if pool_sm is not None and pool_sm.p2p is p2p}
         for c in connected_peer_infos:
             pool_name = classify(c, membership)
             if pool_name is None:

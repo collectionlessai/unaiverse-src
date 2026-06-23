@@ -37,15 +37,23 @@ class _FakeP2P:
 def pools_with_one_p2p():
     """A NodeConn whose public P2P returns whatever messages we plant. The world P2P is
     a second fake we never feed: get_messages is only exercised on the public one. The
-    constructor never calls P2P methods, so the bare fakes are enough."""
+    constructor never calls P2P methods, so the bare fakes are enough. get_messages resolves
+    the instance through the SM (S18), so we register minimal SM stubs that just carry the
+    p2p_name and their P2P handle."""
+    from types import SimpleNamespace
     fake_p2p = _FakeP2P([])
+    world_p2p = _FakeP2P([])
     pools = NodeConn(
         max_connections=16,
         p2p_u=fake_p2p,
-        p2p_w=_FakeP2P([]),
+        p2p_w=world_p2p,
         is_world_node=False,
         public_key=None,
         token=None,
+    )
+    pools.set_session_managers(
+        SimpleNamespace(p2p=fake_p2p, p2p_name=NodeConn.P2P_PUBLIC),
+        SimpleNamespace(p2p=world_p2p, p2p_name=NodeConn.P2P_WORLD),
     )
     return pools, fake_p2p
 
@@ -298,6 +306,7 @@ def test_conn_routing_classifies_against_passed_snapshot():
     The Coordinator holds no live roster (it lives in sm_world), so a peer the snapshot
     calls a world agent is routed purely from the passed view, proving the seam is the
     snapshot."""
+    from types import SimpleNamespace
     from unaiverse.networking.node.connpool import WorldMembership
 
     class _WP2P:
@@ -306,10 +315,11 @@ def test_conn_routing_classifies_against_passed_snapshot():
 
     conn = NodeConn.__new__(NodeConn)  # bypass the heavy P2P-bound __init__
     conn.p2p_public = object()
-    # conn_routing_fcn derives this instance's pools from the triples bound to world_p2p
-    # (the SM is the instance, no per-p2p-object index any more).
+    # conn_routing_fcn derives this instance's pools from the triples whose owning SM rides
+    # world_p2p (the SM is the instance; triple[2] holds the SM, not the raw P2P, since S18).
+    world_sm = SimpleNamespace(p2p=world_p2p)
     conn.pool_name_to_pool_triple = {
-        p: [set(), 0, world_p2p] for p in (
+        p: [set(), 0, world_sm] for p in (
             NodeConn.IN_WORLD_AGENTS, NodeConn.OUT_WORLD_AGENTS,
             NodeConn.IN_WORLD_NODE, NodeConn.OUT_WORLD_NODE,
             NodeConn.IN_WORLD_MASTERS, NodeConn.OUT_WORLD_MASTERS,
@@ -675,3 +685,30 @@ def test_char_update_prunes_known_when_peer_leaves_rendezvous():
     conn.set_world_agents_list([])
     _run(conn.update())
     assert conn._sm_world.get_session("wa") is None
+
+
+# ── S18 layering enforcement ──────────────────────────────────────────────────
+
+def test_s18_coordinator_indexes_the_instance_by_sm_not_p2p():
+    """Enforce the S18 contract on the Coordinator side: the per-instance indices are keyed
+    on the SessionManager (the instance), not the raw P2P handle, and the raw handle is no
+    longer exposed as a call/read channel. The P2P objects survive purely as custody."""
+    from unaiverse.networking.session import SessionManager
+    conn, pub, world = _make_node_conn()
+
+    # __getitem__ returns the SM, not the P2P. The raw-P2P index is gone, replaced by the
+    # SM-keyed one.
+    assert isinstance(conn[NodeConn.P2P_PUBLIC], SessionManager)
+    assert conn[NodeConn.P2P_PUBLIC] is conn._sm_public
+    assert conn[NodeConn.P2P_WORLD] is conn._sm_world
+    assert hasattr(conn, "p2p_name_to_sm") and not hasattr(conn, "p2p_name_to_p2p")
+
+    # Each pool triple's instance slot is the owning SM, never a P2P.
+    assert conn.pool_name_to_pool_triple[NodeConn.IN_PUBLIC][2] is conn._sm_public
+    assert conn.pool_name_to_pool_triple[NodeConn.IN_WORLD_AGENTS][2] is conn._sm_world
+    for _, _, instance in conn.pool_name_to_pool_triple.values():
+        assert isinstance(instance, SessionManager)
+
+    # Custody is still allowed: the Coordinator keeps the P2P handles for its own internal
+    # reads (rendezvous, identity facade). Enforcement forbids EXPOSURE, not possession.
+    assert conn.p2p_public is pub and conn.p2p_world is world

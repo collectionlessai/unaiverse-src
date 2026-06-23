@@ -56,6 +56,12 @@ def build_real_node(identity_dir: str, port: int = 0, listen_ip: str = "0.0.0.0"
         p2p=p2p, p2p_name=NodeConn.P2P_PUBLIC, local_peer_id=p2p.peer_id,
         local_node_id=nid, local_profile_factory=_profile_factory(p2p.peer_id, p2p.peer_id),
     )
+    # Register the (single, public) manager on the conn so conn.get_messages resolves the
+    # instance through the SM (S18): the SM is the instance, conn.get_messages reads its
+    # P2P handle via _sm_by_name. In production attach_session_policy does this; this
+    # builder bypasses it, so wire it explicitly like build_real_world_node does.
+    conn._sm_public = sm
+    conn.set_session_managers(sm)
     return p2p, conn, sm
 
 

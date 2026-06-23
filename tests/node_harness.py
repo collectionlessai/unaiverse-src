@@ -375,7 +375,9 @@ def build_agent_node_shell(node_peer_id: str, node_id: str = "shell-node",
     node.memory_finder = None
     node._interact_mode_opts = None
 
-    node._sm_public = SessionManager(
+    # Node holds no SM handle (S18): the managers live on the Coordinator. Build them
+    # locally and register them on the fake conn, mirroring NodeConn.attach_session_policy.
+    sm_public = SessionManager(
         p2p=conn.as_p2p(NodeConn.P2P_PUBLIC),
         p2p_name=NodeConn.P2P_PUBLIC,
         local_peer_id=node_peer_id,
@@ -383,7 +385,7 @@ def build_agent_node_shell(node_peer_id: str, node_id: str = "shell-node",
         local_profile_factory=lambda: node.profile.get_all_profile(),
         decision_hook=node._session_decision_hook,
     )
-    node._sm_world = SessionManager(
+    sm_world = SessionManager(
         p2p=conn.as_p2p(NodeConn.P2P_WORLD),
         p2p_name=NodeConn.P2P_WORLD,
         local_peer_id=node_peer_id + "-w",
@@ -393,7 +395,7 @@ def build_agent_node_shell(node_peer_id: str, node_id: str = "shell-node",
     )
     # Register the managers on the fake conn so its pump_sessions / on_peer_* / is_in_grace
     # facades delegate to them, mirroring NodeConn.attach_session_policy.
-    conn.set_session_managers(node._sm_public, node._sm_world)
+    conn.set_session_managers(sm_public, sm_world)
     return node, conn
 
 

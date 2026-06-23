@@ -146,7 +146,7 @@ class Agent(AgentBasics):
         _, own_private_pid = self.get_peer_ids()
         t = clock.get_time_ms()
         try:
-            info = self.node_conn['p2p_world'].get_connected_peers_info()
+            info = self.node_conn.get_world_connected_peers_info()
             peers_list = [i['id'] for i in info]
             self.stats.store_stat('connected_peers', peers_list, group_key=own_private_pid, timestamp=t)
         except Exception as e:

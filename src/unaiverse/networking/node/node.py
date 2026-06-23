@@ -146,9 +146,9 @@ class Node:
         self.agent: Agent | None = hosted if isinstance(hosted, Agent) else None
         self.world: World | None = hosted if isinstance(hosted, World) else None
         self.conn: NodeConn  # Manages the network operations in the P2P network
-        self._sm_public = None  # SessionManager for p2p_public, built in __init__ after self.conn
-        self._sm_world = None   # SessionManager for p2p_world, built in __init__ after self.conn
-        # The world-handoff correlation (public<->world peer-id) now lives in the
+        # The two SessionManagers are owned by the Coordinator (conn.attach_session_policy);
+        # Node holds no handle to them and drives every Session verb through conn facades
+        # (S18). The world-handoff correlation (public<->world peer-id) now lives in the
         # Coordinator (conn.start_world_handoff / rollback_handoff / complete_world_handoff);
         # Node drives the handoff through those facades and holds no maps.
         # Interactive-mode options dict (built in run() when interact_mode is on),
@@ -384,16 +384,15 @@ class Node:
         # The Coordinator (NodeConn) owns the two per-instance SessionManagers: it
         # builds them from its own P2P handles and the cross-instance capability, and
         # only needs the Node policy that is born late — the profile factory (self.
-        # profile is set further down) and the responder decision hook. Node keeps a
-        # convenience reference to each manager for its loop methods; conn can also
-        # consult them on behalf of the hosted entity (is_peer_session_pending).
+        # profile is set further down) and the responder decision hook. The Coordinator
+        # owns the two managers; Node keeps no handle and drives every Session verb through
+        # conn facades, and conn consults them on behalf of the hosted entity (e.g.
+        # is_peer_session_pending).
         self.conn.attach_session_policy(
             local_profile_factory=lambda: (self.profile.get_all_profile() if self.profile is not None else {}),
             decision_hook=self._session_decision_hook,
             token_factory=lambda: self.node_token,
         )
-        self._sm_public = self.conn._sm_public
-        self._sm_world = self.conn._sm_world
 
         # Get CV
         cv = self.get_cv()
@@ -2914,8 +2913,8 @@ class Node:
 
             # Inspector expects also to have access to the profile of the world,
             # so we patch this thing by adding it here. This is the REMOTE world-host's
-            # peer-id (conn.get_world_node_peer_id, i.e. _sm_world.world_node_peer_id), NOT
-            # our own local world peer-id (self.get_world_peer_id / conn[P2P_WORLD].peer_id).
+            # peer-id (conn.get_world_node_peer_id, i.e. conn._sm_world.world_node_peer_id),
+            # NOT our own local world peer-id (self.get_world_peer_id / conn.world_peer_id).
             world_node_peer_id = self.conn.get_world_node_peer_id()
             if self.hosted.in_world() and world_node_peer_id is not None:
                 all_agents_profiles[world_node_peer_id] = self.hosted.world_profile.get_all_profile()
