@@ -93,14 +93,12 @@ def build_real_world_node(idir_pub: str, idir_world: str, decision_hook=None,
                             local_peer_id=p2p_pub.peer_id, local_node_id=node_id,
                             local_profile_factory=_profile_factory(node_id, p2p_world.peer_id),
                             decision_hook=decision_hook,
-                            routing_classifier=NodeConn._route_public,
-                            perimeter_disconnect=None)
+                            routing_classifier=NodeConn._route_public)
     sm_world = SessionManager(p2p=p2p_world, p2p_name=NodeConn.P2P_WORLD,
                               local_peer_id=p2p_world.peer_id, local_node_id=node_id,
                               local_profile_factory=_profile_factory(node_id, p2p_world.peer_id),
                               decision_hook=decision_hook,
-                              routing_classifier=NodeConn._route_world,
-                              perimeter_disconnect=lambda peer_id: NodeConn.disconnect(p2p_world, peer_id))
+                              routing_classifier=NodeConn._route_world)
     # Wire the SMs into the conn so conn.update() / _reconcile_instance / _p2p_of see them.
     # This builder bypasses Node.__init__, which is where attach_session_policy normally does
     # this; without it conn._sm_* stay None and conn.update() trips over sm.reconcile.

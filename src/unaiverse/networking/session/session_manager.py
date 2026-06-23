@@ -77,7 +77,6 @@ class SessionManager:
         token_verifier: Optional[Callable] = None,
         token_factory: Optional[Callable[[], str]] = None,
         routing_classifier=None,
-        perimeter_disconnect=None,
     ):
         """
         Args:
@@ -109,11 +108,11 @@ class SessionManager:
         # so the initial token is not re-broadcast.
         self._last_pushed_token = token_factory() if token_factory is not None else None
         # Per-instance perimeter routing, injected by the Coordinator (which owns the
-        # pool taxonomy): a pure classifier (peer_info, membership) -> pool_name | None,
-        # and an async callable used to cut unclassifiable world peers. The SM stays
-        # free of the conn layer: it only applies what it is given.
+        # pool taxonomy): a pure classifier (peer_info, membership) -> pool_name | None.
+        # The unclassifiable-world-peer cut is no longer an injected callable: the manager
+        # owns its P2P, so it disconnects the peer itself (self.disconnect), keeping the
+        # Node -> NodeConn -> SM -> P2P chain intact.
         self._routing_classifier = routing_classifier
-        self._perimeter_disconnect = perimeter_disconnect
         self._label = _p2p_label(p2p_name)
 
         # peer_id → Session (at most one Session per peer in this p2p instance).
@@ -183,12 +182,25 @@ class SessionManager:
         for c in connected_peer_infos:
             pool_name = self._routing_classifier(c, membership)
             if pool_name is None:
-                if membership is not None and self._perimeter_disconnect is not None:
+                if membership is not None:
                     log.session(f"perimeter: cutting unclassifiable peer ...{c['id'][-5:]}", sub=self._label)
-                    await self._perimeter_disconnect(c['id'])
+                    await self.disconnect(c['id'])
                 continue
             classified.setdefault(pool_name, {})[c['id']] = c
         return classified
+
+    async def disconnect(self, peer_id: str) -> bool:
+        """Disconnect a peer on THIS instance's P2P (best-effort): the manager owns its
+        P2P handle, so the perimeter cut and the Coordinator's remove() route through here
+        instead of reaching the transport from the conn layer (Node -> NodeConn -> SM ->
+        P2P). Returns False if the transport refused, True otherwise. Best-effort: any
+        transport error means 'gone', and the manager stays free of the P2P error type
+        (portability)."""
+        try:
+            self.p2p.disconnect_from(peer_id)
+        except Exception:
+            return False
+        return True
 
     def sync_known_peers(self, known: Dict[str, tuple]) -> None:
         """Reconcile the inert KNOWN roster against the peers currently advertised by

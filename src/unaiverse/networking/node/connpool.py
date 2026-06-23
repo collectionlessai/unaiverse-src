@@ -427,10 +427,12 @@ class NodeConn:
         """
         if peer_id in self.peer_id_to_pool_name:
             pool_name = self.peer_id_to_pool_name[peer_id]
-            pool, _, p2p = self.pool_name_to_pool_triple[pool_name]
+            pool, _, _ = self.pool_name_to_pool_triple[pool_name]
 
-            # Disconnecting
-            disc = await NodeConn.disconnect(p2p, peer_id)
+            # Disconnecting via the owning instance's manager (Node -> NodeConn -> SM ->
+            # P2P), resolved before we drop the peer from the pool indices.
+            sm = self._sm_of(peer_id)
+            disc = await sm.disconnect(peer_id) if sm is not None else False
             pool.remove(peer_id)
             del self.pool_name_to_peer_infos[pool_name][peer_id]
             del self.peer_id_to_pool_name[peer_id]
@@ -776,7 +778,6 @@ class NodeConn:
             token_verifier=self.verify_token_claims,
             token_factory=token_factory,
             routing_classifier=NodeConn._route_public,
-            perimeter_disconnect=None,
         )
         self._sm_world = SessionManager(
             p2p=self.p2p_world,
@@ -788,7 +789,6 @@ class NodeConn:
             token_verifier=self.verify_token_claims,
             token_factory=token_factory,
             routing_classifier=NodeConn._route_world,
-            perimeter_disconnect=lambda peer_id: NodeConn.disconnect(self.p2p_world, peer_id),
         )
         self.set_session_managers(self._sm_public, self._sm_world)
 
@@ -926,20 +926,31 @@ class NodeConn:
         self._pending_world_handoff.pop(public_peer_id, None)
         return events
 
-    def _p2p_of(self, peer_id: str) -> "P2P | None":
-        """Resolve a peer's P2P instance by asking the SessionManagers first: the SM
-        that holds a Session for this peer-id owns the instance the peer lives on
-        (public before world, matching the cross-pool first-network-wins). Falls back to
-        the connection pool for a peer that is connected but has no Session yet (an
-        in-flight or just-evicted handshake), and None when nothing knows the peer."""
+    def _sm_of(self, peer_id: str) -> "SessionManager | None":
+        """Resolve the SessionManager that owns the instance this peer lives on (the SM
+        IS the instance): the manager holding a Session for the peer-id first (public
+        before world, matching the cross-pool first-network-wins), falling back to the
+        manager whose P2P backs the peer's pool for a peer connected without a Session yet
+        (an in-flight or just-evicted handshake), and None when nothing knows the peer.
+        This is the SM-keyed resolver the transport facades (disconnect/send/...) delegate
+        to so the chain stays Node -> NodeConn -> SM -> P2P."""
         for sm in (self._sm_public, self._sm_world):
             if sm is not None and sm.get_session(peer_id) is not None:
-                return sm.p2p
-        # Each pool is bound to one P2P instance, so the peer's pool resolves it.
+                return sm
         pool_name = self.peer_id_to_pool_name.get(peer_id)
         if pool_name is None:
             return None
-        return self.pool_name_to_pool_triple[pool_name][2]
+        p2p = self.pool_name_to_pool_triple[pool_name][2]
+        for sm in (self._sm_public, self._sm_world):
+            if sm is not None and sm.p2p is p2p:
+                return sm
+        return None
+
+    def _p2p_of(self, peer_id: str) -> "P2P | None":
+        """The P2P handle of the peer's owning instance, via _sm_of. None when nothing
+        knows the peer."""
+        sm = self._sm_of(peer_id)
+        return sm.p2p if sm is not None else None
 
     def reset_rendezvous_tag(self) -> None:
         """Resets the rendezvous tag to its initial state."""
