@@ -45,6 +45,11 @@ def build_real_node(identity_dir: str, port: int = 0, listen_ip: str = "0.0.0.0"
         log_sub=log_sub,
     )
     nid = node_id or ("test-" + p2p.peer_id[-5:])
+    # Single P2P for both pools as an economy: this builder returns only sm_public and
+    # its callers exercise the public network alone, so the same instance on both sides
+    # never produces a same-peer-on-both-networks case (that anomaly, and the cross-pool
+    # guard that defends it, is exercised by the mocked char-test instead). World-join
+    # tests that need two distinct peer-ids use build_real_world_node.
     conn = NodeConn(max_connections=16, p2p_u=p2p, p2p_w=p2p,
                     is_world_node=False, public_key=None, token=None)
     sm = SessionManager(

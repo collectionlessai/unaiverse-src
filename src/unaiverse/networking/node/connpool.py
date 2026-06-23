@@ -198,10 +198,14 @@ class NodeConn:
             assert isinstance(ratio, float)
             self.pool_ratios.append(ratio)
 
-        # Indices involving the P2P object or its name
+        # Indices involving the P2P object or its name. p2p_name_to_p2p is kept as a
+        # constant 2-entry map (name -> P2P handle) for the pre-attach paths
+        # (__getitem__, reserve) and as the world/public anchors. The instance a pool
+        # belongs to is read off its own pool triple (the P2P handle is triple[2]) and,
+        # at routing time, off the SessionManager that owns that handle (sm.p2p): the
+        # SM is the instance, so the per-p2p-object indices p2p_to_pool_names /
+        # p2p_name_and_pool_name_to_pool_triple are gone (S10b reindex p2p -> sm).
         self.p2p_name_to_p2p = p2p_name_to_p2p
-        self.p2p_name_and_pool_name_to_pool_triple = {}
-        self.p2p_to_pool_names = {}
 
         # Indices rooted around the pool name
         self.pool_name_to_pool_triple = {}
@@ -259,23 +263,9 @@ class NodeConn:
             "Cannot create pools given the provided max connection count"
         pools_max_sizes[self.pool_names[-1]] += (self.max_con - tot)
 
-        # Storing fixed sizes in the previously created pool triples & building additional index
+        # Storing the fixed cap in each pool triple (triple = [peer_id set, cap, P2P]).
         for pool_name, pool_contents_max_con_and_p2p in self.pool_name_to_pool_triple.items():
             pool_contents_max_con_and_p2p[1] = pools_max_sizes[pool_name]  # Fixing the second element of the triple
-
-            pool, _, p2p = pool_contents_max_con_and_p2p
-            p2p_name = None
-            for k, v in self.p2p_name_to_p2p.items():
-                if v == p2p:
-                    p2p_name = k
-                    break
-            if p2p_name not in self.p2p_name_and_pool_name_to_pool_triple:
-                self.p2p_name_and_pool_name_to_pool_triple[p2p_name] = {}
-                p2p: P2P
-                self.p2p_to_pool_names[p2p] = []
-            self.p2p_name_and_pool_name_to_pool_triple[p2p_name][pool_name] = (
-                pool_contents_max_con_and_p2p)
-            self.p2p_to_pool_names[p2p].append(pool_name)
 
         # Time markers
         self.__last_sent_time = 0.
@@ -661,7 +651,7 @@ class NodeConn:
 
         # Getting the right p2p object
         p2p = None
-        for _p2p in self.p2p_to_pool_names.keys():
+        for _p2p in self.p2p_name_to_p2p.values():
             if _p2p.peer_id == peer_id:
                 p2p = _p2p
                 break
@@ -693,7 +683,7 @@ class NodeConn:
 
         # Getting the right p2p object
         p2p = None
-        for _p2p in self.p2p_to_pool_names.keys():
+        for _p2p in self.p2p_name_to_p2p.values():
             if _p2p.peer_id == peer_id:
                 p2p = _p2p
                 break
@@ -728,7 +718,7 @@ class NodeConn:
 
         # Getting the right p2p object
         p2p = None
-        for _p2p in self.p2p_to_pool_names.keys():
+        for _p2p in self.p2p_name_to_p2p.values():
             if _p2p.peer_id == peer_id:
                 p2p = _p2p
                 break
@@ -914,8 +904,8 @@ class NodeConn:
         facade see this cycle's roster rather than the previous one and the KNOWN sync
         stays out of the pool/diff path. Then run the transport-driven per-instance
         reconcile: one immutable membership snapshot for the whole cycle, fanned out to
-        each P2P instance in insertion order (public then world), merging the per-instance
-        diffs. The pool_name keys are disjoint across the two instances (IN/OUT_PUBLIC vs
+        each SessionManager in registration order (public then world), merging the
+        per-instance diffs. The pool_name keys are disjoint across the two instances (IN/OUT_PUBLIC vs
         IN/OUT_WORLD_*), so the merge is a plain dict.update, asserted to be sure."""
         self._sync_known_world_peers()
 
@@ -924,8 +914,11 @@ class NodeConn:
         membership = self.membership_snapshot()
         self._cycle_membership = membership  # publish this cycle's snapshot for get_messages' gate
 
-        for p2p_name, p2p in self.p2p_name_to_p2p.items():
-            added_local, removed_local = await self._reconcile_instance(p2p_name, p2p, membership)
+        # The SM is the instance: iterate the managers (public then world) instead of the
+        # raw P2P handles. _session_managers preserves the public-before-world order the
+        # cross-pool guard relies on (I-2).
+        for sm in self._session_managers:
+            added_local, removed_local = await self._reconcile_instance(sm, membership)
             assert self.pool_name_to_added_in_last_update.keys().isdisjoint(added_local.keys()), \
                 "pool_name keys must be disjoint across P2P instances"
             assert self.pool_name_to_removed_in_last_update.keys().isdisjoint(removed_local.keys()), \
@@ -949,34 +942,36 @@ class NodeConn:
                  if peer_id != self_peer_id}
         self._sm_world.sync_known_peers(known)
 
-    async def _reconcile_instance(self, p2p_name: str, p2p: P2P, membership) -> tuple[dict, dict]:
-        """Reconcile ONE P2P instance and report its per-pool added/removed diff.
+    async def _reconcile_instance(self, sm, membership) -> tuple[dict, dict]:
+        """Reconcile ONE instance (its SessionManager) and report its per-pool
+        added/removed diff.
 
-        Asks this instance's SessionManager to classify its connected peers
-        (sm.reconcile, which also applies the world perimeter cut), then for each of
-        this instance's pools computes the new/lost set-difference and admits the new
-        peers via add() — which keeps the cross-pool guard and the shared peer_id_to_*
-        indices here in the Coordinator. Returns two dicts keyed by pool_name with only
-        the pools that changed (empty pools omitted), like the legacy update().
+        Asks the manager to classify its connected peers (sm.reconcile, which also
+        applies the world perimeter cut), then for each of this instance's pools computes
+        the new/lost set-difference and admits the new peers via add() — which keeps the
+        cross-pool guard and the shared peer_id_to_* indices here in the Coordinator.
+        Returns two dicts keyed by pool_name with only the pools that changed (empty pools
+        omitted), like the legacy update().
         """
         added_local: dict = {}
         removed_local: dict = {}
 
+        p2p = sm.p2p
         connected_peer_infos = p2p.get_connected_peers_info()
         if connected_peer_infos is None:
             return added_local, removed_local
 
         # The world manager classifies against the snapshot (and cuts the perimeter);
         # the public manager has no membership.
-        if p2p_name == NodeConn.P2P_WORLD:
-            sm, sm_membership = self._sm_world, membership
-        else:
-            sm, sm_membership = self._sm_public, None
+        sm_membership = membership if sm.p2p_name == NodeConn.P2P_WORLD else None
         classified = await sm.reconcile(connected_peer_infos, sm_membership)
 
-        # Iterate this instance's own pools (the Coordinator owns them), treating a
-        # pool absent from `classified` as empty so removals are still detected.
-        for pool_name, (pool, _, pool_p2p) in self.p2p_name_and_pool_name_to_pool_triple[p2p_name].items():
+        # This instance's own pools are the ones whose triple is bound to this manager's
+        # P2P handle (the SM is the instance). Treat a pool absent from `classified` as
+        # empty so removals are still detected.
+        for pool_name, (pool, _, pool_p2p) in self.pool_name_to_pool_triple.items():
+            if pool_p2p is not p2p:
+                continue
             connected_peer_ids = classified.get(pool_name, {}).keys()
             new_peer_ids = connected_peer_ids - pool
             lost_peer_ids = pool - connected_peer_ids
@@ -1012,7 +1007,8 @@ class NodeConn:
             membership = self.membership_snapshot()
         public = p2p == self.p2p_public
         classify = self._route_public if public else self._route_world
-        result = {k: {} for k in self.p2p_to_pool_names[p2p]}
+        # This instance's pools = the ones whose triple is bound to this P2P handle.
+        result = {pool_name: {} for pool_name, (_, _, pp) in self.pool_name_to_pool_triple.items() if pp is p2p}
         for c in connected_peer_infos:
             pool_name = classify(c, membership)
             if pool_name is None:

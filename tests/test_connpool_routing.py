@@ -296,11 +296,15 @@ def test_conn_routing_classifies_against_passed_snapshot():
 
     conn = NodeConn.__new__(NodeConn)  # bypass the heavy P2P-bound __init__
     conn.p2p_public = object()
-    conn.p2p_to_pool_names = {world_p2p: [
-        NodeConn.IN_WORLD_AGENTS, NodeConn.OUT_WORLD_AGENTS,
-        NodeConn.IN_WORLD_NODE, NodeConn.OUT_WORLD_NODE,
-        NodeConn.IN_WORLD_MASTERS, NodeConn.OUT_WORLD_MASTERS,
-    ]}
+    # conn_routing_fcn derives this instance's pools from the triples bound to world_p2p
+    # (the SM is the instance, no per-p2p-object index any more).
+    conn.pool_name_to_pool_triple = {
+        p: [set(), 0, world_p2p] for p in (
+            NodeConn.IN_WORLD_AGENTS, NodeConn.OUT_WORLD_AGENTS,
+            NodeConn.IN_WORLD_NODE, NodeConn.OUT_WORLD_NODE,
+            NodeConn.IN_WORLD_MASTERS, NodeConn.OUT_WORLD_MASTERS,
+        )
+    }
     # The Coordinator no longer holds any live roster (it lives in sm_world): the only
     # classification source is the snapshot passed to conn_routing_fcn.
 
@@ -394,8 +398,15 @@ def test_char_full_pool_truncates_diff_added():
 
 
 def test_char_same_peer_both_networks_enters_once():
-    """The same peer-id seen on both networks enters exactly one pool: public is
-    processed first, and the world add() is refused by the cross-pool guard."""
+    """Defense-in-depth: the cross-pool guard keeps a peer-id out of a second pool.
+
+    The same peer-id appearing on BOTH networks cannot happen in production: a node has
+    two DISTINCT peer-ids (public from p2p_u, world from p2p_w), bound by the token's
+    p2p_peers, so a remote never classifies into both a public and a world pool. This is
+    an anomalous scenario the guard defends against, not a normal path. We simulate it by
+    planting "dual" on both fake instances: public is processed first (registration
+    order), and the world add() is refused by the cross-pool guard, so the peer ends up
+    in exactly one pool."""
     conn, pub, world = _make_node_conn()
     conn._sm_world.world_agents_set = {"dual"}
     pub._infos = [_info("dual", "inbound")]
