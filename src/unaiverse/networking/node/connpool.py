@@ -32,13 +32,13 @@ if TYPE_CHECKING:
     from unaiverse.networking.session.session_manager import SessionManager
 
 
-# The session-protocol wire codec, its protocol IDs and the SessionInbound value object
-# are the session layer's single source of truth (sess_msg.py, the leaf module). connpool
-# imports them rather than redefining them; the inbound codec itself (pop + decode) now
-# lives in P2P.get_messages, and connpool only runs the Node-bound chat path. The protobuf
-# dependency stays inside SessMsg.to_bytes/from_bytes (lazy import), never at this top.
+# sess_msg.py (the session layer's leaf module) is the single source of truth for the
+# session-protocol value objects. The inbound codec itself (pop + decode) now lives in
+# P2P.get_messages, so connpool only needs the SessionInbound value object it carries
+# through and the WORLD_HANDOFF_COMPLETE reason code for the handoff close. The wire codec
+# (SessMsg) and its protocol IDs (SESSION_PROTOCOL_IDS) are no longer referenced here.
 from unaiverse.networking.session.sess_msg import (
-    SessMsg, SESSION_PROTOCOL_IDS, SessionInbound, WORLD_HANDOFF_COMPLETE,
+    SessionInbound, WORLD_HANDOFF_COMPLETE,
 )
 
 
@@ -825,19 +825,12 @@ class NodeConn:
         be managed". KNOWN is excluded too: it is a peer known from the rendezvous
         whose initiator has not dialed yet, so no handshake is in flight. Returns
         False for no Session / KNOWN / ESTABLISHED / RECONNECTING / terminal
-        (FAILED, CLOSED)."""
-        from unaiverse.networking.session.session import SessionState
-        for sm in self._session_managers:
-            sess = sm.get_session(peer_id)
-            if sess is None:
-                continue
-            if sess.state not in (SessionState.KNOWN,
-                                  SessionState.ESTABLISHED,
-                                  SessionState.RECONNECTING,
-                                  SessionState.FAILED,
-                                  SessionState.CLOSED):
-                return True
-        return False
+        (FAILED, CLOSED).
+
+        The per-state classification lives in SessionManager.is_handshake_in_flight
+        (next to SessionState); the Coordinator only aggregates across its instances, so
+        connpool no longer imports the session enum."""
+        return any(sm.is_handshake_in_flight(peer_id) for sm in self._session_managers)
 
     def requires_fast_clock(self) -> bool:
         """True if any registered SessionManager has a Session that needs the main loop

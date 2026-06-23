@@ -13,7 +13,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from unaiverse.networking.node.connpool import (
-    NodeConn, SessionInbound, SESSION_PROTOCOL_IDS,
+    NodeConn, SessionInbound,
 )
 from unaiverse.networking.session import SessMsg
 from unaiverse.networking.p2p.p2p import P2P
@@ -209,7 +209,9 @@ def test_codec_roundtrips_liveness_control_messages():
 
 def test_is_peer_session_pending():
     """NodeConn.is_peer_session_pending is True only for a Session that exists and
-    is neither ESTABLISHED nor terminal."""
+    is neither ESTABLISHED nor terminal. The Coordinator now aggregates the per-state
+    classification from SessionManager.is_handshake_in_flight, so the fake manager exposes
+    that predicate (mirroring the real SessionManager) instead of a bare get_session."""
     from unaiverse.networking.session import SessionState
 
     class _FakeSess:
@@ -222,6 +224,14 @@ def test_is_peer_session_pending():
 
         def get_session(self, pid):
             return self._s.get(pid)
+
+        def is_handshake_in_flight(self, pid):
+            sess = self._s.get(pid)
+            if sess is None:
+                return False
+            return sess.state not in (SessionState.KNOWN, SessionState.ESTABLISHED,
+                                      SessionState.RECONNECTING, SessionState.FAILED,
+                                      SessionState.CLOSED)
 
     conn = NodeConn.__new__(NodeConn)  # bypass the heavy P2P-bound __init__
     conn.set_session_managers(_FakeSM({

@@ -635,8 +635,12 @@ class Session:
         # The PRIVATE_JOIN round-trip the world joiner used to send here was dropped.
         self._set_state(SessionState.ESTABLISHED, None)
         log.session(f"{self!r} ESTABLISHED (initiator)", sub=self._sub)
+        # A world-join Session was opened (start_world_handoff) carrying the grant to
+        # redeem; carry it on the event so Node drives the join body without reaching into
+        # the private Session._grant. None for a plain agent connection.
         self._last_ping_at = time.monotonic()
-        return [self._emit(SessionEventType.ESTABLISHED, {"profile_b": self.remote_profile})]
+        return [self._emit(SessionEventType.ESTABLISHED,
+                           {"profile_b": self.remote_profile, "grant": self._grant})]
 
     # ── Stage-3: WORLD ────────────────────────────────────────────────────────
 
@@ -853,7 +857,10 @@ class Session:
         self._reconnect_substep = ""
         self._reconnect_attempts = 0
         log.session(f"{self!r} session resumed → ESTABLISHED", sub=self._sub)
-        return self._emit(SessionEventType.RESUMED, {})
+        # Carry the stored peer profile on the event so Node can re-enrol from RESUMED
+        # without reaching into Session.remote_profile (a fast RESUME keeps it; only a
+        # full re-handshake clears it). The profile is a plain dict, no protobuf.
+        return self._emit(SessionEventType.RESUMED, {"profile": self.remote_profile})
 
     async def _restart_handshake_or_fail(self, reason: str) -> List[SessionEvent]:
         """RESUME NACK: the peer doesn't recognise our Session. A plain initiator

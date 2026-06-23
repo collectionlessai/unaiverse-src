@@ -646,6 +646,20 @@ class SessionManager:
         sess = self._sessions.get(peer_id)
         return sess is not None and sess.state == SessionState.RECONNECTING
 
+    def is_handshake_in_flight(self, peer_id: str) -> bool:
+        """True if this peer has a Session whose FIRST handshake is still in flight: it
+        exists but has never reached ESTABLISHED, and is neither a rendezvous-only KNOWN
+        nor RECONNECTING (already established once) nor terminal (FAILED/CLOSED). This is
+        the session-era 'connected but not yet managed' notion the Coordinator aggregates
+        for Agent.agents_are_waiting. The classification lives here, next to SessionState,
+        so the Coordinator stays free of the session enum."""
+        sess = self._sessions.get(peer_id)
+        if sess is None:
+            return False
+        return sess.state not in (SessionState.KNOWN, SessionState.ESTABLISHED,
+                                  SessionState.RECONNECTING, SessionState.FAILED,
+                                  SessionState.CLOSED)
+
     def has_active_sessions(self) -> bool:
         """True while any Session is ESTABLISHED or riding its reconnect grace.
         The Node uses this to keep the main loop at full speed: the keep-alive

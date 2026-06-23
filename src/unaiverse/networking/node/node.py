@@ -2409,9 +2409,7 @@ class Node:
         # an agent, so there is nothing to restore.
         if self.node_type is Node.WORLD and not is_world:
             return
-        sm = self._sm_world if is_world else self._sm_public
-        sess = sm.get_session(ev.peer_id)
-        profile_dict = sess.remote_profile if sess is not None else None
+        profile_dict = ev.data.get("profile")
         if not profile_dict:
             return
         try:
@@ -2452,7 +2450,7 @@ class Node:
 
         # ── Initiator on the WORLD instance ───────────────────────────────────
         if ev.role == SessionRole.INITIATOR and is_world:
-            grant = getattr(self._sm_world.get_session(ev.peer_id), "_grant", None)
+            grant = ev.data.get("grant")
             if grant is None and not self.conn.is_pending_handoff(ev.peer_id):
                 # In-world agent-to-agent connection (connect_to/connect_by_role):
                 # same enrolment as the public initiator path. Only the handoff
