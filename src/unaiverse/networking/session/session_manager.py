@@ -202,6 +202,29 @@ class SessionManager:
             return False
         return True
 
+    # ── Raw transport passthroughs (S14b) ─────────────────────────────────────
+    #
+    # The manager owns its P2P, so the Coordinator's chat/relay facades call these
+    # instead of reaching the transport directly (Node -> NodeConn -> SM -> P2P). They
+    # are thin sync wrappers over the P2P handle: the Msg encoding and the piggyback
+    # token stay above on the Coordinator (the manager stays protobuf-free, I-3), and
+    # the P2P error type is not caught here (the caller handles it).
+
+    def send_message_to_peer(self, channel: str, msg_bytes: bytes) -> None:
+        self.p2p.send_message_to_peer(channel, msg_bytes=msg_bytes)
+
+    def broadcast_message(self, channel: str, msg_bytes: bytes) -> None:
+        self.p2p.broadcast_message(channel, msg_bytes=msg_bytes)
+
+    def subscribe_to_topic(self, channel: str) -> None:
+        self.p2p.subscribe_to_topic(channel)
+
+    def unsubscribe_from_topic(self, channel: str) -> None:
+        self.p2p.unsubscribe_from_topic(channel)
+
+    def reserve_on_relay(self, peer_id: str):
+        return self.p2p.reserve_on_relay(peer_id)
+
     def sync_known_peers(self, known: Dict[str, tuple]) -> None:
         """Reconcile the inert KNOWN roster against the peers currently advertised by
         the rendezvous (``peer_id -> (addresses, app_role)``). Registers a KNOWN Session

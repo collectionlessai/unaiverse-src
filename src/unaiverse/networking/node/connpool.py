@@ -18,10 +18,18 @@ import math
 import json
 import binascii
 from collections import namedtuple
+from typing import TYPE_CHECKING
 from unaiverse.utils.logger import log
 from unaiverse.networking.p2p.messages import Msg
 from unaiverse.networking.p2p.p2p import P2P, P2PError
 from unaiverse.networking.node.tokens import TokenVerifier
+
+if TYPE_CHECKING:
+    # Type-only import: at runtime the Coordinator builds the SessionManagers lazily in
+    # attach_session_policy (avoiding an import cycle), so the "SessionManager" forward
+    # references in the _sm_* facade signatures resolve for type checkers without pulling
+    # the module in at import time.
+    from unaiverse.networking.session.session_manager import SessionManager
 
 
 # The session-protocol wire codec, its protocol IDs and the SessionInbound value object
@@ -380,9 +388,11 @@ class NodeConn:
         Returns:
             The UTC expiration timestamp of the reservation, or None if it fails.
         """
-        p2p = self.p2p_name_to_p2p[p2p_name]
+        sm = self._sm_by_name(p2p_name)
+        if sm is None:
+            return None
         try:
-            return p2p.reserve_on_relay(peer_id)
+            return sm.reserve_on_relay(peer_id)
         except P2PError:
             return None
 
@@ -599,7 +609,7 @@ class NodeConn:
             return None
 
     async def send(self, peer_id: str, channel_trail: str | None,
-                   content_type: str, content: bytes | dict | str | None = None, p2p: P2P | None = None) -> bool:
+                   content_type: str, content: bytes | dict | str | None = None) -> bool:
         """Sends a direct message to a specific peer (async).
 
         Args:
@@ -607,7 +617,6 @@ class NodeConn:
             channel_trail: An optional string to append to the channel name.
             content_type: The type of content in the message.
             content: The message content.
-            p2p: An optional P2P object to use for sending. If None, it is derived from the peer_id.
 
         Returns:
             True if the message is sent successfully, otherwise False.
@@ -615,12 +624,12 @@ class NodeConn:
         if content_type not in [Msg.STATS_UPDATE, Msg.STATS_REQUEST, Msg.STATS_RESPONSE]:
             self.__last_sent_time = time.time()
 
-        # Getting the right p2p object
-        if p2p is None:
-            p2p = self._p2p_of(peer_id)
-            if p2p is None:
-                log.error("P2P non found for peer id: " + str(peer_id))
-                return False
+        # Resolve the owning instance's manager and send through it (NodeConn -> SM -> P2P).
+        sm = self._sm_of(peer_id)
+        if sm is None:
+            log.error("P2P non found for peer id: " + str(peer_id))
+            return False
+        p2p = sm.p2p  # property reads (peer_id / log_sub) stay until the identity facade (S15)
 
         # Defining channel
         if channel_trail is not None and len(channel_trail) > 0:
@@ -639,7 +648,7 @@ class NodeConn:
 
         # Sending direct message (offloaded to a thread so the event loop stays unblocked)
         try:
-            await asyncio.to_thread(p2p.send_message_to_peer, channel, msg_bytes=msg.to_bytes())
+            await asyncio.to_thread(sm.send_message_to_peer, channel, msg_bytes=msg.to_bytes())
             return True
         except P2PError as e:
             log.error("Sending error is: " + str(e), sub=p2p.log_sub)
@@ -660,22 +669,12 @@ class NodeConn:
         if default_p2p_name is None:
             default_p2p_name = NodeConn.P2P_WORLD
 
-        # Getting the right p2p object
-        p2p = None
-        for _p2p in self.p2p_name_to_p2p.values():
-            if _p2p.peer_id == peer_id:
-                p2p = _p2p
-                break
-        if p2p is None:
-            p2p = self._p2p_of(peer_id)
-        if p2p is None:
-            if default_p2p_name is not None:
-                p2p = self.p2p_name_to_p2p[default_p2p_name]
-            else:
-                return False
-
+        # Resolve the owning instance's manager and subscribe through it.
+        sm = self._sm_for_topic(peer_id, default_p2p_name)
+        if sm is None:
+            return False
         try:
-            p2p.subscribe_to_topic(channel)
+            sm.subscribe_to_topic(channel)
         except (P2PError, ValueError):
             return False
         return True
@@ -692,23 +691,15 @@ class NodeConn:
             True if the unsubscription is successful, otherwise False.
         """
 
-        # Getting the right p2p object
-        p2p = None
-        for _p2p in self.p2p_name_to_p2p.values():
-            if _p2p.peer_id == peer_id:
-                p2p = _p2p
-                break
-        if p2p is None:
-            p2p = self._p2p_of(peer_id)
-        if p2p is None:
-            if default_p2p_name is None:
-                default_p2p_name = NodeConn.P2P_WORLD
-            p2p = self.p2p_name_to_p2p[default_p2p_name]
-        if p2p is None:
-            return False
+        if default_p2p_name is None:
+            default_p2p_name = NodeConn.P2P_WORLD
 
+        # Resolve the owning instance's manager and unsubscribe through it.
+        sm = self._sm_for_topic(peer_id, default_p2p_name)
+        if sm is None:
+            return False
         try:
-            p2p.unsubscribe_from_topic(channel)
+            sm.unsubscribe_from_topic(channel)
         except (P2PError, ValueError):
             return False
         return True
@@ -727,18 +718,12 @@ class NodeConn:
             True if the message is published successfully, otherwise False.
         """
 
-        # Getting the right p2p object
-        p2p = None
-        for _p2p in self.p2p_name_to_p2p.values():
-            if _p2p.peer_id == peer_id:
-                p2p = _p2p
-                break
-        if p2p is None:
-            p2p = self._p2p_of(peer_id)
-        if p2p is None:
+        # Resolve the owning instance's manager (our own topic or the peer's instance).
+        sm = self._sm_for_topic(peer_id)
+        if sm is None:
             return False
+        p2p = sm.p2p  # property reads (peer_id / log_sub) stay until the identity facade (S15)
 
-        p2p: P2P
         log.network(f">>> PUBLISHING {content_type} to {channel}", sub=p2p.log_sub)
 
         # Adding sender info here
@@ -750,13 +735,13 @@ class NodeConn:
 
         # Sending message via GossipSub
         try:
-            p2p.broadcast_message(channel, msg_bytes=msg.to_bytes())
+            sm.broadcast_message(channel, msg_bytes=msg.to_bytes())
 
             # If the line above executes without raising an error, it was successful.
             return True
         except P2PError:
 
-            # If send_message_to_peer fails, it will raise a P2PError. We catch it here.
+            # If broadcast_message fails, it will raise a P2PError. We catch it here.
             return False
 
     def attach_session_policy(self, local_profile_factory, decision_hook, token_factory=None) -> None:
@@ -951,6 +936,25 @@ class NodeConn:
         knows the peer."""
         sm = self._sm_of(peer_id)
         return sm.p2p if sm is not None else None
+
+    def _sm_by_name(self, p2p_name: str) -> "SessionManager | None":
+        """The SessionManager for a named instance (used by the relay / default paths)."""
+        for sm in (self._sm_public, self._sm_world):
+            if sm is not None and sm.p2p_name == p2p_name:
+                return sm
+        return None
+
+    def _sm_for_topic(self, peer_id: str, default_p2p_name: "str | None" = None) -> "SessionManager | None":
+        """The SessionManager to use for a topic/dm keyed by peer_id: the instance whose
+        OWN peer-id is peer_id (our own topics), else the peer's owning instance (_sm_of),
+        else the named default. None if nothing resolves."""
+        for sm in (self._sm_public, self._sm_world):
+            if sm is not None and sm.p2p.peer_id == peer_id:
+                return sm
+        sm = self._sm_of(peer_id)
+        if sm is not None:
+            return sm
+        return self._sm_by_name(default_p2p_name) if default_p2p_name is not None else None
 
     def reset_rendezvous_tag(self) -> None:
         """Resets the rendezvous tag to its initial state."""
