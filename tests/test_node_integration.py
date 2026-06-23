@@ -129,7 +129,7 @@ def test_inworld_outbound_agent_connection_joins_agent():
         assert node._sm_world.is_established(REMOTE_PEER)
         assert len(node.hosted.added) == 1
         assert node.hosted.added[0][0] == REMOTE_PEER
-        assert node._pending_world_handoff == {} and node._world_to_public == {}
+        assert node.conn._pending_world_handoff == {} and node.conn._world_to_public == {}
 
     asyncio.run(_scenario())
 
@@ -472,8 +472,8 @@ def test_world_handoff_failure_cleans_pending_maps(failure_mode, monkeypatch):
         await node._start_world_handoff("public-world-peer", _world_grant_blob())
 
         assert node._sm_world.is_established(world_world_peer) is False
-        assert node._pending_world_handoff == {}
-        assert node._world_to_public == {}
+        assert node.conn._pending_world_handoff == {}
+        assert node.conn._world_to_public == {}
 
     asyncio.run(_scenario())
 

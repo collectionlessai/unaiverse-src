@@ -148,11 +148,9 @@ class Node:
         self.conn: NodeConn  # Manages the network operations in the P2P network
         self._sm_public = None  # SessionManager for p2p_public, built in __init__ after self.conn
         self._sm_world = None   # SessionManager for p2p_world, built in __init__ after self.conn
-        # public peer-id -> world peer-id, while a world handoff is in flight.
-        self._pending_world_handoff: dict[str, str] = {}
-        # world peer-id -> public peer-id, the reverse map used to GOAWAY the public
-        # Session once the world Session establishes.
-        self._world_to_public: dict[str, str] = {}
+        # The world-handoff correlation (public<->world peer-id) now lives in the
+        # Coordinator (conn.start_world_handoff / rollback_handoff / complete_world_handoff);
+        # Node drives the handoff through those facades and holds no maps.
         # Interactive-mode options dict (built in run() when interact_mode is on),
         # surfaced on self so the SessionEvent pump can flip ready_to_interact on
         # handshake completion. None outside interactive mode.
@@ -2345,15 +2343,8 @@ class Node:
         elif ev.type == SessionEventType.RESUMED:
             await self._on_session_resumed(ev)
         elif ev.type == SessionEventType.FAILED:
-            # Roll back any in-flight world-handoff bookkeeping, whichever side
-            # failed: the forward map is keyed by the public peer-id, the
-            # reverse one by the world peer-id.
-            world_peer_id = self._pending_world_handoff.pop(ev.peer_id, None)
-            if world_peer_id is not None:
-                self._world_to_public.pop(world_peer_id, None)
-            public_peer_id = self._world_to_public.pop(ev.peer_id, None)
-            if public_peer_id is not None:
-                self._pending_world_handoff.pop(public_peer_id, None)
+            # Roll back any in-flight world-handoff correlation (Coordinator-owned).
+            self.conn.rollback_handoff(ev.peer_id)
             self._world_host_unlist_member(ev)
             await self._maybe_leave_world_on_session_end(ev)
             log.error(f"[session] handshake to ...{ev.peer_id[-5:]} failed "
@@ -2466,7 +2457,7 @@ class Node:
         # ── Initiator on the WORLD instance ───────────────────────────────────
         if ev.role == SessionRole.INITIATOR and is_world:
             grant = getattr(self._sm_world.get_session(ev.peer_id), "_grant", None)
-            if grant is None and ev.peer_id not in self._world_to_public:
+            if grant is None and not self.conn.is_pending_handoff(ev.peer_id):
                 # In-world agent-to-agent connection (connect_to/connect_by_role):
                 # same enrolment as the public initiator path. Only the handoff
                 # Session to the world host carries a grant.
@@ -2490,12 +2481,10 @@ class Node:
                 if isinstance(opts, dict) and 'world_peer_id' in opts:
                     opts['ready_to_interact'] = True
             # Whether or not the join body fully succeeded, the public Session has
-            # done its job — close it (GOAWAY) so the host tears it down cleanly.
-            public_peer_id = self._world_to_public.pop(ev.peer_id, None)
-            if public_peer_id is not None:
-                for cev in await self._sm_public.close_session(public_peer_id, WORLD_HANDOFF_COMPLETE):
-                    await self._dispatch_session_event(cev)
-                self._pending_world_handoff.pop(public_peer_id, None)
+            # done its job — close it (GOAWAY) so the host tears it down cleanly. The
+            # Coordinator owns the correlation and returns the close events to dispatch.
+            for cev in await self.conn.complete_world_handoff(ev.peer_id):
+                await self._dispatch_session_event(cev)
             return
 
         # ── Responder on an agent node (public or in-world peer connection) ───
@@ -2528,8 +2517,9 @@ class Node:
             await self._world_host_register_agent(ev, profile_b)
 
     async def _start_world_handoff(self, public_peer_id: str, grant: dict) -> None:
-        """Joiner side: the public Session yielded a WorldGrant. Open the private
-        world Session to the world's world-side peer-id and redeem the grant there."""
+        """Joiner side: the public Session yielded a WorldGrant. Parse the world profile
+        (profile domain, stays on Node) and hand the public<->world correlation + the
+        world Session open to the Coordinator, dispatching the events it returns."""
         try:
             world_profile = NodeProfile.from_dict(
                 json.loads(grant["world_profile_bytes"].decode("utf-8")))
@@ -2543,19 +2533,12 @@ class Node:
             log.error("[session] world handoff: world profile lacks private_peer_id")
             return
 
-        # Tell the connection manager about the world node (pool routing) — replaces
-        # the legacy before_updating_pools_fcn=self.conn.set_world hook.
-        try:
-            self.conn.set_world(world_world_peer_id)
-        except Exception:
-            pass
-
         blob = dict(grant)
         blob["grant_id_bytes"] = bytes.fromhex(grant["grant_id"])
-        self._pending_world_handoff[public_peer_id] = world_world_peer_id
-        self._world_to_public[world_world_peer_id] = public_peer_id
-        for ev in await self._sm_world.initiate(
-                world_world_peer_id, list(world_addrs), grant=blob,
+        # The Coordinator records the correlation, points pool routing at the world host
+        # (set_world) and opens the world Session; we just dispatch its events.
+        for ev in await self.conn.start_world_handoff(
+                public_peer_id, world_world_peer_id, list(world_addrs), blob,
                 reject_relay=not self.talk_to_relay_based_nodes):
             await self._dispatch_session_event(ev)
 

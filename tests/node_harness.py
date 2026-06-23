@@ -21,6 +21,7 @@ from conftest import FakeP2P, FakeConn
 
 from unaiverse.networking.node.connpool import NodeConn, SessionInbound
 from unaiverse.networking.session import SessionManager
+from unaiverse.networking.session.sess_msg import WORLD_HANDOFF_COMPLETE
 
 
 def full_profile_dict(node_id: str, **dynamic_overrides) -> dict:
@@ -196,11 +197,18 @@ class NodeFakeConn(FakeConn):
         self.world_roles = {}
         self.addresses_set = []
         # Registered by the harness after the SessionManagers are built, so the pump /
-        # on_peer / grace facades delegate to them exactly like the real NodeConn.
+        # on_peer / grace / handoff facades delegate to them exactly like the real NodeConn.
         self._session_managers = []
+        self._sm_public = None
+        self._sm_world = None
+        # World-handoff correlation, now Coordinator-owned (mirrors NodeConn).
+        self._pending_world_handoff = {}
+        self._world_to_public = {}
 
     def set_session_managers(self, *session_managers):
         self._session_managers = [sm for sm in session_managers if sm is not None]
+        self._sm_public = session_managers[0] if len(session_managers) > 0 else None
+        self._sm_world = session_managers[1] if len(session_managers) > 1 else None
 
     async def pump_sessions(self, inbound_by_p2p_name, now):
         events = []
@@ -225,6 +233,33 @@ class NodeFakeConn(FakeConn):
 
     def is_in_grace(self, peer_id: str) -> bool:
         return any(sm.is_in_grace(peer_id) for sm in self._session_managers)
+
+    async def start_world_handoff(self, public_peer_id, world_peer_id, world_addrs,
+                                  grant_blob, reject_relay):
+        self.set_world(world_peer_id)
+        self._pending_world_handoff[public_peer_id] = world_peer_id
+        self._world_to_public[world_peer_id] = public_peer_id
+        return await self._sm_world.initiate(
+            world_peer_id, world_addrs, grant=grant_blob, reject_relay=reject_relay)
+
+    def rollback_handoff(self, peer_id):
+        world_peer_id = self._pending_world_handoff.pop(peer_id, None)
+        if world_peer_id is not None:
+            self._world_to_public.pop(world_peer_id, None)
+        public_peer_id = self._world_to_public.pop(peer_id, None)
+        if public_peer_id is not None:
+            self._pending_world_handoff.pop(public_peer_id, None)
+
+    def is_pending_handoff(self, world_peer_id):
+        return world_peer_id in self._world_to_public
+
+    async def complete_world_handoff(self, world_peer_id):
+        public_peer_id = self._world_to_public.pop(world_peer_id, None)
+        if public_peer_id is None:
+            return []
+        events = await self._sm_public.close_session(public_peer_id, WORLD_HANDOFF_COMPLETE)
+        self._pending_world_handoff.pop(public_peer_id, None)
+        return events
 
     async def get_messages(self, p2p_name: str, allowed_not_connected_peers=None):
         inbox = self.inbox_by_p2p[p2p_name]
@@ -321,8 +356,6 @@ def build_agent_node_shell(node_peer_id: str, node_id: str = "shell-node",
     node.reconnected = set()
     node.joining_world_info = None
     node.memory_finder = None
-    node._pending_world_handoff = {}
-    node._world_to_public = {}
     node._interact_mode_opts = None
 
     node._sm_public = SessionManager(

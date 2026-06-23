@@ -30,7 +30,7 @@ from unaiverse.networking.node.tokens import TokenVerifier
 # lives in P2P.get_messages, and connpool only runs the Node-bound chat path. The protobuf
 # dependency stays inside SessMsg.to_bytes/from_bytes (lazy import), never at this top.
 from unaiverse.networking.session.sess_msg import (
-    SessMsg, SESSION_PROTOCOL_IDS, SessionInbound,
+    SessMsg, SESSION_PROTOCOL_IDS, SessionInbound, WORLD_HANDOFF_COMPLETE,
 )
 
 
@@ -170,6 +170,15 @@ class NodeConn:
         self._sm_public = None
         self._sm_world = None
         self._session_managers = []
+
+        # World-handoff correlation, owned here so it sits next to the two SessionManagers
+        # it spans (the public Session that yielded the grant, the world Session that
+        # redeems it). _pending_world_handoff: public peer-id -> world peer-id while the
+        # handoff is in flight; _world_to_public: the reverse, used to GOAWAY the public
+        # Session once the world Session establishes. Node drives the handoff through the
+        # start/rollback/complete facades; it no longer holds these maps.
+        self._pending_world_handoff: dict[str, str] = {}
+        self._world_to_public: dict[str, str] = {}
 
     def _init_pools(self, max_connections: int, pool_name_to_p2p_name_and_ratio: dict[str, list[str | float]],
                     p2p_name_to_p2p: dict[str, P2P],
@@ -866,6 +875,56 @@ class NodeConn:
         (RECONNECTING). The Node uses this to keep the enrolment alive across a transport
         blip (pool-remove) instead of a full purge, without reaching into Session state."""
         return any(sm.is_in_grace(peer_id) for sm in self._session_managers)
+
+    # ── World-handoff correlation (S12) ───────────────────────────────────────
+    #
+    # The join handshake spans two Sessions on two instances: the public one yields a
+    # WorldGrant, the world one redeems it. These facades own the public<->world peer-id
+    # correlation so Node drives the handoff without holding the maps. The world-profile
+    # parse stays on Node (profile domain); only the correlation + transport open/close
+    # live here.
+
+    async def start_world_handoff(self, public_peer_id: str, world_peer_id: str,
+                                  world_addrs: list, grant_blob: dict, reject_relay: bool) -> list:
+        """Joiner side: record the public<->world correlation, point pool routing at the
+        world host (set_world), and open the world Session to redeem the grant. Returns
+        the initiate events for Node to dispatch."""
+        try:
+            self.set_world(world_peer_id)
+        except Exception:
+            pass
+        self._pending_world_handoff[public_peer_id] = world_peer_id
+        self._world_to_public[world_peer_id] = public_peer_id
+        return await self._sm_world.initiate(
+            world_peer_id, world_addrs, grant=grant_blob, reject_relay=reject_relay)
+
+    def rollback_handoff(self, peer_id: str) -> None:
+        """Roll back any in-flight handoff correlation for a failed Session, whichever
+        side failed: the forward map is keyed by the public peer-id, the reverse one by
+        the world peer-id."""
+        world_peer_id = self._pending_world_handoff.pop(peer_id, None)
+        if world_peer_id is not None:
+            self._world_to_public.pop(world_peer_id, None)
+        public_peer_id = self._world_to_public.pop(peer_id, None)
+        if public_peer_id is not None:
+            self._pending_world_handoff.pop(public_peer_id, None)
+
+    def is_pending_handoff(self, world_peer_id: str) -> bool:
+        """True if this world peer-id is the world side of an in-flight handoff (its world
+        Session was opened by start_world_handoff), as opposed to a plain in-world
+        agent-to-agent connection that carries no grant correlation."""
+        return world_peer_id in self._world_to_public
+
+    async def complete_world_handoff(self, world_peer_id: str) -> list:
+        """The world Session established: GOAWAY the correlated public Session (its job is
+        done) and drop the correlation. Returns the close events for Node to dispatch,
+        empty if this world peer-id was not part of a handoff."""
+        public_peer_id = self._world_to_public.pop(world_peer_id, None)
+        if public_peer_id is None:
+            return []
+        events = await self._sm_public.close_session(public_peer_id, WORLD_HANDOFF_COMPLETE)
+        self._pending_world_handoff.pop(public_peer_id, None)
+        return events
 
     def _p2p_of(self, peer_id: str) -> "P2P | None":
         """Resolve a peer's P2P instance by asking the SessionManagers first: the SM
