@@ -324,6 +324,37 @@ class NodeConn:
         """
         return self.p2p_name_to_p2p[p2p_name]
 
+    # Identity / posture facade over our OWN P2P instances. Node used to reach into the
+    # P2P objects (conn[P2P_*].peer_id, conn.p2p_world.is_public, ...) to read these; the
+    # Coordinator now owns the access so the raw handles can stop being a read channel
+    # (S18 prunes __getitem__/p2p_name_to_p2p). These are the peer-ids/addresses of THIS
+    # node on each network, distinct from the remote world host's peer-id exposed by
+    # get_world_node_peer_id. peer_id may be None before the libp2p host is up: the None
+    # guard stays on Node (get_public_peer_id / get_world_peer_id), so these return raw.
+    @property
+    def public_peer_id(self) -> str | None:
+        return self.p2p_public.peer_id
+
+    @property
+    def world_peer_id(self) -> str | None:
+        return self.p2p_world.peer_id
+
+    @property
+    def public_addresses(self) -> list[str]:
+        return self.p2p_public.addresses
+
+    @property
+    def world_addresses(self) -> list[str]:
+        return self.p2p_world.addresses
+
+    @property
+    def world_is_public(self) -> bool | None:
+        return self.p2p_world.is_public
+
+    @property
+    def world_relay_enabled(self) -> bool:
+        return self.p2p_world.relay_is_enabled
+
     @staticmethod
     async def disconnect(p2p: P2P, peer_id: str) -> bool:
         """Disconnects from a specific peer on a P2P network (async).

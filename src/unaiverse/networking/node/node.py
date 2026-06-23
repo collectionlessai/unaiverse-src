@@ -649,7 +649,7 @@ class Node:
         Returns:
             The list of public addresses.
         """
-        return self.conn[NodeConn.P2P_PUBLIC].addresses
+        return self.conn.public_addresses
 
     def get_world_addresses(self) -> list[str]:
         """Returns the world addresses of the P2P node
@@ -657,7 +657,7 @@ class Node:
         Returns:
             The list of world addresses.
         """
-        return self.conn[NodeConn.P2P_WORLD].addresses
+        return self.conn.world_addresses
 
     def get_public_peer_id(self) -> str:
         """Returns the public peer ID of the P2P node
@@ -665,7 +665,7 @@ class Node:
         Returns:
             The public peer ID.
         """
-        peer_id = self.conn[NodeConn.P2P_PUBLIC].peer_id
+        peer_id = self.conn.public_peer_id
         if peer_id is None:
             log.critical("Unable to retrieve the public peer ID (critical)")
             return ""
@@ -677,7 +677,7 @@ class Node:
         Returns:
             The world peer ID.
         """
-        peer_id = self.conn[NodeConn.P2P_WORLD].peer_id
+        peer_id = self.conn.world_peer_id
         if peer_id is None:
             log.critical("Unable to retrieve the world/private peer ID (critical)")
             return ""
@@ -1399,8 +1399,8 @@ class Node:
 
                 # Continuously check the addresses of the node for changes
                 try:
-                    current_public_addrs = self.conn.p2p_public.addresses
-                    current_private_addrs = self.conn.p2p_world.addresses
+                    current_public_addrs = self.conn.public_addresses
+                    current_private_addrs = self.conn.world_addresses
                     profile_public_addrs = self.profile.get_dynamic_profile().get('peer_addresses', [])
                     profile_private_addrs = self.profile.get_dynamic_profile().get('private_peer_addresses', [])
 
@@ -1682,7 +1682,7 @@ class Node:
                 # Publish updated list of (all) world agents (i.e., both agents and masters)
                 world_all_peer_infos = self.conn.get_all_connected_peer_infos(NodeConn.WORLD)
                 if not (await self.conn.publish(self.get_world_peer_id(),
-                                                f"{self.conn.p2p_world.peer_id}::ps:rv",
+                                                f"{self.conn.world_peer_id}::ps:rv",
                                                 content_type=Msg.WORLD_AGENTS_LIST,
                                                 content={"peers": world_all_peer_infos,
                                                          "update_count": clock.get_cycle()})):
@@ -2071,7 +2071,7 @@ class Node:
         if peer_id is not None:
 
             # Relay reservation logic for non-public peers
-            if not self.conn.p2p_world.is_public and self.conn.p2p_world.relay_is_enabled:
+            if not self.conn.world_is_public and self.conn.world_relay_enabled:
                 log.user("Node is not publicly reachable. Attempting to reserve a slot on the world's private network.")
                 expiry_utc = await self.conn.reserve(peer_id, NodeConn.P2P_WORLD)
 
