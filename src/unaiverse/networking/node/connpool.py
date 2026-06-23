@@ -892,6 +892,43 @@ class NodeConn:
         blip (pool-remove) instead of a full purge, without reaching into Session state."""
         return any(sm.is_in_grace(peer_id) for sm in self._session_managers)
 
+    # ── Session lifecycle (S16) ────────────────────────────────────────────────
+    #
+    # The Session lifecycle verbs Node used to drive on the SessionManagers directly,
+    # outside the pump (S11) and the world-handoff (S12): open an initiator Session,
+    # gracefully close one, close them all on shutdown. Events come back as the return
+    # value for Node's single dispatch site; the lifecycle POLICY (when to connect / leave /
+    # purge / close) stays on Node, only the SM resolution and the call move here.
+
+    async def initiate_session(self, p2p_name: str, peer_id: str, addresses: list,
+                               is_world_join: bool = False, remote_node_id_hint: str | None = None,
+                               reject_relay: bool = False) -> list:
+        """Open an initiator Session to `peer_id` on the named instance and return the
+        start-up events for Node to dispatch (and to read a terminal FAILED from). The
+        grant-carrying world initiate stays on the handoff path (start_world_handoff)."""
+        return await self._sm_by_name(p2p_name).initiate(
+            peer_id=peer_id, addresses=addresses, is_world_join=is_world_join,
+            remote_node_id_hint=remote_node_id_hint, reject_relay=reject_relay)
+
+    async def close_session(self, peer_id: str, reason: int) -> list:
+        """Gracefully close (GOAWAY) the Session this peer holds, on whichever instance
+        holds it, returning the events for Node to dispatch (close_session itself returns
+        []: the CLOSED arrives later via tick/inbound). No-op when no instance has a Session
+        for the peer; unlike _sm_of this does NOT fall back to the pool, matching the old
+        Node guard on Session presence. A peer lives on a single instance, so the
+        public-before-world sweep order is not observable."""
+        for sm in self._session_managers:
+            if sm.get_session(peer_id) is not None:
+                return await sm.close_session(peer_id, reason)
+        return []
+
+    async def close_all_sessions(self) -> None:
+        """Shutdown path: GOAWAY every Session on every instance so peers see a clean CLOSED
+        instead of a liveness timeout. Events are intentionally dropped (the node is going
+        down); close_all already skips Sessions already CLOSING/CLOSED."""
+        for sm in self._session_managers:
+            await sm.close_all()
+
     # ── World-handoff correlation (S12) ───────────────────────────────────────
     #
     # The join handshake spans two Sessions on two instances: the public one yields a

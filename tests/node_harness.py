@@ -234,6 +234,23 @@ class NodeFakeConn(FakeConn):
     def is_in_grace(self, peer_id: str) -> bool:
         return any(sm.is_in_grace(peer_id) for sm in self._session_managers)
 
+    async def initiate_session(self, p2p_name, peer_id, addresses, is_world_join=False,
+                               remote_node_id_hint=None, reject_relay=False):
+        sm = next((s for s in self._session_managers if s.p2p_name == p2p_name), None)
+        return await sm.initiate(
+            peer_id=peer_id, addresses=addresses, is_world_join=is_world_join,
+            remote_node_id_hint=remote_node_id_hint, reject_relay=reject_relay)
+
+    async def close_session(self, peer_id, reason):
+        for sm in self._session_managers:
+            if sm.get_session(peer_id) is not None:
+                return await sm.close_session(peer_id, reason)
+        return []
+
+    async def close_all_sessions(self):
+        for sm in self._session_managers:
+            await sm.close_all()
+
     async def start_world_handoff(self, public_peer_id, world_peer_id, world_addrs,
                                   grant_blob, reject_relay):
         self.set_world(world_peer_id)

@@ -825,10 +825,8 @@ class Node:
 
         # Gracefully close any Session to this peer (sends GOAWAY so the remote sees
         # Session.Closed, not Lost) on whichever instance holds it.
-        for sm in (self._sm_world, self._sm_public):
-            if sm is not None and sm.get_session(peer_id) is not None:
-                for ev in await sm.close_session(peer_id, WORLD_DISENGAGEMENT):
-                    await self._dispatch_session_event(ev)
+        for ev in await self.conn.close_session(peer_id, WORLD_DISENGAGEMENT):
+            await self._dispatch_session_event(ev)
 
         dynamic_profile = self.profile.get_dynamic_profile()
 
@@ -1551,9 +1549,7 @@ class Node:
                     for peer_id in connected_peer_ids:
                         await self.leave(peer_id)
                     # GOAWAY any Session not covered by the per-peer leave above.
-                    for sm in (self._sm_public, self._sm_world):
-                        if sm is not None:
-                            await sm.close_all()
+                    await self.conn.close_all_sessions()
                     log.close()  # Closing logger
                 except Exception:
                     pass
@@ -2638,8 +2634,8 @@ class Node:
         (dial/relay/quarantine), True once HELLO is on the wire. The Session owns
         the dial, so callers must NOT pre-dial.
         """
-        sm = self._sm_public if p2p_name == NodeConn.P2P_PUBLIC else self._sm_world
-        events = await sm.initiate(
+        events = await self.conn.initiate_session(
+            p2p_name,
             peer_id=peer_id,
             addresses=addresses,
             is_world_join=is_world_join,
@@ -2677,10 +2673,8 @@ class Node:
                 Session is GOAWAY-closed with this reason before teardown.
         """
         if reason is not None and not keep_connection:
-            for sm in (self._sm_world, self._sm_public):
-                if sm is not None and sm.get_session(peer_id) is not None:
-                    for ev in await sm.close_session(peer_id, reason):
-                        await self._dispatch_session_event(ev)
+            for ev in await self.conn.close_session(peer_id, reason):
+                await self._dispatch_session_event(ev)
 
         await self.hosted.remove_agent(peer_id)
 
