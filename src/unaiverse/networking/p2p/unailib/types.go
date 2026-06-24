@@ -296,15 +296,15 @@ var defaultSTUNServers = []string{
 // Define a list of curated public relay nodes to use as static relays for all nodes in the network.
 var defaultRelays = []string{
 	// Relay 1
-    '/dns4/multaiverse.diism.unisi.it/tcp/30060/tls/ws/p2p/12D3KooWBUHW3KXTrBXrgaxziratJXNLRt8NBy2LJtfDbKJn9HxV',
-    '/ip4/193.205.7.181/tcp/30060/p2p/12D3KooWBUHW3KXTrBXrgaxziratJXNLRt8NBy2LJtfDbKJn9HxV',
-    '/ip4/193.205.7.181/udp/30061/quic-v1/p2p/12D3KooWBUHW3KXTrBXrgaxziratJXNLRt8NBy2LJtfDbKJn9HxV',
-    '/ip4/193.205.7.181/udp/30062/quic-v1/webtransport/certhash/uEiD9HGIuCGa4XvRwNBI4vXi1OwCLmNYBPC_iWBLYX3WEaA/certhash/uEiDPlFDzi7SD_xqUMqU2sHw3R_MTdfMVpgimaAbUx9X6qw/p2p/12D3KooWBUHW3KXTrBXrgaxziratJXNLRt8NBy2LJtfDbKJn9HxV',
-    '/ip4/193.205.7.181/udp/30063/webrtc-direct/certhash/uEiDwJHGTJjBrAh6Ph-d4Im36ByFr92IdDjxoDMj_cfpYKQ/p2p/12D3KooWBUHW3KXTrBXrgaxziratJXNLRt8NBy2LJtfDbKJn9HxV',
+    "/dns4/multaiverse.diism.unisi.it/tcp/30060/tls/ws/p2p/12D3KooWBUHW3KXTrBXrgaxziratJXNLRt8NBy2LJtfDbKJn9HxV",
+    "/ip4/193.205.7.181/tcp/30060/p2p/12D3KooWBUHW3KXTrBXrgaxziratJXNLRt8NBy2LJtfDbKJn9HxV",
+    "/ip4/193.205.7.181/udp/30061/quic-v1/p2p/12D3KooWBUHW3KXTrBXrgaxziratJXNLRt8NBy2LJtfDbKJn9HxV",
+    "/ip4/193.205.7.181/udp/30062/quic-v1/webtransport/certhash/uEiD9HGIuCGa4XvRwNBI4vXi1OwCLmNYBPC_iWBLYX3WEaA/certhash/uEiDPlFDzi7SD_xqUMqU2sHw3R_MTdfMVpgimaAbUx9X6qw/p2p/12D3KooWBUHW3KXTrBXrgaxziratJXNLRt8NBy2LJtfDbKJn9HxV",
+    "/ip4/193.205.7.181/udp/30063/webrtc-direct/certhash/uEiDwJHGTJjBrAh6Ph-d4Im36ByFr92IdDjxoDMj_cfpYKQ/p2p/12D3KooWBUHW3KXTrBXrgaxziratJXNLRt8NBy2LJtfDbKJn9HxV",
 	// Relay 2
-    '/ip4/193.205.7.181/udp/30072/quic-v1/webtransport/certhash/uEiBTtQ0A1iPJcZxrOEP-OCMFd2m1S7IoawVWJncxznpWJQ/certhash/uEiC08yEUHS8YMWHeAwUxbO98qykS7tzGjQPm4Z__g9iBQg/p2p/12D3KooWAwiYf1Xo4E9EFyuSWtcYdwodNvSiQ9zdCVUAKN6wUQxN',
-    '/dns4/multaiverse.diism.unisi.it/tcp/30070/tls/ws/p2p/12D3KooWAwiYf1Xo4E9EFyuSWtcYdwodNvSiQ9zdCVUAKN6wUQxN',
-    '/ip4/193.205.7.181/tcp/30070/p2p/12D3KooWAwiYf1Xo4E9EFyuSWtcYdwodNvSiQ9zdCVUAKN6wUQxN',
-    '/ip4/193.205.7.181/udp/30073/webrtc-direct/certhash/uEiD7Go0K1cjBW04k940SHgMVZArH2hE9lgoB8KexFDzGTw/p2p/12D3KooWAwiYf1Xo4E9EFyuSWtcYdwodNvSiQ9zdCVUAKN6wUQxN',
-    '/ip4/193.205.7.181/udp/30071/quic-v1/p2p/12D3KooWAwiYf1Xo4E9EFyuSWtcYdwodNvSiQ9zdCVUAKN6wUQxN'
+    "/ip4/193.205.7.181/udp/30072/quic-v1/webtransport/certhash/uEiBTtQ0A1iPJcZxrOEP-OCMFd2m1S7IoawVWJncxznpWJQ/certhash/uEiC08yEUHS8YMWHeAwUxbO98qykS7tzGjQPm4Z__g9iBQg/p2p/12D3KooWAwiYf1Xo4E9EFyuSWtcYdwodNvSiQ9zdCVUAKN6wUQxN",
+    "/dns4/multaiverse.diism.unisi.it/tcp/30070/tls/ws/p2p/12D3KooWAwiYf1Xo4E9EFyuSWtcYdwodNvSiQ9zdCVUAKN6wUQxN",
+    "/ip4/193.205.7.181/tcp/30070/p2p/12D3KooWAwiYf1Xo4E9EFyuSWtcYdwodNvSiQ9zdCVUAKN6wUQxN",
+    "/ip4/193.205.7.181/udp/30073/webrtc-direct/certhash/uEiD7Go0K1cjBW04k940SHgMVZArH2hE9lgoB8KexFDzGTw/p2p/12D3KooWAwiYf1Xo4E9EFyuSWtcYdwodNvSiQ9zdCVUAKN6wUQxN",
+    "/ip4/193.205.7.181/udp/30071/quic-v1/p2p/12D3KooWAwiYf1Xo4E9EFyuSWtcYdwodNvSiQ9zdCVUAKN6wUQxN"
 }
