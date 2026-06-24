@@ -18,7 +18,6 @@ import json
 import html
 import graphviz
 from typing import IO
-import importlib.resources
 from typing import TYPE_CHECKING
 from unaiverse.custom import Custom
 from collections.abc import Callable
@@ -26,6 +25,10 @@ from unaiverse.hsm.state import State
 from unaiverse.utils.logger import log
 from unaiverse.hsm.action import Action
 from unaiverse.interaction import Interaction, CompletionReason
+try:
+    from importlib.resources.abc import Traversable   # noqa: Python 3.11+
+except ImportError:
+    from importlib.abc import Traversable             # Python 3.10
 
 if TYPE_CHECKING:
     from unaiverse.agent_basics import AgentBasics
@@ -1349,7 +1352,7 @@ class HybridStateMachine:
         """
 
         # Loading the whole file
-        if (isinstance(filename_or_hsm_as_string, importlib.resources.abc.Traversable) or
+        if (isinstance(filename_or_hsm_as_string, Traversable) or
                 isinstance(filename_or_hsm_as_string, io.TextIOWrapper)):
 
             # Safe way to load when this file is packed in a pip package
