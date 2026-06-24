@@ -164,6 +164,10 @@ _shared_lib.FreeString.restype = None  # Void return
 _shared_lib.FreeInt.argtypes = [ctypes.POINTER(ctypes.c_int)]  # Still expects a pointer to int
 _shared_lib.FreeInt.restype = None  # Void return
 
+# TURN related
+_shared_lib.UpdateICEConfig.argtypes = [ctypes.c_int, ctypes.c_char_p]
+_shared_lib.UpdateICEConfig.restype = ctypes.c_void_p
+
 # --- Python Interface Setup ---
 
 # Import necessary components

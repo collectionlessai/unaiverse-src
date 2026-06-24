@@ -224,6 +224,7 @@ type NodeInstance struct {
 	// WebRTC DataChannel connections (application-level, keyed by remote peer ID)
 	webrtcMutex       sync.RWMutex
 	webrtcConnections map[peer.ID]*WebRTCConn
+	iceConfigMu       sync.RWMutex  // protects iceConfig swaps
 	iceConfig         *ICEConfig // nil → use defaults (Google STUN)
 
 	// a copy of its own index for logging

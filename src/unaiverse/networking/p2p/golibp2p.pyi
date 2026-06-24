@@ -126,6 +126,14 @@ class GoLibP2P:
         """
         ...
 
+    def UpdateICEConfig(self, instance: int, config_json: bytes) -> bytes:
+        """
+        UpdateICEConfig(instance: int, config_json: bytes) -> bytes
+
+        Updates the ICE configuration with a new one (pointer swap). Returns a JSON result.
+        """
+        ...
+
     def FreeString(self, arg: bytes) -> None:
         """
         FreeString(arg: bytes) -> None
