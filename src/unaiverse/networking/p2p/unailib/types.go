@@ -306,5 +306,5 @@ var defaultRelays = []string{
     "/dns4/multaiverse.diism.unisi.it/tcp/30070/tls/ws/p2p/12D3KooWAwiYf1Xo4E9EFyuSWtcYdwodNvSiQ9zdCVUAKN6wUQxN",
     "/ip4/193.205.7.181/tcp/30070/p2p/12D3KooWAwiYf1Xo4E9EFyuSWtcYdwodNvSiQ9zdCVUAKN6wUQxN",
     "/ip4/193.205.7.181/udp/30073/webrtc-direct/certhash/uEiD7Go0K1cjBW04k940SHgMVZArH2hE9lgoB8KexFDzGTw/p2p/12D3KooWAwiYf1Xo4E9EFyuSWtcYdwodNvSiQ9zdCVUAKN6wUQxN",
-    "/ip4/193.205.7.181/udp/30071/quic-v1/p2p/12D3KooWAwiYf1Xo4E9EFyuSWtcYdwodNvSiQ9zdCVUAKN6wUQxN"
+    "/ip4/193.205.7.181/udp/30071/quic-v1/p2p/12D3KooWAwiYf1Xo4E9EFyuSWtcYdwodNvSiQ9zdCVUAKN6wUQxN",
 }
