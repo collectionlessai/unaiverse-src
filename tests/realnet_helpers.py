@@ -105,7 +105,7 @@ def build_real_world_node(idir_pub: str, idir_world: str, decision_hook=None,
                               local_profile_factory=_profile_factory(node_id, p2p_world.peer_id),
                               decision_hook=decision_hook,
                               routing_classifier=NodeConn._route_world)
-    # Wire the SMs into the conn so conn.update() / _reconcile_instance / _p2p_of see them.
+    # Wire the SMs into the conn so conn.update() / _reconcile_instance / _sm_of see them.
     # This builder bypasses Node.__init__, which is where attach_session_policy normally does
     # this; without it conn._sm_* stay None and conn.update() trips over sm.reconcile.
     conn._sm_public, conn._sm_world = sm_pub, sm_world

@@ -15,8 +15,6 @@
 import asyncio
 import time
 import math
-import json
-import binascii
 from collections import namedtuple
 from typing import TYPE_CHECKING
 from unaiverse.utils.logger import log
@@ -43,10 +41,10 @@ from unaiverse.networking.session.sess_msg import (
 
 
 # Immutable per-cycle view of the world membership that the perimeter routing
-# classifies against. Built once per update cycle so conn_routing_fcn reads a single
-# consistent snapshot instead of the Coordinator's mutable sets — and so the same view
-# can be handed down to each per-instance reconcile when the perimeter moves into the
-# SessionManagers. The world side is fed by the rendezvous; the public side ignores it.
+# classifies against. Built once per update cycle so each per-instance reconcile reads a
+# single consistent snapshot instead of the Coordinator's mutable sets, the same frozen
+# view handed both to update()'s reconcile and to the get_messages chat gate. The world
+# side is fed by the rendezvous; the public side ignores it.
 WorldMembership = namedtuple(
     "WorldMembership",
     ["world_agents", "world_masters", "world_node_peer_id", "inspector_peer_id"],
@@ -140,10 +138,10 @@ class NodeConn:
         # world_node_peer_id) now lives in sm_world, next to the Sessions it gates (built
         # in attach_session_policy); the Coordinator reads it back through
         # membership_snapshot(). inspector_peer_id stays here: it is not pure world
-        # membership but an orthogonal, currently-inert chat exception (D-8a).
+        # membership but an orthogonal, currently-inert chat exception.
         self.inspector_peer_id = None
         # role_to_peer_ids and peer_id_to_addrs stay Coordinator-owned and do NOT descend
-        # into sm_world with the world membership (D-2). role_to_peer_ids is the inverse
+        # into sm_world with the world membership. role_to_peer_ids is the inverse
         # index of peer_id_to_misc (the global cross-pool taxonomy, kept here) and set_role
         # updates both together; find_addrs_by_role reads role_to_peer_ids and
         # peer_id_to_addrs jointly, and get_addrs feeds the dial path. Only the pure world
@@ -216,7 +214,7 @@ class NodeConn:
             self.pool_ratios.append(ratio)
 
         # The SM is the instance: the per-instance index maps a p2p_name to its
-        # SessionManager, not to the raw P2P handle (S18). It is empty until
+        # SessionManager, not to the raw P2P handle. It is empty until
         # set_session_managers runs (the SMs are built late in attach_session_policy),
         # so it is seeded here and populated there. The pool->p2p_name mapping captured
         # at init lets set_session_managers wire each pool triple's instance slot to the
@@ -236,7 +234,7 @@ class NodeConn:
         # index (which pool a connected peer lives in): it backs is_connected,
         # get_pool_of, in_connection_queues, get_all_connected_peer_ids and the chat
         # admission gate in get_messages. It is no longer the primary source of the
-        # peer -> instance routing: that is Session-anchored now (_p2p_of asks the
+        # peer -> instance routing: that is Session-anchored now (_sm_of asks the
         # SessionManagers first and only falls back to this map for a peer connected
         # without a Session yet). So it stays load-bearing and must not be dropped when
         # the world roster and the pool state later move down into the SessionManagers.
@@ -333,10 +331,10 @@ class NodeConn:
         """
         return self.p2p_name_to_sm[p2p_name]
 
-    # Identity / posture facade over our OWN P2P instances. Node used to reach into the
-    # P2P objects (conn[P2P_*].peer_id, conn.p2p_world.is_public, ...) to read these; the
-    # Coordinator now owns the access so the raw handles can stop being a read channel
-    # (S18 prunes __getitem__/p2p_name_to_p2p). These are the peer-ids/addresses of THIS
+    # Identity / posture facade over our OWN P2P instances. Node reads its own peer-ids,
+    # addresses and world posture through these instead of reaching into the P2P objects,
+    # so the raw handles are never a read channel (the Coordinator keeps them as custody
+    # only). These are the peer-ids/addresses of THIS
     # node on each network, distinct from the remote world host's peer-id exposed by
     # get_world_node_peer_id. peer_id may be None before the libp2p host is up: the None
     # guard stays on Node (get_public_peer_id / get_world_peer_id), so these return raw.
@@ -532,10 +530,11 @@ class NodeConn:
         Returns a tuple `(chat_messages, session_messages)`:
           * `chat_messages` are decoded `Msg` objects whose `piggyback` JWT has been
             verified (the existing chat / pubsub flow, unchanged).
-          * `session_messages` are raw per-stage Session payloads delivered on one of
-            the SESSION_PROTOCOL_IDS — these skip Msg decoding and JWT verification
-            because identity is established cryptographically inside the Session
-            handshake (sig_b / sig_a / token).
+          * `session_messages` are raw per-stage Session payloads already split off and
+            decoded upstream by P2P.get_messages (the session-protocol partition lives in
+            the transport tier); the Coordinator forwards them as-is, skipping the chat Msg
+            decoding and JWT verification, because identity is established cryptographically
+            inside the Session handshake (sig_b / sig_a / token).
 
         Args:
             p2p_name: The name of the P2P network to fetch messages from.
@@ -571,7 +570,7 @@ class NodeConn:
                 verified_sender_id = msg_dict.get("from")
                 decoded_data = msg_dict.get("data")
 
-                # ── Chat path (Node-bound) ───────────────────────────────────
+                # Chat path (Node-bound)
                 # Session-protocol frames were already split off and decoded by
                 # P2P.get_messages; everything here is a chat Msg that needs
                 # Msg.from_bytes + sender-mismatch + membership gate + JWT verify.
@@ -591,9 +590,10 @@ class NodeConn:
                     # from a peer that sends such malformed/spoofed messages.
                     continue  # Discard this message
 
-                # filter only valid messages to return
-                if (msg_obj.sender in self.peer_id_to_pool_name or  # Check if expected sender
-                        (allowed_not_connected_peers is not None and msg_obj.sender in allowed_not_connected_peers)):
+                # filter only valid messages to return: a sender already in a pool, or one
+                # of this cycle's admitted world agents/masters (the frozen snapshot above).
+                if (msg_obj.sender in self.peer_id_to_pool_name or
+                        msg_obj.sender in allowed_not_connected_peers):
 
                     try:
                         token_with_inspector_final_bit = msg_obj.piggyback
@@ -615,10 +615,6 @@ class NodeConn:
 
             except ValueError as ve:
                 log.error(f"Invalid message created, stopping. Error: {ve}", sub=p2p.log_sub)
-                continue  # Skip problematic message
-            except (TypeError, binascii.Error) as decode_err:
-                log.error(f"Failed to decode Base64 data for a message in batch: {decode_err}. "
-                          f"Message dict: {msg_dict}", sub=p2p.log_sub)
                 continue  # Skip problematic message
             except Exception as msg_proc_err:  # Catch errors from Msg.from_bytes or attribute setting
                 log.error(f"Error processing popped message item {i}: {msg_proc_err}. "
@@ -677,7 +673,7 @@ class NodeConn:
         if sm is None:
             log.error("P2P non found for peer id: " + str(peer_id))
             return False
-        p2p = sm.p2p  # property reads (peer_id / log_sub) stay until the identity facade (S15)
+        p2p = sm.p2p  # the SM's own custody handle, for the channel peer-id and log_sub; not an exposed channel
 
         # Defining channel
         if channel_trail is not None and len(channel_trail) > 0:
@@ -770,7 +766,7 @@ class NodeConn:
         sm = self._sm_for_topic(peer_id)
         if sm is None:
             return False
-        p2p = sm.p2p  # property reads (peer_id / log_sub) stay until the identity facade (S15)
+        p2p = sm.p2p  # the SM's own custody handle, for the channel peer-id and log_sub; not an exposed channel
 
         log.network(f">>> PUBLISHING {content_type} to {channel}", sub=p2p.log_sub)
 
@@ -914,11 +910,12 @@ class NodeConn:
         blip (pool-remove) instead of a full purge, without reaching into Session state."""
         return any(sm.is_in_grace(peer_id) for sm in self._session_managers)
 
-    # ── Session lifecycle (S16) ────────────────────────────────────────────────
+    # Session lifecycle
     #
-    # The Session lifecycle verbs Node used to drive on the SessionManagers directly,
-    # outside the pump (S11) and the world-handoff (S12): open an initiator Session,
-    # gracefully close one, close them all on shutdown. Events come back as the return
+    # The Session lifecycle verbs, kept separate from the pump and the world-handoff:
+    # open an initiator Session, gracefully close one, close them all on shutdown.
+    # Node drives these through the Coordinator rather than on the SessionManagers
+    # directly. Events come back as the return
     # value for Node's single dispatch site; the lifecycle POLICY (when to connect / leave /
     # purge / close) stays on Node, only the SM resolution and the call move here.
 
@@ -951,7 +948,7 @@ class NodeConn:
         for sm in self._session_managers:
             await sm.close_all()
 
-    # ── World-handoff correlation (S12) ───────────────────────────────────────
+    # World-handoff correlation
     #
     # The join handshake spans two Sessions on two instances: the public one yields a
     # WorldGrant, the world one redeems it. These facades own the public<->world peer-id
@@ -1018,12 +1015,6 @@ class NodeConn:
         # The pool triple's instance slot already holds the owning SM (None pre-attach).
         return self.pool_name_to_pool_triple[pool_name][2]
 
-    def _p2p_of(self, peer_id: str) -> "P2P | None":
-        """The P2P handle of the peer's owning instance, via _sm_of. None when nothing
-        knows the peer."""
-        sm = self._sm_of(peer_id)
-        return sm.p2p if sm is not None else None
-
     def _sm_by_name(self, p2p_name: str) -> "SessionManager | None":
         """The SessionManager (the instance) for a named network, via the per-instance
         index populated at attach time. None before the managers are registered."""
@@ -1049,7 +1040,7 @@ class NodeConn:
         """Freeze the current world membership into an immutable per-cycle view. The pure
         membership (the two sets + world_node_peer_id) is read from sm_world, where it now
         lives next to the Sessions it gates; inspector_peer_id is the Coordinator's own
-        orthogonal exception (D-8a). The sets are copied into frozensets so a snapshot
+        orthogonal exception. The sets are copied into frozensets so a snapshot
         already taken cannot change if the membership mutates later (and cannot be mutated
         by the routing itself). Before attach_session_policy builds sm_world the membership
         reads empty."""
@@ -1119,7 +1110,7 @@ class NodeConn:
 
         # The SM is the instance: iterate the managers (public then world) instead of the
         # raw P2P handles. _session_managers preserves the public-before-world order the
-        # cross-pool guard relies on (I-2).
+        # cross-pool guard relies on (a peer-id enters at most one pool, public winning).
         for sm in self._session_managers:
             added_local, removed_local = await self._reconcile_instance(sm, membership)
             assert self.pool_name_to_added_in_last_update.keys().isdisjoint(added_local.keys()), \
@@ -1192,47 +1183,14 @@ class NodeConn:
 
         return added_local, removed_local
 
-    async def conn_routing_fcn(self, connected_peer_infos: list, p2p: P2P,
-                               membership: WorldMembership = None) -> dict:
-        """Routes connected peers to the correct connection pool based on their network and role (async).
-
-        Args:
-            connected_peer_infos: A list of dictionaries with information about connected peers.
-            p2p: The P2P network object where the connections were found.
-            membership: the immutable world-membership snapshot to classify against.
-                Defaults to a fresh snapshot of the current membership when not passed
-                (so a standalone call still works); update() passes the per-cycle one.
-
-        Returns:
-            A dictionary mapping pool names to a dictionary of peer IDs and their information.
-        """
-        if membership is None:
-            membership = self.membership_snapshot()
-        public = p2p == self.p2p_public
-        classify = self._route_public if public else self._route_world
-        # This instance's pools = the ones whose owning SM rides this P2P handle (the SM is
-        # the instance; the incoming arg is still the raw P2P from the transport callback).
-        result = {pool_name: {} for pool_name, (_, _, pool_sm) in self.pool_name_to_pool_triple.items()
-                  if pool_sm is not None and pool_sm.p2p is p2p}
-        for c in connected_peer_infos:
-            pool_name = classify(c, membership)
-            if pool_name is None:
-                # A world peer that is not a known member gets cut from the perimeter;
-                # the public side never returns None for a real (in/out) connection.
-                if not public:
-                    await NodeConn.disconnect(p2p, c['id'])
-                continue
-            result[pool_name][c['id']] = c
-        return result
-
-    # ── World-roster writers (S9: writes are centralized here) ─────────────────
+    # World-roster writers: every world-membership mutation lands here
     #
     # set_world / set_world_agents_list / set_world_masters_list / add_to_world_agents_list /
     # add_to_world_masters_list / remove_from_world_lists are the ONLY places the world roster
     # is mutated. node.py never touches world_agents_set/world_masters_set/world_node_peer_id
     # directly: it calls these Coordinator methods, which write sm_world. That is what keeps the
-    # membership single-sourced in sm_world (S8). The rendezvous READ stays on the Coordinator
-    # (set_world_agents_and_world_masters_lists_from_rendezvous, D-6); only the write lands here.
+    # membership single-sourced in sm_world. The rendezvous READ stays on the Coordinator
+    # (set_world_agents_and_world_masters_lists_from_rendezvous); only the write lands here.
     # If a new roster mutation is ever needed, add it as a method here, never as a direct set.
 
     def set_world(self, world_peer_id: str | None) -> None:

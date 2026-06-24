@@ -301,41 +301,24 @@ def test_membership_snapshot_is_immutable():
     assert "b" not in snap.world_agents
 
 
-def test_conn_routing_classifies_against_passed_snapshot():
-    """conn_routing_fcn classifies world peers against the *passed* membership snapshot.
-    The Coordinator holds no live roster (it lives in sm_world), so a peer the snapshot
-    calls a world agent is routed purely from the passed view, proving the seam is the
-    snapshot."""
-    from types import SimpleNamespace
+def test_route_world_classifies_against_passed_snapshot():
+    """The world routing classifier keys purely off the membership snapshot it is given:
+    the Coordinator holds no live roster (it lives in sm_world), so a peer the snapshot
+    calls a world agent routes to IN_WORLD_AGENTS, and a peer the snapshot does not know is
+    cut (None). This is the classifier the production path runs through sm.reconcile; the
+    perimeter cut and the agent>node>master precedence are exercised end-to-end by the
+    char-tests via update()."""
     from unaiverse.networking.node.connpool import WorldMembership
-
-    class _WP2P:
-        log_sub = "world"
-    world_p2p = _WP2P()
-
-    conn = NodeConn.__new__(NodeConn)  # bypass the heavy P2P-bound __init__
-    conn.p2p_public = object()
-    # conn_routing_fcn derives this instance's pools from the triples whose owning SM rides
-    # world_p2p (the SM is the instance; triple[2] holds the SM, not the raw P2P, since S18).
-    world_sm = SimpleNamespace(p2p=world_p2p)
-    conn.pool_name_to_pool_triple = {
-        p: [set(), 0, world_sm] for p in (
-            NodeConn.IN_WORLD_AGENTS, NodeConn.OUT_WORLD_AGENTS,
-            NodeConn.IN_WORLD_NODE, NodeConn.OUT_WORLD_NODE,
-            NodeConn.IN_WORLD_MASTERS, NodeConn.OUT_WORLD_MASTERS,
-        )
-    }
-    # The Coordinator no longer holds any live roster (it lives in sm_world): the only
-    # classification source is the snapshot passed to conn_routing_fcn.
 
     membership = WorldMembership(world_agents=frozenset({"agentX"}), world_masters=frozenset(),
                                 world_node_peer_id=None, inspector_peer_id=None)
-    infos = [{"id": "agentX", "direction": "inbound", "addrs": [], "connected_at": 0}]
-    routed = _run(conn.conn_routing_fcn(infos, world_p2p, membership))
-    assert "agentX" in routed[NodeConn.IN_WORLD_AGENTS]
+    agent_in = {"id": "agentX", "direction": "inbound", "addrs": [], "connected_at": 0}
+    ghost_in = {"id": "ghost", "direction": "inbound", "addrs": [], "connected_at": 0}
+    assert NodeConn._route_world(agent_in, membership) == NodeConn.IN_WORLD_AGENTS
+    assert NodeConn._route_world(ghost_in, membership) is None
 
 
-# ── Characterization oracle for update()/conn_routing_fcn ─────────────────────
+# ── Characterization oracle for update() ──────────────────────────────────────
 #
 # These freeze the exact contract of the per-cycle diff and the world perimeter so
 # the per-instance reconcile in the SessionManagers can be checked bit-for-bit
@@ -344,7 +327,7 @@ def test_conn_routing_classifies_against_passed_snapshot():
 
 class _UpdP2P:
     """Fake P2P for driving update(): serves planted connected-peer infos and records
-    perimeter disconnects (conn_routing_fcn -> NodeConn.disconnect)."""
+    perimeter disconnects (the world reconcile -> sm.disconnect -> p2p.disconnect_from)."""
     def __init__(self, log_sub):
         self.log_sub = log_sub
         self.peer_id = log_sub + "-self"
@@ -482,22 +465,23 @@ def test_char_remove_keeps_misc():
     assert conn.get_role("wa") == ROLE_WORLD_AGENT
 
 
-def test_p2p_of_prefers_session_then_index():
-    """_p2p_of resolves the peer's instance from the SessionManager that holds its
-    Session (public before world), falling back to the connection index for peers that
-    are connected but have no Session yet, and None when nothing knows the peer."""
+def test_sm_of_prefers_session_then_index():
+    """_sm_of resolves the peer's instance (the SessionManager, the SM is the instance)
+    from the manager that holds its Session (public before world), falling back to the
+    connection index for peers that are connected but have no Session yet, and None when
+    nothing knows the peer."""
     conn, pub, world = _make_node_conn()
     # A Session on the world manager resolves to the world instance.
     conn._sm_world._sessions["w1"] = object()
-    assert conn._p2p_of("w1") is world
+    assert conn._sm_of("w1") is conn._sm_world
     # A Session on the public manager resolves to the public instance.
     conn._sm_public._sessions["p1"] = object()
-    assert conn._p2p_of("p1") is pub
+    assert conn._sm_of("p1") is conn._sm_public
     # No Session: fall back to the pool a connected peer lives in (no Session yet).
     conn.peer_id_to_pool_name["idx"] = NodeConn.IN_WORLD_AGENTS
-    assert conn._p2p_of("idx") is world
+    assert conn._sm_of("idx") is conn._sm_world
     # Unknown to both Sessions and pools.
-    assert conn._p2p_of("nope") is None
+    assert conn._sm_of("nope") is None
 
 
 def test_cycle_snapshot_frozen_until_next_update():

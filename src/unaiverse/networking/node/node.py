@@ -40,8 +40,8 @@ from unaiverse.networking.p2p import P2P, P2PError
 from unaiverse.networking.node.connpool import NodeConn
 from unaiverse.networking.node.profile import NodeProfile
 from unaiverse.networking.session import (ProfileDecisionResult, WorldGrantSpec, VerifiedTokenClaims,
-                                          SessionEventType, SessionRole, SessionState)
-from unaiverse.networking.session.sess_msg import (WORLD_DISENGAGEMENT, WORLD_HANDOFF_COMPLETE,
+                                          SessionEventType, SessionRole)
+from unaiverse.networking.session.sess_msg import (WORLD_DISENGAGEMENT,
                                                    LOCAL_ERROR, NOT_IN_ALLOW_LIST, ROLE_INCOMPATIBLE,
                                                    HOSTED_REJECTED, CV_HASH_MISMATCH, NOT_AUTHORIZED)
 from unaiverse.streams.streams import DataProps, BufferedStream
@@ -147,8 +147,8 @@ class Node:
         self.world: World | None = hosted if isinstance(hosted, World) else None
         self.conn: NodeConn  # Manages the network operations in the P2P network
         # The two SessionManagers are owned by the Coordinator (conn.attach_session_policy);
-        # Node holds no handle to them and drives every Session verb through conn facades
-        # (S18). The world-handoff correlation (public<->world peer-id) now lives in the
+        # Node holds no handle to them and drives every Session verb through conn facades.
+        # The world-handoff correlation (public<->world peer-id) now lives in the
         # Coordinator (conn.start_world_handoff / rollback_handoff / complete_world_handoff);
         # Node drives the handoff through those facades and holds no maps.
         # Interactive-mode options dict (built in run() when interact_mode is on),
@@ -1729,7 +1729,7 @@ class Node:
         log.misc("Got " + str(len(public_messages)) + " messages from the public net", sub="pub")
         log.misc("Got " + str(len(world_messages)) + " messages from the world/private net", sub="prv")
 
-        # ── Pump the Sessions (deliver inbound + tick), Coordinator-owned ─────
+        # Pump the Sessions (deliver inbound + tick), Coordinator-owned
         # SessionInbound items skip Msg.from_bytes / JWT verify; identity is
         # established cryptographically by sig_a / sig_b inside the handshake. The
         # Coordinator delivers each inbound to its instance's manager and then ticks
@@ -2253,7 +2253,7 @@ class Node:
                 log.misc(f"[session] decision: cv_hash mismatch for ...{peer_id[-5:]} → reject")
                 return ProfileDecisionResult(accepted=False, reason_code=CV_HASH_MISMATCH)
 
-        # ── World host ────────────────────────────────────────────────────────
+        # World host
         if self.node_type is Node.WORLD:
             # On the private world instance, an inbound offer is a joiner redeeming
             # a grant: accept (no new grant). The Session ESTABLISHes on PROFILE and
@@ -2271,8 +2271,8 @@ class Node:
             role = role | (Agent.ROLE_WORLD_MASTER if is_world_master else Agent.ROLE_WORLD_AGENT)
 
             # Admit the joiner's world-side identity BEFORE it dials the private
-            # instance: conn_routing_fcn disconnects unknown peers on the world
-            # network, and the post-handshake registration
+            # instance: the world perimeter cut (the world SessionManager's reconcile)
+            # disconnects unknown peers, and the post-handshake registration
             # (_world_host_register_agent) would come too late to save the
             # in-flight world handshake. The legacy flow did this at approval time.
             joiner_dyn = profile.get_dynamic_profile()
@@ -2312,7 +2312,7 @@ class Node:
             log.misc(f"[session] decision: granting world role '{role_str}' to ...{peer_id[-5:]}")
             return ProfileDecisionResult(accepted=True, world_grant=spec)
 
-        # ── Agent host ────────────────────────────────────────────────────────
+        # Agent host
         # v1: accept (allow-list already gated above). Custom hosted.evaluate_profile
         # / certified / cv_hash gating returns with the deferred auth model.
         return ProfileDecisionResult(accepted=True)
@@ -2428,7 +2428,7 @@ class Node:
         is_world = NodeConn.P2P_WORLD == ev.p2p_name or "world" in ev.p2p_name
         profile_b = ev.data.get("profile_b")
 
-        # ── Initiator on the PUBLIC instance ──────────────────────────────────
+        # Initiator on the PUBLIC instance
         if ev.role == SessionRole.INITIATOR and not is_world:
             grant = ev.data.get("world_grant")
             if grant is not None:
@@ -2447,7 +2447,7 @@ class Node:
                     opts['ready_to_interact'] = True
             return
 
-        # ── Initiator on the WORLD instance ───────────────────────────────────
+        # Initiator on the WORLD instance
         if ev.role == SessionRole.INITIATOR and is_world:
             grant = ev.data.get("grant")
             if grant is None and not self.conn.is_pending_handoff(ev.peer_id):
@@ -2480,7 +2480,7 @@ class Node:
                 await self._dispatch_session_event(cev)
             return
 
-        # ── Responder on an agent node (public or in-world peer connection) ───
+        # Responder on an agent node (public or in-world peer connection)
         # On a world host the world-side responder is the grant-redemption path
         # handled below; everything else lands here.
         if ev.role == SessionRole.RESPONDER and (not is_world or self.node_type is not Node.WORLD):
@@ -2505,7 +2505,7 @@ class Node:
                         opts['ready_to_interact'] = True
             return
 
-        # ── Responder on the WORLD instance: a joiner redeemed a grant ────────
+        # Responder on the WORLD instance: a joiner redeemed a grant
         if ev.role == SessionRole.RESPONDER and is_world and self.node_type is Node.WORLD:
             await self._world_host_register_agent(ev, profile_b)
 
@@ -2913,8 +2913,8 @@ class Node:
 
             # Inspector expects also to have access to the profile of the world,
             # so we patch this thing by adding it here. This is the REMOTE world-host's
-            # peer-id (conn.get_world_node_peer_id, i.e. conn._sm_world.world_node_peer_id),
-            # NOT our own local world peer-id (self.get_world_peer_id / conn.world_peer_id).
+            # peer-id (conn.get_world_node_peer_id), NOT our own local world peer-id
+            # (self.get_world_peer_id / conn.world_peer_id).
             world_node_peer_id = self.conn.get_world_node_peer_id()
             if self.hosted.in_world() and world_node_peer_id is not None:
                 all_agents_profiles[world_node_peer_id] = self.hosted.world_profile.get_all_profile()

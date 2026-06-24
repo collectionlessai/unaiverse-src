@@ -41,8 +41,7 @@ from typing import Dict, List, Optional, Callable, TYPE_CHECKING
 
 from unaiverse.networking.session.session import (
     Session, SessionState, SessionRole, SessionEvent, SessionEventType, DecisionHook,
-    SESSION_HELLO_PROTOCOL, SESSION_PROFILE_PROTOCOL,
-    SESSION_WORLD_PROTOCOL, SESSION_CONTROL_PROTOCOL,
+    SESSION_HELLO_PROTOCOL, SESSION_CONTROL_PROTOCOL,
     SESSION_PROTOCOL_IDS,
 )
 from unaiverse.networking.session.sess_msg import (
@@ -131,13 +130,13 @@ class SessionManager:
         # from the rendezvous and the world-host writers; inert (empty) on the public
         # instance. The Coordinator reads them back through membership_snapshot() to build
         # the per-cycle WorldMembership the perimeter classifies against. The role/addrs
-        # indices and inspector_peer_id stay Coordinator-owned (D-2 / D-8a): only the two
+        # indices and inspector_peer_id stay Coordinator-owned: only the two
         # sets and the world node's peer-id live here.
         self.world_agents_set: set = set()
         self.world_masters_set: set = set()
         self.world_node_peer_id: Optional[str] = None
 
-    # ── Session registry (keep the two views consistent) ──────────────────────
+    # Session registry (keep the two views consistent)
     #
     # Every mutation of the session store goes through these helpers so the
     # tick-active view never drifts from the full registry.
@@ -163,7 +162,7 @@ class SessionManager:
         self._sessions.pop(peer_id, None)
         self._active_sessions.pop(peer_id, None)
 
-    # ── Per-instance reconcile (routing + perimeter) ──────────────────────────
+    # Per-instance reconcile (routing + perimeter)
 
     async def reconcile(self, connected_peer_infos: list, membership) -> dict:
         """Classify this instance's connected peers into pools, returning a dict
@@ -202,13 +201,13 @@ class SessionManager:
             return False
         return True
 
-    # ── Raw transport passthroughs (S14b) ─────────────────────────────────────
+    # Raw transport passthroughs
     #
     # The manager owns its P2P, so the Coordinator's chat/relay facades call these
     # instead of reaching the transport directly (Node -> NodeConn -> SM -> P2P). They
     # are thin sync wrappers over the P2P handle: the Msg encoding and the piggyback
-    # token stay above on the Coordinator (the manager stays protobuf-free, I-3), and
-    # the P2P error type is not caught here (the caller handles it).
+    # token stay above on the Coordinator (the manager stays protobuf-free, the codec
+    # lives only in P2P), and the P2P error type is not caught here (the caller handles it).
 
     def send_message_to_peer(self, channel: str, msg_bytes: bytes) -> None:
         self.p2p.send_message_to_peer(channel, msg_bytes=msg_bytes)
@@ -252,7 +251,7 @@ class SessionManager:
         for peer_id in stale:
             self._drop_session(peer_id)
 
-    # ── Initiator API ─────────────────────────────────────────────────────────
+    # Initiator API
 
     def ensure(
         self,
@@ -352,7 +351,7 @@ class SessionManager:
         log.session(f"initiating Session to ...{peer_id[-5:]}", sub=self._label)
         return await self.activate(peer_id)
 
-    # ── Inbound dispatch ──────────────────────────────────────────────────────
+    # Inbound dispatch
 
     async def deliver(self, peer_id: str, protocol_id: str, sess_msg: SessMsg) -> List[SessionEvent]:
         """Route a session message at this manager's p2p instance. Handles the
@@ -512,7 +511,7 @@ class SessionManager:
         self._spawn_responder(peer_id)
         return "_replaced_with_responder_"
 
-    # ── Per-cycle tick (timeouts + keep-alive) ────────────────────────────────
+    # Per-cycle tick (timeouts + keep-alive)
 
     async def tick(self, now: Optional[float] = None) -> List[SessionEvent]:
         """Sweep all sessions: timeout firings + active re-dial + session-level
@@ -570,7 +569,7 @@ class SessionManager:
                 if sess is not None and sess.state in (SessionState.FAILED, SessionState.CLOSED):
                     self._drop_session(ev.peer_id)
 
-    # ── Transport events ──────────────────────────────────────────────────────
+    # Transport events
 
     async def on_peer_disconnected(self, peer_id: str) -> List[SessionEvent]:
         """Called when the polled libp2p diff reports a peer dropping."""
@@ -598,7 +597,7 @@ class SessionManager:
         ev = sess.on_transport_reconnected()
         return [ev] if ev is not None else []
 
-    # ── Intentional close ─────────────────────────────────────────────────────
+    # Intentional close
 
     async def close_session(
         self,
@@ -624,7 +623,7 @@ class SessionManager:
                 log.error(f"close_all: close(...{sess.peer_id[-5:]}) failed: {e}", sub=self._label)
         return []
 
-    # ── Accessors ─────────────────────────────────────────────────────────────
+    # Accessors
 
     def get_session(self, peer_id: str) -> Optional[Session]:
         return self._sessions.get(peer_id)

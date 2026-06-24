@@ -763,7 +763,7 @@ class P2P:
             logger.error(f"verify_peer_signature exception: {e}")
             return False
 
-    # --- High-level Session transport surface (CPython twin of OP2P.js) ──────────
+    # --- High-level Session transport surface (CPython twin of OP2P.js)
     #
     # These are the methods the Session/SessionManager call directly on their
     # injected P2P instance, with no p2p_name argument (each P2P is already a single
@@ -893,7 +893,7 @@ class P2P:
                 chat_raw.append(msg_dict)
         return chat_raw, session_inbounds
 
-    # --- Async crypto wrappers (Session awaits these) ────────────────────────────
+    # --- Async crypto wrappers (Session awaits these)
     # Thin async wrappers over the synchronous Go FFI primitives above so session.py
     # `await`s identically in CPython and in Pyodide-over-JS.
 

@@ -11,11 +11,12 @@ The contract that keeps the FSM portable:
 
   * Session/SessionManager speak only in :class:`SessMsg` — a plain ``kind`` tag
     plus a ``dict`` of fields (field names mirror ``session.proto`` exactly). They
-    *construct* and *read* SessMsg, but never serialize: the conn layer does that.
+    *construct* and *read* SessMsg, but never serialize: the transport layer does that.
   * :class:`SessMsg` is self-contained like ``p2p/messages.py``'s ``Msg``: it owns
     its own wire (de)serialization via :meth:`SessMsg.to_bytes` /
-    :meth:`SessMsg.from_bytes`. The conn layer (``connpool.py`` in CPython, the JS
-    ``NodeConn`` in the browser) just calls those — it no longer holds the codec.
+    :meth:`SessMsg.from_bytes`. The transport layer (``P2P.send_session`` /
+    ``P2P.get_messages`` in CPython, the JS ``OP2P`` mirror in the browser) just calls
+    those; it no longer holds the codec.
 
 The module **top** stays stdlib-only so importing it is safe under Pyodide. The
 ``session_pb2`` import lives **inside** ``to_bytes``/``from_bytes`` (a lazy import):
@@ -33,7 +34,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 
 
-# ── Session protocol IDs (libp2p stream protocols that carry a SessMsg) ───────
+# Session protocol IDs (libp2p stream protocols that carry a SessMsg)
 # Single source of truth, imported by session.py, session_manager.py, connpool.py
 # and p2p.py (the inbound/outbound codec). Keep in sync with unailib/types.go.
 SESSION_HELLO_PROTOCOL   = "/unaiverse/session/hello/1.0.0"
@@ -56,7 +57,7 @@ SESSION_PROTOCOL_IDS = frozenset({
 SessionInbound = namedtuple("SessionInbound", ["peer_id", "protocol_id", "sess_msg"])
 
 
-# ── ReasonCode (verbatim from session.proto enum ReasonCode) ──────────────────
+# ReasonCode (verbatim from session.proto enum ReasonCode)
 OK                     = 0
 VERSION_UNSUPPORTED    = 1
 OVERLOADED             = 2
@@ -107,7 +108,7 @@ def reason_name(code: int) -> str:
     return REASON_NAME.get(int(code), str(code))
 
 
-# ── SessMsg ───────────────────────────────────────────────────────────────────
+# SessMsg
 
 @dataclass
 class SessMsg:
@@ -130,9 +131,9 @@ class SessMsg:
     KIND_WORLD_GRANT_ACK  = "world_grant_ack"
     KIND_GOAWAY           = "goaway"
     KIND_GOAWAY_ACK       = "goaway_ack"
-    # Liveness / resume control messages (post-date session.proto; the conn-layer
-    # codec encodes these as a small JSON control envelope rather than protobuf —
-    # see connpool.py. They ride SESSION_CONTROL_PROTOCOL like GOAWAY).
+    # Liveness / resume control messages (post-date session.proto; the transport-layer
+    # codec encodes these as a small JSON control envelope rather than protobuf,
+    # see P2P.send_session. They ride SESSION_CONTROL_PROTOCOL like GOAWAY).
     KIND_PING             = "ping"          # {session_id: bytes, nonce: bytes}
     KIND_PONG             = "pong"          # {session_id: bytes, nonce: bytes, ok: bool}
     KIND_RESUME           = "resume"        # {session_id: bytes, nonce: bytes}
@@ -145,7 +146,7 @@ class SessMsg:
     def __getitem__(self, key: str) -> Any:
         return self.fields[key]
 
-    # ── Wire (de)serialization ───────────────────────────────────────────────
+    # Wire (de)serialization
     # SessMsg is self-contained: it owns its own codec, like p2p/messages.py's Msg.
     # The protobuf runtime is imported lazily inside these two methods (never at
     # module top) so importing SessMsg stays protobuf-free — the FSM constructs and
@@ -215,7 +216,7 @@ class SessMsg:
         return cls(kind=kind, fields=fields)
 
 
-# ── SessMsg ↔ wire codec tables ───────────────────────────────────────────────
+# SessMsg ↔ wire codec tables
 #
 # Wire bytes are ``[1-byte kind tag] || payload``. Handshake messages encode with
 # protobuf (session_pb2); the liveness/resume control messages ride a small JSON
@@ -269,10 +270,10 @@ _JSON_KIND_FIELDS = {
     SessMsg.KIND_TOKEN_UPDATE: {"session_id": True, "token": False},
 }
 # Decode defaults for missing non-bytes JSON fields (bytes default to b"").
-_JSON_FIELD_DEFAULTS = {"ok": False, "accepted": False, "joiner_node_id": "", "token": ""}
+_JSON_FIELD_DEFAULTS = {"ok": False, "accepted": False, "token": ""}
 
 
-# ── Application decision types (returned by the responder decision hook) ──────
+# Application decision types (returned by the responder decision hook)
 
 @dataclass
 class WorldGrantSpec:

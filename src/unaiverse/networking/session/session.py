@@ -30,7 +30,7 @@ the transport/crypto only through the high-level async ``P2P`` surface injected 
 ``verify_peer_signature``).
 That is exactly the surface a JS ``OP2P`` mirror exposes, so this file runs
 unchanged in Pyodide. The wire (de)serialization lives inside ``P2P.send_session``
-(via ``SessMsg.to_bytes``) in CPython and in ``session_pb.js`` in the browser.
+(via ``SessMsg.to_bytes``) in CPython and in ``sess_msg.js`` in the browser.
 
 Each stage runs on its own libp2p protocol:
   /unaiverse/session/hello/1.0.0     -- HelloRequest / HelloResponse
@@ -59,7 +59,7 @@ from typing import Optional, Dict, Any, List, Callable, Awaitable, TYPE_CHECKING
 from unaiverse.networking.session.sess_msg import (
     SessMsg, reason_name, ProfileDecisionResult, WorldGrantSpec, VerifiedTokenClaims,
     OK, VERSION_UNSUPPORTED, NOT_AUTHORIZED, LOCAL_ERROR, GRACEFUL_SHUTDOWN,
-    SIMULTANEOUS_OPEN_LOSS, SESSION_UNKNOWN, GRANT_EXPIRED, TOKEN_EXPIRED,
+    SESSION_UNKNOWN, TOKEN_EXPIRED,
     SESSION_HELLO_PROTOCOL, SESSION_PROFILE_PROTOCOL,
     SESSION_WORLD_PROTOCOL, SESSION_CONTROL_PROTOCOL, SESSION_PROTOCOL_IDS,
 )
@@ -68,7 +68,7 @@ from unaiverse.utils.logger import log
 if TYPE_CHECKING:
     from unaiverse.networking.p2p.p2p import P2P
 
-# ── Per-state timeouts (seconds) ──────────────────────────────────────────────
+# Per-state timeouts (seconds)
 _TIMEOUT_CONNECT_S = 35.0   # dial: PeerConnectionTimeout (30s Go) + 5s buffer
 _TIMEOUT_HELLO_S = 5.0      # Stage 1: HELLO → HELLO_ACK
 _TIMEOUT_PROFILE_S = 15.0   # Stage 2: PROFILE_OFFER → PROFILE_DECISION
@@ -83,13 +83,13 @@ _TIMEOUT_CLOSING_S = 10.0   # GOAWAY sent; wait for GOAWAY_ACK
 # fires when refreshes are missed AND no re-handshake happened.
 _TOKEN_EXP_GRACE_S = 3600.0
 
-# ── Retry / backoff ──────────────────────────────────────────────────────────
+# Retry / backoff
 _MAX_DIAL_ATTEMPTS = 4
 _RETRY_BASE_S = 1.0
 _RETRY_CAP_S = 30.0
 _RESUME_ACK_TIMEOUT_S = 3.0  # RESUME sent; if un-acked within this, re-dial + re-RESUME
 
-# ── Session-level keep-alive (PING/PONG over the control protocol) ────────────
+# Session-level keep-alive (PING/PONG over the control protocol)
 # Bound to session_id on purpose: /ipfs/ping is a transport probe that go-libp2p
 # answers by dial-on-demand, so it cannot distinguish a restarted peer (no Session)
 # from a live one. A PONG with ok=false (peer holds no matching Session) is treated
@@ -103,13 +103,13 @@ _KEEPALIVE_PERIOD_S = 15.0
 _PING_RTT_TIMEOUT_S = 10.0
 _KEEPALIVE_FAIL_THRESHOLD = 2
 
-# ── Misc ─────────────────────────────────────────────────────────────────────
+# Misc
 _SESSION_ID_BYTES = 16
 _NONCE_BYTES = 32
 _GRANT_ID_BYTES = 32
 
 
-# ── State / Role / Event enums ────────────────────────────────────────────────
+# State / Role / Event enums
 
 class SessionState(str, Enum):
     KNOWN = "known"                     # initiator: peer known, not yet started (no dial)
@@ -159,14 +159,14 @@ DecisionHook = Callable[[str, Optional[str], dict, str, Optional[VerifiedTokenCl
                         Awaitable[ProfileDecisionResult]]
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
+# Helpers
 
 def _sign_payload(nonce: bytes, session_id: bytes) -> bytes:
     """Canonical sign-payload for sig_a / sig_b: ``nonce || session_id``."""
     return bytes(nonce) + bytes(session_id)
 
 
-# ── Session ───────────────────────────────────────────────────────────────────
+# Session
 
 class Session:
     """Per-peer session FSM. See module docstring for lifecycle."""
@@ -298,13 +298,13 @@ class Session:
         self.grant_id: bytes = b""
         self.grant_expiry_unix_ms: int = 0
 
-    # ── repr ─────────────────────────────────────────────────────────────────
+    # repr
 
     def __repr__(self) -> str:
         return (f"Session(...{self.peer_id[-5:]} role={self.role.value} "
                 f"state={self.state.value} p2p={self.p2p_name})")
 
-    # ── Initiator entry point ─────────────────────────────────────────────────
+    # Initiator entry point
 
     async def start(self) -> List[SessionEvent]:
         """Initiator: dial the peer and send HELLO. Returns events accumulated
@@ -365,7 +365,7 @@ class Session:
         log.session(f"{self!r} HELLO sent", sub=self._sub)
         return []
 
-    # ── Inbound dispatch ──────────────────────────────────────────────────────
+    # Inbound dispatch
 
     async def process_inbound(self, protocol_id: str, sess_msg: SessMsg) -> List[SessionEvent]:
         """Route an inbound session message through the FSM. Called by
@@ -387,7 +387,7 @@ class Session:
             events.append(self._fail(f"inbound_dispatch_error:{e}"))
         return events
 
-    # ── Stage-1: HELLO ────────────────────────────────────────────────────────
+    # Stage-1: HELLO
 
     async def _on_hello_protocol(self, msg: SessMsg) -> List[SessionEvent]:
         if (msg.kind == SessMsg.KIND_HELLO_REQ and
@@ -450,7 +450,7 @@ class Session:
         self.nonce_b = bytes(resp.get("nonce_b") or b"")
         return await self._initiator_send_profile_offer()
 
-    # ── Stage-2: PROFILE ──────────────────────────────────────────────────────
+    # Stage-2: PROFILE
 
     async def _initiator_send_profile_offer(self) -> List[SessionEvent]:
         sig_a = await self.p2p.sign_with_host_key(_sign_payload(self.nonce_b, self.session_id))
@@ -642,7 +642,7 @@ class Session:
         return [self._emit(SessionEventType.ESTABLISHED,
                            {"profile_b": self.remote_profile, "grant": self._grant})]
 
-    # ── Stage-3: WORLD ────────────────────────────────────────────────────────
+    # Stage-3: WORLD
 
     async def _responder_issue_world_grant(self, spec: WorldGrantSpec) -> List[SessionEvent]:
         """World host (on its PUBLIC Session): mint and send a WORLD_GRANT, then
@@ -723,7 +723,7 @@ class Session:
             },
         })]
 
-    # ── Control: GOAWAY ──────────────────────────────────────────────────────
+    # Control: GOAWAY
 
     async def _on_control_protocol(self, msg: SessMsg) -> List[SessionEvent]:
         if msg.kind == SessMsg.KIND_GOAWAY:
@@ -747,7 +747,7 @@ class Session:
         log.session(f"{self!r} unrecognised CONTROL {msg.kind} in state {self.state.value}", sub=self._sub)
         return []
 
-    # ── Control: token refresh ────────────────────────────────────────────────
+    # Control: token refresh
 
     async def send_token_update(self, token: str) -> None:
         """Push our refreshed root token to this peer (ESTABLISHED only). The peer
@@ -787,7 +787,7 @@ class Session:
             self.remote_cv_hash = cv_hash
         log.session(f"{self!r} TOKEN_UPDATE applied (exp={self.remote_token_exp})", sub=self._sub)
 
-    # ── Control: session-level liveness (PING/PONG) ──────────────────────────
+    # Control: session-level liveness (PING/PONG)
 
     async def _on_ping(self, msg: SessMsg) -> List[SessionEvent]:
         """Answer a peer's liveness PING. ok=True only if we hold this exact
@@ -818,7 +818,7 @@ class Session:
         log.session(f"{self!r} PONG ok=false (peer lost our session) → reconnecting", sub=self._sub)
         return self.on_transport_disconnected()
 
-    # ── Control: RESUME (fast-path recovery before re-handshake) ─────────────
+    # Control: RESUME (fast-path recovery before re-handshake)
 
     async def _on_resume(self, msg: SessMsg) -> List[SessionEvent]:
         """Peer (initiator) is resuming after a link blip. ACK if we still hold the
@@ -905,7 +905,7 @@ class Session:
         reason = reason_name(ga.get("reason", 0))
         return [self._finalize_close(f"remote_goaway:{reason}")]
 
-    # ── Timeout sweep ─────────────────────────────────────────────────────────
+    # Timeout sweep
 
     def check_timeout(self, now: Optional[float] = None) -> Optional[SessionEvent]:
         """Pure synchronous — no sends. Returns a single SessionEvent on timeout
@@ -938,7 +938,7 @@ class Session:
 
         return None
 
-    # ── Transport events (sync) ───────────────────────────────────────────────
+    # Transport events (sync)
 
     def on_transport_disconnected(self) -> Optional[SessionEvent]:
         """Called when the link drops (transport diff) or when session-level
@@ -967,7 +967,7 @@ class Session:
             log.session(f"{self!r} transport reconnect signal → attempting RESUME", sub=self._sub)
         return None
 
-    # ── Session-level keep-alive (PING/PONG over the control protocol) ───────
+    # Session-level keep-alive (PING/PONG over the control protocol)
 
     async def tick_keepalive(self, now: Optional[float] = None) -> Optional[SessionEvent]:
         """Time out an unanswered ping, then send a new one if due. The PONG
@@ -1021,7 +1021,7 @@ class Session:
         })):
             log.session(f"{self!r} keepalive PING send failed", sub=self._sub)
 
-    # ── Active re-dial + RESUME (initiator-driven recovery) ──────────────────
+    # Active re-dial + RESUME (initiator-driven recovery)
 
     async def tick_reconnect(self, now: Optional[float] = None) -> Optional[SessionEvent]:
         """Drive active re-dial + RESUME while RECONNECTING (at most one attempt
@@ -1073,7 +1073,7 @@ class Session:
         }))
         log.session(f"{self!r} reconnect dial ok, RESUME sent", sub=self._sub)
 
-    # ── Internal FSM helpers ──────────────────────────────────────────────────
+    # Internal FSM helpers
 
     def _set_state(self, state: SessionState, timeout_s: Optional[float]) -> None:
         prev = self.state
@@ -1109,7 +1109,7 @@ class Session:
             sess_msg=msg,
         )
 
-    # ── Silent abort (used by SessionManager tie-breaker) ────────────────────
+    # Silent abort (used by SessionManager tie-breaker)
 
     def abort_silently(self, reason: str) -> None:
         """Drop this Session without emitting an event. Used by the
