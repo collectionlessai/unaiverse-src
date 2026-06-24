@@ -61,7 +61,7 @@ class NodeConn:
     together here."""
 
     # Basic name
-    __ALL_UNIVERSE = "all_universe"
+    __ALL_UNAIVERSE = "all_unaiverse"
     __WORLD_AGENTS_ONLY = "world_agents"
     __WORLD_NODE_ONLY = "world_node"
     __WORLD_MASTERS_ONLY = "world_masters"
@@ -79,8 +79,8 @@ class NodeConn:
     P2P_WORLD = "p2p_world"
 
     # All pools (prefix + basic name + suffix)
-    IN_PUBLIC = __INBOUND + __ALL_UNIVERSE + __PUBLIC_NET
-    OUT_PUBLIC = __OUTBOUND + __ALL_UNIVERSE + __PUBLIC_NET
+    IN_PUBLIC = __INBOUND + __ALL_UNAIVERSE + __PUBLIC_NET
+    OUT_PUBLIC = __OUTBOUND + __ALL_UNAIVERSE + __PUBLIC_NET
     IN_WORLD_AGENTS = __INBOUND + __WORLD_AGENTS_ONLY + __PRIVATE_NET
     OUT_WORLD_AGENTS = __OUTBOUND + __WORLD_AGENTS_ONLY + __PRIVATE_NET
     IN_WORLD_NODE = __INBOUND + __WORLD_NODE_ONLY + __PRIVATE_NET
