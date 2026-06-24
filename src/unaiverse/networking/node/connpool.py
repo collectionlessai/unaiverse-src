@@ -204,8 +204,6 @@ class ConnectionPools:
             else:
                 return 2  # Lowest priority
 
-        log.user(addresses)
-
         # Sort in place (sorting does not seem to have an effect, but it makes things more readable)
         kept_addresses = sorted(
             [s for s in addresses if "127.0.0.1" not in s and ("/tcp/" not in s or "/ws/" in s)],
@@ -220,9 +218,6 @@ class ConnectionPools:
         else:
             addresses = discarded_addresses
             discarded_addresses = []
-
-        log.user("---")
-        log.user(addresses)
 
         log.cpool(f"Connecting to {addresses}", sub=p2p.log_sub)
 
