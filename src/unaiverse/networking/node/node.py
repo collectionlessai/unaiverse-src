@@ -374,8 +374,6 @@ class Node:
         # the connection manager will ensure that this limit is fulfilled)
         # however, the actual number of connection attempts handled by libp2p must be higher that
         self.conn = NodeConn(max_connections=profile_static['max_nr_connections'],
-                             p2p_u=p2p_u,
-                             p2p_w=p2p_w,
                              is_world_node=self.node_type is Node.WORLD,
                              public_key=self.public_key,
                              token=self.node_token,
@@ -394,6 +392,8 @@ class Node:
         # policy on every call, instead of the bound method frozen once at attach time.
         self._decision_policy = self._session_decision_hook
         self.conn.attach_session_policy(
+            p2p_u=p2p_u,
+            p2p_w=p2p_w,
             local_profile_factory=lambda: (self.profile.get_all_profile() if self.profile is not None else {}),
             decision_hook=lambda *a: self._decision_policy(*a),
             token_factory=lambda: self.node_token,

@@ -46,12 +46,13 @@ def pools_with_one_p2p():
     world_p2p = _FakeP2P([])
     pools = NodeConn(
         max_connections=16,
-        p2p_u=fake_p2p,
-        p2p_w=world_p2p,
         is_world_node=False,
         public_key=None,
         token=None,
     )
+    # This fixture bypasses attach_session_policy (it registers stub SMs directly), so set
+    # the transport custody handles by hand, as attach would.
+    pools.p2p_public, pools.p2p_world = fake_p2p, world_p2p
     pools.set_session_managers(
         SimpleNamespace(p2p=fake_p2p, p2p_name=NodeConn.P2P_PUBLIC,
                         get_messages=fake_p2p.get_messages, log_sub=fake_p2p.log_sub),
@@ -351,10 +352,11 @@ def _info(peer_id, direction):
 
 def _make_node_conn():
     pub, world = _UpdP2P("pub"), _UpdP2P("world")
-    conn = NodeConn(max_connections=16, p2p_u=pub, p2p_w=world,
-                    is_world_node=False, public_key=None, token=None, local_node_id="n")
-    # Build the per-instance SessionManagers (update() routes through sm.reconcile).
-    conn.attach_session_policy(local_profile_factory=lambda: {}, decision_hook=None)
+    conn = NodeConn(max_connections=16, is_world_node=False, public_key=None, token=None,
+                    local_node_id="n")
+    # Build the per-instance SessionManagers (update() routes through sm.reconcile); the
+    # transports are handed to attach_session_policy now, not to the constructor.
+    conn.attach_session_policy(p2p_u=pub, p2p_w=world, local_profile_factory=lambda: {}, decision_hook=None)
     return conn, pub, world
 
 

@@ -50,16 +50,17 @@ def build_real_node(identity_dir: str, port: int = 0, listen_ip: str = "0.0.0.0"
     # never produces a same-peer-on-both-networks case (that anomaly, and the cross-pool
     # guard that defends it, is exercised by the mocked char-test instead). World-join
     # tests that need two distinct peer-ids use build_real_world_node.
-    conn = NodeConn(max_connections=16, p2p_u=p2p, p2p_w=p2p,
-                    is_world_node=False, public_key=None, token=None)
+    conn = NodeConn(max_connections=16, is_world_node=False, public_key=None, token=None)
     sm = SessionManager(
         p2p=p2p, p2p_name=NodeConn.P2P_PUBLIC, local_peer_id=p2p.peer_id,
         local_node_id=nid, local_profile_factory=_profile_factory(p2p.peer_id, p2p.peer_id),
     )
     # Register the (single, public) manager on the conn so conn.get_messages resolves the
     # instance through the SM (S18): the SM is the instance, conn.get_messages reads its
-    # P2P handle via _sm_by_name. In production attach_session_policy does this; this
-    # builder bypasses it, so wire it explicitly like build_real_world_node does.
+    # P2P handle via _sm_by_name. In production attach_session_policy takes the transports,
+    # sets the custody handles and builds the SMs; this builder bypasses it, so mirror both
+    # the custody assignment (identity reads need it) and the SM wiring explicitly.
+    conn.p2p_public = conn.p2p_world = p2p
     conn._sm_public = sm
     conn.set_session_managers(sm)
     return p2p, conn, sm
@@ -69,10 +70,11 @@ def build_real_world_node(idir_pub: str, idir_world: str, decision_hook=None,
                           node_id: str = "node"):
     """A two-instance node (public + world) sharing one NodeConn.
 
-    Returns (p2p_pub, p2p_world, conn, sm_public, sm_world). The conn is built
-    with ``p2p_u=p2p_pub, p2p_w=p2p_world`` so ``conn.<op>(P2P_WORLD, ...)`` hits
-    the world instance — this is what exercises real cross-instance world-key
-    signing in the world-join handshake."""
+    Returns (p2p_pub, p2p_world, conn, sm_public, sm_world). The conn takes the two
+    transports as custody (p2p_public=p2p_pub, p2p_world=p2p_world), assigned below as
+    attach_session_policy would, so ``conn.<op>(P2P_WORLD, ...)`` hits the world instance,
+    which is what exercises real cross-instance world-key signing in the world-join
+    handshake."""
     from unaiverse.networking.p2p.p2p import P2P
     from unaiverse.networking.session import SessionManager
 
@@ -86,8 +88,7 @@ def build_real_world_node(idir_pub: str, idir_world: str, decision_hook=None,
     p2p_pub = P2P(identity_dir=idir_pub, log_sub="pub", **common)
     p2p_world = P2P(identity_dir=idir_world, log_sub="prv", **common)
 
-    conn = NodeConn(max_connections=16, p2p_u=p2p_pub, p2p_w=p2p_world,
-                    is_world_node=False, public_key=None, token=None)
+    conn = NodeConn(max_connections=16, is_world_node=False, public_key=None, token=None)
     # The profile must advertise the world-side peer-id: the world host pre-admits
     # the joiner's dynamic.private_peer_id (from the root-attested p2p_peers) and the
     # world Session re-verifies the joiner token on its PROFILE handshake.
@@ -105,9 +106,11 @@ def build_real_world_node(idir_pub: str, idir_world: str, decision_hook=None,
                               local_profile_factory=_profile_factory(node_id, p2p_world.peer_id),
                               decision_hook=decision_hook,
                               routing_classifier=NodeConn._route_world)
-    # Wire the SMs into the conn so conn.update() / _reconcile_instance / _sm_of see them.
-    # This builder bypasses Node.__init__, which is where attach_session_policy normally does
-    # this; without it conn._sm_* stay None and conn.update() trips over sm.reconcile.
+    # Wire the SMs into the conn so conn.update() / _reconcile_instance / _sm_of see them,
+    # and set the transport custody handles. This builder bypasses Node.__init__, which is
+    # where attach_session_policy normally takes the transports and does both; without it
+    # conn.p2p_* / conn._sm_* stay None and conn.update() trips over sm.reconcile.
+    conn.p2p_public, conn.p2p_world = p2p_pub, p2p_world
     conn._sm_public, conn._sm_world = sm_pub, sm_world
     conn.set_session_managers(sm_pub, sm_world)
     return p2p_pub, p2p_world, conn, sm_pub, sm_world

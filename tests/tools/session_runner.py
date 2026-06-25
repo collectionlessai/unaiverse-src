@@ -111,10 +111,12 @@ def _build_node(identity_dir: str, port: int, listen_ip: str = "0.0.0.0"):
     # because we don't have a root-server signature here.
     conn = NodeConn(
         max_connections=16,
-        p2p_u=p2p, p2p_w=p2p,                 # use the same instance for both pools
         is_world_node=False,
         public_key=None, token=None,
     )
+    # Same instance for both pools; set the transport custody as attach_session_policy
+    # would (this runner wires the SM by hand and skips the attach).
+    conn.p2p_public = conn.p2p_world = p2p
 
     sm = SessionManager(
         p2p=p2p,

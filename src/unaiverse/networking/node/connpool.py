@@ -90,15 +90,19 @@ class NodeConn:
     OUTGOING = {OUT_PUBLIC, OUT_WORLD_NODE, OUT_WORLD_AGENTS, OUT_WORLD_MASTERS}
     INCOMING = {IN_PUBLIC, IN_WORLD_NODE, IN_WORLD_AGENTS, IN_WORLD_MASTERS}
 
-    def __init__(self, max_connections: int, p2p_u: P2P, p2p_w: P2P,
+    def __init__(self, max_connections: int,
                  is_world_node: bool, public_key: str, token: str,
                  local_node_id: str = None) -> None:
         """Initializes a new instance of the NodeConn class.
 
+        The two transport handles are NOT taken here: the constructor builds only the pool
+        taxonomy (keyed on the P2P NAMES, which are class constants) and the empty indices.
+        The P2P objects arrive later, together with the Node policy, in attach_session_policy,
+        which is where they are first used (to build the SessionManagers). A NodeConn before
+        attach_session_policy is an inert shell with no transport.
+
         Args:
             max_connections: The total number of connections the node can handle.
-            p2p_u: The P2P object for the public network.
-            p2p_w: The P2P object for the world/private network.
             is_world_node: A boolean flag indicating if this node is a world node.
             public_key: The public key for token verification.
             token: The node's authentication token.
@@ -106,10 +110,7 @@ class NodeConn:
                 per-instance SessionManagers in attach_session_policy.
         """
         self._init_pools(max_connections=max_connections,
-                         p2p_name_to_p2p={
-                             NodeConn.P2P_PUBLIC: p2p_u,
-                             NodeConn.P2P_WORLD: p2p_w,
-                         },
+                         valid_p2p_names={NodeConn.P2P_PUBLIC, NodeConn.P2P_WORLD},
                          pool_name_to_p2p_name_and_ratio={
                              NodeConn.IN_PUBLIC: [NodeConn.P2P_PUBLIC, 0.25 / 2. if not is_world_node else 0.25 / 2.],
                              NodeConn.OUT_PUBLIC: [NodeConn.P2P_PUBLIC, 0.25 / 2. if not is_world_node else 0.25 / 2.],
@@ -122,9 +123,11 @@ class NodeConn:
                          },
                          public_key=public_key, token=token)
 
-        # Just for convenience
-        self.p2p_public = p2p_u
-        self.p2p_world = p2p_w
+        # The two transport handles are set in attach_session_policy (custody for building
+        # the SessionManagers and for the Coordinator's own identity reads). Seeded to None
+        # so the attribute always exists; nothing reads them before the attach.
+        self.p2p_public = None
+        self.p2p_world = None
 
         # The pure world membership (world_agents_set / world_masters_set /
         # world_node_peer_id) now lives in sm_world, next to the Sessions it gates (built
@@ -179,7 +182,7 @@ class NodeConn:
         self._world_to_public: dict[str, str] = {}
 
     def _init_pools(self, max_connections: int, pool_name_to_p2p_name_and_ratio: dict[str, list[str | float]],
-                    p2p_name_to_p2p: dict[str, P2P],
+                    valid_p2p_names: set[str],
                     public_key: str | None = None, token: str | None = None) -> None:
         """Set up the pool triples and the per-peer / per-p2p indices for this Coordinator.
 
@@ -187,7 +190,9 @@ class NodeConn:
             max_connections: The maximum total number of connections allowed across all pools.
             pool_name_to_p2p_name_and_ratio: A dictionary mapping pool names to a list containing the associated P2P
                 network name and its connection ratio.
-            p2p_name_to_p2p: A dictionary mapping P2P network names to their corresponding P2P objects.
+            valid_p2p_names: The set of known P2P network names, used only to validate that every
+                pool references an existing network. The P2P objects themselves are not needed
+                here, they arrive in attach_session_policy.
             public_key: An optional public key for token verification.
             token: An optional initial token for authentication.
 
@@ -240,7 +245,7 @@ class NodeConn:
 
         # Checking
         for p2p_name_and_ratio in pool_name_to_p2p_name_and_ratio.values():
-            assert p2p_name_and_ratio[0] in p2p_name_to_p2p, f"Cannot find p2p named {p2p_name_and_ratio[0]} "
+            assert p2p_name_and_ratio[0] in valid_p2p_names, f"Cannot find p2p named {p2p_name_and_ratio[0]} "
         assert self.max_con >= len(self.pool_names), "Too small number of max connections"
         assert sum([x for x in self.pool_ratios if x > 0]) == 1.0, "Pool ratios must sum to 1.0"
 
@@ -717,11 +722,18 @@ class NodeConn:
             # If broadcast_message fails, it will raise a P2PError. We catch it here.
             return False
 
-    def attach_session_policy(self, local_profile_factory, decision_hook, token_factory=None) -> None:
-        """Build and own the two per-instance SessionManagers, now that the Node
-        policy born late is available (the profile factory samples self.profile, the
-        decision hook reads world/agent/allow-list state). Each manager owns its P2P
-        instance."""
+    def attach_session_policy(self, p2p_u: P2P, p2p_w: P2P,
+                              local_profile_factory, decision_hook, token_factory=None) -> None:
+        """Take the two transport handles and build the two per-instance SessionManagers,
+        now that both the transports and the Node policy born late are available (the profile
+        factory samples self.profile, the decision hook reads world/agent/allow-list state).
+        This is the single point where the Coordinator becomes operational: the P2P objects
+        are received here, kept as custody (self.p2p_public/self.p2p_world, for building the
+        managers and the Coordinator's own identity reads), and each manager owns its P2P."""
+        # Custody of the two transports, set here where they are first used (the constructor
+        # built only the pool taxonomy from the P2P names).
+        self.p2p_public = p2p_u
+        self.p2p_world = p2p_w
         # Per-instance perimeter routing injected into each manager: the public one
         # routes by direction (no membership, never cuts); the world one classifies
         # against the snapshot and cuts unclassifiable peers on its P2P instance.
