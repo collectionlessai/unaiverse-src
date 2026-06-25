@@ -23,6 +23,7 @@ from typing import Optional, List, Dict, Any, TYPE_CHECKING
 # The session-layer wire codec lives in the leaf module sess_msg (no FSM, no cycle back
 # into the conn layer): P2P.get_messages decodes inbound Session frames with it.
 from unaiverse.networking.session.sess_msg import SessMsg, SESSION_PROTOCOL_IDS, SessionInbound
+from unaiverse.networking.p2p.messages import Msg
 
 # FdCapture and Logger are optional — gracefully degrade if not present
 try:
@@ -867,16 +868,19 @@ class P2P:
             return False
 
     def get_messages(self) -> tuple:
-        """Pop this instance's inbound batch and split it. Session-protocol frames are
-        decoded here, in the transport tier, into SessionInbound(peer_id, protocol_id,
-        SessMsg) via the wire codec (SessMsg.from_bytes); everything else is returned as
-        raw transport dicts for the Node-bound chat path (Msg.from_bytes + JWT verify),
-        which must not move into the portable transport. Inbound mirror of send_session.
+        """Pop this instance's inbound batch and split it. The whole wire codec lives here,
+        in the transport tier (this is the rewrite boundary toward OP2P.js): Session-protocol
+        frames are decoded into SessionInbound(peer_id, protocol_id, SessMsg) via
+        SessMsg.from_bytes, chat frames into Msg objects via Msg.from_bytes. Chat frames are
+        also sender-verified here (the sender claimed inside the payload must match the
+        cryptographically verified network sender); spoofed or undecodable frames are dropped.
+        The Node-bound chat path downstream only gates membership and verifies the JWT
+        piggyback, it never touches the codec. Inbound mirror of send_session / send.
 
-        Returns (chat_raw, session_inbounds): chat_raw is a list of raw message dicts
-        ({"from","data","protocol"}), session_inbounds a list of SessionInbound.
+        Returns (chat_messages, session_inbounds): chat_messages a list of decoded,
+        sender-verified Msg; session_inbounds a list of SessionInbound.
         """
-        chat_raw = []
+        chat_messages = []
         session_inbounds = []
         for msg_dict in self.pop_messages():
             protocol_id = msg_dict.get("protocol") or ""
@@ -890,8 +894,27 @@ class P2P:
                 session_inbounds.append(SessionInbound(
                     peer_id=msg_dict.get("from"), protocol_id=protocol_id, sess_msg=sess_msg))
             else:
-                chat_raw.append(msg_dict)
-        return chat_raw, session_inbounds
+                # Chat path (Node-bound). The binary transport delivers "data" already as
+                # raw bytes (Go structure: {"from":"Qm...", "data":<bytes>, "protocol":"..."}).
+                verified_sender_id = msg_dict.get("from")
+                try:
+                    msg_obj = Msg.from_bytes(msg_dict.get("data"))
+                except Exception as e:
+                    logger.error(f"get_messages: failed to decode chat message from "
+                                 f"{verified_sender_id}: {e}")
+                    continue
+
+                # --- CRITICAL SECURITY CHECK ---
+                # Verify that the sender claimed inside the message payload matches the
+                # cryptographically verified sender from the network layer.
+                if msg_obj.sender != verified_sender_id:
+                    logger.error(f"SENDER MISMATCH! Network sender '{verified_sender_id}' "
+                                 f"does not match payload sender '{msg_obj.sender}'. "
+                                 f"Discarding message.")
+                    continue
+
+                chat_messages.append(msg_obj)
+        return chat_messages, session_inbounds
 
     # --- Async crypto wrappers (Session awaits these)
     # Thin async wrappers over the synchronous Go FFI primitives above so session.py

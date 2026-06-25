@@ -39,7 +39,8 @@ def pools_with_one_p2p():
     a second fake we never feed: get_messages is only exercised on the public one. The
     constructor never calls P2P methods, so the bare fakes are enough. get_messages resolves
     the instance through the SM (S18), so we register minimal SM stubs that just carry the
-    p2p_name and their P2P handle."""
+    p2p_name and passthrough get_messages/log_sub to their P2P handle (R1a: the Coordinator
+    reaches the transport only via the SM, never directly)."""
     from types import SimpleNamespace
     fake_p2p = _FakeP2P([])
     world_p2p = _FakeP2P([])
@@ -52,8 +53,10 @@ def pools_with_one_p2p():
         token=None,
     )
     pools.set_session_managers(
-        SimpleNamespace(p2p=fake_p2p, p2p_name=NodeConn.P2P_PUBLIC),
-        SimpleNamespace(p2p=world_p2p, p2p_name=NodeConn.P2P_WORLD),
+        SimpleNamespace(p2p=fake_p2p, p2p_name=NodeConn.P2P_PUBLIC,
+                        get_messages=fake_p2p.get_messages, log_sub=fake_p2p.log_sub),
+        SimpleNamespace(p2p=world_p2p, p2p_name=NodeConn.P2P_WORLD,
+                        get_messages=world_p2p.get_messages, log_sub=world_p2p.log_sub),
     )
     return pools, fake_p2p
 

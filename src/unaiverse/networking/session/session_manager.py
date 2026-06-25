@@ -224,6 +224,20 @@ class SessionManager:
     def reserve_on_relay(self, peer_id: str):
         return self.p2p.reserve_on_relay(peer_id)
 
+    def get_messages(self) -> tuple:
+        """Pop and decode this instance's inbound batch (passthrough to the transport).
+        P2P returns (chat_messages, session_inbounds): chat_messages are decoded,
+        sender-verified Msg, session_inbounds are SessionInbound. The wire codec lives
+        entirely in P2P (the manager stays protobuf-free); the Coordinator's chat path
+        only gates membership and verifies the piggyback token on top of these."""
+        return self.p2p.get_messages()
+
+    @property
+    def log_sub(self) -> str:
+        """The transport's log sub-label ('pub'/'wor'), exposed so the Coordinator can tag
+        its chat-path logs without reaching into the P2P handle."""
+        return self.p2p.log_sub
+
     def sync_known_peers(self, known: Dict[str, tuple]) -> None:
         """Reconcile the inert KNOWN roster against the peers currently advertised by
         the rendezvous (``peer_id -> (addresses, app_role)``). Registers a KNOWN Session

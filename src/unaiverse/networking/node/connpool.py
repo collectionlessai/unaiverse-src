@@ -536,6 +536,11 @@ class NodeConn:
             decoding and JWT verification, because identity is established cryptographically
             inside the Session handshake (sig_b / sig_a / token).
 
+        The whole wire codec (Msg.from_bytes and the sender-mismatch check) lives in
+        P2P.get_messages now (the rewrite boundary toward OP2P.js); here the Coordinator
+        receives already-decoded, sender-verified Msg and does only the Node-bound
+        application work: membership gate plus piggyback JWT verification.
+
         Args:
             p2p_name: The name of the P2P network to fetch messages from.
             allowed_not_connected_peers: must be None at the call site. The Coordinator
@@ -550,76 +555,42 @@ class NodeConn:
         allowed_not_connected_peers = (self._cycle_membership.world_agents
                                        | self._cycle_membership.world_masters)
 
-        # P2P pops this instance's inbound batch and decodes the Session-protocol frames
-        # (the wire codec lives in the transport tier); chat_raw stays raw for the
-        # Node-bound chat path below, and session_messages is passed straight through.
-        # The instance is the SM; read its P2P handle for the transport pop (internal
-        # custody, not an exposed channel).
-        p2p = self._sm_by_name(p2p_name).p2p
-        chat_raw, session_messages = p2p.get_messages()
+        # The instance is the SM; go through its passthrough (never call P2P directly).
+        # P2P has already popped the inbound batch and run the whole codec: chat frames are
+        # decoded, sender-verified Msg, session frames are SessionInbound passed straight
+        # through. Here we only gate membership and verify the piggyback token.
+        sm = self._sm_by_name(p2p_name)
+        chat_messages, session_messages = sm.get_messages()
         processed_messages: list[Msg] = []
 
-        if chat_raw or session_messages:
+        if chat_messages or session_messages:
             self.__last_recv_time = time.time()
 
-        for i, msg_dict in enumerate(chat_raw):
-            msg_dict: dict
-            try:
-                # The binary transport delivers "data" already as raw bytes (no base64).
-                # Go structure: {"from":"Qm...", "data":<bytes>, "protocol":"..."}
-                verified_sender_id = msg_dict.get("from")
-                decoded_data = msg_dict.get("data")
+        for msg_obj in chat_messages:
+            log.network(f"<<< RECEIVED {msg_obj.content_type} through channel {msg_obj.channel}", sub=sm.log_sub)
 
-                # Chat path (Node-bound)
-                # Session-protocol frames were already split off and decoded by
-                # P2P.get_messages; everything here is a chat Msg that needs
-                # Msg.from_bytes + sender-mismatch + membership gate + JWT verify.
-                msg_obj = Msg.from_bytes(decoded_data)
+            # filter only valid messages to return: a sender already in a pool, or one
+            # of this cycle's admitted world agents/masters (the frozen snapshot above).
+            if (msg_obj.sender in self.peer_id_to_pool_name or
+                    msg_obj.sender in allowed_not_connected_peers):
 
-                log.network(f"<<< RECEIVED {msg_obj.content_type} through channel {msg_obj.channel}", sub=p2p.log_sub)
-
-                # --- CRITICAL SECURITY CHECK ---
-                # Verify that the sender claimed inside the message payload
-                # matches the cryptographically verified sender from the network layer.
-                if msg_obj.sender != verified_sender_id:
-                    log.error(f"SENDER MISMATCH! Network sender '{verified_sender_id}' "
-                              f"does not match payload sender '{msg_obj.sender}'. Discarding message.",
-                              sub=p2p.log_sub)
-
-                    # In a real-world scenario, you might also want to penalize or disconnect
-                    # from a peer that sends such malformed/spoofed messages.
-                    continue  # Discard this message
-
-                # filter only valid messages to return: a sender already in a pool, or one
-                # of this cycle's admitted world agents/masters (the frozen snapshot above).
-                if (msg_obj.sender in self.peer_id_to_pool_name or
-                        msg_obj.sender in allowed_not_connected_peers):
-
-                    try:
-                        token_with_inspector_final_bit = msg_obj.piggyback
-                        token = token_with_inspector_final_bit[0:-1]
-                        inspector_mode = token_with_inspector_final_bit[-1]
-                        node_id, _ = await self.verify_token(token, msg_obj.sender)
-                        if node_id is not None:
-                            # Replacing piggyback with the node ID and the flag telling if it is inspector
-                            msg_obj.piggyback = node_id + inspector_mode
-                            processed_messages.append(msg_obj)
-                            if msg_obj.sender in self.peer_id_to_pool_name:
-                                self.peer_id_to_token[msg_obj.sender] = token
-                        else:
-                            log.error("Received a message missing expected info in the token payload "
-                                      "(discarding it)", sub=p2p.log_sub)
-                    except Exception as e:
-                        log.error(f"Received a message with an invalid piggyback token! (discarding it) [{e}]",
-                                  sub=p2p.log_sub)
-
-            except ValueError as ve:
-                log.error(f"Invalid message created, stopping. Error: {ve}", sub=p2p.log_sub)
-                continue  # Skip problematic message
-            except Exception as msg_proc_err:  # Catch errors from Msg.from_bytes or attribute setting
-                log.error(f"Error processing popped message item {i}: {msg_proc_err}. "
-                          f"Message dict: {msg_dict}", sub=p2p.log_sub)
-                continue  # Skip problematic message
+                try:
+                    token_with_inspector_final_bit = msg_obj.piggyback
+                    token = token_with_inspector_final_bit[0:-1]
+                    inspector_mode = token_with_inspector_final_bit[-1]
+                    node_id, _ = await self.verify_token(token, msg_obj.sender)
+                    if node_id is not None:
+                        # Replacing piggyback with the node ID and the flag telling if it is inspector
+                        msg_obj.piggyback = node_id + inspector_mode
+                        processed_messages.append(msg_obj)
+                        if msg_obj.sender in self.peer_id_to_pool_name:
+                            self.peer_id_to_token[msg_obj.sender] = token
+                    else:
+                        log.error("Received a message missing expected info in the token payload "
+                                  "(discarding it)", sub=sm.log_sub)
+                except Exception as e:
+                    log.error(f"Received a message with an invalid piggyback token! (discarding it) [{e}]",
+                              sub=sm.log_sub)
 
         return processed_messages, session_messages
 
