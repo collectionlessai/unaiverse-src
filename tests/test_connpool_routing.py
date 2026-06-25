@@ -50,9 +50,6 @@ def pools_with_one_p2p():
         public_key=None,
         token=None,
     )
-    # This fixture bypasses attach_session_policy (it registers stub SMs directly), so set
-    # the transport custody handles by hand, as attach would.
-    pools.p2p_public, pools.p2p_world = fake_p2p, world_p2p
     pools.set_session_managers(
         SimpleNamespace(p2p=fake_p2p, p2p_name=NodeConn.P2P_PUBLIC,
                         get_messages=fake_p2p.get_messages, log_sub=fake_p2p.log_sub),
@@ -659,7 +656,7 @@ def test_char_update_registers_known_world_sessions_off_diff():
 def test_char_update_excludes_self_from_known_sessions():
     """The world instance never registers a KNOWN Session toward our own peer-id."""
     conn, pub, world = _make_node_conn()
-    self_id = conn.p2p_world.peer_id
+    self_id = conn.world_peer_id
     conn.set_world_agents_list([{"id": self_id, "addrs": ["/ip4/9.9.9.9/tcp/9"], "misc": ROLE_WORLD_AGENT}])
     _run(conn.update())
     assert conn._sm_world.get_session(self_id) is None
@@ -698,6 +695,7 @@ def test_s18_coordinator_indexes_the_instance_by_sm_not_p2p():
     for _, _, instance in conn.pool_name_to_pool_triple.values():
         assert isinstance(instance, SessionManager)
 
-    # Custody is still allowed: the Coordinator keeps the P2P handles for its own internal
-    # reads (rendezvous, identity facade). Enforcement forbids EXPOSURE, not possession.
-    assert conn.p2p_public is pub and conn.p2p_world is world
+    # The Coordinator keeps no separate transport handle: each P2P lives inside its owning
+    # SM, and the Coordinator reaches it (and the instance identity) through the SM.
+    assert conn._sm_public.p2p is pub and conn._sm_world.p2p is world
+    assert not hasattr(conn, "p2p_public") and not hasattr(conn, "p2p_world")

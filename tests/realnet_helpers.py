@@ -57,10 +57,9 @@ def build_real_node(identity_dir: str, port: int = 0, listen_ip: str = "0.0.0.0"
     )
     # Register the (single, public) manager on the conn so conn.get_messages resolves the
     # instance through the SM (S18): the SM is the instance, conn.get_messages reads its
-    # P2P handle via _sm_by_name. In production attach_session_policy takes the transports,
-    # sets the custody handles and builds the SMs; this builder bypasses it, so mirror both
-    # the custody assignment (identity reads need it) and the SM wiring explicitly.
-    conn.p2p_public = conn.p2p_world = p2p
+    # P2P handle via _sm_by_name. In production attach_session_policy takes the transports
+    # and builds the SMs around them; this builder bypasses it, so wire the SM explicitly.
+    # The Coordinator keeps no separate transport handle (R7): the P2P lives inside the SM.
     conn._sm_public = sm
     conn.set_session_managers(sm)
     return p2p, conn, sm
@@ -70,11 +69,10 @@ def build_real_world_node(idir_pub: str, idir_world: str, decision_hook=None,
                           node_id: str = "node"):
     """A two-instance node (public + world) sharing one NodeConn.
 
-    Returns (p2p_pub, p2p_world, conn, sm_public, sm_world). The conn takes the two
-    transports as custody (p2p_public=p2p_pub, p2p_world=p2p_world), assigned below as
-    attach_session_policy would, so ``conn.<op>(P2P_WORLD, ...)`` hits the world instance,
-    which is what exercises real cross-instance world-key signing in the world-join
-    handshake."""
+    Returns (p2p_pub, p2p_world, conn, sm_public, sm_world). The two SMs are built around
+    p2p_pub / p2p_world and wired into the conn, so ``conn.<op>(P2P_WORLD, ...)`` hits the
+    world instance through its SM, which is what exercises real cross-instance world-key
+    signing in the world-join handshake."""
     from unaiverse.networking.p2p.p2p import P2P
     from unaiverse.networking.session import SessionManager
 
@@ -106,11 +104,11 @@ def build_real_world_node(idir_pub: str, idir_world: str, decision_hook=None,
                               local_profile_factory=_profile_factory(node_id, p2p_world.peer_id),
                               decision_hook=decision_hook,
                               routing_classifier=NodeConn._route_world)
-    # Wire the SMs into the conn so conn.update() / _reconcile_instance / _sm_of see them,
-    # and set the transport custody handles. This builder bypasses Node.__init__, which is
-    # where attach_session_policy normally takes the transports and does both; without it
-    # conn.p2p_* / conn._sm_* stay None and conn.update() trips over sm.reconcile.
-    conn.p2p_public, conn.p2p_world = p2p_pub, p2p_world
+    # Wire the SMs into the conn so conn.update() / _reconcile_instance / _sm_of see them.
+    # This builder bypasses Node.__init__, which is where attach_session_policy normally
+    # builds and wires them; without it conn._sm_* stay None and conn.update() trips over
+    # sm.reconcile. The Coordinator keeps no separate transport handle (R7): the P2P lives
+    # inside its SM.
     conn._sm_public, conn._sm_world = sm_pub, sm_world
     conn.set_session_managers(sm_pub, sm_world)
     return p2p_pub, p2p_world, conn, sm_pub, sm_world

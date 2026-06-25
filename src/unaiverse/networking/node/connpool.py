@@ -123,12 +123,6 @@ class NodeConn:
                          },
                          public_key=public_key, token=token)
 
-        # The two transport handles are set in attach_session_policy (custody for building
-        # the SessionManagers and for the Coordinator's own identity reads). Seeded to None
-        # so the attribute always exists; nothing reads them before the attach.
-        self.p2p_public = None
-        self.p2p_world = None
-
         # The pure world membership (world_agents_set / world_masters_set /
         # world_node_peer_id) now lives in sm_world, next to the Sessions it gates (built
         # in attach_session_policy); the Coordinator reads it back through
@@ -215,9 +209,9 @@ class NodeConn:
         # set_session_managers runs (the SMs are built late in attach_session_policy),
         # so it is seeded here and populated there. The pool->p2p_name mapping captured
         # at init lets set_session_managers wire each pool triple's instance slot to the
-        # right SM. The raw P2P handles live on self.p2p_public/self.p2p_world purely as
-        # custody (to build the SMs and for the Coordinator's own internal reads), never
-        # exposed to callers as a channel.
+        # right SM. The Coordinator keeps no separate transport handle: each P2P lives inside
+        # its owning SM, and the Coordinator reaches it (and the instance identity) through
+        # the SM, never as a raw channel.
         self._p2p_name_to_sm = {}
         self._pool_name_to_p2p_name = {}
 
@@ -313,36 +307,35 @@ class NodeConn:
             s += ss
         return s
 
-    # Identity / posture facade over our OWN P2P instances. Node reads its own peer-ids,
-    # addresses and world posture through these instead of reaching into the P2P objects,
-    # so the raw handles are never a read channel (the Coordinator keeps them as custody
-    # only). These are the peer-ids/addresses of THIS
-    # node on each network, distinct from the remote world host's peer-id exposed by
-    # get_world_node_peer_id. peer_id may be None before the libp2p host is up: the None
-    # guard stays on Node (get_public_peer_id / get_world_peer_id), so these return raw.
+    # Identity / posture facade. Node reads its own peer-ids, addresses and world posture
+    # through the owning SessionManager (the manager is the instance, so its identity is the
+    # instance's identity), never reaching into a raw P2P handle. These are the peer-ids /
+    # addresses of THIS node on each network, distinct from the remote world host's peer-id
+    # exposed by get_world_node_peer_id. peer_id may be None before the libp2p host is up:
+    # the None guard stays on Node (get_public_peer_id / get_world_peer_id), so these return raw.
     @property
     def public_peer_id(self) -> str | None:
-        return self.p2p_public.peer_id
+        return self._sm_public.local_peer_id
 
     @property
     def world_peer_id(self) -> str | None:
-        return self.p2p_world.peer_id
+        return self._sm_world.local_peer_id
 
     @property
     def public_addresses(self) -> list[str]:
-        return self.p2p_public.addresses
+        return self._sm_public.addresses
 
     @property
     def world_addresses(self) -> list[str]:
-        return self.p2p_world.addresses
+        return self._sm_world.addresses
 
     @property
     def world_is_public(self) -> bool | None:
-        return self.p2p_world.is_public
+        return self._sm_world.is_public
 
     @property
     def world_relay_enabled(self) -> bool:
-        return self.p2p_world.relay_is_enabled
+        return self._sm_world.relay_enabled
 
     def get_world_connected_peers_info(self) -> list:
         """Raw transport-level connected peers on the world instance, for the stats path
@@ -727,20 +720,16 @@ class NodeConn:
         """Take the two transport handles and build the two per-instance SessionManagers,
         now that both the transports and the Node policy born late are available (the profile
         factory samples self.profile, the decision hook reads world/agent/allow-list state).
-        This is the single point where the Coordinator becomes operational: the P2P objects
-        are received here, kept as custody (self.p2p_public/self.p2p_world, for building the
-        managers and the Coordinator's own identity reads), and each manager owns its P2P."""
-        # Custody of the two transports, set here where they are first used (the constructor
-        # built only the pool taxonomy from the P2P names).
-        self.p2p_public = p2p_u
-        self.p2p_world = p2p_w
+        This is the single point where the Coordinator becomes operational: each manager is
+        built around its P2P and owns it. The Coordinator keeps no separate transport handle,
+        it reaches each instance (and its identity) through the owning manager."""
         # Per-instance perimeter routing injected into each manager: the public one
         # routes by direction (no membership, never cuts); the world one classifies
         # against the snapshot and cuts unclassifiable peers on its P2P instance.
         self._sm_public = SessionManager(
-            p2p=self.p2p_public,
+            p2p=p2p_u,
             p2p_name=NodeConn.P2P_PUBLIC,
-            local_peer_id=self.p2p_public.peer_id,
+            local_peer_id=p2p_u.peer_id,
             local_node_id=self._local_node_id,
             local_profile_factory=local_profile_factory,
             decision_hook=decision_hook,
@@ -749,9 +738,9 @@ class NodeConn:
             routing_classifier=NodeConn._route_public,
         )
         self._sm_world = SessionManager(
-            p2p=self.p2p_world,
+            p2p=p2p_w,
             p2p_name=NodeConn.P2P_WORLD,
-            local_peer_id=self.p2p_world.peer_id,
+            local_peer_id=p2p_w.peer_id,
             local_node_id=self._local_node_id,
             local_profile_factory=local_profile_factory,
             decision_hook=decision_hook,
@@ -1070,7 +1059,7 @@ class NodeConn:
         membership."""
         if self._sm_world is None:
             return
-        self_peer_id = self.p2p_world.peer_id
+        self_peer_id = self._sm_world.local_peer_id
         known = {peer_id: (addrs, self.peer_id_to_misc.get(peer_id, 0))
                  for peer_id, addrs in self.peer_id_to_addrs.items()
                  if peer_id != self_peer_id}
@@ -1482,7 +1471,8 @@ class NodeConn:
         ret_addrs = []
         ret_peer_ids = []
         for peer_id in peer_ids:
-            if discard_yourself and (peer_id == self.p2p_public.peer_id or peer_id == self.p2p_world.peer_id):
+            if discard_yourself and (peer_id == self._sm_public.local_peer_id
+                                     or peer_id == self._sm_world.local_peer_id):
                 continue
             addrs = self.get_addrs(peer_id)
             if addrs is not None:
@@ -1536,13 +1526,13 @@ class NodeConn:
                 world_masters_peer_infos = []
 
                 log.cpool(f"Rendezvous peer infos (tag: {tag}, peers: "
-                          f"{len(rendezvous_peer_infos)} peers)", sub=self.p2p_world.log_sub)
+                          f"{len(rendezvous_peer_infos)} peers)", sub=self._sm_world.log_sub)
                 log.cpool(f"Rendezvous message included peer IDs: "
                           f"{[p['id'] for p in rendezvous_peer_infos]})", sub="prv")
 
                 for c in rendezvous_peer_infos:
                     if c['addrs'] is None:
-                        log.cpool(f"Skipping a peer with None addrs (unexpected)", sub=self.p2p_world.log_sub)
+                        log.cpool(f"Skipping a peer with None addrs (unexpected)", sub=self._sm_world.log_sub)
                         continue
                     # if len(c['addrs']) == 0:
                     #    log.cpool(f"Skipping a peer with zero-length addrs-list (unexpected)")
@@ -1552,7 +1542,7 @@ class NodeConn:
                     elif (c['misc'] & 1) == 1 and (c['misc'] & 2) == 2:
                         world_masters_peer_infos.append(c)
                     else:
-                        log.critical("Unexpected value of the 'misc' field: " + str(c), sub=self.p2p_world.log_sub)
+                        log.critical("Unexpected value of the 'misc' field: " + str(c), sub=self._sm_world.log_sub)
 
                 # Updating lists
                 self.set_world_agents_list(world_agents_peer_infos)

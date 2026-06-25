@@ -255,6 +255,26 @@ class SessionManager:
         its chat-path logs without reaching into the P2P handle."""
         return self.p2p.log_sub
 
+    # Per-instance identity / posture facade. peer_id/addresses/is_public are properties of
+    # THIS instance (the manager is the instance), so the Coordinator reads its own network
+    # identity through the owning manager, never through a raw P2P handle. The peer-id is
+    # already self.local_peer_id (set at construction, used by the tie-breaker).
+
+    @property
+    def addresses(self) -> list[str]:
+        """This instance's live multiaddresses (passthrough to the transport)."""
+        return self.p2p.addresses
+
+    @property
+    def is_public(self) -> "bool | None":
+        """Whether this instance is publicly reachable (passthrough to the transport)."""
+        return self.p2p.is_public
+
+    @property
+    def relay_enabled(self) -> bool:
+        """Whether the relay client is enabled on this instance (passthrough)."""
+        return self.p2p.relay_is_enabled
+
     def sync_known_peers(self, known: Dict[str, tuple]) -> None:
         """Reconcile the inert KNOWN roster against the peers currently advertised by
         the rendezvous (``peer_id -> (addresses, app_role)``). Registers a KNOWN Session
