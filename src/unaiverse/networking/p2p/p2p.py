@@ -550,6 +550,18 @@ class P2P:
 
         logger.info(f"✅ Successfully broadcasted message on channel {channel}.")
 
+    async def send(self, channel: str, msg) -> None:
+        """Encode and send a direct chat Msg to a peer. The wire codec (Msg.to_bytes) and
+        the thread offload of the blocking Go call both live here, at the transport tier
+        (the rewrite boundary toward OP2P.js): the Coordinator hands over a Msg object and
+        awaits, it never serializes nor offloads. Outbound mirror of send_session."""
+        await asyncio.to_thread(self.send_message_to_peer, channel, msg.to_bytes())
+
+    async def broadcast(self, channel: str, msg) -> None:
+        """Encode and broadcast a chat Msg over pubsub. Like send, the codec and the
+        thread offload live here; the Coordinator hands over a Msg object and awaits."""
+        await asyncio.to_thread(self.broadcast_message, channel, msg.to_bytes())
+
     def pop_messages(self) -> List[bytes]:
         """
         Retrieves and removes the first message from the queue of each channel for this node instance.

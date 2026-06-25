@@ -201,19 +201,20 @@ class SessionManager:
             return False
         return True
 
-    # Raw transport passthroughs
+    # Transport passthroughs
     #
     # The manager owns its P2P, so the Coordinator's chat/relay facades call these
-    # instead of reaching the transport directly (Node -> NodeConn -> SM -> P2P). They
-    # are thin sync wrappers over the P2P handle: the Msg encoding and the piggyback
-    # token stay above on the Coordinator (the manager stays protobuf-free, the codec
-    # lives only in P2P), and the P2P error type is not caught here (the caller handles it).
+    # instead of reaching the transport directly (Node -> NodeConn -> SM -> P2P). The chat
+    # egress passes a Msg object (not bytes): the codec (Msg.to_bytes) and the thread
+    # offload of the blocking Go call both live in P2P, so the manager stays protobuf-free
+    # and free of the async boundary. The piggyback token stays above on the Coordinator,
+    # and the P2P error type is not caught here (the caller handles it).
 
-    def send_message_to_peer(self, channel: str, msg_bytes: bytes) -> None:
-        self.p2p.send_message_to_peer(channel, msg_bytes=msg_bytes)
+    async def send(self, channel: str, msg) -> None:
+        await self.p2p.send(channel, msg)
 
-    def broadcast_message(self, channel: str, msg_bytes: bytes) -> None:
-        self.p2p.broadcast_message(channel, msg_bytes=msg_bytes)
+    async def broadcast(self, channel: str, msg) -> None:
+        await self.p2p.broadcast(channel, msg)
 
     def subscribe_to_topic(self, channel: str) -> None:
         self.p2p.subscribe_to_topic(channel)

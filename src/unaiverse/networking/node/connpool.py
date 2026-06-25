@@ -12,7 +12,6 @@
                  Code Repositories:  https://github.com/collectionlessai/
                  Main Developers:    Stefano Melacci (Project Leader), Christian Di Maio, Tommaso Guidi
 """
-import asyncio
 import time
 import math
 from collections import namedtuple
@@ -644,29 +643,28 @@ class NodeConn:
         if sm is None:
             log.error("P2P non found for peer id: " + str(peer_id))
             return False
-        p2p = sm.p2p  # the SM's own custody handle, for the channel peer-id and log_sub; not an exposed channel
 
-        # Defining channel
+        # Defining channel (the instance's local peer-id, read from the SM, not the P2P handle)
         if channel_trail is not None and len(channel_trail) > 0:
-            channel = f"{p2p.peer_id}::dm:{peer_id}-{content_type}~{channel_trail}"
+            channel = f"{sm.local_peer_id}::dm:{peer_id}-{content_type}~{channel_trail}"
         else:
-            channel = f"{p2p.peer_id}::dm:{peer_id}-{content_type}"
+            channel = f"{sm.local_peer_id}::dm:{peer_id}-{content_type}"
 
-        log.network(f">>> SENDING {content_type} to {peer_id}", sub=p2p.log_sub)
+        log.network(f">>> SENDING {content_type} to {peer_id}", sub=sm.log_sub)
 
         # Adding sender info here
-        msg = Msg(sender=p2p.peer_id,
+        msg = Msg(sender=sm.local_peer_id,
                   content_type=content_type,
                   content=content,
                   channel=channel,
                   piggyback=self.__token + "0")  # Adding inspector-mode bit (dummy bit here)
 
-        # Sending direct message (offloaded to a thread so the event loop stays unblocked)
+        # Hand the Msg object to the SM; the codec and the thread offload live in P2P.
         try:
-            await asyncio.to_thread(sm.send_message_to_peer, channel, msg_bytes=msg.to_bytes())
+            await sm.send(channel, msg)
             return True
         except P2PError as e:
-            log.error("Sending error is: " + str(e), sub=p2p.log_sub)
+            log.error("Sending error is: " + str(e), sub=sm.log_sub)
             return False
 
     async def subscribe(self, peer_id: str, channel: str, default_p2p_name: str | None = None) -> bool:
@@ -737,20 +735,19 @@ class NodeConn:
         sm = self._sm_for_topic(peer_id)
         if sm is None:
             return False
-        p2p = sm.p2p  # the SM's own custody handle, for the channel peer-id and log_sub; not an exposed channel
 
-        log.network(f">>> PUBLISHING {content_type} to {channel}", sub=p2p.log_sub)
+        log.network(f">>> PUBLISHING {content_type} to {channel}", sub=sm.log_sub)
 
         # Adding sender info here
-        msg = Msg(sender=p2p.peer_id,
+        msg = Msg(sender=sm.local_peer_id,
                   content_type=content_type,
                   content=content,
                   channel=channel,
                   piggyback=self.__token + "0")  # Adding inspector-mode bit (dummy bit here)
 
-        # Sending message via GossipSub
+        # Hand the Msg object to the SM; the codec and the thread offload live in P2P.
         try:
-            sm.broadcast_message(channel, msg_bytes=msg.to_bytes())
+            await sm.broadcast(channel, msg)
 
             # If the line above executes without raising an error, it was successful.
             return True
