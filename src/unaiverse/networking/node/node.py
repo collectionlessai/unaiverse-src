@@ -388,9 +388,14 @@ class Node:
         # owns the two managers; Node keeps no handle and drives every Session verb through
         # conn facades, and conn consults them on behalf of the hosted entity (e.g.
         # is_peer_session_pending).
+        # The responder decision policy is late-bound through self._decision_policy so a
+        # runtime set_decision_policy() propagates to every Session, existing or future:
+        # the hook injected into each Session is a thin lambda that re-reads the current
+        # policy on every call, instead of the bound method frozen once at attach time.
+        self._decision_policy = self._session_decision_hook
         self.conn.attach_session_policy(
             local_profile_factory=lambda: (self.profile.get_all_profile() if self.profile is not None else {}),
-            decision_hook=self._session_decision_hook,
+            decision_hook=lambda *a: self._decision_policy(*a),
             token_factory=lambda: self.node_token,
         )
 
@@ -2211,6 +2216,19 @@ class Node:
     # Session FSM. The profile-acceptance evaluation that lived in
     # __interview_check_profile (cv_hash / certified / hosted.evaluate_profile) rides
     # with the deferred auth model and is intentionally light in the hook for now.
+
+    def set_decision_policy(self, policy) -> None:
+        """Override the responder decision policy at runtime. The new policy takes effect on
+        the next inbound PROFILE_OFFER for every Session, existing or future (the Sessions
+        hold a lambda that re-reads self._decision_policy on each call, not a frozen hook).
+
+        Args:
+            policy: an async callable with the same signature as _session_decision_hook,
+                ``(peer_id, remote_node_id, remote_profile, p2p_name, verified_claims) ->
+                ProfileDecisionResult``. Pass self._session_decision_hook to restore the
+                built-in policy.
+        """
+        self._decision_policy = policy
 
     async def _session_decision_hook(self, peer_id: str, remote_node_id, remote_profile: dict,
                                      p2p_name: str,

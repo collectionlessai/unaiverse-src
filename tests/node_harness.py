@@ -377,13 +377,17 @@ def build_agent_node_shell(node_peer_id: str, node_id: str = "shell-node",
 
     # Node holds no SM handle (S18): the managers live on the Coordinator. Build them
     # locally and register them on the fake conn, mirroring NodeConn.attach_session_policy.
+    # The decision hook is the same late-bound lambda the real attach_session_policy injects
+    # (re-reads node._decision_policy on each call), so a runtime set_decision_policy()
+    # propagates to these Sessions too.
+    node._decision_policy = node._session_decision_hook
     sm_public = SessionManager(
         p2p=conn.as_p2p(NodeConn.P2P_PUBLIC),
         p2p_name=NodeConn.P2P_PUBLIC,
         local_peer_id=node_peer_id,
         local_node_id=node_id,
         local_profile_factory=lambda: node.profile.get_all_profile(),
-        decision_hook=node._session_decision_hook,
+        decision_hook=lambda *a: node._decision_policy(*a),
     )
     sm_world = SessionManager(
         p2p=conn.as_p2p(NodeConn.P2P_WORLD),
@@ -391,7 +395,7 @@ def build_agent_node_shell(node_peer_id: str, node_id: str = "shell-node",
         local_peer_id=node_peer_id + "-w",
         local_node_id=node_id,
         local_profile_factory=lambda: node.profile.get_all_profile(),
-        decision_hook=node._session_decision_hook,
+        decision_hook=lambda *a: node._decision_policy(*a),
     )
     # Register the managers on the fake conn so its pump_sessions / on_peer_* / is_in_grace
     # facades delegate to them, mirroring NodeConn.attach_session_policy.

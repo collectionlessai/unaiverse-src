@@ -23,7 +23,7 @@ from unaiverse.networking.node.profile import NodeProfile
 from unaiverse.networking.session import (SessionState, SessionEventType, SessionRole,
                                           VerifiedTokenClaims)
 from unaiverse.networking.session.session import SessionEvent
-from unaiverse.networking.session.sess_msg import CV_HASH_MISMATCH, NOT_AUTHORIZED
+from unaiverse.networking.session.sess_msg import CV_HASH_MISMATCH, NOT_AUTHORIZED, ProfileDecisionResult
 
 from conftest import apump
 from node_harness import (
@@ -244,6 +244,40 @@ def test_decision_hook_rejects_node_not_in_allow_list():
         assert node.hosted.added == []
         sess = conn._sm_public.get_session(REMOTE_PEER)
         assert sess is None or sess.state == SessionState.FAILED
+
+    asyncio.run(_scenario())
+
+
+def test_set_decision_policy_propagates_at_runtime():
+    """R3: set_decision_policy() re-routes the decision for Sessions already wired. The hook
+    the managers hold is a late-bound lambda that re-reads node._decision_policy on every
+    call, not the frozen built-in, so swapping the policy at runtime takes effect on the
+    same injected hook without rebuilding any Session."""
+    async def _scenario():
+        node, conn = build_agent_node_shell(NODE_PEER)
+        # The default policy is the built-in, and the injected hook is the indirection
+        # lambda (not the bound method itself).
+        assert node._decision_policy == node._session_decision_hook
+        injected = conn._sm_public._decision_hook
+        assert injected is not node._session_decision_hook
+
+        marker_reject = ProfileDecisionResult(accepted=False)
+        marker_accept = ProfileDecisionResult(accepted=True)
+
+        async def policy_reject(*_a):
+            return marker_reject
+
+        async def policy_accept(*_a):
+            return marker_accept
+
+        node.set_decision_policy(policy_reject)
+        res = await injected(REMOTE_PEER, "remote-node", {}, NodeConn.P2P_PUBLIC, None)
+        assert res is marker_reject
+
+        # Swap at runtime: the SAME injected hook now yields the new policy's result.
+        node.set_decision_policy(policy_accept)
+        res = await injected(REMOTE_PEER, "remote-node", {}, NodeConn.P2P_PUBLIC, None)
+        assert res is marker_accept
 
     asyncio.run(_scenario())
 
