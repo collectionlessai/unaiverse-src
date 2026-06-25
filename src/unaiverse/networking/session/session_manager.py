@@ -1,39 +1,17 @@
 """
-SessionManager — owns all Sessions for one P2P instance.
-
-One SessionManager is created per p2p instance (p2p_public / p2p_world). Node
-holds these and calls:
-
-  - ``await sm.initiate(peer_id, addresses, ...)`` when it wants to open a new
-    Session as initiator.
-  - ``await sm.deliver(peer_id, protocol_id, payload_bytes)`` for every inbound
-    session-protocol message returned by ``conn.get_messages``.
-  - ``await sm.tick(now)`` once per polling-loop iteration to fire timeouts and
-    keep-alive pings.
-  - ``await sm.on_peer_disconnected(peer_id)`` / ``sm.on_peer_reconnected(...)``
-    when the libp2p connection state changes (as observed by the existing
-    polling diff in ``__handle_network_connections``).
-  - ``await sm.close_session(peer_id, reason)`` for graceful GOAWAY.
-
-Every public method returns ``list[SessionEvent]`` — node.py is the single
-dispatch site. No internal pending-event queue, no on_event callback.
-
-Tie-breaker on simultaneous open
---------------------------------
-libp2p collapses *connections* automatically; we still need to collapse the two
-*FSMs* (initiator we created, responder spawned from inbound HELLO) when both
-exist for the same peer-id. Rule mirrors libp2p's standard:
-the peer with the lexicographically *smaller* peer-id keeps its initiator. The
-other side drops its initiator and accepts the inbound HELLO.
-
-Anti-flap quarantine
---------------------
-After a Lost event, the peer-id is held in quarantine for ``_QUARANTINE_S``
-seconds — re-dials during that window return immediately with
-``[SessionEvent(FAILED, reason="quarantined")]``. Replaces the legacy
-``keep_connection=True`` soft-purge path.
+       █████  █████ ██████   █████           █████ █████   █████ ██████████ ███████████    █████████  ██████████
+      ░░███  ░░███ ░░██████ ░░███           ░░███ ░░███   ░░███ ░░███░░░░░█░░███░░░░░███  ███░░░░░███░░███░░░░░█
+       ░███   ░███  ░███░███ ░███   ██████   ░███  ░███    ░███  ░███  █ ░  ░███    ░███ ░███    ░░░  ░███  █ ░ 
+       ░███   ░███  ░███░░███░███  ░░░░░███  ░███  ░███    ░███  ░██████    ░██████████  ░░█████████  ░██████   
+       ░███   ░███  ░███ ░░██████   ███████  ░███  ░░███   ███   ░███░░█    ░███░░░░░███  ░░░░░░░░███ ░███░░█   
+       ░███   ░███  ░███  ░░█████  ███░░███  ░███   ░░░█████░    ░███ ░   █ ░███    ░███  ███    ░███ ░███ ░   █
+       ░░████████   █████  ░░█████░░████████ █████    ░░███      ██████████ █████   █████░░█████████  ██████████
+        ░░░░░░░░   ░░░░░    ░░░░░  ░░░░░░░░ ░░░░░      ░░░      ░░░░░░░░░░ ░░░░░   ░░░░░  ░░░░░░░░░  ░░░░░░░░░░ 
+                 A Collectionless AI Project (https://collectionless.ai)
+                 Registration/Login: https://unaiverse.io
+                 Code Repositories:  https://github.com/collectionlessai/
+                 Main Developers:    Stefano Melacci (Project Leader), Christian Di Maio, Tommaso Guidi
 """
-
 from __future__ import annotations
 
 import time

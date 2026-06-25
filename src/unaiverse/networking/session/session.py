@@ -1,50 +1,17 @@
 """
-Session — per-peer connection lifecycle FSM.
-
-Each Session owns the entire lifecycle of a connection to one remote peer:
-  dial (via p2p.connect) → 4-stage handshake → established → session-level
-  PING/PONG keep-alive → active re-dial + RESUME on loss → intentional GOAWAY
-  close. Liveness/recovery are session-aware (bound to session_id), so a peer
-  that restarts and forgets the session is detected and re-handshaked rather
-  than masked by a transport that transparently re-dials.
-
-Design (v1 — polling mode)
---------------------------
-The FSM is *synchronous* with async send helpers: ``process_inbound()`` and
-``check_timeout()`` are called from the polling loop (Node's
-``__handle_network_messages`` / main loop) and advance state immediately.
-``process_inbound()`` is async only because some transitions need to
-``await p2p.send_session()`` / ``await p2p.<crypto>()``.
-
-No asyncio.Queue, no background Task at all — the polling loop drives
-everything, and all I/O (sends, keep-alive PING, re-dial + RESUME) happens
-inline at the polling points (``deliver`` / ``tick``). Fire-and-forget tasks
-are deliberately avoided: they only start when the event loop regains control,
-which a mostly-synchronous main loop cannot guarantee.
-
-Portability (CPython + Pyodide)
--------------------------------
-This module is **protobuf-free**: it speaks ``SessMsg`` value objects and reaches
-the transport/crypto only through the high-level async ``P2P`` surface injected as
-``self.p2p`` (``connect`` / ``send_session`` / ``sign_with_host_key`` /
-``verify_peer_signature``).
-That is exactly the surface a JS ``OP2P`` mirror exposes, so this file runs
-unchanged in Pyodide. The wire (de)serialization lives inside ``P2P.send_session``
-(via ``SessMsg.to_bytes``) in CPython and in ``sess_msg.js`` in the browser.
-
-Each stage runs on its own libp2p protocol:
-  /unaiverse/session/hello/1.0.0     -- HelloRequest / HelloResponse
-  /unaiverse/session/profile/1.0.0   -- ProfileOffer / ProfileDecision
-  /unaiverse/session/world/1.0.0     -- WorldGrant / WorldGrantAck
-  /unaiverse/session/control/1.0.0   -- Goaway / GoawayAck
-
-Identity is bound by ``sig_b`` (Stage-1, responder over ``nonce_a||session_id``)
-and ``sig_a`` (Stage-2, initiator over ``nonce_b||session_id``), each verified
-against the transport peer-id, plus the root token (RT) that attests node_id /
-cv_hash / the public<->world p2p_peers binding. No per-message JWT piggyback for
-session protocols.
+       █████  █████ ██████   █████           █████ █████   █████ ██████████ ███████████    █████████  ██████████
+      ░░███  ░░███ ░░██████ ░░███           ░░███ ░░███   ░░███ ░░███░░░░░█░░███░░░░░███  ███░░░░░███░░███░░░░░█
+       ░███   ░███  ░███░███ ░███   ██████   ░███  ░███    ░███  ░███  █ ░  ░███    ░███ ░███    ░░░  ░███  █ ░ 
+       ░███   ░███  ░███░░███░███  ░░░░░███  ░███  ░███    ░███  ░██████    ░██████████  ░░█████████  ░██████   
+       ░███   ░███  ░███ ░░██████   ███████  ░███  ░░███   ███   ░███░░█    ░███░░░░░███  ░░░░░░░░███ ░███░░█   
+       ░███   ░███  ░███  ░░█████  ███░░███  ░███   ░░░█████░    ░███ ░   █ ░███    ░███  ███    ░███ ░███ ░   █
+       ░░████████   █████  ░░█████░░████████ █████    ░░███      ██████████ █████   █████░░█████████  ██████████
+        ░░░░░░░░   ░░░░░    ░░░░░  ░░░░░░░░ ░░░░░      ░░░      ░░░░░░░░░░ ░░░░░   ░░░░░  ░░░░░░░░░  ░░░░░░░░░░ 
+                 A Collectionless AI Project (https://collectionless.ai)
+                 Registration/Login: https://unaiverse.io
+                 Code Repositories:  https://github.com/collectionlessai/
+                 Main Developers:    Stefano Melacci (Project Leader), Christian Di Maio, Tommaso Guidi
 """
-
 from __future__ import annotations
 
 import json

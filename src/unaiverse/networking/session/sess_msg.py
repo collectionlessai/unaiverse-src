@@ -1,31 +1,17 @@
 """
-SessMsg — self-contained value object + wire codec for Session handshake messages.
-
-Why this module exists
-----------------------
-``session.py`` / ``session_manager.py`` must run **unchanged in Pyodide** (Python
-in the browser, driving a JS-implemented connection layer). Pyodide mocks the
-``google.protobuf`` runtime, so the FSM cannot touch ``session_pb2`` directly.
-
-The contract that keeps the FSM portable:
-
-  * Session/SessionManager speak only in :class:`SessMsg` — a plain ``kind`` tag
-    plus a ``dict`` of fields (field names mirror ``session.proto`` exactly). They
-    *construct* and *read* SessMsg, but never serialize: the transport layer does that.
-  * :class:`SessMsg` is self-contained like ``p2p/messages.py``'s ``Msg``: it owns
-    its own wire (de)serialization via :meth:`SessMsg.to_bytes` /
-    :meth:`SessMsg.from_bytes`. The transport layer (``P2P.send_session`` /
-    ``P2P.get_messages`` in CPython, the JS ``OP2P`` mirror in the browser) just calls
-    those; it no longer holds the codec.
-
-The module **top** stays stdlib-only so importing it is safe under Pyodide. The
-``session_pb2`` import lives **inside** ``to_bytes``/``from_bytes`` (a lazy import):
-those methods run only in the CPython conn layer, never in the FSM, so protobuf
-never enters the Pyodide import graph. Do not hoist that import to module top, and
-do not import anything that pulls protobuf at module level (e.g. ``p2p/messages.py``).
-The JS twin is a single ``sess_msg.js`` carrying both the value object and the codec.
+       █████  █████ ██████   █████           █████ █████   █████ ██████████ ███████████    █████████  ██████████
+      ░░███  ░░███ ░░██████ ░░███           ░░███ ░░███   ░░███ ░░███░░░░░█░░███░░░░░███  ███░░░░░███░░███░░░░░█
+       ░███   ░███  ░███░███ ░███   ██████   ░███  ░███    ░███  ░███  █ ░  ░███    ░███ ░███    ░░░  ░███  █ ░ 
+       ░███   ░███  ░███░░███░███  ░░░░░███  ░███  ░███    ░███  ░██████    ░██████████  ░░█████████  ░██████   
+       ░███   ░███  ░███ ░░██████   ███████  ░███  ░░███   ███   ░███░░█    ░███░░░░░███  ░░░░░░░░███ ░███░░█   
+       ░███   ░███  ░███  ░░█████  ███░░███  ░███   ░░░█████░    ░███ ░   █ ░███    ░███  ███    ░███ ░███ ░   █
+       ░░████████   █████  ░░█████░░████████ █████    ░░███      ██████████ █████   █████░░█████████  ██████████
+        ░░░░░░░░   ░░░░░    ░░░░░  ░░░░░░░░ ░░░░░      ░░░      ░░░░░░░░░░ ░░░░░   ░░░░░  ░░░░░░░░░  ░░░░░░░░░░ 
+                 A Collectionless AI Project (https://collectionless.ai)
+                 Registration/Login: https://unaiverse.io
+                 Code Repositories:  https://github.com/collectionlessai/
+                 Main Developers:    Stefano Melacci (Project Leader), Christian Di Maio, Tommaso Guidi
 """
-
 from __future__ import annotations
 
 import json
