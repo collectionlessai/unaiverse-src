@@ -545,24 +545,17 @@ class Node:
         if hasattr(self, 'conn') and self.conn is not None:
             self.conn.set_token(self.node_token)
 
-            # TURN-related information
+            # TURN-related information: push the credentials through the Coordinator
+            # (Node -> NodeConn -> SM -> P2P), which fans them out to both instances. The
+            # raw transport handles stay custody-only behind the SMs.
             turn_info = response.get("turn_info", None)
             if turn_info is not None:
                 turn_info: dict
-                self.conn.p2p_public.set_turn_credentials(
-                    ice_turn_servers=[{
-                        "urls": turn_info["urls"],
-                        "username": turn_info["username"],
-                        "credential": turn_info["credential"],
-                    }],
-                )
-                self.conn.p2p_world.set_turn_credentials(
-                    ice_turn_servers=[{
-                        "urls": turn_info["urls"],
-                        "username": turn_info["username"],
-                        "credential": turn_info["credential"],
-                    }],
-                )
+                self.conn.set_turn_credentials(ice_turn_servers=[{
+                    "urls": turn_info["urls"],
+                    "username": turn_info["username"],
+                    "credential": turn_info["credential"],
+                }])
 
     def get_cv(self) -> list[dict]:
         """Retrieves the node's CV (Curriculum Vitae) from the root server.

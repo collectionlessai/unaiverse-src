@@ -208,6 +208,11 @@ class SessionManager:
     async def reserve(self, peer_id: str):
         return await self.p2p.reserve(peer_id)
 
+    def set_turn_credentials(self, ice_turn_servers) -> None:
+        """Update this instance's TURN credentials (passthrough). Sync: it is a local ICE
+        config update for future WebRTC connections, not a network round-trip."""
+        self.p2p.set_turn_credentials(ice_turn_servers)
+
     def connected_peers_info(self) -> list:
         """Transport-level connected peers on this instance (passthrough). The Coordinator
         reads peer info through the manager instead of reaching into the P2P handle."""

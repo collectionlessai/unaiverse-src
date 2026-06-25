@@ -398,6 +398,13 @@ class NodeConn:
         except P2PError:
             return None
 
+    def set_turn_credentials(self, ice_turn_servers) -> None:
+        """Push TURN credentials to BOTH instances, fanning out through the SMs
+        (Node -> NodeConn -> SM -> P2P). The raw transport handles stay custody-only
+        behind the managers, so Node sets credentials once and both instances update."""
+        self._sm_public.set_turn_credentials(ice_turn_servers)
+        self._sm_world.set_turn_credentials(ice_turn_servers)
+
     def add(self, peer_info: dict, pool_name: str) -> bool:
         """Adds a connected peer to a specified connection pool.
 
