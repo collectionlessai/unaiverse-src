@@ -209,6 +209,11 @@ class SessionManager:
     # offload of the blocking Go call both live in P2P, so the manager stays protobuf-free
     # and free of the async boundary. The piggyback token stays above on the Coordinator,
     # and the P2P error type is not caught here (the caller handles it).
+    #
+    # The async boundary is uniform and lives only in P2P: the operations that block on a
+    # round-trip (send, broadcast, reserve) are async and offload there. The instantaneous
+    # Go FFI calls (subscribe/unsubscribe, the peer-info getters, get_messages) stay sync,
+    # they run in the hot polling loop and a thread hop would only add latency.
 
     async def send(self, channel: str, msg) -> None:
         await self.p2p.send(channel, msg)
@@ -222,8 +227,8 @@ class SessionManager:
     def unsubscribe_from_topic(self, channel: str) -> None:
         self.p2p.unsubscribe_from_topic(channel)
 
-    def reserve_on_relay(self, peer_id: str):
-        return self.p2p.reserve_on_relay(peer_id)
+    async def reserve(self, peer_id: str):
+        return await self.p2p.reserve(peer_id)
 
     def connected_peers_info(self) -> list:
         """Transport-level connected peers on this instance (passthrough). The Coordinator

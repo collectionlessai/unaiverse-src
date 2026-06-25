@@ -985,6 +985,13 @@ class P2P:
             print(e)
             raise P2PError(f"Reservation on {relay_peer_id} failed") from e
 
+    async def reserve(self, relay_peer_id: str) -> str:
+        """Reserve a relay slot, offloading the blocking Go call to a thread. The async
+        boundary lives here, at the transport tier (like send / broadcast / send_session),
+        so the Coordinator just awaits and never offloads. Returns the expiry timestamp;
+        raises P2PError on failure (the Coordinator catches it)."""
+        return await asyncio.to_thread(self.reserve_on_relay, relay_peer_id)
+
     # --- Node Information ---
     @property
     def peer_id(self) -> Optional[str]:

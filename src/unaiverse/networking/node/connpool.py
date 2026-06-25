@@ -418,7 +418,7 @@ class NodeConn:
         if sm is None:
             return None
         try:
-            return sm.reserve_on_relay(peer_id)
+            return await sm.reserve(peer_id)
         except P2PError:
             return None
 
