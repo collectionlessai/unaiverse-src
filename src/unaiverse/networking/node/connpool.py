@@ -15,18 +15,11 @@
 import time
 import math
 from collections import namedtuple
-from typing import TYPE_CHECKING
 from unaiverse.utils.logger import log
 from unaiverse.networking.p2p.messages import Msg
 from unaiverse.networking.p2p.p2p import P2P, P2PError
 from unaiverse.networking.node.tokens import TokenVerifier
-
-if TYPE_CHECKING:
-    # Type-only import: at runtime the Coordinator builds the SessionManagers lazily in
-    # attach_session_policy (avoiding an import cycle), so the "SessionManager" forward
-    # references in the _sm_* facade signatures resolve for type checkers without pulling
-    # the module in at import time.
-    from unaiverse.networking.session.session_manager import SessionManager
+from unaiverse.networking.session.session_manager import SessionManager
 
 
 # sess_msg.py (the session layer's leaf module) is the single source of truth for the
@@ -220,7 +213,7 @@ class NodeConn:
         # right SM. The raw P2P handles live on self.p2p_public/self.p2p_world purely as
         # custody (to build the SMs and for the Coordinator's own internal reads), never
         # exposed to callers as a channel.
-        self.p2p_name_to_sm = {}
+        self._p2p_name_to_sm = {}
         self._pool_name_to_p2p_name = {}
 
         # Indices rooted around the pool name
@@ -314,21 +307,6 @@ class NodeConn:
             ss += ")"
             s += ss
         return s
-
-    def __getitem__(self, p2p_name: str) -> "SessionManager":
-        """Retrieves the SessionManager (the instance) for a named P2P network.
-
-        The SM is the instance: callers index the Coordinator by network name and get the
-        manager, not the raw P2P handle (which stays custody-only on the Coordinator). Only
-        valid after the managers are attached (set_session_managers / attach_session_policy).
-
-        Args:
-            p2p_name: The name of the P2P network.
-
-        Returns:
-            The SessionManager owning that instance.
-        """
-        return self.p2p_name_to_sm[p2p_name]
 
     # Identity / posture facade over our OWN P2P instances. Node reads its own peer-ids,
     # addresses and world posture through these instead of reaching into the P2P objects,
@@ -744,7 +722,6 @@ class NodeConn:
         policy born late is available (the profile factory samples self.profile, the
         decision hook reads world/agent/allow-list state). Each manager owns its P2P
         instance."""
-        from unaiverse.networking.session import SessionManager
         # Per-instance perimeter routing injected into each manager: the public one
         # routes by direction (no membership, never cuts); the world one classifies
         # against the snapshot and cuts unclassifiable peers on its P2P instance.
@@ -783,12 +760,12 @@ class NodeConn:
         bare NodeConn via __new__ (no _init_pools) have no triples to wire, hence the
         guard."""
         self._session_managers = [sm for sm in session_managers if sm is not None]
-        self.p2p_name_to_sm = {sm.p2p_name: sm for sm in self._session_managers
+        self._p2p_name_to_sm = {sm.p2p_name: sm for sm in self._session_managers
                                if getattr(sm, "p2p_name", None) is not None}
         triples = getattr(self, "pool_name_to_pool_triple", None)
         if triples:
             for pool_name, triple in triples.items():
-                triple[2] = self.p2p_name_to_sm.get(self._pool_name_to_p2p_name[pool_name])
+                triple[2] = self._p2p_name_to_sm.get(self._pool_name_to_p2p_name[pool_name])
 
     def is_peer_session_pending(self, peer_id: str) -> bool:
         """True if `peer_id` has a Session whose *first* handshake is still in
@@ -969,7 +946,7 @@ class NodeConn:
     def _sm_by_name(self, p2p_name: str) -> "SessionManager | None":
         """The SessionManager (the instance) for a named network, via the per-instance
         index populated at attach time. None before the managers are registered."""
-        return self.p2p_name_to_sm.get(p2p_name)
+        return self._p2p_name_to_sm.get(p2p_name)
 
     def _sm_for_topic(self, peer_id: str, default_p2p_name: "str | None" = None) -> "SessionManager | None":
         """The SessionManager to use for a topic/dm keyed by peer_id: the instance whose

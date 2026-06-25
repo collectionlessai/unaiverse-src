@@ -96,13 +96,12 @@ def action(func: Callable) -> Callable:
                              "(it is tolerated to return non-None stuff and interpreted as True, "
                              "but not if it returns None, as happens here)")
         except Exception as e:
+            import traceback  # Debug
             if not isinstance(e, AssertionError):
                 log.error(f"Action '{func.__name__}' failed since it raised an exception: {e}")  # No-Debug
-                import traceback  # Debug
                 log.error(f"{traceback.format_exc()}")  # Debug
             else:
                 log.error(f"Action '{func.__name__}' failed since it raised an AssertionError")  # No-Debug
-                import traceback
                 log.error(f"{traceback.format_exc()}")
             ret = False
         return ret

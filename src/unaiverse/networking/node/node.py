@@ -1781,14 +1781,14 @@ class Node:
             sender_is_inspector = (sender_node_id == self.profile.get_static_profile()['inspector_node_id'] and
                                    sender_inspector_mode_on)
 
-            # (A–D) legacy PROFILE / WORLD_APPROVAL / AGENT_APPROVAL / PROFILE_REQUEST
-            # handshake — REMOVED. The per-peer Session now carries all of it
-            # (PROFILE_OFFER/DECISION, WORLD_GRANT) and runs the role
-            # assignment + add_agent + join_world side-effects via
-            # _dispatch_session_event. These chat content-types are no longer sent;
-            # ignore any that arrive from a not-yet-migrated peer.
-            if msg.content_type in (Msg.PROFILE, Msg.WORLD_APPROVAL,
-                                    Msg.AGENT_APPROVAL, Msg.PROFILE_REQUEST):
+            # (A) legacy PROFILE handshake — REMOVED. The per-peer Session now carries all
+            # of it (PROFILE_OFFER/DECISION, WORLD_GRANT) and runs the role assignment +
+            # add_agent + join_world side-effects via _dispatch_session_event. PROFILE is
+            # still a valid content-type (send_profile_to_all may emit it), but the
+            # Session-era consumer ignores any that arrives. The old WORLD_APPROVAL /
+            # AGENT_APPROVAL / PROFILE_REQUEST types are gone: an undecodable frame from a
+            # not-yet-migrated peer is already dropped at the codec (Msg.from_bytes).
+            if msg.content_type == Msg.PROFILE:
                 log.misc(f"Ignoring legacy handshake message {msg.content_type} from {msg.sender} "
                          f"(Session handshake supersedes it)")
 
@@ -2698,30 +2698,25 @@ class Node:
 
     @staticmethod
     def __sort_messages_by_priority(messages: list) -> list:
-        """Sort messages by priority: world approval and agent approval first.
+        """Sort messages by priority: action (interaction) requests first, then the rest.
 
         Args:
             messages: The list of Msg objects to sort.
 
         Returns:
-            A new list with world-approval messages first, then agent-approval, then action requests,
-            then all other messages.
+            A new list with action requests first, then all other messages. The legacy
+            world-approval / agent-approval priority tiers are gone with the pre-Session
+            handshake (those content-types no longer exist).
         """
 
-        _world_approval_messages = []
-        _agent_approval_messages = []
         _action_messages = []
         _other_messages = []
         for _msg in messages:
-            if _msg.content_type == Msg.WORLD_APPROVAL:
-                _world_approval_messages.append(_msg)
-            elif _msg.content_type == Msg.AGENT_APPROVAL:
-                _agent_approval_messages.append(_msg)
-            elif _msg.content_type == Msg.INTERACTION:
+            if _msg.content_type == Msg.INTERACTION:
                 _action_messages.append(_msg)
             else:
                 _other_messages.append(_msg)
-        return _world_approval_messages + _agent_approval_messages + _action_messages + _other_messages
+        return _action_messages + _other_messages
 
     def __root(self, api: str, payload: dict) -> dict | list:
         """Sends a POST request to the root server's API endpoint.

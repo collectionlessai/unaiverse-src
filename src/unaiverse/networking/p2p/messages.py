@@ -35,9 +35,6 @@ class Msg:
 
     # Message content types
     PROFILE = "profile"
-    WORLD_APPROVAL = "world_approval"
-    AGENT_APPROVAL = "agent_approval"
-    PROFILE_REQUEST = "profile_request"
     ADDRESS_UPDATE = "address_update"
     STREAM_SAMPLE = "stream_sample"
     ROLE_SUGGESTION = "role_suggestion"
@@ -56,7 +53,7 @@ class Msg:
     STATS_RESPONSE = 'stats_response'  # world -> agent
 
     # Collections
-    CONTENT_TYPES = {PROFILE, WORLD_APPROVAL, AGENT_APPROVAL, PROFILE_REQUEST, ADDRESS_UPDATE,
+    CONTENT_TYPES = {PROFILE, ADDRESS_UPDATE,
                      STREAM_SAMPLE, ROLE_SUGGESTION, HSM, MISC, GET_CV_FROM_ROOT,
                      BADGE_SUGGESTIONS, INSPECT_ON, INSPECT_CMD, WORLD_AGENTS_LIST, CONSOLE_AND_BEHAV_STATUS,
                      STATS_UPDATE, STATS_REQUEST, STATS_RESPONSE, INTERACTION, INTERACTION_STATUS}

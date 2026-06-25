@@ -683,12 +683,12 @@ def test_s18_coordinator_indexes_the_instance_by_sm_not_p2p():
     from unaiverse.networking.session import SessionManager
     conn, pub, world = _make_node_conn()
 
-    # __getitem__ returns the SM, not the P2P. The raw-P2P index is gone, replaced by the
-    # SM-keyed one.
-    assert isinstance(conn[NodeConn.P2P_PUBLIC], SessionManager)
-    assert conn[NodeConn.P2P_PUBLIC] is conn._sm_public
-    assert conn[NodeConn.P2P_WORLD] is conn._sm_world
-    assert hasattr(conn, "p2p_name_to_sm") and not hasattr(conn, "p2p_name_to_p2p")
+    # _sm_by_name resolves to the SM, not the P2P. The raw-P2P index is gone, replaced by
+    # the SM-keyed one.
+    assert isinstance(conn._sm_by_name(NodeConn.P2P_PUBLIC), SessionManager)
+    assert conn._sm_by_name(NodeConn.P2P_PUBLIC) is conn._sm_public
+    assert conn._sm_by_name(NodeConn.P2P_WORLD) is conn._sm_world
+    assert hasattr(conn, "_p2p_name_to_sm") and not hasattr(conn, "p2p_name_to_p2p")
 
     # Each pool triple's instance slot is the owning SM, never a P2P.
     assert conn.pool_name_to_pool_triple[NodeConn.IN_PUBLIC][2] is conn._sm_public
