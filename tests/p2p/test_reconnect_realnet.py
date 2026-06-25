@@ -47,9 +47,9 @@ def test_real_transport_drop_then_resume(real_nodes):
                          timeout=20.0)
         old_sid = a_sm.get_session(b_p2p.peer_id).session_id
 
-        # Drop the link for real, then feed both sides the disconnect signal the
-        # Node loop would derive from its pool diff.
-        await NodeConn.disconnect(a_p2p, b_p2p.peer_id)
+        # Drop the link for real (through the production path NodeConn -> SM -> P2P), then
+        # feed both sides the disconnect signal the Node loop would derive from its pool diff.
+        await a_sm.disconnect(b_p2p.peer_id)
         await a_sm.on_peer_disconnected(b_p2p.peer_id)
         await b_sm.on_peer_disconnected(a_p2p.peer_id)
         assert a_sm.get_session(b_p2p.peer_id).state == SessionState.RECONNECTING

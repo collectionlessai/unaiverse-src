@@ -363,26 +363,9 @@ class NodeConn:
 
     def get_world_connected_peers_info(self) -> list:
         """Raw transport-level connected peers on the world instance, for the stats path
-        (Agent.collect_and_store_own_stats). Reads our own world P2P as internal custody
-        and returns the data, not the handle, so callers stop reaching into conn[...].p2p."""
-        return self.p2p_world.get_connected_peers_info()
-
-    @staticmethod
-    async def disconnect(p2p: P2P, peer_id: str) -> bool:
-        """Disconnects from a specific peer on a P2P network (async).
-
-        Args:
-            p2p: The P2P network object to use for disconnection.
-            peer_id: The peer ID to disconnect from.
-
-        Returns:
-            True if the disconnection is successful, otherwise False.
-        """
-        try:
-            p2p.disconnect_from(peer_id)
-        except P2PError:
-            return False
-        return True
+        (Agent.collect_and_store_own_stats). Reads through the world manager as internal
+        custody and returns the data, not the handle, so callers stop reaching into the P2P."""
+        return self._sm_world.connected_peers_info()
 
     def set_token(self, token: str) -> None:
         """Sets the authentication token for the connection pools.
@@ -1118,8 +1101,7 @@ class NodeConn:
         added_local: dict = {}
         removed_local: dict = {}
 
-        p2p = sm.p2p
-        connected_peer_infos = p2p.get_connected_peers_info()
+        connected_peer_infos = sm.connected_peers_info()
         if connected_peer_infos is None:
             return added_local, removed_local
 
@@ -1552,7 +1534,7 @@ class NodeConn:
 
     async def set_world_agents_and_world_masters_lists_from_rendezvous(self) -> None:
         """Updates the lists of world agents and masters using data from the rendezvous topic (async)."""
-        rendezvous_state = self.p2p_world.get_rendezvous_peers_info()
+        rendezvous_state = self._sm_world.rendezvous_peers()
 
         if rendezvous_state is not None:
             tag = rendezvous_state.get('update_count', -1)

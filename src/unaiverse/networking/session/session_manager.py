@@ -225,6 +225,17 @@ class SessionManager:
     def reserve_on_relay(self, peer_id: str):
         return self.p2p.reserve_on_relay(peer_id)
 
+    def connected_peers_info(self) -> list:
+        """Transport-level connected peers on this instance (passthrough). The Coordinator
+        reads peer info through the manager instead of reaching into the P2P handle."""
+        return self.p2p.get_connected_peers_info()
+
+    def rendezvous_peers(self):
+        """Rendezvous advertisement snapshot on this instance (passthrough). Meaningful only
+        on the world instance, where the rendezvous is joined; inert (None) on the public
+        one. The Coordinator parses and stores the result, the manager only fetches it."""
+        return self.p2p.get_rendezvous_peers_info()
+
     def get_messages(self) -> tuple:
         """Pop and decode this instance's inbound batch (passthrough to the transport).
         P2P returns (chat_messages, session_inbounds): chat_messages are decoded,

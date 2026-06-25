@@ -69,7 +69,7 @@ def test_session_only_peers_enter_pools_and_pool_diffs_fire(real_nodes):
         # A real transport drop must surface as a "removed" pool diff: instantly
         # on the side that called disconnect, within the Go grace period (10s)
         # on the other side.
-        await NodeConn.disconnect(a_p2p, b_p2p.peer_id)
+        await a_sm.disconnect(b_p2p.peer_id)
         _, removed_a = await a_conn.update()
         assert b_p2p.peer_id in removed_a.get(NodeConn.OUT_PUBLIC, set())
 
