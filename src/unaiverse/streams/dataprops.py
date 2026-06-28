@@ -702,6 +702,9 @@ class DataProps:
         Returns:
             A string representing the name or group.
         """
+        # TODO(review): no guard for a user_hash without a ':' separator. rsplit then
+        # yields a single-element list and [1] raises IndexError. Synthetic keys like
+        # '<data_sample_0>' reach here via StreamProxy.__str__. See tests/test_agent_chat_e2e.py.
         return user_hash.rsplit(":", 1)[1]
 
     @staticmethod
