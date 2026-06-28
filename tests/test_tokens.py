@@ -6,6 +6,7 @@ peer-id binding instead of trusting the offered profile. `verify_token` keeps it
 original 2-tuple contract for the per-message piggyback path; both share a single
 decode/validation path so the security checks never diverge.
 """
+import json
 import time
 
 import jwt
@@ -33,7 +34,10 @@ def _mint(priv, **payload):
 
 
 def _valid_payload(**over):
-    p = {"node_id": "node-N", "cv_hash": "cv-abc", "p2p_peers": PEERS,
+    # The root mints the token with p2p_peers as a JSON string (json.dumps), not a
+    # native JSON array, so reproduce that here: jwt would otherwise round-trip a
+    # Python list as a native array and the wire format would diverge from production.
+    p = {"node_id": "node-N", "cv_hash": "cv-abc", "p2p_peers": json.dumps(PEERS),
          "exp": int(time.time()) + 3600}
     p.update(over)
     return p
@@ -77,3 +81,27 @@ def test_verify_token_claims_rejects_wrong_signature():
     tv = TokenVerifier(other_pub)   # verifier holds a DIFFERENT public key
     token = _mint(priv, **_valid_payload())
     assert tv.verify_token_claims(token, p2p_peer=PEERS[0]) == (None, None, (), 0)
+
+
+def test_verify_token_claims_returns_full_peer_ids_not_chars():
+    # Regression for the json.dumps payload: p2p_peers must come back as the tuple
+    # of full peer-id strings, never a tuple of single characters (which is what
+    # tuple() over the raw JSON string used to produce before the _decode fix).
+    priv, pub = _keypair()
+    tv = TokenVerifier(pub)
+    token = _mint(priv, **_valid_payload())
+    _, _, peers, exp = tv.verify_token_claims(token, p2p_peer=PEERS[0])
+    assert peers == tuple(PEERS)
+    assert all(p in PEERS for p in peers)
+    assert isinstance(exp, int)
+
+
+def test_verify_token_claims_rejects_substring_of_peer():
+    # A fragment of a real peer-id must NOT pass the binding check. Before the fix
+    # the membership test ran on the raw JSON string, so any substring slipped
+    # through; now it runs on the decoded tuple.
+    priv, pub = _keypair()
+    tv = TokenVerifier(pub)
+    token = _mint(priv, **_valid_payload())
+    assert tv.verify_token_claims(token, p2p_peer=PEERS[0][:20]) == (None, None, (), 0)
+    assert tv.verify_token(token, p2p_peer=PEERS[0][:20]) == (None, None)

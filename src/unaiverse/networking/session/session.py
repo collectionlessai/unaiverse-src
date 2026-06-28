@@ -472,10 +472,10 @@ class Session:
         if self.remote_node_id_hint and self.remote_node_id_hint != node_id:
             return None, "token_node_id_mismatch"
         self.remote_node_id_hint = node_id
-        self.remote_token_exp = int(exp)
+        self.remote_token_exp = exp
         self.remote_cv_hash = cv_hash
         return VerifiedTokenClaims(node_id=node_id, cv_hash=cv_hash,
-                                   p2p_peers=tuple(p2p_peers), exp=int(exp)), None
+                                   p2p_peers=p2p_peers, exp=exp), None
 
     async def _responder_on_profile_offer(self, offer: SessMsg) -> List[SessionEvent]:
         # Verify sig_a under the initiator's peer-id.

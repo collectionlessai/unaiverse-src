@@ -12,6 +12,7 @@
                  Code Repositories:  https://github.com/collectionlessai/
                  Main Developers:    Stefano Melacci (Project Leader), Christian Di Maio, Tommaso Guidi
 """
+import json
 import jwt
 
 
@@ -53,6 +54,21 @@ class TokenVerifier:
             return None
         except Exception:
             return None
+
+        # The root serializes p2p_peers as a JSON string (json.dumps), so decode it
+        # once here, at the token-codec boundary, into a real tuple of peer-ids. The
+        # membership check below and both accessors then operate on the tuple rather
+        # than the raw string (a bare tuple() over the string would explode into
+        # single characters, and ``peer not in <string>`` would be a substring test).
+        # exp is normalized to int for the same single-boundary reason.
+        peers = payload.get("p2p_peers", ())
+        if isinstance(peers, str):
+            try:
+                peers = json.loads(peers)
+            except (ValueError, TypeError):
+                return None
+        payload["p2p_peers"] = tuple(peers)
+        payload["exp"] = int(payload.get("exp", 0))
 
         # Checking optional information
         if node_id is not None and payload.get("node_id", None) != node_id:
@@ -114,7 +130,7 @@ class TokenVerifier:
         if payload is None:
             return None, None, (), 0
         return (payload.get("node_id", None), payload.get("cv_hash", None),
-                tuple(payload.get("p2p_peers", ())), int(payload.get("exp", 0)))
+                payload.get("p2p_peers", ()), payload.get("exp", 0))
 
     def __str__(self):
         key_str = self.public_key.decode("utf-8") if isinstance(self.public_key, bytes) else self.public_key
