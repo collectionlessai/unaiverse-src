@@ -31,6 +31,34 @@ def _local_clock(min_delta: float = -1.0) -> _Clock:
     return _Clock(min_delta=min_delta, current_time=FIXED_T)
 
 
+class _ManualClock(_Clock):
+    """A ``_Clock`` whose virtual time is advanced explicitly via ``advance``.
+
+    ``get_time`` is stable between calls, so cycle bookkeeping is deterministic and
+    never depends on the wall-clock resolution. This is what makes the cycle tests
+    below reproducible: with the real ``get_time`` two fast ``next_cycle`` calls can
+    read an identical instant and ``__add_timestamp`` then raises on the duplicate
+    timestamp (the real-time-mode footgun pinned by
+    ``test_real_time_next_cycle_without_advance_raises``).
+    """
+
+    def __init__(self, min_delta: float = -1.0, current_time: float = FIXED_T):
+        super().__init__(min_delta=min_delta, current_time=current_time)
+        self._anchor = current_time
+        self._virtual_now = current_time
+
+    def advance(self, dt: float = 1.0) -> None:
+        self._virtual_now += dt
+
+    def get_time(self, passed: bool = False) -> float:
+        return (self._virtual_now - self._anchor) if passed else self._virtual_now
+
+
+def _manual_clock(min_delta: float = -1.0) -> _ManualClock:
+    """Build an offline ``_Clock`` with an explicitly advanced virtual time."""
+    return _ManualClock(min_delta=min_delta)
+
+
 # ── cycle2time (pure arithmetic with explicit delta) ─────────────────────────
 
 def test_cycle2time_with_delta_is_linear():
@@ -64,17 +92,19 @@ def test_initial_cycle_is_minus_one():
 
 def test_next_cycle_increments_when_unconstrained():
     """With min_delta <= 0 the clock is real-time: next_cycle always advances."""
-    c = _local_clock(min_delta=-1.0)
+    c = _manual_clock(min_delta=-1.0)
     assert c.next_cycle() is True
     assert c.get_cycle() == 0
+    c.advance()
     assert c.next_cycle() is True
     assert c.get_cycle() == 1
 
 
 def test_timestamps_are_strictly_increasing_across_cycles():
     """Each advanced cycle records a strictly later timestamp."""
-    c = _local_clock(min_delta=-1.0)
+    c = _manual_clock(min_delta=-1.0)
     c.next_cycle()
+    c.advance()
     c.next_cycle()
     t0 = c.cycle2time(0)
     t1 = c.cycle2time(1)
@@ -83,8 +113,9 @@ def test_timestamps_are_strictly_increasing_across_cycles():
 
 def test_get_cycle_time_matches_current_cycle_timestamp():
     """get_cycle_time is just cycle2time of the current cycle index."""
-    c = _local_clock(min_delta=-1.0)
+    c = _manual_clock(min_delta=-1.0)
     c.next_cycle()
+    c.advance()
     c.next_cycle()
     assert c.get_cycle_time() == c.cycle2time(c.get_cycle())
 
@@ -100,12 +131,26 @@ def test_min_delta_blocks_second_immediate_advance():
     assert c.get_cycle() == 0
 
 
+def test_real_time_next_cycle_without_advance_raises():
+    """SUSPECTED BUG (clock.py:222): in real-time mode (min_delta <= 0) next_cycle does no
+    gating, so two advances at the very same instant record a duplicate timestamp and
+    __add_timestamp raises instead of degrading gracefully (e.g. returning False). Pinned
+    here as the current behaviour, deterministically (the virtual clock is not advanced
+    between the two calls), which is what the real wall-clock can also produce when two
+    next_cycle calls land within the timer resolution. See the TODO(review) at the site."""
+    c = _manual_clock(min_delta=-1.0)
+    assert c.next_cycle() is True            # cycle -1 -> 0 records the current virtual instant
+    with pytest.raises(ValueError):
+        c.next_cycle()                       # same virtual instant -> duplicate timestamp -> raise
+
+
 # ── time2cycle without delta (timestamp-table search) ────────────────────────
 
 def test_time2cycle_finds_exact_recorded_timestamps():
     """An exact recorded timestamp resolves to its cycle index."""
-    c = _local_clock(min_delta=-1.0)
+    c = _manual_clock(min_delta=-1.0)
     c.next_cycle()
+    c.advance()
     c.next_cycle()
     t0 = c.cycle2time(0)
     t1 = c.cycle2time(1)
@@ -115,8 +160,9 @@ def test_time2cycle_finds_exact_recorded_timestamps():
 
 def test_time2cycle_future_timestamp_returns_length():
     """A timestamp newer than every recorded one yields the table length."""
-    c = _local_clock(min_delta=-1.0)
+    c = _manual_clock(min_delta=-1.0)
     c.next_cycle()
+    c.advance()
     c.next_cycle()
     t1 = c.cycle2time(1)
     assert c.time2cycle(t1 + 1000.0) == 2  # two timestamps recorded -> length 2
@@ -124,8 +170,9 @@ def test_time2cycle_future_timestamp_returns_length():
 
 def test_time2cycle_unrecorded_intermediate_returns_minus_one():
     """A timestamp strictly between two recorded ones is reported as not found (-1)."""
-    c = _local_clock(min_delta=-1.0)
+    c = _manual_clock(min_delta=-1.0)
     c.next_cycle()
+    c.advance()
     c.next_cycle()
     t0 = c.cycle2time(0)
     t1 = c.cycle2time(1)
@@ -136,16 +183,18 @@ def test_time2cycle_unrecorded_intermediate_returns_minus_one():
 
 def test_time2cycle_with_delta_returns_current_cycle_for_now():
     """Converting ~now under a huge delta gives back the current cycle."""
-    c = _local_clock(min_delta=-1.0)
+    c = _manual_clock(min_delta=-1.0)
     c.next_cycle()
+    c.advance()
     c.next_cycle()
     assert c.time2cycle(c.get_time(), delta=1e9) == c.get_cycle()
 
 
 def test_time2cycle_with_delta_counts_back_whole_deltas():
     """A timestamp 1.5 deltas in the past is one whole cycle behind; 0.5 deltas is none."""
-    c = _local_clock(min_delta=-1.0)
+    c = _manual_clock(min_delta=-1.0)
     c.next_cycle()
+    c.advance()
     c.next_cycle()
     base = c.get_cycle()
     assert c.time2cycle(c.get_time() - 15.0, delta=10.0) == base - 1
