@@ -436,6 +436,7 @@ class AgentBasics:
         self.set_default_stdin_binding(public)
 
         # Zero-step: if we are in a world, the peer ID used for indexing the interaction cache is the world peer ID
+        # TODO(review): with public=False the broadcaster peer-id is overwritten by the world-node id before the per-broadcaster lookup, so the entry is missed and the human reply is misrouted to the world node; see tests/test_human_routing.py::test_prepare_world_should_return_broadcaster_interaction_uuid
         peer_id = peer_id if public else self.node_conn.get_world_node_peer_id()
 
         # First of all, clearing residuals of interactions that were completed in the past
@@ -559,6 +560,7 @@ class AgentBasics:
         if self.world_folder is not None and self.is_world:
 
             # Guessing roles from the list of json files
+            # TODO(review): CUSTOM_ROLES order derives from os.listdir and is filesystem-order-dependent, so any caller assuming a stable order is fragile; see tests/test_world_roles.py::test_discovery_custom_roles_top_level_case_insensitive
             listdir = os.listdir(self.world_folder)  # Do this only once
             self.CUSTOM_ROLES = [os.path.splitext(f)[0] for f in listdir
                                  if os.path.isfile(os.path.join(self.world_folder, f))
@@ -1289,6 +1291,7 @@ class AgentBasics:
             return ref
 
         # Search by email@node_name (if only node_name is provided, assumes it is one of your agents)
+        # TODO(review): a bare node_name is always prefixed with the caller's own email, so another user's bare node_name silently resolves to None; see tests/test_agent_resolution.py::test_resolve_agent_ref_bare_name_of_other_user_is_silent_none
         if '@' not in ref:
             your_email = self.get_profile().get_static_profile()['email']
             ref = your_email + '@' + ref
@@ -1296,6 +1299,7 @@ class AgentBasics:
         for peer_id, profile in self.all_agents.items():
             static_profile = profile.get_static_profile() if hasattr(profile, 'get_static_profile') else {}
             if isinstance(static_profile, dict):
+                # TODO(review): 'node_name' has no default, so a profile missing it yields None and the str concat raises TypeError; see tests/test_agent_resolution.py::test_resolve_agent_ref_profile_missing_node_name_crashes
                 if (static_profile.get('email', '') + '@' + static_profile.get('node_name')) == ref:
                     return peer_id
 
@@ -1346,6 +1350,7 @@ class AgentBasics:
                 if ref == Stream.name_from_user_hash(user_hash):
                     return user_hash
             for net_hash, stream_dict in self.owned_streams.items():
+                # TODO(review): next(iter(...)) raises StopIteration when public=True and the net_hash maps to an empty inner dict; an empty stream group should be skipped, not crash; see tests/test_agent_resolution.py::test_resolve_stream_ref_empty_group_public_crashes
                 if public and not next(iter(stream_dict.values())).is_public():
                     continue
                 if ref == Stream.name_or_group_from_net_hash(net_hash):
@@ -1359,6 +1364,7 @@ class AgentBasics:
                 if ref == Stream.name_from_user_hash(user_hash):
                     return user_hash
             for net_hash, stream_dict in self.known_streams.items():
+                # TODO(review): next(iter(...)) raises StopIteration when public=True and the net_hash maps to an empty inner dict; an empty stream group should be skipped, not crash; see tests/test_agent_resolution.py::test_resolve_stream_ref_empty_group_public_crashes
                 if public and not next(iter(stream_dict.values())).is_public():
                     continue
                 if ref == Stream.name_or_group_from_net_hash(net_hash):

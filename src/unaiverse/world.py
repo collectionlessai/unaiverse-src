@@ -87,6 +87,7 @@ class World(AgentBasics):
             if len(self.world_masters) < 1:
                 return AgentBasics.ROLE_BITS_TO_STR[AgentBasics.ROLE_WORLD_MASTER]
             else:
+                # TODO(review): this single-master demotion to 'world_agent' is undone downstream at the node layer, which re-ORs ROLE_WORLD_MASTER (see node.py); see tests/test_world_roles.py::test_node_layer_second_master_demotion_should_hold
                 return AgentBasics.ROLE_BITS_TO_STR[AgentBasics.ROLE_WORLD_AGENT]
         else:
             return AgentBasics.ROLE_BITS_TO_STR[AgentBasics.ROLE_WORLD_AGENT]

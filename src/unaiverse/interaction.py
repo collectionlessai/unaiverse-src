@@ -896,6 +896,7 @@ class InteractionManager:
 
     def room_for_registration(self) -> bool:
         """Return True if there is capacity to register another interaction."""
+        # TODO(review): counts only the three active dicts while count_interactions also adds the *_recently_completed sets, so count can exceed max_interactions while room still reports capacity; see tests/test_interaction_manager.py::test_room_ignores_recently_completed_while_count_includes_them
         return len(self.sent) + len(self.received) + len(self.lazy) < self.max_interactions
 
     def count_interactions(self) -> int:
@@ -959,6 +960,7 @@ class InteractionManager:
         Returns:
             True if registration succeeded; False if there is no room or the streams are invalid.
         """
+        # TODO(review): collision guard inspects only self.sent while room_for_registration counts sent+received+lazy together, so the same uuid can live in two of {sent, received, lazy} at once; see tests/test_interaction_manager.py::test_same_uuid_can_live_in_sent_and_received_simultaneously
         existing = self.sent.get(interaction.uuid)
         if existing is not None and existing is not interaction:
             log.error(f"UUID collision on {interaction.uuid}, refusing to evict an in-flight interaction")
@@ -1089,6 +1091,7 @@ class InteractionManager:
         Returns:
             True if registration succeeded; False if there is no room, streams are invalid, or matching failed.
         """
+        # TODO(review): collision guard inspects only self.received while room_for_registration counts sent+received+lazy together, so the same uuid can live in two of {sent, received, lazy} at once; see tests/test_interaction_manager.py::test_same_uuid_can_live_in_sent_and_received_simultaneously
         existing = self.received.get(interaction.uuid)
         if existing is not None and existing is not interaction:
             log.error(f"UUID collision on {interaction.uuid}, refusing to evict an in-flight interaction")
@@ -1113,6 +1116,7 @@ class InteractionManager:
         Returns:
             True if registration succeeded; False if there is no room or the streams are invalid.
         """
+        # TODO(review): collision guard inspects only self.lazy while room_for_registration counts sent+received+lazy together, so the same uuid can live in two of {sent, received, lazy} at once; see tests/test_interaction_manager.py::test_same_uuid_can_live_in_sent_and_received_simultaneously
         existing = self.lazy.get(interaction.uuid)
         if existing is not None and existing is not interaction:
             log.error(f"UUID collision on {interaction.uuid}, refusing to evict an in-flight interaction")
@@ -1207,6 +1211,7 @@ class InteractionManager:
         # Guessing net hash and specific name af each stream: if the name was not provided, then all the streams of the
         # group are considered. Generating a full list of streams, distinguishing them in function of their suggested
         # redirection, i.e., 'stdin', 'stdtar', 'stdext', None (meaning 'no suggestions').
+        # TODO(review): buckets keyed by the literal 'stdunk' while the docstring and the dict[str | None, ...] annotation say None; see tests/test_interaction_manager.py::test_match_streams_all_empty_returns_true_five_empty_dicts
         expanded_streams = {'stdin': [], 'stdtar': [], 'stdext': [], "stdunk": []}
         expanded_owned_streams = {'stdin': [], 'stdtar': [], 'stdext': [], "stdunk": []}
 
@@ -1229,8 +1234,10 @@ class InteractionManager:
                         expanded_streams[redirect].append(_stream_hash)
                         if _stream_hash in self.agent.owned_streams_by_user_hash:
                             expanded_owned_streams[redirect].append(_stream_hash)
+        # TODO(review): never returns (None, None) despite the docstring, so the `... is None` guards in register_sent/register_received are dead code; see tests/test_interaction_manager.py::test_expand_uses_stdunk_key_and_never_returns_none
         return expanded_streams, expanded_owned_streams
 
+    # TODO(review): returns a 5-tuple including owned_streams while the docstring describes only a 4-tuple; see tests/test_interaction_manager.py::test_match_streams_all_empty_returns_true_five_empty_dicts
     def match_streams(self, expanded_streams: dict) -> tuple[bool, dict, dict, dict, dict]:
         """Assign expanded stream dicts to stdin, stdtar, or stdext based on processor compatibility.
 
@@ -1749,6 +1756,7 @@ class InteractionManager:
                     log.critical(f"Invalid callback method {interaction.callback}: it must have an argument "
                                  f"which is the interaction object (a single one)")
             else:
+                # TODO(review): a callback naming a non-existent agent method only logs critical here, never returns False or raises, so register_sent/received/lazy still register the broken callback and the AttributeError is deferred to complete(); see tests/test_interaction_manager.py::test_register_sent_should_reject_broken_callback, test_register_received_should_reject_broken_callback, test_register_lazy_should_reject_broken_callback
                 log.critical(f"Invalid callback method {interaction.callback}: it must be a method of the agent class")
 
     def __normalize_to_user_hashes(self, stream_hash: str) -> list[str]:

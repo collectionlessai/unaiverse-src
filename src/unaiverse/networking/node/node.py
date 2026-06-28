@@ -2276,9 +2276,11 @@ class Node:
             is_world_master = (self.world_masters_node_ids is not None and
                                remote_node_id in self.world_masters_node_ids)
             role_str = self.world.assign_role(profile=profile, is_world_master=is_world_master)
+            # TODO(review): dead guard for the base World (assign_role never returns None) and a sharp edge for custom overrides: an out-of-vocabulary string raises KeyError at ROLE_STR_TO_BITS below instead of being rejected here; see tests/test_world_roles.py::test_assign_role_never_returns_none_across_all_combinations
             if role_str is None:
                 return ProfileDecisionResult(accepted=False, reason_code=ROLE_INCOMPATIBLE)
             role = self.world.ROLE_STR_TO_BITS[role_str]
+            # TODO(review): OR-ing ROLE_WORLD_MASTER back in when is_world_master is True turns 1 (assign_role's demoted 'world_agent') into 1|3 == 3 == world_master, undoing the World-layer single-master demotion; see tests/test_world_roles.py::test_node_layer_second_master_demotion_should_hold
             role = role | (Agent.ROLE_WORLD_MASTER if is_world_master else Agent.ROLE_WORLD_AGENT)
 
             # Admit the joiner's world-side identity BEFORE it dials the private

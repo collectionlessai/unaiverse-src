@@ -255,6 +255,7 @@ class HybridStateMachine:
             obj: The object instance to be set as the new `agent`.
         """
         if obj is None:
+            # TODO(review): log.critical raises GenException, so this aborts (e.g. construction with agent=None) and the trailing 'return' is dead code; see tests/test_hsm.py::test_set_actionable_none_raises_genexception
             log.critical("Unexpected None for the agent HSM actionable")
             return
 
@@ -703,6 +704,7 @@ class HybridStateMachine:
         # Handling special state names
         if from_state == Custom.ALL_STATES_NAME:
             for from_state_obj in self.__id_to_state:
+                # TODO(review): this skips states whose name == from_state ('all', which never matches) instead of the destination, so add_global_teleport(to_state=X) forges a spurious X->X self-loop teleport that to_dict drops; see tests/test_hsm.py::test_add_global_teleport_roundtrip_is_stable_intended
                 if from_state_obj.name == from_state:
                     continue
 
@@ -1378,6 +1380,7 @@ class HybridStateMachine:
             self.state = self.initial_state
             self.prev_state = None
             self.limbo_state = None
+            # TODO(review): set_role runs apply_wildcards here, before set_welcome_message installs the welcome, and wildcards are never re-applied, so welcome_msg keeps the literal '<role>' unlike the build path; see tests/test_hsm.py::test_load_applies_welcome_wildcard_intended
             self.set_role(hsm_data['machine']['role'])
             self.set_welcome_message(hsm_data['machine'].get('msg', None))
             self.show_blocking_states = (
@@ -1394,6 +1397,7 @@ class HybridStateMachine:
 
         # Getting states
         if 'states' not in hsm_data:
+            # TODO(review): this unguarded log.critical raises GenException rather than degrading, so load() aborts when the payload lacks the 'states' key; see tests/test_hsm.py::test_load_missing_states_key_raises_genexception
             log.critical(f"Invalid JSON data format when loading the state machine (missing state list)")
 
         for state, state_action in hsm_data['states'].items():
@@ -1505,6 +1509,7 @@ class HybridStateMachine:
                     msg = action_dict.get("msg", None)
                     act_ready = action_dict.get("ready", True)
                     high_priority = action_dict.get("high_priority", False)
+                    # TODO(review): latent: these per-source teleport meta scans omit the 'break' the other scans use, so a second alias key would take the last match instead of the first; harmless today with single-key alias sets
                     total_time = 0.
                     for k in Custom.SECONDS_ARG_NAMES:
                         if k in action_dict:
