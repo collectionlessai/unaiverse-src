@@ -186,6 +186,9 @@ class NodeProfile:
 
         # Ensure essential 'node_id' is present
         static_combined_data = combined_data.get('static')
+        # TODO(review): bare assert raises AssertionError instead of a ValueError consistent with the rest of the
+        # validation, and is stripped under python -O so a downstream None.get / KeyError surfaces instead; see
+        # tests/test_profile.py::test_from_dict_without_static_section_raises
         assert static_combined_data is not None
         static_combined_data: dict
         node_id = static_combined_data.get('node_id', None)
@@ -492,6 +495,9 @@ class NodeProfile:
         return specs_changed
 
     # Get profile data as dict: cv, dynamic_profile, static_profile
+    # TODO(review): these getters (and get_dynamic_profile/get_cv/get_all_profile below) return the internal mutable
+    # dict/list directly instead of a copy, so callers can mutate the profile's private state (encapsulation leak);
+    # see tests/test_profile.py::test_get_all_profile_structure
     def get_static_profile(self) -> dict:
         """Returns the static portion of the profile data.
 

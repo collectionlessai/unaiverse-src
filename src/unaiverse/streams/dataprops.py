@@ -80,6 +80,9 @@ class StreamType:
             kwargs['data_type'] = args[0]
             args = []
 
+        # TODO(review): public_only is a no-op here: a private DataProps is always appended and the public one is added
+        # whenever not private_only, so public_only=True still emits both streams (test:
+        # tests/test_streams_dataprops.py::test_streamtype_public_only_still_emits_both).
         kwargs['public'] = False
         self.props.append(DataProps(*args, **kwargs))
         if not private_only:
@@ -440,6 +443,9 @@ class DataProps:
                          data_desc=self.data_desc,
                          tensor_shape=self.tensor_shape,
                          tensor_dtype=self.tensor_dtype,
+                         # TODO(review): shallow copy of labels: self.tensor_labels.labels (the same list object) is
+                         # passed through, so clone and original share one underlying labels list and mutating one
+                         # affects both (test: tests/test_streams_dataprops.py::test_dataprops_clone_shares_label_list).
                          tensor_labels=self.tensor_labels.labels if self.tensor_labels is not None else None,
                          tensor_labeling_rule=self.tensor_labels.original_labeling_rule
                          if self.tensor_labels is not None else "max",

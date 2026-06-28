@@ -479,6 +479,8 @@ class Stream:
             If all_uuids is True, then it returns a list of tuples (data_sample, tag, timestamp),
                 where each data_sample has the just mentioned properties.
         """
+        # TODO(review): get() has no 'enabled' check, so a disabled stream (disable() gates set() only) keeps serving
+        # previously stored data (tests/test_streams_io.py::test_disable_blocks_set_but_get_still_reads).
         if all_uuids:
             samples = []
             for _uuid in self.get_data_uuids():
@@ -496,6 +498,9 @@ class Stream:
         data_struct = self.data_by_uuid[uuid]
 
         if requested_by is not None:
+            # TODO(review): per-requester dedup keys on data_timestamp (== clock cycle time), so a second set() in the
+            # same cycle is silently dropped for a requester that already consumed the cycle's first sample
+            # (tests/test_streams_io.py::test_resetting_same_cycle_does_not_rearm).
             if (requested_by not in data_struct.data_timestamp_when_got_by or
                     data_struct.data_timestamp_when_got_by[requested_by] != data_struct.data_timestamp):
                 data_struct.data_timestamp_when_got_by[requested_by] = data_struct.data_timestamp
@@ -878,6 +883,9 @@ class BufferedStream(Stream):
                     self.data_buffer_by_uuid[uuid].pop(0)
                     self.text_buffer_by_uuid[uuid].pop(0)
 
+            # TODO(review): on a drained queue self[(0, uuid)] returns (None, -1), so this branch is skipped and the
+            # cached Data struct in data_by_uuid is left untouched, making a new-cycle get() return the last delivered
+            # (stale) sample instead of None (tests/test_streams_io.py::test_buffered_queue_is_fifo).
             if new_tag >= 0:  # When tag == -1, then it means that the data was not present at all
                 if first:
                     data_struct = Data(uuid=uuid)
