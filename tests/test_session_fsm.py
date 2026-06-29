@@ -31,6 +31,8 @@ from unaiverse.networking.session.sess_msg import (
 )
 from unaiverse.networking.node.connpool import NodeConn
 
+pytestmark = pytest.mark.unit
+
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -409,6 +411,7 @@ def test_check_timeout_fires_failed_for_handshake_states(alice_conn, alice_peer_
 
 
 def test_check_timeout_returns_none_before_expiry(alice_conn, alice_peer_id, bob_peer_id):
+    """check_timeout() must not fire while the state deadline is still in the future."""
     sess = _mk(bob_peer_id, SessionRole.INITIATOR, alice_conn, alice_peer_id)
     sess._set_state(SessionState.HELLO_SENT, 10.0)
     assert sess.check_timeout() is None
@@ -417,6 +420,7 @@ def test_check_timeout_returns_none_before_expiry(alice_conn, alice_peer_id, bob
 # ── Disconnect / grace / resume ─────────────────────────────────────────────
 
 def test_disconnect_from_established_enters_reconnecting(alice_conn, alice_peer_id, bob_peer_id):
+    """A transport disconnect from ESTABLISHED emits RECONNECTING and moves to RECONNECTING."""
     sess = _mk(bob_peer_id, SessionRole.INITIATOR, alice_conn, alice_peer_id)
     sess._set_state(SessionState.ESTABLISHED, None)
     ev = sess.on_transport_disconnected()
@@ -437,6 +441,7 @@ def test_transport_reconnect_does_not_blindly_resume(alice_conn, alice_peer_id, 
 
 
 def test_grace_expiry_emits_lost(alice_conn, alice_peer_id, bob_peer_id):
+    """The grace timer expiring while RECONNECTING emits LOST and lands in FAILED."""
     sess = _mk(bob_peer_id, SessionRole.INITIATOR, alice_conn, alice_peer_id)
     sess._set_state(SessionState.RECONNECTING, 0.001)
     time.sleep(0.005)
@@ -448,6 +453,8 @@ def test_grace_expiry_emits_lost(alice_conn, alice_peer_id, bob_peer_id):
 # ── Intentional close ───────────────────────────────────────────────────────
 
 def test_close_sends_goaway_and_enters_closing(alice_conn, alice_p2p, alice_peer_id, bob_peer_id):
+    """close() from ESTABLISHED sends a GOAWAY on the control protocol carrying the given
+    reason and moves the session to CLOSING."""
     sess = _mk(bob_peer_id, SessionRole.INITIATOR, alice_conn, alice_peer_id)
     sess._set_state(SessionState.ESTABLISHED, None)
     _run(sess.close(WORLD_DISENGAGEMENT))
@@ -460,6 +467,7 @@ def test_close_sends_goaway_and_enters_closing(alice_conn, alice_p2p, alice_peer
 
 
 def test_goaway_ack_finalizes_close(alice_conn, alice_peer_id, bob_peer_id):
+    """Receiving a GOAWAY_ACK while CLOSING finalizes the close: CLOSED event, state CLOSED."""
     sess = _mk(bob_peer_id, SessionRole.INITIATOR, alice_conn, alice_peer_id)
     sess._set_state(SessionState.CLOSING, 10.0)
     ack = SessMsg(SessMsg.KIND_GOAWAY_ACK, {"received": True})
@@ -506,6 +514,8 @@ def test_tick_keepalive_sends_session_ping_when_due(alice_conn, alice_peer_id, b
 
 
 def test_pong_ok_clears_failures(alice_conn, alice_peer_id, bob_peer_id):
+    """A matching PONG(ok=true) clears the in-flight ping and resets the consecutive-failure
+    counter to zero, leaving the session ESTABLISHED with no event."""
     sess = _mk(bob_peer_id, SessionRole.INITIATOR, alice_conn, alice_peer_id)
     sess._set_state(SessionState.ESTABLISHED, None)
     sess.session_id = b"\x02" * 16
@@ -553,6 +563,8 @@ def test_keepalive_two_misses_trigger_reconnecting(alice_conn, alice_peer_id, bo
 
 
 def test_on_ping_answers_pong_ok_when_session_matches(bob_conn, bob_peer_id, alice_peer_id):
+    """An inbound PING whose session_id matches the held session is answered with a
+    PONG(ok=true) echoing the ping nonce, with no event emitted."""
     sess = _mk(alice_peer_id, SessionRole.RESPONDER, bob_conn, bob_peer_id)
     sess._set_state(SessionState.ESTABLISHED, None)
     sess.session_id = b"\x07" * 16
@@ -594,6 +606,8 @@ def test_resume_inbound_unknown_session_naks(bob_conn, bob_peer_id, alice_peer_i
 
 
 def test_resume_ack_accepted_resumes(alice_conn, alice_peer_id, bob_peer_id):
+    """An accepted RESUME_ACK with the matching nonce resumes a RECONNECTING initiator
+    straight back to ESTABLISHED via a RESUMED event."""
     sess = _mk(bob_peer_id, SessionRole.INITIATOR, alice_conn, alice_peer_id)
     sess._set_state(SessionState.RECONNECTING, 10.0)
     sess._reconnect_substep = "resume_sent"
@@ -748,6 +762,8 @@ def test_world_grant_to_plain_initiator_is_ignored(alice_conn, alice_peer_id, bo
 # ── Silent abort (tie-breaker support) ──────────────────────────────────────
 
 def test_abort_silently_fails_without_event(alice_conn, alice_peer_id, bob_peer_id):
+    """abort_silently() drops the session to FAILED without emitting any event, as the
+    losing side of a simultaneous-open tie-break needs."""
     sess = _mk(bob_peer_id, SessionRole.INITIATOR, alice_conn, alice_peer_id)
     sess._set_state(SessionState.HELLO_SENT, 5.0)
     sess.abort_silently("simultaneous_open_yielded")

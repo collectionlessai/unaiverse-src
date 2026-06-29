@@ -25,6 +25,8 @@ from unaiverse.networking.node.connpool import NodeConn
 
 from conftest import apump, establish_pair
 
+pytestmark = pytest.mark.e2e
+
 
 def _make_sm(p2p, local_peer_id, node_id):
     return SessionManager(

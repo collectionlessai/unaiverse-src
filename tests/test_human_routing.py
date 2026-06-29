@@ -30,6 +30,8 @@ import pytest
 from unaiverse.agent import Agent
 from unaiverse.custom import Custom
 
+pytestmark = pytest.mark.unit
+
 
 # Distinct, non-equal sentinels so the buggy override is observable: a lookup
 # that swaps BROADCASTER -> WORLD_NODE changes the result.

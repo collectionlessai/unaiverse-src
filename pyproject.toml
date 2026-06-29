@@ -118,4 +118,6 @@ testpaths = ["tests"]
 addopts = "-m 'not p2p'"
 markers = [
     "p2p: integration tests that start real libp2p nodes (slow, opt-in with -m p2p)",
+    "unit: isolated-component / pure-function tests with light mocks",
+    "e2e: end-to-end tests exercising several components in concert (mocked transport)",
 ]

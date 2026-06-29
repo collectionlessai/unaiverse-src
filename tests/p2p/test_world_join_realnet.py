@@ -62,6 +62,11 @@ def _host_decision_hook(peer_id, remote_node_id, remote_profile, p2p_name, verif
 
 
 def test_real_world_join_full_handoff(real_nodes):
+    """Over four real P2P instances, a public world-join mints a WorldGrant that the
+    joiner redeems on the world side: both world Sessions reach ESTABLISHED, the public
+    session is handed off (joiner closes it, host sees CLOSED carrying WORLD_HANDOFF_COMPLETE),
+    and the joiner's world Session establishes as initiator via the normal PROFILE handshake
+    with no PRIVATE_JOIN."""
     j_pub_p2p, j_world_p2p, j_conn, j_pub, j_world = real_nodes.world_node("joiner")
     h_pub_p2p, h_world_p2p, h_conn, h_pub, h_world = real_nodes.world_node(
         "host", decision_hook=_host_decision_hook)

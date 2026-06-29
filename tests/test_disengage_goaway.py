@@ -32,6 +32,8 @@ from unaiverse.agent import Agent
 from unaiverse.networking.node.node import Node
 from unaiverse.networking.session.sess_msg import WORLD_DISENGAGEMENT
 
+pytestmark = pytest.mark.unit
+
 
 PEER = "peer-engaged-id"
 OTHER = "peer-other-id"

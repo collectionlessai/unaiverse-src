@@ -16,6 +16,8 @@ from unaiverse.interaction import (
     InteractionType,
 )
 
+pytestmark = pytest.mark.unit
+
 
 # ── Construction ─────────────────────────────────────────────────────────────
 

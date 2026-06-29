@@ -30,6 +30,8 @@ from node_harness import (
     build_agent_node_shell, make_remote_peer, full_profile_dict, FakeWorld,
 )
 
+pytestmark = pytest.mark.e2e
+
 NODE_PEER = "12D3KooWaaa1nodeshelllllllllllllllllllllllllllllllll"
 REMOTE_PEER = "12D3KooWzzz9remoteeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
 

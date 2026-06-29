@@ -37,6 +37,8 @@ import pytest
 
 from unaiverse.agent import Agent
 
+pytestmark = pytest.mark.unit
+
 
 # ── Lightweight fakes ───────────────────────────────────────────────────────
 

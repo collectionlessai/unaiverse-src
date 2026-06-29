@@ -46,6 +46,10 @@ def _dialable_addr(p2p, kind: str) -> str | None:
 
 @pytest.mark.parametrize("transport", ["tcp", "quic"])
 def test_real_idle_keepalive_stays_established(real_nodes, transport):
+    """A plain public session (over TCP or QUIC) left idle for 42s stays
+    ESTABLISHED on both sides: no RECONNECTING/LOST/FAILED events fire, each
+    peer emits at least two distinct keep-alive ping nonces, and neither side
+    records a single consecutive ping miss."""
     a_p2p, a_conn, a_sm = real_nodes.node("alice")
     b_p2p, b_conn, b_sm = real_nodes.node("bob")
     bob_addr = _dialable_addr(b_p2p, transport)

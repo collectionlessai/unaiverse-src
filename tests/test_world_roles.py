@@ -24,6 +24,8 @@ import pytest
 from unaiverse.world import World
 from unaiverse.custom import GenException
 
+pytestmark = pytest.mark.unit
+
 
 # ── Test doubles ─────────────────────────────────────────────────────────────
 

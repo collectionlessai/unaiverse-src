@@ -18,6 +18,8 @@ from unaiverse.networking.node.connpool import (
 from unaiverse.networking.session import SessMsg
 from unaiverse.networking.p2p.p2p import P2P
 
+pytestmark = pytest.mark.unit
+
 
 class _FakeP2P:
     """Minimal stand-in: fakes pop_messages and reuses the real P2P.get_messages, so the
@@ -66,6 +68,9 @@ def _run(coro):
 # ── Codec round-trip ─────────────────────────────────────────────────────────
 
 def test_codec_round_trips_hello_request():
+    """A HELLO_REQ SessMsg survives to_bytes/from_bytes over the hello protocol id,
+    preserving kind, the bytes fields session_id and nonce_a, the protocol_versions
+    list and the client_id string."""
     msg = SessMsg(SessMsg.KIND_HELLO_REQ, {
         "session_id": b"\x01" * 16, "nonce_a": b"\xaa" * 32,
         "protocol_versions": ["1.0"], "capabilities": 0, "client_id": "py/1.0",
@@ -80,6 +85,9 @@ def test_codec_round_trips_hello_request():
 
 
 def test_codec_round_trips_world_grant():
+    """A WORLD_GRANT SessMsg survives to_bytes/from_bytes over the world protocol id,
+    preserving kind, the grant_id bytes, the large expiry_unix_ms integer, and the
+    role and rendezvous_tag integers."""
     msg = SessMsg(SessMsg.KIND_WORLD_GRANT, {
         "grant_id": b"\x05" * 32, "expiry_unix_ms": 1234567890123,
         "world_profile": b'{"a":1}',
@@ -187,6 +195,8 @@ def test_mixed_batch_split_correctly(pools_with_one_p2p, monkeypatch):
 
 
 def test_session_inbound_namedtuple_shape():
+    """SessionInbound is a namedtuple whose peer_id, protocol_id and sess_msg fields are
+    reachable both by name and by positional index 0/1/2."""
     si = SessionInbound(peer_id="P", protocol_id="/x", sess_msg="d")
     assert si.peer_id == "P"
     assert si.protocol_id == "/x"

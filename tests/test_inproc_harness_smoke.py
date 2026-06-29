@@ -25,6 +25,8 @@ from inproc_harness import (
     build_real_agent_node, register_known_processor_stream,
 )
 
+pytestmark = pytest.mark.e2e
+
 
 # ── Deterministic clock fixture (save/restore the global singleton) ──────────
 

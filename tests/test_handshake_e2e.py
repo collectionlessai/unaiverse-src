@@ -21,6 +21,8 @@ from unaiverse.networking.session import (
 from unaiverse.networking.session.sess_msg import WORLD_DISENGAGEMENT
 from unaiverse.networking.node.connpool import NodeConn
 
+pytestmark = pytest.mark.e2e
+
 
 def _run(coro):
     return asyncio.run(coro)

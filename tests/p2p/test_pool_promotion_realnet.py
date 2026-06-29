@@ -23,6 +23,13 @@ pytestmark = pytest.mark.p2p
 
 
 def test_session_only_peers_enter_pools_and_pool_diffs_fire(real_nodes):
+    """Session handshake traffic alone promotes both peers into friendlyPeers
+    with the correct connection direction (dialer outbound, responder inbound),
+    conn.update() routes them into OUT_PUBLIC/IN_PUBLIC so conn.send finds the
+    peer, and after closing the session a transport disconnect surfaces as a
+    removed pool diff instantly on the disconnecting side and within the Go
+    grace window on the other.
+    """
     # Two-instance nodes: conn.update() iterates both p2p instances like a real
     # Node does (the single-instance test builder aliases public and world onto
     # one P2P, which update() does not support).

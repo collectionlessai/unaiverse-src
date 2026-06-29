@@ -30,6 +30,8 @@ from inproc_harness import (
     build_real_agent_node,
 )
 
+pytestmark = pytest.mark.e2e
+
 GROUP = "best_student_stream"
 PUB_NET_HASH = DataProps.build_net_hash("A-world", pubsub=True, name_or_group=GROUP)
 

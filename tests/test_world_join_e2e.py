@@ -29,6 +29,8 @@ from unaiverse.networking.session.sess_msg import WORLD_HANDOFF_COMPLETE
 from unaiverse.networking.node.connpool import NodeConn
 from conftest import FakeP2P
 
+pytestmark = pytest.mark.e2e
+
 
 def _run(coro):
     return asyncio.run(coro)
@@ -97,6 +99,11 @@ def _host_decision_hook(peer_id, remote_node_id, remote_profile, p2p_name, verif
 
 
 def test_world_join_full_handoff():
+    """Drives the complete world-join handoff end to end: the host mints a WorldGrant on
+    the joiner's public session, the joiner redeems it by establishing both world sessions
+    via the ordinary PROFILE handshake (no PRIVATE_JOIN and no rendezvous_topic in the
+    event), and the public session is then handed off, with the joiner closing it and the
+    host observing a CLOSED carrying the WORLD_HANDOFF_COMPLETE reason."""
     joiner_pub_id, joiner_world_id = "12D3Joiner_PUB", "12D3Joiner_WORLD"
     host_pub_id, host_world_id = "12D3Host_PUB", "12D3Host_WORLD"
 

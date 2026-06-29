@@ -36,6 +36,8 @@ from unaiverse.networking.session.sess_msg import LOCAL_ERROR  # == 15
 from inproc_harness import InProcSwitchboard, InProcNodeConn
 from node_harness import FakeHosted, FakeWorld, FakeNodeProfile
 
+pytestmark = pytest.mark.e2e
+
 
 def _build_world_and_sender():
     """Two InProcNodeConn on one switchboard: a WORLD-host Node shell (FakeHosted

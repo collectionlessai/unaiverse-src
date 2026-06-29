@@ -18,6 +18,8 @@ from unaiverse.networking.session import (
 from unaiverse.networking.session.sess_msg import SIMULTANEOUS_OPEN_LOSS, WORLD_DISENGAGEMENT
 from unaiverse.networking.node.connpool import NodeConn
 
+pytestmark = pytest.mark.unit
+
 
 def _run(coro):
     return asyncio.run(coro)
@@ -68,6 +70,8 @@ def test_initiate_during_quarantine_returns_failed(alice_conn, alice_peer_id, bo
 # ── deliver() — basics ──────────────────────────────────────────────────────
 
 def test_deliver_unknown_protocol_drops(alice_conn, alice_peer_id, bob_peer_id):
+    """A message on a protocol id the manager doesn't route is dropped silently,
+    yielding no events and spawning no Session."""
     sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
     events = _run(sm.deliver(bob_peer_id, "/something/else/1.0.0", SessMsg(SessMsg.KIND_HELLO_REQ, {})))
     assert events == []
@@ -198,6 +202,7 @@ def test_disconnect_from_established_emits_reconnecting(alice_conn, alice_peer_i
 
 
 def test_disconnect_unknown_peer_is_noop(alice_conn, alice_peer_id, bob_peer_id):
+    """A disconnect for a peer the manager holds no Session for is a no-op: no events."""
     sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
     events = _run(sm.on_peer_disconnected(bob_peer_id))
     assert events == []
@@ -206,6 +211,8 @@ def test_disconnect_unknown_peer_is_noop(alice_conn, alice_peer_id, bob_peer_id)
 # ── close_session() ─────────────────────────────────────────────────────────
 
 def test_close_session_sends_goaway(alice_conn, alice_p2p, alice_peer_id, bob_peer_id):
+    """close_session on an ESTABLISHED session moves it to CLOSING and emits a single
+    GOAWAY on the control protocol carrying the given reason code."""
     sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
     sess = _mk_session(alice_conn, bob_peer_id, alice_peer_id)
     sm._sessions[bob_peer_id] = sess
@@ -236,6 +243,8 @@ def test_deliver_unknown_session_ping_replies_pong_not_ok(alice_conn, alice_peer
 
 
 def test_deliver_unknown_session_resume_naks(alice_conn, alice_peer_id, bob_peer_id):
+    """A RESUME for a peer we hold no Session for is NAK'd: a RESUME_ACK with
+    accepted=false and reason_code SESSION_UNKNOWN, and no Session is spawned."""
     from unaiverse.networking.session.sess_msg import SESSION_UNKNOWN
     sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
     resume = SessMsg(SessMsg.KIND_RESUME, {"session_id": b"\x01" * 16, "nonce": b"r1"})
@@ -250,6 +259,8 @@ def test_deliver_unknown_session_resume_naks(alice_conn, alice_peer_id, bob_peer
 # ── close_all() ──────────────────────────────────────────────────────────────
 
 def test_close_all_goaways_established_sessions(alice_conn, alice_peer_id, bob_peer_id):
+    """close_all moves each ESTABLISHED session to CLOSING and sends it a GOAWAY on the
+    control protocol carrying the given reason code."""
     sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
     sess = _mk_session(alice_conn, bob_peer_id, alice_peer_id)
     sess._set_state(SessionState.ESTABLISHED, None)

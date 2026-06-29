@@ -21,6 +21,8 @@ from unaiverse.modules.utils import (
 from unaiverse.streams.dataprops import StreamType
 from unaiverse.custom import GenException
 
+pytestmark = pytest.mark.unit
+
 
 # ── Minimal agent-like container ─────────────────────────────────────────────
 

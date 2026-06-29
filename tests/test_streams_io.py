@@ -13,6 +13,8 @@ from unaiverse.clock import clock
 from unaiverse.streams.streams import Stream, BufferedStream
 from unaiverse.streams.dataprops import DataProps, StreamType
 
+pytestmark = pytest.mark.unit
+
 
 # ── Deterministic clock ─────────────────────────────────────────────────────
 

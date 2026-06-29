@@ -21,6 +21,8 @@ import pytest
 from unaiverse.clock import _Clock, Clock, clock
 from unaiverse.custom import Custom
 
+pytestmark = pytest.mark.unit
+
 
 # A fixed wall-clock anchor: 1700000000.0 == 2023-11-14T22:13:20 UTC.
 FIXED_T = 1700000000.0

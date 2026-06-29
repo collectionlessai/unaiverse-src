@@ -14,6 +14,9 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 
 from unaiverse.networking.node.tokens import TokenVerifier
+import pytest
+
+pytestmark = pytest.mark.unit
 
 PEERS = ["12D3KooWpublicccccccccccccccccccccccccccccccccccccc",
          "12D3KooWworldddddddddddddddddddddddddddddddddddddd"]
@@ -44,6 +47,9 @@ def _valid_payload(**over):
 
 
 def test_verify_token_claims_returns_node_id_cv_hash_and_p2p_peers():
+    """On a valid token, verify_token keeps its 2-tuple (node_id, cv_hash) contract while
+    verify_token_claims additionally returns the p2p_peers binding as a tuple and a positive
+    int exp, with both accessors accepting any peer-id attested in the binding."""
     priv, pub = _keypair()
     tv = TokenVerifier(pub)
     token = _mint(priv, **_valid_payload())
@@ -60,6 +66,8 @@ def test_verify_token_claims_returns_node_id_cv_hash_and_p2p_peers():
 
 
 def test_verify_token_claims_rejects_peer_not_in_binding():
+    """A p2p_peer that is not among the token's attested p2p_peers fails the binding check, so
+    verify_token_claims returns the empty (None, None, (), 0) and verify_token returns (None, None)."""
     priv, pub = _keypair()
     tv = TokenVerifier(pub)
     token = _mint(priv, **_valid_payload())
@@ -69,6 +77,8 @@ def test_verify_token_claims_rejects_peer_not_in_binding():
 
 
 def test_verify_token_claims_rejects_expired_token():
+    """A token whose exp is in the past is rejected by the required-exp decode, so
+    verify_token_claims returns (None, None, (), 0) even when the p2p_peer matches the binding."""
     priv, pub = _keypair()
     tv = TokenVerifier(pub)
     token = _mint(priv, **_valid_payload(exp=int(time.time()) - 10))
@@ -76,6 +86,8 @@ def test_verify_token_claims_rejects_expired_token():
 
 
 def test_verify_token_claims_rejects_wrong_signature():
+    """A token minted with one private key but verified against a different public key fails the
+    RS256 signature check, so verify_token_claims returns (None, None, (), 0)."""
     priv, _ = _keypair()
     _, other_pub = _keypair()
     tv = TokenVerifier(other_pub)   # verifier holds a DIFFERENT public key
@@ -84,6 +96,8 @@ def test_verify_token_claims_rejects_wrong_signature():
 
 
 def test_verify_token_claims_returns_full_peer_ids_not_chars():
+    """Regression: the json.dumps-encoded p2p_peers is decoded back into a tuple of full peer-id
+    strings (each one a member of PEERS), never a tuple of single characters, with exp an int."""
     # Regression for the json.dumps payload: p2p_peers must come back as the tuple
     # of full peer-id strings, never a tuple of single characters (which is what
     # tuple() over the raw JSON string used to produce before the _decode fix).
@@ -97,6 +111,8 @@ def test_verify_token_claims_returns_full_peer_ids_not_chars():
 
 
 def test_verify_token_claims_rejects_substring_of_peer():
+    """A truncated prefix of an attested peer-id is rejected because membership runs on the decoded
+    tuple, not a substring test over the raw JSON string, so both accessors return their empty result."""
     # A fragment of a real peer-id must NOT pass the binding check. Before the fix
     # the membership test ran on the raw JSON string, so any substring slipped
     # through; now it runs on the decoded tuple.

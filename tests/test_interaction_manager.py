@@ -26,6 +26,8 @@ from unaiverse.interaction import (
     InteractionType,
 )
 
+pytestmark = pytest.mark.unit
+
 
 # ── Fakes ────────────────────────────────────────────────────────────────────
 
@@ -562,6 +564,8 @@ def test_register_sent_broken_callback_registers_anyway_actual():
                                        "rejected; register_sent should refuse it (deferred failure "
                                        "lands in complete()).")
 def test_register_sent_should_reject_broken_callback():
+    """DESIRED behavior (xfail): register_sent should refuse a sent interaction whose callback
+    names a method that does not exist on the agent."""
     agent = FakeAgent()
     im = _manager(agent)
     inter = _inter(id="cb", requester="peerA", target="peerB", callback="no_such_callback")
@@ -571,6 +575,8 @@ def test_register_sent_should_reject_broken_callback():
 @pytest.mark.xfail(strict=True, reason="BUG interaction.py:1734: broken callback is logged but not "
                                        "rejected; register_received should refuse it.")
 def test_register_received_should_reject_broken_callback():
+    """DESIRED behavior (xfail): register_received should refuse a received interaction whose
+    callback names a method that does not exist on the agent."""
     agent = FakeAgent()
     agent.all_agents = {"peerA"}
     im = _manager(agent)
@@ -581,6 +587,8 @@ def test_register_received_should_reject_broken_callback():
 @pytest.mark.xfail(strict=True, reason="BUG interaction.py:1734: broken callback is logged but not "
                                        "rejected; register_lazy should refuse it.")
 def test_register_lazy_should_reject_broken_callback():
+    """DESIRED behavior (xfail): register_lazy should refuse a lazy system interaction whose
+    callback names a method that does not exist on the agent."""
     agent = FakeAgent()
     im = _manager(agent)
     inter = _inter(id="cb", requester=Custom.SYSTEM_INTERACTION_LABEL, callback="no_such_callback")

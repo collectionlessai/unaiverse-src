@@ -34,6 +34,8 @@ from unaiverse.custom import Custom, GenException
 from unaiverse.hsm.hsm import HybridStateMachine
 from unaiverse.interaction import Interaction
 
+pytestmark = pytest.mark.unit
+
 
 # ── Logger contract ──────────────────────────────────────────────────────────
 # The suite-wide conftest fixture swaps the logger sink for a no-op object, which

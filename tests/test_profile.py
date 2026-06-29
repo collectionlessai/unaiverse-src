@@ -16,6 +16,8 @@ import pytest
 from unaiverse.networking.node import profile as profile_module
 from unaiverse.networking.node.profile import NodeProfile
 
+pytestmark = pytest.mark.unit
+
 
 # Keys that MUST be present in the static dict or __init__ raises ValueError.
 REQUIRED_STATIC_KEYS = [

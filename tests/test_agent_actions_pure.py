@@ -48,6 +48,8 @@ import pytest
 from unaiverse.agent import Agent
 from unaiverse.agent_basics import AgentBasics
 
+pytestmark = pytest.mark.unit
+
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -160,6 +162,8 @@ def test_role_dict_isolation_restored_after_fixture():
 # ── nop / disengage_all ──────────────────────────────────────────────────────
 
 def test_nop_returns_true_and_does_not_mutate_state(agent):
+    """``nop`` returns True with or without a ``message`` and leaves the engaged
+    set and availability untouched."""
     agent._engaged_agents = {"x"}
     agent._available = False
     assert _run(agent.nop()) is True
@@ -170,6 +174,8 @@ def test_nop_returns_true_and_does_not_mutate_state(agent):
 
 
 def test_disengage_all_resets_engaged_and_availability(agent):
+    """``disengage_all`` clears ``_engaged_agents`` and flips ``_available`` back
+    to True."""
     agent._engaged_agents = {"a", "b"}
     agent._available = False
     assert _run(agent.disengage_all()) is True
@@ -194,11 +200,15 @@ def test_all_sent_completed_true_on_empty_sent(agent):
 
 
 def test_all_sent_completed_false_when_any_pending(agent):
+    """A single not-yet-completed entry in ``im.sent`` makes
+    ``all_sent_completed`` return False."""
     agent.im.sent = {"u1": _FakeSent("teach", True), "u2": _FakeSent("eval", False)}
     assert _run(agent.all_sent_completed()) is False
 
 
 def test_all_sent_completed_filters_by_action_name(agent):
+    """With ``action_name`` set, only entries of that action are checked: 'teach'
+    (all complete) is True while 'eval' (still pending) is False."""
     agent.im.sent = {"u1": _FakeSent("teach", True), "u2": _FakeSent("eval", False)}
     # Only 'teach' entries are complete; only 'eval' is pending.
     assert _run(agent.all_sent_completed(action_name="teach")) is True
@@ -206,6 +216,8 @@ def test_all_sent_completed_filters_by_action_name(agent):
 
 
 def test_all_engagements_completed_tracks_found_agents(agent):
+    """``all_engagements_completed`` is True while ``_found_agents`` is empty and
+    False once it holds any agent."""
     assert _run(agent.all_engagements_completed()) is True
     agent._found_agents = {"s1"}
     assert _run(agent.all_engagements_completed()) is False
@@ -257,12 +269,16 @@ def test_engage_unknown_requester_returns_false(roled_agent):
 
 
 def test_engage_none_sender_role_returns_false(roled_agent):
+    """A ``sender_role`` of None has no bits to mask and match, so engage returns
+    False."""
     roled_agent.world_agents = {"peerW": object()}
     assert _run(roled_agent.engage(acceptable_role="teacher", sender_role=None,
                                    interaction=FakeInteraction("peerW"))) is False
 
 
 def test_engage_none_acceptable_role_returns_false(roled_agent):
+    """An ``acceptable_role`` of None gives nothing to match against, so engage
+    returns False."""
     roled_agent.world_agents = {"peerW": object()}
     assert _run(roled_agent.engage(acceptable_role=None, sender_role="world_agent~teacher",
                                    interaction=FakeInteraction("peerW"))) is False
@@ -320,12 +336,16 @@ def test_find_agents_searches_both_world_role_ints(roled_agent):
 
 
 def test_find_agents_returns_false_when_none_found(roled_agent):
+    """When the node layer yields no peers for the role, find_agents returns
+    False and leaves ``_found_agents`` empty."""
     roled_agent.node_conn = FakeConn({})
     assert _run(roled_agent.find_agents(role="student")) is False
     assert roled_agent._found_agents == set()
 
 
 def test_find_agents_engage_true_copies_into_engaged(roled_agent):
+    """``engage=True`` copies the found peers into ``_engaged_agents``, after
+    which engagements are no longer reported complete."""
     roled_agent.node_conn = FakeConn({9: ["s1"], 11: ["s2"]})
     assert _run(roled_agent.find_agents(role="student", engage=True)) is True
     assert roled_agent._engaged_agents == {"s1", "s2"}
@@ -352,6 +372,8 @@ def test_find_agents_clears_previous_found(roled_agent):
 # ── next_pref_stream / first_pref_stream ─────────────────────────────────────
 
 def test_next_pref_stream_wraps_around(agent):
+    """``next_pref_stream`` advances the pointer one step per call and wraps from
+    the last index back to 0."""
     agent._preferred_streams = ["x", "y", "z"]
     agent._cur_preferred_stream = 0
     assert _run(agent.next_pref_stream()) is True
@@ -364,10 +386,13 @@ def test_next_pref_stream_wraps_around(agent):
 
 
 def test_next_pref_stream_empty_returns_false(agent):
+    """With an empty playlist there is nothing to advance, so
+    ``next_pref_stream`` returns False."""
     assert _run(agent.next_pref_stream()) is False
 
 
 def test_first_pref_stream_resets_pointer(agent):
+    """``first_pref_stream`` resets ``_cur_preferred_stream`` back to 0."""
     agent._preferred_streams = ["x", "y", "z"]
     agent._cur_preferred_stream = 2
     assert _run(agent.first_pref_stream()) is True
@@ -375,6 +400,8 @@ def test_first_pref_stream_resets_pointer(agent):
 
 
 def test_first_pref_stream_empty_returns_false(agent):
+    """With an empty playlist ``first_pref_stream`` has no pointer to reset and
+    returns False."""
     assert _run(agent.first_pref_stream()) is False
 
 
@@ -393,6 +420,9 @@ def test_first_pref_stream_empty_returns_false(agent):
     ],
 )
 def test_check_pref_stream_table_repeat2_songs3(agent, cur, first, last, last_round, last_song):
+    """Full truth table for a repeat=2, 3-song (length-6) playlist: at every
+    pointer position it pins first/last/last_round/last_song (and each negation)
+    of ``check_pref_stream``."""
     agent._preferred_streams = list("abcdef")
     agent._repeat = 2
     agent._cur_preferred_stream = cur
@@ -532,6 +562,8 @@ def test_compare_eval_max_thres_negative_disables_gate(agent):
 
 
 def test_compare_eval_empty_results_returns_false(agent):
+    """With no ``_eval_results`` to compare, compare_eval returns False and leaves
+    ``_valid_cmp_agents`` empty."""
     _seed_eval(agent, {})
     assert _run(agent.compare_eval(cmp="<", thres=0.2)) is False
     assert agent._valid_cmp_agents == set()
@@ -545,6 +577,8 @@ def test_compare_eval_negative_score_returns_false(agent):
 
 
 def test_compare_eval_invalid_cmp_assert_swallowed_to_false(agent):
+    """An unsupported ``cmp`` such as '==' fails the assert inside compare_eval,
+    which @action swallows into a returned False."""
     _seed_eval(agent, {"A": 0.1})
     assert _run(agent.compare_eval(cmp="==", thres=0.2)) is False
 

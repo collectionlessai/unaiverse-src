@@ -10,6 +10,8 @@ import pytest
 
 from unaiverse.streams.dataprops import DataProps, StreamType
 
+pytestmark = pytest.mark.unit
+
 
 # ── net_hash statics ─────────────────────────────────────────────────────────
 

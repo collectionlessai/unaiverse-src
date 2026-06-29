@@ -38,6 +38,8 @@ from inproc_harness import (
     build_real_agent_node, tick, ROLE_PUBLIC,
 )
 
+pytestmark = pytest.mark.e2e
+
 
 # ── Deterministic clock fixture (verbatim from the smoke test) ───────────────
 

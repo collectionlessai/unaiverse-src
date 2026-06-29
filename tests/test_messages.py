@@ -30,6 +30,9 @@ from PIL import Image
 from unaiverse.networking.p2p.messages import Msg
 from unaiverse.networking.p2p import message_pb2 as pb
 from unaiverse.streams.dataprops import FileContainer
+import pytest
+
+pytestmark = pytest.mark.unit
 
 FIXED_TS = "2026-01-02 03:04:05.678901"
 
@@ -37,6 +40,9 @@ FIXED_TS = "2026-01-02 03:04:05.678901"
 # ── scalar fields + observable shape ─────────────────────────────────────────
 
 def test_scalar_fields_preserved_on_construction_and_roundtrip():
+    """The scalar fields (sender, content_type, channel, piggyback, timestamp_net)
+    are kept on construction and survive a to_bytes/from_bytes round-trip, as does
+    the json content."""
     msg = Msg(sender="alice", content={"k": 1}, timestamp_net=FIXED_TS,
               channel="ch-1", content_type=Msg.MISC, piggyback="tok0")
     assert msg.sender == "alice"
@@ -70,6 +76,8 @@ def test_empty_content_is_sentinel():
 
 
 def test_invalid_content_type_rejected():
+    """Constructing a Msg with an unknown content_type string raises AssertionError
+    whose message contains 'Invalid content type'."""
     try:
         Msg(sender="a", content_type="not_a_real_type")
         assert False, "expected an assertion on invalid content_type"
@@ -80,6 +88,9 @@ def test_invalid_content_type_rejected():
 # ── json_content: wire pinned via independent protobuf oracle ────────────────
 
 def test_json_content_wire_matches_protobuf_oracle():
+    """For a json INTERACTION Msg, to_bytes() equals the serialized bytes of a
+    hand-built pb.Message whose json_content is json.dumps(content), pinning the
+    exact wire format."""
     content = {"hello": "world", "n": 3, "nested": {"a": [1, 2]}}
     msg = Msg(sender="s", content=content, timestamp_net=FIXED_TS,
               channel="c", content_type=Msg.INTERACTION, piggyback="p")
@@ -96,6 +107,8 @@ def test_json_content_wire_matches_protobuf_oracle():
 
 
 def test_json_content_roundtrip_shape():
+    """A json content dict with nested lists comes back unchanged through a
+    to_bytes/from_bytes round-trip."""
     content = {"x": 1, "y": ["a", "b"]}
     msg = Msg(sender="s", content=content, content_type=Msg.WORLD_AGENTS_LIST,
               timestamp_net=FIXED_TS)
@@ -110,6 +123,8 @@ def _sample(data, tag=7, uuid="uuid-1"):
 
 
 def test_stream_sample_tensor_roundtrip():
+    """A STREAM_SAMPLE carrying a float32 tensor round-trips preserving data_tag,
+    data_uuid, the tensor values and its dtype."""
     t = torch.arange(12, dtype=torch.float32).reshape(3, 4)
     msg = Msg(sender="s", content={"feat": _sample(t)},
               content_type=Msg.STREAM_SAMPLE, timestamp_net=FIXED_TS)
@@ -122,6 +137,8 @@ def test_stream_sample_tensor_roundtrip():
 
 
 def test_stream_sample_image_roundtrip():
+    """A STREAM_SAMPLE carrying a PIL image with a None data_uuid round-trips
+    preserving the None uuid plus the exact image size and pixel bytes."""
     img = Image.new("RGB", (4, 3), color=(10, 20, 30))
     img.putpixel((1, 1), (200, 100, 50))
     msg = Msg(sender="s", content={"img": _sample(img, uuid=None)},
@@ -135,6 +152,8 @@ def test_stream_sample_image_roundtrip():
 
 
 def test_stream_sample_text_roundtrip():
+    """A STREAM_SAMPLE carrying a text string sample round-trips with the text
+    unchanged."""
     msg = Msg(sender="s", content={"t": _sample("hello there")},
               content_type=Msg.STREAM_SAMPLE, timestamp_net=FIXED_TS)
     back = Msg.from_bytes(msg.to_bytes())
@@ -142,6 +161,8 @@ def test_stream_sample_text_roundtrip():
 
 
 def test_stream_sample_file_roundtrip():
+    """A STREAM_SAMPLE carrying a FileContainer round-trips as a FileContainer,
+    preserving the raw bytes, filename and mime_type."""
     fc = FileContainer(content=b"\x00\x01rawbytes", filename="f.bin", mime_type="application/octet-stream")
     msg = Msg(sender="s", content={"f": _sample(fc)},
               content_type=Msg.STREAM_SAMPLE, timestamp_net=FIXED_TS)
@@ -156,6 +177,8 @@ def test_stream_sample_file_roundtrip():
 # ── stats_update: round-trip, including the existing int->float coercion ─────
 
 def test_stats_update_roundtrip():
+    """A STATS_UPDATE list round-trips preserving the order of group_key, stat_name
+    and timestamp, and the float, list and dict shapes of value."""
     payload = [
         {"group_key": "peerA", "stat_name": "loss", "timestamp": 100, "value": 1.5},
         {"group_key": "peerB", "stat_name": "tags", "timestamp": 200, "value": ["x", "y"]},
