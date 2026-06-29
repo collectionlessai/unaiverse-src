@@ -186,10 +186,8 @@ class NodeProfile:
 
         # Ensure essential 'node_id' is present
         static_combined_data = combined_data.get('static')
-        # TODO(review): bare assert raises AssertionError instead of a ValueError consistent with the rest of the
-        # validation, and is stripped under python -O so a downstream None.get / KeyError surfaces instead; see
-        # tests/test_profile.py::test_from_dict_without_static_section_raises
-        assert static_combined_data is not None
+        if static_combined_data is None:
+            raise ValueError("Input dictionary must contain a 'static' section.")
         static_combined_data: dict
         node_id = static_combined_data.get('node_id', None)
         if not node_id:

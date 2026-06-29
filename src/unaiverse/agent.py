@@ -1415,8 +1415,7 @@ class Agent(AgentBasics):
                     best_so_far = eval_result
                     self._valid_cmp_agents = {agent_peer_id}
                     msgs = [f"The best agent is {owner_account}/{agent_name}"]
-                else:
-                    # TODO(review): cosmetic logging defect, this overwrites msgs with 'No best agent found' on every non-best agent even after the best was selected, while the return value and _valid_cmp_agents stay correct; see tests/test_agent_actions_pure.py::test_compare_eval_min_keeps_best_even_when_iterated_first
+                elif best_so_far < 0:
                     msgs = [f"No best agent found for the considered threshold ({thres})"]
 
         for msg in msgs:

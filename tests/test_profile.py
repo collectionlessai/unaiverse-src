@@ -328,8 +328,9 @@ def test_from_dict_empty_node_id_raises():
 
 
 def test_from_dict_without_static_section_raises():
-    """from_dict asserts the presence of the 'static' section."""
-    with pytest.raises(AssertionError):
+    """from_dict raises ValueError (consistent with the node_id check) when the
+    'static' section is absent."""
+    with pytest.raises(ValueError):
         NodeProfile.from_dict({"dynamic": {}, "cv": []})
 
 

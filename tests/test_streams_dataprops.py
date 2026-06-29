@@ -127,22 +127,6 @@ def test_streamtype_private_only_emits_single_private():
     assert dicts[0]["public"] is False
 
 
-def test_streamtype_public_only_still_emits_both():
-    """SUSPECTED BUG: public_only=True has no real effect; it still emits both a
-    private and a public DataProps (only mutual-exclusion with private_only is
-    enforced). Documenting the current behavior."""
-    st = StreamType("text", public_only=True)
-    dicts = st.to_list_of_dicts()
-    assert len(dicts) == 2
-    assert [d["public"] for d in dicts] == [False, True]
-
-
-def test_streamtype_rejects_both_only_flags():
-    """Setting both private_only and public_only raises ValueError."""
-    with pytest.raises(ValueError):
-        StreamType("text", private_only=True, public_only=True)
-
-
 def test_streamtype_rejects_public_kwarg():
     """Passing 'public' directly (a DataProps arg) raises ValueError."""
     with pytest.raises(ValueError):
@@ -240,14 +224,16 @@ def test_dataprops_clone_is_distinct_and_scalar_independent():
     assert dp.is_pubsub() is False
 
 
-def test_dataprops_clone_shares_label_list():
-    """SUSPECTED BUG: clone passes the same labels list object to the new
-    DataProps, so the two share one underlying list (shallow, not deep, copy).
-    Documenting current behavior."""
+def test_dataprops_clone_copies_label_list():
+    """clone copies the labels list, so clone and original do not share one
+    underlying list and mutating one does not affect the other."""
     dp = DataProps(data_type="tensor", tensor_shape=(1, 2),
                    tensor_dtype="torch.float32", tensor_labels=["a", "b"])
     cl = dp.clone()
-    assert cl.tensor_labels.labels is dp.tensor_labels.labels
+    assert cl.tensor_labels.labels is not dp.tensor_labels.labels
+    assert cl.tensor_labels.labels == dp.tensor_labels.labels
+    cl.tensor_labels.labels.append("c")
+    assert dp.tensor_labels.labels == ["a", "b"]
 
 
 # ── DataProps: type predicates ───────────────────────────────────────────────

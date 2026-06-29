@@ -599,11 +599,10 @@ def test_compare_eval_missing_profile_keyerror_swallowed_to_false(agent):
 
 
 def test_compare_eval_min_keeps_best_even_when_iterated_first(agent):
-    """SUSPECTED BUG (agent.py:1411, cosmetic): in min/max the user-facing
-    ``msgs`` are overwritten to 'No best agent found' on every non-best agent, so
-    when the best is iterated FIRST the final log is misleading. This is a
-    logging-only defect: the RETURN value and ``_valid_cmp_agents`` are still
-    correct. We pin the correct return/state (the cosmetic log is not asserted)."""
+    """In min/max the best agent iterated FIRST is kept: the return value and
+    ``_valid_cmp_agents`` stay correct, and the user-facing ``msgs`` are no longer
+    overwritten to 'No best agent found' once a best exists. We pin the correct
+    return/state (the log text itself is not asserted)."""
     # dict order: best (lowest) 'A' first, then worse 'B'.
     _seed_eval(agent, {"A": 0.1, "B": 0.9})
     assert _run(agent.compare_eval(cmp="min", thres=-1)) is True
