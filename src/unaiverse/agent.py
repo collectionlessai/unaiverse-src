@@ -1793,7 +1793,7 @@ class Agent(AgentBasics):
             # If we are in a world, the reference peer ID is the one of the world, no matter who sent the interaction
             # TODO(review): BUG 2 write side, in a world a non-system chat is stored under the world-node peer-id instead of interaction.requester; see tests/test_human_routing.py::test_rebind_world_should_store_under_requester
             peer_id = interaction.requester if not in_world else self.get_connection_pool_manager().get_world_node_peer_id()
-            self.proc_human_peer_id_to_interaction[peer_id] = interaction
+            self.proc_human_peer_id_to_interaction[peer_id] = interaction  # HERE ONLY
 
         # Forcing default stdin binding (discarding the interaction-provided ones)
         self.set_default_stdin_binding()
@@ -1808,6 +1808,10 @@ class Agent(AgentBasics):
         # TODO(review): BUG 2 corroboration, cleanup deletes under interaction.requester, but in a world the rebind stored the entry under the world-node id, so in-world human interactions are never purged; see tests/test_human_routing.py
         if interaction.requester in self.proc_human_peer_id_to_interaction:
             del self.proc_human_peer_id_to_interaction[interaction.requester]
+        elif self.behaving_in_world():
+            peer_id = self.get_connection_pool_manager().get_world_node_peer_id()
+            if peer_id in self.proc_human_peer_id_to_interaction:
+                del self.proc_human_peer_id_to_interaction[peer_id]
 
         # Clearing data from the stdin, to avoid garbage residuals
         streams_by_user_hash = self.get_default_stdin_bindings()

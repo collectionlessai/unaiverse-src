@@ -544,6 +544,8 @@ class AgentBasics:
         # Clear/reset
         await self.__remove_all_world_private_streams()
         await self.__remove_all_world_related_agents()
+        if world_peer_id in self.proc_human_peer_id_to_interaction:
+            del self.proc_human_peer_id_to_interaction[world_peer_id]
         self.node_conn.reset_rendezvous_tag()
         await self.node_conn.unsubscribe(world_peer_id, channel=f"{world_peer_id}::ps:rv")  # Special rendezvous (ps:rv)
 
