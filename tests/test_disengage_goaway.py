@@ -1,20 +1,20 @@
-"""Characterization tests for the disengage / GOAWAY teardown path (BUG 3).
+"""Tests for the disengage / GOAWAY teardown path (BUG 3, fixed).
 
 Area: ``DisengageGoawayBug``.
 
 When an agent honours a disengagement request *with* a disconnect
-(``Agent.disengage(disconnect_too=True)``), the intent is a graceful teardown:
-the disengaged peer should receive a GOAWAY (Session.Closed) instead of being
-left to time out (RECONNECTING -> FAILED via liveness). The graceful reference
-is ``Node.leave`` (node.py:825), which calls
-``conn.close_session(peer_id, WORLD_DISENGAGEMENT)`` *before* tearing down.
+(``Agent.disengage(disconnect_too=True)``), the teardown is graceful: the
+disengaged peer must receive a GOAWAY (Session.Closed) instead of being left to
+time out (RECONNECTING -> FAILED via liveness). The reference is ``Node.leave``
+(node.py:825), which calls ``conn.close_session(peer_id, WORLD_DISENGAGEMENT)``
+*before* tearing down.
 
-The bug (agent.py:688): ``disengage`` calls ``self.node_purge_fcn(_requester)``
-with ONLY the peer-id and NO reason. ``node_purge_fcn`` is wired to
-``Node.__purge``, whose ``reason`` defaults to ``None``; the guard at
-node.py:2683 (``if reason is not None and not keep_connection``) is therefore
-False, so the ``close_session``/GOAWAY branch is skipped entirely. No GOAWAY is
-sent and the remote falls back to a liveness timeout.
+The fix (agent.py:689): ``disengage`` calls
+``self.node_purge_fcn(_requester, reason=WORLD_DISENGAGEMENT)``. ``node_purge_fcn``
+is wired to ``Node.__purge``; with a non-None reason the guard at node.py:2685
+(``if reason is not None and not keep_connection``) is True, so the
+``close_session``/GOAWAY branch runs. The ``reason=None`` path stays the
+intentional "silent purge" sentinel for internal drops.
 
 Everything here is pure in-process object manipulation: no libp2p, no
 SessionManager, no transport. The raw coroutines are driven via
@@ -24,7 +24,7 @@ resolves agent refs, both unwanted here) and via the name-mangled
 """
 import asyncio
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, call
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -161,11 +161,12 @@ def test_disengage_stays_unavailable_while_other_agents_remain():
 
 # ── disconnect_too=True: current behaviour (documents the bug) ───────────────
 
-def test_disengage_disconnect_too_purges_with_peer_only_no_reason():
-    """CURRENT behaviour: disconnect_too purges with the peer-id alone, no reason.
+def test_disengage_disconnect_too_suppresses_ack_and_purges_once():
+    """disconnect_too suppresses the ack and purges the requester exactly once.
 
-    This pins BUG 3 as it stands today: the ack is suppressed and the peer is
-    purged, but the purge carries no ReasonCode, so __purge skips the GOAWAY.
+    State-side companion to the reason assertion below: the engaged set is
+    cleared, the agent is freed, and the confirmation is suppressed because the
+    link is about to be torn down.
     """
     me = _fake_self(engaged={PEER})
     inter = _fake_interaction()
@@ -177,13 +178,8 @@ def test_disengage_disconnect_too_purges_with_peer_only_no_reason():
     assert me._available is True
     # Ack suppressed because we are about to tear the link down.
     assert inter.send_status is False
-    # The purge is awaited exactly once, with ONLY the peer-id and no kwargs.
+    # The purge is awaited exactly once (the ReasonCode is asserted below).
     me.node_purge_fcn.assert_awaited_once()
-    assert me.node_purge_fcn.call_args == call(PEER)
-    assert me.node_purge_fcn.call_args.args == (PEER,)
-    assert me.node_purge_fcn.call_args.kwargs == {}
-    # Hence no reason is propagated downstream.
-    assert _propagated_reason(me.node_purge_fcn.call_args) is None
 
 
 def test_disengage_disconnect_too_without_interaction_still_purges():
@@ -197,17 +193,11 @@ def test_disengage_disconnect_too_without_interaction_still_purges():
 
 # ── disconnect_too=True: CORRECT behaviour (the bug, xfail strict) ───────────
 
-@pytest.mark.xfail(
-    reason="bug3: disengage(disconnect_too=True) purges without a reason, so __purge "
-           "skips close_session and no GOAWAY is sent (agent.py:688)",
-    strict=True,
-)
-def test_disengage_disconnect_too_should_propagate_world_disengagement_reason():
-    """CORRECT behaviour: the purge must carry WORLD_DISENGAGEMENT so a GOAWAY goes out.
+def test_disengage_disconnect_too_propagates_world_disengagement_reason():
+    """The purge carries WORLD_DISENGAGEMENT so a GOAWAY goes out on a graceful disengage.
 
     Mirrors Node.leave (node.py:825), which closes the Session with
-    WORLD_DISENGAGEMENT before teardown. Today line 688 passes only the peer-id,
-    so the propagated reason is None and this strict xfail is satisfied.
+    WORLD_DISENGAGEMENT before teardown.
     """
     me = _fake_self(engaged={PEER})
     inter = _fake_interaction()
@@ -233,7 +223,7 @@ def _fake_node():
 
 
 def test_purge_with_reason_none_skips_close_session_but_tears_down():
-    """reason=None (disengage's call): no GOAWAY, yet the peer is still removed."""
+    """reason=None (an internal silent purge): no GOAWAY, yet the peer is still removed."""
     node = _fake_node()
 
     _run(_purge(node, PEER))  # reason defaults to None

@@ -37,6 +37,7 @@ from unaiverse.agent import Agent
 from unaiverse.agent_basics import AgentBasics
 from unaiverse.interaction import Interaction
 from unaiverse.networking.p2p.messages import Msg
+from unaiverse.networking.session.sess_msg import WORLD_DISENGAGEMENT
 
 from inproc_harness import (
     InProcSwitchboard, InProcNodeConn, HarnessClock,
@@ -230,18 +231,18 @@ def test_graceful_disengage_clears_relationship_and_leaves_conn_untouched(harnes
     assert conn_s.get_pool_of("T-world") == InProcNodeConn.IN_WORLD_AGENTS
 
 
-# ── (d) disconnect_too: characterize what disengage does to the conn (BUG 3) ──
+# ── (d) disconnect_too: disengage drives a GOAWAY on the conn (BUG 3, fixed) ──
 
-def test_disconnect_too_purges_peer_but_records_no_goaway(harness_clock, roles):
-    """``disengage(disconnect_too=True)`` runs the node purge with a reason-LESS
-    peer-id, so ``Node.__purge``'s guard skips ``close_session``: NO GOAWAY is
-    recorded, yet ``remove_agent`` + ``conn.remove`` still drop the peer from the
-    membership tables and the conn pool.
+def test_disconnect_too_purges_peer_and_records_goaway(harness_clock, roles):
+    """``disengage(disconnect_too=True)`` runs the node purge with
+    WORLD_DISENGAGEMENT, so ``Node.__purge``'s guard routes through
+    ``close_session``: a GOAWAY is recorded, AND ``remove_agent`` + ``conn.remove``
+    drop the peer from the membership tables and the conn pool.
 
-    This is the e2e expression of BUG 3 (agent.py:688). The strict-xfail of the
-    DESIRED GOAWAY-on-graceful-disengage behaviour lives at Level 1 in
-    ``tests/test_disengage_goaway.py::test_disengage_disconnect_too_should_propagate_world_disengagement_reason``;
-    here we only characterize the CURRENT behaviour (empty ``closed_sessions``)."""
+    This is the e2e expression of the BUG 3 fix (agent.py:689). The Level 1 reason
+    assertion lives in
+    ``tests/test_disengage_goaway.py::test_disengage_disconnect_too_propagates_world_disengagement_reason``;
+    here we verify the GOAWAY reaches the conn end to end."""
     sb, conn_t, conn_s, node_t, agent_t, node_s, agent_s = _build_world_pair()
 
     # Establish the relationship first (positive precondition).
@@ -252,8 +253,8 @@ def test_disconnect_too_purges_peer_but_records_no_goaway(harness_clock, roles):
     assert conn_s.is_connected("T-world") is True
 
     # Wire a purge closure that MIRRORS Node.__purge exactly (same guard, same
-    # order), bound to the harness conn + real agent. disengage calls it with only
-    # the peer-id, so reason defaults to None and the close_session branch is dead.
+    # order), bound to the harness conn + real agent. disengage now calls it with
+    # reason=WORLD_DISENGAGEMENT, so the close_session/GOAWAY branch runs.
     async def purge(peer_id, keep_connection=False, reason=None):
         if reason is not None and not keep_connection:
             for ev in await conn_s.close_session(peer_id, reason):
@@ -276,9 +277,9 @@ def test_disconnect_too_purges_peer_but_records_no_goaway(harness_clock, roles):
     # disconnect_too suppresses the confirmation send-back on this interaction.
     assert inter.send_status is False
 
-    # BUG 3 (current behaviour): the reason-less purge skipped close_session, so NO
-    # GOAWAY was recorded on the conn.
-    assert conn_s.closed_sessions == []
+    # BUG 3 (fixed): the reasoned purge routed through close_session, so the GOAWAY
+    # was recorded on the conn with WORLD_DISENGAGEMENT.
+    assert conn_s.closed_sessions == [("T-world", WORLD_DISENGAGEMENT)]
 
     # ...yet remove_agent + conn.remove still ran: the peer is gone from the
     # membership tables AND from the conn pool (no longer connected).

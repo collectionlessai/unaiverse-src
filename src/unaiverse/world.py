@@ -19,6 +19,7 @@ from unaiverse.utils.logger import log
 from unaiverse.agent import AgentBasics
 from unaiverse.networking.p2p.messages import Msg
 from unaiverse.networking.node.profile import NodeProfile
+from unaiverse.networking.session.sess_msg import LOCAL_ERROR
 
 
 class World(AgentBasics):
@@ -119,7 +120,9 @@ class World(AgentBasics):
                                                                 self.ROLE_BITS_TO_STR[new_role_without_base_int]]},
                                               content_type=Msg.ROLE_SUGGESTION)):
                 log.error("Failed to send role change, removing (disconnecting) " + peer_id)
-                await self.node_purge_fcn(peer_id)
+                # Send-failure teardown: LOCAL_ERROR (best-effort GOAWAY; the link may already be
+                # down, but close_session still evicts the Session cleanly).
+                await self.node_purge_fcn(peer_id, reason=LOCAL_ERROR)
             else:
                 self.role_changed_by_world = True
 

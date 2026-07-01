@@ -25,6 +25,7 @@ from unaiverse.utils.logger import log
 from unaiverse.interaction import Interaction
 from unaiverse.agent_basics import AgentBasics
 from unaiverse.networking.p2p.messages import Msg
+from unaiverse.networking.session.sess_msg import WORLD_DISENGAGEMENT, GRACEFUL_SHUTDOWN
 from unaiverse.custom import Custom, GenException
 from unaiverse.streams.dataprops import DataProps
 from unaiverse.modules.utils import ModuleWrapper
@@ -685,8 +686,9 @@ class Agent(AgentBasics):
         if disconnect_too:
             if interaction is not None:
                 interaction.send_status = False  # This will avoid sending back a confirmation for this interaction
-            # TODO(review): BUG 3, disengage(disconnect_too=True) purges with only the peer-id and no reason, so __purge skips close_session and no GOAWAY is sent on a graceful disengage; see tests/test_disengage_goaway.py::test_disengage_disconnect_too_should_propagate_world_disengagement_reason
-            await self.node_purge_fcn(_requester)
+            # Graceful disengage: carry WORLD_DISENGAGEMENT so __purge emits a GOAWAY and the
+            # remote sees Session.Closed instead of timing out via liveness.
+            await self.node_purge_fcn(_requester, reason=WORLD_DISENGAGEMENT)
 
         # Marking this agent as available if not engaged to any agent
         self._available = len(self._engaged_agents) == 0
@@ -717,8 +719,8 @@ class Agent(AgentBasics):
             Always True.
         """
         log.misc(f"Disconnecting agent: {agent}")
-        # TODO(review): BUG 3 related, purges with no reason, so __purge skips close_session and no GOAWAY is sent; see tests/test_disengage_goaway.py
-        await self.node_purge_fcn(agent)  # This will also call remove_agent, that will call remove_streams
+        # Deliberate local teardown: GRACEFUL_SHUTDOWN so the remote sees a clean close.
+        await self.node_purge_fcn(agent, reason=GRACEFUL_SHUTDOWN)  # also calls remove_agent -> remove_streams
         return True
 
     @action
@@ -739,8 +741,9 @@ class Agent(AgentBasics):
         if await self.find_agents(role):
             found_agents = copy.deepcopy(self._found_agents)
             for agent in found_agents:
-                # TODO(review): BUG 3 related, purges with no reason, so __purge skips close_session and no GOAWAY is sent; see tests/test_disengage_goaway.py
-                await self.node_purge_fcn(agent)  # This will also call remove_agent, that will call remove_streams
+                # Role-based disconnect happens only in a world (roles exist only there), so
+                # carry WORLD_DISENGAGEMENT, consistent with disengage.
+                await self.node_purge_fcn(agent, reason=WORLD_DISENGAGEMENT)  # also calls remove_agent -> remove_streams
         return True
 
     @action

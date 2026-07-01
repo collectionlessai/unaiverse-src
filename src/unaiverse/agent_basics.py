@@ -30,6 +30,7 @@ from unaiverse.networking.p2p.messages import Msg
 from unaiverse.streams.streamproxy import StreamProxy
 from unaiverse.networking.node.connpool import NodeConn
 from unaiverse.networking.node.profile import NodeProfile
+from unaiverse.networking.session.sess_msg import LOCAL_ERROR
 from unaiverse.streams.streams import Stream, BufferedStream
 from unaiverse.interaction import Interaction, InteractionManager
 from unaiverse.streams.dataprops import DataProps, StreamType, TensorLabels
@@ -1700,7 +1701,8 @@ class AgentBasics:
                         f"Failed to send interaction status to peer {interaction.requester}, disconnecting it")
 
                     assert self.node_purge_fcn is not None
-                    await self.node_purge_fcn(interaction.requester)
+                    # Send-failure teardown: LOCAL_ERROR (best-effort GOAWAY on a possibly dead link).
+                    await self.node_purge_fcn(interaction.requester, reason=LOCAL_ERROR)
 
     def learn_behave(self, state: int, last_action: int, prev_state: int):
         """A placeholder method for behavioral learning, intended to be implemented by child classes.

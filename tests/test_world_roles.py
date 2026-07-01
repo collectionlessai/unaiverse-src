@@ -19,10 +19,15 @@ One cross-layer bug (the single-master demotion being undone at the node layer)
 is documented with an ``xfail`` test that reproduces the exact integer arithmetic
 of the ``node.py`` call site; see ``suspected_bugs`` in the run report.
 """
+import asyncio
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
 import pytest
 
 from unaiverse.world import World
 from unaiverse.custom import GenException
+from unaiverse.networking.session.sess_msg import LOCAL_ERROR
 
 pytestmark = pytest.mark.unit
 
@@ -364,3 +369,48 @@ def test_discovery_is_skipped_when_not_a_world(world):
     method is a no-op and returns None even on an empty folder (no raise)."""
     world.is_world = False
     assert world.load_and_refactor_action_file_and_behav_files() is None
+
+
+# ── set_role send-failure teardown (BUG 3) ───────────────────────────────────
+
+def _set_role_fake_self(send_ok):
+    """The slice of ``World`` that ``set_role`` touches, with a controllable send
+    outcome. Roles are kept fake (a single custom bit) so the test does not depend
+    on the real role-bit vocabulary."""
+    return SimpleNamespace(
+        is_world=True,
+        node_conn=SimpleNamespace(
+            get_role=lambda peer_id: 1,                 # current role: world_agent
+            set_role=lambda peer_id, role: None,        # spy no-op
+            send=AsyncMock(return_value=send_ok),
+        ),
+        ROLE_BITS_TO_STR={4: "custom_role"},
+        role_to_behav={"custom_role": "<behav>"},
+        node_purge_fcn=AsyncMock(),
+        role_changed_by_world=False,
+    )
+
+
+def test_set_role_send_failure_purges_with_local_error():
+    """When the ROLE_SUGGESTION send fails, set_role purges the peer carrying
+    LOCAL_ERROR, so __purge emits a GOAWAY instead of a silent drop (BUG 3)."""
+    me = _set_role_fake_self(send_ok=False)
+
+    # role=5 -> new_role_without_base_int=4 (!= the current role 1) -> the change is
+    # broadcast, the send fails, and the peer is purged.
+    asyncio.run(World.set_role(me, "peerX", 5))
+
+    me.node_purge_fcn.assert_awaited_once_with("peerX", reason=LOCAL_ERROR)
+    # The success branch (role_changed_by_world=True) never ran.
+    assert me.role_changed_by_world is False
+
+
+def test_set_role_send_success_does_not_purge():
+    """Positive control: when the ROLE_SUGGESTION send succeeds, no purge happens
+    and the world records the role change."""
+    me = _set_role_fake_self(send_ok=True)
+
+    asyncio.run(World.set_role(me, "peerX", 5))
+
+    me.node_purge_fcn.assert_not_awaited()
+    assert me.role_changed_by_world is True

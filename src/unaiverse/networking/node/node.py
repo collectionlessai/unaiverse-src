@@ -1245,6 +1245,10 @@ class Node:
                                         log.error(
                                             "Inspector command was not sent by the expected inspector node ID "
                                             "or no inspector connected")
+                                        # TODO(review): policy question (out of BUG3 scope): this silently purges the
+                                        # whole peer (no reason) for one stray INSPECT_CMD, and the "no inspector
+                                        # connected" branch can hit an innocent peer. Decide whether to drop at all,
+                                        # or pass reason=NOT_AUTHORIZED, before emitting a GOAWAY here.
                                         await self.__purge(msg.sender)
                             await self.conn.get_messages(p2p_name=NodeConn.P2P_WORLD)  # Just draining
                             await asyncio.sleep(0.1)  # Don't block the loop
