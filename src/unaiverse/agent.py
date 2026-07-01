@@ -743,7 +743,7 @@ class Agent(AgentBasics):
             for agent in found_agents:
                 # Role-based disconnect happens only in a world (roles exist only there), so
                 # carry WORLD_DISENGAGEMENT, consistent with disengage.
-                await self.node_purge_fcn(agent, reason=WORLD_DISENGAGEMENT)  # also calls remove_agent -> remove_streams
+                await self.node_purge_fcn(agent, reason=WORLD_DISENGAGEMENT)  # Also calls remove_agent->remove_streams
         return True
 
     @action
@@ -1791,8 +1791,8 @@ class Agent(AgentBasics):
         if not interaction.is_system():
 
             # If we are in a world, the reference peer ID is the one of the world, no matter who sent the interaction
-            # TODO(review): BUG 2 write side, in a world a non-system chat is stored under the world-node peer-id instead of interaction.requester; see tests/test_human_routing.py::test_rebind_world_should_store_under_requester
-            peer_id = interaction.requester if not in_world else self.get_connection_pool_manager().get_world_node_peer_id()
+            peer_id = interaction.requester if not in_world else (
+                self.get_connection_pool_manager().get_world_node_peer_id())
             self.proc_human_peer_id_to_interaction[peer_id] = interaction  # HERE ONLY
 
         # Forcing default stdin binding (discarding the interaction-provided ones)
@@ -1805,7 +1805,6 @@ class Agent(AgentBasics):
         if not self.is_human() or interaction is None:
             return
 
-        # TODO(review): BUG 2 corroboration, cleanup deletes under interaction.requester, but in a world the rebind stored the entry under the world-node id, so in-world human interactions are never purged; see tests/test_human_routing.py
         if interaction.requester in self.proc_human_peer_id_to_interaction:
             del self.proc_human_peer_id_to_interaction[interaction.requester]
         elif self.behaving_in_world():
