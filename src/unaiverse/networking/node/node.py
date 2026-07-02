@@ -682,7 +682,7 @@ class Node:
 
     async def ask_to_get_in_touch(self, node_name: str | None = None, addresses: list[str] | None = None,
                                   node_id: str | None = None,
-                                  public: bool = True, before_updating_pools_fcn: Callable = None,
+                                  public: bool = True, before_updating_pools_fcn: Callable | None = None,
                                   is_world_join: bool = False) -> str | None:
         """Tries to connect to another agent or world node. (async)
 
@@ -751,7 +751,7 @@ class Node:
 
         # Drive the per-peer Session handshake (the Session owns dial + handshake +
         # re-dial). On success the peer is enrolled via the Session ESTABLISHED
-        # side-effects (add_agent / join_world). Pool membership refreshes via the
+        # side effects (add_agent / join_world). Pool membership refreshes via the
         # main polling loop while we await ESTABLISHED.
         log.misc("Connecting to another agent/world (Session-owned dial + handshake)...")
         ok = await self.connect_via_session(peer_id=peer_id, addresses=addresses, p2p_name=p2p_name,
@@ -798,7 +798,6 @@ class Node:
                 'node_id': node_id
             }
             self.joining_world_info = {"world_public_peer_id": peer_id, "options": kwargs}
-            self.joining_world_info["world_public_peer_id"] = peer_id
             log.user("Connected on the public network, waiting for the world handshake to complete...")
         else:
             log.error("Failed to join world!")
@@ -1246,10 +1245,6 @@ class Node:
                                         log.error(
                                             "Inspector command was not sent by the expected inspector node ID "
                                             "or no inspector connected")
-                                        # TODO(review): policy question (out of BUG3 scope): this silently purges the
-                                        # whole peer (no reason) for one stray INSPECT_CMD, and the "no inspector
-                                        # connected" branch can hit an innocent peer. Decide whether to drop at all,
-                                        # or pass reason=NOT_AUTHORIZED, before emitting a GOAWAY here.
                                         await self.__purge(msg.sender)
                             await self.conn.get_messages(p2p_name=NodeConn.P2P_WORLD)  # Just draining
                             await asyncio.sleep(0.1)  # Don't block the loop
@@ -1777,7 +1772,7 @@ class Node:
 
             # (A) legacy PROFILE handshake — REMOVED. The per-peer Session now carries all
             # of it (PROFILE_OFFER/DECISION, WORLD_GRANT) and runs the role assignment +
-            # add_agent + join_world side-effects via _dispatch_session_event. PROFILE is
+            # add_agent + join_world side effects via _dispatch_session_event. PROFILE is
             # still a valid content-type (send_profile_to_all may emit it), but the
             # Session-era consumer ignores any that arrives. The old WORLD_APPROVAL /
             # AGENT_APPROVAL / PROFILE_REQUEST types are gone: an undecodable frame from a
@@ -2027,7 +2022,7 @@ class Node:
         # Session FSM owns handshake timeouts, retry, and reconnection.)
 
     async def __join_world(self, profile: NodeProfile, role: int,
-                           packed_agent_files: str | None, agent_stats_code: str | None,
+                           packed_agent_files: str, agent_stats_code: str | None,
                            rendezvous_tag: int, initial_stats: dict[str, Any] | None,
                            connected_peer_id: str | None = None) -> bool:
         """Performs the actual operation of joining a world after receiving confirmation. (async)
@@ -2111,7 +2106,6 @@ class Node:
             # public peer from the pools so routing is consistent.
             log.misc("Disconnecting from the public world network (since we joined the private one)")
             await self.__purge(world_public_peer_id)
-
 
             # Subscribing to all the other world topics, from which we will get fresh information
             # about the streams
@@ -2276,12 +2270,11 @@ class Node:
             # On the public instance: assign a role and mint a grant.
             is_world_master = (self.world_masters_node_ids is not None and
                                remote_node_id in self.world_masters_node_ids)
+            assert self.world is not None
             role_str = self.world.assign_role(profile=profile, is_world_master=is_world_master)
-            # TODO(review): dead guard for the base World (assign_role never returns None) and a sharp edge for custom overrides: an out-of-vocabulary string raises KeyError at ROLE_STR_TO_BITS below instead of being rejected here; see tests/test_world_roles.py::test_assign_role_never_returns_none_across_all_combinations
             if role_str is None:
                 return ProfileDecisionResult(accepted=False, reason_code=ROLE_INCOMPATIBLE)
             role = self.world.ROLE_STR_TO_BITS[role_str]
-            # TODO(review): OR-ing ROLE_WORLD_MASTER back in when is_world_master is True turns 1 (assign_role's demoted 'world_agent') into 1|3 == 3 == world_master, undoing the World-layer single-master demotion; see tests/test_world_roles.py::test_node_layer_second_master_demotion_should_hold
             role = role | (Agent.ROLE_WORLD_MASTER if is_world_master else Agent.ROLE_WORLD_AGENT)
 
             # Admit the joiner's world-side identity BEFORE it dials the private
@@ -2290,12 +2283,15 @@ class Node:
             # (_world_host_register_agent) would come too late to save the
             # in-flight world handshake. The legacy flow did this at approval time.
             joiner_dyn = profile.get_dynamic_profile()
-            joiner_private_peer_id = joiner_dyn.get('private_peer_id')
-            joiner_private_addr = joiner_dyn.get('private_peer_addresses')
-            # RT binding: the joiner's world-side peer-id must be one the root
+            joiner_private_peer_id: str | None = joiner_dyn.get('private_peer_id')
+            joiner_private_addr: list[str] | None = joiner_dyn.get('private_peer_addresses')
+            # RT binding: the joiner's world-side peer-id must be the one the root
             # attested in p2p_peers, so the host preregisters a root-vouched identity
             # instead of a self-claimed one (the public peer-id was already checked
             # inside the token verification). Skipped on the v1 / no-verifier path.
+            assert joiner_private_peer_id is not None
+            assert joiner_private_addr is not None
+            assert self.world.stats is not None
             if (verified_claims is not None and joiner_private_peer_id and
                     joiner_private_peer_id not in verified_claims.p2p_peers):
                 log.misc(f"[session] decision: world binding mismatch for ...{peer_id[-5:]} → reject")
@@ -2335,7 +2331,7 @@ class Node:
         """Single dispatch site translating SessionEvents into application action.
 
         ESTABLISHED drives the world handoff (joiner side) and the
-        ``add_agent`` / ``__join_world`` / world-list side-effects that the legacy
+        ``add_agent`` / ``__join_world`` / world-list side effects that the legacy
         handshake used to perform inline. RECONNECTING is logged; RESUMED
         re-enrols the agent if the disconnect path already purged it;
         LOST/CLOSED purge; FAILED is surfaced as an error (the handshake is
@@ -2446,7 +2442,7 @@ class Node:
             log.error(f"[session] resumed: re-enrol failed for ...{ev.peer_id[-5:]}: {e}")
 
     async def _on_session_established(self, ev) -> None:
-        """Run the application side-effects for an ESTABLISHED Session, branching on
+        """Run the application side effects for an ESTABLISHED Session, branching on
         (role, p2p instance, grant presence)."""
         is_world = NodeConn.P2P_WORLD == ev.p2p_name or "world" in ev.p2p_name
         profile_b = ev.data.get("profile_b")
@@ -2543,7 +2539,7 @@ class Node:
             log.error(f"[session] world handoff: bad world profile: {e}")
             return
         world_dyn = world_profile.get_dynamic_profile()
-        world_world_peer_id = world_dyn.get("private_peer_id")
+        world_world_peer_id: str | None = world_dyn.get("private_peer_id")
         world_addrs = world_dyn.get("private_peer_addresses") or []
         if not world_world_peer_id:
             log.error("[session] world handoff: world profile lacks private_peer_id")
@@ -2580,7 +2576,9 @@ class Node:
             await self.__purge(ev.peer_id, reason=LOCAL_ERROR)
             return
         private_peer_id = ev.peer_id
-        private_addr = profile.get_dynamic_profile().get("private_peer_addresses")
+        private_addr: list[str] | None = profile.get_dynamic_profile().get("private_peer_addresses")
+        assert self.world is not None
+        assert private_addr is not None
         try:
             # conn pools (routing) + world object (membership). The periodic rendezvous
             # publish (PUBLISH_RENDEZVOUS_EVERY) advertises the new member to the world.
@@ -2596,7 +2594,8 @@ class Node:
         except Exception as e:
             log.error(f"[session] world register failed for ...{private_peer_id[-5:]}: {e}")
 
-    async def _join_world_after_session(self, world_peer_id: str, ev_data: dict, grant) -> bool:
+    # noinspection PyUnusedLocal
+    async def _join_world_after_session(self, world_peer_id: str, ev_data: dict, grant: dict | None) -> bool:
         """Joiner side: run the world-join body against an already-connected world
         Session, decoding the grant blob carried from the public Session."""
         if not grant:
@@ -2616,7 +2615,7 @@ class Node:
         if code:
             try:
                 bundle = json.loads(code.decode("utf-8"))
-                agent_files = bundle.get("agent_files")
+                agent_files: str | None = bundle.get("agent_files")
                 stats_code = bundle.get("stats_code")
             except Exception as e:
                 log.error(f"[session] join_world: bad code_bundle: {e}")
@@ -2628,6 +2627,10 @@ class Node:
                 initial_stats = json.loads(istats.decode("utf-8"))
             except Exception:
                 initial_stats = None
+
+        if agent_files is None:
+            log.error("[session] join_world: missing agent files")
+            return False
 
         return await self.__join_world(
             profile=world_profile, role=role,

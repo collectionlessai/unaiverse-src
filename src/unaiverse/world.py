@@ -64,7 +64,7 @@ class World(AgentBasics):
                                cache_window_hours=2.0)
         assert self.stats is not None
 
-    def assign_role(self, profile: NodeProfile, is_world_master: bool) -> str:
+    def assign_role(self, profile: NodeProfile, is_world_master: bool) -> str | None:
         """Assigns an initial role to a newly connected agent.
 
         In this basic implementation, the role is determined based on whether the agent is a world master or a regular
@@ -75,7 +75,7 @@ class World(AgentBasics):
             is_world_master: A boolean indicating if the new agent is attempting to be a master.
 
         Returns:
-            A string representing the assigned role.
+            A string representing the assigned role or None if assignment was not possible.
         """
         assert self.is_world, "Assigning a role is expected to be done by the world"
 
@@ -83,13 +83,10 @@ class World(AgentBasics):
                 profile.get_dynamic_profile()['guessed_location'] == 'Some Dummy Location, Just An Example Here'):
             pass
 
-        # Currently, roles are only world masters and world agents
+        # Currently, roles are only world masters and world agents: this is expected to be overridden when creating a
+        # world
         if is_world_master:
-            if len(self.world_masters) < 1:
-                return AgentBasics.ROLE_BITS_TO_STR[AgentBasics.ROLE_WORLD_MASTER]
-            else:
-                # TODO(review): this single-master demotion to 'world_agent' is undone downstream at the node layer, which re-ORs ROLE_WORLD_MASTER (see node.py); see tests/test_world_roles.py::test_node_layer_second_master_demotion_should_hold
-                return AgentBasics.ROLE_BITS_TO_STR[AgentBasics.ROLE_WORLD_AGENT]
+            return AgentBasics.ROLE_BITS_TO_STR[AgentBasics.ROLE_WORLD_MASTER]
         else:
             return AgentBasics.ROLE_BITS_TO_STR[AgentBasics.ROLE_WORLD_AGENT]
 
@@ -115,9 +112,9 @@ class World(AgentBasics):
             log.misc("Telling an agent that his role changed")
             if not (await self.node_conn.send(peer_id, channel_trail=None,
                                               content={'peer_id': peer_id, 'role': new_role,
-                                                        'default_behav':
-                                                            self.role_to_behav[
-                                                                self.ROLE_BITS_TO_STR[new_role_without_base_int]]},
+                                                       'default_behav':
+                                                           self.role_to_behav[
+                                                               self.ROLE_BITS_TO_STR[new_role_without_base_int]]},
                                               content_type=Msg.ROLE_SUGGESTION)):
                 log.error("Failed to send role change, removing (disconnecting) " + peer_id)
                 # Send-failure teardown: LOCAL_ERROR (best-effort GOAWAY; the link may already be
