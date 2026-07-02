@@ -86,8 +86,8 @@ def test_send_registers_interaction_and_links_hsm_action(harness_clock):
     """A.send('process', B, data_samples=['hi']): A.im.sent holds the sent
     interaction; B's REAL Node.__handle_network_messages registers the received
     interaction AND the HSM links it to the 'process' action (action_ref set,
-    status RECEIVED). The LIST form is registration-only (see the behave() crash
-    pinned below)."""
+    status RECEIVED). The LIST form is registration-only; the receiver's behave()
+    then runs cleanly over it (the old '<data_sample_0>' crash is fixed, see below)."""
     sb = InProcSwitchboard()
     conn_a = InProcNodeConn("node-A", "A-pub", "A-world", sb)
     conn_b = InProcNodeConn("node-B", "B-pub", "B-world", sb)
@@ -129,18 +129,15 @@ def test_send_registers_interaction_and_links_hsm_action(harness_clock):
     assert rec.status == InteractionStatus.RECEIVED
     assert rec.action_ref is not None  # HybridStateMachine.request_action linked it
 
-    # BUG (TODO(review)): a list-form data_samples=['hi'] crashes the receiver's
-    # behave() unconditionally. Interaction.set_manager binds synthetic
-    # '<data_sample_0>' keys into the StreamProxy; StreamProxy.__str__
-    # (streamproxy.py:448) only special-cases keys starting with '<default', so
-    # '<data_sample_0>' falls through to DataProps.name_from_user_hash
-    # (dataprops.py:705) which does rsplit(':',1)[1] and IndexErrors. The string
-    # is built eagerly when the HSM logs the queued interaction during act(), so
-    # any receiver behave() with a list-form interaction on an action crashes.
-    # Pinned with raises (deterministic) rather than xfail so the registration
-    # assertions above stay in the same green test.
-    with pytest.raises(IndexError):
-        asyncio.run(agent_b.behave())
+    # A list-form data_samples=['hi'] used to crash the receiver's behave():
+    # Interaction.set_manager binds synthetic '<data_sample_0>' keys into the
+    # StreamProxy, and StreamProxy.__str__ only special-cased '<default' keys, so
+    # '<data_sample_0>' fell through to DataProps.name_from_user_hash, whose
+    # rsplit(':',1)[1] raised IndexError when the HSM logged the queued interaction
+    # during act(). __str__ now special-cases '<data_sample' keys, so behave() runs
+    # cleanly and the registered interaction survives the pass.
+    asyncio.run(agent_b.behave())
+    assert agent_b.im.get_interaction(sent.uuid, consider_completed_too=True) is not None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
