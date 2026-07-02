@@ -375,6 +375,36 @@ func CreateNode(
 		options = append(options, libp2p.DisableRelay()) // Explicitly disable using relays.
 		logger.Debugf("[GO]   - Instance %d: Relay client is DISABLED.\n", instanceIndex)
 	} else {
+		var defaultRelaysMaddrs []ma.Multiaddr
+		// Convert string addresses to Multiaddr, skipping any malformed entry
+		// instead of pushing a nil into the slice (which would then poison
+		// AddrInfosFromP2pAddrs below).
+		for _, s := range defaultRelays {
+				addr, err := ma.NewMultiaddr(s)
+				if err != nil {
+					logger.Warnf("[GO] ⚠️ Instance %d: Skipping malformed default relay '%s': %v\n", instanceIndex, s, err)
+					continue
+				}
+				defaultRelaysMaddrs = append(defaultRelaysMaddrs, addr)
+		}
+
+		// Convert to AddrInfo. Never log.Fatal here: this is a c-shared library,
+		// os.Exit would take down the whole hosting Python process.
+		defaultRelaysAddrInfo, err := peer.AddrInfosFromP2pAddrs(defaultRelaysMaddrs...)
+		if err != nil {
+			return C.CString(jsonErrorResponse(fmt.Sprintf("Instance %d: Failed to parse default relay addresses", instanceIndex), err))
+		}
+		// Always enable the autorelay client so a private node can be reached through
+		// our relays. Offering the relay service (below) is now additive and independent:
+		// libp2p gates both on the real AutoNAT reachability, so a private node keeps a
+		// dead /hop while a public one actually relays.
+		options = append(options, libp2p.EnableAutoRelayWithStaticRelays(
+			defaultRelaysAddrInfo,
+			autorelay.WithBootDelay(time.Second*10),
+			autorelay.WithMinCandidates(2),
+			autorelay.WithNumRelays(1),
+		))
+		logger.Debugf("[GO]   - Instance %d: AutoRelay client ENABLED.\n", instanceIndex)
 		// Configure Relay Service (ability to *be* a relay)
 		if cfg.Relay.EnableService {
 			resources := rc.DefaultResources() // open this to see the default resource limits
@@ -393,34 +423,6 @@ func CreateNode(
 			}
 			// This single option enables the node to act as a relay for others.
 			options = append(options, libp2p.EnableRelayService(rc.WithResources(resources)), libp2p.EnableNATService())
-		} else {
-			var defaultRelaysMaddrs []ma.Multiaddr
-			// Convert string addresses to Multiaddr, skipping any malformed entry
-			// instead of pushing a nil into the slice (which would then poison
-			// AddrInfosFromP2pAddrs below).
-			for _, s := range defaultRelays {
-					addr, err := ma.NewMultiaddr(s)
-					if err != nil {
-						logger.Warnf("[GO] ⚠️ Instance %d: Skipping malformed default relay '%s': %v\n", instanceIndex, s, err)
-						continue
-					}
-					defaultRelaysMaddrs = append(defaultRelaysMaddrs, addr)
-			}
-
-			// Convert to AddrInfo. Never log.Fatal here: this is a c-shared library,
-			// os.Exit would take down the whole hosting Python process.
-			defaultRelaysAddrInfo, err := peer.AddrInfosFromP2pAddrs(defaultRelaysMaddrs...)
-			if err != nil {
-				return C.CString(jsonErrorResponse(fmt.Sprintf("Instance %d: Failed to parse default relay addresses", instanceIndex), err))
-			}
-			// In this case we want to use relays but not offer the service to others.
-			options = append(options, libp2p.EnableAutoRelayWithStaticRelays(
-				defaultRelaysAddrInfo,
-				autorelay.WithBootDelay(time.Second*10),
-				autorelay.WithMinCandidates(2),
-				autorelay.WithNumRelays(1),
-			))
-			logger.Debugf("[GO]   - Instance %d: AutoRelay client ENABLED.\n", instanceIndex)
 		}
 	}
 
