@@ -6,11 +6,13 @@ that needs a full ``Node`` WORLD (token issuance, world roles, stdin-driven huma
 turns), so it cannot run on the bare realnet helpers. What CAN run on the real
 wire, and is exercised here, is the punishment PRIMITIVE the world node fires when
 it detects misrouted application content: ``Node.__purge(peer_id,
-reason=LOCAL_ERROR)`` whose entire wire action is
-``conn.close_session(peer_id, LOCAL_ERROR)`` (see node.py:2685-2687). That close
-emits a GOAWAY carrying ``LOCAL_ERROR``; the punished sender's Session must reach
-the terminal ``CLOSED`` state over the real transport, observing the reason — and
-must NOT slip into LOST (the bare-drop symptom).
+reason=LOCAL_ERROR)``, whose GOAWAY wire action is the ``_close_session`` component
+of ``conn.drop_peer(peer_id, LOCAL_ERROR)``. That close emits a GOAWAY carrying
+``LOCAL_ERROR``; the punished sender's Session must reach the terminal ``CLOSED``
+state over the real transport, observing the reason — and must NOT slip into LOST
+(the bare-drop symptom). We isolate the GOAWAY here (``_close_session``, the
+graceful half of drop_peer) so the clean-close property is asserted without the
+transport-drop half racing it.
 
 In scope here (real-wire truth, no mocks):
   * a world-instance ``close_session(sender, LOCAL_ERROR)`` -> GOAWAY -> the
@@ -107,12 +109,13 @@ def test_world_instance_punishes_misrouted_sender_with_goaway_local_error(real_n
         s_sess["host_state"] = h_world.get_session(sender_world_id).state
 
         # The punishment: the host world instance GOAWAY-closes the sender with
-        # LOCAL_ERROR. This is exactly conn.close_session(peer_id, reason), the whole
-        # wire action of Node.__purge(reason=LOCAL_ERROR) (node.py:2685-2687). It
+        # LOCAL_ERROR. This is the GOAWAY half of conn.drop_peer(peer_id, reason), the
+        # wire action of Node.__purge(reason=LOCAL_ERROR); we call _close_session
+        # directly to isolate the graceful close from the transport-drop half. It
         # resolves the sender onto the world instance (the only one holding it) and
         # sends the GOAWAY; the CLOSED arrives back on the sender via the drain.
-        purge_events = await h_conn.close_session(sender_world_id, LOCAL_ERROR)
-        # close_session itself returns [] (CLOSED lands later via tick/inbound).
+        purge_events = await h_conn._close_session(sender_world_id, LOCAL_ERROR)
+        # _close_session itself returns [] (CLOSED lands later via tick/inbound).
         assert purge_events == [], f"expected no immediate events, got {purge_events}"
 
         # Drain until the sender leaves ESTABLISHED: it processed the GOAWAY and

@@ -52,7 +52,7 @@ def full_profile_dict(node_id: str, **dynamic_overrides) -> dict:
 
 
 class _FakeBehav:
-    """The HSM slice leave()'s agent-restore path touches."""
+    """The HSM slice leave_world()'s agent-restore path touches."""
 
     def __init__(self):
         self.actionable = None
@@ -70,7 +70,7 @@ class _FakeRef:
 
 class FakeHosted:
     """Stands in for the hosted Agent: records add/remove calls plus the
-    surface Node.leave() touches when tearing down a world membership."""
+    surface Node.leave_world() touches when tearing down a world membership."""
 
     HUMAN = "human"
 
@@ -89,6 +89,9 @@ class FakeHosted:
         self.behav_lone_wolf = _FakeBehav()
         self.accepted_roles = []
         self.world_data_clears = 0
+        # in_world() reads the role bit (bit0) on the real agent; mirror it here so the
+        # leave_world / _maybe_leave_world_on_session_end gate is exercisable.
+        self._in_world = False
 
     async def add_agent(self, peer_id, profile):
         self.added.append((peer_id, profile))
@@ -106,6 +109,10 @@ class FakeHosted:
 
     def accept_new_role(self, role):
         self.accepted_roles.append(role)
+        self._in_world = bool(role & 1)   # bit0 = "about world" (mirrors in_world())
+
+    def in_world(self):
+        return self._in_world
 
     def set_policy_filter(self, policy_filter, public=False):
         pass
@@ -190,7 +197,9 @@ class NodeFakeConn(FakeConn):
         self.next_removed: dict = {}
         self.peer_id_to_pool = {}
         # Call recorders.
-        self.removed_calls = []
+        self.removed_calls = []          # peers torn down via drop_peer (voluntary teardown)
+        self.evicted_on_disconnect = []  # peers evicted from the pool by on_peer_disconnected
+        self._world_node_peer_id = None  # the remote world host (set_world), read by get_world_node_peer_id
         self.set_world_calls = []
         self.world_agents_set = set()
         self.world_masters_set = set()
@@ -223,6 +232,10 @@ class NodeFakeConn(FakeConn):
         events = []
         for sm in self._session_managers:
             events.extend(await sm.on_peer_disconnected(peer_id))
+        # Involuntary pool-sync: the transport is gone, so the pool bookkeeping is
+        # evicted here (mirrors NodeConn._evict_from_pools), not by a Node bare-remove.
+        self.peer_id_to_pool.pop(peer_id, None)
+        self.evicted_on_disconnect.append(peer_id)
         return events
 
     async def on_peer_reconnected(self, peer_id: str):
@@ -240,6 +253,20 @@ class NodeFakeConn(FakeConn):
         return await sm.initiate(
             peer_id=peer_id, addresses=addresses, is_world_join=is_world_join,
             remote_node_id_hint=remote_node_id_hint, reject_relay=reject_relay)
+
+    async def drop_peer(self, peer_id, reason=None):
+        """Voluntary per-peer teardown (mirrors NodeConn.drop_peer): with a reason,
+        GOAWAY the Session (delegated to the owning SM); then evict the pool
+        bookkeeping. Records the peer for assertions."""
+        events = []
+        if reason is not None:
+            for sm in self._session_managers:
+                if sm.get_session(peer_id) is not None:
+                    events = await sm.close_session(peer_id, reason)
+                    break
+        self.removed_calls.append(peer_id)
+        self.peer_id_to_pool.pop(peer_id, None)
+        return events
 
     async def close_session(self, peer_id, reason):
         for sm in self._session_managers:
@@ -309,7 +336,11 @@ class NodeFakeConn(FakeConn):
         return False
 
     def set_world(self, world_peer_id):
+        self._world_node_peer_id = world_peer_id
         self.set_world_calls.append(world_peer_id)
+
+    def get_world_node_peer_id(self):
+        return self._world_node_peer_id
 
     def get_role(self, peer_id):
         return self.world_roles.get(peer_id, 0)

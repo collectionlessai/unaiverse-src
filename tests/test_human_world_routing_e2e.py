@@ -79,10 +79,10 @@ def test_world_purges_sender_of_application_content(content_type, content, trail
     """A registered sender delivers application content (INTERACTION or
     STREAM_SAMPLE) to a WORLD node; the world purges it with LOCAL_ERROR.
 
-    Asserts all three __purge side-effects: close_session recorded
-    (sender, LOCAL_ERROR), hosted.remove_agent ran and dropped the sender, and
-    conn.remove cleared the pool entry. Cross-ref: the mis-routing that causes a
-    human reply to land here is the xfail unit in tests/test_human_routing.py.
+    Asserts all three __purge side-effects, now funnelled through drop_peer: the
+    GOAWAY is recorded (sender, LOCAL_ERROR), hosted.remove_agent ran and dropped
+    the sender, and the pool entry was cleared. Cross-ref: the mis-routing that
+    causes a human reply to land here is the xfail unit in tests/test_human_routing.py.
     """
     sb, conn_w, conn_h, node_w = _build_world_and_sender()
 
@@ -103,13 +103,13 @@ def test_world_purges_sender_of_application_content(content_type, content, trail
 
     asyncio.run(_run())
 
-    # (a) Session GOAWAY-closed with LOCAL_ERROR (close_session is recorded;
+    # (a) Session GOAWAY-closed with LOCAL_ERROR (drop_peer records the GOAWAY;
     # it returns [] in-process so no _dispatch_session_event is invoked).
     assert ("H-world", LOCAL_ERROR) in conn_w.closed_sessions
     # (b) hosted.remove_agent ran and dropped the sender.
     assert "H-world" in node_w.hosted.removed
     assert "H-world" not in node_w.hosted.all_agents
-    # (c) conn.remove dropped the sender from the pool/identity tables.
+    # (c) drop_peer cleared the sender from the pool/identity tables.
     assert "H-world" not in conn_w.peer_id_to_pool_name
     # The inbox was fully drained by the real loop.
     assert len(conn_w.chat_inbox[InProcNodeConn.P2P_WORLD]) == 0

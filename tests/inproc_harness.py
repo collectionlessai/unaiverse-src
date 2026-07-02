@@ -271,6 +271,18 @@ class InProcNodeConn:
         so this returns no events."""
         return []
 
+    async def drop_peer(self, peer_id: str, reason: int | None = None) -> list:
+        """Voluntary per-peer teardown (mirrors NodeConn.drop_peer): with a reason,
+        RECORD the GOAWAY (close) for the bug-3 e2e; then drop the peer from the
+        pool/identity indices (like the real _remove). Returns [] (the CLOSED event
+        would arrive later via the FSM, not modelled here)."""
+        if reason is not None:
+            self.closed_sessions.append((peer_id, reason))
+        self.peer_id_to_pool_name.pop(peer_id, None)
+        self.peer_id_to_token.pop(peer_id, None)
+        self.peer_id_to_node_id.pop(peer_id, None)
+        return []
+
     async def close_session(self, peer_id: str, reason: int) -> list:
         """GOAWAY a Session. RECORDS (peer_id, reason) for the bug-3 e2e and returns
         [] (the CLOSED event would arrive later via the FSM, not modelled here)."""

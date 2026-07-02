@@ -206,10 +206,12 @@ def test_world_session_goaway_triggers_full_world_leave():
         await node._Node__handle_network_messages()
         assert conn._sm_world.is_established(REMOTE_PEER)
 
-        # Mark the remote as our current world host (what __join_world records).
+        # Mark the remote as our current world host and mark ourselves in-world (what
+        # __join_world records: the host on conn + the world role bit / in_world()).
         dyn = node.profile.get_dynamic_profile()
         dyn['connections']['world_peer_id'] = REMOTE_PEER
         conn.set_world(REMOTE_PEER)
+        node.hosted._in_world = True
 
         # The world host tears the session down gracefully (GOAWAY).
         await remote_sm.close_session(NODE_PEER + "-w", WORLD_DISENGAGEMENT)
@@ -230,6 +232,34 @@ def test_world_session_goaway_triggers_full_world_leave():
                             p2p_name=NodeConn.P2P_WORLD, data={"reason": "liveness_timeout"})
         await node._dispatch_session_event(late)
         assert node.hosted.world_data_clears == 1
+
+    asyncio.run(_scenario())
+
+
+def test_world_handoff_failure_before_join_does_not_leave_world():
+    """A world-session FAILED during the join handoff — before the join completes, so
+    in_world() is still False — must NOT run the full leave_world cleanup: it is a
+    failed join, not a departure. conn holds the host from handoff-initiate onward, so
+    the guard keys off in_world() (the role bit), not merely the host being set."""
+    async def _scenario():
+        from unaiverse.agent import Agent
+
+        node, conn = build_agent_node_shell(NODE_PEER)
+        # Handoff initiated: conn knows the world host, but the join never completed
+        # (no role bit set → in_world() stays False).
+        conn.set_world(REMOTE_PEER)
+        assert node.hosted.in_world() is False
+
+        ev = SessionEvent(type=SessionEventType.FAILED, session_id="00" * 8,
+                          peer_id=REMOTE_PEER, role=SessionRole.INITIATOR,
+                          p2p_name=NodeConn.P2P_WORLD, data={"reason": "dial_failed"})
+        left = await node._maybe_leave_world_on_session_end(ev)
+
+        # Not treated as a departure, and leave_world's side effects never ran.
+        assert left is False
+        assert node.hosted.world_data_clears == 0
+        assert Agent.ROLE_PUBLIC not in node.hosted.accepted_roles
+        assert None not in conn.set_world_calls   # set_world(None) never called
 
     asyncio.run(_scenario())
 
@@ -376,8 +406,9 @@ def test_pool_removal_while_established_keeps_enrolment_during_grace():
     """Contract of __handle_network_connections on a pool drop: the session moves
     to RECONNECTING (grace) and the peer is KEPT in hosted (all_agents), so an
     interaction arriving mid-grace is not rejected as coming from an unknown node.
-    Only the transport-level pool state is cleared here; the hosted purge is driven
-    by the terminal LOST/CLOSED dispatch (see
+    The transport-level pool state is cleared by on_peer_disconnected (involuntary
+    pool-sync, internal to the Coordinator), NOT by a bare-remove from Node; the
+    hosted purge is driven by the terminal LOST/CLOSED dispatch (see
     test_session_lost_while_peer_still_in_pool_purges_and_quarantines)."""
     async def _scenario():
         node, conn, remote_sm, remote_inbox = _agent_pair()
@@ -391,8 +422,9 @@ def test_pool_removal_while_established_keeps_enrolment_during_grace():
         # Enrolment survives the grace window...
         assert REMOTE_PEER in node.hosted.all_agents
         assert REMOTE_PEER not in node.hosted.removed
-        # ...but the transport-level pool state is cleared.
-        assert REMOTE_PEER in conn.removed_calls
+        # ...the pool state is cleared by on_peer_disconnected (not a Node bare-remove).
+        assert REMOTE_PEER in conn.evicted_on_disconnect
+        assert REMOTE_PEER not in conn.removed_calls
 
     asyncio.run(_scenario())
 

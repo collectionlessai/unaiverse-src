@@ -5,16 +5,15 @@ Area: ``DisengageGoawayBug``.
 When an agent honours a disengagement request *with* a disconnect
 (``Agent.disengage(disconnect_too=True)``), the teardown is graceful: the
 disengaged peer must receive a GOAWAY (Session.Closed) instead of being left to
-time out (RECONNECTING -> FAILED via liveness). The reference is ``Node.leave``
-(node.py:825), which calls ``conn.close_session(peer_id, WORLD_DISENGAGEMENT)``
-*before* tearing down.
+time out (RECONNECTING -> FAILED via liveness).
 
 The fix (agent.py:689): ``disengage`` calls
 ``self.node_purge_fcn(_requester, reason=WORLD_DISENGAGEMENT)``. ``node_purge_fcn``
-is wired to ``Node.__purge``; with a non-None reason the guard at node.py:2685
-(``if reason is not None and not keep_connection``) is True, so the
-``close_session``/GOAWAY branch runs. The ``reason=None`` path stays the
-intentional "silent purge" sentinel for internal drops.
+is wired to ``Node.__purge``, which forwards the reason to
+``conn.drop_peer(peer_id, reason)``: with a non-None reason the Coordinator
+GOAWAYs the Session before dropping the connection; with ``reason=None`` it is an
+intentional "silent" teardown (no GOAWAY), for drops that react to a Session that
+already ended.
 
 Everything here is pure in-process object manipulation: no libp2p, no
 SessionManager, no transport. The raw coroutines are driven via
@@ -210,57 +209,47 @@ def test_disengage_disconnect_too_propagates_world_disengagement_reason():
     assert reason == WORLD_DISENGAGEMENT
 
 
-# ── Node.__purge guard (the downstream consequence, green) ───────────────────
-# These pin the guard at node.py:2683 that turns a reason-less purge into a
-# silent drop: with reason=None the GOAWAY (close_session) branch is skipped.
+# ── Node.__purge (the downstream consequence, green) ─────────────────────────
+# __purge forwards (peer_id, reason) to conn.drop_peer (the Coordinator owns the
+# GOAWAY + connection drop), dispatches whatever events drop_peer returns, then
+# tears down the hosted side. The Connection is no longer visible here.
 
 def _fake_node():
     return SimpleNamespace(
-        conn=SimpleNamespace(close_session=AsyncMock(return_value=[]), remove=AsyncMock()),
+        conn=SimpleNamespace(drop_peer=AsyncMock(return_value=[])),
         hosted=SimpleNamespace(remove_agent=AsyncMock()),
         _dispatch_session_event=AsyncMock(),
     )
 
 
-def test_purge_with_reason_none_skips_close_session_but_tears_down():
-    """reason=None (an internal silent purge): no GOAWAY, yet the peer is still removed."""
+def test_purge_with_reason_none_is_a_silent_drop_via_drop_peer():
+    """reason=None (an internal silent teardown / reaction to a session that ended):
+    drop_peer is called with reason=None (no GOAWAY) and the hosted agent is removed."""
     node = _fake_node()
 
     _run(_purge(node, PEER))  # reason defaults to None
 
-    node.conn.close_session.assert_not_awaited()
+    node.conn.drop_peer.assert_awaited_once_with(PEER, None)
     node._dispatch_session_event.assert_not_awaited()
     node.hosted.remove_agent.assert_awaited_once_with(PEER)
-    node.conn.remove.assert_awaited_once_with(PEER)
 
 
-def test_purge_with_reason_sends_goaway_via_close_session():
-    """A non-None reason routes through conn.close_session with that exact reason."""
+def test_purge_with_reason_routes_through_drop_peer_with_that_reason():
+    """A non-None reason is forwarded to conn.drop_peer, which GOAWAYs the Session
+    (with that exact reason) before dropping the connection."""
     node = _fake_node()
 
     _run(_purge(node, PEER, reason=WORLD_DISENGAGEMENT))
 
-    node.conn.close_session.assert_awaited_once_with(PEER, WORLD_DISENGAGEMENT)
+    node.conn.drop_peer.assert_awaited_once_with(PEER, WORLD_DISENGAGEMENT)
     node.hosted.remove_agent.assert_awaited_once_with(PEER)
-    node.conn.remove.assert_awaited_once_with(PEER)
 
 
-def test_purge_dispatches_each_session_event_from_close_session():
-    """Events returned by close_session are dispatched one by one before teardown."""
+def test_purge_dispatches_each_session_event_from_drop_peer():
+    """Events returned by drop_peer are dispatched one by one before the hosted teardown."""
     node = _fake_node()
-    node.conn.close_session = AsyncMock(return_value=["ev-closed"])
+    node.conn.drop_peer = AsyncMock(return_value=["ev-closed"])
 
     _run(_purge(node, PEER, reason=WORLD_DISENGAGEMENT))
 
     node._dispatch_session_event.assert_awaited_once_with("ev-closed")
-
-
-def test_purge_keep_connection_skips_close_session_and_remove():
-    """keep_connection=True suppresses both the GOAWAY and the connection removal."""
-    node = _fake_node()
-
-    _run(_purge(node, PEER, keep_connection=True, reason=WORLD_DISENGAGEMENT))
-
-    node.conn.close_session.assert_not_awaited()
-    node.conn.remove.assert_not_awaited()
-    node.hosted.remove_agent.assert_awaited_once_with(PEER)

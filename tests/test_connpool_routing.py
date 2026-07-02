@@ -460,10 +460,10 @@ def test_char_removal_from_pool_absent_from_classified():
 
 
 def test_char_remove_keeps_misc():
-    """remove() drops the peer from its pool and the connection indices but deliberately KEEPS
+    """_remove() drops the peer from its pool and the connection indices but deliberately KEEPS
     peer_id_to_misc (the role taxonomy), so the role survives a disconnect/re-add. This is part
     of I-2 and must hold after the pool state descends into the SM while the role taxonomy stays
-    Coordinator-owned (D-2)."""
+    Coordinator-owned (D-2). _remove is the internal transport-drop primitive drop_peer builds on."""
     conn, pub, world = _make_node_conn()
     # add_to_world_agents_list records the role in peer_id_to_misc (via set_role) and the roster.
     conn.add_to_world_agents_list("wa", ["/ip4/1.1.1.1/tcp/1"], role=ROLE_WORLD_AGENT)
@@ -471,7 +471,7 @@ def test_char_remove_keeps_misc():
     _run(conn.update())
     assert conn.is_connected("wa")
     assert conn.get_role("wa") == ROLE_WORLD_AGENT
-    assert _run(conn.remove("wa"))
+    assert _run(conn._remove("wa"))
     assert not conn.is_connected("wa")
     # The pool / connection indices dropped it, but the role taxonomy is intentionally kept.
     assert conn.get_role("wa") == ROLE_WORLD_AGENT

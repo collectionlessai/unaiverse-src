@@ -435,33 +435,67 @@ class NodeConn:
         else:
             return False
 
-    async def remove(self, peer_id: str) -> bool:
-        """Removes a peer from its connection pool and disconnects from it (async).
+    async def drop_peer(self, peer_id: str, reason: int | None = None) -> list:
+        """Voluntary per-peer teardown, the single teardown verb the hosted entity
+        drives through (Node.__purge). It is the consequence of a Session transition,
+        never a bare connection close:
+
+          * ``reason is not None`` (we close): GOAWAY the peer's Session on whichever
+            instance holds it (``_close_session``), then disconnect the transport and
+            evict the pool bookkeeping (``_remove``).
+          * ``reason is None`` (the Session already ended: remote CLOSED/LOST or a
+            timeout): no GOAWAY, only ``_remove``.
+
+        Returns the SessionEvents for Node to dispatch (usually ``[]``: the CLOSED
+        arrives later via tick / GOAWAY-ACK). The grace case (transport drop with a
+        surviving RECONNECTING Session) does NOT come through here: it is handled by
+        ``on_peer_disconnected``, which syncs the pool without closing the Session.
 
         Args:
-            peer_id: The peer ID to remove.
+            peer_id: The peer ID to tear down.
+            reason: Optional ReasonCode; when set, the Session is GOAWAY-closed with it
+                before the transport/pool drop.
 
         Returns:
-            True if the peer is successfully removed, otherwise False.
+            The list of SessionEvents to dispatch.
         """
-        if peer_id in self.peer_id_to_pool_name:
-            pool_name = self.peer_id_to_pool_name[peer_id]
-            pool, _, _ = self.pool_name_to_pool_triple[pool_name]
+        events: list = []
+        if reason is not None:
+            events = await self._close_session(peer_id, reason)
+        await self._remove(peer_id)
+        return events
 
-            # Disconnecting via the owning instance's manager (Node -> NodeConn -> SM ->
-            # P2P), resolved before we drop the peer from the pool indices.
-            sm = self._sm_of(peer_id)
-            disc = await sm.disconnect(peer_id) if sm is not None else False
-            pool.remove(peer_id)
-            del self.pool_name_to_peer_infos[pool_name][peer_id]
-            del self.peer_id_to_pool_name[peer_id]
-            if peer_id in self.peer_id_to_token:
-                del self.peer_id_to_token[peer_id]
-
-            # Remember to NOT del peer_id_to_misc[peer_id]!
-            return disc
-        else:
+    async def _remove(self, peer_id: str) -> bool:
+        """Internal: disconnect the peer's transport on its owning instance and evict
+        the pool bookkeeping. Resolves the owning SessionManager BEFORE the eviction
+        (the pool index feeds ``_sm_of``'s fallback). Best-effort; returns the transport
+        disconnect result. Deliberately KEEPS peer_id_to_misc (the role taxonomy)."""
+        if peer_id not in self.peer_id_to_pool_name:
             return False
+
+        # Disconnecting via the owning instance's manager (Node -> NodeConn -> SM ->
+        # P2P), resolved before we drop the peer from the pool indices.
+        sm = self._sm_of(peer_id)
+        disc = await sm.disconnect(peer_id) if sm is not None else False
+        self._evict_from_pools(peer_id)
+        return disc
+
+    def _evict_from_pools(self, peer_id: str) -> bool:
+        """Internal: drop the peer from the pool indices only (the pool set, the per-pool
+        peer infos, the pool-name index and the last-token cache), WITHOUT touching the
+        transport or the Session. This is the pure pool-sync shared by the voluntary drop
+        (``_remove``) and the involuntary transport-drop reaction (``on_peer_disconnected``).
+
+        Remember to NOT del peer_id_to_misc[peer_id]! (the role taxonomy survives a drop)."""
+        pool_name = self.peer_id_to_pool_name.get(peer_id)
+        if pool_name is None:
+            return False
+        pool, _, _ = self.pool_name_to_pool_triple[pool_name]
+        pool.discard(peer_id)
+        self.pool_name_to_peer_infos[pool_name].pop(peer_id, None)
+        del self.peer_id_to_pool_name[peer_id]
+        self.peer_id_to_token.pop(peer_id, None)
+        return True
 
     def get_pool_status(self) -> dict[str, set]:
         """Returns a dictionary showing the set of peer IDs in each pool.
@@ -823,12 +857,20 @@ class NodeConn:
         return events
 
     async def on_peer_disconnected(self, peer_id: str) -> list:
-        """Fan a transport disconnect to every instance's manager and return the flat
-        list of resulting SessionEvent (public before world), for Node to dispatch.
-        ESTABLISHED -> RECONNECTING (grace), in-handshake states -> FAILED."""
+        """React to a transport disconnect: fan it to every instance's manager
+        (ESTABLISHED -> RECONNECTING grace, in-handshake states -> FAILED) and sync the
+        pool bookkeeping (``_evict_from_pools``), returning the flat list of resulting
+        SessionEvent (public before world) for Node to dispatch.
+
+        The link is already gone, so this evicts the pool WITHOUT a transport disconnect
+        (unlike the voluntary ``_remove``). This is the involuntary pool-sync: it runs in
+        BOTH the grace case (the RECONNECTING Session survives, the pool self-heals on the
+        next update() if the peer RESUMEs) and the terminal case, so Node never issues a
+        bare pool-remove itself."""
         events: list = []
         for sm in self._session_managers:
             events.extend(await sm.on_peer_disconnected(peer_id))
+        self._evict_from_pools(peer_id)
         return events
 
     async def on_peer_reconnected(self, peer_id: str) -> list:
@@ -865,13 +907,13 @@ class NodeConn:
             peer_id=peer_id, addresses=addresses, is_world_join=is_world_join,
             remote_node_id_hint=remote_node_id_hint, reject_relay=reject_relay)
 
-    async def close_session(self, peer_id: str, reason: int) -> list:
-        """Gracefully close (GOAWAY) the Session this peer holds, on whichever instance
-        holds it, returning the events for Node to dispatch (close_session itself returns
-        []: the CLOSED arrives later via tick/inbound). No-op when no instance has a Session
-        for the peer; unlike _sm_of this does NOT fall back to the pool, matching the old
-        Node guard on Session presence. A peer lives on a single instance, so the
-        public-before-world sweep order is not observable."""
+    async def _close_session(self, peer_id: str, reason: int) -> list:
+        """Internal: gracefully close (GOAWAY) the Session this peer holds, on whichever
+        instance holds it, returning the events for Node to dispatch (the close itself
+        returns []: the CLOSED arrives later via tick/inbound). No-op when no instance has
+        a Session for the peer; unlike _sm_of this does NOT fall back to the pool, matching
+        the old Node guard on Session presence. A peer lives on a single instance, so the
+        public-before-world sweep order is not observable. Used only by ``drop_peer``."""
         for sm in self._session_managers:
             if sm.get_session(peer_id) is not None:
                 return await sm.close_session(peer_id, reason)
@@ -1576,7 +1618,7 @@ class NodeConn:
         peer_infos = self.get_all_connected_peer_infos(NodeConn.WORLD)
         for c in peer_infos:
             peer_id = c['id']
-            await self.remove(peer_id)
+            await self._remove(peer_id)
             if peer_id in self.peer_id_to_addrs:
                 del self.peer_id_to_addrs[peer_id]
             for role, peer_ids in self.role_to_peer_ids.items():

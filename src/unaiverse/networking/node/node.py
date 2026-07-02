@@ -777,10 +777,8 @@ class Node:
         """
         log.user("Asking to join world...")
 
-        # Leave an already entered world (if any)
-        world_peer_id = self.profile.get_dynamic_profile()['connections']['world_peer_id']
-        if world_peer_id is not None:
-            await self.leave(world_peer_id)
+        # Leave an already entered world (if any); idempotent, reads the host from conn.
+        await self.leave_world()
 
         # Record the join intent (options forwarded into the offered profile downstream).
         self.joining_world_info = {"world_public_peer_id": None, "options": kwargs}
@@ -807,101 +805,104 @@ class Node:
             self.joining_world_info = None
         return peer_id
 
-    async def leave(self, peer_id: str) -> None:
-        """Disconnects the node from a specific peer, typically a world. (async)
+    async def leave_world(self) -> None:
+        """Leave the world we are currently in, if any. (async)
 
-        Args:
-            peer_id: The peer ID of the node to leave.
+        The world host is read from the Coordinator (``conn.get_world_node_peer_id``),
+        the single runtime source of truth for the current world identity (the profile
+        field is a persisted mirror). Idempotent: a no-op when not in a world. This is the
+        world-departure domain flow that used to live, inverted, inside the per-peer
+        ``leave`` god-method:
+
+          * GOAWAY + drop the world host (``__purge`` with WORLD_DISENGAGEMENT);
+          * clear the world roster and point pool routing away from the host (``set_world(None)``);
+          * drop every remaining in-world agent (``remove_all_world_agents``);
+          * clear the world fields of the profile (the persisted mirror);
+          * drop the cached world data and, for a code-hosting WAgent, restore a plain
+            public Agent instance carrying over the pre-world attributes.
+
+        Gated on ``in_world()`` (the role bit set by a completed join), NOT merely on conn
+        holding a host: conn holds the host from handoff-initiate onward, so gating on the
+        host alone would tear down on an in-flight or failed join. This mirrors the
+        pre-refactor gate (profile world_peer_id, written only on a successful join).
         """
-
-        if not isinstance(peer_id, str):
-            log.error(f"Invalid argument provided to leave(...): {peer_id}")
+        if self.agent is None or not self.agent.in_world():
+            return
+        host = self.conn.get_world_node_peer_id()
+        if host is None:
             return
 
-        log.user(f"Leaving {peer_id}...")
+        log.user("Leaving world...")
 
-        # Gracefully close any Session to this peer (sends GOAWAY so the remote sees
-        # Session.Closed, not Lost) on whichever instance holds it.
-        for ev in await self.conn.close_session(peer_id, WORLD_DISENGAGEMENT):
-            await self._dispatch_session_event(ev)
+        # GOAWAY the world host and drop its connection (so the remote sees Session.Closed,
+        # not Lost). remove_all_world_agents below drops the other world agents (no GOAWAY).
+        await self.__purge(host, reason=WORLD_DISENGAGEMENT)
 
+        # Clearing world-related lists in the connection manager (to avoid world agents
+        # reconnecting) and pointing pool routing away from the host.
+        self.conn.set_world(None)
+        self.conn.set_world_agents_list(None)
+        self.conn.set_world_masters_list(None)
+
+        # Disconnecting all the remaining connected world agents (clears their roles too).
+        await self.conn.remove_all_world_agents()
+
+        # Clearing the world fields of the profile (the persisted mirror of the runtime state).
         dynamic_profile = self.profile.get_dynamic_profile()
+        dynamic_profile['connections']['world_peer_id'] = None
+        dynamic_profile['connections']['world_agents'] = None
+        dynamic_profile['connections']['world_masters'] = None
+        self.profile.mark_change_in_connections()
 
-        if peer_id == dynamic_profile['connections']['world_peer_id']:
-            log.user("Leaving world...")
+        # Clearing all joining options + cached world data.
+        assert self.agent is not None
+        await self.agent.clear_world_related_data(host)
+        self.joining_world_info = None
 
-            # Clearing world-related lists in the connection manager (to avoid world agent to connect again)
-            self.conn.set_world(None)
-            self.conn.set_world_agents_list(None)
-            self.conn.set_world_masters_list(None)
+        if self.agent.__class__.__name__ == "WAgent":
+            new_agent = Agent(proc=None)
 
-            # Disconnecting all connected world-related agents, including world node (it clears roles too)
-            await self.conn.remove_all_world_agents()
-
-            # Clear profile
-            dynamic_profile['connections']['world_peer_id'] = None
-            dynamic_profile['connections']['world_agents'] = None
-            dynamic_profile['connections']['world_masters'] = None
-            self.profile.mark_change_in_connections()
-
-            # Clearing all joining options
-            assert self.agent is not None
-            await self.agent.clear_world_related_data(peer_id)
-            self.joining_world_info = None
-
-            if self.agent.__class__.__name__ == "WAgent":
-                new_agent = Agent(proc=None)
-
-                # Clearing memory
-                if self.memory_finder is not None:
-                    self.memory_finder.cleanup()
-                self.memory_finder = None
-            else:
-                new_agent = self.agent
-
-            # Cloning attributes of the existing agent
-            skip = {'stats', 'world_profile', 'behav'}
-            for key, value in self.agent.__dict__.items():
-                if hasattr(new_agent, key):  # This will skip ROLE_BITS_TO_STR, CUSTOM_ROLES, etc...
-                    if key in skip:
-                        continue
-                    else:
-                        setattr(new_agent, key, value)
-
-            # Fixing internal references to agent (im/proc were cloned from the
-            # in-world instance and still point at it)
-            new_agent.im.agent = new_agent
-            new_agent.proc.agent = new_agent
-
-            # Telling the FSM that actions are related to this new agent
-            new_agent.behav.set_actionable(new_agent)
-            new_agent.behav_lone_wolf.set_actionable(new_agent)
-
-            # Inheriting the pre-defined policy filter (if any)
-            new_agent.set_policy_filter(self.agent.policy_filter, public=False)
-            new_agent.set_policy_filter(self.agent.policy_filter_lone_wolf, public=True)
-
-            # Interaction Manager and processor
-            new_agent.im.agent = new_agent
-            if new_agent.proc is not None and hasattr(new_agent.proc, 'set_agent'):
-                new_agent.proc.set_agent(new_agent)
-
-            # Fixing role in the agent profile
-            new_agent.world_profile = None  # It is already None actually...
-            new_agent.accept_new_role(Agent.ROLE_PUBLIC)
-
-            # Updating node-level references
-            self.agent = new_agent
-            self.hosted = new_agent
+            # Clearing memory
+            if self.memory_finder is not None:
+                self.memory_finder.cleanup()
+            self.memory_finder = None
         else:
-            if peer_id in self.hosted.all_agents:
-                await self.hosted.remove_agent(peer_id)
-            await self.conn.remove(peer_id)
+            new_agent = self.agent
 
-    async def leave_world(self) -> None:
-        """Initiates the process of leaving a world. (async)"""
-        if self.profile.get_dynamic_profile()['connections']['world_peer_id'] is not None:
-            await self.leave(self.profile.get_dynamic_profile()['connections']['world_peer_id'])
+        # Cloning attributes of the existing agent
+        skip = {'stats', 'world_profile', 'behav'}
+        for key, value in self.agent.__dict__.items():
+            if hasattr(new_agent, key):  # This will skip ROLE_BITS_TO_STR, CUSTOM_ROLES, etc...
+                if key in skip:
+                    continue
+                else:
+                    setattr(new_agent, key, value)
+
+        # Fixing internal references to agent (im/proc were cloned from the
+        # in-world instance and still point at it)
+        new_agent.im.agent = new_agent
+        new_agent.proc.agent = new_agent
+
+        # Telling the FSM that actions are related to this new agent
+        new_agent.behav.set_actionable(new_agent)
+        new_agent.behav_lone_wolf.set_actionable(new_agent)
+
+        # Inheriting the pre-defined policy filter (if any)
+        new_agent.set_policy_filter(self.agent.policy_filter, public=False)
+        new_agent.set_policy_filter(self.agent.policy_filter_lone_wolf, public=True)
+
+        # Interaction Manager and processor
+        new_agent.im.agent = new_agent
+        if new_agent.proc is not None and hasattr(new_agent.proc, 'set_agent'):
+            new_agent.proc.set_agent(new_agent)
+
+        # Fixing role in the agent profile
+        new_agent.world_profile = None  # It is already None actually...
+        new_agent.accept_new_role(Agent.ROLE_PUBLIC)
+
+        # Updating node-level references
+        self.agent = new_agent
+        self.hosted = new_agent
 
     def search(self, query_text: str, email: str | None = None) -> list[NodeProfile]:
         """Searches the UNaIVERSE platform for nodes matching the given query.
@@ -1339,7 +1340,7 @@ class Node:
                                     await self.leave_world()
                                 connected_peer_ids = list(self.agent.all_agents.keys())
                                 for peer_id in connected_peer_ids:
-                                    await self.leave(peer_id)
+                                    await self.__purge(peer_id, reason=WORLD_DISENGAGEMENT)
                             elif msg.lower() == "/debug":
                                 self.agent.behav_lone_wolf.set_debug_messages_active(
                                     not self.agent.behav_lone_wolf.are_debug_messages_active())
@@ -1428,10 +1429,8 @@ class Node:
                         # mark as changed (-> sends the profile to the root)
                         self.profile.mark_change_in_connections()
 
-                        world_peer_id = (self.profile.get_dynamic_profile().
-                                         get('connections', {}).get('world_peer_id', None))
-                        if (world_peer_id is not None and isinstance(world_peer_id, str) and
-                                self.node_type is Node.AGENT and world_peer_id):
+                        world_peer_id = self.conn.get_world_node_peer_id()
+                        if world_peer_id is not None and self.node_type is Node.AGENT:
                             log.misc("Notifying world of address change...")
                             await self.conn.send(
                                 world_peer_id, content_type=Msg.ADDRESS_UPDATE, channel_trail=None,
@@ -1447,7 +1446,7 @@ class Node:
                     time_to_expiry = self.relay_reservation_expiry - datetime.now(timezone.utc)
                     if time_to_expiry < timedelta(minutes=15):
                         log.misc("Relay reservation nearing expiration. Attempting to renew...")
-                        world_private_peer_id = self.profile.get_dynamic_profile()['connections']['world_peer_id']
+                        world_private_peer_id = self.conn.get_world_node_peer_id()
                         new_expiry_utc = await self.conn.reserve(world_private_peer_id, NodeConn.P2P_WORLD)
                         if new_expiry_utc is not None:
                             self.relay_reservation_expiry = datetime.fromisoformat(
@@ -1548,7 +1547,7 @@ class Node:
                 try:
                     connected_peer_ids = list(self.hosted.all_agents.keys())
                     for peer_id in connected_peer_ids:
-                        await self.leave(peer_id)
+                        await self.__purge(peer_id, reason=WORLD_DISENGAGEMENT)
                     # GOAWAY any Session not covered by the per-peer leave above.
                     await self.conn.close_all_sessions()
                     log.close()  # Closing logger
@@ -1583,16 +1582,14 @@ class Node:
                 for ev in await self.conn.on_peer_disconnected(peer_id):
                     await self._dispatch_session_event(ev)
 
-                # A Session riding its grace period (RECONNECTING) is not gone yet.
-                # Keep the enrolment (all_agents) alive across the blip so an
-                # INTERACTION arriving mid-grace is not rejected as coming from an
-                # unknown node: only clear the transport-level pool state here. The
-                # hosted purge is then driven solely by the terminal LOST/CLOSED
-                # Session event (see _dispatch_session_event). When no Session is in
-                # grace for this peer, fall back to the full purge as before.
-                if self.conn.is_in_grace(peer_id):
-                    await self.conn.remove(peer_id)
-                else:
+                # on_peer_disconnected above already synced the pool bookkeeping (the
+                # link is gone). A Session riding its grace period (RECONNECTING) is not
+                # gone yet: keep the enrolment (all_agents) alive across the blip so an
+                # INTERACTION arriving mid-grace is not rejected as coming from an unknown
+                # node. The hosted purge is then driven solely by the terminal LOST/CLOSED
+                # Session event (see _dispatch_session_event). When no Session is in grace
+                # for this peer, purge the hosted side now (the pool is already clean).
+                if not self.conn.is_in_grace(peer_id):
                     await self.__purge(peer_id)
 
                 # Checking if we removed an agent from this world
@@ -2106,7 +2103,7 @@ class Node:
             # about the world agents and masters
             log.misc("Subscribing to the world-members topic...")
             if not (await self.conn.subscribe(peer_id, channel=f"{peer_id}::ps:rv")):  # Special rendezvous (ps:rv)
-                await self.leave(peer_id)  # If subscribing fails, we quit everything (safer)
+                await self.__purge(peer_id, reason=WORLD_DISENGAGEMENT)  # If subscribing fails, we quit everything (safer)
                 return False
 
             # Killing the public connection to the world node. On the Session path the
@@ -2125,7 +2122,7 @@ class Node:
             list_of_props += dynamic_profile['proc_outputs'] if dynamic_profile['proc_outputs'] is not None else []
 
             if not (await self.agent.add_compatible_streams(peer_id, list_of_props, buffered=False, public=False)):
-                await self.leave(peer_id)
+                await self.__purge(peer_id, reason=WORLD_DISENGAGEMENT)
                 return False
 
             # Getting agent files
@@ -2382,15 +2379,24 @@ class Node:
         (world lists, profile connections, role, agent-instance restore, code
         bundle unload) instead of a plain purge, otherwise the agent keeps
         believing it is in-world (in_world() reads the role bit) and e.g. the
-        stats sender fires against a dead peer forever. A CLOSED caused by our
-        own leave() does not match: leave() clears world_peer_id synchronously,
-        before its CLOSED event surfaces through the pump."""
+        stats sender fires against a dead peer forever. The world host is read from
+        the Coordinator (the single runtime source of truth). A terminal event caused
+        by our own leave_world does not re-enter: leave_world clears the host
+        synchronously (conn.set_world(None)) before its CLOSED surfaces through the pump."""
         if self.node_type is not Node.AGENT:
             return False
         if not (NodeConn.P2P_WORLD == ev.p2p_name or "world" in ev.p2p_name):
             return False
-        world_peer_id = self.profile.get_dynamic_profile()['connections']['world_peer_id']
-        if world_peer_id is None or ev.peer_id != world_peer_id:
+        host = self.conn.get_world_node_peer_id()
+        if host is None or ev.peer_id != host:
+            return False
+        # conn holds the host from handoff-initiate onward, i.e. BEFORE the join
+        # completes. A terminal event on the host before we are actually in the world
+        # (in_world() reads the role bit set by __join_world) is a failed join, not a
+        # departure: fall through to the plain purge, leaving the application state
+        # untouched (matching the pre-refactor guard, whose profile mirror stayed unset
+        # until the join succeeded).
+        if self.agent is None or not self.agent.in_world():
             return False
         log.misc(f"[session] world link terminated ({ev.type.value}, "
                  f"reason={ev.data.get('reason', 'unknown')}) → leaving world", sub="prv")
@@ -2665,35 +2671,28 @@ class Node:
             await self._dispatch_session_event(ev)
         return started
 
-    async def __purge(self, peer_id: str, keep_connection: bool = False,
-                      reason: int | None = None) -> None:
-        """Removes a peer from the hosted entity and the connection pools. (async)
+    async def __purge(self, peer_id: str, reason: int | None = None) -> None:
+        """Tear a peer down: drop its connection at the Coordinator and remove it from
+        the hosted entity. (async)
 
-        The legacy interview / ack / ping-pong queues this used to clear are gone —
-        per-peer state now lives in the Session FSM. When `reason` is given and we
-        are actually dropping the link, the peer's Session (if any) is gracefully
-        closed first (GOAWAY with `reason`) so the remote observes Session.Closed
-        instead of timing out to Lost, and the Session is evicted rather than left
-        dangling until its keep-alive expires. Pass `reason=None` (the default) for
-        drops where the Session is handled elsewhere: the polled transport-disconnect
-        path (already moved to RECONNECTING for re-dial/RESUME), the LOST/CLOSED
-        dispatch (Session already terminal), and the world-handoff public purge
-        (Session already GOAWAY-closed by the dispatcher).
+        The teardown is Session-driven, the Connection is not visible here. ``conn.drop_peer``
+        GOAWAY-closes the peer's Session when a ``reason`` is given (so the remote observes
+        Session.Closed instead of a liveness timeout) and then drops the transport + pool
+        bookkeeping; with ``reason=None`` it is a silent drop reacting to a Session that
+        already ended: the polled transport-disconnect path (non-grace), the LOST/CLOSED
+        dispatch (Session already terminal), and the world-handoff public retire (Session
+        already GOAWAY-closed by the dispatcher). The events drop_peer returns are dispatched
+        before the hosted removal.
 
         Args:
             peer_id: The peer ID of the node to purge.
-            keep_connection: If True, the underlying P2P connection is preserved.
-            reason: Optional ReasonCode; when set (and not keep_connection), the
-                Session is GOAWAY-closed with this reason before teardown.
+            reason: Optional ReasonCode; when set, the Session is GOAWAY-closed with this
+                reason (inside drop_peer) before teardown.
         """
-        if reason is not None and not keep_connection:
-            for ev in await self.conn.close_session(peer_id, reason):
-                await self._dispatch_session_event(ev)
+        for ev in await self.conn.drop_peer(peer_id, reason):
+            await self._dispatch_session_event(ev)
 
         await self.hosted.remove_agent(peer_id)
-
-        if not keep_connection:
-            await self.conn.remove(peer_id)
 
     @staticmethod
     def __sort_messages_by_priority(messages: list) -> list:
@@ -2875,7 +2874,7 @@ class Node:
                 if arg is None:
                     log.error("Missing inspector arguments!")
                 else:
-                    await self.leave(arg)
+                    await self.__purge(arg, reason=WORLD_DISENGAGEMENT)
             elif cmd == "leave_world":
                 log.user("Inspector asked to leave the current world")
                 await self.leave_world()

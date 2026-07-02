@@ -19,13 +19,12 @@ harness-built ``world_agent``'s ``behav`` is the empty one-state placeholder, wh
 therefore drive the engage/disengage handlers directly, which is exactly what
 ``behav.act()`` would ultimately invoke.
 
-BUG 3 is CHARACTERIZED here, not re-xfailed: ``disengage(disconnect_too=True)``
-calls ``node_purge_fcn(_requester)`` with only the peer-id, so ``Node.__purge``'s
-guard ``if reason is not None and not keep_connection`` is False and
-``close_session``/GOAWAY is skipped. The strict xfail of the desired behaviour
-lives in ``tests/test_disengage_goaway.py``; here we assert the CURRENT behaviour
-(``conn.closed_sessions`` stays empty while ``remove_agent`` + ``conn.remove`` still
-run).
+BUG 3 (fixed): ``disengage(disconnect_too=True)`` calls
+``node_purge_fcn(_requester, reason=WORLD_DISENGAGEMENT)``, so ``Node.__purge``
+forwards the reason to ``conn.drop_peer``, which GOAWAYs the Session (recorded on
+``conn.closed_sessions``) before dropping the connection. The Level 1 reason
+assertion lives in ``tests/test_disengage_goaway.py``; here we assert the end-to-end
+effect on the conn (GOAWAY recorded, peer dropped from the pool + membership).
 """
 
 import asyncio
@@ -252,16 +251,13 @@ def test_disconnect_too_purges_peer_and_records_goaway(harness_clock, roles):
     assert agent_s._engaged_agents == {"T-world"}
     assert conn_s.is_connected("T-world") is True
 
-    # Wire a purge closure that MIRRORS Node.__purge exactly (same guard, same
-    # order), bound to the harness conn + real agent. disengage now calls it with
-    # reason=WORLD_DISENGAGEMENT, so the close_session/GOAWAY branch runs.
-    async def purge(peer_id, keep_connection=False, reason=None):
-        if reason is not None and not keep_connection:
-            for ev in await conn_s.close_session(peer_id, reason):
-                await node_s._dispatch_session_event(ev)
+    # Wire a purge closure that MIRRORS Node.__purge exactly (same order), bound to
+    # the harness conn + real agent. disengage calls it with
+    # reason=WORLD_DISENGAGEMENT, so drop_peer GOAWAYs the Session then drops the conn.
+    async def purge(peer_id, reason=None):
+        for ev in await conn_s.drop_peer(peer_id, reason):
+            await node_s._dispatch_session_event(ev)
         await agent_s.remove_agent(peer_id)
-        if not keep_connection:
-            await conn_s.remove(peer_id)
 
     agent_s.node_purge_fcn = purge
 
