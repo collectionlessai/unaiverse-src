@@ -126,11 +126,12 @@ def test_assign_role_non_master_returns_world_agent(world):
     assert world.assign_role(FakeProfile(), is_world_master=False) == "world_agent"
 
 
-def test_assign_role_second_master_is_demoted_to_world_agent(world):
-    """With a master already present, a second would-be master is demoted to
-    'world_agent' at the World layer (the base policy enforces a single master)."""
-    world.world_masters["already-a-master"] = object()  # drives the len(...) >= 1 branch
-    assert world.assign_role(FakeProfile(), is_world_master=True) == "world_agent"
+def test_assign_role_second_master_stays_world_master(world):
+    """With a master already present, a second would-be master still gets
+    'world_master': the base policy places no single-master cap (who may be a master
+    is governed upstream by the world_masters_node_ids allow-list, not here)."""
+    world.world_masters["already-a-master"] = object()
+    assert world.assign_role(FakeProfile(), is_world_master=True) == "world_master"
 
 
 def test_assign_role_returns_string_not_bits(world):
@@ -149,10 +150,10 @@ def test_assign_role_never_returns_none_across_all_combinations(make_world):
     w0 = make_world()
     assert w0.assign_role(FakeProfile(), is_world_master=True) == "world_master"
     assert w0.assign_role(FakeProfile(), is_world_master=False) == "world_agent"
-    # One master already registered.
+    # One master already registered: the base policy has no single-master cap.
     w1 = make_world()
     w1.world_masters["m"] = object()
-    assert w1.assign_role(FakeProfile(), is_world_master=True) == "world_agent"
+    assert w1.assign_role(FakeProfile(), is_world_master=True) == "world_master"
     assert w1.assign_role(FakeProfile(), is_world_master=False) == "world_agent"
 
 
@@ -172,7 +173,7 @@ def test_assign_role_guessed_location_branch_is_a_noop(world):
     assert world.assign_role(profile, is_world_master=True) == "world_master"
 
 
-# ── Cross-layer single-master invariant (suspected bug) ──────────────────────
+# ── Cross-layer role bits (node layer) ───────────────────────────────────────
 # node.py:2278-2282 (public world host) computes the joiner's role like this:
 #     role_str = self.world.assign_role(profile=profile, is_world_master=...)
 #     role = self.world.ROLE_STR_TO_BITS[role_str]
@@ -201,25 +202,13 @@ def test_node_layer_non_master_role_bits(world):
     assert bits == World.ROLE_WORLD_AGENT == 1
 
 
-def test_node_layer_second_master_role_bits_actual_current_behavior(world):
-    """ACTUAL behavior: assign_role demotes the 2nd master to 'world_agent' (bits
-    1), but node.py then OR-s ROLE_WORLD_MASTER back in because is_world_master is
-    still True, so the final node-layer role bits are 1 | 3 == 3 == world_master.
-    The World-layer demotion is therefore undone. Pinned green to document it."""
+def test_node_layer_second_master_is_world_master(world):
+    """With a master already present, a second would-be master resolves to
+    world_master bits at the node layer too: assign_role returns 'world_master'
+    (no single-master cap) and node.py OR-s ROLE_WORLD_MASTER in, so bits == 3."""
     world.world_masters["already-a-master"] = object()
     bits = _node_layer_role_bits(world, FakeProfile(), is_world_master=True)
-    assert bits == World.ROLE_WORLD_MASTER == 3  # demotion to world_agent was undone
-
-
-@pytest.mark.xfail(strict=True, reason="suspected bug: node.py re-ORs ROLE_WORLD_MASTER, "
-                                       "undoing the single-master demotion done by assign_role")
-def test_node_layer_second_master_demotion_should_hold(world):
-    """INTENDED behavior: assign_role demoting the 2nd master to 'world_agent'
-    should make the node-layer role NOT a world_master. It does not (see the
-    companion *_actual_current_behavior test), so this xfails."""
-    world.world_masters["already-a-master"] = object()
-    bits = _node_layer_role_bits(world, FakeProfile(), is_world_master=True)
-    assert bits != World.ROLE_WORLD_MASTER
+    assert bits == World.ROLE_WORLD_MASTER == 3
 
 
 # ── policy_default (inherited by World) ──────────────────────────────────────

@@ -67,8 +67,9 @@ class World(AgentBasics):
     def assign_role(self, profile: NodeProfile, is_world_master: bool) -> str | None:
         """Assigns an initial role to a newly connected agent.
 
-        In this basic implementation, the role is determined based on whether the agent is a world master or a regular
-        world agent, ensuring there's only one master.
+        In this basic implementation, the role is determined solely by whether the agent is a world master or a regular
+        world agent. Who may be a master is governed upstream by the world_masters_node_ids allow-list (see node.py),
+        not by a single-master cap here: this base policy places no limit on the number of masters.
 
         Args:
             profile: The NodeProfile of the new agent.
