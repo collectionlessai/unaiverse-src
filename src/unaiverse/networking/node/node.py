@@ -43,7 +43,7 @@ from unaiverse.networking.session import (ProfileDecisionResult, WorldGrantSpec,
                                           SessionEventType, SessionRole)
 from unaiverse.networking.session.sess_msg import (WORLD_DISENGAGEMENT,
                                                    LOCAL_ERROR, NOT_IN_ALLOW_LIST, ROLE_INCOMPATIBLE,
-                                                   HOSTED_REJECTED, CV_HASH_MISMATCH, NOT_AUTHORIZED)
+                                                   HOSTED_REJECTED, CV_HASH_MISMATCH, NOT_AUTHORIZED, GRACEFUL_SHUTDOWN)
 from unaiverse.streams.streams import DataProps, BufferedStream
 from unaiverse.utils.logger import log, ALWAYS_ON_CHANNELS, ALL_CHANNELS
 from unaiverse.utils.misc import (get_key_considering_multiple_sources, save_node_addresses_to_file,
@@ -803,6 +803,9 @@ class Node:
             log.error("Failed to join world!")
             self.joining_world_info = None
         return peer_id
+
+    async def leave(self, peer_id: str):
+        await self.__purge(peer_id, reason=GRACEFUL_SHUTDOWN)
 
     async def leave_world(self) -> None:
         """Leave the world we are currently in, if any. (async)
