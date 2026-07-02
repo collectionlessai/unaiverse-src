@@ -408,6 +408,10 @@ class Node:
                                             'peer_addresses': p2p_u.addresses,
                                             'private_peer_id': p2p_w.peer_id,
                                             'private_peer_addresses': p2p_w.addresses,
+                                            # A world node is a relay for its members only if its world instance is
+                                            # publicly reachable (the relay service is enabled iff node_type is WORLD).
+                                            # p2p_w keeps no DHT, so its reachability is fixed at boot: set once here.
+                                            'is_relay': (self.node_type is Node.WORLD) and bool(p2p_w.is_public),
                                             'connections': {
                                                 'role': self.hosted.ROLE_BITS_TO_STR[self.hosted.ROLE_PUBLIC]
                                             },
@@ -2063,8 +2067,11 @@ class Node:
 
         if peer_id is not None:
 
-            # Relay reservation logic for non-public peers
-            if not self.conn.world_is_public and self.conn.world_relay_enabled:
+            # Relay reservation logic: reserve a slot on the world node only when WE are not
+            # publicly reachable AND the world node actually offers a reachable relay (is_relay
+            # from its profile), not merely because our relay client is enabled.
+            world_is_relay = bool(profile.get_dynamic_profile().get('is_relay'))
+            if not self.conn.world_is_public and self.conn.world_relay_enabled and world_is_relay:
                 log.user("Node is not publicly reachable. Attempting to reserve a slot on the world's private network.")
                 expiry_utc = await self.conn.reserve(peer_id, NodeConn.P2P_WORLD)
 
@@ -2598,7 +2605,6 @@ class Node:
         except Exception as e:
             log.error(f"[session] world register failed for ...{private_peer_id[-5:]}: {e}")
 
-    # noinspection PyUnusedLocal
     async def _join_world_after_session(self, world_peer_id: str, ev_data: dict, grant: dict | None) -> bool:
         """Joiner side: run the world-join body against an already-connected world
         Session, decoding the grant blob carried from the public Session."""

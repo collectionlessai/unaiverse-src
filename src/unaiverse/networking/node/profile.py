@@ -86,6 +86,7 @@ class NodeProfile:
                     'peer_addresses': None,
                     'private_peer_id': None,
                     'private_peer_addresses': None,
+                    'is_relay': None,  # True when this node is a world offering a reachable relay to its members
                     'proc_inputs': None,
                     'proc_outputs': None,
                     'streams': None,
