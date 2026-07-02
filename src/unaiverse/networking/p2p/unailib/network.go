@@ -490,6 +490,53 @@ func handleAddressUpdateEvents(ni *NodeInstance, sub event.Subscription) {
 	}
 }
 
+// setIsPublic / getIsPublic guard the reachability state shared between
+// handleReachabilityEvents (writer) and the GetReachability export (reader).
+func (ni *NodeInstance) setIsPublic(v bool) {
+	ni.reachMutex.Lock()
+	ni.isPublic = v
+	ni.reachMutex.Unlock()
+}
+
+func (ni *NodeInstance) getIsPublic() bool {
+	ni.reachMutex.RLock()
+	defer ni.reachMutex.RUnlock()
+	return ni.isPublic
+}
+
+// handleReachabilityEvents keeps ni.isPublic in sync with libp2p's AutoNAT verdict for the
+// node's lifetime. Unlike the address listener it does NOT seed an initial value from the
+// host (reachability is only observable via the event bus): CreateNode seeds it before
+// starting this goroutine, which is then the sole writer. Started only for non-ForcePublic
+// nodes, where AutoNAT actually emits verdicts (a ForcePublic node keeps its seeded true).
+func handleReachabilityEvents(ni *NodeInstance, sub event.Subscription) {
+	defer recoverGoroutine("handleReachabilityEvents")
+	defer sub.Close()
+
+	for {
+		select {
+		case <-ni.ctx.Done():
+			return
+		case ev, ok := <-sub.Out():
+			if !ok {
+				return
+			}
+			// Unknown means "AutoNAT can't tell", NOT "private": keep the last known verdict
+			// rather than regressing a valid Public/Private to false on a transient Unknown.
+			switch ev.(event.EvtLocalReachabilityChanged).Reachability {
+			case network.ReachabilityPublic:
+				ni.setIsPublic(true)
+				logger.Infof("[GO] 📶 Instance %d: Reachability -> public", ni.instanceIndex)
+			case network.ReachabilityPrivate:
+				ni.setIsPublic(false)
+				logger.Infof("[GO] 📶 Instance %d: Reachability -> private", ni.instanceIndex)
+			default: // ReachabilityUnknown: no new information, keep the current value.
+				logger.Debugf("[GO] 📶 Instance %d: Reachability -> unknown (keeping last value)", ni.instanceIndex)
+			}
+		}
+	}
+}
+
 // goGetNodeAddresses is the internal Go function that performs the core logic
 // of fetching and formatting node addresses.
 // It takes a pointer to a NodeInstance and a targetPID. If targetPID is empty (peer.ID("")),

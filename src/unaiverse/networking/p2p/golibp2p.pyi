@@ -118,6 +118,14 @@ class GoLibP2P:
         """
         ...
 
+    def GetReachability(self, instance: int) -> int:
+        """
+        GetReachability(instance: int) -> bytes
+
+        Returns the node's current AutoNAT reachability as a boolean. Returns a JSON result.
+        """
+        ...
+
     def UpdateICEConfig(self, instance: int, config_json: bytes) -> bytes:
         """
         UpdateICEConfig(instance: int, config_json: bytes) -> bytes

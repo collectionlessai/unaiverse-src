@@ -465,6 +465,7 @@ func CreateNode(
 
 	if cfg.Network.ForcePublic {
 		isPublic = true
+		ni.setIsPublic(true) // authoritative: AutoNAT is bypassed, so there are no dynamic updates.
 		logger.Debugf("[GO] ⏳ Instance %d: ForcePublic is ON. Waiting for addresses to settle...", instanceIndex)
 		waitCtx, waitCancel := context.WithTimeout(ni.ctx, 5*time.Second)
 		defer waitCancel()
@@ -493,7 +494,8 @@ func CreateNode(
 		if err != nil {
 			return C.CString(jsonErrorResponse("Failed to subscribe to reachability events", err))
 		}
-		defer reachSub.Close()
+		// NB: reachSub is NOT closed here — it is handed to handleReachabilityEvents below
+		// (started after the boot verdict), which owns and closes it on shutdown.
 
 		timeoutCtx, timeoutCancel := context.WithTimeout(ni.ctx, PeerConnectionTimeout)
 		defer timeoutCancel()
@@ -520,6 +522,20 @@ func CreateNode(
 			case <-ni.ctx.Done():
 				return C.CString(jsonErrorResponse("Context cancelled during init", nil))
 			}
+		}
+		// Seed the shared reachability state with the boot verdict (the WAIT_LOOP's first event,
+		// or false on timeout). This runs for EVERY non-ForcePublic node, including the
+		// dht_keep=False ones that close the subscription below, so isPublic is always set once.
+		ni.setIsPublic(isPublic)
+
+		// Then keep it live only where AutoNAT survives, i.e. where the DHT is kept. Where the
+		// DHT is closed after boot (dht_keep=False, e.g. p2p_w) AutoNAT dies, so a listener would
+		// just sit idle holding a subscription for the node's lifetime: close it instead.
+		// (Making AutoNAT survive without the DHT is tracked separately.)
+		if cfg.DHT.Keep {
+			go handleReachabilityEvents(ni, reachSub)
+		} else {
+			reachSub.Close()
 		}
 	}
 
@@ -1069,6 +1085,22 @@ func GetNodeAddresses(
 	}
 
 	return C.CString(jsonSuccessResponse(addresses))
+}
+
+// GetReachability returns the node's current AutoNAT reachability as a boolean. For a
+// ForcePublic node this is the seeded true; otherwise it reflects the latest
+// EvtLocalReachabilityChanged verdict kept live by handleReachabilityEvents.
+// Success: {"state":"Success","message":true|false}. Free the result with FreeString.
+//
+//export GetReachability
+func GetReachability(instanceIndexC C.int) (ret *C.char) {
+	defer recoverToCString(&ret, "GetReachability")
+
+	ni, err := getInstance(int(instanceIndexC))
+	if err != nil {
+		return C.CString(jsonErrorResponse(fmt.Sprintf("Invalid instance index: %d", int(instanceIndexC)), err))
+	}
+	return C.CString(jsonSuccessResponse(ni.getIsPublic()))
 }
 
 // GetWebRTCConnections returns a JSON array of all peers that currently have

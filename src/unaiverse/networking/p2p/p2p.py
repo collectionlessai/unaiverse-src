@@ -1012,8 +1012,11 @@ class P2P:
 
     @property
     def is_public(self) -> Optional[bool]:
-        """Returns a boolean stating whether the local node is publicly reachable."""
-        return self._is_public
+        """Returns whether the local node is publicly reachable, reading the live AutoNAT
+        verdict from Go on each access (O(1), cached Go-side, like ``addresses``). For a
+        ForcePublic node this is a fixed true; otherwise it tracks the latest AutoNAT
+        verdict, falling back to the last known value on FFI error."""
+        return self.get_reachability()
 
     @property
     def relay_is_enabled(self) -> bool:
@@ -1057,6 +1060,23 @@ class P2P:
         except Exception as e:
             logger.error(f"❌ Failed to get addresses for {target}: {e}")
             raise P2PError(f"Failed to get addresses for {target}") from e
+
+    def get_reachability(self) -> bool:
+        """Reads the current AutoNAT reachability from the Go engine (O(1), event-cached)
+        and updates the cached ``_is_public``. Returns the last known value on FFI error
+        rather than raising, since callers treat reachability as best-effort telemetry."""
+        try:
+            result_ptr = P2P.libp2p.GetReachability(P2P._type_interface.to_go_int(self._instance))
+            result = P2P._type_interface.from_go_ptr_to_json(result_ptr)
+            if result is None or result.get('state') == "Error":
+                msg = result.get('message', 'null result') if result is not None else 'null result'
+                logger.warning(f"Failed to read reachability: {msg}. Using last known value.")
+                return bool(self._is_public)
+            self._is_public = bool(result.get('message', False))
+            return self._is_public
+        except Exception as e:
+            logger.warning(f"Failed to read reachability: {e}. Using last known value.")
+            return bool(self._is_public)
 
     def get_webrtc_connections(self) -> List[Dict[str, Any]]:
         """

@@ -153,6 +153,10 @@ _shared_lib.ReserveOnRelay.restype = ctypes.c_void_p  # Treat returned *C.char a
 _shared_lib.GetWebRTCConnections.argtypes = [ctypes.c_int]
 _shared_lib.GetWebRTCConnections.restype = ctypes.c_void_p  # Treat returned *C.char as opaque pointer
 
+# Reachability (AutoNAT)
+_shared_lib.GetReachability.argtypes = [ctypes.c_int]
+_shared_lib.GetReachability.restype = ctypes.c_void_p  # Treat returned *C.char as opaque pointer
+
 # Session abstraction (per-stage handshake protocols + signed peer record).
 # See unailib/session_api.go. (Liveness is session-level PING/PONG, not /ipfs/ping.)
 _shared_lib.SendOnProtocol.argtypes = [

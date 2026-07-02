@@ -249,6 +249,11 @@ type NodeInstance struct {
 	// Static relay
 	privateRelayAddrs []ma.Multiaddr
 
+	// Reachability State (AutoNAT). Seeded in CreateNode; for non-ForcePublic nodes it is
+	// then kept live by handleReachabilityEvents, which is the only writer from that point.
+	reachMutex sync.RWMutex
+	isPublic   bool
+
 	// PubSub State
 	pubsubMutex   sync.RWMutex
 	topics        map[string]*pubsub.Topic
