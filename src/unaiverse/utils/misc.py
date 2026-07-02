@@ -40,8 +40,18 @@ if TYPE_CHECKING:
     from unaiverse.networking.node.node import Node
 
 
-def build_unaid(profile):
-    return profile.get_static_profile()['email'] + '/' + profile.get_static_profile()['node_name']
+def build_unaid(profile, node_name: str | None = None):
+    if not hasattr(profile, "get_static_profile"):
+        return None
+    static_profile = profile.get_static_profile()
+    if not isinstance(static_profile, dict):
+        return None
+    if node_name is None:
+        if "node_name" not in static_profile:
+            return None
+        return static_profile['email'] + '/' + static_profile['node_name']
+    else:
+        return static_profile['email'] + '/' + node_name
 
 
 def save_node_addresses_to_file(node: "Node", dir_path: str, public: bool,

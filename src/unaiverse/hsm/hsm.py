@@ -255,9 +255,8 @@ class HybridStateMachine:
             obj: The object instance to be set as the new `agent`.
         """
         if obj is None:
-            # TODO(review): log.critical raises GenException, so this aborts (e.g. construction with agent=None) and the trailing 'return' is dead code; see tests/test_hsm.py::test_set_actionable_none_raises_genexception
             log.critical("Unexpected None for the agent HSM actionable")
-            return
+            return  # This is dead code, since log.critical raises a GenException, but I keep it here to remember
 
         self.agent = obj
 
@@ -704,9 +703,6 @@ class HybridStateMachine:
         # Handling special state names
         if from_state == Custom.ALL_STATES_NAME:
             for from_state_obj in self.__id_to_state:
-                # TODO(review): this skips states whose name == from_state ('all', which never matches) instead of the destination, so add_global_teleport(to_state=X) forges a spurious X->X self-loop teleport that to_dict drops; see tests/test_hsm.py::test_add_global_teleport_roundtrip_is_stable_intended
-                if from_state_obj.name == from_state:
-                    continue
 
                 # Adding a transition to the dest state
                 self.add_transit(from_state=from_state_obj.name, to_state=to_state, action=action, args=args,
@@ -1380,9 +1376,8 @@ class HybridStateMachine:
             self.state = self.initial_state
             self.prev_state = None
             self.limbo_state = None
-            # TODO(review): set_role runs apply_wildcards here, before set_welcome_message installs the welcome, and wildcards are never re-applied, so welcome_msg keeps the literal '<role>' unlike the build path; see tests/test_hsm.py::test_load_applies_welcome_wildcard_intended
-            self.set_role(hsm_data['machine']['role'])
             self.set_welcome_message(hsm_data['machine'].get('msg', None))
+            self.set_role(hsm_data['machine']['role'])  # Do it AFTER having set the welcome message
             self.show_blocking_states = (
                 hsm_data['machine']['options'].get('highlight_blocking_states_in_messages', False))
             self.show_action_completion = (
@@ -1397,7 +1392,6 @@ class HybridStateMachine:
 
         # Getting states
         if 'states' not in hsm_data:
-            # TODO(review): this unguarded log.critical raises GenException rather than degrading, so load() aborts when the payload lacks the 'states' key; see tests/test_hsm.py::test_load_missing_states_key_raises_genexception
             log.critical(f"Invalid JSON data format when loading the state machine (missing state list)")
 
         for state, state_action in hsm_data['states'].items():
@@ -1415,37 +1409,38 @@ class HybridStateMachine:
                            waiting_time=waiting_time, blocking=blocking, msg=msg)
 
         # Getting ordinary transitions (before teleports, to ensure higher priority)
-        for from_state, list_of_to_state_dicts in hsm_data['transitions'].items():
-            for to_state_dict in list_of_to_state_dicts:
-                to_state = to_state_dict["goto"]
-                action_dict = to_state_dict["on"]
+        if 'transitions' in hsm_data:
+            for from_state, list_of_to_state_dicts in hsm_data['transitions'].items():
+                for to_state_dict in list_of_to_state_dicts:
+                    to_state = to_state_dict["goto"]
+                    action_dict = to_state_dict["on"]
 
-                act_name = action_dict["action"]
-                act_args = action_dict.get("action_kwargs", {})
-                msg = action_dict.get("msg", None)
-                act_ready = action_dict.get("ready", True)
-                high_priority = action_dict.get("high_priority", False)
-                total_time = 0.
-                for k in Custom.SECONDS_ARG_NAMES:
-                    if k in action_dict:
-                        total_time = action_dict[k]
-                        break
-                timeout = 0.
-                for k in Custom.TIMEOUT_ARG_NAMES:
-                    if k in action_dict:
-                        timeout = action_dict[k]
-                        break
-                delay = 0.
-                for k in Custom.DELAY_ARG_NAMES:
-                    if k in action_dict:
-                        delay = action_dict[k]
-                        break
+                    act_name = action_dict["action"]
+                    act_args = action_dict.get("action_kwargs", {})
+                    msg = action_dict.get("msg", None)
+                    act_ready = action_dict.get("ready", True)
+                    high_priority = action_dict.get("high_priority", False)
+                    total_time = 0.
+                    for k in Custom.SECONDS_ARG_NAMES:
+                        if k in action_dict:
+                            total_time = action_dict[k]
+                            break
+                    timeout = 0.
+                    for k in Custom.TIMEOUT_ARG_NAMES:
+                        if k in action_dict:
+                            timeout = action_dict[k]
+                            break
+                    delay = 0.
+                    for k in Custom.DELAY_ARG_NAMES:
+                        if k in action_dict:
+                            delay = action_dict[k]
+                            break
 
-                self.add_transit(from_state, to_state,
-                                 action=act_name, args=act_args, ready=act_ready, msg=msg,
-                                 avoid_changing_ready="ready" in action_dict, total_time=total_time,
-                                 high_priority=high_priority,
-                                 timeout=timeout, delay=delay)
+                    self.add_transit(from_state, to_state,
+                                     action=act_name, args=act_args, ready=act_ready, msg=msg,
+                                     avoid_changing_ready="ready" in action_dict, total_time=total_time,
+                                     high_priority=high_priority,
+                                     timeout=timeout, delay=delay)
 
         # Getting teleports (do it after getting ordinary transitions, so teleports will have lower priority)
         if 'teleports' in hsm_data:
@@ -1509,19 +1504,18 @@ class HybridStateMachine:
                     msg = action_dict.get("msg", None)
                     act_ready = action_dict.get("ready", True)
                     high_priority = action_dict.get("high_priority", False)
-                    # TODO(review): latent: these per-source teleport meta scans omit the 'break' the other scans use, so a second alias key would take the last match instead of the first; harmless today with single-key alias sets
                     total_time = 0.
                     for k in Custom.SECONDS_ARG_NAMES:
                         if k in action_dict:
-                            total_time = action_dict[k]
+                            total_time = action_dict[k]  # It will take the last one in case of multiple aliases used
                     timeout = 0.
                     for k in Custom.TIMEOUT_ARG_NAMES:
                         if k in action_dict:
-                            timeout = action_dict[k]
+                            timeout = action_dict[k]  # It will take the last one in case of multiple aliases used
                     delay = 0.
                     for k in Custom.DELAY_ARG_NAMES:
                         if k in action_dict:
-                            delay = action_dict[k]
+                            delay = action_dict[k]  # It will take the last one in case of multiple aliases used
 
                     self.add_transit(from_state, to_state,
                                      action=act_name, args=act_args, ready=act_ready, msg=msg,
@@ -1548,8 +1542,8 @@ class HybridStateMachine:
         self.state = hsm_data['state']
         self.prev_state = hsm_data['prev_state']
         self.limbo_state = hsm_data['limbo_state']
-        self.set_role(hsm_data.get('role', 'unknown'))
         self.set_welcome_message(hsm_data.get('welcome_msg', None))
+        self.set_role(hsm_data.get('role', 'unknown'))  # Do it AFTER set_welcome_message
         self.show_blocking_states = hsm_data.get('highlight_blocking_states_in_messages', False)
         self.show_action_completion = hsm_data.get('show_action_ticks_after_messages', False)
         self.show_action_request_info = hsm_data.get('show_action_request_after_messages', False)

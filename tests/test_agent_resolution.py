@@ -132,8 +132,8 @@ def test_resolve_agent_ref_full_email_at_name(agent):
     """The full ``email@node_name`` form resolves to the matching peer id even
     when it belongs to another user."""
     agent.all_agents = {"PIDbob": FakeProfile(static={"email": "bob@x.org", "node_name": "bob"})}
-    # 'email' + '@' + 'node_name' == 'bob@x.org' + '@' + 'bob' == the ref.
-    assert agent.resolve_agent_ref("bob@x.org@bob") == "PIDbob"
+    # 'email' + '/' + 'node_name' == 'bob@x.org' + '/' + 'bob' == the ref.
+    assert agent.resolve_agent_ref("bob@x.org/bob") == "PIDbob"
 
 
 def test_resolve_agent_ref_bare_name_resolves_only_own_agents(agent):
@@ -159,7 +159,7 @@ def test_resolve_agent_ref_bare_name_of_other_user_is_silent_none(agent):
 def test_resolve_agent_ref_total_miss_returns_none(agent):
     """An ``email@name`` form that matches nobody returns None."""
     agent.all_agents = {"PIDbob": FakeProfile(static={"email": "bob@x.org", "node_name": "bob"})}
-    assert agent.resolve_agent_ref("ghost@y.org@nobody") is None
+    assert agent.resolve_agent_ref("ghost@y.org/nobody") is None
 
 
 def test_resolve_agent_ref_skips_non_dict_static_profile(agent):
@@ -168,25 +168,20 @@ def test_resolve_agent_ref_skips_non_dict_static_profile(agent):
     resolution falls through to None instead of crashing.
 
     NOTE: a profile that lacks ``get_static_profile`` entirely is coerced to the
-    empty dict ``{}``, which is still a dict and therefore reaches the buggy
-    ``'' + '@' + None`` concatenation (see
-    test_resolve_agent_ref_profile_missing_node_name_crashes); only a genuinely
+    empty dict ``{}``, only a genuinely
     non-dict static profile is skipped cleanly."""
     agent.all_agents = {"PIDnone": _NonDictProfile(None),
                         "PIDlist": _NonDictProfile(["not", "a", "dict"])}
-    assert agent.resolve_agent_ref("ghost@y.org@nobody") is None
+    assert agent.resolve_agent_ref("ghost@y.org/nobody") is None
 
 
-@pytest.mark.xfail(reason="BUG agent_basics.py:1299 - missing 'node_name' key -> "
-                          "str + None TypeError (no default, asymmetric with 'email')",
-                   raises=TypeError, strict=True)
 def test_resolve_agent_ref_profile_missing_node_name_crashes(agent):
     """A stored profile missing the 'node_name' key should be treated as a
     non-match (ideally -> None). Today the unguarded
     ``email + '@' + None`` concatenation raises TypeError instead."""
     agent.all_agents = {"PIDbad": FakeProfile(static={"email": "x@y.org"})}
-    # ref has '@', so no email prefixing: the loop reaches the bad profile.
-    assert agent.resolve_agent_ref("anything@here") is None
+    # ref has '/', so no email prefixing: the loop reaches the bad profile.
+    assert agent.resolve_agent_ref("anything/here") is None
 
 
 # ── resolve_stream_ref (base, AgentBasics) ──────────────────────────────────
@@ -252,12 +247,9 @@ def test_resolve_stream_ref_user_hash_own_peer_searches_owned(agent):
     assert agent.resolve_stream_ref("PIDme:foo", public=False) == "PIDme:foo"
 
 
-@pytest.mark.xfail(reason="BUG agent_basics.py:1349/1362 - next(iter(stream_dict.values())) "
-                          "raises StopIteration on an EMPTY inner dict when public=True",
-                   raises=StopIteration, strict=True)
 def test_resolve_stream_ref_empty_group_public_crashes(agent):
     """An owned net-hash group that maps to an EMPTY inner dict should be skipped
-    when ``public=True``. Today ``next(iter({}.values()))`` raises StopIteration."""
+    when ``public=True``."""
     agent.owned_streams = {"PIDme::ps:grp": {}}
     assert agent.resolve_stream_ref("grp", public=True) is None
 
@@ -278,12 +270,8 @@ def test_resolve_stream_ref_non_playlist_delegates_to_super(agent):
     assert agent.resolve_stream_ref("foo", public=False) == "PIDme:foo"
 
 
-@pytest.mark.xfail(reason="BUG agent.py:1441 - '<playlist>' indexes _preferred_streams "
-                          "with no empty guard -> IndexError on an empty playlist",
-                   raises=IndexError, strict=True)
 def test_resolve_stream_ref_empty_playlist_crashes(agent):
-    """An empty playlist should resolve to None (or be guarded). Today indexing
-    ``_preferred_streams[0]`` on an empty list raises IndexError."""
+    """An empty playlist should resolve to None (or be guarded)."""
     agent._preferred_streams = []
     agent._cur_preferred_stream = 0
     assert agent.resolve_stream_ref("<playlist>", public=False) is None

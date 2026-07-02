@@ -281,16 +281,16 @@ def test_checker_dummy_processor_runs_on_cpu():
 
 
 def test_checker_human_string_currently_raises():
-    """proc='human' raises GenException: the string fails the callable validation.
+    """proc='human' does not raise GenException.
 
     The HumanModule-wrapping branch (modules/utils.py around lines 767-773) is
-    guarded by an earlier 'must be None / nn.Module / ModuleWrapper / callable'
-    check that a plain string does not satisfy, so that branch never runs. This
-    pins the CURRENT behavior; see the suspected-bug note in the report.
+    guarded by an earlier 'must be None / nn.Module / ModuleWrapper / callable / str'
+    check that a plain string 'human' works.
     """
     agent = FakeAgent(proc="human")
-    with pytest.raises(GenException):
-        AgentProcessorChecker(agent)
+    AgentProcessorChecker(agent)
+    assert isinstance(agent.proc, ModuleWrapper)
+    assert isinstance(agent.proc.module, HumanModule)
 
 
 def test_checker_human_module_instance_is_wrapped():

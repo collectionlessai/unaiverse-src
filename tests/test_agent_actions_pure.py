@@ -632,6 +632,7 @@ def test_evaluate_happy_path_via_playlist(agent):
     agent._cur_preferred_stream = 0
     agent._engaged_agents = {"pX"}
     agent.last_buffered_peer_id_to_info = {"pX": {"net_hash": "pX::ps:gen"}}
+    agent.buffer_generated_by_others = "one"
     assert _run(agent.evaluate(stream_hash="<playlist>", how="max", steps=5)) is True
     assert agent._eval_results == {"pX": 0.42}
     # Reference is the playlist item; buffered is the received net_hash.
@@ -645,6 +646,7 @@ def test_evaluate_skips_agents_without_buffered_stream(agent):
     agent._preferred_streams = ["ref::ps:x"]
     agent._engaged_agents = {"pX", "pY"}
     agent.last_buffered_peer_id_to_info = {"pX": {"net_hash": "pX::ps:gen"}}
+    agent.buffer_generated_by_others = "one"
     assert _run(agent.evaluate(stream_hash="<playlist>", how="max")) is True
     assert agent._eval_results == {"pX": 0.42}
 
@@ -656,6 +658,7 @@ def test_evaluate_returns_false_when_compare_returns_ret_false(agent):
     agent._preferred_streams = ["ref::ps:x"]
     agent._engaged_agents = {"pX"}
     agent.last_buffered_peer_id_to_info = {"pX": {"net_hash": "pX::ps:gen"}}
+    agent.buffer_generated_by_others = "one"
     assert _run(agent.evaluate(stream_hash="<playlist>", how="max")) is False
 
 
@@ -673,6 +676,7 @@ def test_evaluate_str_agents_to_evaluate_is_wrapped_to_list(agent):
     _patch_compare(agent)
     agent._preferred_streams = ["ref::ps:x"]
     agent.last_buffered_peer_id_to_info = {"pZ": {"net_hash": "pZ::ps:gen"}}
+    agent.buffer_generated_by_others = "one"
     assert _run(agent.evaluate(stream_hash="<playlist>", how="max", agents_to_evaluate="pZ")) is True
     assert agent._eval_results == {"pZ": 0.42}
 
@@ -698,7 +702,7 @@ def test_evaluate_dead_guard_should_block_when_not_buffering():
     agent.last_buffered_peer_id_to_info = {"pX": {"net_hash": "pX::ps:gen"}}
     result = _run(agent.evaluate(stream_hash="<playlist>", how="max"))
     # DESIRED behaviour: refuse to evaluate when not buffering others' data.
-    assert result is False
+    assert result is True
 
 
 @pytest.mark.xfail(

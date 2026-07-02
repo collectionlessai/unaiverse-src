@@ -36,7 +36,7 @@ from unaiverse.interaction import Interaction, InteractionManager
 from unaiverse.streams.dataprops import DataProps, StreamType, TensorLabels
 from unaiverse.modules.utils import AgentProcessorChecker, ModuleWrapper, HumanModule, has_human_processor
 from unaiverse.utils.misc import (GenException, FileTracker, collect_py_files, load_agent_in_memory, pack_py_files,
-                                  unpack_py_files)
+                                  unpack_py_files, build_unaid)
 
 
 class AgentBasics:
@@ -70,7 +70,7 @@ class AgentBasics:
     HUMAN = "human"  # Human agent
 
     def __init__(self,
-                 proc: ModuleWrapper | torch.nn.Module | Callable | None,
+                 proc: ModuleWrapper | torch.nn.Module | Callable | str | None,
                  proc_inputs: list[StreamType | str] | None = None,
                  proc_outputs: list[StreamType | str] | None = None,
                  proc_opts: dict | None = None,
@@ -83,7 +83,7 @@ class AgentBasics:
         """Create a new agent.
 
         Args:
-            proc: The processing module (e.g., a neural network) for the agent. Can be None.
+            proc: The processing module (e.g., a neural network) for the agent. Can be None (or string 'human').
             proc_inputs: list of DataProps defining the expected inputs for processor (if None it will be guessed).
             proc_outputs: list of DataProps defining the expected outputs from processor (if None it will be guessed).
             proc_opts: A dictionary of options for the processor.
@@ -562,8 +562,8 @@ class AgentBasics:
         if self.world_folder is not None and self.is_world:
 
             # Guessing roles from the list of JSON files
-            # TODO(review): CUSTOM_ROLES order derives from os.listdir and is filesystem-order-dependent, so any caller assuming a stable order is fragile; see tests/test_world_roles.py::test_discovery_custom_roles_top_level_case_insensitive
             listdir = os.listdir(self.world_folder)  # Do this only once
+            listdir.sort()  # Keep it stable
             self.CUSTOM_ROLES = [os.path.splitext(f)[0] for f in listdir
                                  if os.path.isfile(os.path.join(self.world_folder, f))
                                  and f.lower().endswith(".json")]
@@ -1293,17 +1293,12 @@ class AgentBasics:
             return ref
 
         # Search by email@node_name (if only node_name is provided, assumes it is one of your agents)
-        # TODO(review): a bare node_name is always prefixed with the caller's own email, so another user's bare node_name silently resolves to None; see tests/test_agent_resolution.py::test_resolve_agent_ref_bare_name_of_other_user_is_silent_none
-        if '@' not in ref:
-            your_email = self.get_profile().get_static_profile()['email']
-            ref = your_email + '@' + ref
+        if '/' not in ref:
+            ref = build_unaid(self.get_profile(), ref)
 
         for peer_id, profile in self.all_agents.items():
-            static_profile = profile.get_static_profile() if hasattr(profile, 'get_static_profile') else {}
-            if isinstance(static_profile, dict):
-                # TODO(review): 'node_name' has no default, so a profile missing it yields None and the str concat raises TypeError; see tests/test_agent_resolution.py::test_resolve_agent_ref_profile_missing_node_name_crashes
-                if (static_profile.get('email', '') + '@' + static_profile.get('node_name')) == ref:
-                    return peer_id
+            if build_unaid(profile) == ref:
+                return peer_id
 
         return None
 
@@ -1352,7 +1347,8 @@ class AgentBasics:
                 if ref == Stream.name_from_user_hash(user_hash):
                     return user_hash
             for net_hash, stream_dict in self.owned_streams.items():
-                # TODO(review): next(iter(...)) raises StopIteration when public=True and the net_hash maps to an empty inner dict; an empty stream group should be skipped, not crash; see tests/test_agent_resolution.py::test_resolve_stream_ref_empty_group_public_crashes
+                if len(stream_dict) == 0:
+                    continue
                 if public and not next(iter(stream_dict.values())).is_public():
                     continue
                 if ref == Stream.name_or_group_from_net_hash(net_hash):
@@ -1366,7 +1362,8 @@ class AgentBasics:
                 if ref == Stream.name_from_user_hash(user_hash):
                     return user_hash
             for net_hash, stream_dict in self.known_streams.items():
-                # TODO(review): next(iter(...)) raises StopIteration when public=True and the net_hash maps to an empty inner dict; an empty stream group should be skipped, not crash; see tests/test_agent_resolution.py::test_resolve_stream_ref_empty_group_public_crashes
+                if len(stream_dict) == 0:
+                    continue
                 if public and not next(iter(stream_dict.values())).is_public():
                     continue
                 if ref == Stream.name_or_group_from_net_hash(net_hash):

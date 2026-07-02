@@ -699,10 +699,8 @@ class AgentProcessorChecker:
         if proc is None and callable(agent):
             proc = agent
 
-        # TODO(review): this guard rejects a 'human' string (it is not callable), making the later
-        # proc=='human' branch unreachable. See tests/test_modules.py::test_checker_human_string_currently_raises.
         if not (proc is None or isinstance_fcn(proc, torch.nn.Module) or isinstance_fcn(proc, ModuleWrapper) or
-                callable(proc)):
+                callable(proc) or (isinstance(proc, str) and proc == "human")):
             raise GenException("Processor (proc) must be either None or a torch.nn.Module, "
                                "or a ModuleWrapper, or a callable object")
         if not ((proc_inputs is None or (
@@ -765,10 +763,6 @@ class AgentProcessorChecker:
                                  agent=agent, device=torch.device("cpu"))
         else:
 
-            # String telling it is a human converted to a ModuleWrapper with HumanModule processor
-            # TODO(review): dead code, a 'human' string never reaches here because the type guard above
-            # rejects it first (callable('human') is False). Only a HumanModule instance works as a human
-            # processor. See tests/test_modules.py::test_checker_human_string_currently_raises.
             if isinstance(proc, str) and proc.lower().strip() == "human":
                 proc_inputs: list[StreamType] = [StreamType(data_type="text", pubsub=False, private_only=False),
                                                  StreamType(data_type="img", pubsub=False, private_only=False)]

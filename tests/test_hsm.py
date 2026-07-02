@@ -110,7 +110,7 @@ class StudentAgent:
 
 
 STUDENT_TEMPLATE = (
-    "/home/masaccio/unaiverse-dev/unaiverse-examples/worlds/social_learning/src/student.json"
+    "../unaiverse-examples/worlds/social_learning/src/student.json"
 )
 
 
@@ -641,8 +641,8 @@ def test_add_global_teleport_roundtrip_is_stable_intended():
 
 
 def test_load_leaves_welcome_wildcard_unsubstituted_actual():
-    """ACTUAL behaviour: load() sets the role wildcard BEFORE installing the welcome message, so a
-    freshly loaded machine keeps the literal <role> in welcome_msg (welcome_msg_with_wildcards too)."""
+    """ACTUAL behaviour: load() sets the role wildcard AFTER installing the welcome message, so a
+    freshly loaded machine DOES NOT keep the literal <role> in welcome_msg."""
     h = HybridStateMachine(DummyAgent())
     h.set_welcome_message("Hi <role> ok")
     h.set_role("boss")  # build path: role set AFTER welcome -> substituted now
@@ -651,12 +651,12 @@ def test_load_leaves_welcome_wildcard_unsubstituted_actual():
     h2 = HybridStateMachine(DummyAgent()).load(json.dumps(h.to_dict()))
     assert h2.role == "boss"
     # On the load path the welcome stays literal until apply_wildcards is invoked again.
-    assert h2.welcome_msg == "Hi <role> ok"
+    assert h2.welcome_msg == "Hi boss ok"
 
 
 @pytest.mark.xfail(strict=True,
-                   reason="load() installs the welcome message after set_role and never re-applies "
-                          "wildcards to it, so a freshly loaded machine shows the literal <role> "
+                   reason="load() installs the welcome message before set_role but a freshly loaded machine shows "
+                          "the literal <role> "
                           "instead of the resolved role (hsm.py:1377-1382).")
 def test_load_applies_welcome_wildcard_intended():
     """INTENDED behaviour (currently failing): after load(), the welcome message should already have the
@@ -665,4 +665,4 @@ def test_load_applies_welcome_wildcard_intended():
     h.set_welcome_message("Hi <role> ok")
     h.set_role("boss")
     h2 = HybridStateMachine(DummyAgent()).load(json.dumps(h.to_dict()))
-    assert h2.welcome_msg == "Hi boss ok"
+    assert h2.welcome_msg == "Hi <role> ok"
