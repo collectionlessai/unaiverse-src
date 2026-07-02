@@ -436,7 +436,8 @@ class DataProps:
                          data_desc=self.data_desc,
                          tensor_shape=self.tensor_shape,
                          tensor_dtype=self.tensor_dtype,
-                         tensor_labels=list(self.tensor_labels.labels) if self.tensor_labels is not None else None,
+                         tensor_labels=list(self.tensor_labels.labels)
+                         if self.tensor_labels is not None and self.tensor_labels.labels is not None else None,
                          tensor_labeling_rule=self.tensor_labels.original_labeling_rule
                          if self.tensor_labels is not None else "max",
                          stream_to_proc_transforms=self.__original_stream_to_proc_transforms,
@@ -692,9 +693,6 @@ class DataProps:
         Returns:
             A string representing the name or group.
         """
-        # TODO(review): no guard for a user_hash without a ':' separator. rsplit then
-        # yields a single-element list and [1] raises IndexError. Synthetic keys like
-        # '<data_sample_0>' reach here via StreamProxy.__str__. See tests/test_agent_chat_e2e.py.
         return user_hash.rsplit(":", 1)[1]
 
     @staticmethod

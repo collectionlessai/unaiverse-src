@@ -447,13 +447,11 @@ class StreamProxy:
         """
         grouped_by_user = {}
         for user_hash in self._streams.keys():
-            # TODO(review): this special-case only covers '<default...' keys. Other
-            # synthetic keys such as '<data_sample_0>' (list-form data_samples) fall
-            # through to name_from_user_hash, which IndexErrors on a key with no ':',
-            # so any receiver behave() with a list-form interaction crashes. See
-            # tests/test_agent_chat_e2e.py.
             if user_hash.startswith("<default"):
                 user = "owner"
+                name = user_hash
+            elif user_hash.startswith("<data_sample"):
+                user = "sample"
                 name = user_hash
             else:
                 user = DataProps.peer_id_from_user_hash(user_hash)
