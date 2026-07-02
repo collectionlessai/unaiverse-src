@@ -1442,6 +1442,7 @@ class Node:
                     if time_to_expiry < timedelta(minutes=15):
                         log.misc("Relay reservation nearing expiration. Attempting to renew...")
                         world_private_peer_id = self.conn.get_world_node_peer_id()
+                        assert world_private_peer_id is not None
                         new_expiry_utc = await self.conn.reserve(world_private_peer_id, NodeConn.P2P_WORLD)
                         if new_expiry_utc is not None:
                             self.relay_reservation_expiry = datetime.fromisoformat(
@@ -2098,7 +2099,7 @@ class Node:
             # about the world agents and masters
             log.misc("Subscribing to the world-members topic...")
             if not (await self.conn.subscribe(peer_id, channel=f"{peer_id}::ps:rv")):  # Special rendezvous (ps:rv)
-                await self.__purge(peer_id, reason=WORLD_DISENGAGEMENT)  # If subscribing fails, we quit everything (safer)
+                await self.__purge(peer_id, reason=WORLD_DISENGAGEMENT)  # If subscribing fails, we quit (safer)
                 return False
 
             # Killing the public connection to the world node. On the Session path the
