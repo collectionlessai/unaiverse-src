@@ -27,6 +27,7 @@ The conftest autouse fixture swaps the logger's sink for a no-op, but
 call), so the critical paths below really do raise.
 """
 import json
+from pathlib import Path
 
 import pytest
 
@@ -109,8 +110,15 @@ class StudentAgent:
         pass
 
 
-STUDENT_TEMPLATE = (
-    "../unaiverse-examples/worlds/social_learning/src/student.json"
+# Anchored to this file, not the CWD: the tests must pass whether pytest runs from the
+# repo dir or from the uv root one level up. The examples repo is a sibling checkout, so
+# it may be absent; the two tests below skip cleanly when it is.
+STUDENT_TEMPLATE = str(
+    Path(__file__).resolve().parents[2] / "unaiverse-examples/worlds/social_learning/src/student.json"
+)
+_requires_student_template = pytest.mark.skipif(
+    not Path(STUDENT_TEMPLATE).exists(),
+    reason="unaiverse-examples checkout not present",
 )
 
 
@@ -579,6 +587,7 @@ def test_set_actionable_none_raises_genexception():
 
 # ── Real-world template oracle (social_learning student.json) ────────────────
 
+@_requires_student_template
 def test_load_real_student_template_rebuilds_machine():
     """The shipped student.json loads into the expected role, states and a known transition."""
     h = HybridStateMachine(StudentAgent()).load(STUDENT_TEMPLATE)
@@ -596,6 +605,7 @@ def test_load_real_student_template_rebuilds_machine():
     assert init_engage.ready is False
 
 
+@_requires_student_template
 def test_load_real_student_template_roundtrips_via_to_dict():
     """Reserializing the loaded student.json and reloading it is byte-for-byte stable."""
     h = HybridStateMachine(StudentAgent()).load(STUDENT_TEMPLATE)
