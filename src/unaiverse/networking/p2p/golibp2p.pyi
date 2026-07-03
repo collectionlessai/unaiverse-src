@@ -42,6 +42,16 @@ class GoLibP2P:
         """
         ...
 
+    def GetTopicPeers(self, instance: int) -> int:
+        """
+        GetTopicPeers(instance: int) -> bytes
+
+        Returns a JSON string listing the de-duplicated peer IDs subscribed to any topic
+        this instance is subscribed to (union of topic.ListPeers()): the directly-connected
+        peers that receive this instance's broadcasts.
+        """
+        ...
+
     def GetRendezvousPeers(self, instance: int) -> int:
         """
         GetRendezvousPeers(instance: int) -> bytes

@@ -1180,6 +1180,39 @@ class P2P:
             # Optionally raise P2PError(f"Failed to get connected peers info") from e if called directly
             return []  # Return empty list on error during polling
 
+    def get_topic_peers(self) -> List[str]:
+        """
+        Gets the peer IDs subscribed to any of this instance's topics (the de-duplicated
+        union of topic.ListPeers()). Each is a peer we are DIRECTLY connected to that
+        announced a subscription: the pubsub router intersects its connected-peer set with the
+        topic subscribers, so a peer we are not connected to never appears. These are exactly
+        the peers that receive this instance's broadcasts; the world perimeter uses them to cut
+        the pubsub-only peers that open no stream and so never surface in
+        get_connected_peers_info. A relay does not subscribe, so it never appears here.
+
+        Returns:
+            A list of peer-id strings, empty on error so that a transient FFI failure never
+            triggers a spurious perimeter cut.
+        """
+        try:
+            result_ptr = P2P.libp2p.GetTopicPeers(P2P._type_interface.to_go_int(self._instance))
+            result = P2P._type_interface.from_go_ptr_to_json(result_ptr)
+
+            if result is None:
+                logger.error("Failed to get topic peers, received null result.")
+                raise P2PError("Failed to get topic peers, received null result.")
+            if result.get('state') == "Error":
+                logger.error(f"Failed to get topic peers: {result.get('message', 'Unknown Go error')}")
+                raise P2PError(f"Failed to get topic peers: {result.get('message', 'Unknown Go error')}")
+
+            return result.get('message', [])
+
+        except Exception as e:
+
+            # Avoid crashing the polling loop; empty means "cut nobody" (fail-safe).
+            logger.error(f"❌ Error fetching topic peers: {e}")
+            return []
+
     def get_rendezvous_peers_info(self) -> Dict[str, Any] | None:
         """
         Gets the full rendezvous state from the Go library, including peers and metadata.

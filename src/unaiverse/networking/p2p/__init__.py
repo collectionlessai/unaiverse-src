@@ -120,6 +120,9 @@ _shared_lib.GetNodeAddresses.restype = ctypes.c_void_p  # Treat returned *C.char
 _shared_lib.GetConnectedPeers.argtypes = [ctypes.c_int]
 _shared_lib.GetConnectedPeers.restype = ctypes.c_void_p  # Treat returned *C.char as opaque pointer
 
+_shared_lib.GetTopicPeers.argtypes = [ctypes.c_int]
+_shared_lib.GetTopicPeers.restype = ctypes.c_void_p  # Treat returned *C.char as opaque pointer
+
 _shared_lib.GetRendezvousPeers.argtypes = [ctypes.c_int]
 _shared_lib.GetRendezvousPeers.restype = ctypes.c_void_p  # Treat returned *C.char as opaque pointer
 

@@ -147,7 +147,24 @@ func readFromSubscription(
 
 		// Handle Rendezvous or Standard Messages
 		if strings.HasSuffix(topic, ":rv") {
-			// This is a rendezvous update.
+			// A rendezvous roster. Only the host that owns the topic may write it: the
+			// topic embeds the host peer id and gossipsub authenticates the sender, so
+			// drop an update whose sender is not that host.
+			expectedHostStr, hasSuffix := strings.CutSuffix(topic, "::ps:rv")
+			if !hasSuffix {
+				logger.Warnf("[GO] ⚠️ Instance %d: rendezvous topic '%s' is not in '<host>::ps:rv' form; dropping update.\n", ni.instanceIndex, topic)
+				continue
+			}
+			expectedHost, decErr := peer.Decode(expectedHostStr)
+			if decErr != nil {
+				logger.Warnf("[GO] ⚠️ Instance %d: rendezvous topic '%s' has an undecodable host id: %v; dropping update.\n", ni.instanceIndex, topic, decErr)
+				continue
+			}
+			if msg.GetFrom() != expectedHost {
+				logger.Warnf("[GO] 🚫 Instance %d: rendezvous update on '%s' from %s is not the world host %s; dropping forged roster.\n", ni.instanceIndex, topic, msg.GetFrom(), expectedHost)
+				continue
+			}
+
 			// 1. First, unmarshal the outer Protobuf message.
 			var protoMsg pg.Message
 			if err := proto.Unmarshal(msg.Data, &protoMsg); err != nil {
@@ -181,10 +198,18 @@ func readFromSubscription(
 			// 5. Safely replace the old map with the new one.
 			ni.rendezvousMutex.Lock()
 			// If this is the first update for this instance, initialize the state struct.
-			if ni.rendezvousState == nil {
+			first := ni.rendezvousState == nil
+			if first {
 				ni.rendezvousState = &RendezvousState{}
 			}
 			rendezvousState := ni.rendezvousState
+			// Drop a roster that does not advance the counter: a replayed host-signed
+			// envelope must not reinstall a stale one. State resets on (un)subscribe.
+			if !first && updatePayload.UpdateCount <= rendezvousState.UpdateCount {
+				ni.rendezvousMutex.Unlock()
+				logger.Debugf("[GO] ⏮️ Instance %d: rendezvous update on '%s' tag %d does not advance past %d; ignoring stale/replayed roster.\n", ni.instanceIndex, topic, updatePayload.UpdateCount, rendezvousState.UpdateCount)
+				continue
+			}
 			rendezvousState.Peers = newPeerMap
 			rendezvousState.UpdateCount = updatePayload.UpdateCount
 			ni.rendezvousMutex.Unlock()

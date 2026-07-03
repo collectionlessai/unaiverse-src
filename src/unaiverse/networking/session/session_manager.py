@@ -156,7 +156,9 @@ class SessionManager:
         classified: dict = {}
         if connected_peer_infos is None or self._routing_classifier is None:
             return classified
+        seen: set = set()
         for c in connected_peer_infos:
+            seen.add(c['id'])
             pool_name = self._routing_classifier(c, membership)
             if pool_name is None:
                 if membership is not None:
@@ -164,6 +166,21 @@ class SessionManager:
                     await self.disconnect(c['id'])
                 continue
             classified.setdefault(pool_name, {})[c['id']] = c
+
+        # connected_peer_infos only holds peers that opened a stream, so a peer whose only
+        # traffic is a topic subscription is absent above yet still receives every broadcast.
+        # On the world instance, also cut the non-member subscribers the stream loop did not
+        # handle. These inform only the cut, never pool admission (which stays stream-driven),
+        # so we pass bare ids and build no pool entries. Direction does not affect the member
+        # test, so a synthetic value reuses the classifier. Relays never subscribe.
+        if membership is not None:
+            for peer_id in self.topic_peers():
+                if peer_id in seen or peer_id == self.local_peer_id:
+                    continue  # already classified/cut by the stream loop, or ourselves
+                if self._routing_classifier({'id': peer_id, 'direction': 'inbound'}, membership) is None:
+                    log.session(f"perimeter: cutting pubsub-only non-member ...{peer_id[-5:]}", sub=self._label)
+                    await self.disconnect(peer_id)
+
         return classified
 
     async def disconnect(self, peer_id: str) -> bool:
@@ -217,6 +234,13 @@ class SessionManager:
         """Transport-level connected peers on this instance (passthrough). The Coordinator
         reads peer info through the manager instead of reaching into the P2P handle."""
         return self.p2p.get_connected_peers_info()
+
+    def topic_peers(self) -> list:
+        """Peer IDs subscribed to this instance's topics, i.e. the directly-connected peers
+        that receive its broadcasts (passthrough). The world perimeter uses them to see the
+        pubsub-only peers that open no stream and so never appear in connected_peers_info.
+        Empty on transport error, so a transient FFI failure never causes a spurious cut."""
+        return self.p2p.get_topic_peers()
 
     def rendezvous_peers(self):
         """Rendezvous advertisement snapshot on this instance (passthrough). Meaningful only

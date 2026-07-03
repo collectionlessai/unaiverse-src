@@ -343,10 +343,14 @@ class _UpdP2P:
         self.log_sub = log_sub
         self.peer_id = log_sub + "-self"
         self._infos = []
+        self._topic_peers = []  # pubsub topic subscribers; plant to drive the cut-sweep
         self.disconnected = []
 
     def get_connected_peers_info(self):
         return list(self._infos)
+
+    def get_topic_peers(self):
+        return list(self._topic_peers)
 
     def disconnect_from(self, peer_id):
         self.disconnected.append(peer_id)
@@ -398,6 +402,49 @@ def test_char_world_perimeter_cuts_unclassifiable():
     assert "ghost" in world.disconnected
     assert all("ghost" not in s for s in added.values())
     assert "ghost" not in conn.peer_id_to_pool_name
+
+
+def test_char_world_perimeter_cuts_pubsub_only_nonmember():
+    """A peer whose only presence is a world topic subscription (it never opened a stream, so
+    it is absent from connected_peers_info and the stream loop is blind to it) is still cut if
+    it is not a world member. A subscribed member is kept. This closes the exfiltration channel
+    the private instance exists to protect."""
+    conn, pub, world = _make_node_conn()
+    conn._sm_world.world_agents_set = {"member"}
+    world._infos = []                             # no stream: invisible to the stream-based loop
+    world._topic_peers = ["intruder", "member"]   # both subscribe to a world topic
+    _run(conn.update())
+    assert "intruder" in world.disconnected       # non-member subscriber is cut
+    assert "member" not in world.disconnected     # a subscribed member is kept
+
+
+def test_char_world_perimeter_topic_cut_ignores_self():
+    """The instance's own peer-id, should it ever surface among topic peers, is never cut."""
+    conn, pub, world = _make_node_conn()
+    world._topic_peers = [world.peer_id]
+    _run(conn.update())
+    assert world.peer_id not in world.disconnected
+
+
+def test_char_world_perimeter_topic_cut_skips_stream_peers():
+    """A peer already handled by the stream loop (present in connected_peers_info) is not
+    re-processed by the topic sweep: a member with a stream is admitted, not double-cut."""
+    conn, pub, world = _make_node_conn()
+    conn._sm_world.world_agents_set = {"member"}
+    world._infos = [_info("member", "inbound")]   # member with a real stream
+    world._topic_peers = ["member"]               # also a topic subscriber
+    _run(conn.update())
+    assert "member" not in world.disconnected
+    assert conn.is_connected("member")
+
+
+def test_char_public_perimeter_never_cuts_topic_peers():
+    """The public instance has no membership and must never cut topic peers (it is the open
+    network); only the world instance enforces the perimeter."""
+    conn, pub, world = _make_node_conn()
+    pub._topic_peers = ["anyone"]
+    _run(conn.update())
+    assert "anyone" not in pub.disconnected
 
 
 def test_char_full_pool_truncates_diff_added():

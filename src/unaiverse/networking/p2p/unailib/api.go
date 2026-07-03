@@ -991,6 +991,50 @@ func GetConnectedPeers(
 	return C.CString(jsonSuccessResponse(peersList)) // Caller frees.
 }
 
+// GetTopicPeers returns, de-duplicated across this instance's topics, the peers subscribed
+// to them (topic.ListPeers()): the directly-connected peers that receive this instance's
+// broadcasts. The pubsub router intersects its connected-peer set with each topic's
+// subscribers, so a peer we are not connected to never appears. (Not the gossipsub grafted
+// mesh, a degree-bounded subset; on the floodsub world instance it is every subscriber.)
+//
+// The world perimeter needs this because GetConnectedPeers reports only friendlyPeers (peers
+// that opened a stream); a peer whose only traffic is a subscription is invisible there yet
+// still receives every broadcast. Only ids are returned: enough to decide the cut, and
+// unlike GetConnectedPeers this must not feed pool admission (which stays stream-driven), so
+// fuller info would only mislead. A relay never subscribes and so never appears.
+//
+// Returns JSON `{"state":"Success","message":["<peer_id>", ...]}`. Caller MUST FreeString it.
+//
+//export GetTopicPeers
+func GetTopicPeers(
+	instanceIndexC C.int,
+) (ret *C.char) {
+	defer recoverToCString(&ret, "GetTopicPeers")
+
+	ni, err := getInstance(int(instanceIndexC))
+	if err != nil {
+		// Not ready yet: a query, so report no subscribers rather than an error.
+		logger.Warnf("[GO] ⚠️ Instance %d: GetTopicPeers called but instance is not ready: %v\n", int(instanceIndexC), err)
+		return C.CString(jsonSuccessResponse([]string{}))
+	}
+
+	// De-duplicate across topics: a peer subscribed to several topics must appear once.
+	seen := make(map[peer.ID]struct{})
+	ni.pubsubMutex.RLock()
+	for _, topic := range ni.topics {
+		for _, pid := range topic.ListPeers() {
+			seen[pid] = struct{}{}
+		}
+	}
+	ni.pubsubMutex.RUnlock()
+
+	peersList := make([]string, 0, len(seen))
+	for pid := range seen {
+		peersList = append(peersList, pid.String())
+	}
+	return C.CString(jsonSuccessResponse(peersList)) // Caller frees.
+}
+
 // GetRendezvousPeers returns a list of peers currently tracked as part of the world for a specific instance.
 // Note: This relies on the internal `rendezvousDiscoveredPeersInstances` map which is updated by pubsub
 // Parameters:
