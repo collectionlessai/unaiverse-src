@@ -28,7 +28,7 @@ from unaiverse.networking.session.session_manager import SessionManager
 # through and the WORLD_HANDOFF_COMPLETE reason code for the handoff close. The wire codec
 # (SessMsg) and its protocol IDs (SESSION_PROTOCOL_IDS) are no longer referenced here.
 from unaiverse.networking.session.sess_msg import (
-    SessionInbound, WORLD_HANDOFF_COMPLETE,
+    SessionInbound, WORLD_HANDOFF_COMPLETE, WORLD_DISENGAGEMENT,
 )
 
 
@@ -1590,11 +1590,14 @@ class NodeConn:
             return None
 
     async def remove_all_world_agents(self) -> None:
-        """Removes all connected world agents from the pools and role lists (async)."""
+        """GOAWAY-close and drop every connected world agent from the pools and role lists
+        (async). The reason WORLD_DISENGAGEMENT closes each ex-companion's Session cleanly
+        (CLOSED, no reconnect) instead of leaving it ESTABLISHED to re-dial and re-enrol
+        peers of a world we just left."""
         peer_infos = self.get_all_connected_peer_infos(NodeConn.WORLD)
         for c in peer_infos:
             peer_id = c['id']
-            await self.drop_peer(peer_id)
+            await self.drop_peer(peer_id, WORLD_DISENGAGEMENT)
             if peer_id in self.peer_id_to_addrs:
                 del self.peer_id_to_addrs[peer_id]
             for role, peer_ids in self.role_to_peer_ids.items():

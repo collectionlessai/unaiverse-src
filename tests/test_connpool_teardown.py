@@ -136,6 +136,23 @@ def test_drop_peer_keeps_role_taxonomy():
     assert conn.get_role(peer) == ROLE_WORLD_AGENT
 
 
+def test_remove_all_world_agents_goaways_ex_companions():
+    """Leaving a world GOAWAY-closes every in-world agent (WORLD_DISENGAGEMENT) so its
+    Session reaches CLOSED and never re-dials us back into the abandoned world — not a
+    bare transport drop that leaves the Session ESTABLISHED to reconnect and re-enrol."""
+    conn, pub, world = _conn()
+    peer = "wa1"
+    _plant_pool_member(conn, peer, NodeConn.IN_WORLD_AGENTS)
+    stub = _StubSession()
+    conn._sm_world._sessions[peer] = stub
+
+    _run(conn.remove_all_world_agents())
+
+    assert stub.closed_with == WORLD_DISENGAGEMENT   # GOAWAY, not a bare drop
+    assert peer in world.disconnected                # transport severed
+    assert peer not in conn.peer_id_to_pool_name     # pool evicted
+
+
 # ── on_peer_disconnected: involuntary pool-sync ──────────────────────────────
 
 def test_on_peer_disconnected_evicts_pool_without_transport_disconnect():

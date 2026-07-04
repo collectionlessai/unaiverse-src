@@ -23,7 +23,7 @@ from unaiverse.networking.session.session import (
     SESSION_PROTOCOL_IDS,
 )
 from unaiverse.networking.session.sess_msg import (
-    SessMsg, SIMULTANEOUS_OPEN_LOSS, GRACEFUL_SHUTDOWN, SESSION_UNKNOWN,
+    SessMsg, SIMULTANEOUS_OPEN_LOSS, GRACEFUL_SHUTDOWN, SESSION_UNKNOWN, PERIMETER_CUT,
 )
 from unaiverse.utils.logger import log
 
@@ -147,9 +147,10 @@ class SessionManager:
         ``pool_name -> {peer_id -> peer_info}``.
 
         Uses the injected per-instance classifier. When a membership snapshot is given
-        (the world instance) an unclassifiable peer is cut from the perimeter
-        (disconnected) and left out; the public instance has no membership and never
-        cuts (an undefined-direction peer is simply skipped). Empty pools are absent
+        (the world instance) an unclassifiable peer is cut from the perimeter: its Session
+        is GOAWAY-closed (PERIMETER_CUT) so it never re-dials, and its transport is dropped
+        so it leaves the private mesh at once. The public instance has no membership and
+        never cuts (an undefined-direction peer is simply skipped). Empty pools are absent
         from the result: the Coordinator iterates its own pools and treats a missing
         pool as empty, so removals are still detected.
         """
@@ -163,7 +164,7 @@ class SessionManager:
             if pool_name is None:
                 if membership is not None:
                     log.session(f"perimeter: cutting unclassifiable peer ...{c['id'][-5:]}", sub=self._label)
-                    await self.drop(c['id'])
+                    await self.drop(c['id'], PERIMETER_CUT)
                 continue
             classified.setdefault(pool_name, {})[c['id']] = c
 
@@ -171,8 +172,10 @@ class SessionManager:
         # traffic is a topic subscription is absent above yet still receives every broadcast.
         # On the world instance, also cut the non-member subscribers the stream loop did not
         # handle. These inform only the cut, never pool admission (which stays stream-driven),
-        # so we pass bare ids and build no pool entries. Direction does not affect the member
-        # test, so a synthetic value reuses the classifier. Relays never subscribe.
+        # so we pass bare ids and build no pool entries. A pubsub-only peer opened no session
+        # stream, so there is nothing to GOAWAY: a reasonless drop just severs the transport.
+        # Direction does not affect the member test, so a synthetic value reuses the classifier.
+        # Relays never subscribe.
         if membership is not None:
             for peer_id in self.topic_peers():
                 if peer_id in seen or peer_id == self.local_peer_id:

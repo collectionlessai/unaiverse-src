@@ -20,8 +20,9 @@ import pytest
 
 from unaiverse.networking.p2p.messages import Msg
 from unaiverse.networking.node.connpool import NodeConn
+from unaiverse.networking.session.session import SessionState
 
-from realnet_helpers import pick_dialable_addr
+from realnet_helpers import pick_dialable_addr, pump_until
 
 pytestmark = pytest.mark.p2p
 
@@ -143,5 +144,60 @@ def test_perimeter_security_b4_pubsub_only_intruder_is_cut(real_nodes):
 
         cut = await _wait_until(lambda: x_p2p.peer_id not in h_world.get_topic_peers(), timeout=8.0)
         assert cut, "pubsub-only non-member was never cut from the world topic"
+
+    asyncio.run(_scenario())
+
+
+def test_perimeter_security_b6_revoked_member_session_is_closed_not_looped(real_nodes):
+    """When a world member loses membership, the perimeter cut GOAWAY-closes its Session
+    (PERIMETER_CUT) instead of only severing the transport, so it does not enter the
+    cut -> redial -> RESUME -> cut loop.
+
+    Member M establishes a real world Session to host H; H admits M, so the first
+    reconcile keeps it. H then revokes M's membership; the next reconcile must (a) close
+    H's own Session to M as a voluntary close (CLOSING/CLOSED, so H does not keep it
+    ESTABLISHED to bounce), and (b) deliver a GOAWAY(PERIMETER_CUT) that drives M's
+    Session to CLOSED (a clean close, not a LOST that would re-dial).
+    """
+    _, h_world_p2p, h_conn, _, h_world = real_nodes.world_node("b6-host")
+    _, m_world_p2p, m_conn, _, m_world = real_nodes.world_node("b6-member")
+
+    h_world_id = h_world_p2p.peer_id
+    m_world_id = m_world_p2p.peer_id
+    h_world_addr = pick_dialable_addr(h_world_p2p)
+    targets = [(h_conn, h_world, NodeConn.P2P_WORLD), (m_conn, m_world, NodeConn.P2P_WORLD)]
+
+    async def _scenario():
+        # M opens a real world Session to H (H accepts by default), both ESTABLISHED.
+        await asyncio.wait_for(m_world.initiate(h_world_id, [h_world_addr]), timeout=10.0)
+        await pump_until(targets,
+                         predicate=lambda: m_world.is_established(h_world_id)
+                         and h_world.is_established(m_world_id),
+                         timeout=20.0)
+
+        # Admit M as a member, then reconcile: a member is kept, never cut.
+        h_conn.add_to_world_agents_list(m_world_id, [h_world_addr], role=1)
+        await h_conn.update()
+        assert h_world.is_established(m_world_id), "a member was cut while still in membership"
+
+        # Revoke M's membership and reconcile: now H must cut M.
+        h_conn._sm_world.world_agents_set.discard(m_world_id)
+        await h_conn.update()
+
+        # (a) Deterministic: H closed its OWN Session to M (voluntary), not left it ESTABLISHED.
+        h_sess = h_world.get_session(m_world_id)
+        assert h_sess is None or h_sess.state in (SessionState.CLOSING, SessionState.CLOSED), \
+            f"host kept the cut peer's Session alive (state={h_sess.state if h_sess else None})"
+
+        # (b) M receives the GOAWAY(PERIMETER_CUT) and closes cleanly — it must NOT sit
+        # ESTABLISHED nor ride a reconnect grace that would re-dial into the perimeter.
+        await pump_until(targets,
+                         predicate=lambda: (m_world.get_session(h_world_id) is None
+                                            or m_world.get_session(h_world_id).state
+                                            in (SessionState.CLOSING, SessionState.CLOSED)),
+                         timeout=15.0)
+        m_sess = m_world.get_session(h_world_id)
+        assert m_sess is None or m_sess.state in (SessionState.CLOSING, SessionState.CLOSED), \
+            f"cut member did not close (state={m_sess.state if m_sess else None}); it would re-dial"
 
     asyncio.run(_scenario())

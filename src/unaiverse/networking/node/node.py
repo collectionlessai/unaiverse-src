@@ -841,7 +841,8 @@ class Node:
         log.user("Leaving world...")
 
         # GOAWAY the world host and drop its connection (so the remote sees Session.Closed,
-        # not Lost). remove_all_world_agents below drops the other world agents (no GOAWAY).
+        # not Lost). remove_all_world_agents below GOAWAY-closes the other world agents the
+        # same way, so none of them re-dials us back into a world we are leaving.
         await self.__purge(host, reason=WORLD_DISENGAGEMENT)
 
         # Clearing world-related lists in the connection manager (to avoid world agents

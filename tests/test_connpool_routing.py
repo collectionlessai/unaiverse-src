@@ -16,6 +16,8 @@ from unaiverse.networking.node.connpool import (
     NodeConn, SessionInbound,
 )
 from unaiverse.networking.session import SessMsg
+from unaiverse.networking.session.sess_msg import PERIMETER_CUT
+from unaiverse.networking.session.session import SessionState
 from unaiverse.networking.p2p.p2p import P2P
 
 pytestmark = pytest.mark.unit
@@ -416,6 +418,56 @@ def test_char_world_perimeter_cuts_pubsub_only_nonmember():
     _run(conn.update())
     assert "intruder" in world.disconnected       # non-member subscriber is cut
     assert "member" not in world.disconnected     # a subscribed member is kept
+
+
+class _CutStubSession:
+    """An ESTABLISHED-enough Session that records close(): planted into the world SM's
+    registry so the perimeter cut's GOAWAY can be asserted without a full FSM. The state
+    keeps sync_known_peers from pruning it as a stale KNOWN entry."""
+    def __init__(self):
+        self.closed_with = None
+        self.state = SessionState.ESTABLISHED
+
+    async def close(self, reason_code):
+        self.closed_with = reason_code
+
+
+def test_char_world_perimeter_cut_closes_session_not_just_transport():
+    """A world peer that falls out of membership but still holds a Session is not merely
+    disconnected: its Session is GOAWAY-closed with PERIMETER_CUT so it will never re-dial
+    (closing the cut -> redial -> RESUME -> cut loop), on top of the transport drop."""
+    conn, pub, world = _make_node_conn()
+    conn._sm_world.world_agents_set = {"member"}   # 'ghost' is NOT a member
+    stub = _CutStubSession()
+    conn._sm_world._sessions["ghost"] = stub
+    world._infos = [_info("ghost", "inbound")]
+    _run(conn.update())
+    assert stub.closed_with == PERIMETER_CUT       # GOAWAY closed, not left ESTABLISHED
+    assert "ghost" in world.disconnected           # transport severed too
+    assert "ghost" not in conn.peer_id_to_pool_name
+
+
+def test_char_grace_companion_slips_leave_sweep_but_is_cut_on_reconcile():
+    """A companion riding its reconnect grace at leave-time was already evicted from the
+    pool, so remove_all_world_agents (which sweeps the WORLD pools) cannot see it and does
+    NOT close it — the known leak. The backstop is the perimeter cut: once membership is
+    cleared, the next reconcile classifies the still-connected companion as a non-member
+    and GOAWAY-closes it. This is why B2 (leave closes companions) and B6 (perimeter closes
+    on reconcile) must ship in the same commit."""
+    conn, pub, world = _make_node_conn()
+    stub = _CutStubSession()
+    conn._sm_world._sessions["companion"] = stub  # live Session, but NOT in any pool (grace-evicted)
+
+    # The leave sweep iterates the WORLD pools, so it never reaches the pool-less companion.
+    _run(conn.remove_all_world_agents())
+    assert stub.closed_with is None, "expected the grace companion to slip the leave sweep"
+
+    # Backstop: membership cleared and the companion still connected -> reconcile cuts it.
+    conn._sm_world.world_agents_set = set()
+    world._infos = [_info("companion", "inbound")]
+    _run(conn.update())
+    assert stub.closed_with == PERIMETER_CUT, "the perimeter cut did not close the leaked companion"
+    assert "companion" in world.disconnected
 
 
 def test_char_world_perimeter_topic_cut_ignores_self():

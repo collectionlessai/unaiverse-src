@@ -36,6 +36,7 @@ enum ReasonCode {
   SIMULTANEOUS_OPEN_LOSS   = 17;
   SESSION_UNKNOWN          = 18;  // liveness: peer holds no Session for this session_id
   TOKEN_EXPIRED            = 19;  // peer's root token lapsed past the grace window
+  PERIMETER_CUT            = 20;  // world perimeter: peer is not (no longer) a member
 }
 
 // ── Stage 1 ──────────────────────────────────────────────────────────────────

@@ -64,6 +64,7 @@ GRANT_EXPIRED          = 16
 SIMULTANEOUS_OPEN_LOSS = 17
 SESSION_UNKNOWN        = 18  # liveness: peer holds no Session for this session_id
 TOKEN_EXPIRED          = 19  # peer's root token lapsed past the grace window
+PERIMETER_CUT          = 20  # world perimeter: peer is not (no longer) a member
 
 REASON_NAME: Dict[int, str] = {
     OK: "OK",
@@ -86,6 +87,7 @@ REASON_NAME: Dict[int, str] = {
     SIMULTANEOUS_OPEN_LOSS: "SIMULTANEOUS_OPEN_LOSS",
     SESSION_UNKNOWN: "SESSION_UNKNOWN",
     TOKEN_EXPIRED: "TOKEN_EXPIRED",
+    PERIMETER_CUT: "PERIMETER_CUT",
 }
 
 
