@@ -890,10 +890,21 @@ class NodeConn:
                                reject_relay: bool = False) -> list:
         """Open an initiator Session to `peer_id` on the named instance and return the
         start-up events for Node to dispatch (and to read a terminal FAILED from). The
-        grant-carrying world initiate stays on the handoff path (start_world_handoff)."""
-        return await self._sm_by_name(p2p_name).initiate(
+        grant-carrying world initiate stays on the handoff path (start_world_handoff).
+
+        A world-join dial to a peer that already holds an ESTABLISHED world-join carrier
+        with NO pending handoff is a SPENT carrier (a previous join's handoff failed and was
+        rolled back): the plain intent match in initiate() would no-op and the join would
+        never restart. The pending-handoff correlation lives here on the Coordinator, so we
+        detect it here and tell the SM to replace the stale carrier. An in-flight handoff
+        stays in _pending_world_handoff, so a live join is protected (no-op), not torn down."""
+        sm = self._sm_by_name(p2p_name)
+        replace_stale = (is_world_join and peer_id not in self._pending_world_handoff
+                         and sm.has_established_world_join_carrier(peer_id))
+        return await sm.initiate(
             peer_id=peer_id, addresses=addresses, is_world_join=is_world_join,
-            remote_node_id_hint=remote_node_id_hint, reject_relay=reject_relay)
+            remote_node_id_hint=remote_node_id_hint, reject_relay=reject_relay,
+            replace_stale=replace_stale)
 
     async def close_all_sessions(self) -> None:
         """Shutdown path: GOAWAY every Session on every instance so peers see a clean CLOSED

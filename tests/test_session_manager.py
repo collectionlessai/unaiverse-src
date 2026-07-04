@@ -56,6 +56,52 @@ def test_initiate_idempotent_when_already_healthy(alice_conn, alice_p2p, alice_p
     assert len(alice_conn.connect_calls) == 1
 
 
+def test_initiate_replaces_on_divergent_world_join_intent(alice_conn, alice_peer_id, bob_peer_id):
+    """A non-terminal Session whose world-join intent DIFFERS from the request is replaced
+    (dropped + re-dialed), not silently reused: otherwise a world join would be lost to a
+    leftover plain Session and the caller would see success while nothing (re)starts (B8)."""
+    alice_conn.connect_returns = (bob_peer_id, False)
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    _run(sm.initiate(bob_peer_id, ["/ip4/127.0.0.1/tcp/0"], is_world_join=False))
+    assert sm.get_session(bob_peer_id).is_world_join is False
+    # Same peer, now a WORLD-join intent → the plain Session must be replaced, not no-opped.
+    _run(sm.initiate(bob_peer_id, ["/ip4/127.0.0.1/tcp/0"], is_world_join=True))
+    assert sm.get_session(bob_peer_id).is_world_join is True
+    assert len(alice_conn.connect_calls) == 2            # re-dialed
+    assert bob_peer_id in alice_conn.disconnect_calls    # the stale one was dropped
+
+
+def test_initiate_replace_stale_forces_replacement_at_matching_intent(alice_conn, alice_peer_id, bob_peer_id):
+    """replace_stale (the Coordinator's spent-carrier flag) replaces a non-terminal Session
+    even when the world-join intent matches, so a spent carrier does not no-op forever (B8)."""
+    alice_conn.connect_returns = (bob_peer_id, False)
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    _run(sm.initiate(bob_peer_id, ["/ip4/127.0.0.1/tcp/0"], is_world_join=True))
+    # Matching intent, no flag → no-op (idempotent).
+    _run(sm.initiate(bob_peer_id, ["/ip4/127.0.0.1/tcp/0"], is_world_join=True))
+    assert len(alice_conn.connect_calls) == 1
+    # Matching intent, but replace_stale set → replace and re-dial.
+    _run(sm.initiate(bob_peer_id, ["/ip4/127.0.0.1/tcp/0"], is_world_join=True, replace_stale=True))
+    assert len(alice_conn.connect_calls) == 2
+
+
+def test_has_established_world_join_carrier(alice_conn, alice_peer_id, bob_peer_id):
+    """The spent-carrier detector is True only for an ESTABLISHED world-join Session: an
+    in-flight handshake (not yet ESTABLISHED) and a plain Session are never flagged, so a
+    live join is never mistaken for a spent carrier."""
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    assert sm.has_established_world_join_carrier(bob_peer_id) is False   # no Session
+    s = _mk_session(alice_conn, bob_peer_id, alice_peer_id)
+    s.is_world_join = True
+    sm._sessions[bob_peer_id] = s
+    s._set_state(SessionState.HELLO_SENT, None)
+    assert sm.has_established_world_join_carrier(bob_peer_id) is False   # in-flight, not spent
+    s._set_state(SessionState.ESTABLISHED, None)
+    assert sm.has_established_world_join_carrier(bob_peer_id) is True    # established carrier
+    s.is_world_join = False
+    assert sm.has_established_world_join_carrier(bob_peer_id) is False   # plain session
+
+
 def test_initiate_during_quarantine_returns_failed(alice_conn, alice_peer_id, bob_peer_id):
     """A Lost event must put the peer in quarantine; the next dial returns
     [FAILED] immediately without touching the wire."""

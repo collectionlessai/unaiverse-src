@@ -373,10 +373,17 @@ class SessionManager:
         remote_node_id_hint: Optional[str] = None,
         grant: Optional[dict] = None,
         reject_relay: bool = False,
+        replace_stale: bool = False,
     ) -> List[SessionEvent]:
-        """Open a new initiator Session to `peer_id` and start it. Idempotent if the
-        peer already has a healthy Session — returns []. A stale FAILED/CLOSED Session
-        is replaced. initiate() = ensure() + activate()."""
+        """Open a new initiator Session to `peer_id` and start it. A stale FAILED/CLOSED
+        Session is replaced. initiate() = ensure() + activate().
+
+        Idempotent on a matching-intent non-terminal Session (returns []), BUT a Session
+        whose intent DIVERGES from the request is replaced rather than silently reused:
+        the world-join flag must match, and the Coordinator sets ``replace_stale`` for a
+        spent world-join carrier (an established carrier whose handoff already failed and
+        was rolled back). Otherwise a leftover Session would shadow the dial and the join
+        would never (re)start — the caller sees success while nothing happens."""
         # The quarantine gate lives in activate() (the single dial door), so a
         # quarantined peer is refused there, even on a direct activate.
         existing = self._sessions.get(peer_id)
@@ -389,15 +396,34 @@ class SessionManager:
             app_role = existing.app_role
             self._forget(peer_id)
         elif existing is not None and existing.state not in (SessionState.FAILED, SessionState.CLOSED):
-            log.session(f"initiate(...{peer_id[-5:]}): "
-                      f"already have Session in state {existing.state.value} — no-op", sub=self._label)
-            return []
+            if not replace_stale and existing.is_world_join == is_world_join:
+                log.session(f"initiate(...{peer_id[-5:]}): "
+                          f"already have Session in state {existing.state.value} — no-op", sub=self._label)
+                return []
+            # Intent diverged (world-join vs plain), or a spent carrier: the stale Session
+            # would shadow the new dial, and a bare forget leaves the remote ESTABLISHED,
+            # ignoring our HELLO. GOAWAY-close it (so the remote drops its Session) and forget
+            # it now — without waiting for the CLOSED, or ensure() below would return the
+            # CLOSING — then dial fresh.
+            log.session(f"initiate(...{peer_id[-5:]}): replacing {existing.state.value} Session "
+                        f"(intent diverged or stale carrier)", sub=self._label)
+            await self.drop(peer_id, GRACEFUL_SHUTDOWN)
+            self._forget(peer_id)
 
         self.ensure(peer_id, addresses, is_world_join=is_world_join,
                     remote_node_id_hint=remote_node_id_hint, grant=grant, reject_relay=reject_relay,
                     app_role=app_role)
         log.session(f"initiating Session to ...{peer_id[-5:]}", sub=self._label)
         return await self.activate(peer_id)
+
+    def has_established_world_join_carrier(self, peer_id: str) -> bool:
+        """True if peer_id holds an ESTABLISHED initiator Session opened for a world join.
+        Paired with the Coordinator's pending-handoff view: an established world-join carrier
+        with NO pending handoff is a spent carrier (its private handoff failed and was rolled
+        back, leaving the carrier ESTABLISHED), which the next join attempt must replace rather
+        than reuse. Restricted to ESTABLISHED so an in-flight handshake is never torn down."""
+        s = self._sessions.get(peer_id)
+        return s is not None and s.is_world_join and s.state == SessionState.ESTABLISHED
 
     # Inbound dispatch
 

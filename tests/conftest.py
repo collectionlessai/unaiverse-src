@@ -126,10 +126,16 @@ class FakeConn:
         # forward writes; otherwise send_session just records.
         self.send_inbox: Optional[deque] = None
         self.sent: list[tuple[str, str, object]] = []
+        self.disconnect_calls: list[str] = []
 
     async def connect(self, addresses):
         self.connect_calls.append(list(addresses))
         return self.connect_returns
+
+    async def disconnect(self, peer_id: str) -> bool:
+        # The transport-disconnect primitive SessionManager.drop delegates to.
+        self.disconnect_calls.append(peer_id)
+        return True
 
     async def send_session(self, peer_id: str, protocol_id: str, sess_msg) -> bool:
         # Record the outbound call exactly as it was made (peer_id == destination).
@@ -172,6 +178,10 @@ class _FakeConnView:
     async def connect(self, addresses):
         self._parent.connect_calls.append(list(addresses))
         return self._parent.connect_returns
+
+    async def disconnect(self, peer_id: str) -> bool:
+        self._parent.disconnect_calls.append(peer_id)
+        return True
 
     async def send_session(self, peer_id: str, protocol_id: str, sess_msg) -> bool:
         self._parent.sent.append((peer_id, protocol_id, sess_msg))

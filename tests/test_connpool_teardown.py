@@ -25,6 +25,7 @@ import pytest
 
 from unaiverse.networking.node.connpool import NodeConn
 from unaiverse.networking.session.sess_msg import WORLD_DISENGAGEMENT
+from unaiverse.networking.session.session import SessionState
 
 pytestmark = pytest.mark.unit
 
@@ -151,6 +152,39 @@ def test_remove_all_world_agents_goaways_ex_companions():
     assert stub.closed_with == WORLD_DISENGAGEMENT   # GOAWAY, not a bare drop
     assert peer in world.disconnected                # transport severed
     assert peer not in conn.peer_id_to_pool_name     # pool evicted
+
+
+# ── initiate_session: spent-carrier detection (B8 × B12) ─────────────────────
+
+def test_initiate_session_flags_spent_carrier_but_protects_pending_handoff():
+    """A world-join dial to a peer holding an ESTABLISHED world-join carrier is flagged
+    replace_stale ONLY when there is no pending handoff. A spent carrier (handoff failed and
+    rolled back) is replaced so the join restarts (B8); an in-flight handoff is protected
+    (no replace), so B12's watchdog cannot tear down a live join."""
+    conn, pub, world = _conn()
+    peer = "host-pub"
+    carrier = _StubSession()
+    carrier.is_world_join = True
+    carrier.state = SessionState.ESTABLISHED
+    conn._sm_public._sessions[peer] = carrier
+
+    # Capture the flag the Coordinator passes down, without driving a real dial.
+    captured = {}
+
+    async def _spy_initiate(**kwargs):
+        captured.clear()
+        captured.update(kwargs)
+        return []
+    conn._sm_public.initiate = _spy_initiate
+
+    # No pending handoff → spent carrier → replace.
+    _run(conn.initiate_session(NodeConn.P2P_PUBLIC, peer, ["/ip4/1.1.1.1/tcp/1"], is_world_join=True))
+    assert captured["replace_stale"] is True
+
+    # A pending handoff for the same peer → live join → protected (no replace).
+    conn._pending_world_handoff[peer] = peer + "-w"
+    _run(conn.initiate_session(NodeConn.P2P_PUBLIC, peer, ["/ip4/1.1.1.1/tcp/1"], is_world_join=True))
+    assert captured["replace_stale"] is False
 
 
 # ── on_peer_disconnected: involuntary pool-sync ──────────────────────────────
