@@ -87,7 +87,7 @@ class SessionManager:
         # Per-instance perimeter routing, injected by the Coordinator (which owns the
         # pool taxonomy): a pure classifier (peer_info, membership) -> pool_name | None.
         # The unclassifiable-world-peer cut is no longer an injected callable: the manager
-        # owns its P2P, so it disconnects the peer itself (self.disconnect), keeping the
+        # owns its P2P, so it drops the peer itself (self.drop), keeping the
         # Node -> NodeConn -> SM -> P2P chain intact.
         self._routing_classifier = routing_classifier
         self._label = _p2p_label(p2p_name)
@@ -135,7 +135,7 @@ class SessionManager:
         if self._sessions.get(peer_id) is sess and sess.state != SessionState.KNOWN:
             self._active_sessions[peer_id] = sess
 
-    def _drop_session(self, peer_id: str) -> None:
+    def _forget(self, peer_id: str) -> None:
         """Remove a Session from both views."""
         self._sessions.pop(peer_id, None)
         self._active_sessions.pop(peer_id, None)
@@ -163,7 +163,7 @@ class SessionManager:
             if pool_name is None:
                 if membership is not None:
                     log.session(f"perimeter: cutting unclassifiable peer ...{c['id'][-5:]}", sub=self._label)
-                    await self.disconnect(c['id'])
+                    await self.drop(c['id'])
                 continue
             classified.setdefault(pool_name, {})[c['id']] = c
 
@@ -179,22 +179,9 @@ class SessionManager:
                     continue  # already classified/cut by the stream loop, or ourselves
                 if self._routing_classifier({'id': peer_id, 'direction': 'inbound'}, membership) is None:
                     log.session(f"perimeter: cutting pubsub-only non-member ...{peer_id[-5:]}", sub=self._label)
-                    await self.disconnect(peer_id)
+                    await self.drop(peer_id)
 
         return classified
-
-    async def disconnect(self, peer_id: str) -> bool:
-        """Disconnect a peer on THIS instance's P2P (best-effort): the manager owns its
-        P2P handle, so the perimeter cut and the Coordinator's remove() route through here
-        instead of reaching the transport from the conn layer (Node -> NodeConn -> SM ->
-        P2P). Returns False if the transport refused, True otherwise. Best-effort: any
-        transport error means 'gone', and the manager stays free of the P2P error type
-        (portability)."""
-        try:
-            self.p2p.disconnect_from(peer_id)
-        except Exception:
-            return False
-        return True
 
     # Transport passthroughs
     #
@@ -307,7 +294,7 @@ class SessionManager:
         stale = [pid for pid, s in self._sessions.items()
                  if s.state == SessionState.KNOWN and pid not in known]
         for peer_id in stale:
-            self._drop_session(peer_id)
+            self._forget(peer_id)
 
     # Initiator API
 
@@ -372,7 +359,7 @@ class SessionManager:
         log.session(f"activating Session to ...{peer_id[-5:]}", sub=self._label)
         events = await sess.start()
         self._promote(peer_id, sess)
-        self._evict_if_terminal(peer_id, sess)
+        self._forget_if_terminal(peer_id, sess)
         return events
 
     async def initiate(
@@ -397,7 +384,7 @@ class SessionManager:
             # its rendezvous role across the replacement so the dialed Session is not
             # blank on app_role until the next sync refresh.
             app_role = existing.app_role
-            self._drop_session(peer_id)
+            self._forget(peer_id)
         elif existing is not None and existing.state not in (SessionState.FAILED, SessionState.CLOSED):
             log.session(f"initiate(...{peer_id[-5:]}): "
                       f"already have Session in state {existing.state.value} — no-op", sub=self._label)
@@ -425,7 +412,7 @@ class SessionManager:
         # re-handshake initiated by the remote): evict it and fall through to
         # the no-session paths.
         if sess is not None and sess.state in (SessionState.FAILED, SessionState.CLOSED):
-            self._drop_session(peer_id)
+            self._forget(peer_id)
             sess = None
 
         # A KNOWN Session could be an initiator that has not dialed yet: it is not an
@@ -475,16 +462,16 @@ class SessionManager:
                 return events  # type: ignore[return-value]
 
         events = await sess.process_inbound(protocol_id, sess_msg)
-        self._evict_if_terminal(peer_id, sess)
+        self._forget_if_terminal(peer_id, sess)
         return events
 
-    def _evict_if_terminal(self, peer_id: str, sess: Session) -> None:
+    def _forget_if_terminal(self, peer_id: str, sess: Session) -> None:
         """Drop a Session that just reached FAILED/CLOSED outside the tick path,
         so the registry never holds a dead FSM that would shadow later inbound
         traffic from the same peer. Quarantine stays a tick-path concern."""
         if (sess.state in (SessionState.FAILED, SessionState.CLOSED) and
                 self._sessions.get(peer_id) is sess):
-            self._drop_session(peer_id)
+            self._forget(peer_id)
 
     def _spawn_responder(self, peer_id: str) -> Session:
         sess = Session(
@@ -565,7 +552,7 @@ class SessionManager:
         # We yield: drop our initiator, spawn a fresh responder for the inbound HELLO.
         log.session(f"simultaneous-open with ...{peer_id[-5:]}: yielding to responder", sub=self._label)
         existing.abort_silently("simultaneous_open_yielded")
-        self._drop_session(peer_id)
+        self._forget(peer_id)
         self._spawn_responder(peer_id)
         return "_replaced_with_responder_"
 
@@ -625,7 +612,7 @@ class SessionManager:
                 # Only drop from registry if the session is genuinely terminal.
                 sess = self._sessions.get(ev.peer_id)
                 if sess is not None and sess.state in (SessionState.FAILED, SessionState.CLOSED):
-                    self._drop_session(ev.peer_id)
+                    self._forget(ev.peer_id)
 
     # Transport events
 
@@ -668,6 +655,19 @@ class SessionManager:
             return []
         await sess.close(reason_code)
         return []  # CLOSED event will arrive via process_inbound(GoawayAck) or tick
+
+    async def drop(self, peer_id: str, reason_code: Optional[int] = None) -> List[SessionEvent]:
+        """Tear the relation down on THIS instance: GOAWAY-close the Session (only when
+        a reason is given; no-op without a Session) and disconnect the transport now.
+        A bare close also ends with the transport down, but only downstream (CLOSED ->
+        purge) and only if the peer cooperates: drop is the deterministic verb the
+        voluntary teardown (drop_peer) and the perimeter cut build on. The manager owns
+        its P2P handle, so the conn layer never reaches the transport directly (Node ->
+        NodeConn -> SM -> P2P); the disconnect is best-effort (an error means 'gone').
+        Returns the close events (usually []: the CLOSED arrives later via tick)."""
+        events = await self.close_session(peer_id, reason_code) if reason_code is not None else []
+        await self.p2p.disconnect(peer_id)
+        return events
 
     async def close_all(self, reason_code: int = GRACEFUL_SHUTDOWN) -> List[SessionEvent]:
         """GOAWAY every Session that can be gracefully closed (ESTABLISHED /

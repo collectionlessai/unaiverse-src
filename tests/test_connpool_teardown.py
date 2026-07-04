@@ -12,10 +12,11 @@ consequence of a Session transition, never a bare "close a connection":
     bookkeeping (``_evict_from_pools``) and signal the SessionManagers, WITHOUT a
     transport disconnect (there is nothing to disconnect).
 
-``_remove`` / ``_close_session`` / ``_evict_from_pools`` are internal primitives; the
-only external teardown surface is ``drop_peer`` (voluntary) and
-``on_peer_disconnected`` (involuntary). The NodeConn constructor never calls P2P
-methods, so a bare fake transport is enough.
+``SM.drop`` (GOAWAY-close + transport disconnect on the owning instance) and
+``_evict_from_pools`` are the primitives drop_peer composes; the only external
+teardown surface is ``drop_peer`` (voluntary) and ``on_peer_disconnected``
+(involuntary). The NodeConn constructor never calls P2P methods, so a bare fake
+transport is enough.
 """
 
 import asyncio
@@ -31,7 +32,7 @@ ROLE_WORLD_AGENT = 1
 
 
 class _FakeP2P:
-    """Minimal transport: no connected peers, records disconnect_from calls."""
+    """Minimal transport: no connected peers, records disconnect calls."""
 
     def __init__(self, log_sub):
         self.log_sub = log_sub
@@ -41,7 +42,7 @@ class _FakeP2P:
     def get_connected_peers_info(self):
         return []
 
-    def disconnect_from(self, peer_id):
+    async def disconnect(self, peer_id):
         self.disconnected.append(peer_id)
         return True
 

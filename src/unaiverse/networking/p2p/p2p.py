@@ -851,11 +851,12 @@ class P2P:
 
     async def disconnect(self, peer_id: str) -> bool:
         """Close the connection to `peer_id`. Returns True on success, False on a
-        transport-level failure. High-level wrapper over `disconnect_from` used by
-        the Session for per-peer teardown."""
+        transport-level failure. The canonical transport-disconnect primitive the
+        SessionManager's drop delegates to; best-effort, any error (including a
+        malformed peer_id) means 'gone' rather than propagating into the caller."""
         try:
             self.disconnect_from(peer_id)
-        except P2PError:
+        except (P2PError, ValueError):
             return False
         return True
 

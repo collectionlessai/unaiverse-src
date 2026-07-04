@@ -338,7 +338,7 @@ def test_route_world_classifies_against_passed_snapshot():
 
 class _UpdP2P:
     """Fake P2P for driving update(): serves planted connected-peer infos and records
-    perimeter disconnects (the world reconcile -> sm.disconnect -> p2p.disconnect_from)."""
+    perimeter disconnects (the world reconcile -> sm.drop -> p2p.disconnect)."""
     def __init__(self, log_sub):
         self.log_sub = log_sub
         self.peer_id = log_sub + "-self"
@@ -352,7 +352,7 @@ class _UpdP2P:
     def get_topic_peers(self):
         return list(self._topic_peers)
 
-    def disconnect_from(self, peer_id):
+    async def disconnect(self, peer_id):
         self.disconnected.append(peer_id)
         return True
 
@@ -506,11 +506,11 @@ def test_char_removal_from_pool_absent_from_classified():
     assert removed[NodeConn.IN_WORLD_AGENTS] == {"wa"}
 
 
-def test_char_remove_keeps_misc():
-    """_remove() drops the peer from its pool and the connection indices but deliberately KEEPS
+def test_char_drop_peer_keeps_misc():
+    """drop_peer() drops the peer from its pool and the connection indices but deliberately KEEPS
     peer_id_to_misc (the role taxonomy), so the role survives a disconnect/re-add. This is part
     of I-2 and must hold after the pool state descends into the SM while the role taxonomy stays
-    Coordinator-owned (D-2). _remove is the internal transport-drop primitive drop_peer builds on."""
+    Coordinator-owned (D-2)."""
     conn, pub, world = _make_node_conn()
     # add_to_world_agents_list records the role in peer_id_to_misc (via set_role) and the roster.
     conn.add_to_world_agents_list("wa", ["/ip4/1.1.1.1/tcp/1"], role=ROLE_WORLD_AGENT)
@@ -518,7 +518,8 @@ def test_char_remove_keeps_misc():
     _run(conn.update())
     assert conn.is_connected("wa")
     assert conn.get_role("wa") == ROLE_WORLD_AGENT
-    assert _run(conn._remove("wa"))
+    _run(conn.drop_peer("wa"))
+    assert "wa" in world.disconnected
     assert not conn.is_connected("wa")
     # The pool / connection indices dropped it, but the role taxonomy is intentionally kept.
     assert conn.get_role("wa") == ROLE_WORLD_AGENT
