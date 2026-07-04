@@ -337,10 +337,12 @@ class NodeConn:
     def world_relay_enabled(self) -> bool:
         return self._sm_world.relay_enabled
 
-    def get_world_connected_peers_info(self) -> list:
+    def get_world_connected_peers_info(self) -> list | None:
         """Raw transport-level connected peers on the world instance, for the stats path
         (Agent.collect_and_store_own_stats). Reads through the world manager as internal
-        custody and returns the data, not the handle, so callers stop reaching into the P2P."""
+        custody and returns the data, not the handle, so callers stop reaching into the P2P.
+        None on an FFI error (transport state unknown): callers must skip, not treat it as
+        zero peers, or a transient failure poisons the stats with a false empty sample."""
         return self._sm_world.connected_peers_info()
 
     def set_token(self, token: str) -> None:

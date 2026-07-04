@@ -220,9 +220,11 @@ class SessionManager:
         config update for future WebRTC connections, not a network round-trip."""
         self.p2p.set_turn_credentials(ice_turn_servers)
 
-    def connected_peers_info(self) -> list:
+    def connected_peers_info(self) -> Optional[list]:
         """Transport-level connected peers on this instance (passthrough). The Coordinator
-        reads peer info through the manager instead of reaching into the P2P handle."""
+        reads peer info through the manager instead of reaching into the P2P handle. None on
+        an FFI error (transport state unknown), so a transient failure is not read as "zero
+        peers": the reconcile skips the diff on None instead of emptying the pools."""
         return self.p2p.get_connected_peers_info()
 
     def topic_peers(self) -> list:

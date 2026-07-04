@@ -47,8 +47,8 @@ def test_session_only_peers_enter_pools_and_pool_diffs_fire(real_nodes):
 
         # Session traffic alone must have promoted both sides to friendlyPeers,
         # with the connection direction (not the per-message stream direction).
-        a_view = {c["id"]: c for c in a_p2p.get_connected_peers_info()}
-        b_view = {c["id"]: c for c in b_p2p.get_connected_peers_info()}
+        a_view = {c["id"]: c for c in (a_p2p.get_connected_peers_info() or [])}
+        b_view = {c["id"]: c for c in (b_p2p.get_connected_peers_info() or [])}
         assert b_p2p.peer_id in a_view, "dialer side never saw the peer (send path)"
         assert a_p2p.peer_id in b_view, "responder side never saw the peer (recv path)"
         assert a_view[b_p2p.peer_id]["direction"] == "outbound"

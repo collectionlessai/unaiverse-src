@@ -1141,16 +1141,18 @@ class P2P:
             msg: str = result.get('message', 'unknown error') if result else 'null result'
             raise P2PError(f"[Instance {self._instance}] set_ice_config failed: {msg}")
 
-    def get_connected_peers_info(self) -> List[Dict[str, Any]]:
+    def get_connected_peers_info(self) -> Optional[List[Dict[str, Any]]]:
         """
         Gets information about currently connected peers from the Go library.
 
         Returns:
-            A list of dictionaries, each representing a connected peer with
-            keys like 'addr_info' (containing 'ID', 'Addrs'), 'connected_at', 'direction', and 'misc'.
+            On success, a (possibly empty) list of dictionaries, each representing a
+            connected peer with keys like 'addr_info' (containing 'ID', 'Addrs'),
+            'connected_at', 'direction', and 'misc'. A real empty list means "zero peers".
 
-        Raises:
-            P2PError: If fetching connected peers fails.
+            ``None`` when the FFI call itself fails (transport state UNKNOWN), so a
+            transient error is not read as "zero peers": the reconcile skips the diff on
+            None (leaving the pools intact) instead of tearing every peer down.
         """
 
         # Logger.info("ℹ️ Fetching connected peers info...") # Can be noisy
@@ -1162,24 +1164,21 @@ class P2P:
 
             if result is None:
                 logger.error("Failed to get connected peers, received null result.")
-                raise P2PError("Failed to get connected peers, received null result.")
+                return None
             if result.get('state') == "Error":
                 logger.error(f"Failed to get connected peers: {result.get('message', 'Unknown Go error')}")
-                raise P2PError(f"Failed to get connected peers: {result.get('message', 'Unknown Go error')}")
+                return None
 
-            peers_list = result.get('message', [])
-
-            # Update internal map (optional)
-            # logger.info(f"  Connected peers count: {len(peers_list)}") # Can be noisy
-            return peers_list
+            # A successful call returns the real list (empty means genuinely zero peers).
+            return result.get('message', [])
 
         except Exception as e:
 
             # Avoid crashing the polling thread, just log the error
             logger.error(f"❌ Error fetching connected peers info: {e}")
 
-            # Optionally raise P2PError(f"Failed to get connected peers info") from e if called directly
-            return []  # Return empty list on error during polling
+            # None (not []) so the caller distinguishes "FFI errored" from "zero peers".
+            return None
 
     def get_topic_peers(self) -> List[str]:
         """

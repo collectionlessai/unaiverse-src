@@ -349,7 +349,8 @@ class _UpdP2P:
         self.disconnected = []
 
     def get_connected_peers_info(self):
-        return list(self._infos)
+        # None models an FFI error (transport state unknown); a list is the real state.
+        return None if self._infos is None else list(self._infos)
 
     def get_topic_peers(self):
         return list(self._topic_peers)
@@ -497,6 +498,28 @@ def test_char_public_perimeter_never_cuts_topic_peers():
     pub._topic_peers = ["anyone"]
     _run(conn.update())
     assert "anyone" not in pub.disconnected
+
+
+def test_char_ffi_error_none_skips_diff_and_keeps_pools():
+    """When the transport reports None (an FFI error: transport state UNKNOWN, not "zero
+    peers"), the reconcile skips the diff and leaves the pools intact. A transient error
+    must NOT empty every pool — for an agent that would fire a spurious leave_world (B28)."""
+    conn, pub, world = _make_node_conn()
+    conn._sm_world.world_agents_set = {"wa"}
+    world._infos = [_info("wa", "inbound")]
+    added, _ = _run(conn.update())
+    assert added[NodeConn.IN_WORLD_AGENTS] == {"wa"}     # admitted
+
+    # Next cycle the FFI errors (None), which must NOT read as "zero peers".
+    world._infos = None
+    _, removed = _run(conn.update())
+    assert "wa" not in removed.get(NodeConn.IN_WORLD_AGENTS, set())   # not spuriously removed
+    assert conn.is_connected("wa")                                    # still pooled
+
+    # A genuine empty list (zero peers), by contrast, DOES remove it.
+    world._infos = []
+    _, removed2 = _run(conn.update())
+    assert "wa" in removed2.get(NodeConn.IN_WORLD_AGENTS, set())
 
 
 def test_char_full_pool_truncates_diff_added():

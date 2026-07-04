@@ -145,13 +145,19 @@ class Agent(AgentBasics):
 
         _, own_private_pid = self.get_peer_ids()
         t = clock.get_time_ms()
-        try:
-            info = self.node_conn.get_world_connected_peers_info()
-            peers_list = [i['id'] for i in info]
-            self.stats.store_stat('connected_peers', peers_list, group_key=own_private_pid, timestamp=t)
-        except Exception as e:
-            self.stats.store_stat('connected_peers', [], group_key=own_private_pid, timestamp=t)
-            log.error(f"[Stats] Error collecting and storing own stats, clearing: {e}")
+        info = self.node_conn.get_world_connected_peers_info()
+        if info is None:
+            # The FFI call failed (transport state unknown): skip this sample rather than
+            # record a false "zero peers", which would poison the world connectivity graph
+            # with a phantom drop of every peer on a transient error.
+            log.error("[Stats] connected peers unavailable (FFI error); skipping the sample")
+        else:
+            try:
+                peers_list = [i['id'] for i in info]
+                self.stats.store_stat('connected_peers', peers_list, group_key=own_private_pid, timestamp=t)
+            except Exception as e:
+                self.stats.store_stat('connected_peers', [], group_key=own_private_pid, timestamp=t)
+                log.error(f"[Stats] Error collecting and storing own stats, clearing: {e}")
 
         try:
             behav = self.behav
