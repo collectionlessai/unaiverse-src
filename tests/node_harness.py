@@ -405,6 +405,11 @@ def build_agent_node_shell(node_peer_id: str, node_id: str = "shell-node",
     node.joining_world_info = None
     node.memory_finder = None
     node._interact_mode_opts = None
+    # Rejoin state (Node.__init__ sets these; the shell bypasses __init__). Off by default so
+    # a world-link terminal event does not arm a rejoin unless a test opts in.
+    node.keep_rejoining = False
+    node.rejoining_time = -1.
+    node.rejoining_kwargs = {}
 
     # Node holds no SM handle (S18): the managers live on the Coordinator. Build them
     # locally and register them on the fake conn, mirroring NodeConn.attach_session_policy.

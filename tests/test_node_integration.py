@@ -236,15 +236,50 @@ def test_world_session_goaway_triggers_full_world_leave():
     asyncio.run(_scenario())
 
 
+def test_involuntary_world_link_end_arms_rejoin_but_clean_close_does_not():
+    """keep_rejoining: an INVOLUNTARY end of the Session toward the current world host
+    re-arms the rejoin timer, and does so BEFORE leave_world runs. LOST (host vanished)
+    and FAILED (e.g. an inbound-dispatch error on the live world Session) re-arm; a clean
+    CLOSED (a GOAWAY from the host: kick, role-revoke, graceful shutdown, or our own
+    token-expiry close) does NOT — re-joining would just be bounced by whatever closed us."""
+    async def _scenario():
+        for ev_type, should_arm in [
+            (SessionEventType.LOST, True),
+            (SessionEventType.FAILED, True),
+            (SessionEventType.CLOSED, False),
+        ]:
+            node, conn = build_agent_node_shell(NODE_PEER)
+            node.keep_rejoining = True
+            node.rejoining_time = -1.
+            conn.set_world(REMOTE_PEER)       # REMOTE is our current world host
+            node.hosted._in_world = True      # the join completed (role bit set)
+
+            ev = SessionEvent(type=ev_type, session_id="00" * 8, peer_id=REMOTE_PEER,
+                              role=SessionRole.INITIATOR, p2p_name=NodeConn.P2P_WORLD,
+                              data={"reason": "x"})
+            left = await node._maybe_leave_world_on_session_end(ev)
+
+            assert left is True, f"{ev_type.value}: should have left the world"
+            armed = node.rejoining_time > 0.
+            assert armed is should_arm, \
+                f"{ev_type.value}: rejoin armed={armed}, expected {should_arm}"
+
+    asyncio.run(_scenario())
+
+
 def test_world_handoff_failure_before_join_does_not_leave_world():
     """A world-session FAILED during the join handoff — before the join completes, so
     in_world() is still False — must NOT run the full leave_world cleanup: it is a
     failed join, not a departure. conn holds the host from handoff-initiate onward, so
-    the guard keys off in_world() (the role bit), not merely the host being set."""
+    the guard keys off in_world() (the role bit), not merely the host being set. And it
+    must NOT re-arm the rejoin here: a failed JOIN is retried by the rejoin watchdog
+    (which reschedules on every dial), not by this departure path."""
     async def _scenario():
         from unaiverse.agent import Agent
 
         node, conn = build_agent_node_shell(NODE_PEER)
+        node.keep_rejoining = True
+        node.rejoining_time = -1.
         # Handoff initiated: conn knows the world host, but the join never completed
         # (no role bit set → in_world() stays False).
         conn.set_world(REMOTE_PEER)
@@ -260,6 +295,7 @@ def test_world_handoff_failure_before_join_does_not_leave_world():
         assert node.hosted.world_data_clears == 0
         assert Agent.ROLE_PUBLIC not in node.hosted.accepted_roles
         assert None not in conn.set_world_calls   # set_world(None) never called
+        assert node.rejoining_time == -1.         # not re-armed here (the watchdog handles it)
 
     asyncio.run(_scenario())
 

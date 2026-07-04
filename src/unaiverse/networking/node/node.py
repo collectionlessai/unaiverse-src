@@ -1267,17 +1267,20 @@ class Node:
 
                 log.misc(f"=== Starting clock cycle {clock.get_cycle()} ===")
 
-                # Checking if a rejoin is needed
+                # Rejoin watchdog. A scheduled rejoin fires ask_to_join_world, which dials
+                # and then hands off ASYNChronously, so a dial that "succeeds" is not yet a
+                # join. We therefore reschedule (not disarm) the watchdog: a join that fails
+                # or stalls after the dial is retried at the next window, and the disarm
+                # happens only when the join truly completes (__join_world sets the role bit).
+                # If we are already back in-world (a slow join finished), a stale tick just
+                # disarms without re-joining, so a late watchdog cannot tear the world down.
                 if 0. < self.rejoining_time <= clock.get_time():
-                    if self.keep_rejoining:
-                        ret = await self.ask_to_join_world(**self.rejoining_kwargs)
-                        if ret is not None:
-                            self.rejoining_time = -1.
-                        else:
-                            log.user(f"Failed to rejoin, waiting {Custom.REJOINING_WAIT} before trying again...")
-                            self.rejoining_time = clock.get_time() + Custom.REJOINING_WAIT
-                    else:
+                    if not self.keep_rejoining or (self.agent is not None and self.agent.in_world()):
                         self.rejoining_time = -1.
+                    else:
+                        if await self.ask_to_join_world(**self.rejoining_kwargs) is None:
+                            log.user(f"Failed to rejoin, retrying in {Custom.REJOINING_WAIT} seconds...")
+                        self.rejoining_time = clock.get_time() + Custom.REJOINING_WAIT
 
                 # Handle new connections or lost connections
                 await self.__handle_network_connections()
@@ -1600,13 +1603,11 @@ class Node:
                 if self.node_type is Node.WORLD and pool_name in self.conn.WORLD:
                     an_agent_left_the_world = True
 
-                # Check if the world disconnected: in that case, disconnect all the other agents in the world and leave
-                if self.node_type is Node.AGENT and pool_name in self.conn.WORLD_NODE:
-                    log.error("The world node disconnected")
-                    await self.leave_world()
-                    if self.keep_rejoining:
-                        log.user(f"Waiting before trying to rejoin ({Custom.REJOINING_WAIT} seconds)...")
-                        self.rejoining_time = clock.get_time() + Custom.REJOINING_WAIT
+                # The world host dropping out of the pool is NOT where we leave/rejoin: a
+                # transport blip must ride the world Session's reconnect grace (RESUME), and
+                # only its terminal LOST/FAILED event (in _maybe_leave_world_on_session_end)
+                # leaves the world and arms the rejoin. Deciding here, on the transport diff,
+                # would tear the world down on a brief blip and skip the grace entirely.
 
                 # Checking if the inspector disconnected
                 if peer_id == self.inspector_peer_id:
@@ -2182,6 +2183,10 @@ class Node:
             self.profile.get_dynamic_profile()['connections']['world_peer_id'] = peer_id
             self.profile.mark_change_in_connections()
 
+            # The join truly completed (the role bit is set): disarm the rejoin watchdog so a
+            # pending tick does not retry (and tear down) the world we just joined.
+            self.rejoining_time = -1.
+
             log.user("Handshake completed, world joined!")
             return True
         else:
@@ -2408,6 +2413,13 @@ class Node:
             return False
         log.misc(f"[session] world link terminated ({ev.type.value}, "
                  f"reason={ev.data.get('reason', 'unknown')}) → leaving world", sub="prv")
+        # Arm the rejoin BEFORE leaving (leave_world is best-effort and may raise; the rejoin
+        # must survive that). Only an INVOLUNTARY end re-arms: a clean CLOSED is a GOAWAY from
+        # the host (kick / role-revoke / graceful shutdown / our own token-expiry close), where
+        # re-joining would just be bounced again. LOST (host vanished) and FAILED (e.g. an
+        # inbound-dispatch error on the live world Session) do re-arm.
+        if self.keep_rejoining and ev.type != SessionEventType.CLOSED:
+            self.rejoining_time = clock.get_time() + Custom.REJOINING_WAIT
         try:
             await self.leave_world()
         except Exception as e:
