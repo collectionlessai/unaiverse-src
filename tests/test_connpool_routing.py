@@ -522,6 +522,59 @@ def test_char_ffi_error_none_skips_diff_and_keeps_pools():
     assert "wa" in removed2.get(NodeConn.IN_WORLD_AGENTS, set())
 
 
+def test_get_connected_peers_info_returns_none_on_ffi_error():
+    """The B28 fix at the boundary: P2P.get_connected_peers_info returns None on an FFI-level
+    failure (Go state==Error, a null/unparseable result, or a marshalling exception), so a
+    caller can tell a transient error from a genuine zero-peers. A successful (possibly empty)
+    result stays a real list, never None."""
+    from unittest.mock import patch
+    p = P2P.__new__(P2P)
+    p._instance = 0
+    with patch.object(P2P, "libp2p", create=True) as lib, \
+         patch.object(P2P, "_type_interface", create=True) as ti:
+        ti.to_go_int = lambda x: x
+        lib.GetConnectedPeers = lambda i: object()   # opaque ptr; from_go_ptr_to_json is stubbed
+
+        ti.from_go_ptr_to_json = lambda ptr: {"state": "Error", "message": "boom"}
+        assert p.get_connected_peers_info() is None
+        ti.from_go_ptr_to_json = lambda ptr: None
+        assert p.get_connected_peers_info() is None
+
+        def _raise(ptr):
+            raise ValueError("bad json")
+        ti.from_go_ptr_to_json = _raise
+        assert p.get_connected_peers_info() is None
+
+        # A successful call returns the real list — empty means genuinely zero peers, NOT None.
+        ti.from_go_ptr_to_json = lambda ptr: {"state": "Success", "message": []}
+        assert p.get_connected_peers_info() == []
+        ti.from_go_ptr_to_json = lambda ptr: {"state": "Success", "message": [{"id": "x"}]}
+        assert p.get_connected_peers_info() == [{"id": "x"}]
+
+
+def test_agent_stats_skips_connected_peers_sample_on_ffi_none():
+    """The other half of B28: Agent.collect_and_store_own_stats SKIPS the connected_peers
+    sample when the getter returns None (FFI error) instead of storing a false empty sample,
+    which would poison the world connectivity graph with a phantom drop of every peer."""
+    from types import SimpleNamespace
+    from unaiverse.agent import Agent
+    a = Agent.__new__(Agent)
+    stored = []
+    a.stats = SimpleNamespace(store_stat=lambda name, val, **kw: stored.append((name, val)))
+    a.get_peer_ids = lambda: ("pub", "prv")
+    a.behav = None   # the HSM-stats block asserts behav is not None -> its own except swallows it
+
+    a.node_conn = SimpleNamespace(get_world_connected_peers_info=lambda: None)
+    a.collect_and_store_own_stats()
+    assert not any(name == "connected_peers" for name, _ in stored)   # skipped, no false sample
+
+    # A real (empty) list DOES record a sample (genuine zero peers).
+    stored.clear()
+    a.node_conn = SimpleNamespace(get_world_connected_peers_info=lambda: [])
+    a.collect_and_store_own_stats()
+    assert ("connected_peers", []) in stored
+
+
 def test_char_full_pool_truncates_diff_added():
     """When more peers are offered than the pool's max size, only max-size of them are
     admitted: the overflow is rejected by add() and never enters the diff added."""

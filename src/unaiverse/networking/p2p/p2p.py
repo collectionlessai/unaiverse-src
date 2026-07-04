@@ -1150,9 +1150,12 @@ class P2P:
             connected peer with keys like 'addr_info' (containing 'ID', 'Addrs'),
             'connected_at', 'direction', and 'misc'. A real empty list means "zero peers".
 
-            ``None`` when the FFI call itself fails (transport state UNKNOWN), so a
-            transient error is not read as "zero peers": the reconcile skips the diff on
-            None (leaving the pools intact) instead of tearing every peer down.
+            ``None`` on an FFI-LEVEL failure — a Go panic reported as ``state == "Error"``,
+            a NULL/unparseable result pointer, or a marshalling exception — so such a
+            transient is not read as "zero peers": the reconcile skips the diff on None
+            (leaving the pools intact) instead of tearing every peer down. Note this does
+            NOT cover a Go "instance not ready", which Go reports as a successful empty list
+            (read here as a genuine zero-peers), not as an error.
         """
 
         # Logger.info("ℹ️ Fetching connected peers info...") # Can be noisy
