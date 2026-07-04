@@ -24,6 +24,7 @@ from unaiverse.networking.session import (SessionState, SessionEventType, Sessio
                                           VerifiedTokenClaims)
 from unaiverse.networking.session.session import SessionEvent
 from unaiverse.networking.session.sess_msg import CV_HASH_MISMATCH, NOT_AUTHORIZED, ProfileDecisionResult
+from unaiverse.clock import clock
 
 from conftest import apump
 from node_harness import (
@@ -263,6 +264,83 @@ def test_involuntary_world_link_end_arms_rejoin_but_clean_close_does_not():
             armed = node.rejoining_time > 0.
             assert armed is should_arm, \
                 f"{ev_type.value}: rejoin armed={armed}, expected {should_arm}"
+
+    asyncio.run(_scenario())
+
+
+def test_rejoin_watchdog_reschedules_retries_and_is_not_gated_on_in_world():
+    """The rejoin watchdog: a due, keep_rejoining timer RESCHEDULES after firing (a dial is
+    not yet a completed join); keep_rejoining=False disarms; a not-due timer is a no-op; a
+    raising dial is caught and still reschedules (no node death); and it is NOT gated on
+    in_world() — a leave_world that raised and left the role bit set must still let the
+    watchdog re-fire and recover, not cancel the rejoin."""
+    async def _scenario():
+        node, conn = build_agent_node_shell(NODE_PEER)
+        node.rejoining_kwargs = {}
+        calls = []
+
+        async def _fake_join(**kw):
+            calls.append(kw)
+            return "peer"
+        node.ask_to_join_world = _fake_join
+
+        # not due -> no-op
+        node.keep_rejoining = True
+        node.rejoining_time = -1.
+        await node._tick_rejoin_watchdog()
+        assert node.rejoining_time == -1. and calls == []
+
+        # due + keep_rejoining False -> disarm, no dial
+        node.keep_rejoining = False
+        node.rejoining_time = clock.get_time()
+        await node._tick_rejoin_watchdog()
+        assert node.rejoining_time == -1. and calls == []
+
+        # due + keep_rejoining True -> dial + reschedule (not disarm)
+        node.keep_rejoining = True
+        node.rejoining_time = clock.get_time()
+        await node._tick_rejoin_watchdog()
+        assert len(calls) == 1
+        assert node.rejoining_time > clock.get_time()
+
+        # due + in_world() True (leave_world partially failed) -> STILL dials, does NOT disarm
+        node.hosted._in_world = True
+        node.rejoining_time = clock.get_time()
+        await node._tick_rejoin_watchdog()
+        assert len(calls) == 2                        # fired despite in_world (the wedge fix)
+        assert node.rejoining_time > clock.get_time()
+
+        # the dial raises -> caught, still rescheduled (no run_async death)
+        async def _boom(**kw):
+            raise RuntimeError("boom")
+        node.ask_to_join_world = _boom
+        node.rejoining_time = clock.get_time()
+        await node._tick_rejoin_watchdog()            # must not raise
+        assert node.rejoining_time > clock.get_time()
+
+    asyncio.run(_scenario())
+
+
+def test_involuntary_end_arms_rejoin_even_if_leave_world_raises():
+    """The rejoin is armed BEFORE leave_world (best-effort, may raise): a LOST/FAILED must
+    leave the rejoin armed even when leave_world blows up, so the watchdog can still recover
+    the node. Validates the arm-before-leave ordering the docstring claims."""
+    async def _scenario():
+        node, conn = build_agent_node_shell(NODE_PEER)
+        node.keep_rejoining = True
+        node.rejoining_time = -1.
+        conn.set_world(REMOTE_PEER)
+        node.hosted._in_world = True
+
+        async def _boom():
+            raise RuntimeError("leave_world blew up")
+        node.leave_world = _boom
+
+        ev = SessionEvent(type=SessionEventType.LOST, session_id="00" * 8, peer_id=REMOTE_PEER,
+                          role=SessionRole.INITIATOR, p2p_name=NodeConn.P2P_WORLD, data={"reason": "x"})
+        left = await node._maybe_leave_world_on_session_end(ev)
+        assert left is True
+        assert node.rejoining_time > 0.               # armed despite leave_world raising
 
     asyncio.run(_scenario())
 

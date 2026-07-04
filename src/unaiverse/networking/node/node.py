@@ -1267,20 +1267,8 @@ class Node:
 
                 log.misc(f"=== Starting clock cycle {clock.get_cycle()} ===")
 
-                # Rejoin watchdog. A scheduled rejoin fires ask_to_join_world, which dials
-                # and then hands off ASYNChronously, so a dial that "succeeds" is not yet a
-                # join. We therefore reschedule (not disarm) the watchdog: a join that fails
-                # or stalls after the dial is retried at the next window, and the disarm
-                # happens only when the join truly completes (__join_world sets the role bit).
-                # If we are already back in-world (a slow join finished), a stale tick just
-                # disarms without re-joining, so a late watchdog cannot tear the world down.
-                if 0. < self.rejoining_time <= clock.get_time():
-                    if not self.keep_rejoining or (self.agent is not None and self.agent.in_world()):
-                        self.rejoining_time = -1.
-                    else:
-                        if await self.ask_to_join_world(**self.rejoining_kwargs) is None:
-                            log.user(f"Failed to rejoin, retrying in {Custom.REJOINING_WAIT} seconds...")
-                        self.rejoining_time = clock.get_time() + Custom.REJOINING_WAIT
+                # Re-fire a scheduled world rejoin when it comes due (see _tick_rejoin_watchdog).
+                await self._tick_rejoin_watchdog()
 
                 # Handle new connections or lost connections
                 await self.__handle_network_connections()
@@ -2184,8 +2172,11 @@ class Node:
             self.profile.mark_change_in_connections()
 
             # The join truly completed (the role bit is set): disarm the rejoin watchdog so a
-            # pending tick does not retry (and tear down) the world we just joined.
+            # pending tick does not retry (and tear down) the world we just joined, and refresh
+            # the rejoin target to THIS world (a runtime world switch must not rejoin the old one).
             self.rejoining_time = -1.
+            if self.keep_rejoining and self.joining_world_info is not None:
+                self.rejoining_kwargs = copy.deepcopy(self.joining_world_info["options"])
 
             log.user("Handshake completed, world joined!")
             return True
@@ -2385,6 +2376,33 @@ class Node:
                 await self.__purge(ev.peer_id)
             except Exception as e:
                 log.error(f"[session] dispatch LOST/CLOSED purge failed for ...{ev.peer_id[-5:]}: {e}")
+
+    async def _tick_rejoin_watchdog(self) -> None:
+        """One tick of the world-rejoin watchdog, run once per main-loop cycle.
+
+        A scheduled rejoin (rejoining_time armed by _maybe_leave_world_on_session_end on an
+        involuntary world-link end) fires ask_to_join_world, which dials and then hands off
+        ASYNChronously — so a dial that returns is NOT yet a completed join. We therefore
+        RESCHEDULE (not disarm) each time: a join that fails or stalls after the dial is
+        retried at the next window. The disarm happens ONLY on the true completion
+        (__join_world clears the timer when the role bit is set). Deliberately NOT gated on
+        in_world(): a leave_world that raised before clearing the role bit would otherwise
+        keep in_world() True and let this tick cancel the rejoin, wedging the node out of the
+        world with no retry — so we let it re-fire and recover instead. A duplicate tick while
+        a join is in flight is harmless: initiate() no-ops on the matching-intent carrier. Any
+        error from the dial is caught so a transient failure retries rather than unwinding the
+        main loop."""
+        if not (0. < self.rejoining_time <= clock.get_time()):
+            return
+        if not self.keep_rejoining:
+            self.rejoining_time = -1.
+            return
+        try:
+            if await self.ask_to_join_world(**self.rejoining_kwargs) is None:
+                log.user(f"Failed to rejoin, retrying in {Custom.REJOINING_WAIT} seconds...")
+        except Exception as e:
+            log.error(f"[rejoin] ask_to_join_world raised, will retry: {e}")
+        self.rejoining_time = clock.get_time() + Custom.REJOINING_WAIT
 
     async def _maybe_leave_world_on_session_end(self, ev) -> bool:
         """Joiner side: a terminal event on the Session toward the CURRENT world
