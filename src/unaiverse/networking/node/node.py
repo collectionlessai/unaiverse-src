@@ -2335,18 +2335,22 @@ class Node:
             # attested in p2p_peers, so the host preregisters a root-vouched identity
             # instead of a self-claimed one (the public peer-id was already checked
             # inside the token verification). Skipped on the v1 / no-verifier path.
-            assert joiner_private_peer_id is not None
-            assert joiner_private_addr is not None
+            # A joiner with no root-vouched private identity/addresses cannot be a routable
+            # world member: reject structurally instead of asserting (which would tear down
+            # the world host, and under python -O would preregister a None-addressed member).
+            if not joiner_private_peer_id or not joiner_private_addr:
+                log.misc(f"[session] decision: joiner ...{peer_id[-5:]} has no private "
+                         f"peer-id/addresses → reject")
+                return ProfileDecisionResult(accepted=False, reason_code=NOT_AUTHORIZED)
             assert self.world.stats is not None
-            if (verified_claims is not None and joiner_private_peer_id and
+            if (verified_claims is not None and
                     joiner_private_peer_id not in verified_claims.p2p_peers):
                 log.misc(f"[session] decision: world binding mismatch for ...{peer_id[-5:]} → reject")
                 return ProfileDecisionResult(accepted=False, reason_code=NOT_AUTHORIZED)
-            if joiner_private_peer_id:
-                if is_world_master:
-                    self.conn.add_to_world_masters_list(joiner_private_peer_id, joiner_private_addr, role)
-                else:
-                    self.conn.add_to_world_agents_list(joiner_private_peer_id, joiner_private_addr, role)
+            if is_world_master:
+                self.conn.add_to_world_masters_list(joiner_private_peer_id, joiner_private_addr, role)
+            else:
+                self.conn.add_to_world_agents_list(joiner_private_peer_id, joiner_private_addr, role)
 
             is_human = profile.get_static_profile().get("node_type") == self.hosted.HUMAN
             code_bundle = json.dumps({
@@ -2653,12 +2657,22 @@ class Node:
         if role & Agent.ROLE_WORLD_AGENT != Agent.ROLE_WORLD_AGENT:
             log.error(f"[session] world register: grant role {role} lacks the world "
                       f"bit for ...{ev.peer_id[-5:]}; purging")
-            await self.__purge(ev.peer_id, reason=LOCAL_ERROR)
+            await self.__purge(ev.peer_id, reason=HOSTED_REJECTED)
             return
         private_peer_id = ev.peer_id
         private_addr: list[str] | None = profile.get_dynamic_profile().get("private_peer_addresses")
-        assert self.world is not None
-        assert private_addr is not None
+        if self.world is None:
+            return
+        if not private_addr:
+            # A joiner with no private addresses can't be a routable member: reject here
+            # instead of asserting (which would tear down the world host's loop, and under
+            # python -O would list a member with a None address). Unlist explicitly because
+            # __purge does not touch the world lists, so an earlier pre-admission would leak.
+            log.error(f"[session] world register: joiner ...{private_peer_id[-5:]} has no private "
+                      f"addresses; rejecting")
+            self._world_host_unlist_member(ev)
+            await self.__purge(private_peer_id, reason=HOSTED_REJECTED)
+            return
         try:
             # conn pools (routing) + world object (membership). The periodic rendezvous
             # publish (PUBLISH_RENDEZVOUS_EVERY) advertises the new member to the world.
@@ -2670,7 +2684,7 @@ class Node:
                 self.conn.set_addresses_in_peer_info(private_peer_id, private_addr)
             if not (await self.world.add_agent(peer_id=private_peer_id, profile=profile)):
                 log.error(f"[session] world.add_agent rejected ...{private_peer_id[-5:]}; purging")
-                await self.__purge(private_peer_id, reason=LOCAL_ERROR)
+                await self.__purge(private_peer_id, reason=HOSTED_REJECTED)
         except Exception as e:
             log.error(f"[session] world register failed for ...{private_peer_id[-5:]}: {e}")
 

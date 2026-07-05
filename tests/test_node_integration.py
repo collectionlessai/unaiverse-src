@@ -516,6 +516,54 @@ def test_world_host_grants_when_world_peer_bound():
     asyncio.run(_scenario())
 
 
+def test_world_host_decision_rejects_joiner_without_private_addr():
+    """B5: a world-join whose profile carries no private addresses is rejected at the
+    public decision (NOT_AUTHORIZED) instead of asserting, and is never pre-admitted to
+    the world lists (which under python -O would leak a None-addressed member)."""
+    async def _scenario():
+        world = FakeWorld()
+        node, conn = build_agent_node_shell(NODE_PEER, world=world)
+        profile = full_profile_dict("joiner-node", private_peer_addresses=[])
+        _, (_, real_hash) = NodeProfile.from_dict(profile).verify_cv_hash("")
+        claims = VerifiedTokenClaims(node_id="joiner-node", cv_hash=real_hash,
+                                     p2p_peers=("joiner-node-pub-peer", "joiner-node-world-peer"))
+        decision = await node._session_decision_hook(
+            REMOTE_PEER, "joiner-node", profile, NodeConn.P2P_PUBLIC, claims)
+        assert decision.accepted is False
+        assert decision.reason_code == NOT_AUTHORIZED
+        assert "joiner-node-world-peer" not in conn.world_agents_set
+        assert "joiner-node-world-peer" not in conn.world_masters_set
+
+    asyncio.run(_scenario())
+
+
+def test_world_host_register_rejects_joiner_without_private_addr():
+    """B5: a joiner whose world Session establishes but whose profile has no private
+    addresses is rejected at registration instead of asserting (which tore the world
+    host's loop down, and under python -O listed a None-addressed member). It is
+    unlisted (the pre-admission removed) and purged, never enrolled."""
+    async def _scenario():
+        from unaiverse.agent import Agent
+        world = FakeWorld()
+        node, conn = build_agent_node_shell(NODE_PEER, world=world)
+        role = FakeWorld.ROLE_STR_TO_BITS["player"] | Agent.ROLE_WORLD_AGENT
+        # Pre-admission the public decision would have done for this joiner.
+        conn.add_to_world_agents_list(REMOTE_PEER, [], role)
+        profile_b = full_profile_dict("joiner-node", private_peer_addresses=[])
+        ev = SessionEvent(type=SessionEventType.ESTABLISHED, session_id="00" * 8,
+                          peer_id=REMOTE_PEER, role=SessionRole.RESPONDER,
+                          p2p_name=NodeConn.P2P_WORLD, data={})
+
+        await node._world_host_register_agent(ev, profile_b)  # must not raise
+
+        assert REMOTE_PEER not in conn.world_agents_set
+        assert REMOTE_PEER not in conn.world_masters_set
+        assert REMOTE_PEER in conn.removed_calls
+        assert not world.added
+
+    asyncio.run(_scenario())
+
+
 def test_pool_removal_while_established_keeps_enrolment_during_grace():
     """Contract of __handle_network_connections on a pool drop: the session moves
     to RECONNECTING (grace) and the peer is KEPT in hosted (all_agents), so an
