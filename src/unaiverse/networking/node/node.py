@@ -1010,15 +1010,25 @@ class Node:
             log.user("\nDetected Ctrl+C! Exiting gracefully... (Ctrl+C again to force-quit)")
             self.stop_requested = True
 
+        # Install ONE handler, not both. asyncio's add_signal_handler already routes through
+        # the loop's wakeup fd (immune to matplotlib/PyTorch signal hijacks and GIL-holding C
+        # extensions), and arming signal.signal on top of it does NOT disarm that wakeup fd, so
+        # a single SIGINT fires _request_stop twice: the second call sees stop_requested already
+        # set and os._exit(130)s past the finally, so the GOAWAY teardown never runs. Use
+        # signal.signal only as a fallback when the loop-level handler is unavailable (Windows
+        # or no running loop). The second real Ctrl+C still force-quits via os._exit.
+        loop_handler_installed = False
         try:
             asyncio.get_running_loop().add_signal_handler(signal.SIGINT, _request_stop)  # noqa
+            loop_handler_installed = True
         except (NotImplementedError, RuntimeError):
-            pass  # Windows or no event loop — fall back to signal.signal only
+            pass  # Windows or no event loop — fall back to signal.signal below
 
-        try:
-            signal.signal(signal.SIGINT, lambda signum, frame: _request_stop())
-        except (ValueError, OSError):
-            pass  # Not in main thread, etc.
+        if not loop_handler_installed:
+            try:
+                signal.signal(signal.SIGINT, lambda signum, frame: _request_stop())
+            except (ValueError, OSError):
+                pass  # Not in main thread, etc.
 
         # Subscribing/creating our own pubsub
         await self.hosted.subscribe_to_pubsub_owned_streams()
@@ -1257,7 +1267,8 @@ class Node:
                                 log.misc("Inspector is not active/connected anymore, resuming...")
                                 break
 
-                            public_messages, _ = await self.conn.get_messages(p2p_name=NodeConn.P2P_PUBLIC)
+                            public_messages, public_session_inbound = await self.conn.get_messages(
+                                p2p_name=NodeConn.P2P_PUBLIC)
                             for msg in public_messages:
                                 if msg.content_type == Msg.INSPECT_CMD:
 
@@ -1277,7 +1288,22 @@ class Node:
                                             "Inspector command was not sent by the expected inspector node ID "
                                             "or no inspector connected")
                                         await self.__purge(msg.sender)
-                            await self.conn.get_messages(p2p_name=NodeConn.P2P_WORLD)  # Just draining
+                            # get_messages pops the session frames off the transport, so we must
+                            # still pump them or peers get no PONG/keepalive and mark us LOST while
+                            # paused. Dispatch normally (the pause freezes the agent's behave, not
+                            # the network); wrap it so a raising dispatch branch does not kill the
+                            # node under the inspector's eyes.
+                            _, world_session_inbound = await self.conn.get_messages(
+                                p2p_name=NodeConn.P2P_WORLD)
+                            try:
+                                events = await self.conn.pump_sessions(
+                                    {NodeConn.P2P_PUBLIC: public_session_inbound,
+                                     NodeConn.P2P_WORLD: world_session_inbound},
+                                    now=time.monotonic())
+                                for ev in events:
+                                    await self._dispatch_session_event(ev)
+                            except Exception as e:
+                                log.error(f"[pause] session pump/dispatch failed (going ahead): {e}")
                             await asyncio.sleep(0.1)  # Don't block the loop
 
                 # Move to the next cycle. The wait must be an ASYNC sleep: the
@@ -1577,13 +1603,24 @@ class Node:
                 pass
 
             finally:
+                # Per-peer try/except so one peer that raises during purge does not skip the
+                # GOAWAY for the others, nor the close_all_sessions sweep below.
                 try:
                     connected_peer_ids = list(self.hosted.all_agents.keys())
-                    for peer_id in connected_peer_ids:
+                except Exception:
+                    connected_peer_ids = []
+                for peer_id in connected_peer_ids:
+                    try:
                         await self.__purge(peer_id, reason=WORLD_DISENGAGEMENT)
+                    except Exception as e:
+                        log.error(f"Error purging a peer on shutdown: {e}")
+                try:
                     # GOAWAY any Session not covered by the per-peer leave above.
                     await self.conn.close_all_sessions()
-                    log.close()  # Closing logger
+                except Exception as e:
+                    log.error(f"Error closing all sessions on shutdown: {e}")
+                try:
+                    log.close()  # Closing logger (asserts on a stdout-only logger)
                 except Exception:
                     pass
 
