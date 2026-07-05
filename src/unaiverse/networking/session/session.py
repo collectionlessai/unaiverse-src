@@ -45,7 +45,7 @@ _TIMEOUT_PROFILE_S = 15.0   # Stage 2: PROFILE_OFFER → PROFILE_DECISION
 _TIMEOUT_WORLD_S = 30.0     # Stage 3: WORLD_GRANT expiry
 _TIMEOUT_RECONNECT_S = 45.0 # Session-level reconnect ceiling before Session.Lost. Longer than the
                             # Go transport grace (DisconnectionGracePeriod) so several backoff'd
-                            # re-dial + RESUME cycles fit inside the window (see tick_reconnect).
+                            # re-dial + RESUME cycles fit inside the window (see tick_dial).
 _TIMEOUT_CLOSING_S = 10.0   # GOAWAY sent; wait for GOAWAY_ACK
 # How long past the peer's attested token exp we keep the session before a
 # GOAWAY(TOKEN_EXPIRED). Generous on purpose — PING/PONG liveness is the primary
@@ -265,7 +265,7 @@ class Session:
         # Active re-dial + RESUME state (initiator drives recovery while RECONNECTING).
         self._reconnect_substep: str = ""   # "" | "redial" | "resume_sent"
         self._reconnect_attempts: int = 0
-        self._next_redial_at: float = 0.0   # monotonic gate, set/advanced by tick_reconnect
+        self._next_redial_at: float = 0.0   # monotonic gate, set/advanced by tick_dial
         self._resume_nonce: bytes = b""
 
         # World-join specifics.
@@ -994,7 +994,7 @@ class Session:
             self._set_state(SessionState.RECONNECTING, _TIMEOUT_RECONNECT_S)
             self._reconnect_substep = "redial"
             self._reconnect_attempts = 0
-            self._next_redial_at = 0.0   # re-dial on the next tick_reconnect
+            self._next_redial_at = 0.0   # re-dial on the next tick_dial
             self._ping_in_flight = False
             log.session(f"{self!r} link lost, starting {_TIMEOUT_RECONNECT_S}s reconnect window", sub=self._sub)
             return self._emit(SessionEventType.RECONNECTING, {"cause": "transport_disconnected"})
@@ -1009,7 +1009,7 @@ class Session:
         back to ESTABLISHED (see _on_resume_ack / _resume_established)."""
         if self.state == SessionState.RECONNECTING:
             self._reconnect_substep = "redial"
-            self._next_redial_at = 0.0   # send RESUME on the next tick_reconnect
+            self._next_redial_at = 0.0   # send RESUME on the next tick_dial
             log.session(f"{self!r} transport reconnect signal → attempting RESUME", sub=self._sub)
         return None
 

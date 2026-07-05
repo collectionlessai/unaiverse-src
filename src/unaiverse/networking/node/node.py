@@ -803,11 +803,11 @@ class Node:
         # Record the join intent (options forwarded into the offered profile downstream).
         self.joining_world_info = {"world_public_peer_id": None, "options": kwargs}
 
-        # Start the public-network Session to the world. Fire-and-forget: the dial
-        # happens here (so an unreachable world fails synchronously), but the world
-        # handshake — PROFILE → WORLD_GRANT → private world Session →
-        # join_world body — completes asynchronously in the main loop via the Session
-        # ESTABLISHED dispatch.
+        # Start the public-network Session to the world. Fire-and-forget: the dial runs
+        # off-task and the whole world handshake — dial → PROFILE → WORLD_GRANT → private
+        # world Session → join_world body — completes asynchronously in the main loop. An
+        # unreachable world surfaces later as a FAILED event (which arms the rejoin when
+        # keep_rejoining is set), not as a synchronous failure here.
         peer_id = await self.ask_to_get_in_touch(node_name=node_name, addresses=addresses,
                                                  node_id=node_id, public=True, is_world_join=True)
         if peer_id is not None:
@@ -2097,7 +2097,7 @@ class Node:
     async def __join_world(self, profile: NodeProfile, role: int,
                            packed_agent_files: str, agent_stats_code: str | None,
                            rendezvous_tag: int, initial_stats: dict[str, Any] | None,
-                           connected_peer_id: str | None = None) -> bool:
+                           peer_id: str | None = None) -> bool:
         """Performs the actual operation of joining a world after receiving confirmation. (async)
 
         Args:
@@ -2107,27 +2107,18 @@ class Node:
             agent_stats_code: A string of code defining the statistics for this world.
             rendezvous_tag: The rendezvous tag from the world's profile.
             initial_stats: When joining a world we eventually receive the recent history.
-            connected_peer_id: when set (Session world-handoff path), the private world
-                Session is already established to this peer-id — skip the legacy private
-                dial and run the post-connection body against it.
+            peer_id: the peer-id of the already-established private world Session
+                (set by the world-handoff path, the only caller); the post-connection body
+                runs against it.
 
         Returns:
             True if the join operation is successful, otherwise False.
         """
-        addresses = profile.get_dynamic_profile()['private_peer_addresses']
         world_public_peer_id = profile.get_dynamic_profile()['peer_id']
         log.user(f"\nActually joining world, role ID will be '{role}'")
 
-        if connected_peer_id is not None:
-            # Session world-handoff: the world Session already connected privately.
-            peer_id = connected_peer_id
-        else:
-            # Connecting to the world (private)
-            # notice that we also communicate the world node private peer ID to the connection manager,
-            # to avoid filtering it out when updating pools
-            peer_id = await self.ask_to_get_in_touch(addresses=addresses, public=False,
-                                                     before_updating_pools_fcn=self.conn.set_world)
-
+        # The private world Session already connected during the handoff.
+        # The post-connection body runs against the returned peer_id.
         assert self.agent is not None
 
         if peer_id is not None:
@@ -2766,7 +2757,7 @@ class Node:
             profile=world_profile, role=role,
             packed_agent_files=agent_files, agent_stats_code=stats_code,
             rendezvous_tag=rendezvous_tag, initial_stats=initial_stats,
-            connected_peer_id=world_peer_id,
+            peer_id=world_peer_id,
         )
 
     async def connect_via_session(
@@ -2780,12 +2771,12 @@ class Node:
     ) -> bool:
         """Start an initiator Session to `peer_id` via SessionManager and return.
 
-        Fire-and-forget: the dial runs synchronously inside Session.start (so an
-        unreachable peer or a rejected relay fails right here), but the
-        HELLO/PROFILE handshake completes asynchronously in the main loop's pump
-        (deliver/tick). Returns False only if the handshake could not be *started*
-        (dial/relay/quarantine), True once HELLO is on the wire. The Session owns
-        the dial, so callers must NOT pre-dial.
+        Fire-and-forget: Session.start launches the dial off-task and returns, and the whole
+        dial → HELLO → PROFILE handshake completes asynchronously in the main loop's pump
+        (deliver/tick). Returns True once the Session has been started; False only for the one
+        synchronous rejection left, a quarantined peer. Dial failure and relay rejection now
+        surface later as a FAILED event via the pump, not here. The Session owns the dial, so
+        callers must NOT pre-dial.
         """
         events = await self.conn.initiate_session(
             p2p_name,
@@ -2795,8 +2786,8 @@ class Node:
             remote_node_id_hint=remote_node_id_hint,
             reject_relay=reject_relay,
         )
-        # A terminal FAILED among the start-up events means the handshake could not
-        # even begin (dial failed after retries, relay rejected, peer quarantined).
+        # The only synchronous FAILED among the start-up events is a quarantine refusal;
+        # dial failure and relay rejection surface asynchronously via the pump.
         started = True
         for ev in events:
             if ev.type == SessionEventType.FAILED:
