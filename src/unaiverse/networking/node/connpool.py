@@ -1589,22 +1589,6 @@ class NodeConn:
                 self.set_world_agents_list(world_agents_peer_infos)
                 self.set_world_masters_list(world_masters_peer_infos)
 
-    async def get_cv_hash_from_last_token(self, peer_id: str) -> str | None:
-        """Retrieves the CV hash from the last token received from a peer (async).
-
-        Args:
-            peer_id: The peer ID to query.
-
-        Returns:
-            The CV hash string, or None if not found.
-        """
-        token = self.get_last_token(peer_id)
-        if token is not None:
-            _, cv_hash = await self.verify_token(token, peer_id)
-            return cv_hash
-        else:
-            return None
-
     async def remove_all_world_agents(self) -> None:
         """GOAWAY-close and drop every connected world agent from the pools and role lists
         (async). The reason WORLD_DISENGAGEMENT closes each ex-companion's Session cleanly
