@@ -67,7 +67,7 @@ def _run(coro):
     return asyncio.run(coro)
 
 
-# ── Codec round-trip ─────────────────────────────────────────────────────────
+# Codec round-trip
 
 def test_codec_round_trips_hello_request():
     """A HELLO_REQ SessMsg survives to_bytes/from_bytes over the hello protocol id,
@@ -103,7 +103,7 @@ def test_codec_round_trips_world_grant():
     assert back.fields["rendezvous_tag"] == 7
 
 
-# ── Routing ─────────────────────────────────────────────────────────────────
+# Routing
 
 def test_session_protocol_messages_are_partitioned(pools_with_one_p2p):
     """A batch containing one session message and zero chat messages → the
@@ -291,7 +291,7 @@ def test_requires_fast_clock_aggregates_managers():
     assert conn.requires_fast_clock() is True
 
 
-# ── Membership snapshot (perimeter seam) ─────────────────────────────────────
+# Membership snapshot (perimeter seam)
 
 def test_membership_snapshot_is_immutable():
     """membership_snapshot freezes sm_world's live sets so a snapshot already handed to
@@ -331,7 +331,7 @@ def test_route_world_classifies_against_passed_snapshot():
     assert NodeConn._route_world(ghost_in, membership) is None
 
 
-# ── Characterization oracle for update() ──────────────────────────────────────
+# Characterization oracle for update()
 #
 # These freeze the exact contract of the per-cycle diff and the world perimeter so
 # the per-instance reconcile in the SessionManagers can be checked bit-for-bit
@@ -725,7 +725,7 @@ def test_get_messages_gate_reads_cycle_snapshot(pools_with_one_p2p, monkeypatch)
     assert len(chat) == 1
 
 
-# ── Characterization oracle for the facade contract ────────────────────────────
+# Characterization oracle for the facade contract
 #
 # These freeze the role/addrs/is_connected facade (KNOWN Session per rendezvous
 # peer, role/addrs sourced from the Sessions) bit-for-bit. They drive the real
@@ -819,7 +819,7 @@ def test_char_world_host_writer_feeds_same_facade():
     assert conn.is_connected("wh") is False
 
 
-# ── KNOWN roster from the rendezvous via update() ────────────────────────────
+# KNOWN roster from the rendezvous via update()
 
 def test_char_update_registers_known_world_sessions_off_diff():
     """update() registers a KNOWN Session in the world SessionManager for each peer the
@@ -859,7 +859,7 @@ def test_char_update_prunes_known_when_peer_leaves_rendezvous():
     assert conn._sm_world.get_session("wa") is None
 
 
-# ── S18 layering enforcement ──────────────────────────────────────────────────
+# S18 layering enforcement
 
 def test_s18_coordinator_indexes_the_instance_by_sm_not_p2p():
     """Enforce the S18 contract on the Coordinator side: the per-instance indices are keyed

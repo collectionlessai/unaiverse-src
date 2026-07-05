@@ -61,7 +61,7 @@ def _manual_clock(min_delta: float = -1.0) -> _ManualClock:
     return _ManualClock(min_delta=min_delta)
 
 
-# ── cycle2time (pure arithmetic with explicit delta) ─────────────────────────
+# cycle2time (pure arithmetic with explicit delta)
 
 def test_cycle2time_with_delta_is_linear():
     """With a positive delta, cycle2time maps cycle k to k*delta exactly."""
@@ -84,7 +84,7 @@ def test_cycle2time_ignores_non_positive_delta():
     assert c.cycle2time(-1, delta=-5.0) == -1.0
 
 
-# ── get_cycle / next_cycle (real-time, unconstrained) ────────────────────────
+# get_cycle / next_cycle (real-time, unconstrained)
 
 def test_initial_cycle_is_minus_one():
     """A freshly created clock starts at cycle index -1."""
@@ -122,7 +122,7 @@ def test_get_cycle_time_matches_current_cycle_timestamp():
     assert c.get_cycle_time() == c.cycle2time(c.get_cycle())
 
 
-# ── min_delta gating of next_cycle ───────────────────────────────────────────
+# min_delta gating of next_cycle
 
 def test_min_delta_blocks_second_immediate_advance():
     """With a large min_delta the first advance succeeds, the immediate second does not."""
@@ -146,7 +146,7 @@ def test_real_time_next_cycle_without_advance_raises():
         c.next_cycle()                       # same virtual instant -> duplicate timestamp -> raise
 
 
-# ── time2cycle without delta (timestamp-table search) ────────────────────────
+# time2cycle without delta (timestamp-table search)
 
 def test_time2cycle_finds_exact_recorded_timestamps():
     """An exact recorded timestamp resolves to its cycle index."""
@@ -181,7 +181,7 @@ def test_time2cycle_unrecorded_intermediate_returns_minus_one():
     assert c.time2cycle((t0 + t1) / 2.0) == -1
 
 
-# ── time2cycle with explicit delta (constant-cadence model) ──────────────────
+# time2cycle with explicit delta (constant-cadence model)
 
 def test_time2cycle_with_delta_returns_current_cycle_for_now():
     """Converting ~now under a huge delta gives back the current cycle."""
@@ -203,7 +203,7 @@ def test_time2cycle_with_delta_counts_back_whole_deltas():
     assert c.time2cycle(c.get_time() - 5.0, delta=10.0) == base
 
 
-# ── get_time / get_time_ms ───────────────────────────────────────────────────
+# get_time / get_time_ms
 
 def test_get_time_uses_fixed_anchor():
     """get_time is the fixed anchor plus a tiny non-negative local elapsed term."""
@@ -238,7 +238,7 @@ def test_get_time_ms_monotonic_is_strictly_increasing():
     assert all(vals[i] < vals[i + 1] for i in range(len(vals) - 1))
 
 
-# ── get_time_as_string ───────────────────────────────────────────────────────
+# get_time_as_string
 
 def test_get_time_as_string_iso_millisecond_utc_format():
     """The string is ISO-8601 UTC with millisecond precision and a +00:00 offset."""
@@ -249,7 +249,7 @@ def test_get_time_as_string_iso_millisecond_utc_format():
     assert s.startswith("2023-11-14T22:13:20")
 
 
-# ── slow-mode toggling ───────────────────────────────────────────────────────
+# slow-mode toggling
 
 def test_run_slower_then_natural_speed_round_trip():
     """run_slower raises min_delta to the slow constant; run_natural_speed restores it."""
@@ -271,7 +271,7 @@ def test_run_slower_keeps_larger_existing_delta():
     assert c.min_delta == big
 
 
-# ── _search static helper (pure) ─────────────────────────────────────────────
+# _search static helper (pure)
 
 def test_search_empty_list_returns_minus_one():
     """Searching an empty timestamp table yields -1."""
@@ -299,7 +299,7 @@ def test_search_uses_cache_hint_fast_paths():
     assert _Clock._search([10.0, 20.0, 30.0], 30.0, 1) == 2
 
 
-# ── Clock proxy wrapper ──────────────────────────────────────────────────────
+# Clock proxy wrapper
 
 def test_clock_proxy_set_delegates_attributes():
     """Clock.set wires the proxy onto an existing _Clock and forwards attribute access."""

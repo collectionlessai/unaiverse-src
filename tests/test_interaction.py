@@ -19,7 +19,7 @@ from unaiverse.interaction import (
 pytestmark = pytest.mark.unit
 
 
-# ── Construction ─────────────────────────────────────────────────────────────
+# Construction
 
 def test_init_sets_basic_participant_fields():
     """A freshly built interaction stores requester, wraps target into a list and starts CREATED."""
@@ -76,7 +76,7 @@ def test_init_callback_on_volatile_raises():
         Interaction(action_name="a", requester="peerA", callback="cb", volatile=True)
 
 
-# ── to_dict / from_dict round-trip ──────────────────────────────────────────
+# to_dict / from_dict round-trip
 
 def test_to_from_dict_roundtrip_basic_fields():
     """A non-data interaction survives a to_dict/from_dict round-trip with all core fields intact."""
@@ -146,7 +146,7 @@ def test_to_dict_renames_timeout_to_retry_timeout():
     assert "timeout" not in d
 
 
-# ── Status predicates ───────────────────────────────────────────────────────
+# Status predicates
 
 def test_is_system_matches_system_label():
     """is_system is True exactly when the requester equals the system label constant."""
@@ -223,7 +223,7 @@ def test_mark_completed_sets_reason_and_status():
     assert inter.target_destination_state == ["done"]
 
 
-# ── to_status_dict ──────────────────────────────────────────────────────────
+# to_status_dict
 
 def test_to_status_dict_required_fields_present():
     """to_status_dict exposes the status-update fields, with data_tags None when empty."""
@@ -253,7 +253,7 @@ def test_to_status_dict_none_completion_reason():
     assert sd["completion_reason"] is None
 
 
-# ── Step / arg / mark helpers (cheap pure operations) ────────────────────────
+# Step / arg / mark helpers (cheap pure operations)
 
 def test_step_idx_helpers():
     """The step-index helpers increment, decrement, set and reset around the -1 baseline."""
@@ -321,7 +321,7 @@ def test_get_total_steps_and_starting_time_setters():
     assert inter.get_timeout_starting_time() == 3.0
 
 
-# ── Static helpers ──────────────────────────────────────────────────────────
+# Static helpers
 
 def test_build_uuid_defaults_to_system():
     """build_uuid fuses id and requester, defaulting to the system id/label when None."""
@@ -348,7 +348,7 @@ def test_update_target_resets_per_target_bookkeeping():
     assert inter.target_cycle_completed == [-1, -1, -1]
 
 
-# ── InteractionManager.get_recipients (routing rule) ────────────────────────
+# InteractionManager.get_recipients (routing rule)
 # get_recipients lives on InteractionManager, but its routing only consults the
 # manager's own sent/received/lazy dicts, so it is exercised here with a minimal
 # manager (agent=None) by registering interactions in those dicts directly.

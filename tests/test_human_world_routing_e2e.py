@@ -7,7 +7,7 @@ node.py:1865-1867 for INTERACTION) calls ``__purge(sender, reason=LOCAL_ERROR)``
 (node.py:2664-2692), which (a) GOAWAY-closes the sender's Session with
 LOCAL_ERROR, (b) drops the sender from the hosted entity via
 ``hosted.remove_agent``, and (c) removes it from the connection pool via
-``conn.remove``.
+``conn.drop_peer``.
 
 This is the *mechanism* that punishes a human whose reply is mis-routed to the
 world node instead of to the broadcaster. The mis-routing itself (BUG 2) is a

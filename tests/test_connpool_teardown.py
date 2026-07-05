@@ -82,7 +82,7 @@ def _plant_pool_member(conn, peer_id, pool_name):
     conn.peer_id_to_token[peer_id] = "tok"
 
 
-# ── drop_peer: voluntary teardown ────────────────────────────────────────────
+# drop_peer: voluntary teardown
 
 def test_drop_peer_with_reason_goaways_then_drops():
     """drop_peer(peer, reason) GOAWAYs the Session (close with that exact reason on
@@ -154,7 +154,7 @@ def test_remove_all_world_agents_goaways_ex_companions():
     assert peer not in conn.peer_id_to_pool_name     # pool evicted
 
 
-# ── initiate_session: spent-carrier detection (B8 × B12) ─────────────────────
+# initiate_session: spent-carrier detection (B8 × B12)
 
 def test_initiate_session_flags_spent_carrier_but_protects_pending_handoff():
     """A world-join dial to a peer holding an ESTABLISHED world-join carrier is flagged
@@ -187,7 +187,7 @@ def test_initiate_session_flags_spent_carrier_but_protects_pending_handoff():
     assert captured["replace_stale"] is False
 
 
-# ── on_peer_disconnected: involuntary pool-sync ──────────────────────────────
+# on_peer_disconnected: involuntary pool-sync
 
 def test_on_peer_disconnected_evicts_pool_without_transport_disconnect():
     """on_peer_disconnected reacts to a link that is ALREADY gone: it evicts the

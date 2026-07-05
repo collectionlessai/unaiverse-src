@@ -48,7 +48,7 @@ ROLE_WORLD_AGENT = (1 << 0) | (0 << 1)   # 1
 ROLE_WORLD_MASTER = (1 << 0) | (1 << 1)  # 3
 
 
-# ── Deterministic clock (same shape as tests/test_streams_io.py::FakeClock) ──
+# Deterministic clock (same shape as tests/test_streams_io.py::FakeClock)
 
 class HarnessClock:
     """A fully controllable stand-in for ``unaiverse.clock._Clock``.
@@ -91,7 +91,7 @@ def install_clock() -> HarnessClock:
     return fc
 
 
-# ── The in-process switchboard shared by two InProcNodeConn instances ────────
+# The in-process switchboard shared by two InProcNodeConn instances
 
 class InProcSwitchboard:
     """Shared in-memory bus between InProcNodeConn instances.
@@ -119,7 +119,7 @@ class InProcSwitchboard:
         return None
 
 
-# ── The faithful application chat-path conn ──────────────────────────────────
+# The faithful application chat-path conn
 
 class InProcNodeConn:
     """An in-process stand-in for ``NodeConn`` covering the application chat path.
@@ -173,7 +173,7 @@ class InProcNodeConn:
 
         switchboard.register(self)
 
-    # ── Egress (async) ──────────────────────────────────────────────────────
+    # Egress (async)
 
     async def send(self, peer_id: str, channel_trail: str | None,
                    content_type: str, content=None) -> bool:
@@ -231,7 +231,7 @@ class InProcNodeConn:
         self.switchboard.subs[net].get(channel, set()).discard(self.local_peer_id_by_net[net])
         return True
 
-    # ── Ingress (async) ─────────────────────────────────────────────────────
+    # Ingress (async)
 
     async def get_messages(self, p2p_name: str, allowed_not_connected_peers=None):
         """Drain one network's chat inbox. Reproduces connpool.py:518-560: assert
@@ -297,7 +297,7 @@ class InProcNodeConn:
         self.peer_id_to_node_id.pop(peer_id, None)
         return True
 
-    # ── Read facade (sync) ──────────────────────────────────────────────────
+    # Read facade (sync)
 
     def get_role(self, peer_id: str) -> int:
         return self.peer_id_to_misc.get(peer_id, 0)
@@ -326,7 +326,7 @@ class InProcNodeConn:
     def reset_rendezvous_tag(self) -> None:
         pass
 
-    # ── Harness wiring helpers (not part of the NodeConn surface) ────────────
+    # Harness wiring helpers (not part of the NodeConn surface)
 
     def register_peer(self, peer_id: str, node_id: str,
                       role: int = ROLE_WORLD_AGENT,
@@ -339,7 +339,7 @@ class InProcNodeConn:
         self.peer_id_to_misc[peer_id] = role
 
 
-# ── NodeProfile skeleton (offline, no machine-spec network calls) ────────────
+# NodeProfile skeleton (offline, no machine-spec network calls)
 
 def _build_node_profile(node_id: str, public_peer_id: str, world_peer_id: str,
                         role: str = "world_agent",
@@ -401,7 +401,7 @@ async def _noop_async(*args, **kwargs):
     return None
 
 
-# ── Build a REAL Agent + Node shell wired onto an InProcNodeConn ─────────────
+# Build a REAL Agent + Node shell wired onto an InProcNodeConn
 
 def build_real_agent_node(peer_id: str, proc: Callable | None,
                           proc_inputs, proc_outputs, conn: InProcNodeConn,
@@ -493,7 +493,7 @@ def cross_register(node_a, agent_a, node_b, agent_b,
     asyncio.run(_wire())
 
 
-# ── Per-tick driver (canonical order) ────────────────────────────────────────
+# Per-tick driver (canonical order)
 
 async def tick(node) -> None:
     """Run ONE real cycle in the canonical order (node.py:1274-1363):
@@ -506,7 +506,7 @@ async def tick(node) -> None:
     await node.agent.behave()
 
 
-# ── Minimal world folder (for later world tests) ─────────────────────────────
+# Minimal world folder (for later world tests)
 
 def make_min_world_folder(tmp_path) -> str:
     """Write a minimal ``<role>.json`` HSM template + ``agent.py`` companion into a

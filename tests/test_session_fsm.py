@@ -34,7 +34,7 @@ from unaiverse.networking.node.connpool import NodeConn
 pytestmark = pytest.mark.unit
 
 
-# ── Helpers ─────────────────────────────────────────────────────────────────
+# Helpers
 
 def _last_sent(conn, protocol_id):
     """Return the last (peer, proto, SessMsg) sent on protocol_id from the
@@ -73,7 +73,7 @@ def _mk(peer_id, role, p2p, local_peer_id, local_node_id="local-node",
     )
 
 
-# ── Initiator happy path ────────────────────────────────────────────────────
+# Initiator happy path
 
 def test_initiator_start_sends_hello(alice_conn, alice_p2p, alice_peer_id, bob_peer_id):
     """start() must dial, then emit HelloRequest on the hello protocol and
@@ -119,7 +119,7 @@ def test_initiator_dial_failure_fails_after_max_attempts(alice_conn, alice_peer_
     assert sess.state == SessionState.FAILED
 
 
-# ── Responder happy path ────────────────────────────────────────────────────
+# Responder happy path
 
 def test_responder_on_hello_sends_hello_ack(bob_conn, bob_p2p, bob_peer_id, alice_peer_id):
     """Inbound HelloRequest in INIT → HELLO_ACK_SENT, HelloResponse on wire."""
@@ -157,7 +157,7 @@ def test_responder_rejects_unsupported_version(bob_conn, bob_p2p, bob_peer_id, a
     assert last[2].fields["reason_code"] == VERSION_UNSUPPORTED
 
 
-# ── Stage-1 replay defence (sig_b verification) ─────────────────────────────
+# Stage-1 replay defence (sig_b verification)
 
 def test_initiator_rejects_bad_sig_b(alice_conn, alice_p2p, alice_peer_id, bob_peer_id):
     """If the responder's sig_b doesn't verify, the initiator MUST fail before
@@ -178,7 +178,7 @@ def test_initiator_rejects_bad_sig_b(alice_conn, alice_p2p, alice_peer_id, bob_p
     assert _last_sent(alice_conn, SESSION_PROFILE_PROTOCOL) is None
 
 
-# ── Stage-2 + full initiator happy path ─────────────────────────────────────
+# Stage-2 + full initiator happy path
 
 def test_initiator_completes_through_profile_decision(alice_conn, alice_p2p, alice_peer_id, bob_peer_id):
     """Drive the initiator from start through ESTABLISHED."""
@@ -225,7 +225,7 @@ def test_initiator_rejected_profile_fails(alice_conn, alice_p2p, alice_peer_id, 
     assert "NOT_AUTHORIZED" in events[0].data["reason"]
 
 
-# ── Stage-2 responder: bad sig_a ────────────────────────────────────────────
+# Stage-2 responder: bad sig_a
 
 def test_responder_rejects_bad_sig_a(bob_conn, bob_p2p, bob_peer_id, alice_peer_id):
     """ProfileOffer with sig_a that fails verification → reject + FAILED."""
@@ -249,7 +249,7 @@ def test_responder_rejects_bad_sig_a(bob_conn, bob_p2p, bob_peer_id, alice_peer_
     assert decision.fields["reason_code"] == NOT_AUTHORIZED
 
 
-# ── Stage-2 responder: RT token consumption ─────────────────────────────────
+# Stage-2 responder: RT token consumption
 
 def _drive_responder_to_offer_wait(sess):
     """Push a HelloRequest so the responder parks in HELLO_ACK_SENT, ready for an offer."""
@@ -329,7 +329,7 @@ def test_responder_valid_token_overrides_profile_node_id(bob_conn, bob_p2p, bob_
     assert len(events) == 1 and events[0].type == SessionEventType.ESTABLISHED
 
 
-# ── Stage-2: RT mutual auth (responder token verified by the initiator) ──────
+# Stage-2: RT mutual auth (responder token verified by the initiator)
 
 def test_responder_decision_carries_token(bob_conn, bob_p2p, bob_peer_id, alice_peer_id):
     """RT mutual: the responder's PROFILE_DECISION carries its own token."""
@@ -412,7 +412,7 @@ def test_initiator_rejects_responder_node_id_mismatch(alice_conn, alice_p2p, ali
     assert "token_node_id_mismatch" in events[0].data["reason"]
 
 
-# ── Timeouts ────────────────────────────────────────────────────────────────
+# Timeouts
 
 @pytest.mark.parametrize("state,timeout_field", [
     (SessionState.CONNECTING,     "CONNECT"),
@@ -438,7 +438,7 @@ def test_check_timeout_returns_none_before_expiry(alice_conn, alice_peer_id, bob
     assert sess.check_timeout() is None
 
 
-# ── Disconnect / grace / resume ─────────────────────────────────────────────
+# Disconnect / grace / resume
 
 def test_disconnect_from_established_enters_reconnecting(alice_conn, alice_peer_id, bob_peer_id):
     """A transport disconnect from ESTABLISHED emits RECONNECTING and moves to RECONNECTING."""
@@ -471,7 +471,7 @@ def test_grace_expiry_emits_lost(alice_conn, alice_peer_id, bob_peer_id):
     assert sess.state == SessionState.FAILED
 
 
-# ── Intentional close ───────────────────────────────────────────────────────
+# Intentional close
 
 def test_close_sends_goaway_and_enters_closing(alice_conn, alice_p2p, alice_peer_id, bob_peer_id):
     """close() from ESTABLISHED sends a GOAWAY on the control protocol carrying the given
@@ -511,7 +511,7 @@ def test_remote_goaway_sends_ack_and_closes(bob_conn, bob_p2p, bob_peer_id, alic
     assert last[2].fields["received"] is True
 
 
-# ── Session-level keep-alive (PING/PONG over the control protocol) ───────────
+# Session-level keep-alive (PING/PONG over the control protocol)
 
 def test_tick_keepalive_sends_session_ping_when_due(alice_conn, alice_peer_id, bob_peer_id):
     """When ESTABLISHED and the keep-alive period has elapsed, tick must send a
@@ -597,7 +597,7 @@ def test_on_ping_answers_pong_ok_when_session_matches(bob_conn, bob_peer_id, ali
     assert last[2].fields["ok"] is True and last[2].fields["nonce"] == b"abc"
 
 
-# ── RESUME (fast-path recovery) ──────────────────────────────────────────────
+# RESUME (fast-path recovery)
 
 def test_resume_inbound_while_reconnecting_resumes(bob_conn, bob_peer_id, alice_peer_id):
     """Peer RESUME for a session we still hold (and we are RECONNECTING) → ACK + RESUMED."""
@@ -676,7 +676,7 @@ def test_resume_ack_nack_world_session_is_lost(alice_conn, alice_peer_id, bob_pe
     assert sess.state == SessionState.FAILED
 
 
-def test_tick_reconnect_responder_does_not_redial(bob_conn, bob_peer_id, alice_peer_id):
+def test_tick_dial_responder_does_not_redial(bob_conn, bob_peer_id, alice_peer_id):
     """A responder (no addresses) cannot re-dial; it rides the grace timer to LOST."""
     sess = _mk(alice_peer_id, SessionRole.RESPONDER, bob_conn, bob_peer_id)
     sess._set_state(SessionState.RECONNECTING, 10.0)
@@ -684,7 +684,7 @@ def test_tick_reconnect_responder_does_not_redial(bob_conn, bob_peer_id, alice_p
     assert bob_conn.connect_calls == []
 
 
-def test_tick_reconnect_initiator_redials_and_sends_resume(alice_conn, alice_peer_id, bob_peer_id):
+def test_tick_dial_initiator_redials_and_sends_resume(alice_conn, alice_peer_id, bob_peer_id):
     """An initiator with addresses re-dials and, on success, sends RESUME. Design A: the
     first tick_dial launches the redial task, a second (after the task runs) reaps it and
     sends RESUME."""
@@ -707,7 +707,7 @@ def test_tick_reconnect_initiator_redials_and_sends_resume(alice_conn, alice_pee
     assert last is not None and last[2].kind == SessMsg.KIND_RESUME
 
 
-# ── Out-of-order / duplicate messages ───────────────────────────────────────
+# Out-of-order / duplicate messages
 
 def test_profile_offer_in_hello_sent_is_ignored(alice_conn, alice_peer_id, bob_peer_id):
     """A PROFILE_OFFER arriving while the initiator still waits for HELLO_ACK
@@ -784,7 +784,7 @@ def test_world_grant_to_plain_initiator_is_ignored(alice_conn, alice_peer_id, bo
     assert sess.state == SessionState.PROFILE_SENT
 
 
-# ── Silent abort (tie-breaker support) ──────────────────────────────────────
+# Silent abort (tie-breaker support)
 
 def test_abort_silently_fails_without_event(alice_conn, alice_peer_id, bob_peer_id):
     """abort_silently() drops the session to FAILED without emitting any event, as the
@@ -861,7 +861,7 @@ def test_initiator_rejects_expired_world_grant(alice_conn, alice_peer_id, bob_pe
     assert "world_grant_expired" in events[0].data["reason"]
 
 
-# ── In-session token refresh (TOKEN_UPDATE) + expiry ─────────────────────────
+# In-session token refresh (TOKEN_UPDATE) + expiry
 
 def _established_responder(bob_conn, bob_peer_id, alice_peer_id, verifier, node_hint="node-X"):
     sess = _mk(alice_peer_id, SessionRole.RESPONDER, bob_conn, bob_peer_id,

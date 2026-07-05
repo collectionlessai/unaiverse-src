@@ -40,7 +40,7 @@ from unaiverse.agent import Agent
 pytestmark = pytest.mark.unit
 
 
-# ── Lightweight fakes ───────────────────────────────────────────────────────
+# Lightweight fakes
 
 class FakeProfile:
     """Stand-in for ``NodeProfile``: exposes only the two profile accessors the
@@ -119,7 +119,7 @@ def agent() -> Agent:
     return make_agent()
 
 
-# ── resolve_agent_ref ───────────────────────────────────────────────────────
+# resolve_agent_ref
 
 def test_resolve_agent_ref_known_peer_id_passthrough(agent):
     """A ref that is already a key in ``all_agents`` is returned verbatim, before
@@ -184,7 +184,7 @@ def test_resolve_agent_ref_profile_missing_node_name_crashes(agent):
     assert agent.resolve_agent_ref("anything/here") is None
 
 
-# ── resolve_stream_ref (base, AgentBasics) ──────────────────────────────────
+# resolve_stream_ref (base, AgentBasics)
 
 def test_resolve_stream_ref_known_user_hash_passthrough(agent):
     """A ref already present as a key in ``known_streams_by_user_hash`` is
@@ -254,7 +254,7 @@ def test_resolve_stream_ref_empty_group_public_crashes(agent):
     assert agent.resolve_stream_ref("grp", public=True) is None
 
 
-# ── resolve_stream_ref (Agent override, <playlist>) ─────────────────────────
+# resolve_stream_ref (Agent override, <playlist>)
 
 def test_resolve_stream_ref_playlist_returns_current_preferred(agent):
     """The Agent override maps the ``<playlist>`` wildcard to the current entry
@@ -277,7 +277,7 @@ def test_resolve_stream_ref_empty_playlist_crashes(agent):
     assert agent.resolve_stream_ref("<playlist>", public=False) is None
 
 
-# ── user_stream_hash_to_net_hash ────────────────────────────────────────────
+# user_stream_hash_to_net_hash
 
 def test_user_stream_hash_to_net_hash_pubsub_group(agent):
     """A user hash ``peer_id:group`` resolves to the matching pubsub net hash."""
@@ -308,7 +308,7 @@ def test_user_stream_hash_to_net_hash_miss_returns_none(agent):
     assert agent.user_stream_hash_to_net_hash("PIDme:nope") is None
 
 
-# ── get_stream ──────────────────────────────────────────────────────────────
+# get_stream
 
 def test_get_stream_direct_user_hash_hit(agent):
     """A stream present in ``known_streams_by_user_hash`` is returned directly."""
@@ -359,7 +359,7 @@ def test_get_stream_miss_returns_none(agent):
     assert agent.get_stream("absent", peer_id="PIDme") is None
 
 
-# ── get_streams ─────────────────────────────────────────────────────────────
+# get_streams
 
 def test_get_streams_pubsub_group_returns_list(agent):
     """The pubsub net hash is tried first; a group of two yields a list of two."""
@@ -383,7 +383,7 @@ def test_get_streams_unknown_returns_none(agent):
     assert agent.get_streams("zzz", peer_id="PIDme") is None
 
 
-# ── find_streams ────────────────────────────────────────────────────────────
+# find_streams
 
 def test_find_streams_matching_peer_returns_whole_group(agent):
     """With no ``name_or_group`` filter, every net hash owned by the peer yields
@@ -433,7 +433,7 @@ def test_find_streams_discard_owned_skips_owned_net_hashes(agent):
     assert set(agent.find_streams("PIDbob", discard_owned=False).keys()) == {"PIDbob::ps:grp"}
 
 
-# ── __involved_agents (name-mangled: _Agent__involved_agents) ────────────────
+# __involved_agents (name-mangled: _Agent__involved_agents)
 
 def test_involved_agents_concrete_peer_id(agent):
     """A concrete peer_id resolves to a single-element list."""

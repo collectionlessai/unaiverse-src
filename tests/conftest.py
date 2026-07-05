@@ -40,7 +40,7 @@ def _silence_unaiverse_logger():
     setattr(_log, "_Logger__instance", saved)
 
 
-# ── Fake P2P (mocks the ctypes layer) ───────────────────────────────────────
+# Fake P2P (mocks the ctypes layer)
 
 class FakeP2P:
     """Stand-in for ``unaiverse.networking.p2p.p2p.P2P`` in unit tests.
@@ -63,7 +63,7 @@ class FakeP2P:
         self.sent: list[tuple[str, str, bytes]] = []  # (peer_id, protocol_id, payload)
         self.pinged: list[tuple[str, int]] = []      # (peer_id, timeout_ms)
 
-    # ── Synchronous Go-FFI primitives (named like the real P2P) ──────────────
+    # Synchronous Go-FFI primitives (named like the real P2P)
     def _sign_with_host_key_sync(self, data: bytes) -> Optional[bytes]:
         return self.sign_returns
 
@@ -78,7 +78,7 @@ class FakeP2P:
         self.sent.append((peer_id, protocol_id, payload))
         return self.send_returns
 
-    # ── High-level async surface (Session/SessionManager call these) ──────────
+    # High-level async surface (Session/SessionManager call these)
     async def sign_with_host_key(self, data: bytes) -> Optional[bytes]:
         return self._sign_with_host_key_sync(data)
 
@@ -86,7 +86,7 @@ class FakeP2P:
         return self._verify_peer_signature_sync(peer_id, data, signature)
 
 
-# ── Fake conn layer (mocks the connpool surface Session touches) ────────────
+# Fake conn layer (mocks the connpool surface Session touches)
 
 class FakeConn:
     """P2P-per-instance stand-in injected into Session/SessionManager as ``p2p=``.
@@ -147,14 +147,14 @@ class FakeConn:
             self.send_inbox.append((self.my_peer_id, protocol_id, sess_msg))
         return True
 
-    # ── Crypto interface (delegates to the underlying FakeP2P) ────
+    # Crypto interface (delegates to the underlying FakeP2P)
     async def sign_with_host_key(self, data: bytes):
         return await self._p2p_self.sign_with_host_key(data)
 
     async def verify_peer_signature(self, peer_id: str, data: bytes, signature: bytes) -> bool:
         return await self._p2p_self.verify_peer_signature(peer_id, data, signature)
 
-    # ── Per-network view (multi-instance harness) ────────────────────────────
+    # Per-network view (multi-instance harness)
     def as_p2p(self, p2p_name: str) -> "_FakeConnView":
         """Return the P2P-per-network object to inject into the SessionManager for
         `p2p_name`. Sends, dial outcome and crypto knobs stay shared with this
@@ -197,7 +197,7 @@ class _FakeConnView:
         return await self._fake.verify_peer_signature(peer_id, data, signature)
 
 
-# ── Fixtures ────────────────────────────────────────────────────────────────
+# Fixtures
 
 @pytest.fixture
 def alice_peer_id() -> str:
@@ -254,7 +254,7 @@ def profile_factory():
     return _f
 
 
-# ── Helpers used across tests ───────────────────────────────────────────────
+# Helpers used across tests
 
 def _make_session(role, p2p, p2p_name, local_peer_id, addresses=None,
                   is_world_join=False, peer_id="12D3KooWRemote"):
@@ -325,7 +325,7 @@ def _pump_call(sm, peer_id, protocol_id, payload):
     return asyncio.run(sm.deliver(peer_id, protocol_id, payload))
 
 
-# ── Real-libp2p (`-m p2p`) fixtures ─────────────────────────────────────────
+# Real-libp2p (`-m p2p`) fixtures
 # These live in the *root* conftest (not a second tests/p2p/conftest.py) so the
 # bare ``from conftest import ...`` used by the go-mocked tests keeps resolving to
 # this module — two conftest.py files with no package collide on the module name

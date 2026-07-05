@@ -32,7 +32,7 @@ from unaiverse.networking.session.sess_msg import LOCAL_ERROR
 pytestmark = pytest.mark.unit
 
 
-# ── Test doubles ─────────────────────────────────────────────────────────────
+# Test doubles
 
 class _DummyStats:
     """A non-None sentinel handed to ``World(stats=...)`` so the default
@@ -86,7 +86,7 @@ class FakeAction:
         return self._ready
 
 
-# ── Fixtures ─────────────────────────────────────────────────────────────────
+# Fixtures
 
 @pytest.fixture
 def make_world(tmp_path):
@@ -111,7 +111,7 @@ def world(make_world) -> World:
     return make_world()
 
 
-# ── World.assign_role ────────────────────────────────────────────────────────
+# World.assign_role
 
 def test_assign_role_first_master_returns_world_master(world):
     """The first master (no masters registered yet) is assigned 'world_master'."""
@@ -173,7 +173,7 @@ def test_assign_role_guessed_location_branch_is_a_noop(world):
     assert world.assign_role(profile, is_world_master=True) == "world_master"
 
 
-# ── Cross-layer role bits (node layer) ───────────────────────────────────────
+# Cross-layer role bits (node layer)
 # node.py:2278-2282 (public world host) computes the joiner's role like this:
 #     role_str = self.world.assign_role(profile=profile, is_world_master=...)
 #     role = self.world.ROLE_STR_TO_BITS[role_str]
@@ -211,7 +211,7 @@ def test_node_layer_second_master_is_world_master(world):
     assert bits == World.ROLE_WORLD_MASTER == 3
 
 
-# ── policy_default (inherited by World) ──────────────────────────────────────
+# policy_default (inherited by World)
 
 def test_policy_default_empty_list_returns_miss(world):
     """An empty action list selects nothing: (-1, None)."""
@@ -298,7 +298,7 @@ def test_policy_default_ready_third_pass_returns_none_interaction(world):
     assert ready.ready_calls == [False]
 
 
-# ── CUSTOM_ROLES discovery (light error / discovery paths only) ──────────────
+# CUSTOM_ROLES discovery (light error / discovery paths only)
 
 def test_discovery_empty_folder_raises_no_role_files(world):
     """An empty world folder raises before any heavy loading: no *.json roles."""
@@ -360,7 +360,7 @@ def test_discovery_is_skipped_when_not_a_world(world):
     assert world.load_and_refactor_action_file_and_behav_files() is None
 
 
-# ── set_role send-failure teardown (BUG 3) ───────────────────────────────────
+# set_role send-failure teardown (BUG 3)
 
 def _set_role_fake_self(send_ok):
     """The slice of ``World`` that ``set_role`` touches, with a controllable send

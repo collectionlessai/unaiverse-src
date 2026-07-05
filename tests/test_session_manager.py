@@ -43,7 +43,7 @@ def _mk_session(p2p, peer_id, local_peer_id, role=SessionRole.INITIATOR):
     )
 
 
-# ── initiate() ──────────────────────────────────────────────────────────────
+# initiate()
 
 def test_initiate_idempotent_when_already_healthy(alice_conn, alice_p2p, alice_peer_id, bob_peer_id):
     """Calling initiate twice for the same healthy peer must be a no-op the second time."""
@@ -113,7 +113,7 @@ def test_initiate_during_quarantine_returns_failed(alice_conn, alice_peer_id, bo
     assert alice_conn.connect_calls == []
 
 
-# ── deliver() — basics ──────────────────────────────────────────────────────
+# deliver() — basics
 
 def test_deliver_unknown_protocol_drops(alice_conn, alice_peer_id, bob_peer_id):
     """A message on a protocol id the manager doesn't route is dropped silently,
@@ -147,7 +147,7 @@ def test_deliver_inbound_hello_spawns_responder(alice_conn, alice_p2p, alice_pee
     assert sess.state == SessionState.HELLO_ACK_SENT
 
 
-# ── Tie-breaker on simultaneous open ────────────────────────────────────────
+# Tie-breaker on simultaneous open
 
 def test_tiebreak_smaller_peer_keeps_initiator(alice_conn, alice_p2p, alice_peer_id, bob_peer_id):
     """When local_peer_id < remote_peer_id (alice < bob), Alice keeps her
@@ -193,7 +193,7 @@ def test_tiebreak_larger_peer_yields_to_responder(bob_conn, bob_p2p, bob_peer_id
     assert sess_after.session_id != initiator_session_id_before
 
 
-# ── tick() ──────────────────────────────────────────────────────────────────
+# tick()
 
 def test_tick_drains_timeouts_and_cleans_terminal_sessions(alice_conn, alice_peer_id, bob_peer_id):
     """Sessions in a state past their timeout → FAILED event; terminal
@@ -222,7 +222,7 @@ def test_lost_event_enters_quarantine(alice_conn, alice_peer_id, bob_peer_id):
     assert ban_until > time.monotonic() + 20.0
 
 
-# ── on_peer_disconnected() ──────────────────────────────────────────────────
+# on_peer_disconnected()
 
 def test_disconnect_during_handshake_fails_immediately(alice_conn, alice_peer_id, bob_peer_id):
     """Connection drop while still mid-handshake → FAILED event right away."""
@@ -254,7 +254,7 @@ def test_disconnect_unknown_peer_is_noop(alice_conn, alice_peer_id, bob_peer_id)
     assert events == []
 
 
-# ── close_session() ─────────────────────────────────────────────────────────
+# close_session()
 
 def test_close_session_sends_goaway(alice_conn, alice_p2p, alice_peer_id, bob_peer_id):
     """close_session on an ESTABLISHED session moves it to CLOSING and emits a single
@@ -271,7 +271,7 @@ def test_close_session_sends_goaway(alice_conn, alice_p2p, alice_peer_id, bob_pe
     assert sent[0][2].fields["reason"] == WORLD_DISENGAGEMENT
 
 
-# ── Unknown-session liveness reply (restarted-peer detection) ────────────────
+# Unknown-session liveness reply (restarted-peer detection)
 
 def test_deliver_unknown_session_ping_replies_pong_not_ok(alice_conn, alice_peer_id, bob_peer_id):
     """A PING for a peer we hold no Session for (we are the restarted peer) must
@@ -302,7 +302,7 @@ def test_deliver_unknown_session_resume_naks(alice_conn, alice_peer_id, bob_peer
     assert sent[-1][2].fields["reason_code"] == SESSION_UNKNOWN
 
 
-# ── close_all() ──────────────────────────────────────────────────────────────
+# close_all()
 
 def test_close_all_goaways_established_sessions(alice_conn, alice_peer_id, bob_peer_id):
     """close_all moves each ESTABLISHED session to CLOSING and sends it a GOAWAY on the
@@ -357,7 +357,7 @@ def test_session_manager_injects_token_capabilities_into_sessions(alice_p2p, ali
     assert bare.token_verifier is None and bare.token_factory is None
 
 
-# ── KNOWN state and ensure()/activate() split ────────────────────────────────
+# KNOWN state and ensure()/activate() split
 
 def test_ensure_creates_known_session_without_dialing(alice_conn, alice_peer_id, bob_peer_id):
     """ensure() registers an initiator Session in KNOWN without dialing; activate() is
@@ -396,7 +396,7 @@ def test_spawn_responder_starts_in_init(alice_conn, alice_peer_id, bob_peer_id):
     assert sess.state == SessionState.INIT
 
 
-# ── Double view: tick-active vs known ────────────────────────────────────────
+# Double view: tick-active vs known
 
 def test_ensure_keeps_known_out_of_active_view(alice_conn, alice_peer_id, bob_peer_id):
     """A KNOWN Session lives in the full registry but not in the tick-active view, so
@@ -456,7 +456,7 @@ def test_terminal_session_leaves_both_views(alice_conn, alice_peer_id, bob_peer_
     assert bob_peer_id not in sm._active_sessions
 
 
-# ── KNOWN is not an in-flight handshake on inbound ────────────────────────────
+# KNOWN is not an in-flight handshake on inbound
 
 def test_known_session_yields_to_responder_on_inbound_hello(alice_conn, alice_peer_id, bob_peer_id):
     """A KNOWN initiator (registered, not yet dialed) that receives an inbound HELLO
@@ -495,7 +495,7 @@ def test_known_session_survives_inbound_ping(alice_conn, alice_peer_id, bob_peer
     assert sent[-1][2].fields["ok"] is False
 
 
-# ── Known roster sync from rendezvous ─────────────────────────────────────────
+# Known roster sync from rendezvous
 
 def test_sync_known_peers_registers_inert_known(alice_conn, alice_peer_id, bob_peer_id):
     """sync_known_peers registers a KNOWN Session (inert: not dialed, not tick-active)
@@ -582,7 +582,7 @@ def test_initiate_activates_existing_known_placeholder(alice_conn, alice_peer_id
     assert bob_peer_id in sm._active_sessions
 
 
-# ── Quarantine gate in activate(), FAILED-quarantines ─────────────────────────
+# Quarantine gate in activate(), FAILED-quarantines
 
 def test_activate_refused_during_quarantine(alice_conn, alice_peer_id, bob_peer_id):
     """activate() is the single dial gate: a quarantined peer is refused immediately

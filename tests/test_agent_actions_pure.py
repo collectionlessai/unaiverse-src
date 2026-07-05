@@ -51,7 +51,7 @@ from unaiverse.agent_basics import AgentBasics
 pytestmark = pytest.mark.unit
 
 
-# ── Helpers ─────────────────────────────────────────────────────────────────
+# Helpers
 
 def _run(coro):
     return asyncio.run(coro)
@@ -91,7 +91,7 @@ class FakeProfile:
         return self._static
 
 
-# ── Fixtures ────────────────────────────────────────────────────────────────
+# Fixtures
 
 @pytest.fixture
 def agent():
@@ -128,7 +128,7 @@ def roled_agent():
         AgentBasics.CUSTOM_ROLES = saved_custom
 
 
-# ── Construction / initial state ─────────────────────────────────────────────
+# Construction / initial state
 
 def test_bare_agent_builds_offline_with_default_scope_state(agent):
     """``Agent(proc=None)`` constructs offline and seeds every scope variable."""
@@ -159,7 +159,7 @@ def test_role_dict_isolation_restored_after_fixture():
     assert set(AgentBasics.ROLE_STR_TO_BITS) == {"public_agent", "world_master", "world_agent"}
 
 
-# ── nop / disengage_all ──────────────────────────────────────────────────────
+# nop / disengage_all
 
 def test_nop_returns_true_and_does_not_mutate_state(agent):
     """``nop`` returns True with or without a ``message`` and leaves the engaged
@@ -183,7 +183,7 @@ def test_disengage_all_resets_engaged_and_availability(agent):
     assert agent._available is True
 
 
-# ── all_sent_completed / all_engagements_completed ───────────────────────────
+# all_sent_completed / all_engagements_completed
 
 class _FakeSent:
     def __init__(self, action_name, completed):
@@ -223,7 +223,7 @@ def test_all_engagements_completed_tracks_found_agents(agent):
     assert _run(agent.all_engagements_completed()) is False
 
 
-# ── engage ───────────────────────────────────────────────────────────────────
+# engage
 
 def test_engage_match_adds_requester_and_flips_availability(roled_agent):
     """acceptable_role='teacher'(=4) vs sender 'world_agent~teacher'(=5): the
@@ -319,7 +319,7 @@ def test_engage_none_interaction_means_none_requester_rejected(roled_agent):
                                    interaction=None)) is False
 
 
-# ── find_agents / get_agents_by_role ─────────────────────────────────────────
+# find_agents / get_agents_by_role
 
 def test_find_agents_searches_both_world_role_ints(roled_agent):
     """For 'student' (=8, no '~') the search ORs in ROLE_WORLD_AGENT(1) and
@@ -369,7 +369,7 @@ def test_find_agents_clears_previous_found(roled_agent):
     assert roled_agent._found_agents == {"s1"}
 
 
-# ── next_pref_stream / first_pref_stream ─────────────────────────────────────
+# next_pref_stream / first_pref_stream
 
 def test_next_pref_stream_wraps_around(agent):
     """``next_pref_stream`` advances the pointer one step per call and wraps from
@@ -405,7 +405,7 @@ def test_first_pref_stream_empty_returns_false(agent):
     assert _run(agent.first_pref_stream()) is False
 
 
-# ── check_pref_stream ────────────────────────────────────────────────────────
+# check_pref_stream
 
 @pytest.mark.parametrize(
     "cur,first,last,last_round,last_song",
@@ -479,7 +479,7 @@ def test_check_pref_stream_repeat_zero_zerodiv_swallowed(agent):
     assert _run(agent.check_pref_stream(what="last_song")) is False
 
 
-# ── set_pref_streams ─────────────────────────────────────────────────────────
+# set_pref_streams
 
 def test_set_pref_streams_builds_repeat_major_playlist(agent):
     """Order is repeat-major: each round re-lists all net_hashes. With a fake
@@ -521,7 +521,7 @@ def test_set_pref_streams_no_streams_leaves_empty_playlist_but_returns_true(agen
     assert agent._repeat == 2
 
 
-# ── compare_eval ─────────────────────────────────────────────────────────────
+# compare_eval
 
 def _seed_eval(agent, results, profiles=None):
     """Seed ``_eval_results`` (peer_id -> score) and matching profiles."""
@@ -609,7 +609,7 @@ def test_compare_eval_min_keeps_best_even_when_iterated_first(agent):
     assert agent._valid_cmp_agents == {"A"}
 
 
-# ── evaluate ─────────────────────────────────────────────────────────────────
+# evaluate
 
 def _patch_compare(agent, score=0.42, ret=True, record=None):
     """Monkeypatch the name-mangled ``__compare_streams`` so evaluate needs no
@@ -681,7 +681,7 @@ def test_evaluate_str_agents_to_evaluate_is_wrapped_to_list(agent):
     assert agent._eval_results == {"pZ": 0.42}
 
 
-# ── Suspected bugs pinned as xfail (desired behaviour) ───────────────────────
+# Suspected bugs pinned as xfail (desired behaviour)
 
 @pytest.mark.xfail(
     strict=True,

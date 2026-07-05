@@ -174,7 +174,7 @@ async def _graceful_close(conn, sm, iters: int = 30) -> None:
         await asyncio.sleep(0.05)
 
 
-# ── Commands ────────────────────────────────────────────────────────────────
+# Commands
 
 async def cmd_listen(args):
     p2p, conn, sm = _build_node(args.identity, args.port, args.listen_ip)

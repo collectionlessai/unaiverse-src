@@ -13,7 +13,7 @@ from unaiverse.streams.dataprops import DataProps, StreamType
 pytestmark = pytest.mark.unit
 
 
-# ── net_hash statics ─────────────────────────────────────────────────────────
+# net_hash statics
 
 def test_build_net_hash_direct_message_form():
     """build_net_hash with pubsub=False uses the ``::dm:`` separator."""
@@ -74,7 +74,7 @@ def test_name_or_group_from_net_hash_for_both_forms():
     assert DataProps.name_or_group_from_net_hash("abc::ps:topic") == "topic"
 
 
-# ── DataProps net-hash instance helpers ──────────────────────────────────────
+# DataProps net-hash instance helpers
 
 def test_instance_net_hash_uses_name_when_group_none():
     """When group is 'none', net_hash falls back to the stream name (dm form)."""
@@ -102,7 +102,7 @@ def test_instance_user_hash_uses_name_not_group():
     assert dp.user_hash("peerA") == "peerA:foo"
 
 
-# ── StreamType ───────────────────────────────────────────────────────────────
+# StreamType
 
 def test_streamtype_shorthand_sets_data_type():
     """StreamType('text') is shorthand for data_type='text' on each DataProps."""
@@ -171,7 +171,7 @@ def test_streamtype_set_method_applies_to_all_props():
         assert p.get_name() == "renamed"
 
 
-# ── DataProps: round-trip and clone ──────────────────────────────────────────
+# DataProps: round-trip and clone
 
 def test_dataprops_to_from_dict_roundtrip_text():
     """to_dict -> from_dict round-trips a plain text DataProps."""
@@ -236,7 +236,7 @@ def test_dataprops_clone_copies_label_list():
     assert dp.tensor_labels.labels == ["a", "b"]
 
 
-# ── DataProps: type predicates ───────────────────────────────────────────────
+# DataProps: type predicates
 
 def test_predicate_text():
     """is_text is True only for data_type='text'."""

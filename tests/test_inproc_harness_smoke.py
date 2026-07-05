@@ -28,7 +28,7 @@ from inproc_harness import (
 pytestmark = pytest.mark.e2e
 
 
-# ── Deterministic clock fixture (save/restore the global singleton) ──────────
+#  Deterministic clock fixture (save/restore the global singleton)
 
 @pytest.fixture
 def harness_clock():

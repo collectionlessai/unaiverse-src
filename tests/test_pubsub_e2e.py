@@ -36,7 +36,7 @@ GROUP = "best_student_stream"
 PUB_NET_HASH = DataProps.build_net_hash("A-world", pubsub=True, name_or_group=GROUP)
 
 
-# ── Deterministic clock fixture (save/restore the global singleton) ──────────
+# Deterministic clock fixture (save/restore the global singleton)
 
 @pytest.fixture
 def harness_clock():
@@ -94,7 +94,7 @@ def _register_known_pubsub_stream(agent):
     agent.add_stream(stream, owned=False, net_hash=PUB_NET_HASH)
 
 
-# ── (a) pubsub net_hash passes through normalize_net_hash unchanged ───────────
+# (a) pubsub net_hash passes through normalize_net_hash unchanged
 
 def test_pubsub_channel_passes_through_normalize_unchanged():
     """The load-bearing property: a pubsub net_hash is recognized as such and is
@@ -105,7 +105,7 @@ def test_pubsub_channel_passes_through_normalize_unchanged():
     assert DataProps.normalize_net_hash(PUB_NET_HASH) == PUB_NET_HASH
 
 
-# ── (b) real egress -> real ingestion: the subscriber receives the sample ─────
+# (b) real egress -> real ingestion: the subscriber receives the sample
 
 def test_pubsub_egress_via_send_stream_samples_reaches_subscriber(harness_clock):
     """A publishes through the REAL ``send_stream_samples`` (pubsub branch); B,
@@ -148,7 +148,7 @@ def test_pubsub_egress_via_send_stream_samples_reaches_subscriber(harness_clock)
     assert landed.get_tag("u1") == 0
 
 
-# ── (c) a non-subscriber never receives the publish ───────────────────────────
+# (c) a non-subscriber never receives the publish
 
 def test_pubsub_non_subscriber_not_delivered(harness_clock):
     """C, which did NOT subscribe, is not in the topic's subscriber set, so the
@@ -187,7 +187,7 @@ def test_pubsub_non_subscriber_not_delivered(harness_clock):
     assert not agent_c.known_streams[PUB_NET_HASH][GROUP].has_data("u1")
 
 
-# ── (d) the publisher is not self-delivered ───────────────────────────────────
+# (d) the publisher is not self-delivered
 
 def test_pubsub_publisher_not_self_delivered(harness_clock):
     """A, even when subscribed to its OWN topic, is not delivered its own publish

@@ -29,7 +29,7 @@ from unaiverse.interaction import (
 pytestmark = pytest.mark.unit
 
 
-# ── Fakes ────────────────────────────────────────────────────────────────────
+# Fakes
 
 class FakeProps:
     """Minimal stand-in for ``DataProps`` exposing only the accessors the manager
@@ -121,7 +121,7 @@ class FakeAgent:
         pass
 
 
-# ── Helpers ──────────────────────────────────────────────────────────────────
+# Helpers
 
 def _manager(agent=None, max_interactions=-1):
     return InteractionManager(agent=agent, max_interactions=max_interactions)
@@ -131,7 +131,7 @@ def _inter(action_name="act", requester="peerA", target=None, id="random", **kw)
     return Interaction(action_name=action_name, requester=requester, target=target, id=id, **kw)
 
 
-# ── __init__ / max_interactions clamping ─────────────────────────────────────
+# __init__ / max_interactions clamping
 
 def test_init_defaults_and_empty_containers():
     """A fresh manager starts with six empty containers, no current/last_registered."""
@@ -151,7 +151,7 @@ def test_max_interactions_falls_back_to_custom_when_nonpositive():
     assert _manager(max_interactions=7).max_interactions == 7
 
 
-# ── room_for_registration / count_interactions ───────────────────────────────
+# room_for_registration / count_interactions
 
 def test_room_for_registration_counts_only_active_dicts():
     """Capacity is enforced on the three ACTIVE dicts only; full when their total hits the limit."""
@@ -190,7 +190,7 @@ def test_room_ignores_recently_completed_while_count_includes_them():
     assert im.count_interactions() > im.max_interactions  # which already exceeds the cap
 
 
-# ── is_sent / is_received / is_lazy / is_known ───────────────────────────────
+# is_sent / is_received / is_lazy / is_known
 
 def test_is_sent_tracks_active_and_recently_completed():
     """is_sent is True for an interaction in the active sent dict OR the recently-completed set."""
@@ -226,7 +226,7 @@ def test_is_known_is_union_of_the_three_predicates():
     assert im.is_known(unknown) is True
 
 
-# ── unregister ───────────────────────────────────────────────────────────────
+# unregister
 
 def test_unregister_running_returns_false_without_side_effects():
     """A RUNNING interaction is never deregistered: returns False and stays in its dict."""
@@ -280,7 +280,7 @@ def test_unregister_from_multiple_dicts_returns_true():
     assert inter.uuid not in im.lazy
 
 
-# ── expand_and_normalize_streams ─────────────────────────────────────────────
+# expand_and_normalize_streams
 
 def test_expand_empty_streams_returns_two_empty_bucket_dicts():
     """A no-stream interaction expands into two dicts of empty buckets (never None)."""
@@ -335,7 +335,7 @@ def test_expand_net_hash_explodes_into_per_name_user_hashes():
     assert owned["stdin"] == []  # not owned by this agent
 
 
-# ── match_streams ────────────────────────────────────────────────────────────
+# match_streams
 
 def test_match_streams_all_empty_returns_true_five_empty_dicts():
     """BUG (interaction.py:1234/1245-1248): match_streams returns a 5-tuple (the docstring claims a
@@ -385,7 +385,7 @@ def test_match_streams_unknown_stdext_hash_returns_false_tuple():
     assert result == (False, {}, {}, {}, {})
 
 
-# ── register_sent (no-stream happy path + rejections) ────────────────────────
+# register_sent (no-stream happy path + rejections)
 
 def test_register_sent_no_stream_happy_path():
     """A no-stream sent interaction registers: lands in sent, status REQUESTED, type SENT."""
@@ -460,7 +460,7 @@ def test_register_sent_echoed_inconsistent_field_rejected():
     assert inter.uuid not in im.sent
 
 
-# ── register_received / register_lazy (no-stream) ────────────────────────────
+# register_received / register_lazy (no-stream)
 
 def test_register_received_no_stream_happy_path():
     """A received interaction from a known requester registers: status/type RECEIVED."""
@@ -522,7 +522,7 @@ def test_register_received_failure_does_not_mutate_dict():
     assert im.received == {}
 
 
-# ── Cross-dict uuid invariant (suspected bug) ────────────────────────────────
+# Cross-dict uuid invariant (suspected bug)
 
 def test_same_uuid_can_live_in_sent_and_received_simultaneously():
     """BUG (interaction.py:962-965/1092): the uuid-collision guard inspects only the *own* dict,
@@ -544,7 +544,7 @@ def test_same_uuid_can_live_in_sent_and_received_simultaneously():
     assert im.received[twin.uuid] is twin
 
 
-# ── Broken-callback contract (suspected bug, xfail = desired behavior) ────────
+# Broken-callback contract (suspected bug, xfail = desired behavior)
 # __check_callback_method only logs for an invalid callback; it neither returns False
 # nor raises, so registration still succeeds carrying a broken callback (the failure is
 # deferred to complete()). The following three tests assert the DESIRED rejection and are

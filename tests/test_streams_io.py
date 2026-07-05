@@ -16,7 +16,7 @@ from unaiverse.streams.dataprops import DataProps, StreamType
 pytestmark = pytest.mark.unit
 
 
-# ── Deterministic clock ─────────────────────────────────────────────────────
+# Deterministic clock
 
 class FakeClock:
     """A fully controllable stand-in for ``unaiverse.clock._Clock``.
@@ -58,14 +58,14 @@ def fake_clock():
     setattr(clock, "_Clock__instance", saved)
 
 
-# ── Helpers ─────────────────────────────────────────────────────────────────
+# Helpers
 
 def text_props() -> DataProps:
     """A minimal text DataProps (no transforms, real-time, delta<=0)."""
     return DataProps(name="txt", data_type="text")
 
 
-# ── Stream: set/get keyed by uuid ───────────────────────────────────────────
+# Stream: set/get keyed by uuid
 
 def test_set_get_keyed_by_uuid(fake_clock):
     """Data is stored and retrieved per uuid; an unknown uuid yields None."""
@@ -89,7 +89,7 @@ def test_get_without_requester_is_repeatable(fake_clock):
     assert s.get(uuid="A") == "payload"
 
 
-# ── Stream: per-requester "deliver once" semantics ──────────────────────────
+# Stream: per-requester "deliver once" semantics
 
 def test_get_requested_by_delivers_once_per_requester(fake_clock):
     """A given sample is handed to each requester at most once, but a different
@@ -137,7 +137,7 @@ def test_resetting_same_cycle_does_not_rearm(fake_clock):
     assert s.get(requested_by="r2", uuid="A") == "v2"
 
 
-# ── Stream: tag and timestamp accessors ─────────────────────────────────────
+# Stream: tag and timestamp accessors
 
 def test_get_tag_and_timestamp(fake_clock):
     """``get_tag``/``get_timestamp`` expose the stored tag and cycle timestamp;
@@ -163,7 +163,7 @@ def test_timestamp_tracks_cycle(fake_clock):
     assert s.get_timestamp("A") == 1.0
 
 
-# ── Stream: data_tag ordering (auto vs explicit, stale tags) ────────────────
+# Stream: data_tag ordering (auto vs explicit, stale tags)
 
 def test_data_tag_explicit_vs_autoincrement(fake_clock):
     """An explicit tag>=0 is stored verbatim; a tag of -1 auto-fills with the
@@ -209,7 +209,7 @@ def test_set_tag_overwrites_and_missing_is_noop(fake_clock):
     assert s.get_tag("missing") is None
 
 
-# ── Stream: enable/disable gating ───────────────────────────────────────────
+# Stream: enable/disable gating
 
 def test_disable_blocks_set_but_get_still_reads(fake_clock):
     """``disable`` blocks ``set`` (returns None, data unchanged) but ``get`` keeps
@@ -239,7 +239,7 @@ def test_disable_blocks_first_set(fake_clock):
     assert s.get(uuid="Z") is None
 
 
-# ── Stream: all_uuids retrieval ─────────────────────────────────────────────
+# Stream: all_uuids retrieval
 
 def test_get_all_uuids_returns_tuples(fake_clock):
     """``get(all_uuids=True)`` returns a (sample, tag, timestamp) tuple for every
@@ -272,7 +272,7 @@ def test_get_all_uuids_honours_requester_dedup(fake_clock):
     assert second == []
 
 
-# ── DataProps built through StreamType (per the documented build path) ──────
+# DataProps built through StreamType (per the documented build path)
 
 def test_dataprops_from_streamtype_roundtrip(fake_clock):
     """A DataProps reconstructed from ``StreamType(...).to_list_of_dicts()`` drives
@@ -288,7 +288,7 @@ def test_dataprops_from_streamtype_roundtrip(fake_clock):
     assert s.get(uuid="A") == "hi"
 
 
-# ── BufferedStream: static mode ─────────────────────────────────────────────
+# BufferedStream: static mode
 
 def test_buffered_static_returns_same_sample(fake_clock):
     """A static buffer keeps a single sample and yields it on every get, across
@@ -320,7 +320,7 @@ def test_buffered_static_extra_set_does_not_grow_buffer(fake_clock):
     assert bs.get() == "first"
 
 
-# ── BufferedStream: queue mode (FIFO) ───────────────────────────────────────
+# BufferedStream: queue mode (FIFO)
 
 def test_buffered_queue_is_fifo(fake_clock):
     """A queue buffer delivers samples in FIFO order, one per cycle, popping each
@@ -360,7 +360,7 @@ def test_buffered_queue_no_advance_within_same_cycle(fake_clock):
     assert len(bs.data_buffer_by_uuid["U"]) == 1  # only one element popped
 
 
-# ── BufferedStream: cyclic (non-static, non-queue) mode ─────────────────────
+# BufferedStream: cyclic (non-static, non-queue) mode
 
 def test_buffered_cycles_through_buffer(fake_clock):
     """A plain buffer walks its samples by index, one per cycle, without consuming

@@ -39,7 +39,7 @@ BROADCASTER = "BROADCASTER"
 WORLD_NODE = "WORLD_NODE"
 
 
-# ── Fakes ────────────────────────────────────────────────────────────────────
+# Fakes
 
 class FakeInteraction:
     """Minimal stand-in exposing only the four members both methods read:
@@ -133,7 +133,7 @@ _rebind = Agent._Agent__rebind_stdin_if_human
 _prepare = Agent.prepare_stdin_if_human
 
 
-# ── READ side: AgentBasics.prepare_stdin_if_human ────────────────────────────
+# READ side: AgentBasics.prepare_stdin_if_human
 
 def test_prepare_public_returns_broadcaster_interaction_uuid():
     """PUBLIC path (lone wolf): the passed-in broadcaster peer_id is NOT swapped,
@@ -208,7 +208,7 @@ def test_prepare_world_should_return_broadcaster_interaction_uuid():
     assert _prepare(stub, public=False, peer_id=BROADCASTER) == "int-123"
 
 
-# ── WRITE side: Agent.__rebind_stdin_if_human ────────────────────────────────
+# WRITE side: Agent.__rebind_stdin_if_human
 
 def test_rebind_not_human_short_circuits_true():
     """Non-human self early-returns True without touching the cache."""

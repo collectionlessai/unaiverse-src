@@ -41,7 +41,7 @@ from inproc_harness import (
 pytestmark = pytest.mark.e2e
 
 
-# ── Deterministic clock fixture (verbatim from the smoke test) ───────────────
+# Deterministic clock fixture (verbatim from the smoke test)
 
 @pytest.fixture
 def harness_clock():
@@ -60,7 +60,7 @@ def _echo(x, first: bool = False, last: bool = False):
     return x
 
 
-# ── Builders for a public lone-wolf agent and the public cross-register ──────
+# Builders for a public lone-wolf agent and the public cross-register
 
 def _build_agent(pub_id: str, node_id: str, world_id: str, conn: InProcNodeConn):
     return build_real_agent_node(
@@ -78,9 +78,7 @@ async def _public_link(conn_self: InProcNodeConn, agent_self,
     await agent_self.add_agent(other_pub, other_profile)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
 # Test 1: registration via the REAL receive dispatch (LIST form, no completion)
-# ─────────────────────────────────────────────────────────────────────────────
 
 def test_send_registers_interaction_and_links_hsm_action(harness_clock):
     """A.send('process', B, data_samples=['hi']): A.im.sent holds the sent
@@ -140,9 +138,7 @@ def test_send_registers_interaction_and_links_hsm_action(harness_clock):
     assert agent_b.im.get_interaction(sent.uuid, consider_completed_too=True) is not None
 
 
-# ─────────────────────────────────────────────────────────────────────────────
 # Test 2: status round-trip (DICT form) + STRETCH processor-output echo
-# ─────────────────────────────────────────────────────────────────────────────
 
 def test_status_round_trip_completes_sent_interaction(harness_clock):
     """DICT form data_samples={'proc_output_0':'hi'} (the faithful chat path):
@@ -213,9 +209,7 @@ def test_status_round_trip_completes_sent_interaction(harness_clock):
     assert echo_stream.get(uuid=sent.uuid) == "hi"
 
 
-# ─────────────────────────────────────────────────────────────────────────────
 # Test 3: broadcast-to-N (DICT form) — each target registers the interaction
-# ─────────────────────────────────────────────────────────────────────────────
 
 def test_broadcast_registers_on_every_target(harness_clock):
     """A.send to a list [B, C]: each receiver's REAL dispatch registers the
@@ -261,9 +255,7 @@ def test_broadcast_registers_on_every_target(harness_clock):
     assert rec_c.action_ref is not None
 
 
-# ─────────────────────────────────────────────────────────────────────────────
 # Test 4: unknown-sender gate — INTERACTION from a non-member is dropped
-# ─────────────────────────────────────────────────────────────────────────────
 
 def test_unknown_sender_interaction_is_dropped(harness_clock):
     """X is admitted by B's conn POOL (passes the get_messages gate) but is NOT in

@@ -24,7 +24,7 @@ from unaiverse.custom import GenException
 pytestmark = pytest.mark.unit
 
 
-# ── Minimal agent-like container ─────────────────────────────────────────────
+# Minimal agent-like container
 
 
 class FakeAgent:
@@ -42,7 +42,7 @@ class FakeAgent:
         self.proc_optional_inputs = None
 
 
-# ── HumanModule.forward ──────────────────────────────────────────────────────
+# HumanModule.forward
 
 
 def test_human_module_echoes_text_and_image_dropping_whatever():
@@ -75,7 +75,7 @@ def test_human_module_is_callable_nn_module():
     assert hm("x") == ("x", None)
 
 
-# ── ModuleWrapper: wrapping behaviors ────────────────────────────────────────
+# ModuleWrapper: wrapping behaviors
 
 
 def _text_wrapper(module):
@@ -140,7 +140,7 @@ def test_wrapper_multi_output_shape_matches_proc_outputs():
     assert out[1] is img
 
 
-# ── ModuleWrapper: signature / default caching ───────────────────────────────
+# ModuleWrapper: signature / default caching
 
 
 def test_wrapper_sig_defaults_cached_from_human_forward():
@@ -208,7 +208,7 @@ def test_wrapper_non_callable_module_raises():
         )
 
 
-# ── ModuleWrapper: device handling ───────────────────────────────────────────
+# ModuleWrapper: device handling
 
 
 def test_wrapper_default_device_is_cpu():
@@ -238,7 +238,7 @@ def test_guess_device_reads_env_then_override(monkeypatch):
     assert mw.device == torch.device("cpu")
 
 
-# ── AgentProcessorChecker: proc is None → dummy processor ─────────────────────
+# AgentProcessorChecker: proc is None → dummy processor
 
 
 def test_checker_none_proc_builds_dummy_multiidentity():
@@ -277,7 +277,7 @@ def test_checker_dummy_processor_runs_on_cpu():
     assert agent.proc.device == torch.device("cpu")
 
 
-# ── AgentProcessorChecker: proc="human" (current behavior) ───────────────────
+# AgentProcessorChecker: proc="human" (current behavior)
 
 
 def test_checker_human_string_currently_raises():
@@ -305,7 +305,7 @@ def test_checker_human_module_instance_is_wrapped():
     assert isinstance(agent.proc.module, HumanModule)
 
 
-# ── AgentProcessorChecker: string proc_inputs → StreamType ───────────────────
+# AgentProcessorChecker: string proc_inputs → StreamType
 
 
 def test_checker_string_proc_inputs_converted_to_streamtype():
@@ -338,7 +338,7 @@ def test_checker_callable_agent_used_as_processor():
     assert agent.proc.forward("ab") == ("AB",)
 
 
-# ── AgentProcessorChecker: validation errors ─────────────────────────────────
+# AgentProcessorChecker: validation errors
 
 
 def test_checker_missing_attribute_asserts():
@@ -365,7 +365,7 @@ def test_checker_invalid_proc_inputs_not_a_list_raises():
         AgentProcessorChecker(agent)
 
 
-# ── A couple of cross-checks on the wrapper's parametrization ─────────────────
+# A couple of cross-checks on the wrapper's parametrization
 
 
 def test_wrapper_set_proc_inputs_refreshes_optional_inputs_length():

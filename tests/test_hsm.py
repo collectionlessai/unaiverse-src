@@ -38,7 +38,7 @@ from unaiverse.interaction import Interaction
 pytestmark = pytest.mark.unit
 
 
-# ── Logger contract ──────────────────────────────────────────────────────────
+# Logger contract
 # The suite-wide conftest fixture swaps the logger sink for a no-op object, which
 # also neuters ``log.critical`` (it becomes a silent lambda). But the HSM relies
 # on ``log.critical`` actually raising ``GenException`` to abort on invalid input
@@ -56,7 +56,7 @@ def _raising_critical_logger():
     setattr(_log, "_Logger__instance", saved)
 
 
-# ── Fixtures (light mocks; methods are never called, only introspected) ──────
+# Fixtures (light mocks; methods are never called, only introspected)
 
 class DummyAgent:
     """Plain actionable: each method exposes the EXACT keyword params used by the
@@ -126,7 +126,7 @@ def _new() -> HybridStateMachine:
     return HybridStateMachine(DummyAgent())
 
 
-# ── Construction ─────────────────────────────────────────────────────────────
+# Construction
 
 def test_init_seeds_default_wildcards_and_empty_machine():
     """A fresh HSM has no states/transitions, no current state, and exactly the four default wildcards."""
@@ -157,7 +157,7 @@ def test_init_none_agent_raises_genexception():
         HybridStateMachine(None)
 
 
-# ── add_state ────────────────────────────────────────────────────────────────
+# add_state
 
 def test_add_state_first_state_becomes_current_and_initial():
     """The very first state added is auto-selected as both current and initial; later states are not."""
@@ -206,7 +206,7 @@ def test_add_state_forbidden_name_all_raises():
         h.add_state(Custom.ALL_STATES_NAME, action="nop")
 
 
-# ── add_transit ──────────────────────────────────────────────────────────────
+# add_transit
 
 def test_add_transit_auto_creates_missing_endpoints():
     """add_transit auto-creates both endpoint states (action=None) and the transitions dict entries."""
@@ -278,7 +278,7 @@ def test_add_transit_json_suffix_plugs_in_sub_hsm(tmp_path):
     assert main.initial_state == "main_start"
 
 
-# ── Wildcards ────────────────────────────────────────────────────────────────
+# Wildcards
 
 def test_apply_wildcards_substitutes_nested_action_args():
     """apply_wildcards pushes a string wildcard into the (nested) action args of every state/transition."""
@@ -336,7 +336,7 @@ def test_set_role_updates_role_wildcard_and_applies():
     assert h.states["s"].action.args == {"role": "captain"}
 
 
-# ── to_dict (serialization shape) ────────────────────────────────────────────
+# to_dict (serialization shape)
 
 def test_to_dict_top_level_shape_and_machine_block():
     """to_dict emits machine/states/transitions/teleports with the expected machine sub-keys."""
@@ -391,7 +391,7 @@ def test_to_dict_per_source_teleport_stays_under_source_key():
     assert tp["a"][0]["on"]["action"] == "nop"
 
 
-# ── to_dict / load round-trip ────────────────────────────────────────────────
+# to_dict / load round-trip
 
 def _build_roundtrip_machine(agent) -> HybridStateMachine:
     h = HybridStateMachine(agent)
@@ -432,7 +432,7 @@ def test_load_missing_states_key_raises_genexception():
         HybridStateMachine(DummyAgent()).load(json.dumps(payload))
 
 
-# ── Default policy ordering ──────────────────────────────────────────────────
+# Default policy ordering
 
 def _two_actions(ready_first=True):
     """Return (hsm, ready_action, gated_action) where the first is ready and the
@@ -501,7 +501,7 @@ def test_policy_no_candidate_returns_minus_one_none():
     assert inter is None
 
 
-# ── request_action (accept + every reject path) ──────────────────────────────
+# request_action (accept + every reject path)
 
 def _request_machine() -> HybridStateMachine:
     h = _new()
@@ -566,7 +566,7 @@ def test_request_action_disallowed_outer_interactions_returns_false():
     assert h.request_action(inter) is False
 
 
-# ── set_actionable ───────────────────────────────────────────────────────────
+# set_actionable
 
 def test_set_actionable_rebinds_agent_on_states_and_actions():
     """set_actionable rebinds self.agent and the .agent of every state action and every Action."""
@@ -585,7 +585,7 @@ def test_set_actionable_none_raises_genexception():
         h.set_actionable(None)
 
 
-# ── Real-world template oracle (social_learning student.json) ────────────────
+# Real-world template oracle (social_learning student.json)
 
 @_requires_student_template
 def test_load_real_student_template_rebuilds_machine():
@@ -614,7 +614,7 @@ def test_load_real_student_template_roundtrips_via_to_dict():
     assert json.dumps(d1, sort_keys=True) == json.dumps(h2.to_dict(), sort_keys=True)
 
 
-# ── Suspected bugs (characterized; xfail strict on the intended behaviour) ───
+# Suspected bugs (characterized; xfail strict on the intended behaviour)
 
 def test_add_global_teleport_creates_self_loop_on_destination_actual():
     """ACTUAL behaviour: add_global_teleport(to_state=X) wrongly builds an X->X self-loop teleport.

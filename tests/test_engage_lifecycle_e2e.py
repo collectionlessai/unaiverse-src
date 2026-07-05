@@ -46,7 +46,7 @@ from inproc_harness import (
 pytestmark = pytest.mark.e2e
 
 
-# ── Deterministic clock fixture (verbatim from the smoke test) ───────────────
+# Deterministic clock fixture (verbatim from the smoke test)
 
 @pytest.fixture
 def harness_clock():
@@ -58,7 +58,7 @@ def harness_clock():
     setattr(clock, "_Clock__instance", saved)
 
 
-# ── Custom-role registration fixture (snapshot/restore the class-level dicts) ─
+# Custom-role registration fixture (snapshot/restore the class-level dicts)
 
 @pytest.fixture
 def roles():
@@ -120,7 +120,7 @@ def _disengage_interaction():
     return Interaction(action_name="disengage", requester="T-world", target=["S-world"])
 
 
-# ── (a) engage establishes the relationship ──────────────────────────────────
+# (a) engage establishes the relationship
 
 def test_engage_match_establishes_engaged_relationship(harness_clock, roles):
     """A matching engage from the cross-registered teacher adds T-world to the
@@ -145,7 +145,7 @@ def test_engage_match_establishes_engaged_relationship(harness_clock, roles):
     assert agent_s._available is False
 
 
-# ── (b) a real process round registers im.sent and delivers an INTERACTION ────
+# (b) a real process round registers im.sent and delivers an INTERACTION
 
 def test_process_round_registers_sent_and_delivers_interaction(harness_clock, roles):
     """After engaging, the teacher's ``_send(action_name='process')`` round (in the
@@ -197,7 +197,7 @@ def test_process_round_registers_sent_and_delivers_interaction(harness_clock, ro
     assert staged.content["uuid"] == inter.uuid
 
 
-# ── (c) graceful disengage leaves the conn entirely untouched ─────────────────
+# (c) graceful disengage leaves the conn entirely untouched
 
 def test_graceful_disengage_clears_relationship_and_leaves_conn_untouched(harness_clock, roles):
     """``disengage(disconnect_too=False)`` discards the requester from
@@ -230,15 +230,15 @@ def test_graceful_disengage_clears_relationship_and_leaves_conn_untouched(harnes
     assert conn_s.get_pool_of("T-world") == InProcNodeConn.IN_WORLD_AGENTS
 
 
-# ── (d) disconnect_too: disengage drives a GOAWAY on the conn (BUG 3, fixed) ──
+# (d) disconnect_too: disengage drives a GOAWAY on the conn (BUG 3, fixed)
 
 def test_disconnect_too_purges_peer_and_records_goaway(harness_clock, roles):
     """``disengage(disconnect_too=True)`` runs the node purge with
-    WORLD_DISENGAGEMENT, so ``Node.__purge``'s guard routes through
-    ``close_session``: a GOAWAY is recorded, AND ``remove_agent`` + ``conn.remove``
-    drop the peer from the membership tables and the conn pool.
+    WORLD_DISENGAGEMENT, so ``Node.__purge`` forwards the reason to
+    ``conn.drop_peer``: a GOAWAY is recorded, AND ``remove_agent`` + the pool
+    drop remove the peer from the membership tables and the conn pool.
 
-    This is the e2e expression of the BUG 3 fix (agent.py:689). The Level 1 reason
+    This is the e2e expression of the BUG 3 fix (agent.py:669). The Level 1 reason
     assertion lives in
     ``tests/test_disengage_goaway.py::test_disengage_disconnect_too_propagates_world_disengagement_reason``;
     here we verify the GOAWAY reaches the conn end to end."""
@@ -273,11 +273,11 @@ def test_disconnect_too_purges_peer_and_records_goaway(harness_clock, roles):
     # disconnect_too suppresses the confirmation send-back on this interaction.
     assert inter.send_status is False
 
-    # BUG 3 (fixed): the reasoned purge routed through close_session, so the GOAWAY
+    # BUG 3 (fixed): the reasoned purge went through conn.drop_peer, so the GOAWAY
     # was recorded on the conn with WORLD_DISENGAGEMENT.
     assert conn_s.closed_sessions == [("T-world", WORLD_DISENGAGEMENT)]
 
-    # ...yet remove_agent + conn.remove still ran: the peer is gone from the
+    # ...yet remove_agent + the pool drop still ran: the peer is gone from the
     # membership tables AND from the conn pool (no longer connected).
     assert "T-world" not in agent_s.all_agents
     assert "T-world" not in agent_s.world_agents
@@ -285,7 +285,7 @@ def test_disconnect_too_purges_peer_and_records_goaway(harness_clock, roles):
     assert conn_s.get_pool_of("T-world") is None
 
 
-# ── (e) executable boundary: the full loop drops engage at the placeholder ────
+# (e) executable boundary: the full loop drops engage at the placeholder
 
 def test_full_loop_engage_is_dropped_by_placeholder_behav(harness_clock, roles):
     """An engage INTERACTION delivered through the REAL inbound loop

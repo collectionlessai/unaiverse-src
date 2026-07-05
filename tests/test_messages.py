@@ -37,7 +37,7 @@ pytestmark = pytest.mark.unit
 FIXED_TS = "2026-01-02 03:04:05.678901"
 
 
-# ── scalar fields + observable shape ─────────────────────────────────────────
+# scalar fields + observable shape
 
 def test_scalar_fields_preserved_on_construction_and_roundtrip():
     """The scalar fields (sender, content_type, channel, piggyback, timestamp_net)
@@ -85,7 +85,7 @@ def test_invalid_content_type_rejected():
         assert "Invalid content type" in str(e)
 
 
-# ── json_content: wire pinned via independent protobuf oracle ────────────────
+# json_content: wire pinned via independent protobuf oracle
 
 def test_json_content_wire_matches_protobuf_oracle():
     """For a json INTERACTION Msg, to_bytes() equals the serialized bytes of a
@@ -116,7 +116,7 @@ def test_json_content_roundtrip_shape():
     assert back.content == content
 
 
-# ── stream_sample: round-trip (gzip mtime makes the wire non-deterministic) ──
+# stream_sample: round-trip (gzip mtime makes the wire non-deterministic)
 
 def _sample(data, tag=7, uuid="uuid-1"):
     return {"data": data, "data_tag": tag, "data_uuid": uuid}
@@ -174,7 +174,7 @@ def test_stream_sample_file_roundtrip():
     assert out.mime_type == "application/octet-stream"
 
 
-# ── stats_update: round-trip, including the existing int->float coercion ─────
+# stats_update: round-trip, including the existing int->float coercion
 
 def test_stats_update_roundtrip():
     """A STATS_UPDATE list round-trips preserving the order of group_key, stat_name
