@@ -49,6 +49,17 @@ def _run(coro):
     return asyncio.run(coro)
 
 
+def _start(sess):
+    """Design A drive for an initiator: Session.start() only launches the dial as a
+    background task, so let it run one loop turn and reap it with tick_dial (HELLO on
+    success) — all inside a single event loop. Returns the reaped events (usually [])."""
+    async def _go():
+        sess.start()
+        await asyncio.sleep(0)
+        return await sess.tick_dial()
+    return _run(_go())
+
+
 def _mk(peer_id, role, p2p, local_peer_id, local_node_id="local-node",
         local_profile_factory=lambda: {}, addresses=None,
         token_verifier=None, token_factory=None, remote_node_id_hint=None):
@@ -71,7 +82,7 @@ def test_initiator_start_sends_hello(alice_conn, alice_p2p, alice_peer_id, bob_p
     sess = _mk(bob_peer_id, SessionRole.INITIATOR, alice_conn, alice_peer_id,
                local_profile_factory=lambda: {"x": 1},
                addresses=["/ip4/127.0.0.1/tcp/0/p2p/" + bob_peer_id])
-    events = _run(sess.start())
+    events = _start(sess)
     assert events == []
     assert sess.state == SessionState.HELLO_SENT
     assert alice_conn.connect_calls == [["/ip4/127.0.0.1/tcp/0/p2p/" + bob_peer_id]]
@@ -84,15 +95,25 @@ def test_initiator_start_sends_hello(alice_conn, alice_p2p, alice_peer_id, bob_p
     assert "1.0" in list(hello.fields["protocol_versions"])
 
 
-def test_initiator_dial_failure_fails_after_max_attempts(alice_conn, alice_peer_id, bob_peer_id, monkeypatch):
-    """All 4 dial attempts return None → terminal FAILED event."""
+def test_initiator_dial_failure_fails_after_max_attempts(alice_conn, alice_peer_id, bob_peer_id):
+    """All 4 dial attempts return None → terminal FAILED event. Each failed attempt arms a
+    time-based backoff gate, so we advance `now` past each gate to reach the next attempt."""
     alice_conn.connect_returns = (None, False)
-    async def _no_sleep(_s):
-        return None
-    monkeypatch.setattr("asyncio.sleep", _no_sleep)
     sess = _mk(bob_peer_id, SessionRole.INITIATOR, alice_conn, alice_peer_id,
                addresses=["/ip4/1.2.3.4/tcp/0"])
-    events = _run(sess.start())
+
+    async def _go():
+        sess.start()                       # attempt 1 launched
+        now = time.monotonic()
+        for _ in range(20):
+            await asyncio.sleep(0)          # let the dial task run
+            evs = await sess.tick_dial(now)
+            if evs:                         # [FAILED dial_failed] once attempts are exhausted
+                return evs
+            now += 60.0                     # jump past the backoff gate for the next attempt
+        return []
+
+    events = _run(_go())
     assert len(events) == 1 and events[0].type == SessionEventType.FAILED
     assert events[0].data["reason"] == "dial_failed"
     assert sess.state == SessionState.FAILED
@@ -144,7 +165,7 @@ def test_initiator_rejects_bad_sig_b(alice_conn, alice_p2p, alice_peer_id, bob_p
     alice_conn.connect_returns = (bob_peer_id, False)
     sess = _mk(bob_peer_id, SessionRole.INITIATOR, alice_conn, alice_peer_id,
                addresses=["/ip4/127.0.0.1/tcp/0"])
-    _run(sess.start())
+    _start(sess)
     assert sess.state == SessionState.HELLO_SENT
     alice_p2p.verify_peer_sig_returns = False
     resp = SessMsg(SessMsg.KIND_HELLO_RESP, {
@@ -165,7 +186,7 @@ def test_initiator_completes_through_profile_decision(alice_conn, alice_p2p, ali
     sess = _mk(bob_peer_id, SessionRole.INITIATOR, alice_conn, alice_peer_id,
                local_profile_factory=lambda: {"node_id": "alice-node", "k": "v"},
                addresses=["/ip4/127.0.0.1/tcp/0"])
-    _run(sess.start())
+    _start(sess)
     ack = SessMsg(SessMsg.KIND_HELLO_RESP, {
         "chosen_version": "1.0", "nonce_b": b"\xbb" * 32, "sig_b": b"sig", "reason_code": OK,
     })
@@ -194,7 +215,7 @@ def test_initiator_rejected_profile_fails(alice_conn, alice_p2p, alice_peer_id, 
     alice_conn.connect_returns = (bob_peer_id, False)
     sess = _mk(bob_peer_id, SessionRole.INITIATOR, alice_conn, alice_peer_id,
                addresses=["/ip4/127.0.0.1/tcp/0"])
-    _run(sess.start())
+    _start(sess)
     _run(sess.process_inbound(SESSION_HELLO_PROTOCOL, SessMsg(SessMsg.KIND_HELLO_RESP, {
         "chosen_version": "1.0", "nonce_b": b"\xbb" * 32, "sig_b": b"sig", "reason_code": OK,
     })))
@@ -243,7 +264,7 @@ def test_initiator_offer_carries_token(alice_conn, alice_p2p, alice_peer_id, bob
     alice_conn.connect_returns = (bob_peer_id, False)
     sess = _mk(bob_peer_id, SessionRole.INITIATOR, alice_conn, alice_peer_id,
                addresses=["/ip4/127.0.0.1/tcp/0"], token_factory=lambda: "tok-abc")
-    _run(sess.start())
+    _start(sess)
     _run(sess.process_inbound(SESSION_HELLO_PROTOCOL, SessMsg(SessMsg.KIND_HELLO_RESP, {
         "chosen_version": "1.0", "nonce_b": b"\xbb" * 32, "sig_b": b"sig", "reason_code": OK,
     })))
@@ -257,7 +278,7 @@ def test_initiator_offer_token_empty_without_factory(alice_conn, alice_p2p, alic
     alice_conn.connect_returns = (bob_peer_id, False)
     sess = _mk(bob_peer_id, SessionRole.INITIATOR, alice_conn, alice_peer_id,
                addresses=["/ip4/127.0.0.1/tcp/0"])
-    _run(sess.start())
+    _start(sess)
     _run(sess.process_inbound(SESSION_HELLO_PROTOCOL, SessMsg(SessMsg.KIND_HELLO_RESP, {
         "chosen_version": "1.0", "nonce_b": b"\xbb" * 32, "sig_b": b"sig", "reason_code": OK,
     })))
@@ -328,7 +349,7 @@ def test_responder_decision_carries_token(bob_conn, bob_p2p, bob_peer_id, alice_
 
 def _drive_initiator_to_decision(sess, p2p):
     """Start the initiator and feed a valid HELLO_ACK so it parks in PROFILE_SENT."""
-    _run(sess.start())
+    _start(sess)
     _run(sess.process_inbound(SESSION_HELLO_PROTOCOL, SessMsg(SessMsg.KIND_HELLO_RESP, {
         "chosen_version": "1.0", "nonce_b": b"\xbb" * 32, "sig_b": b"sig", "reason_code": OK,
     })))
@@ -659,12 +680,14 @@ def test_tick_reconnect_responder_does_not_redial(bob_conn, bob_peer_id, alice_p
     """A responder (no addresses) cannot re-dial; it rides the grace timer to LOST."""
     sess = _mk(alice_peer_id, SessionRole.RESPONDER, bob_conn, bob_peer_id)
     sess._set_state(SessionState.RECONNECTING, 10.0)
-    assert _run(sess.tick_reconnect()) is None
+    assert _run(sess.tick_dial()) == []
     assert bob_conn.connect_calls == []
 
 
 def test_tick_reconnect_initiator_redials_and_sends_resume(alice_conn, alice_peer_id, bob_peer_id):
-    """An initiator with addresses re-dials and, on success, sends RESUME."""
+    """An initiator with addresses re-dials and, on success, sends RESUME. Design A: the
+    first tick_dial launches the redial task, a second (after the task runs) reaps it and
+    sends RESUME."""
     async def _runner():
         sess = _mk(bob_peer_id, SessionRole.INITIATOR, alice_conn, alice_peer_id,
                    addresses=["/ip4/127.0.0.1/tcp/0/p2p/" + bob_peer_id])
@@ -672,8 +695,10 @@ def test_tick_reconnect_initiator_redials_and_sends_resume(alice_conn, alice_pee
         sess._set_state(SessionState.RECONNECTING, 45.0)
         sess._reconnect_substep = "redial"
         sess._next_redial_at = 0.0
-        # The re-dial + RESUME runs inline within the tick: no loop yield needed.
-        await sess.tick_reconnect()
+        now = time.monotonic()
+        await sess.tick_dial(now)     # launch the redial
+        await asyncio.sleep(0)        # let _run_dial run
+        await sess.tick_dial(now)     # reap → RESUME
         return sess
     sess = asyncio.run(_runner())
     assert alice_conn.connect_calls          # a re-dial happened
@@ -690,7 +715,7 @@ def test_profile_offer_in_hello_sent_is_ignored(alice_conn, alice_peer_id, bob_p
     alice_conn.connect_returns = (bob_peer_id, False)
     sess = _mk(bob_peer_id, SessionRole.INITIATOR, alice_conn, alice_peer_id,
                addresses=["/ip4/127.0.0.1/tcp/0"])
-    _run(sess.start())
+    _start(sess)
     assert sess.state == SessionState.HELLO_SENT
     offer = SessMsg(SessMsg.KIND_PROFILE_OFFER, {
         "profile": json.dumps({}).encode(), "sig_a": b"sig",
@@ -743,7 +768,7 @@ def test_world_grant_to_plain_initiator_is_ignored(alice_conn, alice_peer_id, bo
     alice_conn.connect_returns = (bob_peer_id, False)
     sess = _mk(bob_peer_id, SessionRole.INITIATOR, alice_conn, alice_peer_id,
                addresses=["/ip4/127.0.0.1/tcp/0"])
-    _run(sess.start())
+    _start(sess)
     _run(sess.process_inbound(SESSION_HELLO_PROTOCOL, SessMsg(SessMsg.KIND_HELLO_RESP, {
         "chosen_version": "1.0", "nonce_b": b"\xbb" * 32, "sig_b": b"sig", "reason_code": OK,
     })))
@@ -782,7 +807,7 @@ def test_world_grant_arriving_before_decision_is_buffered(alice_conn, alice_peer
         local_node_id="local-node", local_profile_factory=lambda: {},
         addresses=["/ip4/127.0.0.1/tcp/0"], is_world_join=True,
     )
-    _run(sess.start())
+    _start(sess)
     _run(sess.process_inbound(SESSION_HELLO_PROTOCOL, SessMsg(SessMsg.KIND_HELLO_RESP, {
         "chosen_version": "1.0", "nonce_b": b"\xbb" * 32, "sig_b": b"sig", "reason_code": OK,
     })))
@@ -818,7 +843,7 @@ def test_initiator_rejects_expired_world_grant(alice_conn, alice_peer_id, bob_pe
         local_node_id="local-node", local_profile_factory=lambda: {},
         addresses=["/ip4/127.0.0.1/tcp/0"], is_world_join=True,
     )
-    _run(sess.start())
+    _start(sess)
     _run(sess.process_inbound(SESSION_HELLO_PROTOCOL, SessMsg(SessMsg.KIND_HELLO_RESP, {
         "chosen_version": "1.0", "nonce_b": b"\xbb" * 32, "sig_b": b"sig", "reason_code": OK,
     })))

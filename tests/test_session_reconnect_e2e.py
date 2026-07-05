@@ -56,9 +56,11 @@ def test_transport_drop_then_resume(bidirectional_fakeconns, alice_peer_id, bob_
         assert [e.type for e in ev_a] == [SessionEventType.RECONNECTING]
         assert [e.type for e in ev_b] == [SessionEventType.RECONNECTING]
 
-        # Alice's tick triggers the fire-and-forget re-dial + RESUME.
+        # Alice's tick launches the re-dial; a second tick (after the dial task runs)
+        # reaps it and sends RESUME.
         await sm_alice.tick()
         await asyncio.sleep(0.05)
+        await sm_alice.tick()
         assert sm_alice.get_session(bob_peer_id)._reconnect_substep == "resume_sent"
 
         # Bob holds the session (RECONNECTING) → ACK + RESUMED on his side.
@@ -95,8 +97,9 @@ def test_resume_nack_triggers_full_rehandshake(bidirectional_fakeconns,
         sm_bob = _make_sm(bob_conn, bob_peer_id, "bob")
 
         await sm_alice.on_peer_disconnected(bob_peer_id)
-        await sm_alice.tick()
+        await sm_alice.tick()          # launch the re-dial
         await asyncio.sleep(0.05)
+        await sm_alice.tick()          # reap → RESUME sent
 
         # Bob's manager holds no session → RESUME_ACK(SESSION_UNKNOWN).
         assert await apump(bob_inbox, sm_bob) == []
@@ -139,19 +142,21 @@ def test_redial_failure_backoff_then_grace_expiry_lost_and_quarantine(
         await sm_alice.on_peer_disconnected(bob_peer_id)
         sess = sm_alice.get_session(bob_peer_id)
 
-        # First tick: a re-dial fires and fails → backoff gate armed.
+        # First tick launches the re-dial; a second tick (after the dial task runs and
+        # fails) reaps it and arms the backoff gate.
         await sm_alice.tick()
         await asyncio.sleep(0.05)
+        await sm_alice.tick()
         assert len(alice_conn.connect_calls) == dials_after_handshake + 1
         assert sess._reconnect_attempts == 1
         assert sess._next_redial_at > time.monotonic()
 
-        # Second tick right away: gated by _next_redial_at, no new dial.
+        # Another tick right away: gated by _next_redial_at, no new dial.
         await sm_alice.tick()
         await asyncio.sleep(0.05)
         assert len(alice_conn.connect_calls) == dials_after_handshake + 1
 
-        # Grace expiry: check_timeout fires LOST before tick_reconnect can run,
+        # Grace expiry: check_timeout fires LOST before a re-dial can run,
         # the session is evicted and the peer is quarantined.
         events = await sm_alice.tick(time.monotonic() + 46.0)
         assert [e.type for e in events] == [SessionEventType.LOST]
@@ -296,8 +301,11 @@ def test_requires_fast_clock_covers_handshake_in_flight(bidirectional_fakeconns,
         assert sm_alice.requires_fast_clock() is False
         assert sm_alice.has_active_sessions() is False
 
-        # Start the handshake but do not pump the peer: Alice sits in HELLO_SENT.
+        # Start the handshake but do not pump the peer: Alice sits in HELLO_SENT. Design A:
+        # initiate() launches the dial task; let it run and tick to reap it into the HELLO.
         await sm_alice.initiate(bob_peer_id, ["/ip4/127.0.0.1/tcp/0"])
+        await asyncio.sleep(0)
+        await sm_alice.tick()
         assert sm_alice.get_session(bob_peer_id).state == SessionState.HELLO_SENT
 
         # The handshake in flight keeps the clock fast, even though has_active_sessions

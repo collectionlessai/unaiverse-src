@@ -362,7 +362,7 @@ class SessionManager:
                 p2p_name=self.p2p_name, data={"reason": "quarantined"},
             )]
         log.session(f"activating Session to ...{peer_id[-5:]}", sub=self._label)
-        events = await sess.start()
+        events = sess.start()   # non-blocking: the dial runs off-task, reaped by tick_dial
         self._promote(peer_id, sess)
         self._forget_if_terminal(peer_id, sess)
         return events
@@ -613,9 +613,7 @@ class SessionManager:
             t_event = sess.check_timeout(now)
             if t_event is not None:
                 events.append(t_event)
-            r_event = await sess.tick_reconnect(now)
-            if r_event is not None:
-                events.append(r_event)
+            events.extend(await sess.tick_dial(now))
             k_event = await sess.tick_keepalive(now)
             if k_event is not None:
                 events.append(k_event)

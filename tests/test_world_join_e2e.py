@@ -36,6 +36,18 @@ def _run(coro):
     return asyncio.run(coro)
 
 
+def _initiate_and_reap(sm, *args, **kwargs):
+    """Design A drive: initiate() only launches the dial as a background task. Run it, let
+    the task run one loop turn, then tick to reap it so the initiator's HELLO lands in the
+    peer's inbox (a plain deque, safe across the per-call event loops the pump uses)."""
+    async def _go():
+        evs = list(await sm.initiate(*args, **kwargs))
+        await asyncio.sleep(0)
+        evs += await sm.tick()
+        return evs
+    return _run(_go())
+
+
 class RouterP2P:
     """P2P-per-instance injected into one SessionManager. send_session routes into
     the peer node's same-instance inbox; crypto is delegated to a FakeP2P. The
@@ -146,9 +158,8 @@ def test_world_join_full_handoff():
                 # joiner.public got the grant → open joiner.world to redeem it.
                 blob = dict(grant)
                 blob["grant_id_bytes"] = bytes.fromhex(grant["grant_id"])
-                evs = _run(j_world.initiate(
-                    host_world_id, ["/world/addr"],
-                    grant=blob))
+                evs = _initiate_and_reap(j_world, host_world_id, ["/world/addr"],
+                                         grant=blob)
                 for e in evs:
                     _orchestrate(e)
             elif ev.p2p_name == NodeConn.P2P_WORLD and ev.role.value == "initiator":
@@ -174,7 +185,7 @@ def test_world_join_full_handoff():
                             _orchestrate(ev)
 
     # 1. Joiner starts the public world-join handshake.
-    for ev in _run(j_pub.initiate(host_pub_id, ["/pub/addr"], is_world_join=True)):
+    for ev in _initiate_and_reap(j_pub, host_pub_id, ["/pub/addr"], is_world_join=True):
         _orchestrate(ev)
     pump()
 

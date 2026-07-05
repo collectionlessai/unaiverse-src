@@ -436,7 +436,7 @@ def test_tick_does_not_sweep_known_sessions(alice_conn, alice_peer_id, bob_peer_
     def _boom(*a, **k):
         raise AssertionError("tick touched a KNOWN session")
     sess.check_timeout = _boom
-    sess.tick_reconnect = _boom
+    sess.tick_dial = _boom
     sess.tick_keepalive = _boom
 
     events = _run(sm.tick())

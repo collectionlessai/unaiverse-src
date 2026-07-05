@@ -46,10 +46,25 @@ def _offline_node_profile(monkeypatch):
                         staticmethod(lambda: "203.0.113.1"))
 
 
+async def _reap_remote_dial(remote_sm):
+    """Design A: initiate() only launches the dial as a background task. Let it run one loop
+    turn, then tick to reap it so the initiator's HELLO reaches the wire."""
+    await asyncio.sleep(0)
+    await remote_sm.tick()
+
+
+async def _reap_node_dial(node):
+    """Same reap for a node-initiated Session: the node's own pump tick reaps its dial and
+    puts the HELLO on the wire."""
+    await asyncio.sleep(0)
+    await node._Node__handle_network_messages()
+
+
 async def _establish_inbound(node, conn, remote_sm, remote_inbox):
     """Drive a remote-initiated handshake through the node's message pump until
     both sides are ESTABLISHED. Returns the remote's final events."""
     await remote_sm.initiate(NODE_PEER, ["/ip4/127.0.0.1/tcp/0"])
+    await _reap_remote_dial(remote_sm)            # reap the dial → remote HELLO on the wire
     await node._Node__handle_network_messages()   # HELLO → HELLO_ACK
     await apump(remote_inbox, remote_sm)          # HELLO_ACK → PROFILE_OFFER
     await node._Node__handle_network_messages()   # OFFER → decision (+ESTABLISHED)
@@ -95,6 +110,7 @@ def test_inworld_inbound_agent_connection_calls_add_agent():
         remote_conn.connect_returns = (NODE_PEER + "-w", False)
 
         await remote_sm.initiate(NODE_PEER + "-w", ["/ip4/127.0.0.1/tcp/0"])
+        await _reap_remote_dial(remote_sm)            # reap the dial → remote HELLO on the wire
         await node._Node__handle_network_messages()   # HELLO → HELLO_ACK
         await apump(remote_inbox, remote_sm)          # HELLO_ACK → PROFILE_OFFER
         await node._Node__handle_network_messages()   # OFFER → decision (+ESTABLISHED)
@@ -124,6 +140,7 @@ def test_inworld_outbound_agent_connection_joins_agent():
                                             addresses=["/ip4/127.0.0.1/tcp/0"],
                                             p2p_name=NodeConn.P2P_WORLD)
         assert ok
+        await _reap_node_dial(node)                   # reap node dial → HELLO on the wire
         await apump(remote_inbox, remote_sm)          # HELLO → HELLO_ACK
         await node._Node__handle_network_messages()   # HELLO_ACK → PROFILE_OFFER
         await apump(remote_inbox, remote_sm)          # OFFER → DECISION
@@ -170,6 +187,7 @@ def test_outbound_public_handshake_arms_interactive_ready():
                                             addresses=["/ip4/127.0.0.1/tcp/0"],
                                             p2p_name=NodeConn.P2P_PUBLIC)
         assert ok
+        await _reap_node_dial(node)                   # reap node dial → HELLO on the wire
         await apump(remote_inbox, remote_sm)          # HELLO → HELLO_ACK
         await node._Node__handle_network_messages()   # HELLO_ACK → PROFILE_OFFER
         await apump(remote_inbox, remote_sm)          # OFFER → DECISION
@@ -201,6 +219,7 @@ def test_world_session_goaway_triggers_full_world_leave():
                                             addresses=["/ip4/127.0.0.1/tcp/0"],
                                             p2p_name=NodeConn.P2P_WORLD)
         assert ok
+        await _reap_node_dial(node)                   # reap node dial → HELLO on the wire
         await apump(remote_inbox, remote_sm)
         await node._Node__handle_network_messages()
         await apump(remote_inbox, remote_sm)
@@ -610,9 +629,11 @@ def test_resumed_session_keeps_enrolment_without_readd():
         assert REMOTE_PEER not in node.hosted.removed
         assert conn._sm_public.get_session(REMOTE_PEER).state == SessionState.RECONNECTING
 
-        # The remote initiator re-dials and RESUMEs; the node pump processes it.
+        # The remote initiator re-dials and RESUMEs; the node pump processes it. Design A:
+        # the first tick launches the re-dial, a second (after the task runs) sends RESUME.
         await remote_sm.tick()
-        await asyncio.sleep(0.05)   # let the fire-and-forget re-dial + RESUME run
+        await asyncio.sleep(0.05)
+        await remote_sm.tick()
         await node._Node__handle_network_messages()   # RESUME → ACK + RESUMED dispatch
         await apump(remote_inbox, remote_sm)           # remote absorbs the ACK
 
@@ -684,7 +705,7 @@ def _world_grant_blob():
 
 
 @pytest.mark.parametrize("failure_mode", ["dial_failed", "quarantined"])
-def test_world_handoff_failure_cleans_pending_maps(failure_mode, monkeypatch):
+def test_world_handoff_failure_cleans_pending_maps(failure_mode):
     """When the world-side initiate fails (unreachable world / quarantined
     peer), the handoff bookkeeping must be rolled back."""
     async def _scenario():
@@ -692,14 +713,24 @@ def test_world_handoff_failure_cleans_pending_maps(failure_mode, monkeypatch):
         world_world_peer = "world-node-id-world-peer"
         if failure_mode == "dial_failed":
             conn.connect_returns = (None, False)
-
-            async def _no_sleep(_s):
-                return None
-            monkeypatch.setattr("asyncio.sleep", _no_sleep)
         else:
             conn._sm_world._quarantine[world_world_peer] = time.monotonic() + 30.0
 
         await node._start_world_handoff("public-world-peer", _world_grant_blob())
+
+        if failure_mode == "dial_failed":
+            # Design A: the dial now fails asynchronously over several attempts behind a
+            # time-based backoff gate. Drive the world SM's ticks (advancing `now` past each
+            # gate) until a terminal FAILED, dispatching its events so the rollback runs.
+            now = time.monotonic()
+            for _ in range(20):
+                await asyncio.sleep(0)
+                evs = await conn._sm_world.tick(now)
+                for ev in evs:
+                    await node._dispatch_session_event(ev)
+                if any(e.type == SessionEventType.FAILED for e in evs):
+                    break
+                now += 31.0
 
         assert conn._sm_world.is_established(world_world_peer) is False
         assert node.conn._pending_world_handoff == {}
@@ -769,6 +800,7 @@ def test_world_host_detects_master_from_profile_static_node_id():
 
         await remote_sm.initiate(NODE_PEER, ["/ip4/127.0.0.1/tcp/0"],
                                  is_world_join=True)
+        await _reap_remote_dial(remote_sm)            # reap the dial → remote HELLO on the wire
         await node._Node__handle_network_messages()   # HELLO → HELLO_ACK
         await apump(remote_inbox, remote_sm)          # HELLO_ACK → PROFILE_OFFER
         await node._Node__handle_network_messages()   # OFFER → decision + GRANT
@@ -811,6 +843,7 @@ def test_world_host_registers_joiner_with_grant_role():
 
         await remote_sm.initiate(node_world_peer, ["/ip4/127.0.0.1/tcp/0"],
                                  grant=blob)
+        await _reap_remote_dial(remote_sm)            # reap the dial → remote HELLO on the wire
         await node._Node__handle_network_messages()   # HELLO → HELLO_ACK
         await apump(remote_inbox, remote_sm)          # HELLO_ACK → PROFILE_OFFER
         await node._Node__handle_network_messages()   # OFFER → host ESTABLISHED + register, DECISION sent
@@ -847,6 +880,7 @@ def test_world_host_purges_non_preadmitted_joiner():
                 "expiry_unix_ms": int(time.time() * 1000) + 30_000}
         await remote_sm.initiate(node_world_peer, ["/ip4/127.0.0.1/tcp/0"],
                                  grant=blob)
+        await _reap_remote_dial(remote_sm)            # reap the dial → remote HELLO on the wire
         await node._Node__handle_network_messages()
         await apump(remote_inbox, remote_sm)
         await node._Node__handle_network_messages()
@@ -883,6 +917,7 @@ def test_world_host_unlists_member_when_world_session_ends():
                 "expiry_unix_ms": int(time.time() * 1000) + 30_000}
         await remote_sm.initiate(node_world_peer, ["/ip4/127.0.0.1/tcp/0"],
                                  grant=blob)
+        await _reap_remote_dial(remote_sm)            # reap the dial → remote HELLO on the wire
         await node._Node__handle_network_messages()
         await apump(remote_inbox, remote_sm)
         await node._Node__handle_network_messages()

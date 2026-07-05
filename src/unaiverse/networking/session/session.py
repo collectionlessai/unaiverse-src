@@ -36,7 +36,10 @@ if TYPE_CHECKING:
     from unaiverse.networking.p2p.p2p import P2P
 
 # Per-state timeouts (seconds)
-_TIMEOUT_CONNECT_S = 35.0   # dial: PeerConnectionTimeout (30s Go) + 5s buffer
+_TIMEOUT_CONNECT_S = 300.0  # total CONNECTING budget: a backstop for a wedged dial task. The
+                            # per-attempt bound is Go's PeerConnectionTimeout (~30s, x2 on the
+                            # tcp fallback); tick-driven retries up to _MAX_DIAL_ATTEMPTS (which
+                            # FAILs first) fit inside this window without starving other peers.
 _TIMEOUT_HELLO_S = 5.0      # Stage 1: HELLO → HELLO_ACK
 _TIMEOUT_PROFILE_S = 15.0   # Stage 2: PROFILE_OFFER → PROFILE_DECISION
 _TIMEOUT_WORLD_S = 30.0     # Stage 3: WORLD_GRANT expiry
@@ -234,8 +237,12 @@ class Session:
         self._state_entered_at: float = time.monotonic()
         self._timeout_s: Optional[float] = None
 
-        # Dial retry counter (initiator).
+        # Dial retry counter (initiator) + the in-flight dial task. Design A: the dial runs
+        # off the main loop as a task and is reaped by tick_dial, so a slow dial cannot starve
+        # the other Sessions serviced from the same single main-loop task.
         self._dial_attempts = 0
+        self._dial_task: Optional[asyncio.Task] = None
+        self._next_dial_at: float = 0.0   # monotonic gate for the CONNECTING dial backoff
 
         # Profile received from the remote peer (set on ESTABLISHED).
         self.remote_profile: Optional[dict] = None
@@ -273,49 +280,122 @@ class Session:
 
     # Initiator entry point
 
-    async def start(self) -> List[SessionEvent]:
-        """Initiator: dial the peer and send HELLO. Returns events accumulated
-        during start (typically empty until ESTABLISHED arrives). On terminal
-        dial failure returns ``[SessionEvent(FAILED, ...)]``."""
+    def start(self) -> List[SessionEvent]:
+        """Initiator: enter CONNECTING and launch the dial as a background task. The dial
+        runs off the main loop (Design A) so it does not starve the other Sessions serviced
+        from the same task; its outcome (HELLO on success, retry/FAILED on failure) is reaped
+        on the next tick_dial, so this returns immediately with no events."""
         if self.role != SessionRole.INITIATOR:
             raise RuntimeError("Session.start() is for initiators only")
-        return await self._dial_then_hello()
-
-    async def _dial_then_hello(self) -> List[SessionEvent]:
-        self._dial_attempts += 1
         self._set_state(SessionState.CONNECTING, _TIMEOUT_CONNECT_S)
+        self._next_dial_at = 0.0
+        self._start_dial()
+        return []
+
+    def _start_dial(self) -> None:
+        """Launch the dial as a background task (single-flight: no-op if one is already in
+        flight). Non-blocking; only _dial_task is touched here — the FSM mutates only when
+        tick_dial reaps the outcome, on the main task, so the single-writer invariant holds."""
+        if self._dial_task is not None and not self._dial_task.done():
+            return
+        self._dial_attempts += 1
         log.session(f"{self!r} dial attempt {self._dial_attempts}/{_MAX_DIAL_ATTEMPTS}", sub=self._sub)
+        self._dial_task = asyncio.create_task(self._run_dial(self.p2p, self.addresses))
 
+    @staticmethod
+    async def _run_dial(p2p, addresses) -> tuple:
+        """The dial coroutine, run as a background task: reads only its arguments (no Session
+        state), so the only new interleaving it introduces is 'a result becomes available'.
+        Returns (peer_id or None, through_relay); never raises."""
         try:
-            peer_id, through_relay = await self.p2p.connect(self.addresses)
+            return await p2p.connect(addresses)
         except Exception as e:
-            log.error(f"{self!r} p2p.connect raised: {e}", sub=self._sub)
-            peer_id, through_relay = None, False
+            log.error(f"dial raised: {e}")
+            return None, False
 
+    async def tick_dial(self, now: Optional[float] = None) -> List[SessionEvent]:
+        """Reap a finished dial (→ HELLO / RESUME / retry / FAILED) and launch the next one
+        when the backoff gate opens. Replaces _dial_then_hello, tick_reconnect and
+        _redial_and_resume: the dial is a task, so no other Session is starved while it runs."""
+        if now is None:
+            now = time.monotonic()
+
+        # (a) Reap a completed dial.
+        task = self._dial_task
+        if task is not None and task.done():
+            self._dial_task = None
+            if not task.cancelled():
+                peer_id, through_relay = task.result()   # _run_dial never raises
+                if self.state == SessionState.CONNECTING:
+                    return await self._on_dial_done_connecting(peer_id, through_relay, now)
+                if self.state == SessionState.RECONNECTING:
+                    return await self._on_dial_done_reconnecting(peer_id, through_relay, now)
+                # State advanced (a terminal event fired) while the dial was in flight →
+                # discard the outcome here. This state guard is why a terminal transition
+                # needs no explicit dial detach: _run_dial holds no Session reference, so a
+                # late task is harmless, and the Go connection (if any) is dropped by its own
+                # idle timeout.
+            return []
+        if self._dial_task is not None:
+            return []   # a dial is still in flight
+
+        # (b) Launch the next dial once its gate opens.
+        if self.role != SessionRole.INITIATOR or not self.addresses:
+            return []
+        if self.state == SessionState.CONNECTING and now >= self._next_dial_at:
+            self._start_dial()
+        elif self.state == SessionState.RECONNECTING:
+            # A RESUME that wasn't acked within its window → fall back to another re-dial.
+            if self._reconnect_substep == "resume_sent" and now >= self._next_redial_at:
+                self._reconnect_substep = "redial"
+            if self._reconnect_substep == "redial" and now >= self._next_redial_at:
+                self._start_dial()
+        return []
+
+    async def _on_dial_done_connecting(self, peer_id, through_relay, now) -> List[SessionEvent]:
         if peer_id is not None and through_relay and self._reject_relay:
             log.error(f"{self!r} dial resolved through a relay circuit but relay nodes are "
                       f"disallowed (talk_to_relay_based_nodes=False)", sub=self._sub)
             return [self._fail("relay_rejected")]
-
         if peer_id is None:
             if self._dial_attempts < _MAX_DIAL_ATTEMPTS:
                 delay = min(
                     random.uniform(0, _RETRY_BASE_S * (2 ** (self._dial_attempts - 1))),
                     _RETRY_CAP_S,
                 )
+                self._next_dial_at = now + delay
                 log.session(f"{self!r} dial failed, retrying in {delay:.1f}s", sub=self._sub)
-                await asyncio.sleep(delay)
-                return await self._dial_then_hello()
+                return []
             log.error(f"{self!r} dial failed after {_MAX_DIAL_ATTEMPTS} attempts", sub=self._sub)
             return [self._fail("dial_failed")]
-
-        # If the dial returned a different peer-id than we expected (e.g., relayed
-        # multiaddr without /p2p hop), update it.
+        # If the dial returned a different peer-id than we expected (e.g. relayed multiaddr
+        # without the /p2p hop), update it before the HELLO.
         if peer_id != self.peer_id:
             log.session(f"{self!r} peer_id updated from ...{self.peer_id[-5:]} → ...{peer_id[-5:]}", sub=self._sub)
             self.peer_id = peer_id
-
         return await self._send_hello()
+
+    async def _on_dial_done_reconnecting(self, peer_id, through_relay, now) -> List[SessionEvent]:
+        if peer_id is not None and through_relay and self._reject_relay:
+            peer_id = None   # relay-only reconnect disallowed; treat it as a failed dial
+        if peer_id is None:
+            self._reconnect_attempts += 1
+            delay = min(_RETRY_BASE_S * (2 ** (self._reconnect_attempts - 1)), _RETRY_CAP_S)
+            self._next_redial_at = now + delay
+            self._reconnect_substep = "redial"
+            log.session(f"{self!r} reconnect dial failed, next try in {delay:.1f}s", sub=self._sub)
+            return []
+        if peer_id != self.peer_id:
+            self.peer_id = peer_id
+        # Transport back — try to RESUME the existing session before re-handshaking.
+        self._resume_nonce = secrets.token_bytes(8)
+        self._reconnect_substep = "resume_sent"
+        self._next_redial_at = now + _RESUME_ACK_TIMEOUT_S
+        await self._send_payload(SESSION_CONTROL_PROTOCOL, SessMsg(SessMsg.KIND_RESUME, {
+            "session_id": self.session_id, "nonce": self._resume_nonce,
+        }))
+        log.session(f"{self!r} reconnect dial ok, RESUME sent", sub=self._sub)
+        return []
 
     async def _send_hello(self) -> List[SessionEvent]:
         self.nonce_a = secrets.token_bytes(_NONCE_BYTES)
@@ -896,8 +976,7 @@ class Session:
             return self._fail(f"timeout:{self.state.value}")
 
         if self.state == SessionState.RECONNECTING:
-            self._set_state(SessionState.FAILED, None)
-            return self._emit(SessionEventType.LOST, {"reason": "grace_period_expired"})
+            return self._lose("grace_period_expired")
 
         if self.state == SessionState.CLOSING:
             return self._finalize_close(
@@ -910,7 +989,7 @@ class Session:
     def on_transport_disconnected(self) -> Optional[SessionEvent]:
         """Called when the link drops (transport diff) or when session-level
         liveness fails. ESTABLISHED → RECONNECTING, arming the active re-dial +
-        RESUME loop (tick_reconnect). Already reconnecting: reset the grace timer."""
+        RESUME loop (tick_dial). Already reconnecting: reset the grace timer."""
         if self.state == SessionState.ESTABLISHED:
             self._set_state(SessionState.RECONNECTING, _TIMEOUT_RECONNECT_S)
             self._reconnect_substep = "redial"
@@ -988,58 +1067,6 @@ class Session:
         })):
             log.session(f"{self!r} keepalive PING send failed", sub=self._sub)
 
-    # Active re-dial + RESUME (initiator-driven recovery)
-
-    async def tick_reconnect(self, now: Optional[float] = None) -> Optional[SessionEvent]:
-        """Drive active re-dial + RESUME while RECONNECTING (at most one attempt
-        per backoff window, run inline — see tick_keepalive for why no task).
-        Only an initiator with known addresses can re-dial; a responder rides the
-        grace timer to LOST and is re-handshaked by the peer. Always returns
-        None — the RESUMED/LOST/FAILED events surface via _on_resume_ack /
-        check_timeout."""
-        if now is None:
-            now = time.monotonic()
-        if self.state != SessionState.RECONNECTING:
-            return None
-        if self.role != SessionRole.INITIATOR or not self.addresses:
-            return None
-        # A RESUME that wasn't acked within its window → fall back to another re-dial.
-        if self._reconnect_substep == "resume_sent" and now >= self._next_redial_at:
-            self._reconnect_substep = "redial"
-        if self._reconnect_substep == "redial" and now >= self._next_redial_at:
-            await self._redial_and_resume()
-        return None
-
-    async def _redial_and_resume(self) -> None:
-        """Re-dial the peer; on success send a RESUME bound to the current
-        session_id. Outcome is observed on the next tick / inbound RESUME_ACK.
-        Backoff is stored in _next_redial_at, never slept."""
-        try:
-            peer_id, through_relay = await self.p2p.connect(self.addresses)
-        except Exception as e:
-            log.error(f"{self!r} reconnect dial raised: {e}", sub=self._sub)
-            peer_id, through_relay = None, False
-        if self.state != SessionState.RECONNECTING:
-            return  # grace expired (→ LOST) or otherwise advanced while awaiting
-        if peer_id is not None and through_relay and self._reject_relay:
-            peer_id = None  # relay-only reconnect disallowed; treat as a failed dial
-        if peer_id is None:
-            self._reconnect_attempts += 1
-            delay = min(_RETRY_BASE_S * (2 ** (self._reconnect_attempts - 1)), _RETRY_CAP_S)
-            self._next_redial_at = time.monotonic() + delay
-            log.session(f"{self!r} reconnect dial failed, next try in {delay:.1f}s", sub=self._sub)
-            return
-        if peer_id != self.peer_id:
-            self.peer_id = peer_id
-        # Transport back — try to resume the existing session before re-handshaking.
-        self._resume_nonce = secrets.token_bytes(8)
-        self._reconnect_substep = "resume_sent"
-        self._next_redial_at = time.monotonic() + _RESUME_ACK_TIMEOUT_S
-        await self._send_payload(SESSION_CONTROL_PROTOCOL, SessMsg(SessMsg.KIND_RESUME, {
-            "session_id": self.session_id, "nonce": self._resume_nonce,
-        }))
-        log.session(f"{self!r} reconnect dial ok, RESUME sent", sub=self._sub)
-
     # Internal FSM helpers
 
     def _set_state(self, state: SessionState, timeout_s: Optional[float]) -> None:
@@ -1053,6 +1080,11 @@ class Session:
         self._set_state(SessionState.FAILED, None)
         log.error(f"{self!r} FAILED: {reason}", sub=self._sub)
         return self._emit(SessionEventType.FAILED, {"reason": reason})
+    
+    def _lose(self, reason: str) -> SessionEvent:
+        self._set_state(SessionState.FAILED, None)
+        log.error(f"{self!r} LOST: {reason}", sub=self._sub)
+        return self._emit(SessionEventType.LOST, {"reason": reason})
 
     def _finalize_close(self, reason: str) -> SessionEvent:
         self._set_state(SessionState.CLOSED, None)

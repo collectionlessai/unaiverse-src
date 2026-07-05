@@ -28,6 +28,18 @@ def _run(coro):
     return asyncio.run(coro)
 
 
+def _initiate(sm: SessionManager, *args, **kwargs) -> list:
+    """Design A drive: initiate() only launches the dial as a background task. Run it, let
+    the task run one loop turn, then tick to reap it so the initiator's HELLO is on the wire
+    before the (separate-loop) pumps process it. All inside a single event loop."""
+    async def _go():
+        evs = list(await sm.initiate(*args, **kwargs))
+        await asyncio.sleep(0)
+        evs += await sm.tick()
+        return evs
+    return _run(_go())
+
+
 def _pump(inbox: deque, sm: SessionManager) -> list:
     """Drain everything currently in `inbox` into `sm.deliver`. Returns
     the concatenated list of events."""
@@ -62,7 +74,7 @@ def test_full_handshake_happy_path(bidirectional_fakeconns,
     sm_bob   = _make_sm(bob_conn,   NodeConn.P2P_PUBLIC, bob_peer_id,   "bob-node")
 
     # Stage 1 — Alice's HELLO.
-    init_events = _run(sm_alice.initiate(bob_peer_id, ["/ip4/127.0.0.1/tcp/0"]))
+    init_events = _initiate(sm_alice, bob_peer_id, ["/ip4/127.0.0.1/tcp/0"])
     assert init_events == []
     # Bob processes the HELLO → sends HELLO_ACK back into alice_inbox.
     bob_events_1 = _pump(bob_inbox, sm_bob)
@@ -103,7 +115,7 @@ def test_intentional_close_reaches_peer(bidirectional_fakeconns,
     sm_bob   = _make_sm(bob_conn,   NodeConn.P2P_PUBLIC, bob_peer_id,   "bob")
 
     # Drive to ESTABLISHED on both sides.
-    _run(sm_alice.initiate(bob_peer_id, ["/ip4/127.0.0.1/tcp/0"]))
+    _initiate(sm_alice, bob_peer_id, ["/ip4/127.0.0.1/tcp/0"])
     _pump(bob_inbox, sm_bob)
     _pump(alice_inbox, sm_alice)
     _pump(bob_inbox, sm_bob)
@@ -135,8 +147,8 @@ def test_simultaneous_open_collapses_to_one_session(bidirectional_fakeconns,
     sm_bob   = _make_sm(bob_conn,   NodeConn.P2P_PUBLIC, bob_peer_id,   "bob")
 
     # Both fire initiate at t=0.
-    _run(sm_alice.initiate(bob_peer_id, ["/ip4/1.2.3.4/tcp/0"]))
-    _run(sm_bob.initiate(alice_peer_id, ["/ip4/1.2.3.4/tcp/0"]))
+    _initiate(sm_alice, bob_peer_id, ["/ip4/1.2.3.4/tcp/0"])
+    _initiate(sm_bob, alice_peer_id, ["/ip4/1.2.3.4/tcp/0"])
 
     # Both sides will see each other's HELLO in their inbox. Pump until
     # everything settles (max 10 iterations as a safety cap).

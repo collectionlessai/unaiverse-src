@@ -9,6 +9,7 @@ would call into Go is mocked. The exception is the cross-machine harness in
 import sys
 import os
 import time
+import asyncio
 from collections import deque
 from typing import Optional
 
@@ -297,6 +298,10 @@ async def establish_pair(sm_initiator, sm_responder, initiator_inbox, responder_
     set to a successful dial. Returns (initiator_events, responder_events) as
     emitted on the final two pumps (each should contain one ESTABLISHED)."""
     await sm_initiator.initiate(responder_peer_id, addresses or ["/ip4/127.0.0.1/tcp/0"])
+    # Design A: initiate() only launches the dial as a background task. Let it run one loop
+    # turn, then tick to reap it so the initiator's HELLO reaches the responder's inbox.
+    await asyncio.sleep(0)
+    await sm_initiator.tick()
     await apump(responder_inbox, sm_responder)                       # HELLO → HELLO_ACK
     await apump(initiator_inbox, sm_initiator)                       # HELLO_ACK → PROFILE_OFFER
     responder_events = await apump(responder_inbox, sm_responder)    # OFFER → DECISION (+ESTABLISHED)
