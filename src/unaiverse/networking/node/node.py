@@ -519,11 +519,22 @@ class Node:
             return False
 
     def get_node_token(self, peer_ids: list[str]) -> None:
-        """Generates and retrieves a node token from the root server.
+        """Generates and retrieves a node token from the root server, then applies it.
+
+        Fatal on failure (the fetch raises): a node with no token cannot run, which is the
+        wanted behaviour at startup. In the main loop the fetch and the apply are split so
+        the fetch can run off the event loop under a timeout (see the periodic-refresh
+        call-site), without a late thread mutating the token/transport concurrently.
 
         Args:
             peer_ids: A list of public and private peer IDs.
         """
+        self._apply_node_token(self._request_node_token(peer_ids))
+
+    def _request_node_token(self, peer_ids: list[str]) -> dict:
+        """Blocking HTTP to the root to (re)generate the node token. Reads self but does
+        NOT mutate it, so it is safe to run off the event loop via asyncio.to_thread.
+        Raises on failure (fatal at startup, caught at the periodic-refresh call-site)."""
         response = None
 
         for i in range(0, 3):  # It will try 3 times before raising the exception...
@@ -542,6 +553,11 @@ class Node:
                     log.critical(f"Error while getting token from server [{e}]")  # Raise the exception
 
         assert isinstance(response, dict)
+        return response
+
+    def _apply_node_token(self, response: dict) -> None:
+        """Apply a freshly fetched node token. Main-task only: mutates self and pushes the
+        token into the transport via FFI, so it must not run concurrently with the loop."""
         self.node_token = response["token"]
         self.public_key = response["public_key"]
 
@@ -1215,7 +1231,14 @@ class Node:
 
                 # Sending alive message every "K" seconds
                 if clock.get_time() - self.last_alive_time >= Custom.SEND_ALIVE_EVERY:
-                    was_alive = self.send_alive()
+                    try:
+                        # Capped and off the event loop: a hung POST to the root must not
+                        # freeze the pump, and a transient failure must not kill the node.
+                        was_alive = await asyncio.wait_for(asyncio.to_thread(self.send_alive),
+                                                           timeout=Custom.DEFAULT_TIMEOUT)
+                    except Exception as e:
+                        log.error(f"Error while sending alive message to server (going ahead) [{e}]")
+                        was_alive = False
 
                     # Checking only at the first run
                     if self.last_alive_time == 0 and was_alive and not Custom.SKIP_WAS_ALIVE_CHECK:
@@ -1381,15 +1404,30 @@ class Node:
                         last_dynamic_profile_time = clock.get_time()
                         self.profile.unmark_change_in_connections()
                         await self.send_badges()  # Sending and clearing badges
-                        self.send_dynamic_profile()  # Sending
+                        # Capped and off the event loop so a hung POST cannot freeze the pump.
+                        await asyncio.wait_for(asyncio.to_thread(self.send_dynamic_profile),
+                                               timeout=Custom.DEFAULT_TIMEOUT)  # Sending
                     except Exception as e:
                         log.error(f"Error while sending the update dynamic profile (or badges) to the server "
                                   f"(trying to go ahead...) [{e}]")
 
                 # Getting a new token every "N" seconds
                 if clock.get_time() - last_get_token_time >= Custom.GET_NEW_TOKEN_EVERY:
-                    self.get_node_token(peer_ids=[self.get_public_peer_id(), self.get_world_peer_id()])
-                    last_get_token_time = clock.get_time()
+                    try:
+                        # Fetch off the event loop (capped), apply on the main task: a hung
+                        # or failing refresh must neither freeze the pump nor kill the node.
+                        response = await asyncio.wait_for(
+                            asyncio.to_thread(self._request_node_token,
+                                              [self.get_public_peer_id(), self.get_world_peer_id()]),
+                            timeout=Custom.DEFAULT_TIMEOUT)
+                        self._apply_node_token(response)
+                        last_get_token_time = clock.get_time()  # success: next refresh in ~23.5h
+                    except Exception as e:
+                        log.error(f"Error while refreshing the node token (will retry shortly) [{e}]")
+                        # Asymmetric backoff: retry in ~DEFAULT_TIMEOUT, not every iteration
+                        # (busy-loop) nor in ~23.5h (the token would expire first).
+                        last_get_token_time = (clock.get_time()
+                                               - Custom.GET_NEW_TOKEN_EVERY + Custom.DEFAULT_TIMEOUT)
 
                 # Continuously check the addresses of the node for changes
                 try:
