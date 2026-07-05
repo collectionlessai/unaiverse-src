@@ -200,7 +200,7 @@ class Session:
         self.app_role = app_role
         # Token capabilities (RT), injected by the layer that owns them
         # (Coordinator/Node). token_verifier(token, p2p_peer) -> (node_id, cv_hash,
-        # p2p_peers) backed by the root TokenVerifier; token_factory() -> our current
+        # p2p_peers, exp) backed by the root TokenVerifier; token_factory() -> our current
         # node token. Both directions present and verify: the initiator's token rides
         # the PROFILE_OFFER and the responder's the PROFILE_DECISION, each verified by
         # the other against the transport peer-id (see _verify_peer_token). The
@@ -677,8 +677,9 @@ class Session:
             return []
 
         # Plain agent connection, or a world joiner on the WORLD Session redeeming a
-        # grant: established immediately. node.py branches on the Session's `_grant`
-        # (set at spawn) to run the world-join body and retire the public Session.
+        # grant: established immediately. node.py branches on the grant carried by the
+        # ESTABLISHED event (ev.data["grant"], set below) to run the world-join body and
+        # retire the public Session, without reaching into the private Session._grant.
         # The PRIVATE_JOIN round-trip the world joiner used to send here was dropped.
         self._set_state(SessionState.ESTABLISHED, None)
         log.session(f"{self!r} ESTABLISHED (initiator)", sub=self._sub)

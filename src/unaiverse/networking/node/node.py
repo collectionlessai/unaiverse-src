@@ -748,9 +748,9 @@ class Node:
         # Resolve the target peer-id from the multiaddrs (every root-server address
         # carries a trailing /p2p/<peer-id>; for a relay circuit it is the final hop,
         # i.e. the target — not the relay). The Session is now the *sole* dialer:
-        # conn.connect runs inside Session.start()/_dial_then_hello (and again on
-        # re-dial), so we no longer pre-dial here. The relay gate is enforced inside
-        # the dial via reject_relay (see Session._dial_then_hello).
+        # the Session runs the dial off-task (Session.start() -> _start_dial -> _run_dial,
+        # relaunched on re-dial by tick_dial), so we no longer pre-dial here. The relay gate
+        # is enforced when the dial is reaped, via the Session's reject_relay flag.
         peer_id = None
         for a in addresses:
             if "/p2p/" in a:
@@ -995,13 +995,13 @@ class Node:
 
         # First CTRL+C asks for graceful shutdown (the main loop checks
         # `self.stop_requested` between cycles). Second CTRL+C bypasses
-        # all cleanup with os._exit(130). We install BOTH a loop-level
-        # handler (Unix only, immune to matplotlib/PyTorch signal hijacks
-        # and to GIL-holding C extensions) and a Python-level handler
-        # (the only option on Windows, vulnerable to override but better
-        # than nothing). Registered here — after user imports but before
-        # the main loop — to overwrite any handlers installed at import
-        # time by matplotlib/PyTorch/etc.
+        # all cleanup with os._exit(130). We install ONE handler (see below
+        # for why not both): the loop-level one on Unix (immune to matplotlib/
+        # PyTorch signal hijacks and to GIL-holding C extensions), falling back
+        # to signal.signal only where the loop handler is unavailable (Windows /
+        # no running loop). Registered here — after user imports but before the
+        # main loop — to overwrite any handlers installed at import time by
+        # matplotlib/PyTorch/etc.
         self.stop_requested = False
 
         def _request_stop() -> None:
@@ -2118,136 +2118,135 @@ class Node:
         log.user(f"\nActually joining world, role ID will be '{role}'")
 
         # The private world Session already connected during the handoff.
-        # The post-connection body runs against the returned peer_id.
+        # The post-connection body runs against the passed-in peer_id.
         assert self.agent is not None
 
-        if peer_id is not None:
-
-            # Relay reservation logic: reserve a slot on the world node only when WE are not
-            # publicly reachable AND the world node actually offers a reachable relay (is_relay
-            # from its profile), not merely because our relay client is enabled.
-            world_is_relay = bool(profile.get_dynamic_profile().get('is_relay'))
-            if not self.conn.world_is_public and self.conn.world_relay_enabled and world_is_relay:
-                log.user("Node is not publicly reachable. Attempting to reserve a slot on the world's private network.")
-                expiry_utc = await self.conn.reserve(peer_id, NodeConn.P2P_WORLD)
-
-                if expiry_utc is not None:
-                    self.relay_reservation_expiry = \
-                        (datetime.fromisoformat(expiry_utc.replace('Z', '+00:00')))
-                    assert self.relay_reservation_expiry is not None
-                    log.user(f"Reserved relay slot. Expires at "
-                             f"{self.relay_reservation_expiry.strftime('%Y-%m-%d %H:%M:%S')} UTC")
-                else:
-                    log.error("An error occurred during relay reservation.")
-            
-            # Load custom stats class if provided
-            stats_class = None
-            if agent_stats_code is not None and len(agent_stats_code) > 0:
-
-                # Checking stats code
-                if not analyze_code({"stats.py": agent_stats_code}):
-                    log.error("Invalid agent stats code (syntax errors or unsafe code) was provided by the world, "
-                              "blocking the join operation")
-                    return False
-
-                try:
-                    stats_mod = types.ModuleType("dynamic_stats_module")
-                    exec(agent_stats_code, stats_mod.__dict__)
-                    if not hasattr(stats_mod, 'WStats'):
-                        log.error("World sent stats.py, but it lacks a 'WStats' class. Using default Stats.")
-                    else:
-                        stats_class = stats_mod.WStats
-                        log.misc("Loaded custom WStats class from world.")
-                except Exception as e:
-                    log.error(f"Failed to exec custom stats.py from world: {e}. Using default Stats.")
-
-            # Subscribing to the world rendezvous topic, from which we will get fresh information
-            # about the world agents and masters
-            log.misc("Subscribing to the world-members topic...")
-            if not (await self.conn.subscribe(peer_id, channel=f"{peer_id}::ps:rv")):  # Special rendezvous (ps:rv)
-                await self.__purge(peer_id, reason=WORLD_DISENGAGEMENT)  # If subscribing fails, we quit (safer)
-                return False
-
-            # Killing the public connection to the world node. On the Session path the
-            # public Session is GOAWAY-closed by the dispatcher; here we still purge the
-            # public peer from the pools so routing is consistent.
-            log.misc("Disconnecting from the public world network (since we joined the private one)")
-            await self.__purge(world_public_peer_id)
-
-            # Subscribing to all the other world topics, from which we will get fresh information
-            # about the streams
-            log.misc("Subscribing to the world-streams topics...")
-            dynamic_profile = profile.get_dynamic_profile()
-            list_of_props = []
-            list_of_props += dynamic_profile['streams'] if dynamic_profile['streams'] is not None else []
-            list_of_props += dynamic_profile['proc_outputs'] if dynamic_profile['proc_outputs'] is not None else []
-
-            if not (await self.agent.add_compatible_streams(peer_id, list_of_props, buffered=False, public=False)):
-                await self.__purge(peer_id, reason=WORLD_DISENGAGEMENT)
-                return False
-
-            # Getting agent files
-            try:
-                agent_files = unpack_py_files(packed_agent_files)
-            except Exception:
-
-                # Assuming we are in the case of a single agent.py for all roles (still valid)
-                roles = profile.get_dynamic_profile()['world_roles_fsm'].keys()
-                agent_files = {f"{k}.py": packed_agent_files for k in roles}
-
-            # Checking files
-            if not analyze_code(agent_files):
-                log.error(
-                    f"Invalid agent-related code (syntax errors or unsafe code) was provided by "
-                    f"the world, blocking the join operation")
-                return False
-
-            # Saving reference files (in memory - needed if switching role)
-            self.world_agent_files = agent_files
-
-            # Replacing agent instance with a new one, accordingly to the role
-            self.__replace_agent_instance_by_role(role, peer_id, profile, stats_class, initial_stats)
-
-            # Telling the connection manager the info needed to discriminate peers (getting them from the world profile)
-            # notice that the world node private ID was already told to the connection manager (see a few lines above)
-            log.misc(f"Rendezvous tag received with profile: {rendezvous_tag} "
-                     f"(in conn pool: {self.conn.rendezvous_tag})")
-            if self.conn.rendezvous_tag < rendezvous_tag:
-                self.conn.rendezvous_tag = rendezvous_tag
-                num_world_masters = len(dynamic_profile['world_summary']['world_masters']) \
-                    if dynamic_profile['world_summary']['world_masters'] is not None else 'none'
-                num_world_agents = len(dynamic_profile['world_summary']['world_agents']) \
-                    if dynamic_profile['world_summary']['world_agents'] is not None else 'none'
-                log.misc(f"Rendezvous from profile (tag: {rendezvous_tag}), world masters: {num_world_masters}")
-                log.misc(f"Rendezvous from profile (tag: {rendezvous_tag}), world agents: {num_world_agents}")
-                self.conn.set_world_masters_list(dynamic_profile['world_summary']['world_masters'])
-                self.conn.set_world_agents_list(dynamic_profile['world_summary']['world_agents'])
-
-                masters = dynamic_profile['world_summary']['world_masters']
-                if masters is None:
-                    masters = []
-                agents = dynamic_profile['world_summary']['world_agents']
-                if agents is None:
-                    agents = []
-                world_all_peer_ids = ([p['id'] for p in masters] + [p['id'] for p in agents])
-                log.misc(f"Rendezvous from profile included peer IDs: "
-                         f"{world_all_peer_ids})", sub="prv")
-
-            # Updating our profile to set the world we are in
-            self.profile.get_dynamic_profile()['connections']['world_peer_id'] = peer_id
-            self.profile.mark_change_in_connections()
-
-            # The join truly completed (the role bit is set): disarm the rejoin watchdog so a
-            # pending tick does not retry (and tear down) the world we just joined, and refresh
-            # the rejoin target to THIS world (a runtime world switch must not rejoin the old one).
-            self.rejoining_time = -1.
-            if self.keep_rejoining and self.joining_world_info is not None:
-                self.rejoining_kwargs = copy.deepcopy(self.joining_world_info["options"])
-
-            log.user("Handshake completed, world joined!")
-            return True
-        else:
+        if peer_id is None:
             return False
+
+        # Relay reservation logic: reserve a slot on the world node only when WE are not
+        # publicly reachable AND the world node actually offers a reachable relay (is_relay
+        # from its profile), not merely because our relay client is enabled.
+        world_is_relay = bool(profile.get_dynamic_profile().get('is_relay'))
+        if not self.conn.world_is_public and self.conn.world_relay_enabled and world_is_relay:
+            log.user("Node is not publicly reachable. Attempting to reserve a slot on the world's private network.")
+            expiry_utc = await self.conn.reserve(peer_id, NodeConn.P2P_WORLD)
+
+            if expiry_utc is not None:
+                self.relay_reservation_expiry = \
+                    (datetime.fromisoformat(expiry_utc.replace('Z', '+00:00')))
+                assert self.relay_reservation_expiry is not None
+                log.user(f"Reserved relay slot. Expires at "
+                            f"{self.relay_reservation_expiry.strftime('%Y-%m-%d %H:%M:%S')} UTC")
+            else:
+                log.error("An error occurred during relay reservation.")
+        
+        # Load custom stats class if provided
+        stats_class = None
+        if agent_stats_code is not None and len(agent_stats_code) > 0:
+
+            # Checking stats code
+            if not analyze_code({"stats.py": agent_stats_code}):
+                log.error("Invalid agent stats code (syntax errors or unsafe code) was provided by the world, "
+                            "blocking the join operation")
+                return False
+
+            try:
+                stats_mod = types.ModuleType("dynamic_stats_module")
+                exec(agent_stats_code, stats_mod.__dict__)
+                if not hasattr(stats_mod, 'WStats'):
+                    log.error("World sent stats.py, but it lacks a 'WStats' class. Using default Stats.")
+                else:
+                    stats_class = stats_mod.WStats
+                    log.misc("Loaded custom WStats class from world.")
+            except Exception as e:
+                log.error(f"Failed to exec custom stats.py from world: {e}. Using default Stats.")
+
+        # Subscribing to the world rendezvous topic, from which we will get fresh information
+        # about the world agents and masters
+        log.misc("Subscribing to the world-members topic...")
+        if not (await self.conn.subscribe(peer_id, channel=f"{peer_id}::ps:rv")):  # Special rendezvous (ps:rv)
+            await self.__purge(peer_id, reason=WORLD_DISENGAGEMENT)  # If subscribing fails, we quit (safer)
+            return False
+
+        # Killing the public connection to the world node. On the Session path the
+        # public Session is GOAWAY-closed by the dispatcher; here we still purge the
+        # public peer from the pools so routing is consistent.
+        log.misc("Disconnecting from the public world network (since we joined the private one)")
+        await self.__purge(world_public_peer_id)
+
+        # Subscribing to all the other world topics, from which we will get fresh information
+        # about the streams
+        log.misc("Subscribing to the world-streams topics...")
+        dynamic_profile = profile.get_dynamic_profile()
+        list_of_props = []
+        list_of_props += dynamic_profile['streams'] if dynamic_profile['streams'] is not None else []
+        list_of_props += dynamic_profile['proc_outputs'] if dynamic_profile['proc_outputs'] is not None else []
+
+        if not (await self.agent.add_compatible_streams(peer_id, list_of_props, buffered=False, public=False)):
+            await self.__purge(peer_id, reason=WORLD_DISENGAGEMENT)
+            return False
+
+        # Getting agent files
+        try:
+            agent_files = unpack_py_files(packed_agent_files)
+        except Exception:
+
+            # Assuming we are in the case of a single agent.py for all roles (still valid)
+            roles = profile.get_dynamic_profile()['world_roles_fsm'].keys()
+            agent_files = {f"{k}.py": packed_agent_files for k in roles}
+
+        # Checking files
+        if not analyze_code(agent_files):
+            log.error(
+                f"Invalid agent-related code (syntax errors or unsafe code) was provided by "
+                f"the world, blocking the join operation")
+            return False
+
+        # Saving reference files (in memory - needed if switching role)
+        self.world_agent_files = agent_files
+
+        # Replacing agent instance with a new one, accordingly to the role
+        self.__replace_agent_instance_by_role(role, peer_id, profile, stats_class, initial_stats)
+
+        # Telling the connection manager the info needed to discriminate peers (getting them from the world profile)
+        # notice that the world node private ID was already told to the connection manager (see a few lines above)
+        log.misc(f"Rendezvous tag received with profile: {rendezvous_tag} "
+                    f"(in conn pool: {self.conn.rendezvous_tag})")
+        if self.conn.rendezvous_tag < rendezvous_tag:
+            self.conn.rendezvous_tag = rendezvous_tag
+            num_world_masters = len(dynamic_profile['world_summary']['world_masters']) \
+                if dynamic_profile['world_summary']['world_masters'] is not None else 'none'
+            num_world_agents = len(dynamic_profile['world_summary']['world_agents']) \
+                if dynamic_profile['world_summary']['world_agents'] is not None else 'none'
+            log.misc(f"Rendezvous from profile (tag: {rendezvous_tag}), world masters: {num_world_masters}")
+            log.misc(f"Rendezvous from profile (tag: {rendezvous_tag}), world agents: {num_world_agents}")
+            self.conn.set_world_masters_list(dynamic_profile['world_summary']['world_masters'])
+            self.conn.set_world_agents_list(dynamic_profile['world_summary']['world_agents'])
+
+            masters = dynamic_profile['world_summary']['world_masters']
+            if masters is None:
+                masters = []
+            agents = dynamic_profile['world_summary']['world_agents']
+            if agents is None:
+                agents = []
+            world_all_peer_ids = ([p['id'] for p in masters] + [p['id'] for p in agents])
+            log.misc(f"Rendezvous from profile included peer IDs: "
+                        f"{world_all_peer_ids})", sub="prv")
+
+        # Updating our profile to set the world we are in
+        self.profile.get_dynamic_profile()['connections']['world_peer_id'] = peer_id
+        self.profile.mark_change_in_connections()
+
+        # The join truly completed (the role bit is set): disarm the rejoin watchdog so a
+        # pending tick does not retry (and tear down) the world we just joined, and refresh
+        # the rejoin target to THIS world (a runtime world switch must not rejoin the old one).
+        self.rejoining_time = -1.
+        if self.keep_rejoining and self.joining_world_info is not None:
+            self.rejoining_kwargs = copy.deepcopy(self.joining_world_info["options"])
+
+        log.user("Handshake completed, world joined!")
+        return True
 
     async def __join_agent(self, profile: NodeProfile, peer_id: str) -> bool:
         """Adds a new known agent after receiving an approval message. (async)
