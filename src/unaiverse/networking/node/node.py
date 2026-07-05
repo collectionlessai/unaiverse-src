@@ -2430,14 +2430,14 @@ class Node:
             self.conn.rollback_handoff(ev.peer_id)
             self._world_host_unlist_member(ev)
             await self._maybe_leave_world_on_session_end(ev)
+            self._maybe_rearm_rejoin_on_failed_join(ev)
             log.error(f"[session] handshake to ...{ev.peer_id[-5:]} failed "
                       f"(p2p={ev.p2p_name}, reason={ev.data.get('reason', 'unknown')})",
                       sub="prv" if "world" in ev.p2p_name else "pub")
-        elif ev.type in (SessionEventType.LOST, SessionEventType.CLOSED):
+        elif ev.type == SessionEventType.CLOSED:
             # WORLD_HANDOFF_COMPLETE is the intentional teardown of the public
             # Session after a successful world join — it must NOT purge the node.
-            if (ev.type == SessionEventType.CLOSED and
-                    "WORLD_HANDOFF_COMPLETE" in ev.data.get("reason", "")):
+            if "WORLD_HANDOFF_COMPLETE" in ev.data.get("reason", ""):
                 return
             self._world_host_unlist_member(ev)
             if await self._maybe_leave_world_on_session_end(ev):
@@ -2445,7 +2445,15 @@ class Node:
             try:
                 await self.__purge(ev.peer_id)
             except Exception as e:
-                log.error(f"[session] dispatch LOST/CLOSED purge failed for ...{ev.peer_id[-5:]}: {e}")
+                log.error(f"[session] dispatch CLOSED purge failed for ...{ev.peer_id[-5:]}: {e}")
+        elif ev.type == SessionEventType.LOST:
+            self._world_host_unlist_member(ev)
+            if await self._maybe_leave_world_on_session_end(ev):
+                return
+            try:
+                await self.__purge(ev.peer_id)
+            except Exception as e:
+                log.error(f"[session] dispatch LOST purge failed for ...{ev.peer_id[-5:]}: {e}")
 
     async def _tick_rejoin_watchdog(self) -> None:
         """One tick of the world-rejoin watchdog, run once per main-loop cycle.
@@ -2473,6 +2481,38 @@ class Node:
         except Exception as e:
             log.error(f"[rejoin] ask_to_join_world raised, will retry: {e}")
         self.rejoining_time = clock.get_time() + Custom.REJOINING_WAIT
+
+    def _maybe_rearm_rejoin_on_failed_join(self, ev) -> None:
+        """Joiner side: a FAILED handshake on a world we are still trying to join
+        (joining_world_info set, role bit not yet on) re-arms the rejoin. Called ONLY on
+        FAILED, a Session that never established, which is exactly the 'first join never
+        completed' case: without this a world unreachable at the first join leaves the node
+        up but never joined and never retrying (the dial is off-task now, so ask_to_join_world
+        no longer fails synchronously). An involuntary end of an ALREADY-joined world (LOST)
+        is instead handled by _maybe_leave_world_on_session_end; a clean CLOSED never retries.
+        The watchdog then re-runs the whole ask_to_join_world flow until the world is up."""
+        if self.node_type is not Node.AGENT or not self.keep_rejoining:
+            return
+        if self.joining_world_info is None:
+            return
+        if self.agent is not None and self.agent.in_world():
+            return  # in-world already → this FAILED is some other peer, not our join
+        # The failure belongs to our in-flight join iff it is on the pending public carrier
+        # (case A, world offline: its dial failed) or on a world-instance Session (case B,
+        # public reached but the private world dial failed after the grant). Before we are
+        # in-world there are no other world peers, so a world-instance FAILED here is the
+        # join's own private Session.
+        pending_carrier = self.joining_world_info.get("world_public_peer_id")
+        is_pending_carrier = pending_carrier is not None and ev.peer_id == pending_carrier
+        is_world_instance = NodeConn.P2P_WORLD == ev.p2p_name or "world" in ev.p2p_name
+        if not (is_pending_carrier or is_world_instance):
+            return
+        if not self.rejoining_kwargs:
+            self.rejoining_kwargs = copy.deepcopy(self.joining_world_info["options"])
+        if self.rejoining_time <= 0.:
+            self.rejoining_time = clock.get_time() + Custom.REJOINING_WAIT
+            log.misc(f"[session] pending world join failed ({ev.type.value}) → scheduling a retry",
+                     sub="prv")
 
     async def _maybe_leave_world_on_session_end(self, ev) -> bool:
         """Joiner side: a terminal event on the Session toward the CURRENT world
