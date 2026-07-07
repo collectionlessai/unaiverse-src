@@ -20,7 +20,7 @@ import pytest
 
 from unaiverse.networking.p2p.messages import Msg
 from unaiverse.networking.node.connpool import NodeConn
-from unaiverse.networking.session.session import SessionState
+from unaiverse.networking.session.session import SessionState, SessionEventType
 
 from realnet_helpers import pick_dialable_addr, pump_until
 
@@ -148,16 +148,20 @@ def test_perimeter_security_b4_pubsub_only_intruder_is_cut(real_nodes):
     asyncio.run(_scenario())
 
 
-def test_perimeter_security_b6_revoked_member_session_is_closed_not_looped(real_nodes):
-    """When a world member loses membership, the perimeter cut GOAWAY-closes its Session
-    (PERIMETER_CUT) instead of only severing the transport, so it does not enter the
-    cut -> redial -> RESUME -> cut loop.
+def test_perimeter_security_b6_revoked_member_cut_is_unresumable(real_nodes):
+    """When a world member loses membership, the perimeter applies the COERCIVE cut:
+    the host aborts and forgets its own Session, quarantines the peer and severs the
+    transport at once — no GOAWAY on the security path (the reconcile cannot tell a
+    revoked member from an intruder, the mesh isolation cannot wait an ACK
+    round-trip, and the abortive disconnect would destroy the GOAWAY anyway).
 
-    Member M establishes a real world Session to host H; H admits M, so the first
-    reconcile keeps it. H then revokes M's membership; the next reconcile must (a) close
-    H's own Session to M as a voluntary close (CLOSING/CLOSED, so H does not keep it
-    ESTABLISHED to bounce), and (b) deliver a GOAWAY(PERIMETER_CUT) that drives M's
-    Session to CLOSED (a clean close, not a LOST that would re-dial).
+    The old cut -> redial -> RESUME -> cut loop (B6) is broken differently now: the
+    cut Session is UNRESUMABLE. M's re-dial + RESUME meets an honest, actually
+    delivered NACK(SESSION_UNKNOWN) — never a false resume of the dead session — so
+    M abandons it and re-handshakes from scratch. In this hook-less harness the
+    fresh handshake completes (accept-by-default), which is exactly what proves the
+    NACK path; in production the world decision hook rejects the non-member and M's
+    deliver-path FAILED quarantines it, which is what keeps a revoked peer out.
     """
     _, h_world_p2p, h_conn, _, h_world = real_nodes.world_node("b6-host")
     _, m_world_p2p, m_conn, _, m_world = real_nodes.world_node("b6-member")
@@ -174,30 +178,40 @@ def test_perimeter_security_b6_revoked_member_session_is_closed_not_looped(real_
                          predicate=lambda: m_world.is_established(h_world_id)
                          and h_world.is_established(m_world_id),
                          timeout=20.0)
+        old_sid = m_world.get_session(h_world_id).session_id
 
         # Admit M as a member, then reconcile: a member is kept, never cut.
         h_conn.add_to_world_agents_list(m_world_id, [h_world_addr], role=1)
         await h_conn.update()
         assert h_world.is_established(m_world_id), "a member was cut while still in membership"
 
-        # Revoke M's membership and reconcile: now H must cut M.
+        # Revoke M's membership and reconcile: now H must cut M, coercively.
         h_conn._sm_world.world_agents_set.discard(m_world_id)
         await h_conn.update()
 
-        # (a) Deterministic: H closed its OWN Session to M (voluntary), not left it ESTABLISHED.
-        h_sess = h_world.get_session(m_world_id)
-        assert h_sess is None or h_sess.state in (SessionState.CLOSING, SessionState.CLOSED), \
-            f"host kept the cut peer's Session alive (state={h_sess.state if h_sess else None})"
+        # Host side, deterministic and immediate: Session aborted + forgotten (nothing
+        # left that a RESUME could falsely revive) and M behind the dial quarantine.
+        assert h_world.get_session(m_world_id) is None, \
+            "host kept the cut peer's Session — a RESUME could falsely revive it"
+        assert m_world_id in h_world._quarantine, "host did not quarantine the cut peer"
 
-        # (b) M receives the GOAWAY(PERIMETER_CUT) and closes cleanly — it must NOT sit
-        # ESTABLISHED nor ride a reconnect grace that would re-dial into the perimeter.
-        await pump_until(targets,
-                         predicate=lambda: (m_world.get_session(h_world_id) is None
-                                            or m_world.get_session(h_world_id).state
-                                            in (SessionState.CLOSING, SessionState.CLOSED)),
-                         timeout=15.0)
-        m_sess = m_world.get_session(h_world_id)
-        assert m_sess is None or m_sess.state in (SessionState.CLOSING, SessionState.CLOSED), \
-            f"cut member did not close (state={m_sess.state if m_sess else None}); it would re-dial"
+        # M sees only a transport drop (no GOAWAY on the security path): feed it the
+        # disconnect signal its Node loop would derive from the pool diff -> grace.
+        await m_world.on_peer_disconnected(h_world_id)
+        assert m_world.get_session(h_world_id).state == SessionState.RECONNECTING
+
+        # M re-dials + RESUMEs; H holds no session and answers NACK(SESSION_UNKNOWN),
+        # delivered for real, so M abandons the dead session and re-handshakes from
+        # scratch. Convergence to a NEW session_id proves there was no false resume.
+        captured = await pump_until(
+            targets,
+            predicate=lambda: (m_world.is_established(h_world_id)
+                               and m_world.get_session(h_world_id).session_id != old_sid),
+            timeout=25.0)
+        assert m_world.get_session(h_world_id).session_id != old_sid
+        # The recovery went through the involuntary path on M: the cut is not a
+        # cooperative close, so no CLOSED must ever surface on M's side.
+        m_events = [e.type for e in captured.get(m_world, [])]
+        assert SessionEventType.CLOSED not in m_events
 
     asyncio.run(_scenario())

@@ -15,7 +15,9 @@ from unaiverse.networking.session import (
     SessionManager, Session, SessionRole, SessionState, SessionEventType, SessMsg,
     SESSION_HELLO_PROTOCOL, SESSION_PROFILE_PROTOCOL, SESSION_CONTROL_PROTOCOL,
 )
-from unaiverse.networking.session.sess_msg import OK, SIMULTANEOUS_OPEN_LOSS, WORLD_DISENGAGEMENT
+from unaiverse.networking.session.sess_msg import (
+    OK, NOT_AUTHORIZED, SIMULTANEOUS_OPEN_LOSS, WORLD_DISENGAGEMENT,
+)
 from unaiverse.networking.node.connpool import NodeConn
 
 pytestmark = pytest.mark.unit
@@ -688,3 +690,166 @@ def test_failed_then_known_recreated_then_gated_then_dials(alice_conn, alice_pee
     alice_conn.connect_returns = (bob_peer_id, False)
     _run(sm.activate(bob_peer_id))
     assert len(alice_conn.connect_calls) == 1                        # dials now
+
+
+# Session-first teardown: settlement cuts + state-dispatched drop
+#
+# The transport follows the Session's terminal state: drop with a reason only
+# GOAWAYs (the CLOSING machinery finally gets to complete via ACK), the deferred
+# settlement cut severs the transport after a linger, and only the coercive paths
+# (mid-handshake purge, sessionless/KNOWN, perimeter) disconnect inline.
+
+def _established(sm, conn, peer_id, local_peer_id):
+    """Plant a real Session in ESTABLISHED into the manager's active view."""
+    sess = _mk_session(conn, peer_id, local_peer_id)
+    sess._set_state(SessionState.ESTABLISHED, None)
+    sm._set_active(peer_id, sess)
+    return sess
+
+
+def test_closing_completes_via_ack_with_transport_alive(alice_conn, alice_peer_id, bob_peer_id):
+    """drop(reason) GOAWAYs and leaves the transport up, so the GOAWAY_ACK can come
+    back and complete CLOSING via the ACK path (not the 10s timeout); the transport
+    is severed only by the settlement cut once the linger expires."""
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    sess = _established(sm, alice_conn, bob_peer_id, alice_peer_id)
+
+    events = _run(sm.drop(bob_peer_id, WORLD_DISENGAGEMENT))
+    assert events == []
+    goaways = [s for s in alice_conn.sent if s[2].kind == SessMsg.KIND_GOAWAY]
+    assert len(goaways) == 1
+    assert alice_conn.disconnect_calls == []              # no cut under the GOAWAY
+    assert sess.state == SessionState.CLOSING
+
+    # The ACK lands on the still-alive transport -> CLOSED via ACK.
+    events = _run(sm.deliver(bob_peer_id, SESSION_CONTROL_PROTOCOL,
+                             SessMsg(SessMsg.KIND_GOAWAY_ACK, {"received": True})))
+    assert [e.type for e in events] == [SessionEventType.CLOSED]
+    assert "local_goaway_acked" in events[0].data["reason"]
+    assert sm.get_session(bob_peer_id) is None            # settled: forgotten...
+    assert bob_peer_id in sm._pending_cuts                # ...cut scheduled...
+    assert alice_conn.disconnect_calls == []              # ...but not executed yet
+
+    # The linger expires -> the executor severs the transport.
+    _run(sm.tick(now=time.monotonic() + 3.0))
+    assert alice_conn.disconnect_calls == [bob_peer_id]
+    assert bob_peer_id not in sm._pending_cuts
+
+
+def test_settlement_precedes_dispatch_on_remote_goaway(alice_conn, alice_peer_id, bob_peer_id):
+    """By the time deliver returns the CLOSED of a remote GOAWAY, the SM has already
+    forgotten the Session and scheduled the deferred cut: the purge coming back down
+    from Node (drop with no reason) lands on the tearing-down branch and is a no-op,
+    so it cannot abort the GOAWAY_ACK written moments earlier."""
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    _established(sm, alice_conn, bob_peer_id, alice_peer_id)
+
+    events = _run(sm.deliver(bob_peer_id, SESSION_CONTROL_PROTOCOL,
+                             SessMsg(SessMsg.KIND_GOAWAY,
+                                     {"reason": WORLD_DISENGAGEMENT, "drain_window_ms": 0})))
+    assert [e.type for e in events] == [SessionEventType.CLOSED]
+    acks = [s for s in alice_conn.sent if s[2].kind == SessMsg.KIND_GOAWAY_ACK]
+    assert len(acks) == 1
+    # Settled BEFORE the events were returned.
+    assert sm.get_session(bob_peer_id) is None
+    assert bob_peer_id in sm._pending_cuts
+
+    # Node's purge lands back here reasonless: must NOT disconnect under the ACK.
+    _run(sm.drop(bob_peer_id))
+    assert alice_conn.disconnect_calls == []
+
+
+def test_pending_cut_cancelled_by_new_live_session(alice_conn, alice_peer_id, bob_peer_id):
+    """The lazy guard: a due settlement cut is cancelled when a live (non-KNOWN)
+    Session for the peer exists again — the re-handshake reuses the transport."""
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    sm._pending_cuts[bob_peer_id] = time.monotonic() - 0.1   # already due
+    hello = SessMsg(SessMsg.KIND_HELLO_REQ, {
+        "session_id": b"\x02" * 16, "nonce_a": b"\xaa" * 32,
+        "protocol_versions": ["1.0"], "client_id": "test",
+    })
+    _run(sm.deliver(bob_peer_id, SESSION_HELLO_PROTOCOL, hello))
+    assert sm.get_session(bob_peer_id).state == SessionState.HELLO_ACK_SENT
+
+    _run(sm.tick())
+    assert alice_conn.disconnect_calls == []                 # cancelled, not executed
+    assert bob_peer_id not in sm._pending_cuts
+
+
+def test_pending_cut_not_cancelled_by_known_placeholder(alice_conn, alice_peer_id, bob_peer_id):
+    """A KNOWN placeholder (rendezvous metadata, recreated every sync) is not a live
+    relation: it must NOT cancel a due settlement cut, or a peer that stays on the
+    rendezvous roster would keep its half-open transport forever."""
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    sm._pending_cuts[bob_peer_id] = time.monotonic() - 0.1   # already due
+    sm.ensure(bob_peer_id, ["/ip4/127.0.0.1/tcp/1"])         # KNOWN placeholder
+
+    _run(sm.tick())
+    assert alice_conn.disconnect_calls == [bob_peer_id]      # executed anyway
+    assert bob_peer_id not in sm._pending_cuts
+
+
+def test_drop_on_known_forgets_and_severs_without_goaway(alice_conn, alice_peer_id, bob_peer_id):
+    """drop on a KNOWN placeholder sends no GOAWAY (nothing was ever handshaked) but
+    severs any half-open transport inline: this is the only cure for a chat-only
+    peer that never went past KNOWN."""
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    sm.ensure(bob_peer_id, ["/ip4/127.0.0.1/tcp/1"])
+
+    _run(sm.drop(bob_peer_id, WORLD_DISENGAGEMENT))
+    assert alice_conn.sent == []                             # no GOAWAY
+    assert sm.get_session(bob_peer_id) is None
+    assert alice_conn.disconnect_calls == [bob_peer_id]
+
+
+def test_drop_none_on_live_session_aborts_and_cuts(alice_conn, alice_peer_id, bob_peer_id):
+    """A reasonless drop on a live Session is the silent coercive teardown: abort
+    (no event), forget, disconnect inline — no zombie left to RESUME a relation the
+    node already dismantled."""
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    sess = _established(sm, alice_conn, bob_peer_id, alice_peer_id)
+
+    events = _run(sm.drop(bob_peer_id))
+    assert events == []
+    assert sess.state == SessionState.FAILED                 # aborted silently
+    assert sm.get_session(bob_peer_id) is None
+    assert alice_conn.disconnect_calls == [bob_peer_id]
+    goaways = [s for s in alice_conn.sent if s[2].kind == SessMsg.KIND_GOAWAY]
+    assert goaways == []
+
+
+def test_drop_mid_handshake_aborts_and_cuts(alice_conn, alice_peer_id, bob_peer_id):
+    """A reasoned drop on a mid-handshake Session cannot GOAWAY (close() only covers
+    ESTABLISHED/RECONNECTING): it must abort the handshake and cut, not leave it
+    running to completion behind the purge."""
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    sess = _mk_session(alice_conn, bob_peer_id, alice_peer_id)
+    sess._set_state(SessionState.HELLO_SENT, 5.0)
+    sm._set_active(bob_peer_id, sess)
+
+    _run(sm.drop(bob_peer_id, WORLD_DISENGAGEMENT))
+    assert sess.state == SessionState.FAILED
+    assert sm.get_session(bob_peer_id) is None
+    assert alice_conn.disconnect_calls == [bob_peer_id]
+
+
+def test_failed_from_deliver_quarantines_and_schedules_cut(alice_conn, alice_peer_id, bob_peer_id):
+    """Settlement is path-uniform: a FAILED produced on the deliver path (a rejected
+    HELLO_ACK) quarantines and schedules the cut exactly like a tick-path FAILED.
+    (The old cleanup exempted deliver-path FAILED from quarantine — deliberate
+    change.) The deferred cut also closes the FAILED half-open leak: transport up,
+    pools populated, no Session."""
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    sess = _mk_session(alice_conn, bob_peer_id, alice_peer_id)
+    sess._set_state(SessionState.HELLO_SENT, 5.0)
+    sm._set_active(bob_peer_id, sess)
+
+    events = _run(sm.deliver(bob_peer_id, SESSION_HELLO_PROTOCOL,
+                             SessMsg(SessMsg.KIND_HELLO_RESP, {"reason_code": NOT_AUTHORIZED})))
+    assert [e.type for e in events] == [SessionEventType.FAILED]
+    assert bob_peer_id in sm._quarantine
+    assert bob_peer_id in sm._pending_cuts
+    assert sm.get_session(bob_peer_id) is None
+
+    _run(sm.tick(now=time.monotonic() + 3.0))
+    assert alice_conn.disconnect_calls == [bob_peer_id]

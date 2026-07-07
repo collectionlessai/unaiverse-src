@@ -439,28 +439,30 @@ class NodeConn:
 
     async def drop_peer(self, peer_id: str, reason: int | None = None) -> list:
         """Voluntary per-peer teardown, the single teardown verb the hosted entity
-        drives through (Node.__purge). It is the consequence of a Session transition,
-        never a bare connection close:
+        drives through (Node.__purge): ``sm.drop`` on the owning instance + the pool
+        eviction. What happens to the Session and the transport is the manager's
+        state dispatch (see SessionManager.drop): a live established Session with a
+        reason is GOAWAY-closed only, and the transport falls with the deferred
+        settlement cut once the CLOSED lands — never a disconnect in the same stack
+        as the farewell write, which would destroy the GOAWAY on the wire; the
+        coercive branches (mid-handshake, reasonless on a live Session, KNOWN,
+        sessionless) abort/forget and sever the transport inline.
 
-          * ``reason is not None`` (we close): GOAWAY the peer's Session and disconnect
-            its transport, both on the owning instance (``sm.drop``), then evict the
-            pool bookkeeping.
-          * ``reason is None`` (the Session already ended: remote CLOSED/LOST or a
-            timeout): no GOAWAY, only the transport disconnect + pool evict.
-
-        Returns the SessionEvents for Node to dispatch (usually ``[]``: the CLOSED
-        arrives later via tick / GOAWAY-ACK). The grace case (transport drop with a
-        surviving RECONNECTING Session) does NOT come through here: it is handled by
-        ``on_peer_disconnected``, which syncs the pool without closing the Session.
+        Returns the SessionEvents for Node to dispatch (always ``[]`` today: the
+        CLOSED arrives later via GOAWAY-ACK / the CLOSING timeout). The grace case
+        (transport drop with a surviving RECONNECTING Session) does NOT come through
+        here: it is handled by ``on_peer_disconnected``, which syncs the pool without
+        closing the Session.
 
         The owning manager is resolved BEFORE the pool eviction (the pool index feeds
         ``_sm_of``'s fallback); a peer unknown to both registries is a no-op, which
-        tolerates the frequent double-purge (a CLOSED dispatched after an earlier purge).
+        tolerates the frequent double-purge (a CLOSED dispatched after an earlier
+        purge — also a no-op inside sm.drop, on the tearing-down branch).
 
         Args:
             peer_id: The peer ID to tear down.
-            reason: Optional ReasonCode; when set, the Session is GOAWAY-closed with it
-                before the transport/pool drop.
+            reason: Optional ReasonCode; when set and the Session is closable, it is
+                GOAWAY-closed with it.
 
         Returns:
             The list of SessionEvents to dispatch.

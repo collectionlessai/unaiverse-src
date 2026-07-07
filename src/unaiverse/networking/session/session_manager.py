@@ -23,7 +23,8 @@ from unaiverse.networking.session.session import (
     SESSION_PROTOCOL_IDS,
 )
 from unaiverse.networking.session.sess_msg import (
-    SessMsg, SIMULTANEOUS_OPEN_LOSS, GRACEFUL_SHUTDOWN, SESSION_UNKNOWN, PERIMETER_CUT,
+    SessMsg, reason_name,
+    SIMULTANEOUS_OPEN_LOSS, GRACEFUL_SHUTDOWN, SESSION_UNKNOWN,
 )
 from unaiverse.utils.logger import log
 
@@ -34,6 +35,15 @@ if TYPE_CHECKING:
 # (Custom.REJOINING_WAIT, 30s) so a scheduled rejoin lands after the window has expired
 # instead of racing it and bouncing on the gate.
 _QUARANTINE_S = 25.0
+
+# Settlement linger before the deferred transport cut of a peer whose Session just
+# reached a terminal state. The transport must outlive the Session by a beat because
+# the last farewell frame (a GOAWAY_ACK, a reject decision, an unknown-session NACK)
+# has only been written to the local muxer when the terminal event fires, and
+# P2P.disconnect is abortive (it resets the stream, destroying undelivered frames).
+# Bounds: > one WAN round-trip + multistream negotiation, relay path included;
+# < the CLOSING window (10s) and < the quarantine (25s).
+_CUT_LINGER_S = 2.0
 
 
 def _p2p_label(name: str) -> str:
@@ -103,6 +113,14 @@ class SessionManager:
         # peer_id → monotonic timestamp until which dials are refused.
         self._quarantine: Dict[str, float] = {}
 
+        # peer_id → monotonic deadline of a deferred transport cut (the settlement
+        # cut), scheduled by _on_terminal when a Session ends and executed by tick
+        # once the linger expires. Only settlement cuts live here: the coercive
+        # perimeter cut never goes through the ledger (it must not be cancellable).
+        # A live non-KNOWN Session found at execution time cancels the entry (lazy
+        # guard), so a re-handshake that reused the transport keeps it.
+        self._pending_cuts: Dict[str, float] = {}
+
         # Pure world membership, owned here so it sits next to the Sessions it gates.
         # Meaningful only on the world instance, where the Coordinator populates these
         # from the rendezvous and the world-host writers; inert (empty) on the public
@@ -147,12 +165,17 @@ class SessionManager:
         ``pool_name -> {peer_id -> peer_info}``.
 
         Uses the injected per-instance classifier. When a membership snapshot is given
-        (the world instance) an unclassifiable peer is cut from the perimeter: its Session
-        is GOAWAY-closed (PERIMETER_CUT) so it never re-dials, and its transport is dropped
-        so it leaves the private mesh at once. The public instance has no membership and
-        never cuts (an undefined-direction peer is simply skipped). Empty pools are absent
-        from the result: the Coordinator iterates its own pools and treats a missing
-        pool as empty, so removals are still detected.
+        (the world instance) an unclassifiable peer is cut from the perimeter with the
+        COERCIVE cut (below): the reconcile cannot tell a revoked ex-member from an
+        intruder, so the mesh isolation (I-1) wins over a graceful goodbye and the
+        transport is severed at once. The public instance has no membership and never
+        cuts (an undefined-direction peer is simply skipped) — the coercive path is
+        de facto world-instance only. Peers already tearing down (CLOSING, or holding
+        a pending settlement cut) are skipped BEFORE classification: they must not be
+        re-admitted to the pools during their linger, nor cut a second time; the
+        pool diff the Coordinator computes stays identical to the pre-settlement one.
+        Empty pools are absent from the result: the Coordinator iterates its own pools
+        and treats a missing pool as empty, so removals are still detected.
         """
         classified: dict = {}
         if connected_peer_infos is None or self._routing_classifier is None:
@@ -160,11 +183,13 @@ class SessionManager:
         seen: set = set()
         for c in connected_peer_infos:
             seen.add(c['id'])
+            if self.is_tearing_down(c['id']):
+                continue
             pool_name = self._routing_classifier(c, membership)
             if pool_name is None:
                 if membership is not None:
                     log.session(f"perimeter: cutting unclassifiable peer ...{c['id'][-5:]}", sub=self._label)
-                    await self.drop(c['id'], PERIMETER_CUT)
+                    await self._coercive_cut(c['id'])
                 continue
             classified.setdefault(pool_name, {})[c['id']] = c
 
@@ -172,19 +197,32 @@ class SessionManager:
         # traffic is a topic subscription is absent above yet still receives every broadcast.
         # On the world instance, also cut the non-member subscribers the stream loop did not
         # handle. These inform only the cut, never pool admission (which stays stream-driven),
-        # so we pass bare ids and build no pool entries. A pubsub-only peer opened no session
-        # stream, so there is nothing to GOAWAY: a reasonless drop just severs the transport.
-        # Direction does not affect the member test, so a synthetic value reuses the classifier.
-        # Relays never subscribe.
+        # so we pass bare ids and build no pool entries. Direction does not affect the member
+        # test, so a synthetic value reuses the classifier. Relays never subscribe.
         if membership is not None:
             for peer_id in self.topic_peers():
-                if peer_id in seen or peer_id == self.local_peer_id:
-                    continue  # already classified/cut by the stream loop, or ourselves
+                if peer_id in seen or peer_id == self.local_peer_id or self.is_tearing_down(peer_id):
+                    continue  # already classified/cut by the stream loop, ourselves, or leaving
                 if self._routing_classifier({'id': peer_id, 'direction': 'inbound'}, membership) is None:
                     log.session(f"perimeter: cutting pubsub-only non-member ...{peer_id[-5:]}", sub=self._label)
-                    await self.drop(peer_id)
+                    await self._coercive_cut(peer_id)
 
         return classified
+
+    async def _coercive_cut(self, peer_id: str) -> None:
+        """The perimeter's security cut: sever the transport NOW, no GOAWAY, no
+        settlement ledger (it must never be cancellable), and quarantine the peer so
+        our own side does not immediately re-dial it. The GOAWAY would be advisory at
+        best (a hostile peer ignores it) and the mesh isolation cannot wait for an
+        ACK round-trip; the cut peer converges on its own via re-dial -> RESUME ->
+        NACK(SESSION_UNKNOWN) -> LOST and its own quarantine. Any live Session is
+        aborted silently first so no terminal event (and no settlement cut) fires."""
+        sess = self._sessions.get(peer_id)
+        if sess is not None:
+            sess.abort_silently("perimeter_cut")
+            self._forget(peer_id)
+        self._quarantine[peer_id] = time.monotonic() + _QUARANTINE_S
+        await self.p2p.disconnect(peer_id)
 
     # Transport passthroughs
     #
@@ -364,7 +402,7 @@ class SessionManager:
         log.session(f"activating Session to ...{peer_id[-5:]}", sub=self._label)
         events = sess.start()   # non-blocking: the dial runs off-task, reaped by tick_dial
         self._promote(peer_id, sess)
-        self._forget_if_terminal(peer_id, sess)
+        self._on_terminal(events, now)
         return events
 
     async def initiate(
@@ -493,16 +531,37 @@ class SessionManager:
                 return events  # type: ignore[return-value]
 
         events = await sess.process_inbound(protocol_id, sess_msg)
-        self._forget_if_terminal(peer_id, sess)
+        self._on_terminal(events)
         return events
 
-    def _forget_if_terminal(self, peer_id: str, sess: Session) -> None:
-        """Drop a Session that just reached FAILED/CLOSED outside the tick path,
-        so the registry never holds a dead FSM that would shadow later inbound
-        traffic from the same peer. Quarantine stays a tick-path concern."""
-        if (sess.state in (SessionState.FAILED, SessionState.CLOSED) and
-                self._sessions.get(peer_id) is sess):
-            self._forget(peer_id)
+    def _on_terminal(self, events: List[SessionEvent], now: Optional[float] = None) -> None:
+        """Settlement: the single reaction to terminal SessionEvents, whichever path
+        produced them (deliver, tick, or the transport fail-fast). Quarantines the
+        peer on LOST/FAILED (deliberately including the deliver-path FAILED —
+        rejections and dispatch errors — which the old cleanup exempted), forgets
+        the dead FSM so it never shadows later inbound traffic, and schedules the
+        deferred transport cut in the _pending_cuts ledger.
+
+        ORDER INVARIANT: this runs inside deliver/tick, i.e. BEFORE the events are
+        returned to the layers above. By the time Node dispatches a terminal event
+        the Session is already forgotten and the cut already scheduled, so the
+        purge coming back down (drop with no reason) lands on the tearing-down
+        branch and is a no-op — it cannot abort the farewell frame (GOAWAY_ACK,
+        reject) written moments earlier."""
+        if now is None:
+            now = time.monotonic()
+        for ev in events:
+            if ev.type in (SessionEventType.LOST, SessionEventType.FAILED):
+                self._quarantine[ev.peer_id] = now + _QUARANTINE_S
+            if ev.type in (SessionEventType.LOST,
+                           SessionEventType.CLOSED,
+                           SessionEventType.FAILED):
+                # Only settle if the session is genuinely terminal: a synthetic
+                # event (e.g. the quarantine refusal) has no dead FSM behind it.
+                sess = self._sessions.get(ev.peer_id)
+                if sess is not None and sess.state in (SessionState.FAILED, SessionState.CLOSED):
+                    self._forget(ev.peer_id)
+                    self._pending_cuts.setdefault(ev.peer_id, now + _CUT_LINGER_S)
 
     def _spawn_responder(self, peer_id: str) -> Session:
         sess = Session(
@@ -591,7 +650,9 @@ class SessionManager:
 
     async def tick(self, now: Optional[float] = None) -> List[SessionEvent]:
         """Sweep all sessions: timeout firings + active re-dial + session-level
-        keep-alive. Single dispatch path; the returned list is what node.py acts on."""
+        keep-alive, then settle this sweep's terminal events and execute the
+        settlement cuts whose linger expired. Single dispatch path; the returned
+        list is what node.py acts on (already settled, see _on_terminal)."""
         if now is None:
             now = time.monotonic()
         events: List[SessionEvent] = []
@@ -624,24 +685,29 @@ class SessionManager:
             for pid in expired:
                 self._quarantine.pop(pid, None)
 
-        # Quarantine on Lost; remove session entries after terminal events.
-        self._post_dispatch_cleanup(events, now)
-        return events
+        # Settle the terminal events of this sweep (quarantine + forget + cut ledger).
+        self._on_terminal(events, now)
 
-    def _post_dispatch_cleanup(self, events: List[SessionEvent], now: float) -> None:
-        for ev in events:
-            # Quarantine a peer that just failed (handshake/timeout) or was lost
-            # (reconnect grace expired), so we don't immediately re-dial it. An
-            # intentional CLOSED is not a failure and is not quarantined.
-            if ev.type in (SessionEventType.LOST, SessionEventType.FAILED):
-                self._quarantine[ev.peer_id] = now + _QUARANTINE_S
-            if ev.type in (SessionEventType.LOST,
-                           SessionEventType.CLOSED,
-                           SessionEventType.FAILED):
-                # Only drop from registry if the session is genuinely terminal.
-                sess = self._sessions.get(ev.peer_id)
-                if sess is not None and sess.state in (SessionState.FAILED, SessionState.CLOSED):
-                    self._forget(ev.peer_id)
+        # Execute the settlement cuts whose linger expired: the deferred transport
+        # teardown of peers whose Session already ended. A live non-KNOWN Session
+        # found now cancels the cut (lazy guard): a re-handshake (re-dial, supersede,
+        # replace-stale) reuses the transport and owns it again. A KNOWN placeholder
+        # does NOT cancel — it is rendezvous metadata, not a live relation, and
+        # keeping the half-open transport would defeat the cut.
+        if self._pending_cuts:
+            due = [pid for pid, deadline in self._pending_cuts.items() if deadline <= now]
+            for pid in due:
+                del self._pending_cuts[pid]
+                sess = self._sessions.get(pid)
+                if sess is not None and sess.state not in (SessionState.KNOWN,
+                                                           SessionState.FAILED,
+                                                           SessionState.CLOSED):
+                    log.session(f"settlement cut for ...{pid[-5:]} cancelled: live Session "
+                                f"({sess.state.value})", sub=self._label)
+                    continue
+                await self.p2p.disconnect(pid)
+                log.session(f"settlement cut executed for ...{pid[-5:]}", sub=self._label)
+        return events
 
     # Transport events
 
@@ -658,7 +724,7 @@ class SessionManager:
                           SessionState.AWAITING_HANDOFF):
             # Handshake can't continue without a live connection — fail fast.
             ev = sess._fail("connection_dropped_during_handshake")
-            self._post_dispatch_cleanup([ev], time.monotonic())
+            self._on_terminal([ev])
             return [ev]
 
         ev = sess.on_transport_disconnected()
@@ -686,17 +752,58 @@ class SessionManager:
         return []  # CLOSED event will arrive via process_inbound(GoawayAck) or tick
 
     async def drop(self, peer_id: str, reason_code: Optional[int] = None) -> List[SessionEvent]:
-        """Tear the relation down on THIS instance: GOAWAY-close the Session (only when
-        a reason is given; no-op without a Session) and disconnect the transport now.
-        A bare close also ends with the transport down, but only downstream (CLOSED ->
-        purge) and only if the peer cooperates: drop is the deterministic verb the
-        voluntary teardown (drop_peer) and the perimeter cut build on. The manager owns
-        its P2P handle, so the conn layer never reaches the transport directly (Node ->
-        NodeConn -> SM -> P2P); the disconnect is best-effort (an error means 'gone').
-        Returns the close events (usually []: the CLOSED arrives later via tick)."""
-        events = await self.close_session(peer_id, reason_code) if reason_code is not None else []
+        """Tear the relation down on THIS instance, dispatching on the Session state.
+        The transport follows the Session's terminal state — never a disconnect in the
+        same stack as a farewell write (P2P.disconnect is abortive and would destroy
+        the GOAWAY/ACK just queued):
+
+          * already tearing down (a settlement cut is pending, or CLOSING) → no-op:
+            makes the frequent double-purge (a CLOSED dispatched after an earlier
+            purge) idempotent WITHOUT aborting the farewell in flight;
+          * ESTABLISHED/RECONNECTING with a reason → GOAWAY-close only; the deferred
+            settlement cut severs the transport once the CLOSED lands (ACK or the
+            CLOSING timeout);
+          * KNOWN → forget the placeholder and sever any half-open transport now
+            (there is no GOAWAY owed to a peer we never handshaked; the disconnect
+            is a Go no-op when nothing is connected, and it is the only cure for a
+            chat-only/half-open peer whose Session never went past KNOWN);
+          * any other live Session (mid-handshake, or a live Session dropped with no
+            reason) → silent coercive teardown: abort, forget, disconnect now — a
+            purge must abort a handshake, not leave it running to completion;
+          * no Session (or a stale terminal one) → disconnect now: nothing will ever
+            settle this transport, and this is the only cure for a half-open peer.
+
+        The manager owns its P2P handle, so the conn layer never reaches the transport
+        directly (Node -> NodeConn -> SM -> P2P); the disconnect is best-effort (an
+        error means 'gone'). Returns the close events (always []: the CLOSED arrives
+        later via tick/ACK)."""
+        sess = self._sessions.get(peer_id)
+
+        if peer_id in self._pending_cuts or (sess is not None and
+                                             sess.state == SessionState.CLOSING):
+            log.session(f"drop(...{peer_id[-5:]}): already tearing down — no-op", sub=self._label)
+            return []
+
+        if sess is None or sess.state in (SessionState.FAILED, SessionState.CLOSED):
+            if sess is not None:
+                self._forget(peer_id)
+            await self.p2p.disconnect(peer_id)
+            return []
+
+        if sess.state == SessionState.KNOWN:
+            self._forget(peer_id)
+            await self.p2p.disconnect(peer_id)
+            return []
+
+        if reason_code is not None and sess.state in (SessionState.ESTABLISHED,
+                                                      SessionState.RECONNECTING):
+            return await self.close_session(peer_id, reason_code)
+
+        sess.abort_silently(
+            f"dropped:{reason_name(reason_code) if reason_code is not None else 'no_reason'}")
+        self._forget(peer_id)
         await self.p2p.disconnect(peer_id)
-        return events
+        return []
 
     async def close_all(self, reason_code: int = GRACEFUL_SHUTDOWN) -> List[SessionEvent]:
         """GOAWAY every Session that can be gracefully closed (ESTABLISHED /
@@ -722,6 +829,15 @@ class SessionManager:
     def all_established_peer_ids(self) -> List[str]:
         return [pid for pid, s in self._sessions.items()
                 if s.state == SessionState.ESTABLISHED]
+
+    def is_tearing_down(self, peer_id: str) -> bool:
+        """True while this peer's teardown is in flight: its Session is CLOSING (a
+        GOAWAY awaiting its ACK) or a settlement cut is pending in the ledger.
+        reconcile skips such peers (no pool re-admission during the linger, no
+        second cut) and the shutdown drain waits on them."""
+        sess = self._sessions.get(peer_id)
+        return (peer_id in self._pending_cuts or
+                (sess is not None and sess.state == SessionState.CLOSING))
 
     def is_in_grace(self, peer_id: str) -> bool:
         """True if this peer's Session is riding its reconnect grace window

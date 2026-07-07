@@ -8,6 +8,7 @@ Confirms that:
 """
 
 import asyncio
+import time
 from unittest.mock import MagicMock
 
 import pytest
@@ -16,7 +17,6 @@ from unaiverse.networking.node.connpool import (
     NodeConn, SessionInbound,
 )
 from unaiverse.networking.session import SessMsg
-from unaiverse.networking.session.sess_msg import PERIMETER_CUT
 from unaiverse.networking.session.session import SessionState
 from unaiverse.networking.p2p.p2p import P2P
 
@@ -422,29 +422,39 @@ def test_char_world_perimeter_cuts_pubsub_only_nonmember():
 
 
 class _CutStubSession:
-    """An ESTABLISHED-enough Session that records close(): planted into the world SM's
-    registry so the perimeter cut's GOAWAY can be asserted without a full FSM. The state
-    keeps sync_known_peers from pruning it as a stale KNOWN entry."""
+    """An ESTABLISHED-enough Session that records close()/abort_silently(): planted
+    into the world SM's registry so the perimeter cut can be asserted without a full
+    FSM. The state keeps sync_known_peers from pruning it as a stale KNOWN entry."""
     def __init__(self):
         self.closed_with = None
+        self.aborted_with = None
         self.state = SessionState.ESTABLISHED
 
     async def close(self, reason_code):
         self.closed_with = reason_code
 
+    def abort_silently(self, reason):
+        self.aborted_with = reason
 
-def test_char_world_perimeter_cut_closes_session_not_just_transport():
-    """A world peer that falls out of membership but still holds a Session is not merely
-    disconnected: its Session is GOAWAY-closed with PERIMETER_CUT so it will never re-dial
-    (closing the cut -> redial -> RESUME -> cut loop), on top of the transport drop."""
+
+def test_char_world_perimeter_cut_aborts_session_and_severs_transport():
+    """A world peer that falls out of membership but still holds a Session gets the
+    COERCIVE cut: the Session is silently aborted and forgotten (no GOAWAY — the cut
+    cannot wait an ACK round-trip, and reconcile cannot tell a revoked member from an
+    intruder), the transport is severed inline, and the peer is quarantined so our
+    side never re-dials into the cut -> redial -> cut loop. The remote converges on
+    its own: its re-dial + RESUME meets a NACK(SESSION_UNKNOWN) and goes LOST."""
     conn, pub, world = _make_node_conn()
     conn._sm_world.world_agents_set = {"member"}   # 'ghost' is NOT a member
     stub = _CutStubSession()
     conn._sm_world._sessions["ghost"] = stub
     world._infos = [_info("ghost", "inbound")]
     _run(conn.update())
-    assert stub.closed_with == PERIMETER_CUT       # GOAWAY closed, not left ESTABLISHED
-    assert "ghost" in world.disconnected           # transport severed too
+    assert stub.aborted_with == "perimeter_cut"    # aborted, not left ESTABLISHED
+    assert stub.closed_with is None                # no GOAWAY on the security path
+    assert conn._sm_world.get_session("ghost") is None   # forgotten
+    assert "ghost" in world.disconnected           # transport severed at once (I-1)
+    assert "ghost" in conn._sm_world._quarantine   # our own dial door is shut
     assert "ghost" not in conn.peer_id_to_pool_name
 
 
@@ -453,7 +463,7 @@ def test_char_grace_companion_slips_leave_sweep_but_is_cut_on_reconcile():
     pool, so remove_all_world_agents (which sweeps the WORLD pools) cannot see it and does
     NOT close it — the known leak. The backstop is the perimeter cut: once membership is
     cleared, the next reconcile classifies the still-connected companion as a non-member
-    and GOAWAY-closes it. This is why B2 (leave closes companions) and B6 (perimeter closes
+    and coercively cuts it. This is why B2 (leave closes companions) and B6 (perimeter cuts
     on reconcile) must ship in the same commit."""
     conn, pub, world = _make_node_conn()
     stub = _CutStubSession()
@@ -467,8 +477,30 @@ def test_char_grace_companion_slips_leave_sweep_but_is_cut_on_reconcile():
     conn._sm_world.world_agents_set = set()
     world._infos = [_info("companion", "inbound")]
     _run(conn.update())
-    assert stub.closed_with == PERIMETER_CUT, "the perimeter cut did not close the leaked companion"
+    assert stub.aborted_with == "perimeter_cut", "the perimeter cut did not abort the leaked companion"
     assert "companion" in world.disconnected
+
+
+def test_char_tearing_down_peer_not_readmitted_to_pools():
+    """A peer whose teardown is in flight (a CLOSING Session, or a pending settlement
+    cut) is skipped by reconcile BEFORE classification: evicted by drop_peer, it must
+    not flap back into the pools during the linger (its transport is still up on
+    purpose, so the farewell can land), nor be perimeter-cut a second time."""
+    conn, pub, world = _make_node_conn()
+    conn._sm_world.world_agents_set = {"m"}
+    stub = _CutStubSession()
+    stub.state = SessionState.CLOSING
+    conn._sm_world._sessions["m"] = stub
+    world._infos = [_info("m", "inbound")]
+    _run(conn.update())
+    assert "m" not in conn.peer_id_to_pool_name   # not re-admitted while CLOSING
+    assert "m" not in world.disconnected          # and not cut: it is leaving cleanly
+
+    # Same for a sessionless peer still holding a pending settlement cut.
+    del conn._sm_world._sessions["m"]
+    conn._sm_world._pending_cuts["m"] = time.monotonic() + 2.0
+    _run(conn.update())
+    assert "m" not in conn.peer_id_to_pool_name
 
 
 def test_char_world_perimeter_topic_cut_ignores_self():

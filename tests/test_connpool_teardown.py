@@ -49,15 +49,20 @@ class _FakeP2P:
 
 
 class _StubSession:
-    """A live-enough Session that records close(); planted directly into an SM's
-    registry so drop_peer's GOAWAY branch has something to close without driving a
-    full handshake."""
+    """A live-enough Session that records close()/abort_silently(); planted directly
+    into an SM's registry so drop's state dispatch has something to act on without
+    driving a full handshake. Defaults to ESTABLISHED (the cooperative-close branch)."""
 
-    def __init__(self):
+    def __init__(self, state=SessionState.ESTABLISHED):
         self.closed_with = None
+        self.aborted_with = None
+        self.state = state
 
     async def close(self, reason_code):
         self.closed_with = reason_code
+
+    def abort_silently(self, reason):
+        self.aborted_with = reason
 
 
 def _run(coro):
@@ -84,9 +89,13 @@ def _plant_pool_member(conn, peer_id, pool_name):
 
 # drop_peer: voluntary teardown
 
-def test_drop_peer_with_reason_goaways_then_drops():
+def test_drop_peer_with_reason_goaways_and_defers_transport_cut():
     """drop_peer(peer, reason) GOAWAYs the Session (close with that exact reason on
-    the owning instance), then disconnects the transport and evicts the pool."""
+    the owning instance) and evicts the pool, but does NOT disconnect the transport:
+    P2P.disconnect is abortive (it resets the stream under the just-written GOAWAY),
+    so the cut is deferred to the settlement of the CLOSED terminal (ACK or the
+    CLOSING timeout). The transport outliving the Session by a beat is what makes
+    the farewell actually reach the peer on a real network."""
     conn, pub, world = _conn()
     peer = "w1"
     _plant_pool_member(conn, peer, NodeConn.IN_WORLD_AGENTS)
@@ -97,9 +106,9 @@ def test_drop_peer_with_reason_goaways_then_drops():
 
     # (a) GOAWAY: the Session was closed with the reason.
     assert stub.closed_with == WORLD_DISENGAGEMENT
-    # (b) transport disconnected on the owning instance...
-    assert peer in world.disconnected
-    # (c) ...and the pool bookkeeping evicted.
+    # (b) the transport is NOT cut in the same stack as the GOAWAY write...
+    assert peer not in world.disconnected
+    # (c) ...but the pool bookkeeping is evicted right away.
     assert peer not in conn.peer_id_to_pool_name
     assert peer not in conn.pool_name_to_peer_infos[NodeConn.IN_WORLD_AGENTS]
     assert peer not in conn.peer_id_to_token
@@ -107,9 +116,12 @@ def test_drop_peer_with_reason_goaways_then_drops():
     assert events == []
 
 
-def test_drop_peer_without_reason_drops_without_goaway():
-    """drop_peer(peer, None) (the Session already ended): no GOAWAY, but the
-    transport is still disconnected and the pool evicted."""
+def test_drop_peer_without_reason_aborts_live_session_and_drops():
+    """drop_peer(peer, None) on a live Session is the silent coercive teardown: the
+    Session is aborted (no GOAWAY, no terminal event), forgotten, and the transport
+    disconnected inline — the observable semantics of the old reasonless drop,
+    without leaving a zombie Session in the registry that could later RESUME a
+    relation the node already dismantled."""
     conn, pub, world = _conn()
     peer = "w1"
     _plant_pool_member(conn, peer, NodeConn.IN_WORLD_AGENTS)
@@ -119,7 +131,9 @@ def test_drop_peer_without_reason_drops_without_goaway():
     _run(conn.drop_peer(peer))   # reason defaults to None
 
     assert stub.closed_with is None          # no GOAWAY
-    assert peer in world.disconnected        # transport still dropped
+    assert stub.aborted_with is not None     # silently aborted, no event
+    assert conn._sm_world.get_session(peer) is None   # forgotten
+    assert peer in world.disconnected        # transport dropped inline
     assert peer not in conn.peer_id_to_pool_name
 
 
@@ -140,7 +154,9 @@ def test_drop_peer_keeps_role_taxonomy():
 def test_remove_all_world_agents_goaways_ex_companions():
     """Leaving a world GOAWAY-closes every in-world agent (WORLD_DISENGAGEMENT) so its
     Session reaches CLOSED and never re-dials us back into the abandoned world — not a
-    bare transport drop that leaves the Session ESTABLISHED to reconnect and re-enrol."""
+    bare transport drop that leaves the Session ESTABLISHED to reconnect and re-enrol.
+    The transport is NOT severed in the same stack (that would abort the GOAWAY on
+    the wire): the settlement cut of the CLOSED terminal severs it a beat later."""
     conn, pub, world = _conn()
     peer = "wa1"
     _plant_pool_member(conn, peer, NodeConn.IN_WORLD_AGENTS)
@@ -150,7 +166,7 @@ def test_remove_all_world_agents_goaways_ex_companions():
     _run(conn.remove_all_world_agents())
 
     assert stub.closed_with == WORLD_DISENGAGEMENT   # GOAWAY, not a bare drop
-    assert peer in world.disconnected                # transport severed
+    assert peer not in world.disconnected            # cut deferred to settlement
     assert peer not in conn.peer_id_to_pool_name     # pool evicted
 
 
