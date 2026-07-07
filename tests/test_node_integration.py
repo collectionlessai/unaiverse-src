@@ -838,7 +838,7 @@ def test_world_host_registers_joiner_with_grant_role():
         # The authoritative role comes from the host pre-admission (the public
         # decision), not the join echo. Simulate that pre-admission here.
         conn.add_to_world_masters_list(REMOTE_PEER, [], role)
-        blob = {"grant_id_bytes": b"g" * 32, "role": role,
+        blob = {"role": role,
                 "expiry_unix_ms": int(time.time() * 1000) + 30_000}
 
         await remote_sm.initiate(node_world_peer, ["/ip4/127.0.0.1/tcp/0"],
@@ -875,8 +875,7 @@ def test_world_host_purges_non_preadmitted_joiner():
 
         # NO pre-admission: conn.get_role(REMOTE_PEER) == 0. The joiner even claims a
         # role in the blob, but the host ignores it.
-        blob = {"grant_id_bytes": b"g" * 32,
-                "role": FakeWorld.ROLE_STR_TO_BITS["player"],
+        blob = {"role": FakeWorld.ROLE_STR_TO_BITS["player"],
                 "expiry_unix_ms": int(time.time() * 1000) + 30_000}
         await remote_sm.initiate(node_world_peer, ["/ip4/127.0.0.1/tcp/0"],
                                  grant=blob)
@@ -913,7 +912,7 @@ def test_world_host_unlists_member_when_world_session_ends():
         role = FakeWorld.ROLE_STR_TO_BITS["player"] | Agent.ROLE_WORLD_AGENT
         # Role is authoritative from the host pre-admission, not the join echo.
         conn.add_to_world_agents_list(REMOTE_PEER, [], role)
-        blob = {"grant_id_bytes": b"g" * 32, "role": role,
+        blob = {"role": role,
                 "expiry_unix_ms": int(time.time() * 1000) + 30_000}
         await remote_sm.initiate(node_world_peer, ["/ip4/127.0.0.1/tcp/0"],
                                  grant=blob)

@@ -150,7 +150,6 @@ def test_real_world_link_idle_keepalive_after_handoff(real_nodes):
             grant = ev.data.get("world_grant")
             if grant is not None:
                 blob = dict(grant)
-                blob["grant_id_bytes"] = bytes.fromhex(grant["grant_id"])
                 for e in await j_world.initiate(
                         host_world_id, [host_world_addr],
                         grant=blob):

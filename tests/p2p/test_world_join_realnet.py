@@ -92,7 +92,6 @@ def test_real_world_join_full_handoff(real_nodes):
             if grant is not None:
                 # joiner.public got the grant → open joiner.world to redeem it.
                 blob = dict(grant)
-                blob["grant_id_bytes"] = bytes.fromhex(grant["grant_id"])
                 evs = await j_world.initiate(
                     host_world_id, [host_world_addr],
                     grant=blob)

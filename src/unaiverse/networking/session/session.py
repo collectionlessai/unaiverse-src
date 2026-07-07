@@ -749,8 +749,9 @@ class Session:
         self.grant_id = bytes(grant_id)
         self.grant_expiry_unix_ms = expiry
 
-        await self._send_payload(SESSION_WORLD_PROTOCOL, SessMsg(SessMsg.KIND_WORLD_GRANT_ACK,
-                                                                 {"received": True}))
+        # No WORLD_GRANT_ACK is sent: nothing ever consumed it (the host parks in
+        # AWAITING_HANDOFF waiting the joiner's GOAWAY, and a stray ack would just hit
+        # its "ignored WORLD-protocol" log). The kind stays decodable for old joiners.
 
         # The public Session reaches ESTABLISHED carrying the grant blob; node.py
         # reacts by opening the world Session and, once it is ESTABLISHED, GOAWAYs

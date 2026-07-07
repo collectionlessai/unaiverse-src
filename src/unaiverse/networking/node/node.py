@@ -2114,7 +2114,6 @@ class Node:
         Returns:
             True if the join operation is successful, otherwise False.
         """
-        world_public_peer_id = profile.get_dynamic_profile()['peer_id']
         log.user(f"\nActually joining world, role ID will be '{role}'")
 
         # The private world Session already connected during the handoff.
@@ -2169,11 +2168,12 @@ class Node:
             await self.__purge(peer_id, reason=WORLD_DISENGAGEMENT)  # If subscribing fails, we quit (safer)
             return False
 
-        # Killing the public connection to the world node. On the Session path the
-        # public Session is GOAWAY-closed by the dispatcher; here we still purge the
-        # public peer from the pools so routing is consistent.
-        log.misc("Disconnecting from the public world network (since we joined the private one)")
-        await self.__purge(world_public_peer_id)
+        # The public connection to the world node is NOT torn down here: the dispatcher
+        # retires the carrier right after this body returns (complete_world_handoff sends
+        # GOAWAY(WORLD_HANDOFF_COMPLETE) and evicts its pools), and the settlement cut
+        # severs the transport once the CLOSED lands. Purging here used to disconnect the
+        # public transport BEFORE that GOAWAY was even queued, so the host never saw the
+        # handoff close and failed its parked carrier on every successful join.
 
         # Subscribing to all the other world topics, from which we will get fresh information
         # about the streams
@@ -2644,10 +2644,10 @@ class Node:
                 if isinstance(opts, dict) and 'world_peer_id' in opts:
                     opts['ready_to_interact'] = True
             # Whether or not the join body fully succeeded, the public Session has
-            # done its job — close it (GOAWAY) so the host tears it down cleanly. The
-            # Coordinator owns the correlation and returns the close events to dispatch.
-            for cev in await self.conn.complete_world_handoff(ev.peer_id):
-                await self._dispatch_session_event(cev)
+            # done its job — retire it: GOAWAY(WORLD_HANDOFF_COMPLETE) on the still-live
+            # public transport + pool eviction, with the settlement cut severing the
+            # transport once the CLOSED lands. The Coordinator owns the correlation.
+            await self.conn.complete_world_handoff(ev.peer_id)
             return
 
         # Responder on an agent node (public or in-world peer connection)
@@ -2697,7 +2697,6 @@ class Node:
             return
 
         blob = dict(grant)
-        blob["grant_id_bytes"] = bytes.fromhex(grant["grant_id"])
         # The Coordinator records the correlation, points pool routing at the world host
         # (set_world) and opens the world Session; we just dispatch its events.
         for ev in await self.conn.start_world_handoff(

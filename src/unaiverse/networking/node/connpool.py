@@ -942,13 +942,20 @@ class NodeConn:
     def rollback_handoff(self, peer_id: str) -> None:
         """Roll back any in-flight handoff correlation for a failed Session, whichever
         side failed: the forward map is keyed by the public peer-id, the reverse one by
-        the world peer-id."""
+        the world peer-id. Also un-points pool routing (set_world) when the rolled-back
+        world peer is the current world host: start_world_handoff set it optimistically
+        at handoff-initiate, and leaving it on a world we never joined would classify
+        that host as a member for the perimeter and the facade until the next retry."""
         world_peer_id = self._pending_world_handoff.pop(peer_id, None)
         if world_peer_id is not None:
             self._world_to_public.pop(world_peer_id, None)
         public_peer_id = self._world_to_public.pop(peer_id, None)
         if public_peer_id is not None:
             self._pending_world_handoff.pop(public_peer_id, None)
+        rolled_back_world = world_peer_id if world_peer_id is not None else (
+            peer_id if public_peer_id is not None else None)
+        if rolled_back_world is not None and rolled_back_world == self.get_world_node_peer_id():
+            self.set_world(None)
 
     def is_pending_handoff(self, world_peer_id: str) -> bool:
         """True if this world peer-id is the world side of an in-flight handoff (its world
@@ -956,16 +963,19 @@ class NodeConn:
         agent-to-agent connection that carries no grant correlation."""
         return world_peer_id in self._world_to_public
 
-    async def complete_world_handoff(self, world_peer_id: str) -> list:
-        """The world Session established: GOAWAY the correlated public Session (its job is
-        done) and drop the correlation. Returns the close events for Node to dispatch,
-        empty if this world peer-id was not part of a handoff."""
+    async def complete_world_handoff(self, world_peer_id: str) -> None:
+        """The world Session established: retire the correlated public carrier — GOAWAY
+        it (WORLD_HANDOFF_COMPLETE) on its still-live transport, evict it from the pools,
+        and drop the correlation. No-op if this world peer-id was not part of a handoff.
+        The transport itself falls with the settlement cut once the CLOSED lands (ACK or
+        the CLOSING timeout); the dispatch early-returns on WORLD_HANDOFF_COMPLETE, so
+        the pool eviction must happen here, not in a purge."""
         public_peer_id = self._world_to_public.pop(world_peer_id, None)
         if public_peer_id is None:
-            return []
-        events = await self._sm_public.close_session(public_peer_id, WORLD_HANDOFF_COMPLETE)
+            return
+        await self._sm_public.close_session(public_peer_id, WORLD_HANDOFF_COMPLETE)
         self._pending_world_handoff.pop(public_peer_id, None)
-        return events
+        self._evict_from_pools(public_peer_id)
 
     def _sm_of(self, peer_id: str) -> "SessionManager | None":
         """Resolve the SessionManager that owns the instance this peer lives on (the SM

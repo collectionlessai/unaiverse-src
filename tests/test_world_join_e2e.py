@@ -157,7 +157,6 @@ def test_world_join_full_handoff():
             if grant is not None:
                 # joiner.public got the grant → open joiner.world to redeem it.
                 blob = dict(grant)
-                blob["grant_id_bytes"] = bytes.fromhex(grant["grant_id"])
                 evs = _initiate_and_reap(j_world, host_world_id, ["/world/addr"],
                                          grant=blob)
                 for e in evs:

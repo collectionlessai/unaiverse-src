@@ -4,19 +4,20 @@ The Coordinator exposes a single VOLUNTARY per-peer teardown, ``drop_peer``, and
 reacts to an INVOLUNTARY transport drop via ``on_peer_disconnected``. Both are the
 consequence of a Session transition, never a bare "close a connection":
 
-  * ``drop_peer(peer, reason)`` — we close the peer's Session (GOAWAY on the owning
-    instance) and then drop the transport + pool bookkeeping.
-  * ``drop_peer(peer, None)`` — the Session already ended (remote CLOSED/LOST or a
-    timeout): no GOAWAY, only the transport + pool drop.
+  * ``drop_peer(peer, reason)`` on a live established Session — GOAWAY-close only
+    (the transport must outlive the farewell; the settlement cut severs it once
+    the CLOSED lands) + pool evict.
+  * ``drop_peer(peer, None)`` on a live Session — silent coercive teardown: abort,
+    forget, disconnect inline + pool evict.
   * ``on_peer_disconnected(peer)`` — the link is already gone: sync the pool
     bookkeeping (``_evict_from_pools``) and signal the SessionManagers, WITHOUT a
     transport disconnect (there is nothing to disconnect).
 
-``SM.drop`` (GOAWAY-close + transport disconnect on the owning instance) and
-``_evict_from_pools`` are the primitives drop_peer composes; the only external
-teardown surface is ``drop_peer`` (voluntary) and ``on_peer_disconnected``
-(involuntary). The NodeConn constructor never calls P2P methods, so a bare fake
-transport is enough.
+``SM.drop`` (the per-state teardown dispatch) and ``_evict_from_pools`` are the
+primitives drop_peer composes; the only external teardown surface is ``drop_peer``
+(voluntary), ``on_peer_disconnected`` (involuntary) and the handoff facades
+(``complete_world_handoff`` / ``rollback_handoff``). The NodeConn constructor
+never calls P2P methods, so a bare fake transport is enough.
 """
 
 import asyncio
@@ -224,3 +225,45 @@ def test_on_peer_disconnected_evicts_pool_without_transport_disconnect():
     assert peer not in pub.disconnected
     # No Session → no events (the SM signalling is covered by the SM/integration tests).
     assert events == []
+
+
+# World-handoff carrier retirement
+
+def test_complete_world_handoff_retires_carrier_without_touching_transport():
+    """complete_world_handoff GOAWAYs the correlated public carrier on its still-live
+    transport and evicts its pool entry itself (the dispatch early-returns on
+    WORLD_HANDOFF_COMPLETE, so no purge will do it), leaving the transport to the
+    settlement cut. Disconnecting the carrier before/inside the retirement used to
+    destroy the very GOAWAY the host was parked in AWAITING_HANDOFF waiting for."""
+    conn, pub, world = _conn()
+    pub_peer, world_peer = "host-pub", "host-world"
+    _plant_pool_member(conn, pub_peer, NodeConn.OUT_PUBLIC)
+    carrier = _StubSession(state=SessionState.AWAITING_HANDOFF)
+    conn._sm_public._sessions[pub_peer] = carrier
+    conn._pending_world_handoff[pub_peer] = world_peer
+    conn._world_to_public[world_peer] = pub_peer
+
+    ret = _run(conn.complete_world_handoff(world_peer))
+
+    assert ret is None                                   # contract: nothing to dispatch
+    from unaiverse.networking.session.sess_msg import WORLD_HANDOFF_COMPLETE
+    assert carrier.closed_with == WORLD_HANDOFF_COMPLETE  # GOAWAY out...
+    assert pub_peer not in pub.disconnected               # ...transport untouched
+    assert pub_peer not in conn.peer_id_to_pool_name      # pool evicted here
+    assert not conn.is_pending_handoff(world_peer)        # correlation dropped
+
+
+def test_rollback_handoff_unpoints_world_routing():
+    """rollback_handoff on a failed handoff also resets set_world when the rolled-back
+    world peer is the current world host: start_world_handoff pointed routing at it
+    optimistically, and a world never joined must not stay classified as ours."""
+    conn, pub, world = _conn()
+    pub_peer, world_peer = "host-pub", "host-world"
+    conn.set_world(world_peer)
+    conn._pending_world_handoff[pub_peer] = world_peer
+    conn._world_to_public[world_peer] = pub_peer
+
+    conn.rollback_handoff(pub_peer)   # the public carrier FAILED
+
+    assert conn.get_world_node_peer_id() is None
+    assert not conn.is_pending_handoff(world_peer)

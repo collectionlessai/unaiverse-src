@@ -293,17 +293,24 @@ class NodeFakeConn(FakeConn):
         public_peer_id = self._world_to_public.pop(peer_id, None)
         if public_peer_id is not None:
             self._pending_world_handoff.pop(public_peer_id, None)
+        # Mirror NodeConn: un-point pool routing from a world we never joined.
+        rolled_back_world = world_peer_id if world_peer_id is not None else (
+            peer_id if public_peer_id is not None else None)
+        if rolled_back_world is not None and rolled_back_world == self.get_world_node_peer_id():
+            self.set_world(None)
 
     def is_pending_handoff(self, world_peer_id):
         return world_peer_id in self._world_to_public
 
     async def complete_world_handoff(self, world_peer_id):
+        # Mirror NodeConn: GOAWAY the carrier on its live transport + pool evict;
+        # returns None (the CLOSED arrives later via the pump).
         public_peer_id = self._world_to_public.pop(world_peer_id, None)
         if public_peer_id is None:
-            return []
-        events = await self._sm_public.close_session(public_peer_id, WORLD_HANDOFF_COMPLETE)
+            return
+        await self._sm_public.close_session(public_peer_id, WORLD_HANDOFF_COMPLETE)
         self._pending_world_handoff.pop(public_peer_id, None)
-        return events
+        self.peer_id_to_pool.pop(public_peer_id, None)
 
     async def get_messages(self, p2p_name: str, allowed_not_connected_peers=None):
         inbox = self.inbox_by_p2p[p2p_name]
