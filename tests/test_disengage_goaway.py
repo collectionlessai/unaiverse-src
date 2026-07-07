@@ -58,8 +58,10 @@ def _fake_self(*, world_agents=None, world_masters=None, engaged=None):
 
 
 def _fake_interaction():
-    """``disengage`` only reads ``.requester`` and writes ``.send_status``."""
-    return SimpleNamespace(requester=PEER, send_status=True)
+    """``disengage`` only reads ``.requester``. (It used to also write a
+    ``send_status`` ack-suppression flag, but that attribute was write-only —
+    nothing ever consumed it — and the dead write was removed in 3635b55.)"""
+    return SimpleNamespace(requester=PEER)
 
 
 def _propagated_reason(spy_call):
@@ -89,9 +91,8 @@ def test_disengage_unknown_requester_returns_false_and_skips_purge():
 
     assert ret is False
     me.node_purge_fcn.assert_not_awaited()
-    # The engaged set and the ack flag are left untouched on the unknown-agent path.
+    # The engaged set is left untouched on the unknown-agent path.
     assert me._engaged_agents == {PEER}
-    assert inter.send_status is True
 
 
 def test_disengage_not_previously_engaged_returns_false_and_skips_purge():
@@ -104,7 +105,6 @@ def test_disengage_not_previously_engaged_returns_false_and_skips_purge():
     assert ret is False
     me.node_purge_fcn.assert_not_awaited()
     assert me._engaged_agents == set()
-    assert inter.send_status is True
 
 
 def test_disengage_none_interaction_returns_false():
@@ -131,8 +131,6 @@ def test_disengage_discards_requester_and_marks_available():
     assert me._engaged_agents == set()
     assert me._available is True
     me.node_purge_fcn.assert_not_awaited()
-    # No disconnect requested -> the ack is NOT suppressed.
-    assert inter.send_status is True
 
 
 def test_disengage_via_world_master_membership():
@@ -158,14 +156,13 @@ def test_disengage_stays_unavailable_while_other_agents_remain():
     assert me._available is False
 
 
-# disconnect_too=True: current behaviour (documents the bug)
+# disconnect_too=True
 
-def test_disengage_disconnect_too_suppresses_ack_and_purges_once():
-    """disconnect_too suppresses the ack and purges the requester exactly once.
+def test_disengage_disconnect_too_clears_state_and_purges_once():
+    """disconnect_too clears the engaged state and purges the requester exactly once.
 
     State-side companion to the reason assertion below: the engaged set is
-    cleared, the agent is freed, and the confirmation is suppressed because the
-    link is about to be torn down.
+    cleared and the agent is freed.
     """
     me = _fake_self(engaged={PEER})
     inter = _fake_interaction()
@@ -175,8 +172,6 @@ def test_disengage_disconnect_too_suppresses_ack_and_purges_once():
     assert ret is True
     assert me._engaged_agents == set()
     assert me._available is True
-    # Ack suppressed because we are about to tear the link down.
-    assert inter.send_status is False
     # The purge is awaited exactly once (the ReasonCode is asserted below).
     me.node_purge_fcn.assert_awaited_once()
 

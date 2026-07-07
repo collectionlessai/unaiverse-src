@@ -180,13 +180,13 @@ def test_registered_type_predicates():
     inter = Interaction(action_name="a", requester="peerA")
     assert inter.registered_as_sent is False
     assert inter.registered_as_received is False
-    assert inter.registered_as_lazy() is False
+    assert inter.registered_as_lazy is False
     inter.type = InteractionType.SENT
     assert inter.registered_as_sent is True
     inter.type = InteractionType.RECEIVED
     assert inter.registered_as_received is True
     inter.type = InteractionType.LAZY
-    assert inter.registered_as_lazy() is True
+    assert inter.registered_as_lazy is True
 
 
 def test_is_valid_requires_insertion_order_ids():

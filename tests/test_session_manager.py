@@ -15,7 +15,7 @@ from unaiverse.networking.session import (
     SessionManager, Session, SessionRole, SessionState, SessionEventType, SessMsg,
     SESSION_HELLO_PROTOCOL, SESSION_PROFILE_PROTOCOL, SESSION_CONTROL_PROTOCOL,
 )
-from unaiverse.networking.session.sess_msg import SIMULTANEOUS_OPEN_LOSS, WORLD_DISENGAGEMENT
+from unaiverse.networking.session.sess_msg import OK, SIMULTANEOUS_OPEN_LOSS, WORLD_DISENGAGEMENT
 from unaiverse.networking.node.connpool import NodeConn
 
 pytestmark = pytest.mark.unit
@@ -145,6 +145,59 @@ def test_deliver_inbound_hello_spawns_responder(alice_conn, alice_p2p, alice_pee
     assert sess is not None
     assert sess.role == SessionRole.RESPONDER
     assert sess.state == SessionState.HELLO_ACK_SENT
+
+
+@pytest.mark.xfail(reason="bug: deliver's terminal-evict (session_manager.py:445) only covers "
+                          "FAILED/CLOSED, so a stale CLOSING/RECONNECTING responder shadows a "
+                          "fresh inbound HELLO (the HELLO_SENT re-dial failure)",
+                   strict=True)
+@pytest.mark.parametrize("stale_state, stale_timeout", [
+    (SessionState.RECONNECTING, 45.0),   # link dropped, riding the grace window
+    (SessionState.CLOSING, 10.0),        # our GOAWAY still in flight
+])
+def test_deliver_fresh_hello_supersedes_stale_responder(
+    alice_conn, alice_peer_id, bob_peer_id, stale_state, stale_timeout
+):
+    """A fresh inbound HELLO from a peer we still hold a leftover responder Session
+    for must be answered, not shadowed by the dead handshake.
+
+    deliver() only evicts FAILED/CLOSED sessions before routing an inbound HELLO.
+    A responder Session stuck in a non-terminal, non-INIT state (RECONNECTING after
+    a link drop, or CLOSING while a GOAWAY is in flight) survives that eviction, so
+    the fresh HELLO reaches _on_hello_protocol, which ignores it because the state
+    is not INIT. No HELLO_ACK goes out and the remote initiator rides its 5s
+    HELLO_SENT timeout to FAILED. This is the "re-dial into a just-closed session"
+    HELLO_SENT failure.
+    """
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+
+    # A leftover responder Session for bob, from the session that just went away.
+    stale = _mk_session(alice_conn, bob_peer_id, alice_peer_id, role=SessionRole.RESPONDER)
+    stale.session_id = b"\x11" * 16
+    stale._set_state(stale_state, stale_timeout)
+    sm._set_active(bob_peer_id, stale)
+
+    # bob re-dials and opens a brand-new handshake (a different session_id).
+    hello = SessMsg(SessMsg.KIND_HELLO_REQ, {
+        "session_id": b"\x02" * 16, "nonce_a": b"\xaa" * 32,
+        "protocol_versions": ["1.0"], "client_id": "test",
+    })
+    events = _run(sm.deliver(bob_peer_id, SESSION_HELLO_PROTOCOL, hello))
+    assert events == []
+
+    # The fresh HELLO must be answered with a HELLO_ACK (reason OK)...
+    acks = [s for s in alice_conn.sent
+            if s[1] == SESSION_HELLO_PROTOCOL
+            and s[2].kind == SessMsg.KIND_HELLO_RESP
+            and s[2].fields.get("reason_code") == OK]
+    assert acks, "stale responder Session shadowed the fresh HELLO: no HELLO_ACK sent"
+
+    # ...backed by a brand-new responder Session bound to the new session_id.
+    sess_after = sm.get_session(bob_peer_id)
+    assert sess_after is not stale
+    assert sess_after.role == SessionRole.RESPONDER
+    assert sess_after.state == SessionState.HELLO_ACK_SENT
+    assert sess_after.session_id == b"\x02" * 16
 
 
 # Tie-breaker on simultaneous open

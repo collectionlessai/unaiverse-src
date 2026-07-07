@@ -115,8 +115,7 @@ def _engage_interaction():
 
 
 def _disengage_interaction():
-    """A REAL disengage Interaction from the teacher (reads ``.requester``, writes
-    ``.send_status``)."""
+    """A REAL disengage Interaction from the teacher (only ``.requester`` is read)."""
     return Interaction(action_name="disengage", requester="T-world", target=["S-world"])
 
 
@@ -269,9 +268,6 @@ def test_disconnect_too_purges_peer_and_records_goaway(harness_clock, roles):
     assert ok is True
     assert agent_s._engaged_agents == set()
     assert agent_s._available is True
-
-    # disconnect_too suppresses the confirmation send-back on this interaction.
-    assert inter.send_status is False
 
     # BUG 3 (fixed): the reasoned purge went through conn.drop_peer, so the GOAWAY
     # was recorded on the conn with WORLD_DISENGAGEMENT.
