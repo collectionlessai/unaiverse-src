@@ -290,7 +290,13 @@ class DataProps:
                 f"Invalid tensor type: {tensor_dtype}"
 
             # Setting dtype
-            self.tensor_dtype = tensor_dtype if isinstance(tensor_dtype, torch.dtype) else eval(tensor_dtype)
+            if isinstance(tensor_dtype, torch.dtype):
+                self.tensor_dtype = tensor_dtype
+            else:
+                assert (isinstance(tensor_dtype, str) and tensor_dtype.startswith("torch.") and
+                        "." not in tensor_dtype[6:])
+                self.tensor_dtype = eval(tensor_dtype)
+                assert isinstance(self.tensor_dtype, torch.dtype)
 
             # Checking labels
             assert tensor_labels is None or (isinstance(tensor_labels, list) or

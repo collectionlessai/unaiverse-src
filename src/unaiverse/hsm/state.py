@@ -93,7 +93,7 @@ class State:
         # The state action is executed when we enter the state AND whenever we further run the state callable function
         if self.action is not None:
             log.statem(f"Running action {self.action.name} on the current state...", state=self.name)
-            self.action.system_interaction.reset_state()
+            self.action.system_interaction.reset_state()  # Only single-step actions make sense, of course
             return await self.action(*args, **kwargs)
         else:
             return None

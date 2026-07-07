@@ -100,7 +100,7 @@ def transforms_factory(trans_type: str, add_batch_dim: bool = True,
 
     if trans_type == "rgb*":
         trans = transforms.Compose([
-            transforms.Lambda(lambda img: img.convert("RGB") if img.mode != "RGB" else img),  # Ensure 3 channels
+            transforms.Lambda(lambda img: img.convert("RGB") if img.mode != "RGB" else img),  # Ensure 3 chans
             transforms.Resize(num),
             transforms.CenterCrop(num),
             transforms.ToTensor(),  # Convert PIL to tensor (3, H, W), float [0,1]
@@ -110,7 +110,8 @@ def transforms_factory(trans_type: str, add_batch_dim: bool = True,
         inverse_trans = transforms.Compose([
             transforms.Normalize(mean=[0., 0., 0.],
                                  std=[1. / 0.229, 1. / 0.224, 1. / 0.225]),
-            transforms.Lambda(lambda x: x + torch.tensor([0.485, 0.456, 0.406]).view(3, 1, 1)),
+            transforms.Lambda(lambda x: torch.clamp(x + torch.tensor([0.485, 0.456, 0.406]).view(3, 1, 1),
+                                                    min=0.0, max=1.0)),
             transforms.ToPILImage()
         ])
     elif trans_type == "gray*":
@@ -125,7 +126,7 @@ def transforms_factory(trans_type: str, add_batch_dim: bool = True,
         inverse_trans = transforms.Compose([
             transforms.Normalize(mean=[0.],
                                  std=[1. / 0.225]),
-            transforms.Lambda(lambda x: x + 0.45),
+            transforms.Lambda(lambda x: torch.clamp(x + 0.45, min=0.0, max=1.0)),
             transforms.ToPILImage()
         ])
     elif trans_type == "rgb-no_norm*":
@@ -154,7 +155,8 @@ def transforms_factory(trans_type: str, add_batch_dim: bool = True,
         inverse_trans = transforms.Compose([
             transforms.Normalize(mean=[0., 0., 0.],
                                  std=[1. / 0.229, 1. / 0.224, 1. / 0.225]),
-            transforms.Lambda(lambda x: x + torch.tensor([0.485, 0.456, 0.406]).view(3, 1, 1)),
+            transforms.Lambda(lambda x: torch.clamp(x + torch.tensor([0.485, 0.456, 0.406]).view(3, 1, 1),
+                                                    min=0.0, max=1.0)),
             transforms.ToPILImage()
         ])
     elif trans_type == "gray":
@@ -167,7 +169,7 @@ def transforms_factory(trans_type: str, add_batch_dim: bool = True,
         inverse_trans = transforms.Compose([
             transforms.Normalize(mean=[0.],
                                  std=[1. / 0.225]),
-            transforms.Lambda(lambda x: x + 0.45),
+            transforms.Lambda(lambda x: torch.clamp(x + 0.45, min=0.0, max=1.0)),
             transforms.ToPILImage()
         ])
     elif trans_type == "rgb-no_norm":
@@ -194,7 +196,7 @@ def transforms_factory(trans_type: str, add_batch_dim: bool = True,
         inverse_trans = transforms.Compose([
             transforms.Normalize(mean=[0.],
                                  std=[1. / 0.3081]),
-            transforms.Lambda(lambda x: x + 0.1307),
+            transforms.Lambda(lambda x: torch.clamp(x + 0.1307, min=0.0, max=1.0)),
             transforms.ToPILImage()
         ])
 

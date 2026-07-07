@@ -49,9 +49,10 @@ def resize1d(I, key_size):
 
 def resize2d(I, key_size):
     b, c, h, w = I.shape
+    assert c > 0
     spatial_key_size = key_size // c
     ratio = float(spatial_key_size) / float(w * h)
-    w = int(round(math.sqrt(ratio) * w))
+    w = max(1, int(round(math.sqrt(ratio) * w)))
     h = spatial_key_size // w
     remainder = key_size - (c * h * w)
     o = F.interpolate(I, size=(h, w), mode="bilinear").flatten(start_dim=1)

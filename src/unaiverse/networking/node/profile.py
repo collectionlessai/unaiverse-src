@@ -558,6 +558,7 @@ class NodeProfile:
             the hashes are equal, and the second element contains both hash strings for
             diagnostic purposes.
         """
-        computed_hash = hashlib.blake2b(json.dumps(self._profile_data['cv']).encode("utf-8"),
+        cv = self._profile_data['cv']  # Should we sort keys?
+        computed_hash = hashlib.blake2b(json.dumps(cv).encode("utf-8"),
                                         digest_size=16).hexdigest()
         return cv_hash == computed_hash, (cv_hash, computed_hash)

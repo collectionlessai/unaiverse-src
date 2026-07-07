@@ -127,13 +127,16 @@ def cleanup_docker_artifacts(where: str):
     """Cleans up the generated files and Docker image."""
     print("Cleaning...")
 
-    # Stop and remove container if it's still running (e.g., if previous run failed)
+    # Stop and remove ANY sandbox container (this run or an orphan from a crashed previous run)
     try:
-        print(f"Attempting to stop and remove container '{CONTAINER_NAME}' (if running)...")
-        subprocess.run(["docker", "stop", CONTAINER_NAME],
-                       check=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        subprocess.run(["docker", "rm", CONTAINER_NAME],
-                       check=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        result = subprocess.run(["docker", "ps", "-aq", "--filter", f"name={CONTAINER_NAME_BASE}"],
+                                check=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        ids = [c for c in result.stdout.split() if c]
+        if ids:
+            subprocess.run(["docker", "stop", *ids], check=False,
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            subprocess.run(["docker", "rm", *ids], check=False,
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     except Exception as e:
         print(f"Error during preliminary container cleanup: {e}")
 
@@ -212,23 +215,22 @@ def run_in_docker(file_to_run: str, read_only_host_paths: list[str] | None = Non
     # Completing command
     command.append(DOCKER_IMAGE_NAME)
 
+    process = None
     try:
-
-        # Running the prepared command... (using Popen to stream output in real-time)
         try:
             command.extend(["python3", file_to_run])
             process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
             assert process.stdout is not None
             for line in iter(process.stdout.readline, ''):
                 sys.stdout.write(line)
-            process.wait()  # Wait for the process to finish
+            process.wait()
             if process.returncode != 0:
                 print(f"Container exited with non-zero status code: {process.returncode}")
         except KeyboardInterrupt:
             pass
 
         print(f"\nContainer '{CONTAINER_NAME}' finished execution.")
-        return True
+        return process is not None and process.returncode == 0   # was: return True
     except FileNotFoundError:
         print("Error: Docker command not found. Is Docker installed and in your PATH?")
         print("Please ensure Docker is installed and running.")

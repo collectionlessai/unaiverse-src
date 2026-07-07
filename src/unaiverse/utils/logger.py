@@ -557,9 +557,14 @@ class _Logger:
     def close(self) -> None:
         """Flush and close the log file."""
         with self._lock:
-            assert self._log_file is not None
-            self._log_file.flush()
-            self._log_file.close()
+            if self._log_file is not None:
+                try:
+                    self._log_file.flush()
+                    self._log_file.close()
+                except Exception:
+                    pass
+                self._log_file = None
+            self._file_enabled = False
 
     def __enter__(self) -> "_Logger":
         return self

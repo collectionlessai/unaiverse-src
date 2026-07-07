@@ -147,8 +147,6 @@ class Interaction:
 
         # Status
         self.status: InteractionStatus = InteractionStatus.CREATED
-        self.data_sent_after_completion = False
-        self.buffered_stream_restarted = False
         self.volatile: bool = volatile
 
         # Pointers
@@ -211,7 +209,9 @@ class Interaction:
         return id + "_" + requester
 
     @staticmethod
-    def get_id_from_uuid(uuid: str) -> str:
+    def get_id_from_uuid(uuid: str | None) -> str | None:
+        if uuid is None:
+            return None  # Safety guard
         return uuid.split("_")[0]
 
     @property
@@ -244,6 +244,7 @@ class Interaction:
         """True when the interaction was registered as 'received'."""
         return self.type == InteractionType.RECEIVED
 
+    @property
     def registered_as_lazy(self) -> bool:
         """True when the interaction was registered as 'lazy'."""
         return self.type == InteractionType.LAZY
@@ -392,10 +393,6 @@ class Interaction:
     def is_completed(self) -> bool:
         """Return True if the interaction status is COMPLETED."""
         return self.status == InteractionStatus.COMPLETED
-
-    def was_data_sent_after_completion(self) -> bool:
-        """Return True if data was generated and sent after this interaction completed."""
-        return self.data_sent_after_completion
 
     def has_dummy_requester(self) -> bool:
         """Return True if no requester peer ID is set (system-generated interaction)."""

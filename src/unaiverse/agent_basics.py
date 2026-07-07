@@ -607,42 +607,49 @@ class AgentBasics:
                         raise GenException(f'Mismatching JSON-file roles and .py files in {self.world_folder}')
 
             for role, default_behav_file in zip(self.CUSTOM_ROLES, default_behav_files):
-
-                # Creating a dummy agent which supports the actions of the following state machines
-                try:
-                    dummy_agent, dummy_agent_memory_finder = load_agent_in_memory(agent_files, role, proc=None)
-                    dummy_agent.CUSTOM_ROLES = self.CUSTOM_ROLES
-                except Exception as e:
-                    raise GenException(f'Unable to create a valid dummy agent object for agent with role {role} [{e}]')
-
-                # Checking if the roles you wrote in agent.py are coherent with the JSON files in this folder
-                if dummy_agent.CUSTOM_ROLES != self.CUSTOM_ROLES:
-                    raise GenException(f"Mismatching roles. "
-                                       f"Roles in JSON files: {self.CUSTOM_ROLES}. "
-                                       f"Roles specified in the agent.py file: {dummy_agent.CUSTOM_ROLES}")
+                dummy_agent_memory_finder = None
 
                 try:
-                    behav = HybridStateMachine(dummy_agent)
-                    behav.load(default_behav_file)
-                    self.role_to_behav[role] = str(behav)
 
-                    # Adding roles and machines to profile
-                    self.node_profile.get_dynamic_profile()['world_roles_fsm'] = self.role_to_behav
-                except Exception as e:
-                    raise GenException(f'Error while loading or handling '
-                                       f'behav file {default_behav_file} for role {role} [{e}]')
+                    # Creating a dummy agent which supports the actions of the following state machines
+                    try:
+                        dummy_agent, dummy_agent_memory_finder = load_agent_in_memory(agent_files, role, proc=None)
+                        loaded_roles = dummy_agent.CUSTOM_ROLES
+                        dummy_agent.CUSTOM_ROLES = self.CUSTOM_ROLES
+                    except Exception as e:
+                        raise GenException(f'Unable to create a valid dummy agent object for agent with role {role} [{e}]')
 
-                # Refactoring and saving PDF
-                try:
-                    if (force_save or
-                            behav.save(os.path.join(self.world_folder, f'{role}.json'), only_if_changed=dummy_agent)):
-                        os.makedirs(os.path.join(self.world_folder, 'pdf'), exist_ok=True)
-                        behav.save_pdf(os.path.join(self.world_folder, 'pdf', f'{role}.pdf'))
-                except Exception as e:
-                    raise GenException(f'Error while saving the behav file {default_behav_file} for role {role} [{e}]')
+                    # Checking if the roles you wrote in agent.py are coherent with the JSON files in this folder
+                    if dummy_agent.CUSTOM_ROLES != loaded_roles:
+                        raise GenException(f"Mismatching roles. "
+                                           f"Roles in JSON files: {self.CUSTOM_ROLES}. "
+                                           f"Roles specified in the agent.py file: {loaded_roles}")
 
-                # Clearing memory
-                dummy_agent_memory_finder.cleanup()
+                    try:
+                        behav = HybridStateMachine(dummy_agent)
+                        behav.load(default_behav_file)
+                        self.role_to_behav[role] = str(behav)
+
+                        # Adding roles and machines to profile
+                        self.node_profile.get_dynamic_profile()['world_roles_fsm'] = self.role_to_behav
+                    except Exception as e:
+                        raise GenException(f'Error while loading or handling '
+                                           f'behav file {default_behav_file} for role {role} [{e}]')
+
+                    # Refactoring and saving PDF
+                    try:
+                        if (force_save or
+                                behav.save(os.path.join(self.world_folder, f'{role}.json'), only_if_changed=dummy_agent)):
+                            os.makedirs(os.path.join(self.world_folder, 'pdf'), exist_ok=True)
+                            behav.save_pdf(os.path.join(self.world_folder, 'pdf', f'{role}.pdf'))
+                    except Exception as e:
+                        raise GenException(f'Error while saving the behav file {default_behav_file} for role {role} [{e}]')
+
+                finally:
+
+                    # Clearing memory — runs on success AND on every GenException above
+                    if dummy_agent_memory_finder is not None:
+                        dummy_agent_memory_finder.cleanup()
 
     def create_behav_files(self):
         """This method is called when building a world object. In your custom world-class, you can overload this method
@@ -800,6 +807,7 @@ class AgentBasics:
             public = False
         else:
             log.error(f"Cannot add agent with peer ID {peer_id} - unknown role: {role}")
+            del self.all_agents[peer_id]
             return False
 
         # Human or artificial?
@@ -818,6 +826,7 @@ class AgentBasics:
                                                            buffered=False,
                                                            public=public,
                                                            skip_pubsub=not add_pubsub_streams))):
+                await self.remove_agent(peer_id)  # Clearing
                 return False
 
             # Check compatibility of the generated streams of the agent we are adding with our-agent's processor
@@ -827,6 +836,7 @@ class AgentBasics:
                                                            buffered=False,
                                                            public=public,
                                                            skip_pubsub=not add_pubsub_streams))):
+                await self.remove_agent(peer_id)  # Clearing
                 return False
 
         log.misc(f"Successfully added agent {profile.get_static_profile()['node_name']} "

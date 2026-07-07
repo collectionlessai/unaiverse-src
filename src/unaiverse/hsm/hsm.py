@@ -294,7 +294,7 @@ class HybridStateMachine:
         """
         self.policy_filter = filter_fcn
         self.policy_filter_opts = filter_fcn_opts
-        self.policy_filter_opts.clear()
+        self.policy_filter_opts.clear()  # It is cleared on set, it will be filled up later
 
     def set_wildcards(self, wildcards: dict[str, str | float | int] | None, apply: bool = False) -> None:
         """Sets the dictionary of wildcards that are used to dynamically replace placeholder values in action
@@ -826,7 +826,8 @@ class HybridStateMachine:
                            args=_state.action.args if _state.action is not None else None,
                            state_id=None,
                            blocking=_state.blocking,
-                           msg=_state.msg_with_wildcards)
+                           msg=_state.msg_with_wildcards,
+                           msg_action=_state.action.msg_with_wildcards if _state.action is not None else None)
 
         # Copy all the transitions of the HSM
         for _from_state, _to_states in hsm.transitions.items():
@@ -849,7 +850,7 @@ class HybridStateMachine:
 
         if make_a_copy:
             self.state = hsm.state
-            self.prev_state = hsm.state
+            self.prev_state = hsm.prev_state
             self.initial_state = hsm.initial_state
             self.limbo_state = hsm.limbo_state
             self.set_welcome_message(hsm.welcome_msg_with_wildcards)
@@ -1202,7 +1203,7 @@ class HybridStateMachine:
 
             await self.act_states()
             ret = await self.act_transitions(self.must_wait())
-            if self.state != starting_state:
+            if self.state != starting_state:  # Value of self.state might change while act_transitions runs
                 changed_state = True
             if ret != 0 or (self.state is not None and self.states[self.state].blocking):
                 break
@@ -1507,15 +1508,18 @@ class HybridStateMachine:
                     total_time = 0.
                     for k in Custom.SECONDS_ARG_NAMES:
                         if k in action_dict:
-                            total_time = action_dict[k]  # It will take the last one in case of multiple aliases used
+                            total_time = action_dict[k]
+                            break
                     timeout = 0.
                     for k in Custom.TIMEOUT_ARG_NAMES:
                         if k in action_dict:
-                            timeout = action_dict[k]  # It will take the last one in case of multiple aliases used
+                            timeout = action_dict[k]
+                            break
                     delay = 0.
                     for k in Custom.DELAY_ARG_NAMES:
                         if k in action_dict:
-                            delay = action_dict[k]  # It will take the last one in case of multiple aliases used
+                            delay = action_dict[k]
+                            break
 
                     self.add_transit(from_state, to_state,
                                      action=act_name, args=act_args, ready=act_ready, msg=msg,

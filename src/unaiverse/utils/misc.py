@@ -163,12 +163,15 @@ def countdown_start(seconds: int, msg: str) -> threading.Thread:
             pass  # Tqdm handles flushing
 
     def drawing(secs: int, message: str) -> None:
-        with tqdm(total=secs, desc=message, file=sys.__stdout__) as t:
-            sys.stdout = TqdmPrintRedirector(t)  # Redirect prints to tqdm.write
-            for i in range(secs):
-                time.sleep(1)
-                t.update(1.)
-            sys.stdout = sys.__stdout__  # Restore original stdout
+        saved_stdout = sys.stdout  # whatever was active, not sys.__stdout__
+        try:
+            with tqdm(total=secs, desc=message, file=sys.__stdout__) as t:
+                sys.stdout = TqdmPrintRedirector(t)  # Redirect prints to tqdm.write
+                for i in range(secs):
+                    time.sleep(1)
+                    t.update(1.)
+        finally:
+            sys.stdout = saved_stdout  # Restore the prior value, always
 
     sys.stdout.flush()
     handle = threading.Thread(target=drawing, args=(seconds, msg))

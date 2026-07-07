@@ -690,8 +690,6 @@ class Agent(AgentBasics):
         self._engaged_agents.discard(_requester)  # Remove if present
 
         if disconnect_too:
-            if interaction is not None:
-                interaction.send_status = False  # This will avoid sending back a confirmation for this interaction
             # Graceful disengage: carry WORLD_DISENGAGEMENT so __purge emits a GOAWAY and the
             # remote sees Session.Closed instead of timing out via liveness.
             await self.node_purge_fcn(_requester, reason=WORLD_DISENGAGEMENT)
@@ -826,7 +824,7 @@ class Agent(AgentBasics):
 
                             if data is not None:
                                 if _processing_fcn is None:
-                                    return True
+                                    return True  # If some data arrived and no further processing is expected, just True
                                 else:
                                     got_something = True
                                     _processing_fcn: Callable
@@ -997,17 +995,22 @@ class Agent(AgentBasics):
                 return False
 
         # Adding new streams and subscribing (if compatible with our processor)
+        something_good_happened = False
         for stream_owner, prop_dict, prop_obj in zip(stream_owners, props_dicts, props_objs):
             if not unsubscribe:
                 if not (await self.add_compatible_streams(peer_id=stream_owner, streams_in_profile=[prop_dict],
                                                           buffered=False, public=False)):
                     log.error(f"Unable to add a pubsub stream ({prop_obj.get_name()}) from agent {stream_owner}: "
                               f"no compatible streams were found")
+                else:
+                    something_good_happened = True
             else:
                 if not (await self.remove_streams(peer_id=stream_owner, name=prop_obj.get_name())):
                     log.misc(f"Unable to unsubscribe from pubsub stream ({prop_obj.get_name()}) "
                              f"of agent {stream_owner}")
-        return True
+                else:
+                    something_good_happened = True
+        return something_good_happened
 
     @action
     async def record(self, interaction: Interaction | None = None,
@@ -1404,7 +1407,7 @@ class Agent(AgentBasics):
                 elif cmp == ">=" and eval_result >= thres:
                     outcome = True
 
-                if cmp[0] == "<" or cmp[0] == "<=":
+                if cmp[0] == "<":
                     alias = 'error level' if good_if_true else 'mark'
                 else:
                     alias = 'mark' if good_if_true else 'error level'
