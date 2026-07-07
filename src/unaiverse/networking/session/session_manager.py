@@ -442,12 +442,15 @@ class SessionManager:
                 return []
             # Intent diverged (world-join vs plain), or a spent carrier: the stale Session
             # would shadow the new dial, and a bare forget leaves the remote ESTABLISHED,
-            # ignoring our HELLO. GOAWAY-close it (so the remote drops its Session) and forget
-            # it now — without waiting for the CLOSED, or ensure() below would return the
-            # CLOSING — then dial fresh.
+            # ignoring our HELLO. GOAWAY-close it (so the remote drops its Session and
+            # answers the new HELLO) and forget it now — without waiting for the CLOSED,
+            # or ensure() below would return the CLOSING — then dial fresh. The transport
+            # is deliberately NOT touched: the live connection is exactly what the re-dial
+            # wants, and a disconnect here would abort the GOAWAY we just queued (the
+            # forgotten Session emits no CLOSED, so no settlement cut is scheduled).
             log.session(f"initiate(...{peer_id[-5:]}): replacing {existing.state.value} Session "
                         f"(intent diverged or stale carrier)", sub=self._label)
-            await self.drop(peer_id, GRACEFUL_SHUTDOWN)
+            await self.close_session(peer_id, GRACEFUL_SHUTDOWN)
             self._forget(peer_id)
 
         self.ensure(peer_id, addresses, is_world_join=is_world_join,
@@ -481,6 +484,26 @@ class SessionManager:
         # re-handshake initiated by the remote): evict it and fall through to
         # the no-session paths.
         if sess is not None and sess.state in (SessionState.FAILED, SessionState.CLOSED):
+            self._forget(peer_id)
+            sess = None
+
+        # A terminal-ADJACENT Session must not shadow a fresh handshake either: a new
+        # inbound HELLO_REQ while we are CLOSING (our GOAWAY still in flight, any
+        # role) or while a RESPONDER rides its reconnect grace is the peer's
+        # declaration that the old session is dead on its side — it re-dialed.
+        # Supersede silently: abort the old FSM (no terminal event; the hosted/pool
+        # state of the old relation survives until the new ESTABLISHED re-enrols it)
+        # and let the HELLO spawn a fresh responder below. An INITIATOR in
+        # RECONNECTING is an in-flight dial contention and keeps going to the
+        # simultaneous-open tie-breaker instead.
+        if (sess is not None and protocol_id == SESSION_HELLO_PROTOCOL and
+                sess_msg.kind == SessMsg.KIND_HELLO_REQ and
+                (sess.state == SessionState.CLOSING or
+                 (sess.state == SessionState.RECONNECTING and
+                  sess.role == SessionRole.RESPONDER))):
+            log.session(f"fresh inbound HELLO supersedes stale {sess.state.value} Session "
+                        f"for ...{peer_id[-5:]}", sub=self._label)
+            sess.abort_silently("superseded_by_new_hello")
             self._forget(peer_id)
             sess = None
 
@@ -760,9 +783,9 @@ class SessionManager:
           * already tearing down (a settlement cut is pending, or CLOSING) → no-op:
             makes the frequent double-purge (a CLOSED dispatched after an earlier
             purge) idempotent WITHOUT aborting the farewell in flight;
-          * ESTABLISHED/RECONNECTING with a reason → GOAWAY-close only; the deferred
-            settlement cut severs the transport once the CLOSED lands (ACK or the
-            CLOSING timeout);
+          * ESTABLISHED/RECONNECTING/AWAITING_HANDOFF with a reason → GOAWAY-close
+            only; the deferred settlement cut severs the transport once the CLOSED
+            lands (ACK or the CLOSING timeout);
           * KNOWN → forget the placeholder and sever any half-open transport now
             (there is no GOAWAY owed to a peer we never handshaked; the disconnect
             is a Go no-op when nothing is connected, and it is the only cure for a
@@ -796,7 +819,8 @@ class SessionManager:
             return []
 
         if reason_code is not None and sess.state in (SessionState.ESTABLISHED,
-                                                      SessionState.RECONNECTING):
+                                                      SessionState.RECONNECTING,
+                                                      SessionState.AWAITING_HANDOFF):
             return await self.close_session(peer_id, reason_code)
 
         sess.abort_silently(
@@ -807,14 +831,25 @@ class SessionManager:
 
     async def close_all(self, reason_code: int = GRACEFUL_SHUTDOWN) -> List[SessionEvent]:
         """GOAWAY every Session that can be gracefully closed (ESTABLISHED /
-        RECONNECTING). Used on node/runner shutdown so peers see a clean CLOSED
-        instead of falling through liveness-timeout. Sessions already CLOSING/CLOSED
-        (e.g. an intentional world-handoff GOAWAY) are skipped by Session.close."""
-        for sess in list(self._sessions.values()):
-            try:
-                await sess.close(reason_code)
-            except Exception as e:
-                log.error(f"close_all: close(...{sess.peer_id[-5:]}) failed: {e}", sub=self._label)
+        RECONNECTING / AWAITING_HANDOFF). Used on node/runner shutdown so peers see
+        a clean CLOSED instead of falling through liveness-timeout. Sessions already
+        CLOSING/CLOSED (e.g. an intentional world-handoff GOAWAY) are left alone;
+        every other non-terminal state (a handshake in flight, a KNOWN placeholder)
+        is aborted silently and forgotten — no farewell is owed mid-handshake, and
+        the shutdown drain must be able to reach 'nothing closing, nothing pending'
+        instead of waiting on FSMs nobody will ever pump again."""
+        for peer_id, sess in list(self._sessions.items()):
+            if sess.state in (SessionState.CLOSING, SessionState.CLOSED, SessionState.FAILED):
+                continue
+            if sess.state in (SessionState.ESTABLISHED, SessionState.RECONNECTING,
+                              SessionState.AWAITING_HANDOFF):
+                try:
+                    await sess.close(reason_code)
+                except Exception as e:
+                    log.error(f"close_all: close(...{sess.peer_id[-5:]}) failed: {e}", sub=self._label)
+            else:
+                sess.abort_silently("shutdown")
+                self._forget(peer_id)
         return []
 
     # Accessors

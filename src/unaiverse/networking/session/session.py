@@ -933,8 +933,12 @@ class Session:
 
     async def close(self, reason_code: int = GRACEFUL_SHUTDOWN) -> None:
         """Send GOAWAY to the remote peer and enter CLOSING. The FSM completes
-        via process_inbound(GoawayAck) or check_timeout."""
-        if self.state not in (SessionState.ESTABLISHED, SessionState.RECONNECTING):
+        via process_inbound(GoawayAck) or check_timeout. Closable states are the
+        two live ones plus AWAITING_HANDOFF: a world host shutting down must be
+        able to GOAWAY a parked grant carrier too, instead of leaving it to die
+        of timeout after the process is gone."""
+        if self.state not in (SessionState.ESTABLISHED, SessionState.RECONNECTING,
+                              SessionState.AWAITING_HANDOFF):
             log.session(f"{self!r} close({reason_code}) called in state {self.state.value} — ignored", sub=self._sub)
             return
         await self._send_payload(SESSION_CONTROL_PROTOCOL, SessMsg(SessMsg.KIND_GOAWAY, {

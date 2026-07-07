@@ -60,8 +60,10 @@ def test_initiate_idempotent_when_already_healthy(alice_conn, alice_p2p, alice_p
 
 def test_initiate_replaces_on_divergent_world_join_intent(alice_conn, alice_peer_id, bob_peer_id):
     """A non-terminal Session whose world-join intent DIFFERS from the request is replaced
-    (dropped + re-dialed), not silently reused: otherwise a world join would be lost to a
-    leftover plain Session and the caller would see success while nothing (re)starts (B8)."""
+    (closed + re-dialed), not silently reused: otherwise a world join would be lost to a
+    leftover plain Session and the caller would see success while nothing (re)starts (B8).
+    The transport is deliberately NOT disconnected: the live connection is what the
+    re-dial wants, and a disconnect would abort the replacement GOAWAY on the wire."""
     alice_conn.connect_returns = (bob_peer_id, False)
     sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
     _run(sm.initiate(bob_peer_id, ["/ip4/127.0.0.1/tcp/0"], is_world_join=False))
@@ -69,8 +71,8 @@ def test_initiate_replaces_on_divergent_world_join_intent(alice_conn, alice_peer
     # Same peer, now a WORLD-join intent → the plain Session must be replaced, not no-opped.
     _run(sm.initiate(bob_peer_id, ["/ip4/127.0.0.1/tcp/0"], is_world_join=True))
     assert sm.get_session(bob_peer_id).is_world_join is True
-    assert len(alice_conn.connect_calls) == 2            # re-dialed
-    assert bob_peer_id in alice_conn.disconnect_calls    # the stale one was dropped
+    assert len(alice_conn.connect_calls) == 2                # re-dialed
+    assert bob_peer_id not in alice_conn.disconnect_calls    # transport kept for the re-dial
 
 
 def test_initiate_replace_stale_forces_replacement_at_matching_intent(alice_conn, alice_peer_id, bob_peer_id):
@@ -149,10 +151,6 @@ def test_deliver_inbound_hello_spawns_responder(alice_conn, alice_p2p, alice_pee
     assert sess.state == SessionState.HELLO_ACK_SENT
 
 
-@pytest.mark.xfail(reason="bug: deliver's terminal-evict (session_manager.py:445) only covers "
-                          "FAILED/CLOSED, so a stale CLOSING/RECONNECTING responder shadows a "
-                          "fresh inbound HELLO (the HELLO_SENT re-dial failure)",
-                   strict=True)
 @pytest.mark.parametrize("stale_state, stale_timeout", [
     (SessionState.RECONNECTING, 45.0),   # link dropped, riding the grace window
     (SessionState.CLOSING, 10.0),        # our GOAWAY still in flight
@@ -163,13 +161,12 @@ def test_deliver_fresh_hello_supersedes_stale_responder(
     """A fresh inbound HELLO from a peer we still hold a leftover responder Session
     for must be answered, not shadowed by the dead handshake.
 
-    deliver() only evicts FAILED/CLOSED sessions before routing an inbound HELLO.
-    A responder Session stuck in a non-terminal, non-INIT state (RECONNECTING after
-    a link drop, or CLOSING while a GOAWAY is in flight) survives that eviction, so
-    the fresh HELLO reaches _on_hello_protocol, which ignores it because the state
-    is not INIT. No HELLO_ACK goes out and the remote initiator rides its 5s
-    HELLO_SENT timeout to FAILED. This is the "re-dial into a just-closed session"
-    HELLO_SENT failure.
+    A responder Session parked in a terminal-adjacent state (RECONNECTING after a
+    link drop, or CLOSING while a GOAWAY is in flight) is superseded by a fresh
+    inbound HELLO_REQ: the peer re-dialing is its declaration that the old session
+    is dead on its side. deliver aborts the stale FSM silently and spawns a fresh
+    responder, so the re-dial handshakes in ~1 RTT instead of dying of HELLO_SENT
+    timeout against a zombie (the "re-dial into a just-closed session" failure).
     """
     sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
 
@@ -853,3 +850,41 @@ def test_failed_from_deliver_quarantines_and_schedules_cut(alice_conn, alice_pee
 
     _run(sm.tick(now=time.monotonic() + 3.0))
     assert alice_conn.disconnect_calls == [bob_peer_id]
+
+
+def test_drop_on_awaiting_handoff_goaways(alice_conn, alice_peer_id, bob_peer_id):
+    """AWAITING_HANDOFF is closable: a world host tearing down (shutdown, leave) must
+    be able to GOAWAY a parked grant carrier instead of leaving it to die of its 30s
+    timeout after the process is gone. drop routes it through the cooperative branch."""
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    sess = _mk_session(alice_conn, bob_peer_id, alice_peer_id, role=SessionRole.RESPONDER)
+    sess._set_state(SessionState.AWAITING_HANDOFF, 30.0)
+    sm._set_active(bob_peer_id, sess)
+
+    _run(sm.drop(bob_peer_id, WORLD_DISENGAGEMENT))
+    goaways = [s for s in alice_conn.sent if s[2].kind == SessMsg.KIND_GOAWAY]
+    assert len(goaways) == 1
+    assert sess.state == SessionState.CLOSING
+    assert alice_conn.disconnect_calls == []      # cut deferred to settlement, as usual
+
+
+def test_close_all_goaways_live_and_aborts_handshakes(alice_conn, alice_peer_id, bob_peer_id):
+    """close_all (shutdown sweep) GOAWAYs the closable Sessions and silently aborts
+    the in-flight handshakes: no farewell is owed mid-handshake, and the shutdown
+    drain needs every non-terminal FSM either CLOSING (waited on) or gone."""
+    other_peer = "12D3KooWother_peer_for_close_all_test"
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    live = _mk_session(alice_conn, bob_peer_id, alice_peer_id)
+    live._set_state(SessionState.ESTABLISHED, None)
+    sm._set_active(bob_peer_id, live)
+    inflight = _mk_session(alice_conn, other_peer, alice_peer_id)
+    inflight._set_state(SessionState.HELLO_SENT, 5.0)
+    sm._set_active(other_peer, inflight)
+
+    _run(sm.close_all())
+
+    assert live.state == SessionState.CLOSING            # GOAWAY out, waiting the ACK
+    goaways = [s for s in alice_conn.sent if s[2].kind == SessMsg.KIND_GOAWAY]
+    assert [g[0] for g in goaways] == [bob_peer_id]      # only the live one got a GOAWAY
+    assert inflight.state == SessionState.FAILED         # aborted silently
+    assert sm.get_session(other_peer) is None            # and forgotten (drain can exit)
