@@ -14,6 +14,7 @@
 """
 import time
 import math
+import asyncio
 from collections import namedtuple
 from unaiverse.utils.logger import log
 from unaiverse.networking.p2p.messages import Msg
@@ -913,9 +914,50 @@ class NodeConn:
     async def close_all_sessions(self) -> None:
         """Shutdown path: GOAWAY every Session on every instance so peers see a clean CLOSED
         instead of a liveness timeout. Events are intentionally dropped (the node is going
-        down); close_all already skips Sessions already CLOSING/CLOSED."""
+        down); close_all skips Sessions already CLOSING/terminal and silently aborts the
+        in-flight handshakes (no farewell owed there, and the drain must be able to end)."""
         for sm in self._session_managers:
             await sm.close_all()
+
+    async def drain_teardown(self, budget_s: float = 3.0) -> None:
+        """Shutdown drain: keep pumping ONLY the session traffic until every farewell
+        settled — no Session left CLOSING (its GOAWAY_ACK arrived, or the timeout
+        finalized it) and no settlement cut still pending (the transports of ended
+        Sessions actually severed) — or the budget expires. Events are discarded: the
+        node is going down, there is no application state left worth dispatching to.
+        World instance first: a host's hosted GOAWAYs ride the world instance.
+
+        This is what makes the shutdown GOAWAYs real on a network with latency: the
+        send returning only means 'queued in the local muxer', and exiting (or closing
+        the Go hosts) right after would destroy the queued frames. The GOAWAY_ACK
+        round-trip is the end-to-end proof of delivery; the budget bounds the wait
+        when a peer is gone and the 10s CLOSING timeout exceeds the shutdown patience.
+        """
+        deadline = time.monotonic() + budget_s
+        managers = [sm for sm in reversed(self._session_managers)]
+        while time.monotonic() < deadline:
+            for sm in managers:
+                try:
+                    _, session_inbounds = sm.get_messages()
+                    for inb in session_inbounds:
+                        await sm.deliver(inb.peer_id, inb.protocol_id, inb.sess_msg)
+                    await sm.tick()
+                except Exception as e:
+                    log.error(f"drain_teardown: pump on {sm.p2p_name} failed: {e}")
+            if not any(sm.has_pending_teardown() for sm in managers):
+                return
+            await asyncio.sleep(0.05)
+
+    def close_transports(self) -> None:
+        """Shutdown: close the Go host of every instance (world first), freeing its
+        slot — until now nothing ever called P2P.close, so embedding several Nodes in
+        one process leaked slots. Only the shutdown path calls this, after
+        drain_teardown has let the farewells settle."""
+        for sm in reversed(self._session_managers):
+            try:
+                sm.close_transport()
+            except Exception as e:
+                log.error(f"close_transports: closing {sm.p2p_name} failed: {e}")
 
     # World-handoff correlation
     #

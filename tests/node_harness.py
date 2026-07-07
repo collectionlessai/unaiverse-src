@@ -278,6 +278,16 @@ class NodeFakeConn(FakeConn):
         for sm in self._session_managers:
             await sm.close_all()
 
+    async def drain_teardown(self, budget_s: float = 3.0):
+        # Mirror of NodeConn.drain_teardown; the in-proc inboxes are pumped by the
+        # tests themselves, so the harness drain only sweeps the ticks once.
+        for sm in reversed(self._session_managers):
+            await sm.tick()
+
+    def close_transports(self):
+        # No real transports to close in the in-proc harness.
+        return
+
     async def start_world_handoff(self, public_peer_id, world_peer_id, world_addrs,
                                   grant_blob, reject_relay):
         self.set_world(world_peer_id)

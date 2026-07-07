@@ -25,7 +25,7 @@ import asyncio
 import pytest
 
 from unaiverse.networking.node.connpool import NodeConn
-from unaiverse.networking.session.sess_msg import WORLD_DISENGAGEMENT
+from unaiverse.networking.session.sess_msg import WORLD_DISENGAGEMENT, SessionInbound
 from unaiverse.networking.session.session import SessionState
 
 pytestmark = pytest.mark.unit
@@ -267,3 +267,102 @@ def test_rollback_handoff_unpoints_world_routing():
 
     assert conn.get_world_node_peer_id() is None
     assert not conn.is_pending_handoff(world_peer)
+
+
+# Shutdown drain
+
+def _fp2p_with_inbox(fp2p):
+    """Give a _FakeP2P the session surface the drain pumps: send_session records,
+    get_messages pops a preloadable inbox of SessionInbound-shaped items."""
+    fp2p.sent = []
+    fp2p.inbox = []
+
+    async def send_session(peer_id, protocol_id, sess_msg):
+        fp2p.sent.append((peer_id, protocol_id, sess_msg))
+        return True
+
+    def get_messages():
+        batch, fp2p.inbox = fp2p.inbox, []
+        return [], batch
+
+    fp2p.send_session = send_session
+    fp2p.get_messages = get_messages
+    return fp2p
+
+
+def _real_established(conn, sm_attr, fp2p, peer_id):
+    from unaiverse.networking.session import Session, SessionRole
+    sm = getattr(conn, sm_attr)
+    sess = Session(peer_id=peer_id, role=SessionRole.INITIATOR, p2p=fp2p,
+                   p2p_name=sm.p2p_name, local_peer_id=sm.local_peer_id,
+                   local_node_id="n", local_profile_factory=lambda: {})
+    sess._set_state(SessionState.ESTABLISHED, None)
+    sm._set_active(peer_id, sess)
+    return sess
+
+
+def test_drain_teardown_settles_ack_then_cut(monkeypatch):
+    """The drain pumps until the farewell settles end-to-end: GOAWAY out (close_all),
+    the ACK delivered by the pump completes CLOSING -> CLOSED, the settlement cut
+    executes after its linger, and only then the drain returns — well within budget."""
+    import unaiverse.networking.session.session_manager as sm_module
+    from unaiverse.networking.session import SessMsg, SESSION_CONTROL_PROTOCOL
+    monkeypatch.setattr(sm_module, "_CUT_LINGER_S", 0.05)   # keep the test fast
+
+    conn, pub, world = _conn()
+    _fp2p_with_inbox(world)
+    peer = "w1"
+    sess = _real_established(conn, "_sm_world", world, peer)
+
+    _run(conn.close_all_sessions())
+    assert sess.state == SessionState.CLOSING
+    # The peer's GOAWAY_ACK arrives while draining.
+    world.inbox.append(SessionInbound(peer_id=peer, protocol_id=SESSION_CONTROL_PROTOCOL,
+                                      sess_msg=SessMsg(SessMsg.KIND_GOAWAY_ACK, {"received": True})))
+
+    import time as _t
+    t0 = _t.monotonic()
+    _run(conn.drain_teardown(budget_s=3.0))
+    elapsed = _t.monotonic() - t0
+
+    assert conn._sm_world.get_session(peer) is None       # CLOSED + settled
+    assert peer in world.disconnected                     # settlement cut executed
+    assert not conn._sm_world.has_pending_teardown()
+    assert elapsed < 1.0                                  # settled, did not eat the budget
+
+
+def test_drain_exits_with_inflight_handshake_aborted():
+    """A handshake still in flight at shutdown is aborted by close_all (no farewell
+    owed), so the drain has nothing to wait on and returns immediately instead of
+    burning its whole budget on an FSM nobody will ever answer."""
+    conn, pub, world = _conn()
+    _fp2p_with_inbox(world)
+    peer = "w1"
+    sess = _real_established(conn, "_sm_world", world, peer)
+    sess._set_state(SessionState.HELLO_SENT, 5.0)         # in-flight, not closable
+
+    _run(conn.close_all_sessions())
+    assert conn._sm_world.get_session(peer) is None       # aborted + forgotten
+
+    import time as _t
+    t0 = _t.monotonic()
+    _run(conn.drain_teardown(budget_s=3.0))
+    assert _t.monotonic() - t0 < 0.5
+
+
+def test_drain_gives_up_at_budget_when_ack_never_comes():
+    """No ACK and no timeout within the budget: the drain is bounded — it returns at
+    the deadline with the Session still CLOSING (the GOAWAY had its chance on the
+    wire; the transport teardown that follows is the best we can do)."""
+    conn, pub, world = _conn()
+    _fp2p_with_inbox(world)
+    peer = "w1"
+    sess = _real_established(conn, "_sm_world", world, peer)
+
+    _run(conn.close_all_sessions())
+    import time as _t
+    t0 = _t.monotonic()
+    _run(conn.drain_teardown(budget_s=0.3))
+    elapsed = _t.monotonic() - t0
+    assert 0.25 <= elapsed < 1.5
+    assert sess.state == SessionState.CLOSING

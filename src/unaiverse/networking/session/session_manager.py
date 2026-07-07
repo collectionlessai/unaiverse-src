@@ -865,6 +865,18 @@ class SessionManager:
         return [pid for pid, s in self._sessions.items()
                 if s.state == SessionState.ESTABLISHED]
 
+    def has_pending_teardown(self) -> bool:
+        """True while a farewell is still in flight on this instance: a CLOSING
+        Session waiting its GOAWAY_ACK, or a settlement cut not yet executed. The
+        shutdown drain polls this to know when the goodbyes are done."""
+        return bool(self._pending_cuts) or any(
+            s.state == SessionState.CLOSING for s in self._active_sessions.values())
+
+    def close_transport(self) -> None:
+        """Shut down this instance's transport (the Go host), freeing its slot.
+        Terminal: only the shutdown path calls it, after the drain."""
+        self.p2p.close()
+
     def is_tearing_down(self, peer_id: str) -> bool:
         """True while this peer's teardown is in flight: its Session is CLOSING (a
         GOAWAY awaiting its ACK) or a settlement cut is pending in the ledger.

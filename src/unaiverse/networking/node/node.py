@@ -1620,6 +1620,21 @@ class Node:
                 except Exception as e:
                     log.error(f"Error closing all sessions on shutdown: {e}")
                 try:
+                    # Drain the farewell round-trips: pump the session traffic until every
+                    # GOAWAY got its ACK (or aborted) and the settlement cuts executed, so
+                    # the transports die AFTER the goodbyes, not under them. Without this
+                    # the process exits with the GOAWAYs still queued in the local muxer
+                    # and the peers only ever observe a liveness timeout.
+                    await self.conn.drain_teardown(budget_s=3.0)
+                except Exception as e:
+                    log.error(f"Error draining the session teardown on shutdown: {e}")
+                try:
+                    # Close the Go hosts (frees their slots for processes embedding
+                    # several Nodes); nothing else runs on the transports after the drain.
+                    self.conn.close_transports()
+                except Exception as e:
+                    log.error(f"Error closing the transports on shutdown: {e}")
+                try:
                     log.close()  # Closing logger (asserts on a stdout-only logger)
                 except Exception:
                     pass
