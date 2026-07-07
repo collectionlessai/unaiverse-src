@@ -81,9 +81,12 @@ func SendOnProtocol(
 	// promotion-free on purpose: it also dials relays, which must never enter
 	// the application pools.
 	promoteFriendlyPeer(ni, pid, connDirection(s), s.Conn().RemoteMultiaddr())
-	// Best-effort: keep the read side open so a responder reply can come back on
-	// THIS stream if the peer ever decides to write before we close — for now
-	// responses arrive on a *fresh* inbound stream, so we just half-close write.
+	// One-shot stream: write, then close BOTH sides. CloseWrite is graceful (FIN
+	// ordered after the data, delivery still guaranteed while the connection
+	// lives); responses always arrive on a fresh inbound stream, so the read side
+	// is closed too. NOTE: success below means "accepted by the local muxer", not
+	// "delivered" — an abortive DisconnectFrom (stream Reset) issued right after
+	// destroys the frame, which is why the Python teardown defers the disconnect.
 	if err := writeSessionFrame(s, payload); err != nil {
 		_ = s.Reset()
 		return C.CString(jsonErrorResponse(fmt.Sprintf("SendOnProtocol: write to %s failed", pid), err))

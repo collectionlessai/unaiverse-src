@@ -234,9 +234,10 @@ class SessionManager:
     # and the P2P error type is not caught here (the caller handles it).
     #
     # The async boundary is uniform and lives only in P2P: the operations that block on a
-    # round-trip (send, broadcast, reserve) are async and offload there. The instantaneous
-    # Go FFI calls (subscribe/unsubscribe, the peer-info getters, get_messages) stay sync,
-    # they run in the hot polling loop and a thread hop would only add latency.
+    # round-trip (send, broadcast, reserve, disconnect) are async and offload there. The
+    # instantaneous Go FFI calls (subscribe/unsubscribe, the peer-info getters,
+    # get_messages) stay sync, they run in the hot polling loop and a thread hop would
+    # only add latency.
 
     async def send(self, channel: str, msg) -> None:
         await self.p2p.send(channel, msg)
@@ -380,9 +381,11 @@ class SessionManager:
         return sess
 
     async def activate(self, peer_id: str) -> List[SessionEvent]:
-        """Start the (initiator) Session for `peer_id`: dial + HELLO, then evict it if
-        the dial fails terminally. Returns the events from start (typically [] until
-        ESTABLISHED arrives). No-op ([]) if there is no Session for the peer."""
+        """Start the (initiator) Session for `peer_id`: enter CONNECTING and launch the
+        dial off-task (its outcome — HELLO / retry / FAILED — is reaped by tick_dial).
+        Returns the events from start (always [] today; a quarantined peer returns a
+        synthetic FAILED instead, without dialing). No-op ([]) if there is no Session
+        for the peer."""
         sess = self._sessions.get(peer_id)
         if sess is None:
             return []

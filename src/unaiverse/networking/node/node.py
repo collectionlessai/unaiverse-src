@@ -2408,9 +2408,10 @@ class Node:
                 code_bundle=code_bundle,
                 initial_stats=initial_stats,
             )
-            # No role stash: the grant signature binds (joiner world peer-id,
-            # role, expiry), and the world-side ESTABLISHED reads the role back
-            # from the verified PRIVATE_JOIN.
+            # No role stash needed here: the pre-admission (add_to_world_*_list above)
+            # records the role under the joiner's PRIVATE peer-id, and the world-side
+            # ESTABLISHED reads it back from that record (conn.get_role) — the grant is
+            # unsigned and PRIVATE_JOIN no longer exists.
             log.misc(f"[session] decision: granting world role '{role_str}' to ...{peer_id[-5:]}")
             return ProfileDecisionResult(accepted=True, world_grant=spec)
 
@@ -2422,12 +2423,18 @@ class Node:
     async def _dispatch_session_event(self, ev) -> None:
         """Single dispatch site translating SessionEvents into application action.
 
-        ESTABLISHED drives the world handoff (joiner side) and the
-        ``add_agent`` / ``__join_world`` / world-list side effects that the legacy
-        handshake used to perform inline. RECONNECTING is logged; RESUMED
-        re-enrols the agent if the disconnect path already purged it;
-        LOST/CLOSED purge; FAILED is surfaced as an error (the handshake is
-        fire-and-forget, so a failure that surfaces here is asynchronous)."""
+        ESTABLISHED drives the world handoff (joiner side) and the ``add_agent`` /
+        ``__join_world`` / world-list side effects that the legacy handshake used to
+        perform inline. RECONNECTING is logged; RESUMED re-enrols the agent if the
+        disconnect path already purged it. The terminal branches all end in a purge
+        (pool evict + hosted removal; the transport was already settled by the SM
+        before these events surfaced, so the purge's drop lands on the tearing-down
+        no-op branch): FAILED first rolls back the handoff correlation, unlists the
+        world member and re-arms the rejoin of a never-completed join; LOST/CLOSED
+        first unlist and possibly run the full leave_world (which early-returns past
+        the purge); a CLOSED carrying WORLD_HANDOFF_COMPLETE is the intentional
+        retirement of the public carrier after a successful join and must not touch
+        anything (complete_world_handoff already evicted its pools)."""
         try:
             log.misc(f"[session] {ev.type.value} peer=...{ev.peer_id[-5:]} session={ev.session_id[:8]}… "
                      f"role={ev.role.value} p2p={ev.p2p_name}",
@@ -2448,11 +2455,28 @@ class Node:
             log.error(f"[session] handshake to ...{ev.peer_id[-5:]} failed "
                       f"(p2p={ev.p2p_name}, reason={ev.data.get('reason', 'unknown')})",
                       sub="prv" if "world" in ev.p2p_name else "pub")
+            # Evict the pools right away: a FAILED peer must not linger "connected"
+            # (pool-resident, chat-admitted, re-dial suppressed) for the settlement
+            # linger. The transport cut is the SM settlement's job; hosted removal is
+            # a no-op (enrolment only happens at ESTABLISHED); the purge's drop lands
+            # on the tearing-down / no-session branch. Gated on a real session_id: the
+            # quarantine gate synthesizes FAILED(session_id="") without any Session
+            # ending, and purging there could tear down a fresh inbound relation the
+            # peer re-established while quarantined (inbound is deliberately not gated).
+            if ev.session_id:
+                try:
+                    await self.__purge(ev.peer_id)
+                except Exception as e:
+                    log.error(f"[session] dispatch FAILED purge failed for ...{ev.peer_id[-5:]}: {e}")
         elif ev.type == SessionEventType.CLOSED:
             # WORLD_HANDOFF_COMPLETE is the intentional teardown of the public
-            # Session after a successful world join — it must NOT purge the node.
+            # Session after a successful world join — it must NOT purge the node
+            # (complete_world_handoff already retired the carrier and its pools).
             if "WORLD_HANDOFF_COMPLETE" in ev.data.get("reason", ""):
                 return
+            # A CLOSED/LOST carrier mid-handoff is a dead handoff too: drop the
+            # correlation (idempotent, no-op outside a handoff) or the maps leak.
+            self.conn.rollback_handoff(ev.peer_id)
             self._world_host_unlist_member(ev)
             if await self._maybe_leave_world_on_session_end(ev):
                 return
@@ -2461,6 +2485,7 @@ class Node:
             except Exception as e:
                 log.error(f"[session] dispatch CLOSED purge failed for ...{ev.peer_id[-5:]}: {e}")
         elif ev.type == SessionEventType.LOST:
+            self.conn.rollback_handoff(ev.peer_id)   # a mid-handoff carrier lost = dead handoff
             self._world_host_unlist_member(ev)
             if await self._maybe_leave_world_on_session_end(ev):
                 return
@@ -2580,12 +2605,14 @@ class Node:
                 log.error(f"[session] world unlist failed for ...{ev.peer_id[-5:]}: {e}")
 
     async def _on_session_resumed(self, ev) -> None:
-        """A Session survived a transport drop (RESUME acked). The pool-removal
-        path purges the peer from the hosted entity as soon as the link drops
-        (see __handle_network_connections), so on resume the agent must be
-        re-enrolled from the profile the Session still holds. Pool membership
-        self-heals on the next conn.update(); only the hosted side needs repair.
-        No-op if the peer was never purged."""
+        """A Session survived a transport drop (RESUME acked). The removed-diff
+        path deliberately KEEPS the hosted enrolment while the Session rides its
+        reconnect grace (the purge there is gated on not-in-grace, see
+        __handle_network_connections), so this is usually a no-op; it repairs the
+        hosted side only when the peer WAS purged before the resume (e.g. the
+        grace was entered late, after a non-grace purge already ran), re-enrolling
+        from the profile the Session still holds. Pool membership self-heals on
+        the next conn.update()."""
         if ev.peer_id in self.hosted.all_agents:
             return
         is_world = NodeConn.P2P_WORLD == ev.p2p_name or "world" in ev.p2p_name
@@ -2849,22 +2876,26 @@ class Node:
         return started
 
     async def __purge(self, peer_id: str, reason: int | None = None) -> None:
-        """Tear a peer down: drop its connection at the Coordinator and remove it from
+        """Tear a peer down: drop its relation at the Coordinator and remove it from
         the hosted entity. (async)
 
-        The teardown is Session-driven, the Connection is not visible here. ``conn.drop_peer``
-        GOAWAY-closes the peer's Session when a ``reason`` is given (so the remote observes
-        Session.Closed instead of a liveness timeout) and then drops the transport + pool
-        bookkeeping; with ``reason=None`` it is a silent drop reacting to a Session that
-        already ended: the polled transport-disconnect path (non-grace), the LOST/CLOSED
-        dispatch (Session already terminal), and the world-handoff public retire (Session
-        already GOAWAY-closed by the dispatcher). The events drop_peer returns are dispatched
-        before the hosted removal.
+        The teardown is Session-driven, the Connection is not visible here, and the
+        transport is never severed under a farewell: ``conn.drop_peer`` dispatches on
+        the Session state (see SessionManager.drop). With a ``reason`` on a live
+        established Session it only GOAWAY-closes — the remote really does observe
+        Session.Closed now, because the transport falls with the deferred settlement
+        cut, after the ACK — while a purge of a mid-handshake, KNOWN or sessionless
+        peer aborts/severs inline. With ``reason=None`` it reacts to a Session that
+        already ended (the terminal-event dispatch, the polled non-grace transport
+        drop): the SM has already settled it, so the drop is the tearing-down no-op
+        and only the pool evict + hosted removal remain. The frequent double-purge
+        is idempotent for the same reason. The events drop_peer returns are
+        dispatched before the hosted removal.
 
         Args:
             peer_id: The peer ID of the node to purge.
-            reason: Optional ReasonCode; when set, the Session is GOAWAY-closed with this
-                reason (inside drop_peer) before teardown.
+            reason: Optional ReasonCode; when set and the Session is closable, it is
+                GOAWAY-closed with this reason (inside drop_peer).
         """
         for ev in await self.conn.drop_peer(peer_id, reason):
             await self._dispatch_session_event(ev)

@@ -844,8 +844,12 @@ func ReserveOnRelay(
 	return C.CString(jsonSuccessResponse(reservation.Expiration))
 }
 
-// DisconnectFrom attempts to close any active connections to a specified peer
-// and removes the peer from the internally tracked list for a specific instance.
+// DisconnectFrom ABORTIVELY tears down the connections to a specified peer and
+// removes the peer from the internally tracked list for a specific instance:
+// every open stream is Reset() first (discarding any written-but-undelivered
+// frame on both muxers) and only then the connections are closed. Callers that
+// just wrote a farewell (GOAWAY/ACK) must not call this in the same breath —
+// the Python teardown defers it to the settlement cut.
 // Parameters:
 //   - instanceIndexC (C.int): The index of the node instance.
 //   - peerIDC (*C.char): The Peer ID string of the peer to disconnect from.

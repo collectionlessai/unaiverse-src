@@ -118,8 +118,9 @@ class World(AgentBasics):
                                                                self.ROLE_BITS_TO_STR[new_role_without_base_int]]},
                                               content_type=Msg.ROLE_SUGGESTION)):
                 log.error("Failed to send role change, removing (disconnecting) " + peer_id)
-                # Send-failure teardown: LOCAL_ERROR (best-effort GOAWAY; the link may already be
-                # down, but close_session still evicts the Session cleanly).
+                # Send-failure teardown via the purge: GOAWAY(LOCAL_ERROR) if the Session
+                # is still closable; if the link is already down the Session ends through
+                # its own grace/timeout machinery and the purge only evicts bookkeeping.
                 await self.node_purge_fcn(peer_id, reason=LOCAL_ERROR)
             else:
                 self.role_changed_by_world = True

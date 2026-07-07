@@ -436,8 +436,8 @@ func handleSessionStream(ni *NodeInstance, s network.Stream, protocolID string) 
 }
 
 // writeSessionFrame writes a single length-prefixed session payload onto a stream:
-// 4-byte big-endian uint32 length, then the protobuf bytes. Returns the number of
-// bytes actually written (header + payload) on success.
+// 4-byte big-endian uint32 length, then the protobuf bytes. Returns nil on success
+// (an error otherwise); a nil return means "written to the muxer", not delivered.
 func writeSessionFrame(w io.Writer, payload []byte) error {
 	if uint32(len(payload)) > MaxMessageSize {
 		return fmt.Errorf("session payload size (%d) exceeds limit (%d)", len(payload), MaxMessageSize)

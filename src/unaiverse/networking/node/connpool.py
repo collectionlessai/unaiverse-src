@@ -172,7 +172,10 @@ class NodeConn:
         # redeems it). _pending_world_handoff: public peer-id -> world peer-id while the
         # handoff is in flight; _world_to_public: the reverse, used to GOAWAY the public
         # Session once the world Session establishes. Node drives the handoff through the
-        # start/rollback/complete facades; it no longer holds these maps.
+        # start/rollback/complete facades; it no longer holds these maps. Every terminal
+        # outcome clears the entries: complete pops them on success, and the dispatch
+        # rolls back on FAILED/CLOSED/LOST of either side (idempotent), so a dead
+        # handoff never leaks its correlation.
         self._pending_world_handoff: dict[str, str] = {}
         self._world_to_public: dict[str, str] = {}
 
@@ -1644,10 +1647,13 @@ class NodeConn:
                 self.set_world_masters_list(world_masters_peer_infos)
 
     async def remove_all_world_agents(self) -> None:
-        """GOAWAY-close and drop every connected world agent from the pools and role lists
-        (async). The reason WORLD_DISENGAGEMENT closes each ex-companion's Session cleanly
-        (CLOSED, no reconnect) instead of leaving it ESTABLISHED to re-dial and re-enrol
-        peers of a world we just left."""
+        """GOAWAY-close and drop every connected world peer (the WORLD pools: agents,
+        masters and node alike) from the pools and role lists (async). The reason
+        WORLD_DISENGAGEMENT closes each ex-companion's Session cleanly — the GOAWAY
+        actually reaches them now that the transport falls with the deferred
+        settlement cut instead of being reset under the write — so they observe
+        CLOSED (no reconnect) instead of a drop that would leave them ESTABLISHED
+        to re-dial and re-enrol peers of a world we just left."""
         peer_infos = self.get_all_connected_peer_infos(NodeConn.WORLD)
         for c in peer_infos:
             peer_id = c['id']

@@ -60,7 +60,9 @@ const PeerConnectionTimeout = 30 * time.Second
 // RelayReservationTimeout is the timeout for reserving a slot on a relay node.
 const RelayReservationTimeout = 60 * time.Second
 
-// StreamCreationTimeout is the timeout for opening a new libp2p stream to a peer.
+// StreamCreationTimeout is the timeout for opening a new libp2p stream to a
+// peer. It is also reused as the per-stream READ deadline for inbound session
+// streams (see handleSessionStream), i.e. a 20s budget to receive one frame.
 const StreamCreationTimeout = 20 * time.Second
 
 // ChatStreamIdleTimeout bounds how long a persistent chat stream may stay silent

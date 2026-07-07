@@ -869,7 +869,11 @@ class P2P:
     async def send_session(self, peer_id: str, protocol_id: str, sess_msg) -> bool:
         """Serialize `sess_msg` via its own `to_bytes()` and open a fresh outbound
         stream on `protocol_id` to `peer_id`, writing one length-prefixed payload and
-        closing the stream. Returns True on send success.
+        closing the stream. Returns True when the payload was ACCEPTED by the local
+        muxer (written + half-closed) — NOT when it was delivered: delivery needs the
+        connection to stay alive for the transport to flush/retransmit, and an
+        abortive disconnect (or process exit) right after a True return destroys the
+        frame. End-to-end confirmation is the Session protocol's own ACKs.
 
         The Session FSM passes a `SessMsg` value object (not bytes), so this method
         stays protobuf-free: it just calls `.to_bytes()` on whatever it receives. The
@@ -1272,22 +1276,18 @@ class P2P:
 
     def close(self, close_all: bool = False) -> None | str:
         """
-        Gracefully shuts down the libp2p node and stops background threads.
+        Shuts down this instance's libp2p host via the Go CloseNode, freeing its
+        slot (there are no Python-side background threads to stop). Closing the
+        host abortively tears every remaining connection, so callers must drain
+        their farewells first (see NodeConn.drain_teardown). Blocking FFI: the
+        shutdown path calls it after the main loop has ended.
 
         Args:
-            close_all: If True, closes all instances of the node. Default is False.
+            close_all: If True, closes ALL instances in the process (Go slot -1),
+                not just this one. Default is False.
         """
         logger.info("🛑 Closing node...")
 
-        # 1. Signal background threads to stop
-        logger.info("  - Stopping background threads...")
-
-        # 2. Wait briefly for threads to finish (optional, they are daemons)
-        # self._get_connected_peers_thread.join(retry_timeout=2)
-        # self._check_message_queue_thread.join(retry_timeout=2)
-        # print("  - Background threads signaled.")
-
-        # 3. Call the Go CloseNode function
         try:
             if close_all:
                 result_ptr = P2P.libp2p.CloseNode(P2P._type_interface.to_go_int(-1))

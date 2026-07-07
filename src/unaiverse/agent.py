@@ -690,8 +690,9 @@ class Agent(AgentBasics):
         self._engaged_agents.discard(_requester)  # Remove if present
 
         if disconnect_too:
-            # Graceful disengage: carry WORLD_DISENGAGEMENT so __purge emits a GOAWAY and the
-            # remote sees Session.Closed instead of timing out via liveness.
+            # Graceful disengage: carry WORLD_DISENGAGEMENT so __purge GOAWAYs the Session
+            # and the remote sees Session.Closed instead of timing out via liveness (the
+            # transport falls with the deferred settlement cut, after the farewell).
             await self.node_purge_fcn(_requester, reason=WORLD_DISENGAGEMENT)
 
         # Marking this agent as available if not engaged to any agent

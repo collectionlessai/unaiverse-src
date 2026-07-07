@@ -333,8 +333,10 @@ class Session:
                 # State advanced (a terminal event fired) while the dial was in flight →
                 # discard the outcome here. This state guard is why a terminal transition
                 # needs no explicit dial detach: _run_dial holds no Session reference, so a
-                # late task is harmless, and the Go connection (if any) is dropped by its own
-                # idle timeout.
+                # late task is harmless. The connection is normally severed by the
+                # settlement cut scheduled at the terminal transition; a dial that lands
+                # only AFTER that cut executed leaves a stray sessionless connection that
+                # the next drop/perimeter pass (or the remote's own teardown) reaps.
             return []
         if self._dial_task is not None:
             return []   # a dial is still in flight
@@ -942,12 +944,16 @@ class Session:
                               SessionState.AWAITING_HANDOFF):
             log.session(f"{self!r} close({reason_code}) called in state {self.state.value} — ignored", sub=self._sub)
             return
-        await self._send_payload(SESSION_CONTROL_PROTOCOL, SessMsg(SessMsg.KIND_GOAWAY, {
+        if not await self._send_payload(SESSION_CONTROL_PROTOCOL, SessMsg(SessMsg.KIND_GOAWAY, {
             "reason": reason_code, "drain_window_ms": 0, "session_id": self.session_id,
-        }))
-        # Remembered so the local CLOSED event carries the same reason the remote
-        # sees — the application dispatch branches on it symmetrically (e.g.
-        # WORLD_HANDOFF_COMPLETE must not purge on either side).
+        })):
+            # Enter CLOSING anyway: the timeout finalizes the close either way, and a
+            # failed local write means the link is gone — nothing better to do.
+            log.session(f"{self!r} GOAWAY send failed (closing via timeout)", sub=self._sub)
+        # The reason NAME is embedded in both sides' CLOSED reason strings
+        # (local_goaway_acked:<name> / goaway_ack_timeout:<name> here,
+        # remote_goaway:<name> there): the application dispatch matches it by
+        # substring, e.g. WORLD_HANDOFF_COMPLETE must not purge on either side.
         self._local_goaway_reason = reason_name(reason_code)
         self._set_state(SessionState.CLOSING, _TIMEOUT_CLOSING_S)
         log.session(f"{self!r} GOAWAY sent (reason={self._local_goaway_reason})", sub=self._sub)
