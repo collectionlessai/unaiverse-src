@@ -850,12 +850,18 @@ class P2P:
                 return None, False
 
     async def disconnect(self, peer_id: str) -> bool:
-        """Close the connection to `peer_id`. Returns True on success, False on a
-        transport-level failure. The canonical transport-disconnect primitive the
-        SessionManager's drop delegates to; best-effort, any error (including a
-        malformed peer_id) means 'gone' rather than propagating into the caller."""
+        """Abortively tear down the connection to `peer_id`. Go resets every open
+        stream before closing the connection, so any frame written but not yet
+        delivered (e.g. a GOAWAY queued microseconds earlier) is DESTROYED, not
+        flushed: callers that just sent a farewell must not disconnect in the same
+        stack — schedule the teardown after the Session reaches a terminal state.
+        Returns True on success, False on a transport-level failure. The canonical
+        transport-disconnect primitive the SessionManager delegates to; best-effort,
+        any error (including a malformed peer_id) means 'gone' rather than
+        propagating into the caller. The blocking Go round-trip (WebRTC teardown +
+        stream resets + ClosePeer) runs off the event loop, same as `send`."""
         try:
-            self.disconnect_from(peer_id)
+            await asyncio.to_thread(self.disconnect_from, peer_id)
         except (P2PError, ValueError):
             return False
         return True
