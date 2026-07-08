@@ -888,3 +888,32 @@ def test_close_all_goaways_live_and_aborts_handshakes(alice_conn, alice_peer_id,
     assert [g[0] for g in goaways] == [bob_peer_id]      # only the live one got a GOAWAY
     assert inflight.state == SessionState.FAILED         # aborted silently
     assert sm.get_session(other_peer) is None            # and forgotten (drain can exit)
+
+
+def test_drop_honored_on_live_session_born_inside_linger(alice_conn, alice_peer_id, bob_peer_id):
+    """A pending settlement cut (the OLD relation's) must not swallow a drop aimed at
+    a NEW live Session born inside the linger (the peer re-handshaked inbound after
+    its old relation settled): the purge is honored — GOAWAY on the live Session —
+    and the stale ledger entry is removed. Without this, a rejected re-enrolment
+    (hosted refuses -> purge) would be silently lost and the peer would stay
+    ESTABLISHED and pool-resident forever."""
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    sm._pending_cuts[bob_peer_id] = time.monotonic() + 1.5   # old relation, still lingering
+    sess = _established(sm, alice_conn, bob_peer_id, alice_peer_id)   # new live relation
+
+    events = _run(sm.drop(bob_peer_id, WORLD_DISENGAGEMENT))
+
+    assert events == []
+    assert bob_peer_id not in sm._pending_cuts               # stale entry dropped
+    goaways = [s for s in alice_conn.sent if s[2].kind == SessMsg.KIND_GOAWAY]
+    assert len(goaways) == 1                                 # the purge was honored
+    assert sess.state == SessionState.CLOSING
+
+    # Counterpart: with nothing past a KNOWN placeholder behind the pending cut,
+    # the drop stays the double-purge no-op (the cut still owns the transport).
+    other = "12D3KooWother_peer_for_linger_test"
+    sm._pending_cuts[other] = time.monotonic() + 1.5
+    sm.ensure(other, ["/ip4/127.0.0.1/tcp/1"])               # KNOWN placeholder only
+    _run(sm.drop(other, WORLD_DISENGAGEMENT))
+    assert other in sm._pending_cuts                         # entry kept
+    assert other not in alice_conn.disconnect_calls          # no inline disconnect

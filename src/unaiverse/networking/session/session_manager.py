@@ -783,9 +783,12 @@ class SessionManager:
         same stack as a farewell write (P2P.disconnect is abortive and would destroy
         the GOAWAY/ACK just queued):
 
-          * already tearing down (a settlement cut is pending, or CLOSING) → no-op:
-            makes the frequent double-purge (a CLOSED dispatched after an earlier
-            purge) idempotent WITHOUT aborting the farewell in flight;
+          * already tearing down (CLOSING, or a settlement cut pending for a peer
+            with nothing past a KNOWN placeholder) → no-op: makes the frequent
+            double-purge (a CLOSED dispatched after an earlier purge) idempotent
+            WITHOUT aborting the farewell in flight. A live Session born inside
+            the linger is NOT shielded by the old relation's pending cut: the
+            drop is honored against it and the stale ledger entry removed;
           * ESTABLISHED/RECONNECTING/AWAITING_HANDOFF with a reason → GOAWAY-close
             only; the deferred settlement cut severs the transport once the CLOSED
             lands (ACK or the CLOSING timeout);
@@ -805,10 +808,25 @@ class SessionManager:
         later via tick/ACK)."""
         sess = self._sessions.get(peer_id)
 
-        if peer_id in self._pending_cuts or (sess is not None and
-                                             sess.state == SessionState.CLOSING):
+        if sess is not None and sess.state == SessionState.CLOSING:
             log.session(f"drop(...{peer_id[-5:]}): already tearing down — no-op", sub=self._label)
             return []
+
+        if peer_id in self._pending_cuts:
+            # The pending settlement cut makes a drop a no-op ONLY while it still
+            # refers to the current relation (no Session, or nothing past a KNOWN
+            # placeholder): that is the frequent double-purge, which must not abort
+            # the farewell in flight. A live Session born INSIDE the linger (the
+            # peer re-handshaked inbound) superseded the old teardown, so a new
+            # drop on it must be honored — the stale ledger entry is removed here
+            # (the lazy guard would have cancelled it at execution anyway) and the
+            # dispatch below runs against the live Session.
+            if sess is None or sess.state in (SessionState.KNOWN,
+                                              SessionState.FAILED,
+                                              SessionState.CLOSED):
+                log.session(f"drop(...{peer_id[-5:]}): already tearing down — no-op", sub=self._label)
+                return []
+            del self._pending_cuts[peer_id]
 
         if sess is None or sess.state in (SessionState.FAILED, SessionState.CLOSED):
             if sess is not None:
