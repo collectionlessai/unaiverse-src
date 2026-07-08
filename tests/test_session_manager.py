@@ -917,3 +917,73 @@ def test_drop_honored_on_live_session_born_inside_linger(alice_conn, alice_peer_
     _run(sm.drop(other, WORLD_DISENGAGEMENT))
     assert other in sm._pending_cuts                         # entry kept
     assert other not in alice_conn.disconnect_calls          # no inline disconnect
+
+
+# Control-protocol guards (post-audit hardening)
+
+def _awaiting_handoff(sm, conn, peer_id, local_peer_id):
+    """Plant a responder Session parked in AWAITING_HANDOFF (a grant carrier)."""
+    sess = _mk_session(conn, peer_id, local_peer_id, role=SessionRole.RESPONDER)
+    sess.session_id = b"\x11" * 16
+    sess._set_state(SessionState.AWAITING_HANDOFF, 30.0)
+    sm._set_active(peer_id, sess)
+    return sess
+
+
+def test_ping_and_resume_answered_ok_in_awaiting_handoff(alice_conn, alice_peer_id, bob_peer_id):
+    """A grant carrier parked in AWAITING_HANDOFF is alive: the joiner's keepalive
+    PING gets ok=True and a blip's RESUME gets accepted=True. Answering false there
+    collapsed the handoff at the first PING (~15s effective budget) and NACKed a
+    mid-handoff blip into LOST."""
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    sess = _awaiting_handoff(sm, alice_conn, bob_peer_id, alice_peer_id)
+
+    _run(sm.deliver(bob_peer_id, SESSION_CONTROL_PROTOCOL,
+                    SessMsg(SessMsg.KIND_PING, {"session_id": sess.session_id, "nonce": b"n1"})))
+    pongs = [s for s in alice_conn.sent if s[2].kind == SessMsg.KIND_PONG]
+    assert len(pongs) == 1 and pongs[0][2].fields.get("ok") is True
+
+    _run(sm.deliver(bob_peer_id, SESSION_CONTROL_PROTOCOL,
+                    SessMsg(SessMsg.KIND_RESUME, {"session_id": sess.session_id, "nonce": b"n2"})))
+    acks = [s for s in alice_conn.sent if s[2].kind == SessMsg.KIND_RESUME_ACK]
+    assert len(acks) == 1 and acks[0][2].fields.get("accepted") is True
+    assert sess.state == SessionState.AWAITING_HANDOFF   # still parked, untouched
+
+
+def test_stale_goaway_does_not_close_fresh_session(alice_conn, alice_peer_id, bob_peer_id):
+    """A GOAWAY carrying ANOTHER incarnation's session_id (cross-protocol reordering
+    on replace-stale) is courtesy-ACKed — so the closer's CLOSING completes — but it
+    must not kill the fresh Session it lands on. A matching (or absent, legacy)
+    session_id still closes."""
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    sess = _established(sm, alice_conn, bob_peer_id, alice_peer_id)
+
+    events = _run(sm.deliver(bob_peer_id, SESSION_CONTROL_PROTOCOL,
+                             SessMsg(SessMsg.KIND_GOAWAY,
+                                     {"reason": WORLD_DISENGAGEMENT, "drain_window_ms": 0,
+                                      "session_id": b"\x99" * 16})))   # not ours
+    assert events == []
+    assert sess.state == SessionState.ESTABLISHED        # survived
+    acks = [s for s in alice_conn.sent if s[2].kind == SessMsg.KIND_GOAWAY_ACK]
+    assert len(acks) == 1                                # courtesy ack went out
+
+    events = _run(sm.deliver(bob_peer_id, SESSION_CONTROL_PROTOCOL,
+                             SessMsg(SessMsg.KIND_GOAWAY,
+                                     {"reason": WORLD_DISENGAGEMENT, "drain_window_ms": 0,
+                                      "session_id": sess.session_id})))  # ours
+    assert [e.type for e in events] == [SessionEventType.CLOSED]
+
+
+def test_settlement_linger_is_refreshed_not_inherited(alice_conn, alice_peer_id, bob_peer_id):
+    """A terminal settling while a PREVIOUS relation's ledger entry still lingers
+    must overwrite the deadline: the last farewell owns its full linger. Inheriting
+    a nearly-due deadline would execute the cut right under the just-written ACK."""
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    stale_deadline = time.monotonic() + 0.01             # previous relation, nearly due
+    sm._pending_cuts[bob_peer_id] = stale_deadline
+    _established(sm, alice_conn, bob_peer_id, alice_peer_id)
+
+    _run(sm.deliver(bob_peer_id, SESSION_CONTROL_PROTOCOL,
+                    SessMsg(SessMsg.KIND_GOAWAY, {"reason": WORLD_DISENGAGEMENT,
+                                                  "drain_window_ms": 0})))
+    assert sm._pending_cuts[bob_peer_id] > stale_deadline + 1.0   # refreshed, not inherited

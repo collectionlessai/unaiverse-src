@@ -842,11 +842,14 @@ class Session:
 
     async def _on_ping(self, msg: SessMsg) -> List[SessionEvent]:
         """Answer a peer's liveness PING. ok=True only if we hold this exact
-        Session and are usable (ESTABLISHED or mid-reconnect). A restarted peer
-        with no Session never reaches here — SessionManager.deliver answers ok=False
-        on its behalf."""
+        Session and it is usable: ESTABLISHED, mid-reconnect, or a grant carrier
+        parked in AWAITING_HANDOFF — the joiner's carrier keepalives while its
+        world dial runs, and an ok=False there would collapse the handoff at the
+        first PING (~15s budget). A restarted peer with no Session never reaches
+        here — SessionManager.deliver answers ok=False on its behalf."""
         ok = (bytes(msg.get("session_id") or b"") == self.session_id and
-              self.state in (SessionState.ESTABLISHED, SessionState.RECONNECTING))
+              self.state in (SessionState.ESTABLISHED, SessionState.RECONNECTING,
+                             SessionState.AWAITING_HANDOFF))
         if not await self._send_payload(SESSION_CONTROL_PROTOCOL, SessMsg(SessMsg.KIND_PONG, {
             "session_id": self.session_id,
             "nonce": bytes(msg.get("nonce") or b""),
@@ -873,9 +876,13 @@ class Session:
 
     async def _on_resume(self, msg: SessMsg) -> List[SessionEvent]:
         """Peer (initiator) is resuming after a link blip. ACK if we still hold the
-        Session; NACK (SESSION_UNKNOWN) otherwise so the peer re-handshakes."""
+        Session and it is usable (AWAITING_HANDOFF included: a public blip during
+        the joiner's world dial must not kill the parked carrier, whose RESUME
+        would otherwise be NACKed into a LOST); NACK (SESSION_UNKNOWN) otherwise
+        so the peer re-handshakes."""
         if (bytes(msg.get("session_id") or b"") == self.session_id and
-                self.state in (SessionState.ESTABLISHED, SessionState.RECONNECTING)):
+                self.state in (SessionState.ESTABLISHED, SessionState.RECONNECTING,
+                               SessionState.AWAITING_HANDOFF)):
             await self._send_payload(SESSION_CONTROL_PROTOCOL, SessMsg(SessMsg.KIND_RESUME_ACK, {
                 "session_id": self.session_id, "nonce": bytes(msg.get("nonce") or b""),
                 "accepted": True, "reason_code": OK,
@@ -959,6 +966,18 @@ class Session:
         log.session(f"{self!r} GOAWAY sent (reason={self._local_goaway_reason})", sub=self._sub)
 
     async def _on_remote_goaway(self, ga: SessMsg) -> List[SessionEvent]:
+        # A GOAWAY from a PREVIOUS incarnation (cross-protocol reordering: the
+        # peer's replace-stale sends GOAWAY(old) and HELLO(new) back to back on
+        # different one-shot streams) must not kill this fresh Session. Courtesy-ACK
+        # it so the closer's CLOSING completes, but stay alive. An empty session_id
+        # is tolerated (older senders); PING/RESUME have the same id guard.
+        sid = bytes(ga.get("session_id") or b"")
+        if sid and sid != self.session_id:
+            await self._send_payload(SESSION_CONTROL_PROTOCOL, SessMsg(SessMsg.KIND_GOAWAY_ACK,
+                                                                       {"received": True}))
+            log.session(f"{self!r} stale GOAWAY for another incarnation — acked, ignored",
+                        sub=self._sub)
+            return []
         await self._send_payload(SESSION_CONTROL_PROTOCOL, SessMsg(SessMsg.KIND_GOAWAY_ACK,
                                                                    {"received": True}))
         reason = reason_name(ga.get("reason", 0))

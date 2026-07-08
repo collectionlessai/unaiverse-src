@@ -587,7 +587,10 @@ class SessionManager:
                 sess = self._sessions.get(ev.peer_id)
                 if sess is not None and sess.state in (SessionState.FAILED, SessionState.CLOSED):
                     self._forget(ev.peer_id)
-                    self._pending_cuts.setdefault(ev.peer_id, now + _CUT_LINGER_S)
+                    # Overwrite, not setdefault: the LAST farewell owns the linger.
+                    # Inheriting a nearly-due deadline from a previous relation's
+                    # entry would cut the transport right under this one's ACK.
+                    self._pending_cuts[ev.peer_id] = now + _CUT_LINGER_S
 
     def _spawn_responder(self, peer_id: str) -> Session:
         sess = Session(
