@@ -760,9 +760,13 @@ class SessionManager:
                           SessionState.HELLO_SENT,
                           SessionState.HELLO_ACK_SENT,
                           SessionState.PROFILE_SENT,
-                          SessionState.AWAITING_WORLD_GRANT,
-                          SessionState.AWAITING_HANDOFF):
+                          SessionState.AWAITING_WORLD_GRANT):
             # Handshake can't continue without a live connection — fail fast.
+            # AWAITING_HANDOFF is deliberately NOT here: the parked grant carrier
+            # tolerates transport blips (the joiner's re-dial + RESUME is accepted
+            # in that state, and failing it here would quarantine the joiner and
+            # collapse the handoff on any blip the poll can see); its 30s timeout
+            # is the backstop. on_transport_disconnected below no-ops for it.
             ev = sess._fail("connection_dropped_during_handshake")
             self._on_terminal([ev])
             return [ev]

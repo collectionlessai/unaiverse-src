@@ -408,3 +408,24 @@ def test_drain_gives_up_at_budget_when_ack_never_comes():
     elapsed = _t.monotonic() - t0
     assert 0.25 <= elapsed < 1.5
     assert sess.state == SessionState.CLOSING
+
+
+def test_settled_drop_peer_never_touches_the_session():
+    """The reckoning purge of an already-settled end (terminal dispatch, polled
+    transport drop) evicts pools only: a SUCCESSOR Session born in the same pump
+    batch — live where the settled one is gone — must survive it untouched. This is
+    what keeps the old relation's consuntivo from coercively killing the fresh
+    relation that replaced it (and from destroying its just-queued HELLO_RESP)."""
+    conn, pub, world = _conn()
+    peer = "w1"
+    _plant_pool_member(conn, peer, NodeConn.IN_WORLD_AGENTS)
+    successor = _StubSession(state=SessionState.HELLO_ACK_SENT)   # fresh, mid-handshake
+    conn._sm_world._sessions[peer] = successor
+
+    _run(conn.drop_peer(peer, settled=True))
+
+    assert successor.aborted_with is None            # untouched...
+    assert successor.closed_with is None
+    assert conn._sm_world.get_session(peer) is successor   # ...and still registered
+    assert peer not in world.disconnected            # transport untouched
+    assert peer not in conn.peer_id_to_pool_name     # pools evicted (the reckoning's job)

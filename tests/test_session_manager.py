@@ -1010,3 +1010,18 @@ def test_initiate_supersedes_closing_session_and_dials(alice_conn, alice_peer_id
     assert bob_peer_id not in alice_conn.disconnect_calls    # transport kept
     goaways = [s for s in alice_conn.sent if s[2].kind == SessMsg.KIND_GOAWAY]
     assert len(goaways) == 1                                 # only the original close's
+
+
+def test_transport_drop_leaves_awaiting_handoff_parked(alice_conn, alice_peer_id, bob_peer_id):
+    """A transport blip visible to the poll must not fail the parked grant carrier:
+    the joiner's re-dial + RESUME is accepted in AWAITING_HANDOFF, and failing here
+    would quarantine the joiner and collapse the handoff on any blip. The 30s state
+    timeout stays as the backstop."""
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    sess = _awaiting_handoff(sm, alice_conn, bob_peer_id, alice_peer_id)
+
+    events = _run(sm.on_peer_disconnected(bob_peer_id))
+
+    assert events == []
+    assert sess.state == SessionState.AWAITING_HANDOFF   # still parked
+    assert bob_peer_id not in sm._quarantine             # joiner not punished for a blip

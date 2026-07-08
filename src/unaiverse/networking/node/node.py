@@ -1674,8 +1674,10 @@ class Node:
                 # node. The hosted purge is then driven solely by the terminal LOST/CLOSED
                 # Session event (see _dispatch_session_event). When no Session is in grace
                 # for this peer, purge the hosted side now (the pool is already clean).
+                # Settled: the link is already gone and on_peer_disconnected above already
+                # signalled the SMs — this reckoning must not touch a Session again.
                 if not self.conn.is_in_grace(peer_id):
-                    await self.__purge(peer_id)
+                    await self.__purge(peer_id, settled=True)
 
                 # Checking if we removed an agent from this world
                 if self.node_type is Node.WORLD and pool_name in self.conn.WORLD:
@@ -2466,7 +2468,7 @@ class Node:
             # peer re-established while quarantined (inbound is deliberately not gated).
             if ev.session_id:
                 try:
-                    await self.__purge(ev.peer_id)
+                    await self.__purge(ev.peer_id, settled=True)
                 except Exception as e:
                     log.error(f"[session] dispatch FAILED purge failed for ...{ev.peer_id[-5:]}: {e}")
         elif ev.type == SessionEventType.CLOSED:
@@ -2475,14 +2477,18 @@ class Node:
             # (complete_world_handoff already retired the carrier and its pools).
             if "WORLD_HANDOFF_COMPLETE" in ev.data.get("reason", ""):
                 return
-            # A CLOSED/LOST carrier mid-handoff is a dead handoff too: drop the
-            # correlation (idempotent, no-op outside a handoff) or the maps leak.
-            await self.conn.rollback_handoff(ev.peer_id)
+            # Deliberately NO rollback_handoff here: a carrier CLOSED mid-handoff (e.g.
+            # the host GOAWAYing everything while shutting down) must not abort the
+            # in-flight world redemption — the world Session decides the join's fate:
+            # ESTABLISHED completes the join (complete_world_handoff cleans the maps),
+            # a failure rolls back and re-arms via its own FAILED/LOST dispatch. A
+            # clean CLOSED never re-arms by design, so rolling back here would strand
+            # the pending join forever (silent abort, no terminal event, no retry).
             self._world_host_unlist_member(ev)
             if await self._maybe_leave_world_on_session_end(ev):
                 return
             try:
-                await self.__purge(ev.peer_id)
+                await self.__purge(ev.peer_id, settled=True)
             except Exception as e:
                 log.error(f"[session] dispatch CLOSED purge failed for ...{ev.peer_id[-5:]}: {e}")
         elif ev.type == SessionEventType.LOST:
@@ -2495,7 +2501,7 @@ class Node:
             # CLOSED still never re-arms.
             self._maybe_rearm_rejoin_on_failed_join(ev)
             try:
-                await self.__purge(ev.peer_id)
+                await self.__purge(ev.peer_id, settled=True)
             except Exception as e:
                 log.error(f"[session] dispatch LOST purge failed for ...{ev.peer_id[-5:]}: {e}")
 
@@ -2892,7 +2898,8 @@ class Node:
             await self._dispatch_session_event(ev)
         return started
 
-    async def __purge(self, peer_id: str, reason: int | None = None) -> None:
+    async def __purge(self, peer_id: str, reason: int | None = None,
+                      settled: bool = False) -> None:
         """Tear a peer down: drop its relation at the Coordinator and remove it from
         the hosted entity. (async)
 
@@ -2913,8 +2920,11 @@ class Node:
             peer_id: The peer ID of the node to purge.
             reason: Optional ReasonCode; when set and the Session is closable, it is
                 GOAWAY-closed with this reason (inside drop_peer).
+            settled: True for the reckoning of an already-settled end (the terminal
+                dispatch, the polled transport drop): pools + hosted only, the SM is
+                never touched — see NodeConn.drop_peer.
         """
-        for ev in await self.conn.drop_peer(peer_id, reason):
+        for ev in await self.conn.drop_peer(peer_id, reason, settled=settled):
             await self._dispatch_session_event(ev)
 
         await self.hosted.remove_agent(peer_id)

@@ -254,12 +254,13 @@ class NodeFakeConn(FakeConn):
             peer_id=peer_id, addresses=addresses, is_world_join=is_world_join,
             remote_node_id_hint=remote_node_id_hint, reject_relay=reject_relay)
 
-    async def drop_peer(self, peer_id, reason=None):
+    async def drop_peer(self, peer_id, reason=None, settled=False):
         """Voluntary per-peer teardown (mirrors NodeConn.drop_peer): with a reason,
         GOAWAY the Session (delegated to the owning SM); then evict the pool
-        bookkeeping. Records the peer for assertions."""
+        bookkeeping. A settled reckoning never touches the SMs (mirrors NodeConn).
+        Records the peer for assertions."""
         events = []
-        if reason is not None:
+        if reason is not None and not settled:
             for sm in self._session_managers:
                 if sm.get_session(peer_id) is not None:
                     events = await sm.close_session(peer_id, reason)

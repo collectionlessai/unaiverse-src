@@ -224,7 +224,7 @@ def test_purge_with_reason_none_is_a_silent_drop_via_drop_peer():
 
     _run(_purge(node, PEER))  # reason defaults to None
 
-    node.conn.drop_peer.assert_awaited_once_with(PEER, None)
+    node.conn.drop_peer.assert_awaited_once_with(PEER, None, settled=False)
     node._dispatch_session_event.assert_not_awaited()
     node.hosted.remove_agent.assert_awaited_once_with(PEER)
 
@@ -236,7 +236,7 @@ def test_purge_with_reason_routes_through_drop_peer_with_that_reason():
 
     _run(_purge(node, PEER, reason=WORLD_DISENGAGEMENT))
 
-    node.conn.drop_peer.assert_awaited_once_with(PEER, WORLD_DISENGAGEMENT)
+    node.conn.drop_peer.assert_awaited_once_with(PEER, WORLD_DISENGAGEMENT, settled=False)
     node.hosted.remove_agent.assert_awaited_once_with(PEER)
 
 

@@ -441,7 +441,8 @@ class NodeConn:
         else:
             return False
 
-    async def drop_peer(self, peer_id: str, reason: int | None = None) -> list:
+    async def drop_peer(self, peer_id: str, reason: int | None = None,
+                        settled: bool = False) -> list:
         """Voluntary per-peer teardown, the single teardown verb the hosted entity
         drives through (Node.__purge): ``sm.drop`` on the owning instance + the pool
         eviction. What happens to the Session and the transport is the manager's
@@ -467,12 +468,22 @@ class NodeConn:
             peer_id: The peer ID to tear down.
             reason: Optional ReasonCode; when set and the Session is closable, it is
                 GOAWAY-closed with it.
+            settled: True for the RECKONING purge of a terminal SessionEvent (or of
+                the polled transport drop): the SM settlement already handled the
+                Session and scheduled/executed the transport cut, so only the pool
+                bookkeeping is evicted here — sm.drop is skipped entirely. This is
+                what keeps the reckoning from touching a SUCCESSOR Session born in
+                the same pump batch (the settled relation's teardown must never
+                leak onto the fresh one that replaced it).
 
         Returns:
             The list of SessionEvents to dispatch.
         """
-        sm = self._sm_of(peer_id)
-        events = await sm.drop(peer_id, reason) if sm is not None else []
+        if not settled:
+            sm = self._sm_of(peer_id)
+            events = await sm.drop(peer_id, reason) if sm is not None else []
+        else:
+            events = []
         self._evict_from_pools(peer_id)
         return events
 
