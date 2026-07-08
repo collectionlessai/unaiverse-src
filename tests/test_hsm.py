@@ -14,11 +14,11 @@ action_kwargs is enough. A bare ``**kwargs`` would NOT satisfy
 ``Action.check_provided_args`` (it validates each kwarg against the explicit
 signature), so every fixture below names its parameters.
 
-One genuine asymmetry between the build path and the load path is pinned and
-flagged as a suspected bug (xfail, strict): ``add_global_teleport`` builds a
-self-loop X->X teleport, which ``to_dict`` silently drops, so the
-build->serialize->load round-trip is not stable. (A second one, the welcome
-wildcard left unsubstituted on load, has been fixed and its test is green.)
+Two build-path / load-path asymmetries surfaced by these tests have both been
+fixed and their tests now pin the symmetric behaviour: ``add_global_teleport``
+used to build a self-loop X->X teleport that serialization dropped (the 'all'
+expansion now skips the destination on both paths), and ``load`` used to leave
+the welcome-message role wildcard unsubstituted.
 
 The suite-wide conftest fixture swaps the logger for a no-op object that also
 neuters the raising contract of ``log.critical``; this module's autouse
@@ -613,32 +613,29 @@ def test_load_real_student_template_roundtrips_via_to_dict():
     assert json.dumps(d1, sort_keys=True) == json.dumps(h2.to_dict(), sort_keys=True)
 
 
-# Suspected bugs (characterized; xfail strict on the intended behaviour)
+# Build-path / load-path symmetry of the global-teleport expansion
 
-def test_add_global_teleport_creates_self_loop_on_destination_actual():
-    """ACTUAL behaviour: add_global_teleport(to_state=X) wrongly builds an X->X self-loop teleport.
-
-    The 'all' branch of add_transit skips only states named 'all' (a forbidden, never-matching name)
-    instead of skipping the destination, so the destination gets a teleport back to itself.
-    """
+def test_add_global_teleport_skips_the_destination():
+    """add_global_teleport(to_state=X) gives every OTHER state a teleport to X and
+    never builds an X->X self-loop: the build-time 'all' expansion skips the
+    destination exactly like the load-time one, so built and loaded machines agree
+    (to_dict filters self-loop teleports on save, so a build-time loop would be
+    silently lost on the wire)."""
     h = _new()
     h.set_role("w")
     h.add_state("a", action="nop")
     h.add_state("b")
     h.add_global_teleport(to_state="b", action="nop")
-    # a -> b is wanted; b -> b is the spurious self-loop.
+    # a -> b is wanted; no b -> b self-loop.
     assert "b" in h.transitions["a"]
-    assert "b" in h.transitions["b"]  # <-- the self-loop the fix should remove
-    assert h.transitions["b"]["b"][0].is_teleport() is True
+    assert h.transitions["a"]["b"][0].is_teleport() is True
+    assert "b" not in h.transitions.get("b", {})
 
 
-@pytest.mark.xfail(strict=True,
-                   reason="add_global_teleport builds an X->X self-loop that to_dict drops, "
-                          "so the build->serialize->load round-trip is not stable "
-                          "(hsm.py:704-714 vs load at hsm.py:1483).")
-def test_add_global_teleport_roundtrip_is_stable_intended():
-    """INTENDED behaviour (currently failing): a machine built with add_global_teleport should survive
-    to_dict -> load -> to_dict unchanged. It does not, because the spurious self-loop is dropped on save."""
+def test_add_global_teleport_roundtrip_is_stable():
+    """A machine built with add_global_teleport survives to_dict -> load -> to_dict
+    unchanged: with the destination skipped on both paths, the round-trip is
+    byte-for-byte stable."""
     h = HybridStateMachine(DummyAgent())
     h.set_role("w")
     h.add_state("a", action="nop")

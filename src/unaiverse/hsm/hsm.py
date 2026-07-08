@@ -704,6 +704,10 @@ class HybridStateMachine:
         if from_state == Custom.ALL_STATES_NAME:
             for from_state_obj in self.__id_to_state:
 
+                # Skipping the destination state, mirroring the load-time 'all' expansion
+                if from_state_obj.name == to_state:
+                    continue
+
                 # Adding a transition to the dest state
                 self.add_transit(from_state=from_state_obj.name, to_state=to_state, action=action, args=args,
                                  ready=ready, act_id=None, avoid_changing_ready=avoid_changing_ready,
