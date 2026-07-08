@@ -619,8 +619,10 @@ class AgentBasics:
                     except Exception as e:
                         raise GenException(f'Unable to create a valid dummy agent object for agent with role {role} [{e}]')
 
-                    # Checking if the roles you wrote in agent.py are coherent with the JSON files in this folder
-                    if dummy_agent.CUSTOM_ROLES != loaded_roles:
+                    # Checking if the roles you wrote in agent.py are coherent with the JSON files in this folder;
+                    # most agents declare no roles at all (they inherit the world's ones by the injection above),
+                    # so the check only applies when the agent code takes a stance, and order does not matter
+                    if loaded_roles and set(loaded_roles) != set(self.CUSTOM_ROLES):
                         raise GenException(f"Mismatching roles. "
                                            f"Roles in JSON files: {self.CUSTOM_ROLES}. "
                                            f"Roles specified in the agent.py file: {loaded_roles}")
