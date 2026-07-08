@@ -987,3 +987,26 @@ def test_settlement_linger_is_refreshed_not_inherited(alice_conn, alice_peer_id,
                     SessMsg(SessMsg.KIND_GOAWAY, {"reason": WORLD_DISENGAGEMENT,
                                                   "drain_window_ms": 0})))
     assert sm._pending_cuts[bob_peer_id] > stale_deadline + 1.0   # refreshed, not inherited
+
+
+def test_initiate_supersedes_closing_session_and_dials(alice_conn, alice_peer_id, bob_peer_id):
+    """A dial landing inside the CLOSING window (our GOAWAY out, up to 10s) starts a
+    fresh Session instead of being swallowed by the healthy-session no-op: leave(X)
+    immediately followed by a new dial to X used to report success while nothing
+    ever dialed. Outbound mirror of deliver's inbound supersede; the transport is
+    kept (the re-dial wants it) and no farewell is re-sent."""
+    alice_conn.connect_returns = (bob_peer_id, False)
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    sess = _established(sm, alice_conn, bob_peer_id, alice_peer_id)
+    _run(sm.drop(bob_peer_id, WORLD_DISENGAGEMENT))          # GOAWAY -> CLOSING
+    assert sess.state == SessionState.CLOSING
+
+    events = _run(sm.initiate(bob_peer_id, ["/ip4/127.0.0.1/tcp/0"]))
+
+    assert events == []
+    fresh = sm.get_session(bob_peer_id)
+    assert fresh is not None and fresh is not sess           # replaced, not reused
+    assert len(alice_conn.connect_calls) == 1                # the dial actually started
+    assert bob_peer_id not in alice_conn.disconnect_calls    # transport kept
+    goaways = [s for s in alice_conn.sent if s[2].kind == SessMsg.KIND_GOAWAY]
+    assert len(goaways) == 1                                 # only the original close's

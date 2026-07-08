@@ -296,14 +296,22 @@ class NodeFakeConn(FakeConn):
         return await self._sm_world.initiate(
             world_peer_id, world_addrs, grant=grant_blob, reject_relay=reject_relay)
 
-    def rollback_handoff(self, peer_id):
+    async def rollback_handoff(self, peer_id):
+        # Mirror NodeConn: no-op if the correlated world Session already established
+        # (the join is completing); otherwise pop the maps, abort the in-flight world
+        # Session and un-point pool routing from a world we never joined.
+        pending_world = self._pending_world_handoff.get(peer_id)
+        if pending_world is not None and self._sm_world is not None \
+                and self._sm_world.is_established(pending_world):
+            return
         world_peer_id = self._pending_world_handoff.pop(peer_id, None)
         if world_peer_id is not None:
             self._world_to_public.pop(world_peer_id, None)
+            if self._sm_world is not None:
+                await self._sm_world.drop(world_peer_id)
         public_peer_id = self._world_to_public.pop(peer_id, None)
         if public_peer_id is not None:
             self._pending_world_handoff.pop(public_peer_id, None)
-        # Mirror NodeConn: un-point pool routing from a world we never joined.
         rolled_back_world = world_peer_id if world_peer_id is not None else (
             peer_id if public_peer_id is not None else None)
         if rolled_back_world is not None and rolled_back_world == self.get_world_node_peer_id():

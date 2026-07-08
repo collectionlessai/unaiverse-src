@@ -984,16 +984,36 @@ class NodeConn:
         return await self._sm_world.initiate(
             world_peer_id, world_addrs, grant=grant_blob, reject_relay=reject_relay)
 
-    def rollback_handoff(self, peer_id: str) -> None:
-        """Roll back any in-flight handoff correlation for a failed Session, whichever
-        side failed: the forward map is keyed by the public peer-id, the reverse one by
-        the world peer-id. Also un-points pool routing (set_world) when the rolled-back
-        world peer is the current world host: start_world_handoff set it optimistically
-        at handoff-initiate, and leaving it on a world we never joined would classify
+    async def rollback_handoff(self, peer_id: str) -> None:
+        """Roll back any in-flight handoff correlation for a terminal Session, whichever
+        side died: the forward map is keyed by the public peer-id, the reverse one by
+        the world peer-id.
+
+        When the PUBLIC carrier dies mid-handoff, the fate of the correlated world
+        Session decides everything:
+
+          * world Session already ESTABLISHED → NO-OP. The join is completing (its
+            dispatch runs the join body and complete_world_handoff owns the cleanup);
+            rolling back here would strand it half-rolled-back — correlation gone,
+            set_world None — and the completed join would leave the node in-world
+            with no world host, which the perimeter then 'fixes' by coercively
+            cutting our own host with no event: a permanent wedge.
+          * world Session still in flight → roll back AND abort it (drop): a dial or
+            handshake left running would otherwise complete into a headless join.
+
+        Also un-points pool routing (set_world) when the rolled-back world peer is
+        the current world host: start_world_handoff set it optimistically at
+        handoff-initiate, and leaving it on a world we never joined would classify
         that host as a member for the perimeter and the facade until the next retry."""
+        pending_world = self._pending_world_handoff.get(peer_id)
+        if (pending_world is not None and self._sm_world is not None
+                and self._sm_world.is_established(pending_world)):
+            return
         world_peer_id = self._pending_world_handoff.pop(peer_id, None)
         if world_peer_id is not None:
             self._world_to_public.pop(world_peer_id, None)
+            if self._sm_world is not None:
+                await self._sm_world.drop(world_peer_id)   # abort the in-flight redemption
         public_peer_id = self._world_to_public.pop(peer_id, None)
         if public_peer_id is not None:
             self._pending_world_handoff.pop(public_peer_id, None)

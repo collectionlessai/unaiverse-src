@@ -966,3 +966,35 @@ def test_s18_node_holds_no_session_manager_handle():
     assert not hasattr(node, "_sm_world")
     # The managers live on the Coordinator instead.
     assert conn._sm_public is not None and conn._sm_world is not None
+
+
+def test_failed_join_body_tears_down_world_session_and_rearms():
+    """When the grant is redeemed but the join body fails (bad code bundle, subscribe
+    failure...), the dispatcher must not stop at retiring the carrier: it tears the
+    half-join down — GOAWAY the world Session (the host unlists us on its CLOSED),
+    un-point world routing — and re-arms the rejoin. Before, the node was left with
+    an orphaned ESTABLISHED world Session, a stale set_world and no retry."""
+    async def _scenario():
+        node, conn = build_agent_node_shell(NODE_PEER)
+        node.keep_rejoining = True
+        node.rejoining_time = -1.
+        node.rejoining_kwargs = {}
+        node.joining_world_info = {"world_public_peer_id": "host-pub",
+                                   "options": {"world_name": "w"}}
+        conn.set_world(REMOTE_PEER)
+
+        async def _join_fails(peer_id, data, grant):
+            return False
+        node._join_world_after_session = _join_fails
+
+        ev = SessionEvent(type=SessionEventType.ESTABLISHED, session_id="00" * 8,
+                          peer_id=REMOTE_PEER, role=SessionRole.INITIATOR,
+                          p2p_name=NodeConn.P2P_WORLD,
+                          data={"profile_b": {}, "grant": {"role": 1}})
+        await node._dispatch_session_event(ev)
+
+        assert REMOTE_PEER in conn.removed_calls      # world session purged (reasoned)
+        assert None in conn.set_world_calls           # routing un-pointed
+        assert node.rejoining_time > 0.               # retry armed (involuntary end)
+
+    asyncio.run(_scenario())

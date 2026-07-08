@@ -438,6 +438,17 @@ class SessionManager:
             # blank on app_role until the next sync refresh.
             app_role = existing.app_role
             self._forget(peer_id)
+        elif existing is not None and existing.state == SessionState.CLOSING:
+            # A CLOSING Session is not a healthy one to no-op on: its GOAWAY is out
+            # and the relation is ending, so a new dial intent inside its window (up
+            # to 10s) must start a fresh Session — not be swallowed while the caller
+            # is told the dial started. This is the outbound mirror of deliver's
+            # inbound supersede. No farewell is owed (already sent): forget and dial
+            # fresh over the still-live transport. The forgotten FSM emits no CLOSED,
+            # so no settlement cut is scheduled — right, the re-dial owns it now.
+            log.session(f"initiate(...{peer_id[-5:]}): superseding CLOSING Session with a "
+                        f"fresh dial", sub=self._label)
+            self._forget(peer_id)
         elif existing is not None and existing.state not in (SessionState.FAILED, SessionState.CLOSED):
             if not replace_stale and existing.is_world_join == is_world_join:
                 log.session(f"initiate(...{peer_id[-5:]}): "

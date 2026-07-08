@@ -2447,8 +2447,9 @@ class Node:
         elif ev.type == SessionEventType.RESUMED:
             await self._on_session_resumed(ev)
         elif ev.type == SessionEventType.FAILED:
-            # Roll back any in-flight world-handoff correlation (Coordinator-owned).
-            self.conn.rollback_handoff(ev.peer_id)
+            # Roll back any in-flight world-handoff correlation (Coordinator-owned;
+            # aborts the in-flight world redemption, no-ops if it already established).
+            await self.conn.rollback_handoff(ev.peer_id)
             self._world_host_unlist_member(ev)
             await self._maybe_leave_world_on_session_end(ev)
             self._maybe_rearm_rejoin_on_failed_join(ev)
@@ -2476,7 +2477,7 @@ class Node:
                 return
             # A CLOSED/LOST carrier mid-handoff is a dead handoff too: drop the
             # correlation (idempotent, no-op outside a handoff) or the maps leak.
-            self.conn.rollback_handoff(ev.peer_id)
+            await self.conn.rollback_handoff(ev.peer_id)
             self._world_host_unlist_member(ev)
             if await self._maybe_leave_world_on_session_end(ev):
                 return
@@ -2485,10 +2486,14 @@ class Node:
             except Exception as e:
                 log.error(f"[session] dispatch CLOSED purge failed for ...{ev.peer_id[-5:]}: {e}")
         elif ev.type == SessionEventType.LOST:
-            self.conn.rollback_handoff(ev.peer_id)   # a mid-handoff carrier lost = dead handoff
+            await self.conn.rollback_handoff(ev.peer_id)   # a mid-handoff carrier lost = dead handoff
             self._world_host_unlist_member(ev)
             if await self._maybe_leave_world_on_session_end(ev):
                 return
+            # LOST is involuntary: a pending join whose carrier (or world Session)
+            # rode its grace to LOST must retry, same as a FAILED one. A clean
+            # CLOSED still never re-arms.
+            self._maybe_rearm_rejoin_on_failed_join(ev)
             try:
                 await self.__purge(ev.peer_id)
             except Exception as e:
@@ -2522,14 +2527,14 @@ class Node:
         self.rejoining_time = clock.get_time() + Custom.REJOINING_WAIT
 
     def _maybe_rearm_rejoin_on_failed_join(self, ev) -> None:
-        """Joiner side: a FAILED handshake on a world we are still trying to join
-        (joining_world_info set, role bit not yet on) re-arms the rejoin. Called ONLY on
-        FAILED, a Session that never established, which is exactly the 'first join never
-        completed' case: without this a world unreachable at the first join leaves the node
-        up but never joined and never retrying (the dial is off-task now, so ask_to_join_world
-        no longer fails synchronously). An involuntary end of an ALREADY-joined world (LOST)
-        is instead handled by _maybe_leave_world_on_session_end; a clean CLOSED never retries.
-        The watchdog then re-runs the whole ask_to_join_world flow until the world is up."""
+        """Joiner side: an INVOLUNTARY terminal (FAILED, LOST, or a failed join body)
+        on a world we are still trying to join (joining_world_info set, role bit not
+        yet on) re-arms the rejoin. Without this a world unreachable at the first join
+        leaves the node up but never joined and never retrying (the dial is off-task,
+        so ask_to_join_world no longer fails synchronously). An involuntary end of an
+        ALREADY-joined world is instead handled by _maybe_leave_world_on_session_end;
+        a clean CLOSED never retries. The watchdog then re-runs the whole
+        ask_to_join_world flow until the world is up."""
         if self.node_type is not Node.AGENT or not self.keep_rejoining:
             return
         if self.joining_world_info is None:
@@ -2690,6 +2695,18 @@ class Node:
             # public transport + pool eviction, with the settlement cut severing the
             # transport once the CLOSED lands. The Coordinator owns the correlation.
             await self.conn.complete_world_handoff(ev.peer_id)
+            if not ok:
+                # The grant was redeemed but the join body failed (bad code bundle,
+                # subscribe failure...): tear the half-join down instead of leaving an
+                # orphaned ESTABLISHED world Session, stale world routing and no retry.
+                # GOAWAY the world Session (the host unlists us on its CLOSED),
+                # un-point routing, and re-arm the rejoin (involuntary end).
+                try:
+                    await self.__purge(ev.peer_id, reason=LOCAL_ERROR)
+                except Exception as e:
+                    log.error(f"[session] failed-join teardown purge failed for ...{ev.peer_id[-5:]}: {e}")
+                self.conn.set_world(None)
+                self._maybe_rearm_rejoin_on_failed_join(ev)
             return
 
         # Responder on an agent node (public or in-world peer connection)

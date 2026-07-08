@@ -263,10 +263,52 @@ def test_rollback_handoff_unpoints_world_routing():
     conn._pending_world_handoff[pub_peer] = world_peer
     conn._world_to_public[world_peer] = pub_peer
 
-    conn.rollback_handoff(pub_peer)   # the public carrier FAILED
+    _run(conn.rollback_handoff(pub_peer))   # the public carrier FAILED
 
     assert conn.get_world_node_peer_id() is None
     assert not conn.is_pending_handoff(world_peer)
+
+
+def test_rollback_handoff_aborts_inflight_world_session():
+    """A public carrier dying mid-handoff takes the still-in-flight world redemption
+    down with it: left running, the dial/handshake would complete into a headless
+    join (correlation gone, set_world None) that ends in the node coercively cutting
+    its own world host with no event — a permanent wedge."""
+    conn, pub, world = _conn()
+    pub_peer, world_peer = "host-pub", "host-world"
+    conn.set_world(world_peer)
+    conn._pending_world_handoff[pub_peer] = world_peer
+    conn._world_to_public[world_peer] = pub_peer
+    redemption = _StubSession(state=SessionState.HELLO_SENT)   # world dial in flight
+    conn._sm_world._sessions[world_peer] = redemption
+
+    _run(conn.rollback_handoff(pub_peer))
+
+    assert redemption.aborted_with is not None            # redemption aborted...
+    assert conn._sm_world.get_session(world_peer) is None  # ...and forgotten
+    assert world_peer in world.disconnected               # transport of the dial severed
+    assert not conn.is_pending_handoff(world_peer)
+    assert conn.get_world_node_peer_id() is None
+
+
+def test_rollback_handoff_noop_when_world_session_established():
+    """If the correlated world Session already ESTABLISHED, the carrier's death no
+    longer matters: the join is completing and complete_world_handoff owns the
+    cleanup. Rolling back here would strand the completing join half-rolled-back
+    (in-world with no world host = the perimeter cuts our own host, wedge)."""
+    conn, pub, world = _conn()
+    pub_peer, world_peer = "host-pub", "host-world"
+    conn.set_world(world_peer)
+    conn._pending_world_handoff[pub_peer] = world_peer
+    conn._world_to_public[world_peer] = pub_peer
+    redemption = _StubSession(state=SessionState.ESTABLISHED)
+    conn._sm_world._sessions[world_peer] = redemption
+
+    _run(conn.rollback_handoff(pub_peer))
+
+    assert redemption.aborted_with is None                 # untouched
+    assert conn.is_pending_handoff(world_peer)             # correlation kept
+    assert conn.get_world_node_peer_id() == world_peer     # routing kept
 
 
 # Shutdown drain
