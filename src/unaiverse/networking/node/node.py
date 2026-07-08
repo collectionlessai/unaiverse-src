@@ -1003,10 +1003,22 @@ class Node:
         # main loop — to overwrite any handlers installed at import time by
         # matplotlib/PyTorch/etc.
         self.stop_requested = False
+        stop_requested_at = 0.0
 
         def _request_stop() -> None:
+            nonlocal stop_requested_at
             if self.stop_requested:
-                os._exit(130)
+                # A single physical Ctrl+C can be DELIVERED here more than once: a
+                # terminal signals the whole foreground process group, and a wrapper
+                # like `uv run` additionally forwards the SIGINT to its child — so
+                # the second delivery used to fire the force-quit escape hatch and
+                # os._exit(130) truncated the graceful teardown (GOAWAYs, drain) at
+                # a random point. Debounce: within the window it is the same
+                # keypress and is ignored; past it, it is a real second Ctrl+C.
+                if time.monotonic() - stop_requested_at >= 1.0:
+                    os._exit(130)
+                return
+            stop_requested_at = time.monotonic()
             log.user("\nDetected Ctrl+C! Exiting gracefully... (Ctrl+C again to force-quit)")
             self.stop_requested = True
 

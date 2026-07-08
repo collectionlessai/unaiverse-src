@@ -144,14 +144,22 @@ class SessionManager:
         self._active_sessions.pop(peer_id, None)
 
     def _set_active(self, peer_id: str, sess: "Session") -> None:
-        """Register a Session the tick must sweep (a responder, or a started initiator)."""
+        """Register a Session the tick must sweep (a responder, or a started initiator).
+        A live Session owns the transport again: any settlement cut left over from the
+        previous relation is cancelled eagerly here (it must not fire under the new
+        relation, nor keep the peer flagged as tearing-down for its residual linger).
+        A KNOWN placeholder deliberately does NOT cancel (see _set_known)."""
         self._sessions[peer_id] = sess
         self._active_sessions[peer_id] = sess
+        self._pending_cuts.pop(peer_id, None)
 
     def _promote(self, peer_id: str, sess: "Session") -> None:
-        """Move a just-started initiator out of KNOWN into the tick-active view."""
+        """Move a just-started initiator out of KNOWN into the tick-active view. Same
+        eager cut-cancel as _set_active: the dial reuses a still-open connection when
+        there is one, and a leftover cut firing mid-handshake would sever it."""
         if self._sessions.get(peer_id) is sess and sess.state != SessionState.KNOWN:
             self._active_sessions[peer_id] = sess
+            self._pending_cuts.pop(peer_id, None)
 
     def _forget(self, peer_id: str) -> None:
         """Remove a Session from both views."""
@@ -598,10 +606,21 @@ class SessionManager:
                 sess = self._sessions.get(ev.peer_id)
                 if sess is not None and sess.state in (SessionState.FAILED, SessionState.CLOSED):
                     self._forget(ev.peer_id)
+                    reason = str(ev.data.get("reason", ""))
+                    if "SIMULTANEOUS_OPEN_LOSS" in reason:
+                        # The tie-break loser shares its transport with the WINNER's
+                        # handshake still in flight: no settlement cut, or a slow
+                        # winner dial (e.g. via relay) gets its connection severed
+                        # under it. The quarantine above still gates our own dials.
+                        continue
                     # Overwrite, not setdefault: the LAST farewell owns the linger.
                     # Inheriting a nearly-due deadline from a previous relation's
                     # entry would cut the transport right under this one's ACK.
-                    self._pending_cuts[ev.peer_id] = now + _CUT_LINGER_S
+                    # A CLOSED completed by the received GOAWAY_ACK needs no linger
+                    # at all: the ACK is the end-to-end proof that nothing of ours
+                    # is still in flight — cut at the next tick (faster shutdowns).
+                    linger = 0.0 if reason.startswith("local_goaway_acked") else _CUT_LINGER_S
+                    self._pending_cuts[ev.peer_id] = now + linger
 
     def _spawn_responder(self, peer_id: str) -> Session:
         sess = Session(
@@ -801,12 +820,11 @@ class SessionManager:
         same stack as a farewell write (P2P.disconnect is abortive and would destroy
         the GOAWAY/ACK just queued):
 
-          * already tearing down (CLOSING, or a settlement cut pending for a peer
-            with nothing past a KNOWN placeholder) → no-op: makes the frequent
-            double-purge (a CLOSED dispatched after an earlier purge) idempotent
-            WITHOUT aborting the farewell in flight. A live Session born inside
-            the linger is NOT shielded by the old relation's pending cut: the
-            drop is honored against it and the stale ledger entry removed;
+          * already tearing down (CLOSING, or a settlement cut pending — which
+            implies nothing live behind it: a live Session cancels the entry
+            eagerly at birth) → no-op: makes the frequent double-purge (a CLOSED
+            dispatched after an earlier purge) idempotent WITHOUT aborting the
+            farewell in flight;
           * ESTABLISHED/RECONNECTING/AWAITING_HANDOFF with a reason → GOAWAY-close
             only; the deferred settlement cut severs the transport once the CLOSED
             lands (ACK or the CLOSING timeout);
@@ -831,20 +849,12 @@ class SessionManager:
             return []
 
         if peer_id in self._pending_cuts:
-            # The pending settlement cut makes a drop a no-op ONLY while it still
-            # refers to the current relation (no Session, or nothing past a KNOWN
-            # placeholder): that is the frequent double-purge, which must not abort
-            # the farewell in flight. A live Session born INSIDE the linger (the
-            # peer re-handshaked inbound) superseded the old teardown, so a new
-            # drop on it must be honored — the stale ledger entry is removed here
-            # (the lazy guard would have cancelled it at execution anyway) and the
-            # dispatch below runs against the live Session.
-            if sess is None or sess.state in (SessionState.KNOWN,
-                                              SessionState.FAILED,
-                                              SessionState.CLOSED):
-                log.session(f"drop(...{peer_id[-5:]}): already tearing down — no-op", sub=self._label)
-                return []
-            del self._pending_cuts[peer_id]
+            # A pending settlement cut implies nothing live past a KNOWN placeholder
+            # behind it (a live Session cancels the entry eagerly at birth, see
+            # _set_active/_promote): this is the frequent double-purge, a no-op that
+            # must not abort the farewell in flight.
+            log.session(f"drop(...{peer_id[-5:]}): already tearing down — no-op", sub=self._label)
+            return []
 
         if sess is None or sess.state in (SessionState.FAILED, SessionState.CLOSED):
             if sess is not None:

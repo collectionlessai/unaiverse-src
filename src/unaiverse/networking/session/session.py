@@ -47,6 +47,9 @@ _TIMEOUT_RECONNECT_S = 45.0 # Session-level reconnect ceiling before Session.Los
                             # Go transport grace (DisconnectionGracePeriod) so several backoff'd
                             # re-dial + RESUME cycles fit inside the window (see tick_dial).
 _TIMEOUT_CLOSING_S = 10.0   # GOAWAY sent; wait for GOAWAY_ACK
+_TIMEOUT_CLOSING_FAILED_SEND_S = 1.0  # GOAWAY write failed (link dead): no ACK can
+                                      # ever come, finalize fast so the shutdown
+                                      # drain does not burn its budget waiting.
 # How long past the peer's attested token exp we keep the session before a
 # GOAWAY(TOKEN_EXPIRED). Generous on purpose — PING/PONG liveness is the primary
 # signal and a refresh (TOKEN_UPDATE) normally lands ~30min before exp; this only
@@ -951,17 +954,21 @@ class Session:
                               SessionState.AWAITING_HANDOFF):
             log.session(f"{self!r} close({reason_code}) called in state {self.state.value} — ignored", sub=self._sub)
             return
-        if not await self._send_payload(SESSION_CONTROL_PROTOCOL, SessMsg(SessMsg.KIND_GOAWAY, {
+        sent = await self._send_payload(SESSION_CONTROL_PROTOCOL, SessMsg(SessMsg.KIND_GOAWAY, {
             "reason": reason_code, "drain_window_ms": 0, "session_id": self.session_id,
-        })):
-            # Enter CLOSING anyway: the timeout finalizes the close either way, and a
-            # failed local write means the link is gone — nothing better to do.
-            log.session(f"{self!r} GOAWAY send failed (closing via timeout)", sub=self._sub)
+        }))
         # The reason NAME is embedded in both sides' CLOSED reason strings
         # (local_goaway_acked:<name> / goaway_ack_timeout:<name> here,
         # remote_goaway:<name> there): the application dispatch matches it by
         # substring, e.g. WORLD_HANDOFF_COMPLETE must not purge on either side.
         self._local_goaway_reason = reason_name(reason_code)
+        if not sent:
+            # The local write failed: the link is already gone and no ACK can ever
+            # come. Enter CLOSING anyway (the terminal contract is unchanged) but
+            # with the short fallback, so a shutdown drain is not held hostage.
+            log.session(f"{self!r} GOAWAY send failed (closing via short timeout)", sub=self._sub)
+            self._set_state(SessionState.CLOSING, _TIMEOUT_CLOSING_FAILED_SEND_S)
+            return
         self._set_state(SessionState.CLOSING, _TIMEOUT_CLOSING_S)
         log.session(f"{self!r} GOAWAY sent (reason={self._local_goaway_reason})", sub=self._sub)
 

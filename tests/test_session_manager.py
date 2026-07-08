@@ -757,8 +757,9 @@ def test_settlement_precedes_dispatch_on_remote_goaway(alice_conn, alice_peer_id
 
 
 def test_pending_cut_cancelled_by_new_live_session(alice_conn, alice_peer_id, bob_peer_id):
-    """The lazy guard: a due settlement cut is cancelled when a live (non-KNOWN)
-    Session for the peer exists again — the re-handshake reuses the transport."""
+    """A due settlement cut is cancelled by a live (non-KNOWN) Session for the peer
+    existing again: cancelled eagerly at the Session's birth (_set_active), with the
+    executor's lazy guard as the belt — the re-handshake reuses the transport."""
     sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
     sm._pending_cuts[bob_peer_id] = time.monotonic() - 0.1   # already due
     hello = SessMsg(SessMsg.KIND_HELLO_REQ, {
@@ -893,10 +894,10 @@ def test_close_all_goaways_live_and_aborts_handshakes(alice_conn, alice_peer_id,
 def test_drop_honored_on_live_session_born_inside_linger(alice_conn, alice_peer_id, bob_peer_id):
     """A pending settlement cut (the OLD relation's) must not swallow a drop aimed at
     a NEW live Session born inside the linger (the peer re-handshaked inbound after
-    its old relation settled): the purge is honored — GOAWAY on the live Session —
-    and the stale ledger entry is removed. Without this, a rejected re-enrolment
-    (hosted refuses -> purge) would be silently lost and the peer would stay
-    ESTABLISHED and pool-resident forever."""
+    its old relation settled): the stale ledger entry is cancelled at the Session's
+    birth, so the purge is honored — GOAWAY on the live Session. Without this, a
+    rejected re-enrolment (hosted refuses -> purge) would be silently lost and the
+    peer would stay ESTABLISHED and pool-resident forever."""
     sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
     sm._pending_cuts[bob_peer_id] = time.monotonic() + 1.5   # old relation, still lingering
     sess = _established(sm, alice_conn, bob_peer_id, alice_peer_id)   # new live relation
@@ -1025,3 +1026,70 @@ def test_transport_drop_leaves_awaiting_handoff_parked(alice_conn, alice_peer_id
     assert events == []
     assert sess.state == SessionState.AWAITING_HANDOFF   # still parked
     assert bob_peer_id not in sm._quarantine             # joiner not punished for a blip
+
+
+def test_new_live_session_cancels_pending_cut_at_birth(alice_conn, alice_peer_id, bob_peer_id):
+    """The eager cancel: the moment a live Session is registered (responder spawn,
+    dial promotion) any settlement cut left by the previous relation is dropped from
+    the ledger — the new relation owns the transport, and the stale cut must neither
+    fire under it nor keep the peer flagged tearing-down for its residual linger."""
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    sm._pending_cuts[bob_peer_id] = time.monotonic() + 1.5
+    hello = SessMsg(SessMsg.KIND_HELLO_REQ, {
+        "session_id": b"\x02" * 16, "nonce_a": b"\xaa" * 32,
+        "protocol_versions": ["1.0"], "client_id": "test",
+    })
+    _run(sm.deliver(bob_peer_id, SESSION_HELLO_PROTOCOL, hello))
+    assert bob_peer_id not in sm._pending_cuts        # cancelled at birth, no tick needed
+    assert not sm.is_tearing_down(bob_peer_id)
+
+
+def test_no_settlement_cut_for_simultaneous_open_loss(alice_conn, alice_peer_id, bob_peer_id):
+    """The tie-break loser's FAILED must not schedule a settlement cut: its transport
+    is shared with the WINNER's handshake still in flight, and a slow winner dial
+    (e.g. via relay) would get its connection severed under it. Quarantine still
+    applies (it gates only our own dials, not the winner's inbound handshake)."""
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    sess = _mk_session(alice_conn, bob_peer_id, alice_peer_id)
+    sess._set_state(SessionState.HELLO_SENT, 5.0)
+    sm._set_active(bob_peer_id, sess)
+
+    events = _run(sm.deliver(bob_peer_id, SESSION_HELLO_PROTOCOL,
+                             SessMsg(SessMsg.KIND_HELLO_RESP,
+                                     {"reason_code": SIMULTANEOUS_OPEN_LOSS})))
+    assert [e.type for e in events] == [SessionEventType.FAILED]
+    assert bob_peer_id in sm._quarantine              # dial door still gated
+    assert bob_peer_id not in sm._pending_cuts        # but the shared transport survives
+
+
+def test_acked_close_cuts_without_linger(alice_conn, alice_peer_id, bob_peer_id):
+    """A CLOSED completed by the received GOAWAY_ACK needs no linger: the ACK is the
+    end-to-end proof that nothing of ours is still in flight, so the cut executes at
+    the very next tick (this is what keeps shutdowns from idling ~2s in the drain)."""
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    _established(sm, alice_conn, bob_peer_id, alice_peer_id)
+    _run(sm.drop(bob_peer_id, WORLD_DISENGAGEMENT))
+    _run(sm.deliver(bob_peer_id, SESSION_CONTROL_PROTOCOL,
+                    SessMsg(SessMsg.KIND_GOAWAY_ACK, {"received": True})))
+    assert sm._pending_cuts[bob_peer_id] <= time.monotonic()   # due immediately
+
+    _run(sm.tick())                                            # no time travel needed
+    assert alice_conn.disconnect_calls == [bob_peer_id]
+
+
+def test_failed_goaway_write_closes_fast(alice_conn, alice_peer_id, bob_peer_id):
+    """When the GOAWAY write itself fails (link already dead) no ACK can ever come:
+    CLOSING gets the short fallback timeout instead of the full 10s, so a shutdown
+    drain with an unreachable peer does not burn its whole budget waiting."""
+    async def _send_fails(peer_id, protocol_id, sess_msg):
+        return False
+    alice_conn.send_session = _send_fails
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    sess = _established(sm, alice_conn, bob_peer_id, alice_peer_id)
+
+    _run(sm.drop(bob_peer_id, WORLD_DISENGAGEMENT))
+    assert sess.state == SessionState.CLOSING
+    assert sess._timeout_s == 1.0                              # short fallback, not 10s
+
+    ev = sess.check_timeout(now=time.monotonic() + 1.2)
+    assert ev is not None and ev.type == SessionEventType.CLOSED
