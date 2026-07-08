@@ -1,25 +1,25 @@
-"""Characterization tests for the human chat-routing cache (BUG 2).
+"""Characterization tests for the human chat-routing cache.
 
-These pin the *current* behaviour of the two halves of the per-broadcaster
-human interaction cache and isolate the routing bug that misroutes a human's
-reply toward the remote world-node peer-id instead of the broadcaster:
+These pin the behaviour of the two halves of the human interaction cache:
 
-  * WRITE side  ``Agent.__rebind_stdin_if_human``  (src/unaiverse/agent.py:1740)
-  * READ  side  ``AgentBasics.prepare_stdin_if_human`` (src/unaiverse/agent_basics.py:435)
+  * WRITE side  ``Agent.__rebind_stdin_if_human``  (src/unaiverse/agent.py)
+  * READ  side  ``AgentBasics.prepare_stdin_if_human`` (src/unaiverse/agent_basics.py)
 
-When the human behaves inside a world (``public == False`` / ``in_world ==
-True``) both methods replace the broadcaster peer-id with
-``get_world_node_peer_id()`` (the REMOTE world host). The store-side lands the
-interaction under the world-node id (agent.py:1783) and the read-side looks it
-up under the same world-node id (agent_basics.py:439), so a per-broadcaster
-entry is never found and the read falls back to ``Custom.SYSTEM_INTERACTION_UUID``.
-The downstream consequence (node.py:1865-1867) is that the world node receives
-an agent-to-agent INTERACTION it never expects and purges the human.
+Outside a world the cache is keyed by the requester (the broadcaster agent).
+Inside a world (``public == False`` / ``in_world == True``) BOTH methods
+deliberately replace that key with ``get_world_node_peer_id()`` (the REMOTE
+world host): the world acts as a single well-known slot for the pending
+interaction. This is by design, not a routing bug: the read side is driven by
+the interact-mode keyboard loop, which only knows the local world peer id and
+could never name the broadcaster, so the well-known world key is what lets the
+store and the lookup meet (see the "no matter who sent the interaction" and
+"Zero-step" comments at the two call sites). The typed reply's network
+destination is never derived from this cache key: recipients come from
+``interaction.requester`` via the interaction manager, so the reply reaches
+the broadcaster regardless of how the cache is keyed.
 
-The two correct-behaviour assertions are marked ``xfail(strict=True)``: they
-MUST fail against today's source and only go green once both world-node-id
-overrides are replaced by the broadcaster/requester id. The remaining tests pin
-the current (buggy and non-buggy) behaviour and stay green.
+The accepted limit of the design is pinned below: the world slot is single,
+so concurrent requesters overwrite each other and the last one wins.
 
 The methods only touch ``self`` via plain attribute/method access, so they are
 driven as UNBOUND functions over hand-built stubs, with no real Agent/Node and
@@ -33,8 +33,8 @@ from unaiverse.custom import Custom
 pytestmark = pytest.mark.unit
 
 
-# Distinct, non-equal sentinels so the buggy override is observable: a lookup
-# that swaps BROADCASTER -> WORLD_NODE changes the result.
+# Distinct, non-equal sentinels so the world-key override is observable: a
+# lookup that swaps BROADCASTER -> WORLD_NODE changes the result.
 BROADCASTER = "BROADCASTER"
 WORLD_NODE = "WORLD_NODE"
 
@@ -148,10 +148,11 @@ def test_prepare_public_returns_broadcaster_interaction_uuid():
     assert stub.binding_public == [True]
 
 
-def test_prepare_world_currently_falls_back_to_system_uuid():
-    """CURRENT (buggy) world path: with the broadcaster keyed in the cache,
-    ``public=False`` swaps the key to the world-node id (agent_basics.py:439),
-    misses, and returns the SYSTEM interaction uuid instead of the real one."""
+def test_prepare_world_ignores_requester_keyed_entries():
+    """World path: the lookup only consults the single world slot, so an entry
+    keyed under a specific requester is invisible and the read falls back to
+    the SYSTEM interaction uuid. (The write side never produces such an entry
+    in a world; this pins the single-slot contract from the read side.)"""
     inter = FakeInteraction(requester=BROADCASTER, uuid="int-123")
     stub = PrepareStub(cache={BROADCASTER: inter}, world_node_peer_id=WORLD_NODE)
 
@@ -194,20 +195,6 @@ def test_prepare_miss_returns_system_uuid():
     assert _prepare(stub, public=True, peer_id=BROADCASTER) == Custom.SYSTEM_INTERACTION_UUID
 
 
-@pytest.mark.xfail(reason="bug: agent_basics.py:439 swaps broadcaster->world-node id on read",
-                   strict=True)
-def test_prepare_world_should_return_broadcaster_interaction_uuid():
-    """CORRECT behaviour (read side): inside a world, a reply typed for a
-    broadcaster must resolve to that broadcaster's interaction uuid. The cache is
-    keyed under the broadcaster and ``prepare_stdin_if_human(public=False,
-    peer_id=BROADCASTER)`` must return its uuid, NOT the SYSTEM fallback. It fails
-    today because line 439 overrides peer_id with the world-node id."""
-    inter = FakeInteraction(requester=BROADCASTER, uuid="int-123")
-    stub = PrepareStub(cache={BROADCASTER: inter}, world_node_peer_id=WORLD_NODE)
-
-    assert _prepare(stub, public=False, peer_id=BROADCASTER) == "int-123"
-
-
 # WRITE side: Agent.__rebind_stdin_if_human
 
 def test_rebind_not_human_short_circuits_true():
@@ -239,9 +226,10 @@ def test_rebind_lone_wolf_stores_under_requester():
     assert stub.binding_calls == 1
 
 
-def test_rebind_world_currently_stores_under_world_node():
-    """CURRENT (buggy) world path: the non-system interaction is stored under the
-    world-node id (agent.py:1783) rather than the broadcaster."""
+def test_rebind_world_stores_under_world_node():
+    """World path: the non-system interaction is stored under the world-node id
+    rather than the requester, so it lands in the single well-known slot that
+    the read side (which only knows the world id) will look up."""
     stub = RebindStub(in_world=True)
     inter = FakeInteraction(requester=BROADCASTER, uuid="int-1", is_system=False)
 
@@ -249,6 +237,19 @@ def test_rebind_world_currently_stores_under_world_node():
     assert WORLD_NODE in stub.proc_human_peer_id_to_interaction
     assert stub.proc_human_peer_id_to_interaction[WORLD_NODE] is inter
     assert BROADCASTER not in stub.proc_human_peer_id_to_interaction
+
+
+def test_rebind_world_last_requester_wins_the_slot():
+    """World path, accepted design limit: the world slot is single, so a second
+    pending interaction from a DIFFERENT requester overwrites the first one and
+    the human can only answer the most recent request."""
+    stub = RebindStub(in_world=True)
+    first = FakeInteraction(requester=BROADCASTER, uuid="int-1", is_system=False)
+    second = FakeInteraction(requester="OTHER_REQUESTER", uuid="int-2", is_system=False)
+
+    assert _rebind(stub, first) is True
+    assert _rebind(stub, second) is True
+    assert stub.proc_human_peer_id_to_interaction == {WORLD_NODE: second}
 
 
 def test_rebind_system_blocked_when_partner_already_stored():
@@ -274,19 +275,3 @@ def test_rebind_system_not_stored_when_no_partner():
     assert _rebind(stub, sys_inter) is True
     assert stub.proc_human_peer_id_to_interaction == {}
     assert stub.binding_calls == 1
-
-
-@pytest.mark.xfail(reason="bug: agent.py:1783 stores under world-node id instead of requester",
-                   strict=True)
-def test_rebind_world_should_store_under_requester():
-    """CORRECT behaviour (write side): inside a world, a non-system chat from a
-    broadcaster must be stored under interaction.requester (the broadcaster), and
-    the world-node id must NOT be used as the key. It fails today because line
-    1783 keys the entry on the world-node id."""
-    stub = RebindStub(in_world=True)
-    inter = FakeInteraction(requester=BROADCASTER, uuid="int-1", is_system=False)
-
-    assert _rebind(stub, inter) is True
-    assert BROADCASTER in stub.proc_human_peer_id_to_interaction
-    assert stub.proc_human_peer_id_to_interaction[BROADCASTER] is inter
-    assert WORLD_NODE not in stub.proc_human_peer_id_to_interaction

@@ -20,9 +20,10 @@ self-loop X->X teleport, which ``to_dict`` silently drops, so the
 build->serialize->load round-trip is not stable. (A second one, the welcome
 wildcard left unsubstituted on load, has been fixed and its test is green.)
 
-The conftest autouse fixture swaps the logger's sink for a no-op, but
-``log.critical`` still ``raise``s ``GenException`` (the raise sits after the sink
-call), so the critical paths below really do raise.
+The suite-wide conftest fixture swaps the logger for a no-op object that also
+neuters the raising contract of ``log.critical``; this module's autouse
+``_raising_critical_logger`` fixture restores it (see its comment below), so
+the critical paths below really do raise ``GenException``.
 """
 import json
 from pathlib import Path

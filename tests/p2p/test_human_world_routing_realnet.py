@@ -1,18 +1,18 @@
-"""Real-libp2p mesh-perimeter PUNISHMENT primitive (opt-in: ``-m p2p``).
+"""Real-libp2p world-purge PRIMITIVE (opt-in: ``-m p2p``).
 
-Scoped real-wire slice of bug-2 (a human-in-world reply must reach the
-broadcaster, not the world node). The full reproduction is a *topology* problem
-that needs a full ``Node`` WORLD (token issuance, world roles, stdin-driven human
-turns), so it cannot run on the bare realnet helpers. What CAN run on the real
-wire, and is exercised here, is the punishment PRIMITIVE the world node fires when
-it detects misrouted application content: ``Node.__purge(peer_id,
-reason=LOCAL_ERROR)``, whose GOAWAY wire action is the close component of
-``conn.drop_peer(peer_id, LOCAL_ERROR)``. That close emits a GOAWAY carrying
-``LOCAL_ERROR``; the punished sender's Session must reach the terminal ``CLOSED``
-state over the real transport, observing the reason — and must NOT slip into LOST
-(the bare-drop symptom). We isolate the GOAWAY here (the owning manager's
-``close_session``, the graceful half of drop_peer) so the clean-close property is
-asserted without the transport-drop half racing it.
+Real-wire slice of the world's gate against application content sent to the
+world node itself. The full reproduction is a *topology* problem that needs a
+full ``Node`` WORLD (token issuance, world roles, stdin-driven human turns), so
+it cannot run on the bare realnet helpers. What CAN run on the real wire, and
+is exercised here, is the purge PRIMITIVE the world node fires when it detects
+such content: ``Node.__purge(peer_id, reason=LOCAL_ERROR)``, whose GOAWAY wire
+action is the close component of ``conn.drop_peer(peer_id, LOCAL_ERROR)``. That
+close emits a GOAWAY carrying ``LOCAL_ERROR``; the purged sender's Session must
+reach the terminal ``CLOSED`` state over the real transport, observing the
+reason — and must NOT slip into LOST (the bare-drop symptom). We isolate the
+GOAWAY here (the owning manager's ``close_session``, the graceful half of
+drop_peer) so the clean-close property is asserted without the transport-drop
+half racing it.
 
 In scope here (real-wire truth, no mocks):
   * a world-instance ``close_session(sender, LOCAL_ERROR)`` -> GOAWAY -> the
@@ -20,11 +20,12 @@ In scope here (real-wire truth, no mocks):
     the host holding an ESTABLISHED session as the positive precondition.
 
 Explicitly left to the layered tests above this one:
-  * ``tests/test_human_routing.py`` (Level 1, xfail): the node-dispatch DECISION
-    to purge — that misrouted application content at the world node triggers the
-    ``__purge(..., reason=LOCAL_ERROR)`` in the first place.
-  * ``tests/test_human_world_routing_e2e.py`` (Level 2, e2e): the full topology —
-    the human-in-world reply must reach the broadcaster, not the world node.
+  * ``tests/test_human_world_routing_e2e.py`` (e2e): the node-dispatch DECISION
+    to purge — that application content reaching the world node triggers the
+    ``__purge(..., reason=LOCAL_ERROR)`` in the first place, member-gated.
+  * ``tests/test_human_routing.py`` (unit): the human interaction cache keying
+    (deliberately world-node-keyed inside a world; an earlier mis-route
+    suspicion was refuted, see that module's docstring).
 
 Run with:  ``uv run pytest -m p2p tests/p2p/test_human_world_routing_realnet.py -q -rs``
 """
@@ -64,9 +65,9 @@ def _host_decision_hook(peer_id, remote_node_id, remote_profile, p2p_name, verif
     return _hook()
 
 
-def test_world_instance_punishes_misrouted_sender_with_goaway_local_error(real_nodes):
+def test_world_instance_purges_sender_with_goaway_local_error(real_nodes):
     """A world-instance host GOAWAY-closes the sender with LOCAL_ERROR (the exact
-    wire action of ``__purge(reason=LOCAL_ERROR)``). The punished sender's world
+    wire action of ``__purge(reason=LOCAL_ERROR)``). The purged sender's world
     Session must reach the terminal CLOSED state over the real transport, observe
     a CLOSED event carrying ``LOCAL_ERROR``, and NOT see LOST."""
     s_pub_p2p, s_world_p2p, s_conn, s_pub, s_world = real_nodes.world_node("sender")

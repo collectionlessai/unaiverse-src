@@ -34,11 +34,12 @@ The conftest autouse ``_silence_unaiverse_logger`` fixture swallows the heavy
 offline.
 
 Four defects surfaced while writing these tests were reported under
-``suspected_bugs``. The dead evaluate guard has since been fixed (its test is
-green); the ``_eval_results`` mis-keying is still pinned with
-``xfail(strict=True)`` so the suite stays green today and flags (via XPASS) the
-moment it is fixed. The other two are documented with passing characterization
-tests that assert the actual (buggy) behaviour, commented as such.
+``suspected_bugs``. All are resolved: the dead evaluate guard has been fixed
+(its test is green), the ``_eval_results`` owner-keying turned out to be
+equivalent by construction to the engaged-key keying (the buffering writer
+guarantees owner == key; its test now characterizes that invariant), and the
+other two are documented with passing characterization tests that assert the
+actual behaviour, commented as such.
 """
 
 import asyncio
@@ -681,7 +682,7 @@ def test_evaluate_str_agents_to_evaluate_is_wrapped_to_list(agent):
     assert agent._eval_results == {"pZ": 0.42}
 
 
-# Suspected bugs surfaced by these tests (the first is fixed, the second still pinned as xfail)
+# Suspected bugs surfaced by these tests (the first fixed, the second retracted as by-design)
 
 def test_evaluate_blocks_when_not_buffering():
     """The default ``buffer_generated_by_others == 'none'`` means no buffering of
@@ -697,22 +698,21 @@ def test_evaluate_blocks_when_not_buffering():
     assert result is False
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="BUG agent.py:1323 - evaluate keys _eval_results by the buffered stream's OWNER "
-           "(peer_id_from_net_hash(received)) instead of the agents_to_evaluate key used to "
-           "fetch it. When the buffered net_hash is owned by a different peer than the "
-           "engaged key, compare_eval's later all_agents[peer_id] lookup keys on the wrong id.",
-)
-def test_evaluate_eval_results_should_be_keyed_by_engaged_key():
-    """Engaged key 'engagedKey' whose buffered net_hash is owned by 'OWNER':
-    DESIRED is to key ``_eval_results`` by 'engagedKey'. The code keys it by
-    'OWNER', so this strict-xfail pins the mis-keying."""
+def test_evaluate_eval_results_keyed_by_buffered_owner():
+    """evaluate keys ``_eval_results`` by the OWNER embedded in the buffered
+    net_hash, not by the ``agents_to_evaluate`` key used to fetch the entry.
+    The divergence is only observable with a hand-crafted entry like this one:
+    the real buffering path derives both the dict key and the stored net_hash
+    prefix from the same peer id (agent_basics.py, ``last_buffered_peer_id_to_info``
+    writer), so owner == engaged key by construction in every system-produced
+    flow and the two keyings are equivalent. Keep that invariant in mind if the
+    buffering writer ever starts storing foreign-owned (relayed/aggregated)
+    net_hashes: this test will flag the divergence."""
     agent = Agent(proc=None)
+    agent.buffer_generated_by_others = "one"
     _patch_compare(agent, score=0.7, ret=True)
     agent._preferred_streams = ["ref::ps:x"]
     agent._engaged_agents = {"engagedKey"}
     agent.last_buffered_peer_id_to_info = {"engagedKey": {"net_hash": "OWNER::ps:gen"}}
-    _run(agent.evaluate(stream_hash="<playlist>", how="max"))
-    # DESIRED: keyed by the engaged-agent key, not the buffered owner.
-    assert set(agent._eval_results) == {"engagedKey"}
+    assert _run(agent.evaluate(stream_hash="<playlist>", how="max")) is True
+    assert agent._eval_results == {"OWNER": 0.7}

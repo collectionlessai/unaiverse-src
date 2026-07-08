@@ -11,14 +11,14 @@ The manager is exercised as a light-mock unit: a hand-rolled ``FakeAgent`` (not 
 real ``AgentBasics``) stands in for the back-reference, exposing only the attributes
 and methods the tested code paths actually touch. No real network / Go / libp2p.
 
-Tests marked ``xfail`` document *desired* behavior that the code does not honor today
-(see the module-level note next to each one); they are expected failures so the suite
-stays green while still flagging the bug. The remaining tests assert *actual* behavior,
-warts included, with a comment whenever that behavior looks like a bug.
+Tests assert *actual* behavior, warts included, with a comment whenever that behavior
+looks questionable. The broken-callback section restores the raising logger locally,
+because the production rejection contract (log.critical raising GenException) is
+neutered by the suite-wide no-op logger fixture.
 """
 import pytest
 
-from unaiverse.custom import Custom
+from unaiverse.custom import Custom, GenException
 from unaiverse.interaction import (
     Interaction,
     InteractionManager,
@@ -544,52 +544,64 @@ def test_same_uuid_can_live_in_sent_and_received_simultaneously():
     assert im.received[twin.uuid] is twin
 
 
-# Broken-callback contract (suspected bug, xfail = desired behavior)
-# __check_callback_method only logs for an invalid callback; it neither returns False
-# nor raises, so registration still succeeds carrying a broken callback (the failure is
-# deferred to complete()). The following three tests assert the DESIRED rejection and are
-# therefore expected to fail today.
+# Broken-callback contract
+# In production a callback naming a non-existent agent method is rejected FAIL-FAST:
+# __check_callback_method runs at the top of every register_* and its log.critical
+# raises GenException (logger.py, "Preserve the raising contract") BEFORE any dict is
+# mutated. The suite-wide conftest swaps the logger for a no-op that also neuters the
+# raise, so these tests restore the raising logger locally (same trick as test_hsm.py)
+# to characterize the production behaviour.
 
-def test_register_sent_broken_callback_registers_anyway_actual():
-    """ACTUAL behavior: a sent interaction with a non-existent callback method still registers."""
+@pytest.fixture
+def raising_critical_logger():
+    from unaiverse.utils.logger import log as _log
+    saved = getattr(_log, "_Logger__instance", None)
+    setattr(_log, "_Logger__instance", None)
+    yield
+    setattr(_log, "_Logger__instance", saved)
+
+
+def test_register_sent_broken_callback_raises_before_registering(raising_critical_logger):
+    """A sent interaction whose callback names a non-existent agent method is refused
+    at registration time by GenException, with no partial state left behind."""
     agent = FakeAgent()
     im = _manager(agent)
     inter = _inter(id="cb", requester="peerA", target="peerB", callback="no_such_callback")
 
-    assert im.register_sent(inter, public=True) is True  # the broken callback is NOT caught here
-    assert im.sent[inter.uuid] is inter
+    with pytest.raises(GenException):
+        im.register_sent(inter, public=True)
+    assert im.sent == {}
 
 
-@pytest.mark.xfail(strict=True, reason="BUG interaction.py:1734: broken callback is logged but not "
-                                       "rejected; register_sent should refuse it (deferred failure "
-                                       "lands in complete()).")
-def test_register_sent_should_reject_broken_callback():
-    """DESIRED behavior (xfail): register_sent should refuse a sent interaction whose callback
-    names a method that does not exist on the agent."""
-    agent = FakeAgent()
-    im = _manager(agent)
-    inter = _inter(id="cb", requester="peerA", target="peerB", callback="no_such_callback")
-    assert im.register_sent(inter, public=True) is False
-
-
-@pytest.mark.xfail(strict=True, reason="BUG interaction.py:1734: broken callback is logged but not "
-                                       "rejected; register_received should refuse it.")
-def test_register_received_should_reject_broken_callback():
-    """DESIRED behavior (xfail): register_received should refuse a received interaction whose
-    callback names a method that does not exist on the agent."""
+def test_register_received_broken_callback_raises_before_registering(raising_critical_logger):
+    """Same fail-fast contract on the received path (only reachable with a locally
+    built interaction: the callback does not survive the wire, see the round-trip
+    test below)."""
     agent = FakeAgent()
     agent.all_agents = {"peerA"}
     im = _manager(agent)
     inter = _inter(id="cb", requester="peerA", target="peerSelf", callback="no_such_callback")
-    assert im.register_received(inter, public=True) is False
+
+    with pytest.raises(GenException):
+        im.register_received(inter, public=True)
+    assert im.received == {}
 
 
-@pytest.mark.xfail(strict=True, reason="BUG interaction.py:1734: broken callback is logged but not "
-                                       "rejected; register_lazy should refuse it.")
-def test_register_lazy_should_reject_broken_callback():
-    """DESIRED behavior (xfail): register_lazy should refuse a lazy system interaction whose
-    callback names a method that does not exist on the agent."""
+def test_register_lazy_broken_callback_raises_before_registering(raising_critical_logger):
+    """Same fail-fast contract on the lazy path (system interactions built by the HSM)."""
     agent = FakeAgent()
     im = _manager(agent)
     inter = _inter(id="cb", requester=Custom.SYSTEM_INTERACTION_LABEL, callback="no_such_callback")
-    assert im.register_lazy(inter, public=True) is False
+
+    with pytest.raises(GenException):
+        im.register_lazy(inter, public=True)
+    assert im.lazy == {}
+
+
+def test_callback_does_not_survive_the_wire():
+    """to_dict/from_dict deliberately drop the callback, so an interaction received
+    from the network always carries callback=None: the broken-callback check can only
+    ever fire on locally built interactions (developer error), never remotely."""
+    inter = _inter(id="cb", requester="peerA", target="peerB", callback="no_such_callback")
+    back = Interaction.from_dict(inter.to_dict())
+    assert back.callback is None
