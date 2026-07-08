@@ -44,6 +44,78 @@ WorldMembership = namedtuple(
 )
 
 
+class HandoffCorrelation:
+    """Ledger of an in-flight world-join handoff: the public carrier that yielded the
+    grant, correlated with the world Session that redeems it, kept as twin indexes
+    (forward ``public -> world``, reverse ``world -> public``) with the three
+    lifecycle operations. Shared VERBATIM by the real Coordinator and the
+    test-harness mirror (NodeFakeConn), which used to hand-copy this logic and
+    drifted more than once; one implementation is the lockstep guarantee.
+
+    External effects are injected as callables so the ledger stays pure bookkeeping
+    (and the harness can wire its fakes):
+
+      * ``is_world_established(world_peer_id)``: True when the redemption already
+        reached ESTABLISHED — rollback then no-ops, the completing join owns the
+        cleanup (see ``rollback``).
+      * ``abort_world(world_peer_id)``: awaitable, aborts the in-flight redemption.
+      * ``current_world()`` / ``clear_world()``: read / un-point the pool-routing
+        pointer that ``start_world_handoff`` set optimistically.
+    """
+
+    def __init__(self, is_world_established, abort_world, current_world, clear_world):
+        self.pending_world_handoff: dict[str, str] = {}
+        self.world_to_public: dict[str, str] = {}
+        self._is_world_established = is_world_established
+        self._abort_world = abort_world
+        self._current_world = current_world
+        self._clear_world = clear_world
+
+    def start(self, public_peer_id: str, world_peer_id: str) -> None:
+        """Record the correlation at handoff-initiate (both directions)."""
+        self.pending_world_handoff[public_peer_id] = world_peer_id
+        self.world_to_public[world_peer_id] = public_peer_id
+
+    def is_pending(self, world_peer_id: str) -> bool:
+        """True if this world peer-id is the world side of an in-flight handoff."""
+        return world_peer_id in self.world_to_public
+
+    async def rollback(self, peer_id: str) -> None:
+        """Roll back the correlation for a terminal Session, whichever side died.
+
+        When the PUBLIC carrier dies mid-handoff, the fate of the correlated world
+        Session decides everything: already ESTABLISHED -> NO-OP (the join is
+        completing; rolling back would strand it half-rolled-back — in-world with
+        no world host — and the perimeter would then coercively cut our own host
+        with no event, a permanent wedge); still in flight -> pop both indexes AND
+        abort the redemption (a dial/handshake left running would complete into a
+        headless join). Also un-points the routing pointer when the rolled-back
+        world peer is the current one."""
+        pending_world = self.pending_world_handoff.get(peer_id)
+        if pending_world is not None and self._is_world_established(pending_world):
+            return
+        world_peer_id = self.pending_world_handoff.pop(peer_id, None)
+        if world_peer_id is not None:
+            self.world_to_public.pop(world_peer_id, None)
+            await self._abort_world(world_peer_id)
+        public_peer_id = self.world_to_public.pop(peer_id, None)
+        if public_peer_id is not None:
+            self.pending_world_handoff.pop(public_peer_id, None)
+        rolled_back_world = world_peer_id if world_peer_id is not None else (
+            peer_id if public_peer_id is not None else None)
+        if rolled_back_world is not None and rolled_back_world == self._current_world():
+            self._clear_world()
+
+    def complete(self, world_peer_id: str) -> "str | None":
+        """Drop the correlation on success. Returns the public carrier's peer-id for
+        the caller to retire (GOAWAY on its live transport + pool evict), or None if
+        this world peer-id was not part of a handoff."""
+        public_peer_id = self.world_to_public.pop(world_peer_id, None)
+        if public_peer_id is not None:
+            self.pending_world_handoff.pop(public_peer_id, None)
+        return public_peer_id
+
+
 class NodeConn:
     """The networking Coordinator. Owns the two per-instance P2P handles, the two
     per-instance SessionManagers and the cross-instance world membership, and exposes
@@ -168,16 +240,33 @@ class NodeConn:
         self._session_managers = []
 
         # World-handoff correlation, owned here so it sits next to the two SessionManagers
-        # it spans (the public Session that yielded the grant, the world Session that
-        # redeems it). _pending_world_handoff: public peer-id -> world peer-id while the
-        # handoff is in flight; _world_to_public: the reverse, used to GOAWAY the public
-        # Session once the world Session establishes. Node drives the handoff through the
-        # start/rollback/complete facades; it no longer holds these maps. Every terminal
-        # outcome clears the entries: complete pops them on success, and the dispatch
-        # rolls back on FAILED/CLOSED/LOST of either side (idempotent), so a dead
-        # handoff never leaks its correlation.
-        self._pending_world_handoff: dict[str, str] = {}
-        self._world_to_public: dict[str, str] = {}
+        # it spans. The ledger itself (the twin maps + start/rollback/complete) lives in
+        # HandoffCorrelation, shared with the test-harness mirror; the effect callables
+        # close over self so they see the managers wired later by attach_session_policy.
+        # Node drives the handoff through the start/rollback/complete facades below.
+        self._handoff = HandoffCorrelation(
+            is_world_established=lambda wpid: (self._sm_world is not None
+                                               and self._sm_world.is_established(wpid)),
+            abort_world=self._abort_world_redemption,
+            current_world=self.get_world_node_peer_id,
+            clear_world=lambda: self.set_world(None),
+        )
+
+    @property
+    def _pending_world_handoff(self) -> dict:
+        """The forward handoff index (public -> world); lives in the shared ledger."""
+        return self._handoff.pending_world_handoff
+
+    @property
+    def _world_to_public(self) -> dict:
+        """The reverse handoff index (world -> public); lives in the shared ledger."""
+        return self._handoff.world_to_public
+
+    async def _abort_world_redemption(self, world_peer_id: str) -> None:
+        """Effect injected into the handoff ledger: abort the in-flight grant
+        redemption (drop dispatches on its state: mid-handshake -> silent abort)."""
+        if self._sm_world is not None:
+            await self._sm_world.drop(world_peer_id)
 
     def _init_pools(self, max_connections: int, pool_name_to_p2p_name_and_ratio: dict[str, list[str | float]],
                     valid_p2p_names: set[str],
@@ -990,54 +1079,22 @@ class NodeConn:
             self.set_world(world_peer_id)
         except Exception:
             pass
-        self._pending_world_handoff[public_peer_id] = world_peer_id
-        self._world_to_public[world_peer_id] = public_peer_id
+        self._handoff.start(public_peer_id, world_peer_id)
         return await self._sm_world.initiate(
             world_peer_id, world_addrs, grant=grant_blob, reject_relay=reject_relay)
 
     async def rollback_handoff(self, peer_id: str) -> None:
-        """Roll back any in-flight handoff correlation for a terminal Session, whichever
-        side died: the forward map is keyed by the public peer-id, the reverse one by
-        the world peer-id.
-
-        When the PUBLIC carrier dies mid-handoff, the fate of the correlated world
-        Session decides everything:
-
-          * world Session already ESTABLISHED → NO-OP. The join is completing (its
-            dispatch runs the join body and complete_world_handoff owns the cleanup);
-            rolling back here would strand it half-rolled-back — correlation gone,
-            set_world None — and the completed join would leave the node in-world
-            with no world host, which the perimeter then 'fixes' by coercively
-            cutting our own host with no event: a permanent wedge.
-          * world Session still in flight → roll back AND abort it (drop): a dial or
-            handshake left running would otherwise complete into a headless join.
-
-        Also un-points pool routing (set_world) when the rolled-back world peer is
-        the current world host: start_world_handoff set it optimistically at
-        handoff-initiate, and leaving it on a world we never joined would classify
-        that host as a member for the perimeter and the facade until the next retry."""
-        pending_world = self._pending_world_handoff.get(peer_id)
-        if (pending_world is not None and self._sm_world is not None
-                and self._sm_world.is_established(pending_world)):
-            return
-        world_peer_id = self._pending_world_handoff.pop(peer_id, None)
-        if world_peer_id is not None:
-            self._world_to_public.pop(world_peer_id, None)
-            if self._sm_world is not None:
-                await self._sm_world.drop(world_peer_id)   # abort the in-flight redemption
-        public_peer_id = self._world_to_public.pop(peer_id, None)
-        if public_peer_id is not None:
-            self._pending_world_handoff.pop(public_peer_id, None)
-        rolled_back_world = world_peer_id if world_peer_id is not None else (
-            peer_id if public_peer_id is not None else None)
-        if rolled_back_world is not None and rolled_back_world == self.get_world_node_peer_id():
-            self.set_world(None)
+        """Roll back any in-flight handoff correlation for a terminal Session,
+        whichever side died. The mechanics (established-skip, abort of the in-flight
+        redemption, routing un-point) live in HandoffCorrelation.rollback, shared
+        with the test harness."""
+        await self._handoff.rollback(peer_id)
 
     def is_pending_handoff(self, world_peer_id: str) -> bool:
         """True if this world peer-id is the world side of an in-flight handoff (its world
         Session was opened by start_world_handoff), as opposed to a plain in-world
         agent-to-agent connection that carries no grant correlation."""
-        return world_peer_id in self._world_to_public
+        return self._handoff.is_pending(world_peer_id)
 
     async def complete_world_handoff(self, world_peer_id: str) -> None:
         """The world Session established: retire the correlated public carrier — GOAWAY
@@ -1046,11 +1103,10 @@ class NodeConn:
         The transport itself falls with the settlement cut once the CLOSED lands (ACK or
         the CLOSING timeout); the dispatch early-returns on WORLD_HANDOFF_COMPLETE, so
         the pool eviction must happen here, not in a purge."""
-        public_peer_id = self._world_to_public.pop(world_peer_id, None)
+        public_peer_id = self._handoff.complete(world_peer_id)
         if public_peer_id is None:
             return
         await self._sm_public.close_session(public_peer_id, WORLD_HANDOFF_COMPLETE)
-        self._pending_world_handoff.pop(public_peer_id, None)
         self._evict_from_pools(public_peer_id)
 
     def _sm_of(self, peer_id: str) -> "SessionManager | None":

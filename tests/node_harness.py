@@ -19,7 +19,7 @@ from collections import deque
 
 from conftest import FakeP2P, FakeConn
 
-from unaiverse.networking.node.connpool import NodeConn, SessionInbound
+from unaiverse.networking.node.connpool import NodeConn, SessionInbound, HandoffCorrelation
 from unaiverse.networking.session import SessionManager
 from unaiverse.networking.session.sess_msg import WORLD_HANDOFF_COMPLETE
 
@@ -210,9 +210,27 @@ class NodeFakeConn(FakeConn):
         self._session_managers = []
         self._sm_public = None
         self._sm_world = None
-        # World-handoff correlation, now Coordinator-owned (mirrors NodeConn).
-        self._pending_world_handoff = {}
-        self._world_to_public = {}
+        # World-handoff correlation: the SAME ledger class production uses (no more
+        # hand-kept mirror to drift), wired to the harness's own effects.
+        self._handoff = HandoffCorrelation(
+            is_world_established=lambda wpid: (self._sm_world is not None
+                                               and self._sm_world.is_established(wpid)),
+            abort_world=self._abort_world_redemption,
+            current_world=self.get_world_node_peer_id,
+            clear_world=lambda: self.set_world(None),
+        )
+
+    @property
+    def _pending_world_handoff(self):
+        return self._handoff.pending_world_handoff
+
+    @property
+    def _world_to_public(self):
+        return self._handoff.world_to_public
+
+    async def _abort_world_redemption(self, world_peer_id):
+        if self._sm_world is not None:
+            await self._sm_world.drop(world_peer_id)
 
     def set_session_managers(self, *session_managers):
         self._session_managers = [sm for sm in session_managers if sm is not None]
@@ -292,43 +310,24 @@ class NodeFakeConn(FakeConn):
     async def start_world_handoff(self, public_peer_id, world_peer_id, world_addrs,
                                   grant_blob, reject_relay):
         self.set_world(world_peer_id)
-        self._pending_world_handoff[public_peer_id] = world_peer_id
-        self._world_to_public[world_peer_id] = public_peer_id
+        self._handoff.start(public_peer_id, world_peer_id)
         return await self._sm_world.initiate(
             world_peer_id, world_addrs, grant=grant_blob, reject_relay=reject_relay)
 
     async def rollback_handoff(self, peer_id):
-        # Mirror NodeConn: no-op if the correlated world Session already established
-        # (the join is completing); otherwise pop the maps, abort the in-flight world
-        # Session and un-point pool routing from a world we never joined.
-        pending_world = self._pending_world_handoff.get(peer_id)
-        if pending_world is not None and self._sm_world is not None \
-                and self._sm_world.is_established(pending_world):
-            return
-        world_peer_id = self._pending_world_handoff.pop(peer_id, None)
-        if world_peer_id is not None:
-            self._world_to_public.pop(world_peer_id, None)
-            if self._sm_world is not None:
-                await self._sm_world.drop(world_peer_id)
-        public_peer_id = self._world_to_public.pop(peer_id, None)
-        if public_peer_id is not None:
-            self._pending_world_handoff.pop(public_peer_id, None)
-        rolled_back_world = world_peer_id if world_peer_id is not None else (
-            peer_id if public_peer_id is not None else None)
-        if rolled_back_world is not None and rolled_back_world == self.get_world_node_peer_id():
-            self.set_world(None)
+        # The mechanics live in the shared HandoffCorrelation (no mirror to drift).
+        await self._handoff.rollback(peer_id)
 
     def is_pending_handoff(self, world_peer_id):
-        return world_peer_id in self._world_to_public
+        return self._handoff.is_pending(world_peer_id)
 
     async def complete_world_handoff(self, world_peer_id):
-        # Mirror NodeConn: GOAWAY the carrier on its live transport + pool evict;
-        # returns None (the CLOSED arrives later via the pump).
-        public_peer_id = self._world_to_public.pop(world_peer_id, None)
+        # Retirement effects stay harness-side (GOAWAY record + fake pool evict);
+        # the correlation bookkeeping is the shared ledger's.
+        public_peer_id = self._handoff.complete(world_peer_id)
         if public_peer_id is None:
             return
         await self._sm_public.close_session(public_peer_id, WORLD_HANDOFF_COMPLETE)
-        self._pending_world_handoff.pop(public_peer_id, None)
         self.peer_id_to_pool.pop(public_peer_id, None)
 
     async def get_messages(self, p2p_name: str, allowed_not_connected_peers=None):
