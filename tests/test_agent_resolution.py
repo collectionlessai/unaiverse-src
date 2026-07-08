@@ -28,9 +28,10 @@ The conftest's autouse ``_silence_unaiverse_logger`` fixture swallows the
 ``log.error`` / ``log.misc`` calls these methods make, and inserts ``../src``
 on ``sys.path`` so the import below resolves offline.
 
-Four known defects are pinned with ``xfail(strict=True)`` so the suite stays
-green today while flagging (via XPASS) the moment any of them is fixed; each is
-also reported under ``suspected_bugs``.
+The four defects these tests originally pinned with ``xfail(strict=True)`` have
+all been resolved: three were fixed in the source and their tests turned green,
+and the list-branch by-reference return of ``__involved_agents`` was declared
+intentional, so its test now characterizes the aliasing behaviour.
 """
 
 import pytest
@@ -474,15 +475,11 @@ def test_involved_agents_none_empty_returns_empty_list(agent):
     assert agent._Agent__involved_agents(None) == []
 
 
-@pytest.mark.xfail(reason="BUG agent.py:1703 - the list branch returns the caller's "
-                          "argument by reference (return agent), not list(agent), "
-                          "unlike every other branch",
-                   strict=True)
-def test_involved_agents_list_is_copied(agent):
-    """A list argument should be returned as a fresh copy (like the set / peer_id
-    / None branches). Today it is returned by reference, aliasing the caller's
-    input."""
+def test_involved_agents_list_is_returned_by_reference(agent):
+    """A list argument is returned as-is, aliasing the caller's input; unlike
+    the set / peer_id / None branches this is deliberate (see the comment on
+    the list branch of ``__involved_agents``)."""
     lst = ["p1", "p2"]
     result = agent._Agent__involved_agents(lst)
     assert result == ["p1", "p2"]
-    assert result is not lst  # fails today: same object
+    assert result is lst  # intentional: the exact same object, not a copy

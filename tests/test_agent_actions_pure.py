@@ -33,12 +33,12 @@ The conftest autouse ``_silence_unaiverse_logger`` fixture swallows the heavy
 ``log.*`` calls and inserts ``../src`` on ``sys.path`` so the import resolves
 offline.
 
-Four defects surfaced while writing these tests are reported under
-``suspected_bugs``; the two with an unambiguous "correct" behaviour are pinned
-with ``xfail(strict=True)`` so the suite stays green today and flags (via XPASS)
-the moment either is fixed. The other two are documented with passing
-characterization tests that assert the actual (buggy) behaviour, commented as
-such.
+Four defects surfaced while writing these tests were reported under
+``suspected_bugs``. The dead evaluate guard has since been fixed (its test is
+green); the ``_eval_results`` mis-keying is still pinned with
+``xfail(strict=True)`` so the suite stays green today and flags (via XPASS) the
+moment it is fixed. The other two are documented with passing characterization
+tests that assert the actual (buggy) behaviour, commented as such.
 """
 
 import asyncio
@@ -681,19 +681,12 @@ def test_evaluate_str_agents_to_evaluate_is_wrapped_to_list(agent):
     assert agent._eval_results == {"pZ": 0.42}
 
 
-# Suspected bugs pinned as xfail (desired behaviour)
+# Suspected bugs surfaced by these tests (the first is fixed, the second still pinned as xfail)
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="BUG agent.py:1290 - dead guard. 'if not self.buffer_generated_by_others' is "
-           "checked against the STRING sentinel 'none'; `not 'none'` is False, so the guard "
-           "never fires and evaluate proceeds even when buffering of others' data is OFF. "
-           "Desired: with the default 'none' (no buffering) evaluate refuses (returns False).",
-)
-def test_evaluate_dead_guard_should_block_when_not_buffering():
+def test_evaluate_blocks_when_not_buffering():
     """The default ``buffer_generated_by_others == 'none'`` means no buffering of
-    others' data, so evaluate SHOULD refuse. It currently proceeds and returns
-    True, so this strict-xfail flags the bug (and will XPASS-fail when fixed)."""
+    others' data, so evaluate refuses. The guard used to be dead (``not 'none'``
+    is always False); it was fixed to compare against the string sentinel."""
     agent = Agent(proc=None)
     assert agent.buffer_generated_by_others == "none"  # no buffering of others
     _patch_compare(agent, score=0.42, ret=True)
@@ -701,8 +694,7 @@ def test_evaluate_dead_guard_should_block_when_not_buffering():
     agent._engaged_agents = {"pX"}
     agent.last_buffered_peer_id_to_info = {"pX": {"net_hash": "pX::ps:gen"}}
     result = _run(agent.evaluate(stream_hash="<playlist>", how="max"))
-    # DESIRED behaviour: refuse to evaluate when not buffering others' data.
-    assert result is True
+    assert result is False
 
 
 @pytest.mark.xfail(

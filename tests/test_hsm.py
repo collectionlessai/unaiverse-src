@@ -14,13 +14,11 @@ action_kwargs is enough. A bare ``**kwargs`` would NOT satisfy
 ``Action.check_provided_args`` (it validates each kwarg against the explicit
 signature), so every fixture below names its parameters.
 
-Two genuine asymmetries between the build path and the load path are pinned and
-flagged as suspected bugs (xfail, strict):
-  - ``add_global_teleport`` builds a self-loop X->X teleport, which ``to_dict``
-    silently drops, so the build->serialize->load round-trip is not stable;
-  - ``load`` sets the role wildcard *before* installing the welcome message, so a
-    freshly loaded machine keeps the literal ``<role>`` in ``welcome_msg`` until
-    ``apply_wildcards`` is called again.
+One genuine asymmetry between the build path and the load path is pinned and
+flagged as a suspected bug (xfail, strict): ``add_global_teleport`` builds a
+self-loop X->X teleport, which ``to_dict`` silently drops, so the
+build->serialize->load round-trip is not stable. (A second one, the welcome
+wildcard left unsubstituted on load, has been fixed and its test is green.)
 
 The conftest autouse fixture swaps the logger's sink for a no-op, but
 ``log.critical`` still ``raise``s ``GenException`` (the raise sits after the sink
@@ -650,9 +648,10 @@ def test_add_global_teleport_roundtrip_is_stable_intended():
     assert json.dumps(d1, sort_keys=True) == json.dumps(h2.to_dict(), sort_keys=True)
 
 
-def test_load_leaves_welcome_wildcard_unsubstituted_actual():
-    """ACTUAL behaviour: load() sets the role wildcard AFTER installing the welcome message, so a
-    freshly loaded machine DOES NOT keep the literal <role> in welcome_msg."""
+def test_load_applies_welcome_wildcard():
+    """load() installs the welcome message and only then set_role, so a freshly
+    loaded machine has the role wildcard already resolved, matching what the
+    build path produces."""
     h = HybridStateMachine(DummyAgent())
     h.set_welcome_message("Hi <role> ok")
     h.set_role("boss")  # build path: role set AFTER welcome -> substituted now
@@ -660,19 +659,4 @@ def test_load_leaves_welcome_wildcard_unsubstituted_actual():
 
     h2 = HybridStateMachine(DummyAgent()).load(json.dumps(h.to_dict()))
     assert h2.role == "boss"
-    # On the load path the welcome stays literal until apply_wildcards is invoked again.
     assert h2.welcome_msg == "Hi boss ok"
-
-
-@pytest.mark.xfail(strict=True,
-                   reason="load() installs the welcome message before set_role but a freshly loaded machine shows "
-                          "the literal <role> "
-                          "instead of the resolved role (hsm.py:1377-1382).")
-def test_load_applies_welcome_wildcard_intended():
-    """INTENDED behaviour (currently failing): after load(), the welcome message should already have the
-    role wildcard resolved, matching what the build path produces."""
-    h = HybridStateMachine(DummyAgent())
-    h.set_welcome_message("Hi <role> ok")
-    h.set_role("boss")
-    h2 = HybridStateMachine(DummyAgent()).load(json.dumps(h.to_dict()))
-    assert h2.welcome_msg == "Hi <role> ok"
