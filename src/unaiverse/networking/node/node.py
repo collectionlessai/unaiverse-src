@@ -522,7 +522,7 @@ class Node:
         """Generates and retrieves a node token from the root server, then applies it.
 
         Fatal on failure (the fetch raises): a node with no token cannot run, which is the
-        wanted behaviour at startup. In the main loop the fetch and the apply are split so
+        wanted behaviour at startup. In the main loop the fetch and then apply are split so
         the fetch can run off the event loop under a timeout (see the periodic-refresh
         call-site), without a late thread mutating the token/transport concurrently.
 
@@ -1140,7 +1140,7 @@ class Node:
 
                 public_streams = "lone_wolf_peer_id" in interact_mode_opts
                 assert self.agent is not None
-                proc_streams = self.agent.owned_streams[self.agent.get_proc_input_net_hash(public=public_streams)]
+                proc_streams = self.agent.owned_streams[self.agent.get_proc_output_net_hash(public=public_streams)]
                 for stream in proc_streams.values():
                     if processor_img_stream is None and stream.props.is_img():
                         processor_img_stream = stream
@@ -1446,7 +1446,7 @@ class Node:
                         await asyncio.wait_for(asyncio.to_thread(self.send_dynamic_profile),
                                                timeout=Custom.DEFAULT_TIMEOUT)  # Sending
                     except Exception as e:
-                        log.error(f"Error while sending the update dynamic profile (or badges) to the server "
+                        log.error(f"Error while sending the updated dynamic profile (or badges) to the server "
                                   f"(trying to go ahead...) [{e}]")
 
                 # Getting a new token every "N" seconds
@@ -2165,7 +2165,7 @@ class Node:
                     (datetime.fromisoformat(expiry_utc.replace('Z', '+00:00')))
                 assert self.relay_reservation_expiry is not None
                 log.user(f"Reserved relay slot. Expires at "
-                            f"{self.relay_reservation_expiry.strftime('%Y-%m-%d %H:%M:%S')} UTC")
+                         f"{self.relay_reservation_expiry.strftime('%Y-%m-%d %H:%M:%S')} UTC")
             else:
                 log.error("An error occurred during relay reservation.")
         
@@ -2176,7 +2176,7 @@ class Node:
             # Checking stats code
             if not analyze_code({"stats.py": agent_stats_code}):
                 log.error("Invalid agent stats code (syntax errors or unsafe code) was provided by the world, "
-                            "blocking the join operation")
+                          "blocking the join operation")
                 return False
 
             try:
@@ -2241,7 +2241,7 @@ class Node:
         # Telling the connection manager the info needed to discriminate peers (getting them from the world profile)
         # notice that the world node private ID was already told to the connection manager (see a few lines above)
         log.misc(f"Rendezvous tag received with profile: {rendezvous_tag} "
-                    f"(in conn pool: {self.conn.rendezvous_tag})")
+                 f"(in conn pool: {self.conn.rendezvous_tag})")
         if self.conn.rendezvous_tag < rendezvous_tag:
             self.conn.rendezvous_tag = rendezvous_tag
             num_world_masters = len(dynamic_profile['world_summary']['world_masters']) \
@@ -2261,7 +2261,7 @@ class Node:
                 agents = []
             world_all_peer_ids = ([p['id'] for p in masters] + [p['id'] for p in agents])
             log.misc(f"Rendezvous from profile included peer IDs: "
-                        f"{world_all_peer_ids})", sub="prv")
+                     f"{world_all_peer_ids})", sub="prv")
 
         # Updating our profile to set the world we are in
         self.profile.get_dynamic_profile()['connections']['world_peer_id'] = peer_id
@@ -2524,7 +2524,7 @@ class Node:
         involuntary world-link end) fires ask_to_join_world, which dials and then hands off
         ASYNChronously — so a dial that returns is NOT yet a completed join. We therefore
         RESCHEDULE (not disarm) each time: a join that fails or stalls after the dial is
-        retried at the next window. The disarm happens ONLY on the true completion
+        retried at the next window. The 'disarm' happens ONLY on the true completion
         (__join_world clears the timer when the role bit is set). Deliberately NOT gated on
         in_world(): a leave_world that raised before clearing the role bit would otherwise
         keep in_world() True and let this tick cancel the rejoin, wedging the node out of the
@@ -2698,7 +2698,7 @@ class Node:
             # We joined a world: run the join body and retire the public Session.
             ok = False
             try:
-                ok = await self._join_world_after_session(ev.peer_id, ev.data, grant)
+                ok = await self._join_world_after_session(ev.peer_id, grant)
             except Exception as e:
                 log.error(f"[session] __join_world failed for ...{ev.peer_id[-5:]}: {e}")
             if ok:
@@ -2831,7 +2831,7 @@ class Node:
         except Exception as e:
             log.error(f"[session] world register failed for ...{private_peer_id[-5:]}: {e}")
 
-    async def _join_world_after_session(self, world_peer_id: str, ev_data: dict, grant: dict | None) -> bool:
+    async def _join_world_after_session(self, world_peer_id: str, grant: dict | None) -> bool:
         """Joiner side: run the world-join body against an already-connected world
         Session, decoding the grant blob carried from the public Session."""
         if not grant:
