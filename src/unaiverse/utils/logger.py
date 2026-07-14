@@ -425,7 +425,7 @@ class _Logger:
 
     def p2p(self, msg: str, sub: str = "", **info: Any) -> None:
         """Log a raw line captured from the Go libp2p library (stdout/stderr)."""
-        self._log(Ch.P2P, msg[44:], info, sub=sub)  # Skipping timestamp and initial line info coming from GO
+        self._log(Ch.P2P, msg[43:], info, sub=sub)  # Skipping timestamp and initial line info coming from GO
 
     def _log(self, ch: Ch, msg: str, info: dict[str, Any], sub: str = "") -> None:
         with self._lock:
