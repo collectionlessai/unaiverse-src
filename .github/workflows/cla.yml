@@ -28,7 +28,7 @@ jobs:
           path-to-signatures: 'signatures/version1/cla.json'
           path-to-document: 'https://github.com/collectionlessai/unaiverse-src/blob/main/CLA.md'
           # branch should not be protected
-          branch: 'main'
+          branch: 'cla-signatures'
           allowlist: mela64,gnekt,tommasoguidi,bot*
 
          # the followings are the optional inputs - If the optional inputs are not given, then default values will be taken
