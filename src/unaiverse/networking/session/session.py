@@ -301,8 +301,11 @@ class Session:
         tick_dial reaps the outcome, on the main task, so the single-writer invariant holds."""
         if self._dial_task is not None and not self._dial_task.done():
             return
-        self._dial_attempts += 1
-        log.session(f"{self!r} dial attempt {self._dial_attempts}/{_MAX_DIAL_ATTEMPTS}", sub=self._sub)
+        if self.state == SessionState.RECONNECTING:
+            log.session(f"{self!r} reconnect dial (attempt {self._reconnect_attempts + 1})", sub=self._sub)
+        else:
+            self._dial_attempts += 1
+            log.session(f"{self!r} dial attempt {self._dial_attempts}/{_MAX_DIAL_ATTEMPTS}", sub=self._sub)
         self._dial_task = asyncio.create_task(self._run_dial(self.p2p, self.addresses))
 
     @staticmethod

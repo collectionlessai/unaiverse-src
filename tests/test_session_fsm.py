@@ -73,6 +73,42 @@ def _mk(peer_id, role, p2p, local_peer_id, local_node_id="local-node",
     )
 
 
+async def _cancel_dial(sess):
+    """Drop the background dial task started by _start_dial (we only assert the
+    counter it bumps synchronously, not the dial outcome)."""
+    if sess._dial_task is not None:
+        sess._dial_task.cancel()
+        try:
+            await sess._dial_task
+        except BaseException:
+            pass
+        sess._dial_task = None
+
+
+def test_reconnect_redial_does_not_inflate_dial_attempts(alice_conn, alice_peer_id, bob_peer_id):
+    """The first-handshake dial cap (_dial_attempts / _MAX_DIAL_ATTEMPTS) must not be
+    bumped by reconnect re-dials, which are bounded by the grace window and counted on
+    _reconnect_attempts. Bumping it here made the log read 'attempt 5/4, 6/4, ...'."""
+    sess = _mk(bob_peer_id, SessionRole.INITIATOR, alice_conn, alice_peer_id,
+               addresses=["/ip4/127.0.0.1/tcp/0/p2p/" + bob_peer_id])
+
+    async def _go():
+        sess._set_state(SessionState.CONNECTING, 300.0)
+        sess._start_dial()
+        connecting_count = sess._dial_attempts   # bumped synchronously
+        await _cancel_dial(sess)
+
+        sess._set_state(SessionState.RECONNECTING, 45.0)
+        sess._start_dial()
+        reconnect_count = sess._dial_attempts
+        await _cancel_dial(sess)
+        return connecting_count, reconnect_count
+
+    connecting_count, reconnect_count = _run(_go())
+    assert connecting_count == 1     # the CONNECTING dial bumps the counter
+    assert reconnect_count == 1      # the RECONNECTING re-dial leaves it alone
+
+
 # Initiator happy path
 
 def test_initiator_start_sends_hello(alice_conn, alice_p2p, alice_peer_id, bob_peer_id):
