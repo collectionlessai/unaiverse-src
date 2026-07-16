@@ -113,7 +113,7 @@ def test_initiate_during_quarantine_returns_failed(alice_conn, alice_peer_id, bo
     sm._quarantine[bob_peer_id] = time.monotonic() + 30.0
     events = _run(sm.initiate(bob_peer_id, ["/ip4/127.0.0.1/tcp/0"]))
     assert len(events) == 1 and events[0].type == SessionEventType.FAILED
-    assert events[0].data["reason"] == "quarantined"
+    assert events[0].data["reason"].startswith("quarantined")
     assert alice_conn.connect_calls == []
 
 
@@ -645,9 +645,23 @@ def test_activate_refused_during_quarantine(alice_conn, alice_peer_id, bob_peer_
     sm._quarantine[bob_peer_id] = time.monotonic() + 30.0
     events = _run(sm.activate(bob_peer_id))
     assert len(events) == 1 and events[0].type == SessionEventType.FAILED
-    assert events[0].data["reason"] == "quarantined"
+    assert events[0].data["reason"].startswith("quarantined")
     assert alice_conn.connect_calls == []
     assert sm.get_session(bob_peer_id).state == SessionState.KNOWN   # still inert, not dialed
+
+
+def test_quarantine_refusal_reason_carries_remaining_seconds(alice_conn, alice_peer_id, bob_peer_id):
+    """The refusal must be visible: the FAILED reason keeps the 'quarantined' prefix
+    (robust to future substring checks) and names the remaining wait so the operator
+    sees the wall instead of a silent instant failure."""
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    sm._quarantine[bob_peer_id] = time.monotonic() + 30.0
+    events = _run(sm.initiate(bob_peer_id, ["/ip4/127.0.0.1/tcp/0"]))
+    reason = events[0].data["reason"]
+    assert reason.startswith("quarantined:") and reason.endswith("s")
+    # The countdown is a positive number of seconds close to the window.
+    secs = float(reason[len("quarantined:"):-1])
+    assert 0.0 < secs <= 30.0
 
 
 def test_failed_event_enters_quarantine(alice_conn, alice_peer_id, bob_peer_id):
@@ -680,7 +694,7 @@ def test_failed_then_known_recreated_then_gated_then_dials(alice_conn, alice_pee
     assert sm.get_session(bob_peer_id).state == SessionState.KNOWN
 
     events = _run(sm.activate(bob_peer_id))                          # gated
-    assert events[0].type == SessionEventType.FAILED and events[0].data["reason"] == "quarantined"
+    assert events[0].type == SessionEventType.FAILED and events[0].data["reason"].startswith("quarantined")
     assert alice_conn.connect_calls == []
 
     sm._quarantine[bob_peer_id] = time.monotonic() - 1.0            # window expired

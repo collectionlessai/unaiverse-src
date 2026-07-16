@@ -166,7 +166,7 @@ def test_redial_failure_backoff_then_grace_expiry_lost_and_quarantine(
         # A re-initiate during quarantine fails immediately, without dialing.
         events = await sm_alice.initiate(bob_peer_id, ["/ip4/127.0.0.1/tcp/0"])
         assert [e.type for e in events] == [SessionEventType.FAILED]
-        assert events[0].data["reason"] == "quarantined"
+        assert events[0].data["reason"].startswith("quarantined")
         assert len(alice_conn.connect_calls) == dials_after_handshake + 1
 
     asyncio.run(_scenario())

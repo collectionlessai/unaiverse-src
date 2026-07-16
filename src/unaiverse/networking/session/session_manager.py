@@ -404,11 +404,16 @@ class SessionManager:
         now = time.monotonic()
         ban_until = self._quarantine.get(peer_id, 0.0)
         if ban_until > now:
-            log.session(f"activate(...{peer_id[-5:]}) refused: quarantined for {ban_until - now:.1f}s", sub=self._label)
+            # Surface the refusal to the operator: a silent wall of instant failures
+            # reads as "it never connects". The USER line names the wait; the reason
+            # keeps its "quarantined" prefix (parsed nowhere at runtime, but future
+            # substring/startswith stays robust) and carries the remaining seconds.
+            log.user(f"dial to ...{peer_id[-5:]} refused: peer quarantined for {ban_until - now:.1f}s more",
+                     sub=self._label)
             return [SessionEvent(
                 type=SessionEventType.FAILED, session_id="",
                 peer_id=peer_id, role=SessionRole.INITIATOR,
-                p2p_name=self.p2p_name, data={"reason": "quarantined"},
+                p2p_name=self.p2p_name, data={"reason": f"quarantined:{ban_until - now:.1f}s"},
             )]
         log.session(f"activating Session to ...{peer_id[-5:]}", sub=self._label)
         events = sess.start()   # non-blocking: the dial runs off-task, reaped by tick_dial
