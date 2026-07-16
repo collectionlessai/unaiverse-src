@@ -199,6 +199,119 @@ def test_deliver_fresh_hello_supersedes_stale_responder(
     assert sess_after.session_id == b"\x02" * 16
 
 
+# Reborn-peer supersede (ESTABLISHED / initiator-RECONNECTING, guarded by session_id)
+
+def _plant(sm, conn, peer_id, local_peer_id, role, state, session_id):
+    sess = _mk_session(conn, peer_id, local_peer_id, role=role)
+    sess.session_id = session_id
+    sess._set_state(state, None)
+    sm._set_active(peer_id, sess)
+    return sess
+
+
+@pytest.mark.parametrize("role", [SessionRole.INITIATOR, SessionRole.RESPONDER])
+def test_deliver_reborn_hello_supersedes_established(alice_conn, alice_peer_id, bob_peer_id, role):
+    """A peer killed and restarted (same peer_id, NEW session_id) re-dials while we
+    still hold an ESTABLISHED Session for it. The fresh HELLO must supersede the stale
+    session and be answered, for EITHER role of the survivor, instead of being silently
+    ignored (which forced a ~55s ping-miss recovery in the field)."""
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    stale = _plant(sm, alice_conn, bob_peer_id, alice_peer_id, role,
+                   SessionState.ESTABLISHED, b"\x11" * 16)
+
+    hello = SessMsg(SessMsg.KIND_HELLO_REQ, {
+        "session_id": b"\x02" * 16, "nonce_a": b"\xaa" * 32,
+        "protocol_versions": ["1.0"], "client_id": "test",
+    })
+    events = _run(sm.deliver(bob_peer_id, SESSION_HELLO_PROTOCOL, hello))
+    assert events == []                       # silent abort, no terminal event → no purge
+    assert stale.state == SessionState.FAILED
+
+    acks = [s for s in alice_conn.sent
+            if s[1] == SESSION_HELLO_PROTOCOL and s[2].kind == SessMsg.KIND_HELLO_RESP
+            and s[2].fields.get("reason_code") == OK]
+    assert acks, "stale ESTABLISHED shadowed the reborn HELLO: no HELLO_ACK sent"
+    sess_after = sm.get_session(bob_peer_id)
+    assert sess_after is not stale
+    assert sess_after.role == SessionRole.RESPONDER
+    assert sess_after.state == SessionState.HELLO_ACK_SENT
+    assert sess_after.session_id == b"\x02" * 16
+
+
+def test_established_ignores_same_session_id_hello(alice_conn, alice_peer_id, bob_peer_id):
+    """A replay of the establishing HELLO carries the SAME session_id: it must NOT tear
+    down the live session (the guard requires a different id). Falls through, ignored."""
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    stale = _plant(sm, alice_conn, bob_peer_id, alice_peer_id, SessionRole.RESPONDER,
+                   SessionState.ESTABLISHED, b"\x11" * 16)
+
+    hello = SessMsg(SessMsg.KIND_HELLO_REQ, {
+        "session_id": b"\x11" * 16, "nonce_a": b"\xaa" * 32, "protocol_versions": ["1.0"],
+    })
+    events = _run(sm.deliver(bob_peer_id, SESSION_HELLO_PROTOCOL, hello))
+    assert events == []
+    assert sm.get_session(bob_peer_id) is stale
+    assert stale.state == SessionState.ESTABLISHED
+    assert not [s for s in alice_conn.sent if s[1] == SESSION_HELLO_PROTOCOL]
+
+
+def test_established_ignores_empty_session_id_hello(alice_conn, alice_peer_id, bob_peer_id):
+    """A malformed HELLO with an empty session_id must NOT supersede a live session:
+    the non-empty guard prevents a single bad frame from tearing an ESTABLISHED down."""
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    stale = _plant(sm, alice_conn, bob_peer_id, alice_peer_id, SessionRole.RESPONDER,
+                   SessionState.ESTABLISHED, b"\x11" * 16)
+
+    hello = SessMsg(SessMsg.KIND_HELLO_REQ, {
+        "session_id": b"", "nonce_a": b"\xaa" * 32, "protocol_versions": ["1.0"],
+    })
+    events = _run(sm.deliver(bob_peer_id, SESSION_HELLO_PROTOCOL, hello))
+    assert events == []
+    assert sm.get_session(bob_peer_id) is stale
+    assert stale.state == SessionState.ESTABLISHED
+
+
+def test_reborn_hello_supersedes_initiator_reconnecting(alice_conn, alice_peer_id, bob_peer_id):
+    """An INITIATOR reconnecting toward a peer that got reborn (new session_id HELLO)
+    must supersede, NOT reject it via the simultaneous-open tie-breaker. Uses the
+    smaller-peer-id fixture (alice < bob) so the pre-fix code would have rejected."""
+    assert alice_peer_id < bob_peer_id, "fixture invariant (smaller local would tie-break-win)"
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    stale = _plant(sm, alice_conn, bob_peer_id, alice_peer_id, SessionRole.INITIATOR,
+                   SessionState.RECONNECTING, b"\x11" * 16)
+
+    hello = SessMsg(SessMsg.KIND_HELLO_REQ, {
+        "session_id": b"\x02" * 16, "nonce_a": b"\xaa" * 32, "protocol_versions": ["1.0"],
+    })
+    events = _run(sm.deliver(bob_peer_id, SESSION_HELLO_PROTOCOL, hello))
+    assert events == []
+    assert stale.state == SessionState.FAILED
+    assert not [s for s in alice_conn.sent if s[1] == SESSION_HELLO_PROTOCOL
+                and s[2].fields.get("reason_code") == SIMULTANEOUS_OPEN_LOSS], \
+        "reborn peer was rejected by the tie-breaker instead of superseded"
+    sess_after = sm.get_session(bob_peer_id)
+    assert sess_after is not stale
+    assert sess_after.role == SessionRole.RESPONDER
+    assert sess_after.session_id == b"\x02" * 16
+
+
+def test_late_simultaneous_open_hello_supersedes_established(alice_conn, alice_peer_id, bob_peer_id):
+    """Accepted residual (design option A): a genuine simultaneous open whose losing
+    HELLO arrives reordered AFTER the session is ESTABLISHED will supersede a healthy
+    session (a ~15-25s self-healing outage where today it is a no-op). This pins that
+    behaviour as a conscious, tested trade for the ~1 RTT reborn-peer recovery."""
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    stale = _plant(sm, alice_conn, bob_peer_id, alice_peer_id, SessionRole.INITIATOR,
+                   SessionState.ESTABLISHED, b"\x11" * 16)
+
+    late = SessMsg(SessMsg.KIND_HELLO_REQ, {
+        "session_id": b"\x07" * 16, "nonce_a": b"\xaa" * 32, "protocol_versions": ["1.0"],
+    })
+    events = _run(sm.deliver(bob_peer_id, SESSION_HELLO_PROTOCOL, late))
+    assert events == []
+    assert stale.state == SessionState.FAILED   # healthy session torn down — the known residual
+
+
 # Tie-breaker on simultaneous open
 
 def test_tiebreak_smaller_peer_keeps_initiator(alice_conn, alice_p2p, alice_peer_id, bob_peer_id):

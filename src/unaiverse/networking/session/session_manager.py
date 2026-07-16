@@ -520,9 +520,8 @@ class SessionManager:
         # declaration that the old session is dead on its side — it re-dialed.
         # Supersede silently: abort the old FSM (no terminal event; the hosted/pool
         # state of the old relation survives until the new ESTABLISHED re-enrols it)
-        # and let the HELLO spawn a fresh responder below. An INITIATOR in
-        # RECONNECTING is an in-flight dial contention and keeps going to the
-        # simultaneous-open tie-breaker instead.
+        # and let the HELLO spawn a fresh responder below. These are already-dying
+        # sessions, so no session_id guard is needed.
         if (sess is not None and protocol_id == SESSION_HELLO_PROTOCOL and
                 sess_msg.kind == SessMsg.KIND_HELLO_REQ and
                 (sess.state == SessionState.CLOSING or
@@ -531,6 +530,32 @@ class SessionManager:
             log.session(f"fresh inbound HELLO supersedes stale {sess.state.value} Session "
                         f"for ...{peer_id[-5:]}", sub=self._label)
             sess.abort_silently("superseded_by_new_hello")
+            self._forget(peer_id)
+            sess = None
+
+        # Reborn-peer supersede: a HELLO_REQ carrying a NEW session_id while we hold a
+        # session the peer is supposed to still own — ESTABLISHED (either role), or
+        # RECONNECTING as INITIATOR — proves the peer abandoned that session and came
+        # back fresh (a live peer would RESUME the shared id, not send a new HELLO).
+        # Without this the ESTABLISHED FSM silently ignores the HELLO and the initiator
+        # goes to the tie-breaker and may reject the reborn peer; either way recovery
+        # waits ~55s for our own liveness path. The session_id must be NON-EMPTY and
+        # DIFFERENT: a replay of the establishing HELLO carries the same id (falls
+        # through, ignored) and a malformed empty id must never tear down a live session.
+        # abort_silently keeps the transport and the hosted/pool state, re-enrolled when
+        # the fresh responder reaches ESTABLISHED. NB: a genuine simultaneous open lives
+        # in CONNECTING/HELLO_SENT (kept on the tie-breaker), not here.
+        inbound_sid = bytes(sess_msg.get("session_id") or b"")
+        if (sess is not None and protocol_id == SESSION_HELLO_PROTOCOL and
+                sess_msg.kind == SessMsg.KIND_HELLO_REQ and
+                inbound_sid and inbound_sid != sess.session_id and
+                (sess.state == SessionState.ESTABLISHED or
+                 (sess.state == SessionState.RECONNECTING and
+                  sess.role == SessionRole.INITIATOR))):
+            log.session(f"fresh inbound HELLO (new session_id) supersedes stale "
+                        f"{sess.state.value} Session for ...{peer_id[-5:]} (reborn peer)",
+                        sub=self._label)
+            sess.abort_silently("superseded_by_reborn_hello")
             self._forget(peer_id)
             sess = None
 
@@ -564,11 +589,13 @@ class SessionManager:
         # our own dial; both travel on the same protocol_id). A KNOWN Session is also
         # role=INITIATOR, but it is not an in-flight dial: the state guard keeps it out
         # of the tie-breaker (and the no-session branch above has already handled it).
+        # Only a genuine simultaneous open (both sides first-dialing) reaches here:
+        # RECONNECTING is not eligible — an initiator in reconnect re-dials with RESUME,
+        # not a HELLO, so an inbound HELLO there is a reborn peer handled just above.
         elif (protocol_id == SESSION_HELLO_PROTOCOL and
               sess_msg.kind == SessMsg.KIND_HELLO_REQ and
               sess.role == SessionRole.INITIATOR and
-              sess.state in (SessionState.CONNECTING, SessionState.HELLO_SENT,
-                             SessionState.RECONNECTING)):
+              sess.state in (SessionState.CONNECTING, SessionState.HELLO_SENT)):
             events = await self._handle_simultaneous_open(peer_id)
             if events == "_proceed_with_existing_":   # type: ignore[comparison-overlap]
                 # We kept the existing initiator; the inbound HELLO is dropped after
