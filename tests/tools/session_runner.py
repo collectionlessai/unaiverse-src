@@ -125,14 +125,11 @@ def _build_node(identity_dir: str, port: int, listen_ip: str = "0.0.0.0",
     for a in p2p.addresses:
         log.session(f"  listen multiaddr: {a}")
 
-    # A minimal NodeConn that only uses ``p2p_public``. Tokens are disabled
-    # because we don't have a root-server signature here.
-    conn = NodeConn(
-        max_connections=16,
-        is_world_node=False,
-        public_key=None, token=None,
-    )
-
+    # No NodeConn here: it is an inert shell until attach_session_policy wires
+    # BOTH P2P instances plus the Node policy into it, and this harness has a
+    # single instance and no policy. The SessionManager owns the transport and
+    # the drain loop pumps p2p.get_messages() directly (same (chat, session)
+    # shape the Coordinator consumes).
     sm = SessionManager(
         p2p=p2p,
         p2p_name=NodeConn.P2P_PUBLIC,
@@ -140,17 +137,15 @@ def _build_node(identity_dir: str, port: int, listen_ip: str = "0.0.0.0",
         local_node_id="runner-" + p2p.peer_id[-5:],
         local_profile_factory=lambda: {"node_id": p2p.peer_id, "runner": True},
     )
-    return p2p, conn, sm
+    return p2p, sm
 
 
-async def _drain_loop(conn, sm, stop_event: asyncio.Event):
+async def _drain_loop(p2p, sm, stop_event: asyncio.Event):
     """Poll inbound messages + tick the SessionManager, printing every event."""
-    from unaiverse.networking.node.connpool import NodeConn
-
     log.session("event loop running — Ctrl-C to exit")
     while not stop_event.is_set():
         try:
-            chat, session = await conn.get_messages(p2p_name=NodeConn.P2P_PUBLIC)
+            chat, session = p2p.get_messages()
         except Exception as e:
             log.error(f"get_messages failed: {e}")
             await asyncio.sleep(0.5)
@@ -172,16 +167,15 @@ def _print_event(ev) -> None:
                 f"session={ev.session_id[:8]}… role={ev.role.value:<9} data={ev.data}")
 
 
-async def _graceful_close(conn, sm, iters: int = 30) -> None:
+async def _graceful_close(p2p, sm, iters: int = 30) -> None:
     """On shutdown, GOAWAY every Session and keep pumping deliver+tick briefly so
     the GOAWAY goes out and the peer's GOAWAY_ACK is processed (clean CLOSED on
     both sides). Without this the peer only learns we left via liveness timeout."""
-    from unaiverse.networking.node.connpool import NodeConn
     log.session("sending GOAWAY to peers (graceful close)…")
     await sm.close_all()
     for _ in range(iters):
         try:
-            _chat, session = await conn.get_messages(p2p_name=NodeConn.P2P_PUBLIC)
+            _chat, session = p2p.get_messages()
         except Exception:
             session = []
         for inb in session:
@@ -195,8 +189,8 @@ async def _graceful_close(conn, sm, iters: int = 30) -> None:
 # Commands
 
 async def cmd_listen(args):
-    p2p, conn, sm = _build_node(args.identity, args.port, args.listen_ip,
-                                log_dir=args.log_dir, log_name="session_runner_listen")
+    p2p, sm = _build_node(args.identity, args.port, args.listen_ip,
+                          log_dir=args.log_dir, log_name="session_runner_listen")
     print("\n=== LISTENER READY ===")
     print(f"peer_id:    {p2p.peer_id}")
     print("multiaddrs:")
@@ -208,18 +202,23 @@ async def cmd_listen(args):
     stop = asyncio.Event()
     loop = asyncio.get_event_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
-        loop.add_signal_handler(sig, stop.set)
-    await _drain_loop(conn, sm, stop)
+        loop.add_signal_handler(sig, _make_stopper(stop, sig))
+    await _drain_loop(p2p, sm, stop)
     log.session("shutting down")
-    await _graceful_close(conn, sm)
+    await _graceful_close(p2p, sm)
     p2p.close()
 
 
-async def cmd_dial(args):
-    from unaiverse.networking.node.connpool import NodeConn
+def _make_stopper(stop: asyncio.Event, sig):
+    def _stopper():
+        log.session(f"signal {signal.Signals(sig).name} received — stopping")
+        stop.set()
+    return _stopper
 
-    p2p, conn, sm = _build_node(args.identity, args.port, args.listen_ip,
-                                log_dir=args.log_dir, log_name="session_runner_dial")
+
+async def cmd_dial(args):
+    p2p, sm = _build_node(args.identity, args.port, args.listen_ip,
+                          log_dir=args.log_dir, log_name="session_runner_dial")
     target_addr = args.peer_addr
     # Extract the target peer-id from the multiaddr (.../p2p/<peer-id>).
     if "/p2p/" not in target_addr:
@@ -233,7 +232,7 @@ async def cmd_dial(args):
     stop = asyncio.Event()
     loop = asyncio.get_event_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
-        loop.add_signal_handler(sig, stop.set)
+        loop.add_signal_handler(sig, _make_stopper(stop, sig))
 
     # Kick off the dial in a background task; the drain loop services its events.
     # With --redial-every N the initiate is re-issued every N seconds: on a live
@@ -258,10 +257,10 @@ async def cmd_dial(args):
                 continue
     dial_task = asyncio.create_task(_do_dial())
 
-    await _drain_loop(conn, sm, stop)
+    await _drain_loop(p2p, sm, stop)
     dial_task.cancel()
     log.session("shutting down")
-    await _graceful_close(conn, sm)
+    await _graceful_close(p2p, sm)
     p2p.close()
 
 
