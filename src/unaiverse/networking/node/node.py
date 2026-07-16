@@ -121,7 +121,8 @@ class Node:
             active = ALWAYS_ON_CHANNELS if Custom.PRINT_LEVEL < 1 else ALL_CHANNELS
             screen = ALWAYS_ON_CHANNELS if Custom.PRINT_SCREEN_BASIC_ONLY else ALL_CHANNELS
         log.create(name=os.path.basename(sys.argv[0]), log_dir=os.path.dirname(os.path.abspath(sys.argv[0])),
-                   active=active, screen=screen, no_color=False, file_enabled=Custom.LOG_TO_FILE)
+                   active=active, screen=screen, no_color=False, file_enabled=Custom.LOG_TO_FILE,
+                   file_append=Custom.LOG_APPEND)
         log.set_clock(clock)  # Wiring the clock
 
         # Checking main arguments

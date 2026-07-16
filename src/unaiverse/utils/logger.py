@@ -172,6 +172,10 @@ class _Logger:
                         (e.g. during unit tests or when only screen output is
                         wanted).  Can be toggled at runtime via
                         ``set_file_enabled()``.
+        file_append:    When ``True``, the JSONL file is opened in append mode,
+                        so records survive process restarts (useful when a run
+                        spans deliberate kills/restarts of the same node).
+                        Default ``False``: each run truncates the previous file.
     """
     def __init__(
             self,
@@ -182,6 +186,7 @@ class _Logger:
             no_color: bool = False,
             verbose_screen: bool = False,
             file_enabled: bool = True,
+            file_append: bool = False,
     ):
         self._lock = threading.RLock()
         self._name = name
@@ -189,6 +194,7 @@ class _Logger:
         self._verbose_screen = verbose_screen
         self._force_plain_msg_only = False
         self._file_enabled = file_enabled
+        self._file_mode = "a" if file_append else "w"
         self._cycle_idx: int = -1
         self._ctx: dict[str, Any] = {}
         self._sub: str = ""  # sticky subdomain tag (set via set_sub)
@@ -214,7 +220,7 @@ class _Logger:
         self._log_path = log_dir / f"{name}.jsonl"
         self._log_file = None
         if self._file_enabled and self._log_file is None:
-            self._log_file = open(self._log_path, "w", encoding="utf-8", buffering=1)
+            self._log_file = open(self._log_path, self._file_mode, encoding="utf-8", buffering=1)
 
         # Inspector only
         self.inspector_activated = False
@@ -279,7 +285,7 @@ class _Logger:
         """
         with self._lock:
             if enabled and self._log_file is None:
-                self._log_file = open(self._log_path, "w", encoding="utf-8", buffering=1)
+                self._log_file = open(self._log_path, self._file_mode, encoding="utf-8", buffering=1)
             self._file_enabled = enabled
 
     def set_clock(self, clock) -> None:
