@@ -743,7 +743,13 @@ class Agent(AgentBasics):
         log.misc(f"Disconnecting agents with role: {role}")
         if disengage_too:
             await self.send_disengage(send_disconnection_too=True)
-        if await self.find_agents(role):
+        # Target only enrolled peers (handshake done), not every role match in the
+        # rendezvous roster: disconnecting is meaningful only towards agents we are
+        # actually connected to. Without this, in the template engage-by-role loop
+        # this fires purge on not-yet-connected peers every behavior tick — a flood
+        # of "close called in state known" no-ops plus a synchronous cgo
+        # DisconnectFrom per peer, right on the main task's pump.
+        if await self.find_agents(role, handshake_completed=True):
             found_agents = copy.deepcopy(self._found_agents)
             for agent in found_agents:
                 # Role-based disconnect happens only in a world (roles exist only there), so

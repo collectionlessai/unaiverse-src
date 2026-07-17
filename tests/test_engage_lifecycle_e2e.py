@@ -339,3 +339,36 @@ def test_full_loop_engage_is_dropped_by_placeholder_behav(harness_clock, roles):
     assert agent_s._engaged_agents == set()
     assert agent_s._available is True
     assert agent_s.im.received == {}
+
+
+# (f) disconnect_by_role targets only enrolled agents (close-spam fix)
+
+def test_disconnect_by_role_targets_only_enrolled_agents(roles):
+    """disconnect_by_role must purge only agents that completed the handshake (in
+    all_agents), not every role match in the rendezvous roster. Without the
+    handshake_completed filter it fires purge on not-yet-connected peers on every
+    behavior tick — a flood of no-op closes plus a synchronous cgo DisconnectFrom
+    each. Here a role match that is roster-only must be left alone."""
+    enrolled, roster_only = "PIDenrolled", "PIDroster"
+
+    class _Conn:
+        def find_addrs_by_role(self, role_int, return_peer_ids_too=False):
+            # both peers match the role in the roster; only `enrolled` is connected
+            return {}, [enrolled, roster_only]
+
+    a = Agent.__new__(Agent)
+    a.node_conn = _Conn()
+    a.all_agents = {enrolled: object()}
+    a._found_agents = set()
+    a._engaged_agents = set()
+
+    purged = []
+
+    async def _purge(peer_id, reason=None):
+        purged.append(peer_id)
+
+    a.node_purge_fcn = _purge
+
+    ok = asyncio.run(a.disconnect_by_role("student"))
+    assert ok is True
+    assert purged == [enrolled]                    # the roster-only peer is NOT purged
