@@ -40,7 +40,13 @@ _TIMEOUT_CONNECT_S = 300.0  # total CONNECTING budget: a backstop for a wedged d
                             # per-attempt bound is Go's PeerConnectionTimeout (~30s, x2 on the
                             # tcp fallback); tick-driven retries up to _MAX_DIAL_ATTEMPTS (which
                             # FAILs first) fit inside this window without starving other peers.
-_TIMEOUT_HELLO_S = 5.0      # Stage 1: HELLO → HELLO_ACK
+# Sized for slow peer pumps, not for the wire: a peer whose main loop is busy
+# (heavy compute in an action, a loaded machine, Pyodide) can drain and answer a
+# HELLO several seconds late, and the observed field delays reach ~10s. 15s gives
+# margin over that and aligns stage 1 with stage 2, removing the initiator-5s /
+# responder-15s asymmetry that produced spurious timeout:hello_sent. A late ACK
+# is already accepted at any point in HELLO_SENT, so this is just accepting it.
+_TIMEOUT_HELLO_S = 15.0     # Stage 1: HELLO → HELLO_ACK
 _TIMEOUT_PROFILE_S = 15.0   # Stage 2: PROFILE_OFFER → PROFILE_DECISION
 _TIMEOUT_WORLD_S = 30.0     # Stage 3: WORLD_GRANT expiry
 _TIMEOUT_RECONNECT_S = 45.0 # Session-level reconnect ceiling before Session.Lost. Longer than the
