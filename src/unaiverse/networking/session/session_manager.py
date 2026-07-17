@@ -571,12 +571,14 @@ class SessionManager:
                 # Session (no tie-breaker possible: no in-flight initiator for them).
                 sess = self._spawn_responder(peer_id)
             elif (protocol_id == SESSION_CONTROL_PROTOCOL and
-                  sess_msg.kind in (SessMsg.KIND_PING, SessMsg.KIND_RESUME)):
-                # We are (most likely) the restarted peer: we hold no Session for
-                # this session_id. Tell the initiator so it stops waiting and
-                # re-handshakes, instead of dropping silently (which would make it
-                # ride its grace timer to LOST). Only the manager knows "no Session
-                # exists for this peer", so the reply lives here.
+                  sess_msg.kind in (SessMsg.KIND_PING, SessMsg.KIND_RESUME, SessMsg.KIND_GOAWAY)):
+                # We are (most likely) the restarted/forgetful peer: we hold no
+                # Session for this session_id. Tell the remote so it stops waiting
+                # instead of dropping silently: PING/RESUME get "unknown session" so
+                # the initiator re-handshakes rather than riding its grace to LOST;
+                # a GOAWAY gets a GOAWAY_ACK so the remote's CLOSING ends in one RTT
+                # instead of its full timeout (it already forgot us, nothing to tear
+                # down here). Only the manager knows "no Session for this peer".
                 await self._send_unknown_session_reply(peer_id, sess_msg)
                 return []
             else:
@@ -672,16 +674,22 @@ class SessionManager:
         return sess
 
     async def _send_unknown_session_reply(self, peer_id: str, sess_msg: SessMsg) -> None:
-        """Reply to a liveness PING/RESUME for which we hold no Session (we are the
-        restarted/forgetful peer): PONG ok=false / RESUME_ACK accepted=false with
-        SESSION_UNKNOWN, echoing session_id + nonce. Mirrors the simultaneous-open
-        reject pattern — a one-shot send on the control protocol, no Session object."""
+        """Reply to a liveness PING/RESUME or a farewell GOAWAY for which we hold no
+        Session (we are the restarted/forgetful peer): PONG ok=false / RESUME_ACK
+        accepted=false with SESSION_UNKNOWN / GOAWAY_ACK received=true, echoing
+        session_id + nonce. Mirrors the simultaneous-open reject pattern — a one-shot
+        send on the control protocol, no Session object."""
         if sess_msg.kind == SessMsg.KIND_PING:
             reply = SessMsg(SessMsg.KIND_PONG, {
                 "session_id": bytes(sess_msg.get("session_id") or b""),
                 "nonce": bytes(sess_msg.get("nonce") or b""),
                 "ok": False,
             })
+        elif sess_msg.kind == SessMsg.KIND_GOAWAY:
+            # The remote is closing a session we already forgot: ack it so its
+            # CLOSING completes now (local_goaway_acked) instead of timing out.
+            # GOAWAY_ACK carries only 'received' (routed by peer_id, not session_id).
+            reply = SessMsg(SessMsg.KIND_GOAWAY_ACK, {"received": True})
         else:  # KIND_RESUME
             reply = SessMsg(SessMsg.KIND_RESUME_ACK, {
                 "session_id": bytes(sess_msg.get("session_id") or b""),

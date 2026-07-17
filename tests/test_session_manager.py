@@ -467,6 +467,20 @@ def test_deliver_unknown_session_resume_naks(alice_conn, alice_peer_id, bob_peer
     assert sent[-1][2].fields["reason_code"] == SESSION_UNKNOWN
 
 
+def test_deliver_unknown_session_goaway_replies_goaway_ack(alice_conn, alice_peer_id, bob_peer_id):
+    """A GOAWAY for a peer we hold no Session for (we already forgot it) is acked with
+    GOAWAY_ACK received=true, so the remote's CLOSING completes in one RTT instead of
+    riding its full timeout; no Session is spawned."""
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    goaway = SessMsg(SessMsg.KIND_GOAWAY, {"reason": WORLD_DISENGAGEMENT, "drain_window_ms": 0})
+    events = _run(sm.deliver(bob_peer_id, SESSION_CONTROL_PROTOCOL, goaway))
+    assert events == []
+    assert sm.get_session(bob_peer_id) is None       # no Session spawned
+    sent = [s for s in alice_conn.sent if s[1] == SESSION_CONTROL_PROTOCOL]
+    assert sent and sent[-1][2].kind == SessMsg.KIND_GOAWAY_ACK
+    assert sent[-1][2].fields["received"] is True
+
+
 # close_all()
 
 def test_close_all_goaways_established_sessions(alice_conn, alice_peer_id, bob_peer_id):
