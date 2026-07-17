@@ -13,6 +13,7 @@
                  Main Developers:    Stefano Melacci (Project Leader), Christian Di Maio, Tommaso Guidi
 """
 import os
+import time
 import json
 import torch
 import pickle
@@ -37,6 +38,21 @@ from unaiverse.streams.dataprops import DataProps, StreamType, TensorLabels
 from unaiverse.modules.utils import AgentProcessorChecker, ModuleWrapper, HumanModule, has_human_processor
 from unaiverse.utils.misc import (GenException, FileTracker, collect_py_files, load_agent_in_memory, pack_py_files,
                                   unpack_py_files, build_unaid)
+
+
+_STEPWISE_RETRY_TIMEOUT_S = 60.0  # Default budget for a single stepwise computation
+
+
+class _StepwiseRun:
+    """In-flight state of a stepwise computation, parked in the interaction mark."""
+
+    __slots__ = ("gen", "deadline", "started_at", "chunks")
+
+    def __init__(self, gen, deadline: float, started_at: float):
+        self.gen = gen
+        self.deadline = deadline
+        self.started_at = started_at
+        self.chunks = 0
 
 
 class AgentBasics:
@@ -224,6 +240,97 @@ class AgentBasics:
             self.is_world = True
             if self.world_folder is None:
                 raise GenException("No world folder was indicated (world_folder argument)")
+
+    def stepwise(self, interaction: Interaction | None, make_gen, /, *args,
+                 retry_timeout: float = _STEPWISE_RETRY_TIMEOUT_S, **kwargs):
+        """Run a generator-based computation one chunk per tick across HSM retries.
+
+        Usage inside an @action body:
+            done, result = self.stepwise(interaction, core_gen_factory, arg1, kw=...)
+            if not done:
+                return False          # pedantic retry: the node loop keeps pumping
+            ... apply result on the main task ...
+
+        make_gen(*args, **kwargs) must build a fresh generator whose return value is the
+        result of the computation; every yield marks a chunk boundary. The first call
+        builds the generator, makes the action pedantic so that returning False means
+        "retry next tick", and advances ONE chunk; each later call advances one more
+        chunk, returning (False, None) until the generator returns, then (True, result).
+        Everything runs on the main task: no threads, no concurrency, just cooperative
+        slicing, so the pump latency is bounded by the longest single chunk.
+
+        The retry budget travels in the mark as a deadline: past it, the poll cleans up
+        and raises, which the @action wrapper turns into a single discard. A chunk that
+        raises is cleaned up and re-raised the same way.
+
+        Contract for the generator: self-contained compute in short chunks (each chunk
+        inflates the tick it runs in); never yield while holding a thread-global mode
+        (e.g. inside torch.no_grad(): enter and exit it within the chunk); re-runnable
+        from scratch (a discarded interaction abandons the generator, and a later
+        trigger calls make_gen again); any state flipped on shared objects (e.g. the
+        model train/eval mode) must be restored in a finally block, which also runs when
+        an abandoned generator is garbage-collected. Only viable on single-step actions
+        or from step >= 1 of a multi-step interaction (a False at step 0 of a multi-step
+        is discarded regardless of pedantic).
+
+        With interaction=None (direct call from code) the generator is drained inline,
+        blocking, like the plain synchronous function it wraps.
+        """
+        if interaction is None:
+            gen = make_gen(*args, **kwargs)
+            while True:
+                try:
+                    next(gen)
+                except StopIteration as stop:
+                    return True, stop.value
+        if retry_timeout <= 0.:
+            raise GenException("stepwise retry_timeout must be > 0")
+
+        run = interaction.get_mark()
+        if run is None:
+            action_ref = interaction.action_ref
+            assert isinstance(action_ref, Action)
+            if not action_ref.is_pedantic():
+                action_ref.set_timeout(retry_timeout)  # So that returning False means retry
+            now = time.perf_counter()
+            run = _StepwiseRun(make_gen(*args, **kwargs), now + retry_timeout, now)
+            interaction.set_mark(run)
+        assert isinstance(run, _StepwiseRun)
+
+        if time.perf_counter() >= run.deadline:
+            # Budget exhausted: give up in a single discard. The abandoned generator is
+            # collected once the mark is gone, running its finally cleanup.
+            self._finish_stepwise(interaction, healthy=False)
+            raise GenException(f"Stepwise computation exceeded its retry budget "
+                               f"({run.deadline - run.started_at:.0f} s, "
+                               f"{run.chunks} chunks done)")
+
+        try:
+            next(run.gen)
+        except StopIteration as stop:
+            self._finish_stepwise(interaction, healthy=True)
+            log.misc(f"Stepwise computation completed: {run.chunks} chunks in "
+                     f"{time.perf_counter() - run.started_at:.2f} s")
+            return True, stop.value
+        except Exception:
+            self._finish_stepwise(interaction, healthy=False)
+            raise  # -> @action wrapper -> False -> non-pedantic -> discarded in one shot
+
+        run.chunks += 1
+        return False, None
+
+    def _finish_stepwise(self, interaction: Interaction, healthy: bool) -> None:
+        """Terminal cleanup of a stepwise run: clear the mark and hand back the pedantic
+        grant (same restore dance as send(wait_completion=True)). On a healthy completion
+        inside a multi-step interaction the framework-forced default is kept, so the
+        remaining steps retain their retry semantics; on errors and give-ups the strip is
+        unconditional, so the failure is a single discard and cannot loop."""
+        interaction.clear_mark()
+        action_ref = interaction.action_ref
+        assert isinstance(action_ref, Action)
+        if not action_ref.is_pedantic_by_default():
+            if not healthy or not interaction.is_multi_steps():
+                action_ref.set_timeout(-1.)
 
     def set_node_info(self, conn: NodeConn, profile: NodeProfile,
                       ask_to_get_in_touch_fcn: Callable, purge_fcn: Callable,

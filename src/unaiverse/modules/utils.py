@@ -312,7 +312,32 @@ def isinstance_fcn(obj: object, class_to_check: type | tuple) -> bool:
 
 
 def error_rate_mnist_test_set(network: torch.nn.Module, mnist_data_save_path: str) -> float:
-    """Evaluates a network's classification error rate on the MNIST test set.
+    """Evaluates a network's classification error rate on the MNIST test set, in one
+    blocking call (drains the stepwise generator above).
+
+    Args:
+        network: The PyTorch module to evaluate.
+        mnist_data_save_path: Path where the MNIST dataset will be downloaded and cached.
+
+    Returns:
+        The fraction of misclassified test samples (in [0, 1]).
+    """
+    gen = error_rate_mnist_test_set_steps(network, mnist_data_save_path)
+    while True:
+        try:
+            next(gen)
+        except StopIteration as stop:
+            return stop.value
+
+
+def error_rate_mnist_test_set_steps(network: torch.nn.Module, mnist_data_save_path: str):
+    """Generator variant of error_rate_mnist_test_set, one chunk of work per yield: the
+    dataset setup is a chunk of its own (it may touch the disk), then one test batch per
+    chunk. Built for AgentBasics.stepwise, so the node loop keeps pumping during the
+    evaluation. torch.no_grad() is entered and exited within each chunk (grad mode is
+    thread-global: it must never stay flipped across a yield), and the train-mode
+    restore lives in a finally block, which also runs if an abandoned generator is
+    garbage-collected. Returns the error rate like the plain function.
 
     Args:
         network: The PyTorch module to evaluate.
@@ -330,25 +355,28 @@ def error_rate_mnist_test_set(network: torch.nn.Module, mnist_data_save_path: st
                                     transforms.Normalize((0.1307,), (0.3081,))
                                 ]))
     mnist_test = DataLoader(mnist_test, batch_size=200, shuffle=False)
+    yield
 
     # Checking error rate
     error_rate = 0.
     n = 0
     training_flag_backup = network.training
     network.eval()
-    device = next(network.parameters()).device
-    with torch.no_grad():
+    try:
+        device = next(network.parameters()).device
         for x, y in mnist_test:
-            x = x.to(device)
-            y = y.to(device)
-            o = network(x)
-            c = torch.argmax(o, dim=1)
-            error_rate += float(torch.sum(c != y).item())
-            n += x.shape[0]
-    error_rate /= n
-    network.train(training_flag_backup)
+            with torch.no_grad():
+                x = x.to(device)
+                y = y.to(device)
+                o = network(x)
+                c = torch.argmax(o, dim=1)
+                error_rate += float(torch.sum(c != y).item())
+                n += x.shape[0]
+            yield
+    finally:
+        network.train(training_flag_backup)
 
-    return error_rate
+    return error_rate / n
 
 
 class MultiIdentity(torch.nn.Module):
