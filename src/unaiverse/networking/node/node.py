@@ -1667,6 +1667,13 @@ class Node:
     async def __handle_network_connections(self) -> None:
         """Manages new and lost network connections. (async)"""
 
+        # World host: expire the pre-admitted joiners that never redeemed their grant,
+        # BEFORE the reconcile/publish below read the roster.
+        if self.node_type is Node.WORLD:
+            for peer_id in self.conn.sweep_world_preadmissions():
+                log.misc(f"[session] pre-admission of ...{peer_id[-5:]} expired unredeemed "
+                         f"→ unlisted", sub="prv")
+
         # Getting fresh lists of existing world agents and world masters (from the rendezvous)
         if self.node_type is Node.AGENT:
             log.misc("Updating list of world agents and world masters by using data from the rendezvous",
@@ -2416,10 +2423,16 @@ class Node:
                     joiner_private_peer_id not in verified_claims.p2p_peers):
                 log.misc(f"[session] decision: world binding mismatch for ...{peer_id[-5:]} → reject")
                 return ProfileDecisionResult(accepted=False, reason_code=NOT_AUTHORIZED)
+            # Provisional: the entry must exist before the joiner dials the world
+            # instance (the perimeter would cut an unknown peer mid-handshake), but
+            # only the world-side registration confirms it — unredeemed grants are
+            # swept once the TTL expires.
             if is_world_master:
-                self.conn.add_to_world_masters_list(joiner_private_peer_id, joiner_private_addr, role)
+                self.conn.add_to_world_masters_list(joiner_private_peer_id, joiner_private_addr, role,
+                                                    provisional_ttl_s=Custom.WORLD_PREADMISSION_TTL)
             else:
-                self.conn.add_to_world_agents_list(joiner_private_peer_id, joiner_private_addr, role)
+                self.conn.add_to_world_agents_list(joiner_private_peer_id, joiner_private_addr, role,
+                                                   provisional_ttl_s=Custom.WORLD_PREADMISSION_TTL)
 
             is_human = profile.get_static_profile().get("node_type") == self.hosted.HUMAN
             code_bundle = json.dumps({
@@ -2850,6 +2863,8 @@ class Node:
         try:
             # conn pools (routing) + world object (membership). The periodic rendezvous
             # publish (PUBLISH_RENDEZVOUS_EVERY) advertises the new member to the world.
+            # Re-adding WITHOUT a TTL confirms the grant-time pre-admission (the
+            # provisional deadline is dropped: the member is now registered).
             if role & Agent.ROLE_WORLD_MASTER == Agent.ROLE_WORLD_MASTER:
                 self.conn.add_to_world_masters_list(private_peer_id, private_addr, role)
             else:

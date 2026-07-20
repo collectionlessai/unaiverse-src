@@ -320,6 +320,49 @@ def test_world_handoff_dial_rides_single_grant_bounded_attempt():
     assert 20.0 <= sess._dial_budget_s <= 25.5
 
 
+# Pre-admission TTL (world host)
+
+def test_preadmission_ttl_sweeps_unredeemed_grant():
+    """A grant-time pre-admission whose deadline expires without a world-side
+    registration is swept out of the whole roster bookkeeping: without the TTL a
+    joiner that dies after the grant ghosts the world lists forever (the public
+    carrier's FAILED carries the public peer-id, not this private one)."""
+    conn, pub, world = _conn()
+    conn.add_to_world_agents_list("ghost", ["/ip4/1.1.1.1/tcp/1"], role=1,
+                                  provisional_ttl_s=90.0)
+    assert "ghost" in conn._sm_world.world_agents_set
+    assert conn.sweep_world_preadmissions() == []          # not due yet
+    conn.world_preadmissions["ghost"] -= 1000.0            # expire it
+    assert conn.sweep_world_preadmissions() == ["ghost"]
+    assert "ghost" not in conn._sm_world.world_agents_set
+    assert "ghost" not in conn.peer_id_to_addrs
+    assert "ghost" not in conn.peer_id_to_misc
+    assert "ghost" not in conn.world_preadmissions
+
+
+def test_preadmission_confirmed_by_registration_survives_sweep():
+    """The world-side registration re-adds the member WITHOUT a TTL: that drops the
+    provisional deadline, and no later sweep may touch a registered member."""
+    conn, pub, world = _conn()
+    conn.add_to_world_masters_list("m", ["/ip4/1.1.1.1/tcp/1"], role=3,
+                                   provisional_ttl_s=90.0)
+    assert "m" in conn.world_preadmissions
+    conn.add_to_world_masters_list("m", ["/ip4/1.1.1.1/tcp/1"], role=3)   # registration
+    assert "m" not in conn.world_preadmissions
+    assert conn.sweep_world_preadmissions() == []
+    assert "m" in conn._sm_world.world_masters_set
+
+
+def test_remove_from_world_lists_clears_preadmission_deadline():
+    """The normal unlist path also drops the provisional deadline, so a member
+    removed and later re-admitted does not inherit a stale expiry."""
+    conn, pub, world = _conn()
+    conn.add_to_world_agents_list("g", ["/ip4/1.1.1.1/tcp/1"], role=1,
+                                  provisional_ttl_s=90.0)
+    conn.remove_from_world_lists("g")
+    assert "g" not in conn.world_preadmissions
+
+
 def test_rollback_handoff_noop_when_world_session_established():
     """If the correlated world Session already ESTABLISHED, the carrier's death no
     longer matters: the join is completing and complete_world_handoff owns the

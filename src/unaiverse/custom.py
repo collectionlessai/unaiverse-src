@@ -16,6 +16,9 @@ class Custom:
     SLOW_DOWN_CLOCK_AFTER = 10.0  # Seconds without networks exchanges and 0 interaction (stats are not considered)
     SLOW_CLOCK_DELTA = 2.0  # Clock delta when running in slow-mode
     REJOINING_WAIT = 30.0  # Time to wait before trying to rejoin a world from which we were disconnected
+    WORLD_PREADMISSION_TTL = 90.0  # Seconds a grant-time pre-admission may sit unredeemed before the
+    # world host unlists it (ghost bound; must exceed the worst-case redemption: grant-bounded dial
+    # ~35s + HELLO/PROFILE stages 15s each, plus margin)
 
     # =====================
     # ENVIRONMENT VARIABLES

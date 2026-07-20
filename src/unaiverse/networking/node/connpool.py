@@ -238,6 +238,14 @@ class NodeConn:
         # Rendezvous
         self.rendezvous_tag = -1
 
+        # Pre-admissions still waiting for their world-side redemption: peer_id →
+        # monotonic deadline. Written by the grant-time pre-admission
+        # (add_to_world_*_list with provisional_ttl_s), cleared by the world-side
+        # registration (same writers, no TTL) or by remove_from_world_lists; the
+        # host sweeps the expired ones each cycle, so a grant that is never
+        # redeemed does not leave a ghost member in the roster.
+        self.world_preadmissions: dict[str, float] = {}
+
         # Application node-id, used when this Coordinator builds the SessionManagers.
         self._local_node_id = local_node_id
 
@@ -1418,12 +1426,29 @@ class NodeConn:
         advertising it."""
         self._sm_world.world_agents_set.discard(peer_id)
         self._sm_world.world_masters_set.discard(peer_id)
+        self.world_preadmissions.pop(peer_id, None)
         self.peer_id_to_addrs.pop(peer_id, None)
         misc = self.peer_id_to_misc.pop(peer_id, None)
         if misc in self.role_to_peer_ids:
             self.role_to_peer_ids[misc].discard(peer_id)
             if not self.role_to_peer_ids[misc]:
                 del self.role_to_peer_ids[misc]
+
+    def sweep_world_preadmissions(self, now: float | None = None) -> list[str]:
+        """World host: drop the pre-admitted joiners whose deadline expired without
+        a world-side registration (the grant was never redeemed). The public
+        carrier's own FAILED cannot clean these up — it carries the PUBLIC peer-id
+        while the pre-admission is keyed on the private one — so the deadline is
+        the collector. Returns the removed peer-ids (for the caller's log)."""
+        if not self.world_preadmissions:
+            return []
+        if now is None:
+            now = time.monotonic()
+        expired = [pid for pid, deadline in self.world_preadmissions.items()
+                   if deadline <= now]
+        for pid in expired:
+            self.remove_from_world_lists(pid)   # pops the deadline too
+        return expired
 
     def set_world_masters_list(self, world_masters_list_peer_infos: list[dict] | None) -> None:
         """Sets the list of all world masters based on a provided list of peer information.
@@ -1453,13 +1478,17 @@ class NodeConn:
         else:
             self._sm_world.world_masters_set = set()
 
-    def add_to_world_agents_list(self, peer_id: str, addrs: list[str], role: int = -1) -> None:
+    def add_to_world_agents_list(self, peer_id: str, addrs: list[str], role: int = -1,
+                                 provisional_ttl_s: float | None = None) -> None:
         """Adds a new world agent to the list.
 
         Args:
             peer_id: The peer ID of the new agent.
             addrs: A list of addresses for the new agent.
             role: The role assigned to the agent.
+            provisional_ttl_s: When set, the entry is a grant-time pre-admission
+                that expires after this many seconds unless confirmed; calling
+                again WITHOUT it (the world-side registration) confirms the entry.
         """
         self._sm_world.world_agents_set.add(peer_id)
 
@@ -1468,14 +1497,22 @@ class NodeConn:
         assert role & 2 == 0, "Expecting the second bit of the role to be 0 for world agents"
         self.peer_id_to_addrs[peer_id] = addrs
         self.set_role(peer_id, role)
+        if provisional_ttl_s is not None:
+            self.world_preadmissions[peer_id] = time.monotonic() + provisional_ttl_s
+        else:
+            self.world_preadmissions.pop(peer_id, None)
 
-    def add_to_world_masters_list(self, peer_id: str, addrs: list[str], role: int = -1) -> None:
+    def add_to_world_masters_list(self, peer_id: str, addrs: list[str], role: int = -1,
+                                  provisional_ttl_s: float | None = None) -> None:
         """Adds a new world master to the list.
 
         Args:
             peer_id: The peer ID of the new master.
             addrs: A list of addresses for the new master.
             role: The role assigned to the master.
+            provisional_ttl_s: When set, the entry is a grant-time pre-admission
+                that expires after this many seconds unless confirmed; calling
+                again WITHOUT it (the world-side registration) confirms the entry.
         """
         self._sm_world.world_masters_set.add(peer_id)
 
@@ -1484,6 +1521,10 @@ class NodeConn:
         assert role & 2 == 2, "Expecting the second bit of the role to be 1 for world masters"
         self.peer_id_to_addrs[peer_id] = addrs
         self.set_role(peer_id, role)
+        if provisional_ttl_s is not None:
+            self.world_preadmissions[peer_id] = time.monotonic() + provisional_ttl_s
+        else:
+            self.world_preadmissions.pop(peer_id, None)
 
     def get_added_after_updating(self, pool_names: list[str] | None = None) -> dict[str, set] | set:
         """Retrieves the set of peers added after the last update cycle for specified pools.

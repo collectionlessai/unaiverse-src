@@ -206,6 +206,7 @@ class NodeFakeConn(FakeConn):
         self.world_agents_set = set()
         self.world_masters_set = set()
         self.world_roles = {}
+        self.world_preadmissions = {}
         self.addresses_set = []
         # Registered by the harness after the SessionManagers are built, so the pump /
         # on_peer / grace / handoff facades delegate to them exactly like the real NodeConn.
@@ -376,18 +377,27 @@ class NodeFakeConn(FakeConn):
     def get_role(self, peer_id):
         return self.world_roles.get(peer_id, 0)
 
-    def add_to_world_agents_list(self, peer_id, addrs, role=-1):
+    def add_to_world_agents_list(self, peer_id, addrs, role=-1, provisional_ttl_s=None):
         self.world_agents_set.add(peer_id)
         self.world_roles[peer_id] = role
+        if provisional_ttl_s is not None:
+            self.world_preadmissions[peer_id] = time.monotonic() + provisional_ttl_s
+        else:
+            self.world_preadmissions.pop(peer_id, None)
 
-    def add_to_world_masters_list(self, peer_id, addrs, role=-1):
+    def add_to_world_masters_list(self, peer_id, addrs, role=-1, provisional_ttl_s=None):
         self.world_masters_set.add(peer_id)
         self.world_roles[peer_id] = role
+        if provisional_ttl_s is not None:
+            self.world_preadmissions[peer_id] = time.monotonic() + provisional_ttl_s
+        else:
+            self.world_preadmissions.pop(peer_id, None)
 
     def remove_from_world_lists(self, peer_id):
         self.world_agents_set.discard(peer_id)
         self.world_masters_set.discard(peer_id)
         self.world_roles.pop(peer_id, None)
+        self.world_preadmissions.pop(peer_id, None)
 
     def set_world_agents_list(self, peer_ids):
         self.world_agents_set = set(peer_ids) if peer_ids else set()

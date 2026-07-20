@@ -636,6 +636,32 @@ def test_world_host_register_rejects_joiner_without_private_addr():
     asyncio.run(_scenario())
 
 
+def test_world_host_preadmission_provisional_until_registration():
+    """The grant-time pre-admission is provisional (it carries the TTL deadline: a
+    joiner that never redeems must not ghost the roster) and the world-side
+    registration confirms it by dropping the deadline."""
+    async def _scenario():
+        world = FakeWorld()
+        node, conn = build_agent_node_shell(NODE_PEER, world=world)
+        profile = full_profile_dict("joiner-node")
+        _, (_, real_hash) = NodeProfile.from_dict(profile).verify_cv_hash("")
+        claims = VerifiedTokenClaims(node_id="joiner-node", cv_hash=real_hash,
+                                     p2p_peers=("joiner-node-pub-peer", "joiner-node-world-peer"))
+        decision = await node._session_decision_hook(
+            REMOTE_PEER, "joiner-node", profile, NodeConn.P2P_PUBLIC, claims)
+        assert decision.accepted
+        assert "joiner-node-world-peer" in conn.world_preadmissions   # provisional
+
+        ev = SessionEvent(type=SessionEventType.ESTABLISHED, session_id="00" * 8,
+                          peer_id="joiner-node-world-peer", role=SessionRole.RESPONDER,
+                          p2p_name=NodeConn.P2P_WORLD, data={})
+        await node._world_host_register_agent(ev, profile)
+        assert "joiner-node-world-peer" in conn.world_agents_set
+        assert "joiner-node-world-peer" not in conn.world_preadmissions   # confirmed
+
+    asyncio.run(_scenario())
+
+
 def test_pool_removal_while_established_keeps_enrolment_during_grace():
     """Contract of __handle_network_connections on a pool drop: the session moves
     to RECONNECTING (grace) and the peer is KEPT in hosted (all_agents), so an
