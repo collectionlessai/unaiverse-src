@@ -1150,6 +1150,10 @@ class Agent(AgentBasics):
 
             log.misc(f"Found addresses ({len(found_addresses)}) with role: {role}")
             for f_addr, f_peer_id in zip(found_addresses, found_peer_ids):
+                # is_connected reads pool residency, which a Session riding its reconnect
+                # grace (up to 45s) still holds: the re-dial is deliberately skipped there,
+                # RESUME on the surviving Session is the preferred recovery. Only the
+                # terminal LOST evicts the pool and re-opens this dial path.
                 if not self.node_conn.is_connected(f_peer_id):
                     log.misc(f"Asking to get in touch with {f_peer_id}...")
                     peer_id = await self.node_ask_to_get_in_touch_fcn(addresses=f_addr, public=False)

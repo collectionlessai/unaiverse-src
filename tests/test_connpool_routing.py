@@ -374,6 +374,26 @@ def _make_node_conn():
     return conn, pub, world
 
 
+def test_rendezvous_gate_accepts_same_cycle_publish_after_grant_seed():
+    """The join body seeds rendezvous_tag to grant_tag - 1: a publish carrying
+    update_count == grant_tag (the host's cycle may not have advanced between the
+    grant and its next publish) must be APPLIED by the strictly-greater gate —
+    seeding at the grant tag itself would discard it and cost a publish cadence."""
+    conn, pub, world = _make_node_conn()
+    state = {"update_count": 42,
+             "peers": [{"id": "wa", "addrs": ["/ip4/1.1.1.1/tcp/1"], "misc": 1}]}
+    conn._sm_world.rendezvous_peers = lambda: state
+
+    conn.rendezvous_tag = 42            # seeded AT the grant tag (the old behaviour)
+    _run(conn.set_world_agents_and_world_masters_lists_from_rendezvous())
+    assert "wa" not in conn._sm_world.world_agents_set   # discarded by the strict gate
+
+    conn.rendezvous_tag = 41            # seeded one behind (the join-body seed)
+    _run(conn.set_world_agents_and_world_masters_lists_from_rendezvous())
+    assert "wa" in conn._sm_world.world_agents_set       # applied
+    assert conn.rendezvous_tag == 42
+
+
 def test_char_public_peer_routes_to_in_out_public():
     """A public inbound peer lands in IN_PUBLIC, an outbound one in OUT_PUBLIC."""
     conn, pub, world = _make_node_conn()

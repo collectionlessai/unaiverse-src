@@ -2263,7 +2263,13 @@ class Node:
         log.misc(f"Rendezvous tag received with profile: {rendezvous_tag} "
                  f"(in conn pool: {self.conn.rendezvous_tag})")
         if self.conn.rendezvous_tag < rendezvous_tag:
-            self.conn.rendezvous_tag = rendezvous_tag
+            # Seed the gate one cycle BEHIND the grant tag: the first post-join publish
+            # can carry update_count == grant tag (the host's cycle may not have advanced
+            # between the grant and its next publish, e.g. on a slowed clock) and the
+            # strictly-greater gate would discard it, costing a whole publish cadence.
+            # A same-cycle publish is at worst marginally older than the grant snapshot
+            # applied right below, and the next publish repairs it.
+            self.conn.rendezvous_tag = rendezvous_tag - 1
             num_world_masters = len(dynamic_profile['world_summary']['world_masters']) \
                 if dynamic_profile['world_summary']['world_masters'] is not None else 'none'
             num_world_agents = len(dynamic_profile['world_summary']['world_agents']) \
