@@ -44,6 +44,16 @@ WorldMembership = namedtuple(
 )
 
 
+# Dial budget of the world-join redeemer: a single attempt (one p2p.connect already
+# spans every address in parallel; multi-attempt retries belong to the rejoin
+# watchdog, which re-arms with a FRESH grant) bounded by the grant window. The floor
+# lets a nearly-expired grant still dial (expiry is only checked at grant receipt,
+# and the host-side pre-admission outlives it); the ceiling covers one full dial
+# timeout plus margin, so a wedged dial fails while a watchdog retry is still cheap.
+_WORLD_DIAL_MIN_BUDGET_S = 15.0
+_WORLD_DIAL_MAX_BUDGET_S = 35.0
+
+
 class HandoffCorrelation:
     """Ledger of an in-flight world-join handoff: the public carrier that yielded the
     grant, correlated with the world Session that redeems it, kept as twin indexes
@@ -1074,14 +1084,19 @@ class NodeConn:
                                   world_addrs: list, grant_blob: dict, reject_relay: bool) -> list:
         """Joiner side: record the public<->world correlation, point pool routing at the
         world host (set_world), and open the world Session to redeem the grant. Returns
-        the initiate events for Node to dispatch."""
+        the initiate events for Node to dispatch. The redeemer's dial is a single
+        attempt bounded by the grant window (see _WORLD_DIAL_*_BUDGET_S): time.time()
+        matches the wall-clock the host minted expiry_unix_ms with."""
         try:
             self.set_world(world_peer_id)
         except Exception:
             pass
         self._handoff.start(public_peer_id, world_peer_id)
+        remaining_s = int(grant_blob.get("expiry_unix_ms", 0)) / 1000.0 - time.time()
+        budget_s = max(_WORLD_DIAL_MIN_BUDGET_S, min(remaining_s, _WORLD_DIAL_MAX_BUDGET_S))
         return await self._sm_world.initiate(
-            world_peer_id, world_addrs, grant=grant_blob, reject_relay=reject_relay)
+            world_peer_id, world_addrs, grant=grant_blob, reject_relay=reject_relay,
+            dial_attempts=1, dial_budget_s=budget_s)
 
     async def rollback_handoff(self, peer_id: str) -> None:
         """Roll back any in-flight handoff correlation for a terminal Session,

@@ -15,11 +15,13 @@ by a plain SessionManager on a FakeConn wired into the shell's inbox, exactly
 like the e2e handshake tests.
 """
 
+import time
 from collections import deque
 
 from conftest import FakeP2P, FakeConn
 
-from unaiverse.networking.node.connpool import NodeConn, SessionInbound, HandoffCorrelation
+from unaiverse.networking.node.connpool import (NodeConn, SessionInbound, HandoffCorrelation,
+                                                _WORLD_DIAL_MIN_BUDGET_S, _WORLD_DIAL_MAX_BUDGET_S)
 from unaiverse.networking.session import SessionManager
 from unaiverse.networking.session.sess_msg import WORLD_HANDOFF_COMPLETE
 
@@ -309,10 +311,14 @@ class NodeFakeConn(FakeConn):
 
     async def start_world_handoff(self, public_peer_id, world_peer_id, world_addrs,
                                   grant_blob, reject_relay):
+        # Mirror of NodeConn.start_world_handoff, world-join dial policy included.
         self.set_world(world_peer_id)
         self._handoff.start(public_peer_id, world_peer_id)
+        remaining_s = int(grant_blob.get("expiry_unix_ms", 0)) / 1000.0 - time.time()
+        budget_s = max(_WORLD_DIAL_MIN_BUDGET_S, min(remaining_s, _WORLD_DIAL_MAX_BUDGET_S))
         return await self._sm_world.initiate(
-            world_peer_id, world_addrs, grant=grant_blob, reject_relay=reject_relay)
+            world_peer_id, world_addrs, grant=grant_blob, reject_relay=reject_relay,
+            dial_attempts=1, dial_budget_s=budget_s)
 
     async def rollback_handoff(self, peer_id):
         # The mechanics live in the shared HandoffCorrelation (no mirror to drift).

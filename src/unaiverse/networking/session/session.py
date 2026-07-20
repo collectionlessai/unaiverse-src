@@ -168,6 +168,8 @@ class Session:
         app_role: int = 0,
         token_verifier: Optional[Callable] = None,
         token_factory: Optional[Callable[[], str]] = None,
+        dial_attempts: Optional[int] = None,
+        dial_budget_s: Optional[float] = None,
     ):
         """
         Args:
@@ -195,6 +197,11 @@ class Session:
                 refreshed by SessionManager.sync_known_peers and used as the source for the
                 role/addrs facade and the world perimeter. Distinct from self.role
                 (SessionRole, which is directional). 0 means public / unknown.
+            dial_attempts: initiator only — override of the CONNECTING dial-attempt
+                cap (None = module default).
+            dial_budget_s: initiator only — override of the total CONNECTING budget
+                in seconds (None = module default). The world-join redeemer uses both
+                to ride a single attempt bounded by its grant window.
         """
         self.peer_id = peer_id
         self.role = role
@@ -252,6 +259,8 @@ class Session:
         self._dial_attempts = 0
         self._dial_task: Optional[asyncio.Task] = None
         self._next_dial_at: float = 0.0   # monotonic gate for the CONNECTING dial backoff
+        self._max_dial_attempts = dial_attempts if dial_attempts is not None else _MAX_DIAL_ATTEMPTS
+        self._dial_budget_s = dial_budget_s if dial_budget_s is not None else _TIMEOUT_CONNECT_S
 
         # Profile received from the remote peer (set on ESTABLISHED).
         self.remote_profile: Optional[dict] = None
@@ -296,7 +305,7 @@ class Session:
         on the next tick_dial, so this returns immediately with no events."""
         if self.role != SessionRole.INITIATOR:
             raise RuntimeError("Session.start() is for initiators only")
-        self._set_state(SessionState.CONNECTING, _TIMEOUT_CONNECT_S)
+        self._set_state(SessionState.CONNECTING, self._dial_budget_s)
         self._next_dial_at = 0.0
         self._start_dial()
         return []
@@ -311,7 +320,8 @@ class Session:
             log.session(f"{self!r} reconnect dial (attempt {self._reconnect_attempts + 1})", sub=self._sub)
         else:
             self._dial_attempts += 1
-            log.session(f"{self!r} dial attempt {self._dial_attempts}/{_MAX_DIAL_ATTEMPTS}", sub=self._sub)
+            log.session(f"{self!r} dial attempt {self._dial_attempts}/{self._max_dial_attempts}",
+                        sub=self._sub)
         self._dial_task = asyncio.create_task(self._run_dial(self.p2p, self.addresses))
 
     @staticmethod
@@ -372,7 +382,7 @@ class Session:
                       f"disallowed (talk_to_relay_based_nodes=False)", sub=self._sub)
             return [self._fail("relay_rejected")]
         if peer_id is None:
-            if self._dial_attempts < _MAX_DIAL_ATTEMPTS:
+            if self._dial_attempts < self._max_dial_attempts:
                 delay = min(
                     random.uniform(0, _RETRY_BASE_S * (2 ** (self._dial_attempts - 1))),
                     _RETRY_CAP_S,
@@ -380,7 +390,7 @@ class Session:
                 self._next_dial_at = now + delay
                 log.session(f"{self!r} dial failed, retrying in {delay:.1f}s", sub=self._sub)
                 return []
-            log.error(f"{self!r} dial failed after {_MAX_DIAL_ATTEMPTS} attempts", sub=self._sub)
+            log.error(f"{self!r} dial failed after {self._max_dial_attempts} attempts", sub=self._sub)
             return [self._fail("dial_failed")]
         # If the dial returned a different peer-id than we expected (e.g. relayed multiaddr
         # without the /p2p hop), update it before the HELLO.

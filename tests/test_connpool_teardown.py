@@ -20,6 +20,7 @@ primitives drop_peer composes; the only external teardown surface is ``drop_peer
 never calls P2P methods, so a bare fake transport is enough.
 """
 
+import time
 import asyncio
 
 import pytest
@@ -289,6 +290,34 @@ def test_rollback_handoff_aborts_inflight_world_session():
     assert world_peer in world.disconnected               # transport of the dial severed
     assert not conn.is_pending_handoff(world_peer)
     assert conn.get_world_node_peer_id() is None
+
+
+def test_world_handoff_dial_rides_single_grant_bounded_attempt():
+    """start_world_handoff opens the redeemer with the world-join dial policy: ONE
+    attempt (multi-attempt retries belong to the rejoin watchdog, with a fresh
+    grant) and a CONNECTING budget clamped to the grant window — ceiling for a far
+    expiry, floor for a nearly-spent grant, the remaining window in between."""
+    async def _case(expiry_offset_s):
+        conn, pub, world = _conn()
+        blob = {"expiry_unix_ms": int((time.time() + expiry_offset_s) * 1000)}
+        await conn.start_world_handoff("host-pub", "host-world",
+                                       ["/ip4/1.2.3.4/tcp/1"], blob, reject_relay=False)
+        sess = conn._sm_world.get_session("host-world")
+        assert sess is not None
+        if sess._dial_task is not None:      # don't leak the dial task at loop close
+            sess._dial_task.cancel()
+        return sess
+
+    sess = _run(_case(60.0))                 # far expiry → ceiling
+    assert sess._max_dial_attempts == 1
+    assert sess._dial_budget_s == 35.0
+    assert sess._timeout_s == 35.0           # CONNECTING armed with the budget
+
+    sess = _run(_case(1.0))                  # nearly spent → floor still dials
+    assert sess._dial_budget_s == 15.0
+
+    sess = _run(_case(25.0))                 # inside the window → ~remaining
+    assert 20.0 <= sess._dial_budget_s <= 25.5
 
 
 def test_rollback_handoff_noop_when_world_session_established():

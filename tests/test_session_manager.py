@@ -89,6 +89,20 @@ def test_initiate_replace_stale_forces_replacement_at_matching_intent(alice_conn
     assert len(alice_conn.connect_calls) == 2
 
 
+def test_initiate_passes_dial_policy_to_session(alice_conn, alice_peer_id, bob_peer_id):
+    """ensure/initiate forward the per-Session dial policy (the world redeemer's
+    single grant-bounded attempt) down to the Session they create, and start()
+    arms CONNECTING with that budget."""
+    alice_conn.connect_returns = (bob_peer_id, False)
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    _run(sm.initiate(bob_peer_id, ["/ip4/127.0.0.1/tcp/0"],
+                     dial_attempts=1, dial_budget_s=21.0))
+    sess = sm.get_session(bob_peer_id)
+    assert sess._max_dial_attempts == 1
+    assert sess._dial_budget_s == 21.0
+    assert sess._timeout_s == 21.0
+
+
 def test_has_established_world_join_carrier(alice_conn, alice_peer_id, bob_peer_id):
     """The spent-carrier detector is True only for an ESTABLISHED world-join Session: an
     in-flight handshake (not yet ESTABLISHED) and a plain Session are never flagged, so a

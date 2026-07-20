@@ -366,6 +366,8 @@ class SessionManager:
         grant: Optional[dict] = None,
         reject_relay: bool = False,
         app_role: int = 0,
+        dial_attempts: Optional[int] = None,
+        dial_budget_s: Optional[float] = None,
     ) -> Session:
         """Register an initiator Session to `peer_id` in the KNOWN state WITHOUT
         starting it (no dial yet). Idempotent: a non-terminal existing Session is
@@ -391,6 +393,8 @@ class SessionManager:
             app_role=app_role,
             token_verifier=self._token_verifier,
             token_factory=self._token_factory,
+            dial_attempts=dial_attempts,
+            dial_budget_s=dial_budget_s,
         )
         self._set_known(peer_id, sess)
         return sess
@@ -441,6 +445,8 @@ class SessionManager:
         grant: Optional[dict] = None,
         reject_relay: bool = False,
         replace_stale: bool = False,
+        dial_attempts: Optional[int] = None,
+        dial_budget_s: Optional[float] = None,
     ) -> List[SessionEvent]:
         """Open a new initiator Session to `peer_id` and start it. A stale FAILED/CLOSED
         Session is replaced. initiate() = ensure() + activate().
@@ -493,7 +499,7 @@ class SessionManager:
 
         self.ensure(peer_id, addresses, is_world_join=is_world_join,
                     remote_node_id_hint=remote_node_id_hint, grant=grant, reject_relay=reject_relay,
-                    app_role=app_role)
+                    app_role=app_role, dial_attempts=dial_attempts, dial_budget_s=dial_budget_s)
         log.session(f"initiating Session to ...{peer_id[-5:]}", sub=self._label)
         return await self.activate(peer_id)
 

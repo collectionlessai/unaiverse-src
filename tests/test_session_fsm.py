@@ -62,7 +62,8 @@ def _start(sess):
 
 def _mk(peer_id, role, p2p, local_peer_id, local_node_id="local-node",
         local_profile_factory=lambda: {}, addresses=None,
-        token_verifier=None, token_factory=None, remote_node_id_hint=None):
+        token_verifier=None, token_factory=None, remote_node_id_hint=None,
+        dial_attempts=None, dial_budget_s=None):
     return Session(
         peer_id=peer_id, role=role, p2p=p2p,
         p2p_name=NodeConn.P2P_PUBLIC, local_peer_id=local_peer_id,
@@ -70,6 +71,7 @@ def _mk(peer_id, role, p2p, local_peer_id, local_node_id="local-node",
         addresses=addresses,
         token_verifier=token_verifier, token_factory=token_factory,
         remote_node_id_hint=remote_node_id_hint,
+        dial_attempts=dial_attempts, dial_budget_s=dial_budget_s,
     )
 
 
@@ -153,6 +155,50 @@ def test_initiator_dial_failure_fails_after_max_attempts(alice_conn, alice_peer_
     assert len(events) == 1 and events[0].type == SessionEventType.FAILED
     assert events[0].data["reason"] == "dial_failed"
     assert sess.state == SessionState.FAILED
+
+
+def test_single_attempt_dial_fails_without_retry(alice_conn, alice_peer_id, bob_peer_id):
+    """dial_attempts=1 (the world-join redeemer's policy): the first failed dial is
+    terminal, no backoff retries — retrying belongs to the caller (the rejoin
+    watchdog, which re-arms with a fresh grant)."""
+    alice_conn.connect_returns = (None, False)
+    sess = _mk(bob_peer_id, SessionRole.INITIATOR, alice_conn, alice_peer_id,
+               addresses=["/ip4/1.2.3.4/tcp/0"], dial_attempts=1)
+
+    async def _go():
+        sess.start()
+        now = time.monotonic()
+        for _ in range(5):
+            await asyncio.sleep(0)          # let the dial task run
+            evs = await sess.tick_dial(now)
+            if evs:
+                return evs
+            now += 60.0
+        return []
+
+    events = _run(_go())
+    assert len(events) == 1 and events[0].type == SessionEventType.FAILED
+    assert events[0].data["reason"] == "dial_failed"
+    assert len(alice_conn.connect_calls) == 1   # exactly one dial, no retry
+
+
+def test_dial_budget_bounds_connecting(alice_conn, alice_peer_id, bob_peer_id):
+    """dial_budget_s overrides the CONNECTING backstop: a wedged dial times out at
+    the per-Session budget (the grant window for a world redeemer), not at the
+    module default."""
+    sess = _mk(bob_peer_id, SessionRole.INITIATOR, alice_conn, alice_peer_id,
+               addresses=["/ip4/1.2.3.4/tcp/0"], dial_budget_s=0.001)
+
+    async def _go():
+        sess.start()
+        await _cancel_dial(sess)   # leave CONNECTING with no dial outcome to reap
+    _run(_go())
+
+    assert sess.state == SessionState.CONNECTING
+    time.sleep(0.005)
+    ev = sess.check_timeout()
+    assert ev is not None and ev.type == SessionEventType.FAILED
+    assert ev.data["reason"] == "timeout:connecting"
 
 
 # Responder happy path
