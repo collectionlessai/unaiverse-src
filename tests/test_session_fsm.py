@@ -195,23 +195,35 @@ def test_responder_rejects_unsupported_version(bob_conn, bob_p2p, bob_peer_id, a
 
 # Stage-1 replay defence (sig_b verification)
 
-def test_initiator_rejects_bad_sig_b(alice_conn, alice_p2p, alice_peer_id, bob_peer_id):
-    """If the responder's sig_b doesn't verify, the initiator MUST fail before
-    sending PROFILE_OFFER. This is the replay defence."""
+def test_initiator_ignores_bad_sig_b_then_accepts_good_ack(alice_conn, alice_p2p,
+                                                           alice_peer_id, bob_peer_id):
+    """An ACK whose sig_b doesn't verify is ignored (no PROFILE_OFFER, no terminal):
+    HELLO_RESP has no session_id, so a stale-generation ACK must not kill the
+    handshake the good ACK — possibly in the same drained batch — completes."""
     alice_conn.connect_returns = (bob_peer_id, False)
     sess = _mk(bob_peer_id, SessionRole.INITIATOR, alice_conn, alice_peer_id,
                addresses=["/ip4/127.0.0.1/tcp/0"])
     _start(sess)
     assert sess.state == SessionState.HELLO_SENT
     alice_p2p.verify_peer_sig_returns = False
-    resp = SessMsg(SessMsg.KIND_HELLO_RESP, {
+    bogus = SessMsg(SessMsg.KIND_HELLO_RESP, {
         "chosen_version": "1.0", "capabilities": 0, "nonce_b": b"\xbb" * 32,
         "sig_b": b"bogus", "reason_code": OK,
     })
-    events = _run(sess.process_inbound(SESSION_HELLO_PROTOCOL, resp))
-    assert len(events) == 1 and events[0].type == SessionEventType.FAILED
-    assert events[0].data["reason"] == "hello_ack_bad_sig_b"
+    events = _run(sess.process_inbound(SESSION_HELLO_PROTOCOL, bogus))
+    assert events == []
+    assert sess.state == SessionState.HELLO_SENT
     assert _last_sent(alice_conn, SESSION_PROFILE_PROTOCOL) is None
+    # The good ACK (verifying sig) still completes stage 1.
+    alice_p2p.verify_peer_sig_returns = True
+    good = SessMsg(SessMsg.KIND_HELLO_RESP, {
+        "chosen_version": "1.0", "capabilities": 0, "nonce_b": b"\xcc" * 32,
+        "sig_b": b"sig", "reason_code": OK,
+    })
+    events = _run(sess.process_inbound(SESSION_HELLO_PROTOCOL, good))
+    assert events == []
+    assert sess.state == SessionState.PROFILE_SENT
+    assert _last_sent(alice_conn, SESSION_PROFILE_PROTOCOL) is not None
 
 
 # Stage-2 + full initiator happy path

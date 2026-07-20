@@ -501,12 +501,20 @@ class Session:
         if resp.get("chosen_version") != "1.0":
             return [self._fail(f"hello_ack_bad_version:{resp.get('chosen_version')}")]
 
-        # Verify sig_b under the responder's peer-id (libp2p host key).
+        # Verify sig_b under the responder's peer-id (libp2p host key). A failed
+        # verify is IGNORED, not failed: HELLO_RESP carries no session_id, so an
+        # ACK of a previous generation (e.g. a responder draining a backlog answers
+        # a stale HELLO and the current one back to back) is indistinguishable from
+        # a forgery, and failing here would kill the handshake the good ACK — often
+        # in the same batch — is about to complete. Staying in HELLO_SENT keeps the
+        # wait bounded by the stage timeout.
         if not await self.p2p.verify_peer_signature(
             self.peer_id,
             _sign_payload(bytes(self.nonce_a), self.session_id), bytes(resp.get("sig_b") or b""),
         ):
-            return [self._fail("hello_ack_bad_sig_b")]
+            log.session(f"{self!r} HELLO_ACK with invalid sig_b ignored (stale generation "
+                        f"or forgery)", sub=self._sub)
+            return []
 
         self.nonce_b = bytes(resp.get("nonce_b") or b"")
         return await self._initiator_send_profile_offer()
