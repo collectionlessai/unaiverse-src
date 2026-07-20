@@ -792,16 +792,33 @@ def test_quarantine_refusal_reason_carries_remaining_seconds(alice_conn, alice_p
 
 
 def test_failed_event_enters_quarantine(alice_conn, alice_peer_id, bob_peer_id):
-    """A FAILED event (here a handshake timeout) puts the peer in quarantine like a LOST,
-    so a just-failed peer is not immediately re-dialed."""
+    """A non-stall FAILED (here a profile-stage timeout) keeps the full anti-flap
+    window, like a LOST: only the hello-stage stalls get the short one."""
     sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
     sess = _mk_session(alice_conn, bob_peer_id, alice_peer_id)
     sm._set_active(bob_peer_id, sess)
-    sess._set_state(SessionState.HELLO_SENT, 0.001)
+    sess._set_state(SessionState.PROFILE_SENT, 0.001)
     time.sleep(0.005)
     events = _run(sm.tick())
     assert any(e.type == SessionEventType.FAILED for e in events)
     assert sm._quarantine.get(bob_peer_id, 0.0) > time.monotonic() + 20.0
+
+
+def test_handshake_stall_failure_gets_short_quarantine(alice_conn, alice_peer_id, bob_peer_id):
+    """timeout:hello_sent / timeout:hello_ack_sent mean the peer's pump missed one
+    handshake window (slow, not flapping): the quarantine is short so a retry
+    scheduled right after does not bounce off the dial gate."""
+    for state, role in ((SessionState.HELLO_SENT, SessionRole.INITIATOR),
+                        (SessionState.HELLO_ACK_SENT, SessionRole.RESPONDER)):
+        sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+        sess = _mk_session(alice_conn, bob_peer_id, alice_peer_id, role=role)
+        sm._set_active(bob_peer_id, sess)
+        sess._set_state(state, 0.001)
+        time.sleep(0.005)
+        events = _run(sm.tick())
+        assert any(e.type == SessionEventType.FAILED for e in events)
+        remaining = sm._quarantine[bob_peer_id] - time.monotonic()
+        assert 0.0 < remaining <= 5.5, f"state={state.value}: got {remaining:.1f}s"
 
 
 def test_failed_then_known_recreated_then_gated_then_dials(alice_conn, alice_peer_id, bob_peer_id):

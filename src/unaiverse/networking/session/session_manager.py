@@ -36,6 +36,13 @@ if TYPE_CHECKING:
 # instead of racing it and bouncing on the gate.
 _QUARANTINE_S = 25.0
 
+# Short variant for handshake-stall failures (timeout:hello_sent /
+# timeout:hello_ack_sent): the peer's pump missed one handshake window, which is
+# typically slowness under load, not flapping, and the full window would make any
+# retry scheduled under it bounce off the dial gate. Must stay above _CUT_LINGER_S
+# so the settlement cut of the failed handshake still precedes the next dial.
+_QUARANTINE_STALL_S = 5.0
+
 # Settlement linger before the deferred transport cut of a peer whose Session just
 # reached a terminal state. The transport must outlive the Session by a beat because
 # the last farewell frame (a GOAWAY_ACK, a reject decision, an unknown-session NACK)
@@ -630,8 +637,12 @@ class SessionManager:
         if now is None:
             now = time.monotonic()
         for ev in events:
+            reason = str(ev.data.get("reason", ""))
             if ev.type in (SessionEventType.LOST, SessionEventType.FAILED):
-                self._quarantine[ev.peer_id] = now + _QUARANTINE_S
+                stall = (ev.type is SessionEventType.FAILED and
+                         reason.startswith(("timeout:hello_sent", "timeout:hello_ack_sent")))
+                self._quarantine[ev.peer_id] = now + (_QUARANTINE_STALL_S if stall
+                                                      else _QUARANTINE_S)
             if ev.type in (SessionEventType.LOST,
                            SessionEventType.CLOSED,
                            SessionEventType.FAILED):
@@ -640,7 +651,6 @@ class SessionManager:
                 sess = self._sessions.get(ev.peer_id)
                 if sess is not None and sess.state in (SessionState.FAILED, SessionState.CLOSED):
                     self._forget(ev.peer_id)
-                    reason = str(ev.data.get("reason", ""))
                     if "SIMULTANEOUS_OPEN_LOSS" in reason:
                         # The tie-break loser shares its transport with the WINNER's
                         # handshake still in flight: no settlement cut, or a slow
