@@ -9,9 +9,6 @@ class Custom:
     SEND_DYNAMIC_PROFILE_EVERY = 10.  # Seconds
     GET_NEW_TOKEN_EVERY = 23 * 60. * 60. + 30 * 60.  # Seconds (23 hours and 30 minutes, safer)
     PUBLISH_RENDEZVOUS_EVERY = 10.  # Seconds
-    INTERVIEW_TIMEOUT = 60.  # Seconds
-    CONNECT_WITHOUT_ACK_RETRY_TIMEOUT = 30.  # Seconds
-    CONNECT_WITHOUT_ACK_TOTAL_TIMEOUT = 60.  # Seconds
     SEND_ALIVE_EVERY = 2.5 * 60.  # Seconds
     SAVE_STATS_EVERY = 10.  # Seconds
     SEND_STATS_EVERY = 30.  # Seconds (warning: modified in Node constructor!)
