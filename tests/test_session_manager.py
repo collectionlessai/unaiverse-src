@@ -789,6 +789,11 @@ def test_quarantine_refusal_reason_carries_remaining_seconds(alice_conn, alice_p
     # The countdown is a positive number of seconds close to the window.
     secs = float(reason[len("quarantined:"):-1])
     assert 0.0 < secs <= 30.0
+    # Machine-readable twin of the human reason: the rejoin watchdog schedules its
+    # retry just past this instead of parsing the string.
+    retry_after = events[0].data["retry_after_s"]
+    assert isinstance(retry_after, float)
+    assert abs(retry_after - secs) < 0.2
 
 
 def test_failed_event_enters_quarantine(alice_conn, alice_peer_id, bob_peer_id):

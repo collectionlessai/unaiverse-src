@@ -340,6 +340,59 @@ def test_rejoin_watchdog_reschedules_retries_and_is_not_gated_on_in_world():
     asyncio.run(_scenario())
 
 
+def test_quarantine_refusal_pulls_rejoin_retry_in():
+    """A quarantined world-join refusal carries retry_after_s, and the rearm PULLS IN an
+    already-armed rejoin to just past the ban: without it the next watchdog fire bounces
+    on the still-closed gate and the cadence doubles toward a stalled host."""
+    async def _scenario():
+        node, conn = build_agent_node_shell(NODE_PEER)
+        node.keep_rejoining = True
+        node.joining_world_info = {"world_public_peer_id": REMOTE_PEER,
+                                   "options": {"node_name": "w"}}
+        armed_at = clock.get_time() + 30.0
+        node.rejoining_time = armed_at
+
+        ev = SessionEvent(type=SessionEventType.FAILED, session_id="",
+                          peer_id=REMOTE_PEER, role=SessionRole.INITIATOR,
+                          p2p_name=NodeConn.P2P_PUBLIC,
+                          data={"reason": "quarantined:4.0s", "retry_after_s": 4.0})
+        await node._dispatch_session_event(ev)
+
+        assert node.rejoining_time < armed_at            # pulled in, not left at +30
+        remaining = node.rejoining_time - clock.get_time()
+        assert 0.0 < remaining <= 5.5                    # ~ban + margin
+        assert node.rejoining_kwargs                     # options captured for the retry
+
+        # A LATER target must never push out a sooner armed one.
+        node.rejoining_time = clock.get_time() + 2.0
+        await node._dispatch_session_event(ev)
+        assert node.rejoining_time - clock.get_time() <= 2.5
+
+    asyncio.run(_scenario())
+
+
+def test_rejoin_watchdog_keeps_sooner_retry_armed_by_attempt():
+    """The watchdog disarms across the attempt and re-anchors at the default wait ONLY if
+    the attempt's own failure dispatch did not arm a sooner retry (the quarantine refusal
+    path does): the sooner target must survive the re-anchor."""
+    async def _scenario():
+        node, conn = build_agent_node_shell(NODE_PEER)
+        node.keep_rejoining = True
+        node.rejoining_kwargs = {"node_name": "w"}
+
+        async def _refused_join(**kw):
+            node.rejoining_time = clock.get_time() + 5.0   # what the refusal dispatch arms
+            return None
+        node.ask_to_join_world = _refused_join
+
+        node.rejoining_time = clock.get_time()
+        await node._tick_rejoin_watchdog()
+        remaining = node.rejoining_time - clock.get_time()
+        assert 0.0 < remaining <= 5.5      # kept the sooner retry, not re-anchored to +30
+
+    asyncio.run(_scenario())
+
+
 def test_involuntary_end_arms_rejoin_even_if_leave_world_raises():
     """The rejoin is armed BEFORE leave_world (best-effort, may raise): a LOST/FAILED must
     leave the rejoin armed even when leave_world blows up, so the watchdog can still recover

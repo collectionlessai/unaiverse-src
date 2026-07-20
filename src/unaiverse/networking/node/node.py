@@ -49,6 +49,10 @@ from unaiverse.utils.logger import log, ALWAYS_ON_CHANNELS, ALL_CHANNELS
 from unaiverse.utils.misc import (get_key_considering_multiple_sources, save_node_addresses_to_file,
                                   prepare_app_dir, load_agent_in_memory, unpack_py_files, analyze_code)
 
+# Margin added past a quarantine ban when the rejoin watchdog pulls a retry in:
+# just enough to land on the open side of the gate.
+_REJOIN_RETRY_MARGIN_S = 1.0
+
 
 class Node:
     # Each node can host an agent or a world
@@ -763,6 +767,12 @@ class Node:
             log.error(f"Could not resolve a peer-id from addresses of {node_name}, cannot connect!")
             return None
 
+        # A world join binds the pending carrier as soon as it is known: the dial below
+        # can dispatch a synchronous refusal (quarantine gate), and the rejoin re-arm
+        # correlates that FAILED with the in-flight join through this very field.
+        if is_world_join and self.joining_world_info is not None:
+            self.joining_world_info["world_public_peer_id"] = peer_id
+
         p2p_name = NodeConn.P2P_PUBLIC if public else NodeConn.P2P_WORLD
 
         # Legacy pool-routing hook (e.g. conn.set_world so the world private peer is
@@ -801,7 +811,15 @@ class Node:
         # Leave an already entered world (if any); idempotent, reads the host from conn.
         await self.leave_world()
 
-        # Record the join intent (options forwarded into the offered profile downstream).
+        # Record the join intent BEFORE dialing, with the target already merged in:
+        # a refusal dispatched synchronously inside the dial (the quarantine gate)
+        # re-arms the rejoin from these options, which must therefore be complete —
+        # merging only on success would stash target-less kwargs into the retry.
+        kwargs |= {
+            'node_name': node_name,
+            'addresses': addresses,
+            'node_id': node_id
+        }
         self.joining_world_info = {"world_public_peer_id": None, "options": kwargs}
 
         # Start the public-network Session to the world. Fire-and-forget: the dial runs
@@ -812,13 +830,7 @@ class Node:
         peer_id = await self.ask_to_get_in_touch(node_name=node_name, addresses=addresses,
                                                  node_id=node_id, public=True, is_world_join=True)
         if peer_id is not None:
-            log.user("Connected on the public network, waiting for handshake...")
-            kwargs |= {
-                'node_name': node_name,
-                'addresses': addresses,
-                'node_id': node_id
-            }
-            self.joining_world_info = {"world_public_peer_id": peer_id, "options": kwargs}
+            self.joining_world_info["world_public_peer_id"] = peer_id
             log.user("Connected on the public network, waiting for the world handshake to complete...")
         else:
             log.error("Failed to join world!")
@@ -2524,26 +2536,33 @@ class Node:
         A scheduled rejoin (rejoining_time armed by _maybe_leave_world_on_session_end on an
         involuntary world-link end) fires ask_to_join_world, which dials and then hands off
         ASYNChronously — so a dial that returns is NOT yet a completed join. We therefore
-        RESCHEDULE (not disarm) each time: a join that fails or stalls after the dial is
-        retried at the next window. The 'disarm' happens ONLY on the true completion
-        (__join_world clears the timer when the role bit is set). Deliberately NOT gated on
-        in_world(): a leave_world that raised before clearing the role bit would otherwise
-        keep in_world() True and let this tick cancel the rejoin, wedging the node out of the
-        world with no retry — so we let it re-fire and recover instead. A duplicate tick while
-        a join is in flight is harmless: initiate() no-ops on the matching-intent carrier. Any
-        error from the dial is caught so a transient failure retries rather than unwinding the
-        main loop."""
+        RESCHEDULE (not disarm) each time, at the earliest of the default wait and any sooner
+        retry armed by the attempt's own failure dispatch (a quarantine refusal schedules
+        just past its ban via _maybe_rearm_rejoin_on_failed_join): the timer is disarmed
+        across the attempt precisely so that sooner target survives the default re-anchor.
+        The true 'disarm' happens ONLY on completion (__join_world clears the timer when the
+        role bit is set). Deliberately NOT gated on in_world(): a leave_world that raised
+        before clearing the role bit would otherwise keep in_world() True and let this tick
+        cancel the rejoin, wedging the node out of the world with no retry — so we let it
+        re-fire and recover instead. A duplicate tick while a join is in flight is harmless:
+        initiate() no-ops on the matching-intent carrier. Any error from the dial is caught
+        so a transient failure retries rather than unwinding the main loop."""
         if not (0. < self.rejoining_time <= clock.get_time()):
             return
         if not self.keep_rejoining:
             self.rejoining_time = -1.
             return
+        self.rejoining_time = 0.
+        failed = False
         try:
-            if await self.ask_to_join_world(**self.rejoining_kwargs) is None:
-                log.user(f"Failed to rejoin, retrying in {Custom.REJOINING_WAIT} seconds...")
+            failed = await self.ask_to_join_world(**self.rejoining_kwargs) is None
         except Exception as e:
             log.error(f"[rejoin] ask_to_join_world raised, will retry: {e}")
-        self.rejoining_time = clock.get_time() + Custom.REJOINING_WAIT
+        if self.rejoining_time <= 0.:
+            self.rejoining_time = clock.get_time() + Custom.REJOINING_WAIT
+        if failed:
+            log.user(f"Failed to rejoin, retrying in "
+                     f"{self.rejoining_time - clock.get_time():.0f} seconds...")
 
     def _maybe_rearm_rejoin_on_failed_join(self, ev) -> None:
         """Joiner side: an INVOLUNTARY terminal (FAILED, LOST, or a failed join body)
@@ -2572,9 +2591,20 @@ class Node:
             return
         if not self.rejoining_kwargs:
             self.rejoining_kwargs = copy.deepcopy(self.joining_world_info["options"])
+        # A quarantine refusal names its own horizon (retry_after_s): schedule just past
+        # the ban instead of a blind full wait, and PULL IN an already-armed retry when
+        # this target is sooner — never push it out.
+        retry_after = ev.data.get("retry_after_s")
+        wait_s = (Custom.REJOINING_WAIT if retry_after is None
+                  else min(float(retry_after) + _REJOIN_RETRY_MARGIN_S, Custom.REJOINING_WAIT))
+        target = clock.get_time() + wait_s
         if self.rejoining_time <= 0.:
-            self.rejoining_time = clock.get_time() + Custom.REJOINING_WAIT
-            log.misc(f"[session] pending world join failed ({ev.type.value}) → scheduling a retry",
+            self.rejoining_time = target
+            log.misc(f"[session] pending world join failed ({ev.type.value}) → retry in {wait_s:.0f}s",
+                     sub="prv")
+        elif target < self.rejoining_time:
+            self.rejoining_time = target
+            log.misc(f"[session] pending world join refused → retry pulled in to {wait_s:.0f}s",
                      sub="prv")
 
     async def _maybe_leave_world_on_session_end(self, ev) -> bool:

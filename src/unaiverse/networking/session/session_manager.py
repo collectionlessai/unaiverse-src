@@ -413,14 +413,18 @@ class SessionManager:
         if ban_until > now:
             # Surface the refusal to the operator: a silent wall of instant failures
             # reads as "it never connects". The USER line names the wait; the reason
-            # keeps its "quarantined" prefix (parsed nowhere at runtime, but future
-            # substring/startswith stays robust) and carries the remaining seconds.
-            log.user(f"dial to ...{peer_id[-5:]} refused: peer quarantined for {ban_until - now:.1f}s more",
+            # keeps its "quarantined" prefix (substring/startswith stays robust) but
+            # is human-oriented — the machine-readable remainder rides
+            # data["retry_after_s"], so a scheduler (the rejoin watchdog) can retry
+            # right past the ban instead of bouncing on a blind cadence.
+            remaining = ban_until - now
+            log.user(f"dial to ...{peer_id[-5:]} refused: peer quarantined for {remaining:.1f}s more",
                      sub=self._label)
             return [SessionEvent(
                 type=SessionEventType.FAILED, session_id="",
                 peer_id=peer_id, role=SessionRole.INITIATOR,
-                p2p_name=self.p2p_name, data={"reason": f"quarantined:{ban_until - now:.1f}s"},
+                p2p_name=self.p2p_name,
+                data={"reason": f"quarantined:{remaining:.1f}s", "retry_after_s": remaining},
             )]
         log.session(f"activating Session to ...{peer_id[-5:]}", sub=self._label)
         events = sess.start()   # non-blocking: the dial runs off-task, reaped by tick_dial
