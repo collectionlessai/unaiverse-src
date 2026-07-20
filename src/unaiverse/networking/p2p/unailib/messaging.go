@@ -90,139 +90,6 @@ func storeReceivedMessage(
 	logger.Debugf("[GO] 📥 Instance %d: Queued message on channel '%s' from %s. New queue length: %d\n", ni.instanceIndex, channel, from, messageList.Len())
 }
 
-// readFromSubscription runs as a dedicated goroutine for each active PubSub subscription for a specific instance.
-// It continuously waits for new messages on the subscription's channel (`sub.Next(ctx)`),
-// routes them to `storeReceivedMessage`, and handles errors and context cancellation gracefully.
-// You need to provide the full Channel to uniquely identify the subscription.
-func readFromSubscription(
-	ni *NodeInstance,
-	sub *pubsub.Subscription,
-) {
-	defer recoverGoroutine("readFromSubscription")
-	// Get the topic string directly from the subscription object.
-	topic := sub.Topic()
-
-	if ni.ctx == nil || ni.host == nil {
-		logger.Errorf("[GO] ❌ readFromSubscription: Context or Host not initialized for instance %d. Exiting goroutine.\n", ni.instanceIndex)
-		return
-	}
-
-	logger.Infof("[GO] 👂 Instance %d: Started listener goroutine for topic: %s\n", ni.instanceIndex, topic)
-	defer logger.Infof("[GO] 👂 Instance %d: Exiting listener goroutine for topic: %s\n", ni.instanceIndex, topic) // Log when goroutine exits
-
-	for {
-		// Check if the main context has been cancelled (e.g., during node shutdown).
-		if ni.ctx.Err() != nil {
-			logger.Debugf("[GO] 👂 Instance %d: Context cancelled, stopping listener goroutine for topic: %s\n", ni.instanceIndex, topic)
-			return // Exit the goroutine.
-		}
-
-		// Wait for the next message from the subscription. This blocks until a message
-		// arrives, the context is cancelled, or an error occurs.
-		msg, err := sub.Next(ni.ctx)
-		if err != nil {
-			// Check for expected errors during shutdown or cancellation.
-			if err == context.Canceled || err == context.DeadlineExceeded || err == pubsub.ErrSubscriptionCancelled || ni.ctx.Err() != nil {
-				logger.Debugf("[GO] 👂 Instance %d: Subscription listener for topic '%s' stopping gracefully: %v\n", ni.instanceIndex, topic, err)
-				return // Exit goroutine cleanly.
-			}
-			// Handle EOF, which can sometimes occur. Treat it as a reason to stop.
-			if err == io.EOF {
-				logger.Debugf("[GO] 👂 Instance %d: Subscription listener for topic '%s' encountered EOF, stopping: %v\n", ni.instanceIndex, topic, err)
-				return // Exit goroutine.
-			}
-			// Log other errors but attempt to continue (they might be transient).
-			logger.Errorf("[GO] ❌ Instance %d: Error reading from subscription '%s': %v. Continuing...\n", ni.instanceIndex, topic, err)
-			// Pause briefly to avoid busy-looping on persistent errors.
-			time.Sleep(1 * time.Second)
-			continue // Continue the loop to try reading again.
-		}
-
-		logger.Infof("[GO] 📬 Instance %d (id: %s): Received new PubSub message on topic '%s' from %s\n", ni.instanceIndex, ni.host.ID().String(), topic, msg.GetFrom())
-
-		// Ignore messages published by the local node itself.
-		if msg.GetFrom() == ni.host.ID() {
-			continue // Skip processing self-sent messages.
-		}
-
-		// Handle Rendezvous or Standard Messages
-		if strings.HasSuffix(topic, ":rv") {
-			// A rendezvous roster. Only the host that owns the topic may write it: the
-			// topic embeds the host peer id and gossipsub authenticates the sender, so
-			// drop an update whose sender is not that host.
-			expectedHostStr, hasSuffix := strings.CutSuffix(topic, "::ps:rv")
-			if !hasSuffix {
-				logger.Warnf("[GO] ⚠️ Instance %d: rendezvous topic '%s' is not in '<host>::ps:rv' form; dropping update.\n", ni.instanceIndex, topic)
-				continue
-			}
-			expectedHost, decErr := peer.Decode(expectedHostStr)
-			if decErr != nil {
-				logger.Warnf("[GO] ⚠️ Instance %d: rendezvous topic '%s' has an undecodable host id: %v; dropping update.\n", ni.instanceIndex, topic, decErr)
-				continue
-			}
-			if msg.GetFrom() != expectedHost {
-				logger.Warnf("[GO] 🚫 Instance %d: rendezvous update on '%s' from %s is not the world host %s; dropping forged roster.\n", ni.instanceIndex, topic, msg.GetFrom(), expectedHost)
-				continue
-			}
-
-			// 1. First, unmarshal the outer Protobuf message.
-			var protoMsg pg.Message
-			if err := proto.Unmarshal(msg.Data, &protoMsg); err != nil {
-				logger.Warnf("⚠️ Instance %d: Could not decode Protobuf message on topic '%s': %v\n", ni.instanceIndex, topic, err)
-				continue
-			}
-
-			// 2. The actual payload is a JSON string within the 'json_content' field.
-			jsonPayload := protoMsg.GetJsonContent()
-			if jsonPayload == "" {
-				logger.Warnf("⚠️ Instance %d: Rendezvous message on topic '%s' has empty JSON content.\n", ni.instanceIndex, topic)
-				continue
-			}
-
-			// 3. Now, unmarshal the inner JSON payload.
-			var updatePayload struct {
-				Peers       []ExtendedPeerInfo `json:"peers"`
-				UpdateCount int64              `json:"update_count"`
-			}
-			if err := json.Unmarshal([]byte(jsonPayload), &updatePayload); err != nil {
-				logger.Warnf("[GO] ⚠️ Instance %d: Could not decode rendezvous update payload on topic '%s': %v\n", ni.instanceIndex, topic, err)
-				continue // Skip this malformed message.
-			}
-
-			// 4. Create a new map from the decoded peer list.
-			newPeerMap := make(map[peer.ID]ExtendedPeerInfo)
-			for _, peerInfo := range updatePayload.Peers {
-				newPeerMap[peerInfo.ID] = peerInfo
-			}
-
-			// 5. Safely replace the old map with the new one.
-			ni.rendezvousMutex.Lock()
-			// If this is the first update for this instance, initialize the state struct.
-			first := ni.rendezvousState == nil
-			if first {
-				ni.rendezvousState = &RendezvousState{}
-			}
-			rendezvousState := ni.rendezvousState
-			// Drop a roster that does not advance the counter: a replayed host-signed
-			// envelope must not reinstall a stale one. State resets on (un)subscribe.
-			if !first && updatePayload.UpdateCount <= rendezvousState.UpdateCount {
-				ni.rendezvousMutex.Unlock()
-				logger.Debugf("[GO] ⏮️ Instance %d: rendezvous update on '%s' tag %d does not advance past %d; ignoring stale/replayed roster.\n", ni.instanceIndex, topic, updatePayload.UpdateCount, rendezvousState.UpdateCount)
-				continue
-			}
-			rendezvousState.Peers = newPeerMap
-			rendezvousState.UpdateCount = updatePayload.UpdateCount
-			ni.rendezvousMutex.Unlock()
-
-			logger.Debugf("[GO] ✅ Instance %d: Updated rendezvous peers from topic '%s'. Found %d peers. Update count: %d.\n", ni.instanceIndex, topic, len(newPeerMap), updatePayload.UpdateCount)
-		} else {
-			// This is a standard message. Queue it as before.
-			logger.Debugf("[GO] 📝 Instance %d: Storing new pubsub message from topic '%s'.\n", ni.instanceIndex, topic)
-			storeReceivedMessage(ni, msg.GetFrom(), topic, "", msg.Data)  // Empty protocolID for PubSub messages, since they are identified by topic instead.
-		}
-	}
-}
-
 // promoteFriendlyPeer records (or address-refreshes) a peer in friendlyPeers,
 // the map GetConnectedPeers reports from. Chat streams have always done this on
 // their first message (see handleStream); Session-protocol traffic must do it
@@ -354,41 +221,6 @@ func handleStream(ni *NodeInstance, s network.Stream) {
 	}
 }
 
-// setupDirectMessageHandler configures the libp2p host for a specific instance
-// to listen for incoming streams using the custom ChatProtocol.
-// When a peer opens a stream with this protocol ID, the provided handler function
-// is invoked to manage communication on that stream.
-func setupDirectMessageHandler(
-	ni *NodeInstance,
-) {
-	if ni.host == nil {
-		logger.Errorf("[GO] ❌ Instance %d: Cannot setup direct message handler: Host not initialized\n", ni.instanceIndex)
-		return
-	}
-
-	// Set a handler function for the UnaiverseChatProtocol. This function will be called
-	// automatically by libp2p whenever a new incoming stream for this protocol is accepted.
-	// Use a closure to capture the NodeInstance pointer.
-	ni.host.SetStreamHandler(UnaiverseChatProtocol, func(s network.Stream) {
-		handleStream(ni, s)
-	})
-
-	// Per-stage Session protocol handlers — one protobuf message per stream, no channel
-	// header in the framing (unlike chat which multiplexes channels over a persistent
-	// stream). See handleSessionStream below.
-	for _, proto := range []string{
-		SessionHelloProtocol,
-		SessionProfileProtocol,
-		SessionWorldProtocol,
-		SessionControlProtocol,
-	} {
-		protoCopy := proto // capture loop variable
-		ni.host.SetStreamHandler(libp2pproto.ID(protoCopy), func(s network.Stream) {
-			handleSessionStream(ni, s, protoCopy)
-		})
-	}
-}
-
 // handleSessionStream reads a single length-prefixed protobuf payload from a Session
 // stream and enqueues it for Python with the protocol ID attached. Unlike handleStream
 // (chat), each Session stream carries exactly one message and is closed after read —
@@ -433,6 +265,174 @@ func handleSessionStream(ni *NodeInstance, s network.Stream, protocolID string) 
 	// Python's connpool decoder treats any channel matching a session protocol ID
 	// as a session message and routes it to the SessionManager.
 	storeReceivedMessage(ni, senderPeerID, protocolID, protocolID, payload)
+}
+
+// setupDirectMessageHandler configures the libp2p host for a specific instance
+// to listen for incoming streams using the custom ChatProtocol.
+// When a peer opens a stream with this protocol ID, the provided handler function
+// is invoked to manage communication on that stream.
+func setupDirectMessageHandler(
+	ni *NodeInstance,
+) {
+	if ni.host == nil {
+		logger.Errorf("[GO] ❌ Instance %d: Cannot setup direct message handler: Host not initialized\n", ni.instanceIndex)
+		return
+	}
+
+	// Set a handler function for the UnaiverseChatProtocol. This function will be called
+	// automatically by libp2p whenever a new incoming stream for this protocol is accepted.
+	// Use a closure to capture the NodeInstance pointer.
+	ni.host.SetStreamHandler(UnaiverseChatProtocol, func(s network.Stream) {
+		handleStream(ni, s)
+	})
+
+	// Per-stage Session protocol handlers — one protobuf message per stream, no channel
+	// header in the framing (unlike chat which multiplexes channels over a persistent
+	// stream). See handleSessionStream below.
+	for _, proto := range []string{
+		SessionHelloProtocol,
+		SessionProfileProtocol,
+		SessionWorldProtocol,
+		SessionControlProtocol,
+	} {
+		protoCopy := proto // capture loop variable
+		ni.host.SetStreamHandler(libp2pproto.ID(protoCopy), func(s network.Stream) {
+			handleSessionStream(ni, s, protoCopy)
+		})
+	}
+}
+
+// readFromSubscription runs as a dedicated goroutine for each active PubSub subscription for a specific instance.
+// It continuously waits for new messages on the subscription's channel (`sub.Next(ctx)`),
+// routes them to `storeReceivedMessage`, and handles errors and context cancellation gracefully.
+// You need to provide the full Channel to uniquely identify the subscription.
+func readFromSubscription(
+	ni *NodeInstance,
+	sub *pubsub.Subscription,
+) {
+	defer recoverGoroutine("readFromSubscription")
+	// Get the topic string directly from the subscription object.
+	topic := sub.Topic()
+
+	if ni.ctx == nil || ni.host == nil {
+		logger.Errorf("[GO] ❌ readFromSubscription: Context or Host not initialized for instance %d. Exiting goroutine.\n", ni.instanceIndex)
+		return
+	}
+
+	logger.Infof("[GO] 👂 Instance %d: Started listener goroutine for topic: %s\n", ni.instanceIndex, topic)
+	defer logger.Infof("[GO] 👂 Instance %d: Exiting listener goroutine for topic: %s\n", ni.instanceIndex, topic) // Log when goroutine exits
+
+	for {
+		// Check if the main context has been cancelled (e.g., during node shutdown).
+		if ni.ctx.Err() != nil {
+			logger.Debugf("[GO] 👂 Instance %d: Context cancelled, stopping listener goroutine for topic: %s\n", ni.instanceIndex, topic)
+			return // Exit the goroutine.
+		}
+
+		// Wait for the next message from the subscription. This blocks until a message
+		// arrives, the context is cancelled, or an error occurs.
+		msg, err := sub.Next(ni.ctx)
+		if err != nil {
+			// Check for expected errors during shutdown or cancellation.
+			if err == context.Canceled || err == context.DeadlineExceeded || err == pubsub.ErrSubscriptionCancelled || ni.ctx.Err() != nil {
+				logger.Debugf("[GO] 👂 Instance %d: Subscription listener for topic '%s' stopping gracefully: %v\n", ni.instanceIndex, topic, err)
+				return // Exit goroutine cleanly.
+			}
+			// Handle EOF, which can sometimes occur. Treat it as a reason to stop.
+			if err == io.EOF {
+				logger.Debugf("[GO] 👂 Instance %d: Subscription listener for topic '%s' encountered EOF, stopping: %v\n", ni.instanceIndex, topic, err)
+				return // Exit goroutine.
+			}
+			// Log other errors but attempt to continue (they might be transient).
+			logger.Errorf("[GO] ❌ Instance %d: Error reading from subscription '%s': %v. Continuing...\n", ni.instanceIndex, topic, err)
+			// Pause briefly to avoid busy-looping on persistent errors.
+			time.Sleep(1 * time.Second)
+			continue // Continue the loop to try reading again.
+		}
+
+		logger.Infof("[GO] 📬 Instance %d (id: %s): Received new PubSub message on topic '%s' from %s\n", ni.instanceIndex, ni.host.ID().String(), topic, msg.GetFrom())
+
+		// Ignore messages published by the local node itself.
+		if msg.GetFrom() == ni.host.ID() {
+			continue // Skip processing self-sent messages.
+		}
+
+		// Handle Rendezvous or Standard Messages
+		if strings.HasSuffix(topic, ":rv") {
+			// A rendezvous roster. Only the host that owns the topic may write it: the
+			// topic embeds the host peer id and gossipsub authenticates the sender, so
+			// drop an update whose sender is not that host.
+			expectedHostStr, hasSuffix := strings.CutSuffix(topic, "::ps:rv")
+			if !hasSuffix {
+				logger.Warnf("[GO] ⚠️ Instance %d: rendezvous topic '%s' is not in '<host>::ps:rv' form; dropping update.\n", ni.instanceIndex, topic)
+				continue
+			}
+			expectedHost, decErr := peer.Decode(expectedHostStr)
+			if decErr != nil {
+				logger.Warnf("[GO] ⚠️ Instance %d: rendezvous topic '%s' has an undecodable host id: %v; dropping update.\n", ni.instanceIndex, topic, decErr)
+				continue
+			}
+			if msg.GetFrom() != expectedHost {
+				logger.Warnf("[GO] 🚫 Instance %d: rendezvous update on '%s' from %s is not the world host %s; dropping forged roster.\n", ni.instanceIndex, topic, msg.GetFrom(), expectedHost)
+				continue
+			}
+
+			// 1. First, unmarshal the outer Protobuf message.
+			var protoMsg pg.Message
+			if err := proto.Unmarshal(msg.Data, &protoMsg); err != nil {
+				logger.Warnf("⚠️ Instance %d: Could not decode Protobuf message on topic '%s': %v\n", ni.instanceIndex, topic, err)
+				continue
+			}
+
+			// 2. The actual payload is a JSON string within the 'json_content' field.
+			jsonPayload := protoMsg.GetJsonContent()
+			if jsonPayload == "" {
+				logger.Warnf("⚠️ Instance %d: Rendezvous message on topic '%s' has empty JSON content.\n", ni.instanceIndex, topic)
+				continue
+			}
+
+			// 3. Now, unmarshal the inner JSON payload.
+			var updatePayload struct {
+				Peers       []ExtendedPeerInfo `json:"peers"`
+				UpdateCount int64              `json:"update_count"`
+			}
+			if err := json.Unmarshal([]byte(jsonPayload), &updatePayload); err != nil {
+				logger.Warnf("[GO] ⚠️ Instance %d: Could not decode rendezvous update payload on topic '%s': %v\n", ni.instanceIndex, topic, err)
+				continue // Skip this malformed message.
+			}
+
+			// 4. Create a new map from the decoded peer list.
+			newPeerMap := make(map[peer.ID]ExtendedPeerInfo)
+			for _, peerInfo := range updatePayload.Peers {
+				newPeerMap[peerInfo.ID] = peerInfo
+			}
+
+			// 5. Safely replace the old map with the new one.
+			ni.rendezvousMutex.Lock()
+			// If this is the first update for this instance, initialize the state struct.
+			first := ni.rendezvousState == nil
+			if first {
+				ni.rendezvousState = &RendezvousState{}
+			}
+			rendezvousState := ni.rendezvousState
+			// Drop a roster that does not advance the counter: a replayed host-signed
+			// envelope must not reinstall a stale one. State resets on (un)subscribe.
+			if !first && updatePayload.UpdateCount <= rendezvousState.UpdateCount {
+				ni.rendezvousMutex.Unlock()
+				logger.Debugf("[GO] ⏮️ Instance %d: rendezvous update on '%s' tag %d does not advance past %d; ignoring stale/replayed roster.\n", ni.instanceIndex, topic, updatePayload.UpdateCount, rendezvousState.UpdateCount)
+				continue
+			}
+			rendezvousState.Peers = newPeerMap
+			rendezvousState.UpdateCount = updatePayload.UpdateCount
+			ni.rendezvousMutex.Unlock()
+
+			logger.Debugf("[GO] ✅ Instance %d: Updated rendezvous peers from topic '%s'. Found %d peers. Update count: %d.\n", ni.instanceIndex, topic, len(newPeerMap), updatePayload.UpdateCount)
+		} else {
+			// This is a standard message. Queue it as before.
+			logger.Debugf("[GO] 📝 Instance %d: Storing new pubsub message from topic '%s'.\n", ni.instanceIndex, topic)
+			storeReceivedMessage(ni, msg.GetFrom(), topic, "", msg.Data)  // Empty protocolID for PubSub messages, since they are identified by topic instead.
+		}
+	}
 }
 
 // writeSessionFrame writes a single length-prefixed session payload onto a stream:

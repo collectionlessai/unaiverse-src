@@ -10,7 +10,6 @@ import (
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
 	ma "github.com/multiformats/go-multiaddr"
-	dht "github.com/libp2p/go-libp2p-kad-dht"
 	golog "github.com/ipfs/go-log/v2"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
 	pwebrtc "github.com/pion/webrtc/v4"
@@ -56,6 +55,15 @@ const WebRTCDCUtRWaitJSPeer = 3 * time.Second
 
 // PeerConnectionTimeout is the timeout for a single outbound connection attempt to a peer.
 const PeerConnectionTimeout = 30 * time.Second
+
+// ProbeDialTimeout is the timeout for one boot-time dial to a reachability probe peer.
+// Probe peers are project infrastructure on good links, so a dial that takes longer
+// than this is effectively down and the verdict should not wait for it.
+const ProbeDialTimeout = 10 * time.Second
+
+// ProbeMaintainInterval is how often maintainProbePeers checks that at least one
+// probe peer is still connected, so AutoNAT never runs out of dial-back servers.
+const ProbeMaintainInterval = 2 * time.Minute
 
 // RelayReservationTimeout is the timeout for reserving a slot on a relay node.
 const RelayReservationTimeout = 60 * time.Second
@@ -211,11 +219,13 @@ type NodeConfig struct {
 		FloodSub bool `json:"flood_sub"` // whether to use floodsub instead of gossipsub
     } `json:"network"`
 
-	// Group DHT logic
-	DHT struct {
-		Enabled bool `json:"enabled"`
-		Keep bool	`json:"keep"` // to keep it running after init
-    } `json:"dht"`
+	// Reachability probing (AutoNAT dial-back servers). ProbePeers is the list of
+	// multiaddrs (with peer IDs) dialed at boot so the AutoNAT client has someone to
+	// ask for dial-backs. nil/absent falls back to defaultRelays; an explicit empty
+	// list disables probing (no reachability verdict unless ForcePublic).
+	Reachability struct {
+		ProbePeers []string `json:"probe_peers"`
+	} `json:"reachability"`
 
 	// WebRTC signaling (application-level, not a libp2p transport)
 	WebRTC struct {
@@ -238,11 +248,13 @@ type NodeInstance struct {
 	// Core Components
 	host         host.Host
 	pubsub       *pubsub.PubSub
-	dht          *dht.IpfsDHT
 	ctx          context.Context
 	cancel       context.CancelFunc
 	certManager  *p2pforge.P2PForgeCertMgr
 	messageStore *MessageStore
+
+	// Reachability probe peers (self-filtered), the AutoNAT dial-back supply.
+	probePeers []peer.AddrInfo
 
 	// Address Cache
     addrMutex  sync.RWMutex
