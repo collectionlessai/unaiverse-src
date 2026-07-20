@@ -786,13 +786,11 @@ class P2P:
     # are async so session.py `await`s the same way in CPython and in Pyodide/JS.
 
     async def connect(self, addresses: list[str]) -> tuple[str | None, bool]:
-        """Establish a connection to a peer, trying its addresses in priority order
-        (udp > ws > tcp), discarding loopback, and retrying on the de-prioritized
-        TCP-only addresses if the preferred set fails. Returns (peer_id, through_relay).
-
-        Migrated from connpool.__connect — same sorting, discard and retry logic. The
-        blocking dial runs off the event loop so other sessions keep ticking.
-        """
+        """Establish a connection to a peer: one ConnectTo with every non-loopback
+        address. The libp2p swarm dials them in parallel under a single Go-side
+        budget (its dialer already ranks transports; the first success wins), so
+        there is no second sequential pass and the worst case is one dial timeout.
+        Returns (peer_id, through_relay)."""
         force: str | None = None
         # force: str | None = '/tcp'
         if force is not None:
@@ -800,36 +798,11 @@ class P2P:
             addresses.clear()
             for a in _addresses:
                 addresses.append(a)
-
-        def sort_priority(s):
-            if "/udp/" in s:
-                return 0  # Highest priority
-            elif "/ws/" in s:
-                return 1  # Middle priority
-            else:
-                return 2  # Lowest priority
-
-        # Sort in place (sorting does not seem to have an effect, but it makes things more readable)
-        kept_addresses = sorted(
-            [s for s in addresses if "127.0.0.1" not in s and ("/tcp/" not in s or "/ws/" in s)],
-            key=sort_priority
-        )
-        discarded_addresses = sorted(
-            [s for s in addresses if "127.0.0.1" not in s and ("/tcp/" in s and "/ws/" not in s)],
-            key=sort_priority
-        )
-        if len(kept_addresses) > 0:
-            addresses = kept_addresses
-        else:
-            addresses = discarded_addresses
-            discarded_addresses = []
-
-        logger.info(f"Connecting to {addresses}")
-
-        if addresses is None or len(addresses) == 0:
-            logger.error(f"Connection failed! (not-event tried, invalid addresses: {addresses})")
+        addresses = [a for a in addresses if "127.0.0.1" not in a]
+        if len(addresses) == 0:
+            logger.error("Connection failed! (not even tried, no usable addresses)")
             return None, False
-
+        logger.info(f"Connecting to {addresses}")
         try:
             # Off the event loop: the dial can block up to its timeout, and other
             # sessions must keep ticking meanwhile (e.g. during a re-dial).
@@ -844,10 +817,7 @@ class P2P:
             return peer_id, through_relay
         except P2PError:
             logger.error("Connection failed!")
-            if len(discarded_addresses) > 0:
-                return await self.connect(discarded_addresses)
-            else:
-                return None, False
+            return None, False
 
     async def disconnect(self, peer_id: str) -> bool:
         """Abortively tear down the connection to `peer_id`. Go resets every open
