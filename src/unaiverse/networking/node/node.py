@@ -267,8 +267,6 @@ class Node:
             "domain_name": Custom.ENV_DOMAIN,
             "tls_cert_path": Custom.ENV_CERT_PATH,
             "tls_key_path": Custom.ENV_KEY_PATH,
-            "dht_enabled": True,
-            "dht_keep": True,
             "log_sub": "pub",
             "webrtc_enabled": True,
             "ice_stun_servers": None,
@@ -289,8 +287,6 @@ class Node:
             "domain_name": Custom.ENV_DOMAIN,
             "tls_cert_path": Custom.ENV_CERT_PATH,
             "tls_key_path": Custom.ENV_KEY_PATH,
-            "dht_enabled": True,
-            "dht_keep": False,  # close it after autonat
             "log_sub": "prv",
             "webrtc_enabled": True,
             "ice_stun_servers": None,
@@ -415,7 +411,8 @@ class Node:
                                             'private_peer_addresses': p2p_w.addresses,
                                             # A world node is a relay for its members only if its world instance is
                                             # publicly reachable (the relay service is enabled iff node_type is WORLD).
-                                            # p2p_w keeps no DHT, so its reachability is fixed at boot: set once here.
+                                            # TODO: The live AutoNAT verdict can change later, but the profile field is
+                                            # seeded once here from the boot verdict and never refreshed.
                                             'is_relay': (self.node_type is Node.WORLD) and bool(p2p_w.is_public),
                                             'connections': {
                                                 'role': self.hosted.ROLE_BITS_TO_STR[self.hosted.ROLE_PUBLIC]

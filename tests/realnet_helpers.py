@@ -29,8 +29,10 @@ def build_real_node(identity_dir: str, port: int = 0, listen_ip: str = "0.0.0.0"
                     log_sub: str = "pub", node_id: str | None = None):
     """A single-instance real node: (p2p, conn, sm_public).
 
-    Mirrors ``session_runner._build_node`` (relay/DHT/WebRTC off,
-    ``knows_is_public=True``) but does not touch logging."""
+    Minimal transport: relay, probing and WebRTC off, ``knows_is_public=True``
+    (forced public, no AutoNAT dance), logging untouched. Unlike
+    ``session_runner._build_node``, which keeps the relay client and the default
+    probe peers on, this builder makes no outbound boot connection at all."""
     from unaiverse.networking.p2p.p2p import P2P
     from unaiverse.networking.session import SessionManager
 
@@ -41,7 +43,7 @@ def build_real_node(identity_dir: str, port: int = 0, listen_ip: str = "0.0.0.0"
         identity_dir=identity_dir, port=port, ips=[listen_ip],
         enable_relay_client=False, enable_relay_service=False, use_broad_limits=False,
         is_isolated=False, knows_is_public=True, enable_tls=False,
-        dht_enabled=False, dht_keep=False, webrtc_enabled=False, flood_sub=False,
+        probe_peers=[], webrtc_enabled=False, flood_sub=False,
         log_sub=log_sub,
     )
     nid = node_id or ("test-" + p2p.peer_id[-5:])
@@ -81,8 +83,8 @@ def build_real_world_node(idir_pub: str, idir_world: str, decision_hook=None,
 
     common = dict(port=0, ips=["0.0.0.0"], enable_relay_client=False,
                   enable_relay_service=False, use_broad_limits=False, is_isolated=False,
-                  knows_is_public=True, enable_tls=False, dht_enabled=False,
-                  dht_keep=False, webrtc_enabled=False, flood_sub=False)
+                  knows_is_public=True, enable_tls=False, probe_peers=[],
+                  webrtc_enabled=False, flood_sub=False)
     p2p_pub = P2P(identity_dir=idir_pub, log_sub="pub", **common)
     p2p_world = P2P(identity_dir=idir_world, log_sub="prv", **common)
 

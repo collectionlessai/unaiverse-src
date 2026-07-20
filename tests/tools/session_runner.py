@@ -104,8 +104,8 @@ def _build_node(identity_dir: str, port: int, listen_ip: str = "0.0.0.0",
         P2P.setup_library(enable_logging=Custom.LIBP2PLOG, unai_logger=log)
 
     Path(identity_dir).mkdir(parents=True, exist_ok=True)
-    # No relay / DHT / WebRTC: this harness needs a directly-reachable peer.
-    # ``knows_is_public=True`` skips the NAT-discovery dance.
+    # No relay service / WebRTC: this harness needs a directly-reachable peer.
+    # Default probe peers: the AutoNAT verdict comes from the infrastructure relays.
     p2p = P2P(
         identity_dir=identity_dir,
         port=port,
@@ -115,8 +115,6 @@ def _build_node(identity_dir: str, port: int, listen_ip: str = "0.0.0.0",
         is_isolated=False,
         knows_is_public=False,
         enable_tls=False,
-        dht_enabled=True,
-        dht_keep=True,
         webrtc_enabled=False,
         flood_sub=False,
         log_sub="pub",  # must be a valid logger sub tag ("pub"/"prv"/"gen")

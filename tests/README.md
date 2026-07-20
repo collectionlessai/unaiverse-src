@@ -133,14 +133,12 @@ the other. Open the listener's TCP port in its firewall.
 
 ### Across NATs / over the Internet
 
-The harness disables relay, DHT, and WebRTC to stay minimal, so it has **no NAT
-traversal** — you need direct reachability. Either:
-
-1. Run the listener on a publicly-reachable host (bare TCP on a VPS with the port
-   forwarded), or
-2. Enable the relay client in `_build_node` (`session_runner.py`) — flip
-   `enable_relay_client=True` in the `P2P(...)` constructor call and the listener
-   will reserve on the default public relays, advertising a `/p2p-circuit` address.
+The harness disables the relay service and WebRTC, but keeps the relay client and
+the default reachability probing on (`_build_node` in `session_runner.py`): a
+private listener gets its AutoNAT verdict from the infrastructure relays and then
+reserves on them automatically, advertising a `/p2p-circuit` address. For a
+direct (non-relayed) path you still need direct reachability: run the listener on
+a publicly-reachable host (bare TCP on a VPS with the port forwarded).
 
 ## Liveness scenarios (cross-machine harness only)
 

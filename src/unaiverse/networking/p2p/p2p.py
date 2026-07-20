@@ -134,9 +134,9 @@ class P2P:
                     'p2p-holepunch': 'info',
                     'tcp-tpt': 'info',
                     'connmgr': 'info',
-                    'dht': 'info',
                     'autorelay': 'info',
                     'autonat': 'info',
+                    'autonatv2': 'info',
                     # 'rcmgr': 'info',
                     'swarm2': 'info',
                     'yamux': 'info'
@@ -202,8 +202,7 @@ class P2P:
                  domain_name: Optional[str] = None,
                  tls_cert_path: Optional[str] = None,
                  tls_key_path: Optional[str] = None,
-                 dht_enabled: bool = True,
-                 dht_keep: bool = False,
+                 probe_peers: Optional[List[str]] = None,
                  webrtc_enabled: bool = True,
                  flood_sub: bool = False,
                  ice_stun_servers: Optional[List[str]] = None,
@@ -221,8 +220,11 @@ class P2P:
             enable_relay_service: Enable relay service capabilities for this node.
             knows_is_public: If you already know that the node is public this forces its public reachability.
                 Otherwise, it tries every possible attempt to make the node publicly reachable (UPnP, HolePunching,
-                AutoNat via DHT...).
+                AutoNAT dial-backs from the probe peers...).
             enable_tls: Whether to enable AutoTLS certificate management (requires internet access).
+            probe_peers: Multiaddrs (with peer IDs) dialed at boot as AutoNAT dial-back servers, so the
+                node can discover its own reachability. None uses the built-in infrastructure relays;
+                an empty list disables probing entirely (no reachability verdict unless knows_is_public).
             domain_name: Optional domain name for TLS certificate (required if enable_tls is True).
             tls_cert_path: Optional path to a custom TLS certificate file (PEM format).
             tls_key_path: Optional path to a custom TLS private key file (PEM format).
@@ -295,9 +297,8 @@ class P2P:
                 "force_public": knows_is_public,
                 "flood_sub": flood_sub,
             },
-            "dht": {
-                "enabled": dht_enabled,
-                "keep": dht_keep and dht_enabled,
+            "reachability": {
+                "probe_peers": probe_peers,
             },
             "webrtc": {
                 "enabled": webrtc_enabled,
