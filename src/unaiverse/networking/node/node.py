@@ -132,6 +132,16 @@ class Node:
                    file_append=Custom.LOG_APPEND)
         log.set_clock(clock)  # Wiring the clock
 
+        # Optional log sink plugin: an out-of-core module (resolved on PYTHONPATH) that observes the log
+        # stream, wired in through NODE_LOG_SINK_MODULE. It only needs to expose attach(log). Any failure
+        # here is logged and swallowed: an observability add-on must never abort the node boot.
+        if Custom.LOG_SINK_MODULE:
+            try:
+                import importlib
+                importlib.import_module(Custom.LOG_SINK_MODULE).attach(log)
+            except Exception as e:
+                log.error(f"Failed to attach log sink module '{Custom.LOG_SINK_MODULE}': {e}")
+
         # Checking main arguments
         if not (isinstance(hosted, Agent) or isinstance(hosted, World)):
             log.critical("Invalid hosted entity, must be Agent or World")

@@ -199,6 +199,8 @@ class _Logger:
         self._ctx: dict[str, Any] = {}
         self._sub: str = ""  # sticky subdomain tag (set via set_sub)
         self._clock = None
+        # Optional non-blocking observers of every emitted record (see add_record_sink)
+        self._record_sinks: list[Callable[[str, dict[str, Any]], None]] = []
         self._print_fcn: dict[str, dict[str, Callable[..., Any]]] = {ks: {k: print for k in ALL_CHANNELS}
                                                                      for ks in _ALL_SUBS}
         self._print_fcn_supports_html = {ks: {k: False for k in ALL_CHANNELS} for ks in _ALL_SUBS}
@@ -235,6 +237,26 @@ class _Logger:
 
     def set_name(self, name: str) -> None:
         self._name = name
+
+    def add_record_sink(self, fn: Callable[[str, dict[str, Any]], None]) -> None:
+        """Register an observer invoked with ``(channel_name, record)`` for every emitted record.
+
+        Sinks see the same JSON-ready ``record`` dict that is written to the log file, only for channels
+        that pass the ``_active`` filter. They run under the logger lock, so they MUST be non-blocking:
+        do cheap, in-memory work (append to a buffer, ``put_nowait`` on a queue) and never any network or
+        file I/O. An exception raised by a sink is swallowed and does not disturb logging nor other sinks.
+        """
+        with self._lock:
+            if fn not in self._record_sinks:
+                self._record_sinks.append(fn)
+
+    def remove_record_sink(self, fn: Callable[[str, dict[str, Any]], None]) -> None:
+        """Unregister a previously added record sink (no-op if it was not registered)."""
+        with self._lock:
+            try:
+                self._record_sinks.remove(fn)
+            except ValueError:
+                pass
 
     def enable(self, *channels: Ch) -> None:
         """Enable one or more channels at runtime."""
@@ -457,6 +479,15 @@ class _Logger:
             record["sub"] = effective_sub
             if info:
                 record["info"] = info
+
+            # Fan the record out to optional observers (must be non-blocking; see add_record_sink). A
+            # misbehaving sink must never break logging nor starve the others, hence the per-sink guard.
+            if self._record_sinks:
+                for _sink in self._record_sinks:
+                    try:
+                        _sink(ch.value, record)
+                    except Exception:
+                        pass
 
             if self._file_enabled:
                 assert self._log_file is not None

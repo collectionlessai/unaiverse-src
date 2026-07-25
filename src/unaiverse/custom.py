@@ -28,6 +28,7 @@ class Custom:
     LOG_APPEND = int(os.getenv("NODE_LOG_APPEND", "0")) == 1  # 0, 1 (keep the JSONL across restarts)
     LOG_CHANNELS = os.getenv("NODE_LOG_CHANNELS", "").strip()
     PRINT_SCREEN_BASIC_ONLY = int(os.getenv("NODE_SCREEN_BASIC_PRINT", "0")) == 1  # 0, 1
+    LOG_SINK_MODULE = os.getenv("NODE_LOG_SINK_MODULE", "").strip()  # import path of an optional log sink plugin
     SKIP_WAS_ALIVE_CHECK = os.getenv("NODE_IGNORE_ALIVE", "0") == "1"
     LIBP2PLOG = os.getenv("NODE_LIBP2PLOG", "0") == "1"
     ENV_IS_ISOLATED = os.getenv("NODE_IS_ISOLATED", "0") == "1"
