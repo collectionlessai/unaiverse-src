@@ -116,14 +116,17 @@ class Node:
                          current_time=datetime.now(timezone.utc).timestamp())  # Node clock (not synced at all!)
 
         # Logging: we create a new logger and will share it with the agent/world as well
+        # "active" is the set of recorded channels, "screen" the subset also printed to stdout: they are
+        # independent knobs, so NODE_SCREEN_BASIC_PRINT must be honored even when NODE_LOG_CHANNELS selects
+        # a custom recording set.
         if Custom.LOG_CHANNELS:
             _valid = {c.name: c for c in ALL_CHANNELS}
             _wanted = frozenset(_valid[n] for n in
                                 (s.strip().upper() for s in Custom.LOG_CHANNELS.split(",")) if n in _valid)
-            active = screen = ALWAYS_ON_CHANNELS | _wanted
+            active = ALWAYS_ON_CHANNELS | _wanted
         else:
             active = ALWAYS_ON_CHANNELS if Custom.PRINT_LEVEL < 1 else ALL_CHANNELS
-            screen = ALWAYS_ON_CHANNELS if Custom.PRINT_SCREEN_BASIC_ONLY else ALL_CHANNELS
+        screen = ALWAYS_ON_CHANNELS if Custom.PRINT_SCREEN_BASIC_ONLY else active
         log.create(name=os.path.basename(sys.argv[0]), log_dir=os.path.dirname(os.path.abspath(sys.argv[0])),
                    active=active, screen=screen, no_color=False, file_enabled=Custom.LOG_TO_FILE,
                    file_append=Custom.LOG_APPEND)
