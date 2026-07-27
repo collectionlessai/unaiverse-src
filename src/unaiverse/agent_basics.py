@@ -37,7 +37,7 @@ from unaiverse.interaction import Interaction, InteractionManager
 from unaiverse.streams.dataprops import DataProps, StreamType, TensorLabels
 from unaiverse.modules.utils import AgentProcessorChecker, ModuleWrapper, HumanModule, has_human_processor
 from unaiverse.utils.misc import (GenException, FileTracker, collect_py_files, load_agent_in_memory, pack_py_files,
-                                  unpack_py_files, build_unaid)
+                                  unpack_py_files, prune_to_import_closure, build_unaid)
 
 
 _STEPWISE_RETRY_TIMEOUT_S = 60.0  # Default budget for a single stepwise computation
@@ -182,7 +182,6 @@ class AgentBasics:
 
         # Stats
         self.stats: Stats | None = None
-        self.agent_stats_code = None
 
         # Information inherited from the node that hosts this agent
         self.node_name = "unk"
@@ -442,17 +441,6 @@ class AgentBasics:
             # agent/world specific roles
             self.augment_roles()
 
-            # Loading the custom Stats code
-            if self.world_folder is not None:
-                stats_file = os.path.join(self.world_folder, 'stats.py')
-                if os.path.exists(stats_file):
-                    log.misc(f"Found custom stats.py at {stats_file}")
-                    try:
-                        with open(stats_file, 'r', encoding='utf-8') as file:
-                            self.agent_stats_code = file.read()
-                    except Exception as e:
-                        raise GenException(f'Error while reading/loading the stats.py file: {stats_file} [{e}]')
-
         # Creating streams associated to the processor input (right now we assume there is no need to buffer them)
         self.create_proc_input_streams(buffered=False)
 
@@ -706,10 +694,13 @@ class AgentBasics:
                 if found != len(self.CUSTOM_ROLES):
                     if found_agent_py:
                         code_content = agent_files["agent.py"]
+                        stats_source = agent_files.get('stats.py')
 
-                        # All roles go to the content of agent.py
+                        # All roles go to the content of agent.py; stats.py (when present)
+                        # must survive the rewrite, since it now travels inside the bundle
                         agent_files = {f"{k}.py": code_content for k in self.CUSTOM_ROLES}
-                        self.packed_agent_files = pack_py_files(agent_files)  # Repacking
+                        if stats_source is not None:
+                            agent_files['stats.py'] = stats_source
                     else:
                         raise GenException(f'Mismatching JSON-file roles and .py files in {self.world_folder}')
 
@@ -759,6 +750,17 @@ class AgentBasics:
                     # Clearing memory — runs on success AND on every GenException above
                     if dummy_agent_memory_finder is not None:
                         dummy_agent_memory_finder.cleanup()
+
+            # Ship only what joiners can execute: the role files plus the closure of
+            # their relative imports, with stats.py forced in (it is executed in a bare
+            # module on the joiner, so its own imports are world-side only and are not
+            # followed). World-side code and non-imported files stay private.
+            entry_files = [f"{role}.py" for role in self.CUSTOM_ROLES]
+            pruned_files = prune_to_import_closure(agent_files, entry_files, forced=('stats.py',))
+            kept_private = sorted(set(agent_files) - set(pruned_files))
+            self.packed_agent_files = pack_py_files(pruned_files)
+            log.misc(f"World code bundle: shipping {sorted(pruned_files)}" +
+                     (f", keeping private {kept_private}" if kept_private else ""))
 
     def create_behav_files(self):
         """This method is called when building a world object. In your custom world-class, you can overload this method

@@ -58,7 +58,7 @@ def _host_decision_hook(peer_id, remote_node_id, remote_profile, p2p_name, verif
             role=3,
             world_profile_bytes=json.dumps({"node_id": "world-node"}).encode(),
             rendezvous_tag=42,
-            code_bundle=json.dumps({"agent_files": None, "stats_code": None}).encode(),
+            code_bundle=json.dumps({"agent_files": None}).encode(),
             initial_stats=b"",
         )
         return ProfileDecisionResult(accepted=True, world_grant=spec)

@@ -399,6 +399,103 @@ def unpack_py_files(packed: str) -> dict[str, str]:
     return json.loads(gzip.decompress(base64.b64decode(packed)).decode('utf-8'))
 
 
+def prune_to_import_closure(py_files: dict[str, str], entry_points: list[str],
+                            forced: tuple[str, ...] = ()) -> dict[str, str]:
+    """Restrict *py_files* to the entry points plus everything they can import.
+
+    Mirrors the resolution rules of the in-memory loader on the receiving side:
+    only relative imports (``from .x import y``) resolve against the shipped
+    set, so the closure follows ``ImportFrom`` nodes with ``level >= 1`` and
+    ignores absolute imports (stdlib, third-party, or siblings that would not
+    resolve anyway). ``__init__.py`` files of traversed sub-packages ride
+    along; the top-level ``__init__.py`` never does, because the finder serves
+    the root namespace as an empty package and its source is unreachable.
+    Static analysis is sound here because ``analyze_code`` rejects dynamic
+    imports (``importlib``, ``__import__``) in shipped code.
+
+    Args:
+        py_files: Dict mapping relative paths (forward slashes) to source text.
+        entry_points: Keys whose import closure must be kept (the role files).
+        forced: Keys included WITHOUT following their imports UNLESS some kept
+            file also imports them (e.g. ``stats.py``: when only exec'd it runs
+            in a bare module where relative imports cannot resolve, but a role
+            file importing it turns it into a real namespace module whose
+            dependencies must ship too).
+
+    Returns:
+        The filtered dict, preserving the iteration order of *py_files*.
+    """
+    kept: set[str] = set()
+    enqueued: set[str] = set()
+    queue: list[str] = []
+
+    # Directory prefixes present in the tree: the loader auto-creates a namespace
+    # package for each of them, so imports can legally target bare directories
+    dir_prefixes: set[str] = set()
+    for k in py_files:
+        parts = k.split('/')
+        for i in range(1, len(parts)):
+            dir_prefixes.add('/'.join(parts[:i]))
+
+    def _add(rel: str) -> None:
+        if rel not in py_files:
+            return
+        if rel not in kept:
+            kept.add(rel)
+            # Sub-package __init__.py files ride along (never the root one)
+            parts = rel.split('/')
+            for i in range(1, len(parts)):
+                _add('/'.join(parts[:i]) + '/__init__.py')
+        if rel not in enqueued:
+            enqueued.add(rel)
+            queue.append(rel)
+
+    def _add_subtree(prefix: str) -> None:
+        # Conservative: everything under a package targeted as a whole (namespace
+        # dirs, star-imports whose __all__ names submodules the AST cannot see)
+        for k in py_files:
+            if k.startswith(prefix + '/'):
+                _add(k)
+
+    for entry in entry_points:
+        _add(entry)
+    for name in forced:
+        if name in py_files:
+            kept.add(name)  # Not enqueued: traversed only if an import reaches it
+
+    while queue:
+        rel = queue.pop()
+        try:
+            tree = ast.parse(py_files[rel])
+        except SyntaxError:
+            continue  # Kept as-is; an unparsable file contributes no edges
+        base = rel.split('/')[:-1]
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ImportFrom) or node.level < 1:
+                continue
+            if node.level - 1 > len(base):
+                continue  # Escapes the shipped tree
+            anchor = base[:len(base) - (node.level - 1)] if node.level > 1 else list(base)
+            target = anchor + (node.module.split('.') if node.module else [])
+            prefix = '/'.join(target)
+            if node.module:
+                _add(prefix + '.py')
+                _add(prefix + '/__init__.py')
+            for alias in node.names:
+                if alias.name == '*':
+                    if prefix in dir_prefixes:
+                        _add_subtree(prefix)
+                    continue
+                leaf = (prefix + '/' if prefix else '') + alias.name
+                _add(leaf + '.py')
+                _add(leaf + '/__init__.py')
+                if (leaf + '.py' not in py_files and leaf + '/__init__.py' not in py_files
+                        and leaf in dir_prefixes):
+                    _add_subtree(leaf)  # Bare namespace package (no __init__.py)
+
+    return {k: v for k, v in py_files.items() if k in kept}
+
+
 class _InMemoryLoader(importlib.abc.SourceLoader):
     """Serves Python source from a plain string."""
 

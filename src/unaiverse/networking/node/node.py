@@ -2154,16 +2154,19 @@ class Node:
         # Session FSM owns handshake timeouts, retry, and reconnection.)
 
     async def __join_world(self, profile: NodeProfile, role: int,
-                           packed_agent_files: str, agent_stats_code: str | None,
+                           packed_agent_files: str,
                            rendezvous_tag: int, initial_stats: dict[str, Any] | None,
-                           peer_id: str | None = None) -> bool:
+                           peer_id: str | None = None,
+                           legacy_stats_code: str | None = None) -> bool:
         """Performs the actual operation of joining a world after receiving confirmation. (async)
 
         Args:
             profile: The profile of the world to join.
             role: The role assigned to the agent in the world (int).
-            packed_agent_files: The string encoding agent-code-files, defining the agent's actions.
-            agent_stats_code: A string of code defining the statistics for this world.
+            packed_agent_files: The string encoding agent-code-files, defining the agent's actions
+                (including stats.py, when the world ships custom stats).
+            legacy_stats_code: The stats.py source shipped by legacy worlds in the
+                dedicated code_bundle field; folded into the bundle when it lacks stats.py.
             rendezvous_tag: The rendezvous tag from the world's profile.
             initial_stats: When joining a world we eventually receive the recent history.
             peer_id: the peer-id of the already-established private world Session
@@ -2199,27 +2202,6 @@ class Node:
             else:
                 log.error("An error occurred during relay reservation.")
         
-        # Load custom stats class if provided
-        stats_class = None
-        if agent_stats_code is not None and len(agent_stats_code) > 0:
-
-            # Checking stats code
-            if not analyze_code({"stats.py": agent_stats_code}):
-                log.error("Invalid agent stats code (syntax errors or unsafe code) was provided by the world, "
-                          "blocking the join operation")
-                return False
-
-            try:
-                stats_mod = types.ModuleType("dynamic_stats_module")
-                exec(agent_stats_code, stats_mod.__dict__)
-                if not hasattr(stats_mod, 'WStats'):
-                    log.error("World sent stats.py, but it lacks a 'WStats' class. Using default Stats.")
-                else:
-                    stats_class = stats_mod.WStats
-                    log.misc("Loaded custom WStats class from world.")
-            except Exception as e:
-                log.error(f"Failed to exec custom stats.py from world: {e}. Using default Stats.")
-
         # Subscribing to the world rendezvous topic, from which we will get fresh information
         # about the world agents and masters
         log.misc("Subscribing to the world-members topic...")
@@ -2255,12 +2237,33 @@ class Node:
             roles = profile.get_dynamic_profile()['world_roles_fsm'].keys()
             agent_files = {f"{k}.py": packed_agent_files for k in roles}
 
-        # Checking files
+        # Legacy stats channel: fold it into the bundle when absent there.
+        if legacy_stats_code and 'stats.py' not in agent_files:
+            agent_files['stats.py'] = legacy_stats_code
+
+        # Checking files (single gate: stats.py, when shipped, is part of the bundle)
         if not analyze_code(agent_files):
             log.error(
                 f"Invalid agent-related code (syntax errors or unsafe code) was provided by "
                 f"the world, blocking the join operation")
             return False
+
+        # Load the custom stats class when the bundle ships one. stats.py is executed
+        # in a bare module (no package), exactly as before: relative imports cannot
+        # resolve there, so it must stay self-contained on the joiner side.
+        stats_class = None
+        agent_stats_code = agent_files.get('stats.py')
+        if agent_stats_code:
+            try:
+                stats_mod = types.ModuleType("dynamic_stats_module")
+                exec(agent_stats_code, stats_mod.__dict__)
+                if not hasattr(stats_mod, 'WStats'):
+                    log.error("World sent stats.py, but it lacks a 'WStats' class. Using default Stats.")
+                else:
+                    stats_class = stats_mod.WStats
+                    log.misc("Loaded custom WStats class from world.")
+            except Exception as e:
+                log.error(f"Failed to exec custom stats.py from world: {e}. Using default Stats.")
 
         # Saving reference files (in memory - needed if switching role)
         self.world_agent_files = agent_files
@@ -2451,9 +2454,10 @@ class Node:
                                                    provisional_ttl_s=Custom.WORLD_PREADMISSION_TTL)
 
             is_human = profile.get_static_profile().get("node_type") == self.hosted.HUMAN
+            # Single code channel: stats.py travels inside the packed agent files
+            # (forced member of the pruned bundle), so there is no stats_code field.
             code_bundle = json.dumps({
                 "agent_files": self.world.packed_agent_files,
-                "stats_code": self.world.agent_stats_code,
             }).encode("utf-8")
             initial_stats = (json.dumps(self.world.stats.plot()).encode("utf-8")
                              if is_human else b"")
@@ -2908,13 +2912,15 @@ class Node:
         role = int(grant.get("role", 0))
         rendezvous_tag = int(grant.get("rendezvous_tag", 0))
 
-        agent_files = stats_code = None
+        agent_files = legacy_stats_code = None
         code = grant.get("code_bundle") or b""
         if code:
             try:
                 bundle = json.loads(code.decode("utf-8"))
                 agent_files: str | None = bundle.get("agent_files")
-                stats_code = bundle.get("stats_code")
+                # Legacy worlds shipped stats.py as a dedicated field (and their
+                # single-agent.py repack dropped it from the packed files)
+                legacy_stats_code: str | None = bundle.get("stats_code")
             except Exception as e:
                 log.error(f"[session] join_world: bad code_bundle: {e}")
 
@@ -2932,9 +2938,9 @@ class Node:
 
         return await self.__join_world(
             profile=world_profile, role=role,
-            packed_agent_files=agent_files, agent_stats_code=stats_code,
+            packed_agent_files=agent_files,
             rendezvous_tag=rendezvous_tag, initial_stats=initial_stats,
-            peer_id=world_peer_id,
+            peer_id=world_peer_id, legacy_stats_code=legacy_stats_code,
         )
 
     async def connect_via_session(

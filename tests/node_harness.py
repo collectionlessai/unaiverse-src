@@ -161,7 +161,6 @@ class FakeWorld:
     def __init__(self):
         self.stats = self._Stats()
         self.packed_agent_files = "packed-files"
-        self.agent_stats_code = ""
         self.assign_role_returns = "player"
         self.assigned = []
         self.added = []
