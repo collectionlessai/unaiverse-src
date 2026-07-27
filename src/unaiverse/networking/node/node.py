@@ -2211,6 +2211,7 @@ class Node:
                            packed_agent_files: str, roles_fsm: dict[str, str] | None,
                            rendezvous_tag: int, initial_stats: dict[str, Any] | None,
                            peer_id: str | None = None,
+                           attested_code_hash: str | None = None,
                            legacy_stats_code: str | None = None) -> bool:
         """Performs the actual operation of joining a world after receiving confirmation. (async)
 
@@ -2221,6 +2222,8 @@ class Node:
                 (including stats.py, when the world ships custom stats).
             roles_fsm: Dict role -> FSM (JSON string) from the grant bundle; None with
                 legacy worlds, whose profile still carries the FSMs.
+            attested_code_hash: The world-code hash attested by the root in the world's
+                verified token; None when the token carries no such claim (check skipped).
             legacy_stats_code: The stats.py source shipped by legacy worlds in the
                 dedicated code_bundle field; folded into the bundle when it lacks stats.py.
             rendezvous_tag: The rendezvous tag from the world's profile.
@@ -2285,7 +2288,8 @@ class Node:
             return False
 
         # Role FSMs, delivered by the grant bundle (the caller already folded in the
-        # legacy profile-carried variant when the bundle had none)
+        # legacy profile-carried variant when the bundle had none). Cached on self only
+        # past the integrity gate, together with the agent files.
         roles_fsm = roles_fsm or {}
 
         # Getting agent files
@@ -2296,9 +2300,29 @@ class Node:
             # Assuming we are in the case of a single agent.py for all roles (still valid)
             agent_files = {f"{k}.py": packed_agent_files for k in roles_fsm}
 
-        # Legacy stats channel: fold it into the bundle when absent there.
+        # Legacy stats channel: fold it into the bundle when absent there. Harmless
+        # for attested worlds (they never ship the field; a tampering attempt would
+        # just change the fold below and fail the gate).
         if legacy_stats_code and 'stats.py' not in agent_files:
             agent_files['stats.py'] = legacy_stats_code
+
+        # Code-integrity gate: when the world's root token attests a code hash, the
+        # received bundle must fold to exactly that hash ("what you run is what the
+        # root has on file", same canonical members as the world's upload). Tokens
+        # without the claim (legacy worlds, or a root not attesting it yet) skip this,
+        # leaving analyze_code below as the only check.
+        if attested_code_hash:
+            local_hash = canonical_world_hash(world_definition_members(agent_files, roles_fsm))
+            if local_hash != attested_code_hash:
+                log.error(f"World-code hash mismatch: the token attests {attested_code_hash}, the received "
+                          f"bundle folds to {local_hash}; blocking the join operation")
+                return False
+            log.misc(f"World-code hash verified against the root-attested claim ({local_hash})")
+        else:
+            # Transitional fail-open: a world presenting a still-valid pre-upload token
+            # (no claim) is indistinguishable from a legacy one, so the check can be
+            # dodged until this branch turns fail-closed (root deploy of the claim).
+            log.misc("No world-code hash attested in the world's token, skipping the code-integrity check")
 
         # Checking files (single gate: stats.py, when shipped, is part of the bundle)
         if not analyze_code(agent_files):
@@ -2991,6 +3015,10 @@ class Node:
             # NodeProfile template drops that key at parse time, so read the raw dict.
             roles_fsm = (raw_world_profile.get('dynamic') or {}).get('world_roles_fsm')
 
+        # Root-attested code hash from the public Session's verified token claims
+        # (annotated by the joiner itself when the grant event was emitted)
+        attested_code_hash = grant.get("world_code_hash_claim")
+
         initial_stats = None
         istats = grant.get("initial_stats") or b""
         if istats:
@@ -3007,7 +3035,8 @@ class Node:
             profile=world_profile, role=role,
             packed_agent_files=agent_files, roles_fsm=roles_fsm,
             rendezvous_tag=rendezvous_tag, initial_stats=initial_stats,
-            peer_id=world_peer_id, legacy_stats_code=legacy_stats_code,
+            peer_id=world_peer_id, attested_code_hash=attested_code_hash,
+            legacy_stats_code=legacy_stats_code,
         )
 
     async def connect_via_session(

@@ -58,41 +58,54 @@ def test_verify_token_claims_returns_node_id_cv_hash_and_p2p_peers():
     assert tv.verify_token(token, p2p_peer=PEERS[0]) == ("node-N", "cv-abc")
 
     # RT: verify_token_claims additionally returns the binding and the JWT expiry.
-    node_id, cv_hash, peers, exp = tv.verify_token_claims(token, p2p_peer=PEERS[1])
+    node_id, cv_hash, peers, exp, code_hash = tv.verify_token_claims(token, p2p_peer=PEERS[1])
     assert node_id == "node-N"
     assert cv_hash == "cv-abc"
     assert peers == tuple(PEERS)
     assert isinstance(exp, int) and exp > 0
+    assert code_hash is None  # No code_hash claim in the token
+
+
+def test_verify_token_claims_returns_code_hash_when_attested():
+    """A token carrying the code_hash claim (a world whose stored code the root
+    attests) exposes it as the fifth element; verify_token keeps its 2-tuple."""
+    priv, pub = _keypair()
+    tv = TokenVerifier(pub)
+    token = _mint(priv, **_valid_payload(code_hash="ab" * 32))
+    node_id, _, _, _, code_hash = tv.verify_token_claims(token, p2p_peer=PEERS[0])
+    assert node_id == "node-N"
+    assert code_hash == "ab" * 32
+    assert tv.verify_token(token, p2p_peer=PEERS[0]) == ("node-N", "cv-abc")
 
 
 def test_verify_token_claims_rejects_peer_not_in_binding():
     """A p2p_peer that is not among the token's attested p2p_peers fails the binding check, so
-    verify_token_claims returns the empty (None, None, (), 0) and verify_token returns (None, None)."""
+    verify_token_claims returns the empty (None, None, (), 0, None) and verify_token returns (None, None)."""
     priv, pub = _keypair()
     tv = TokenVerifier(pub)
     token = _mint(priv, **_valid_payload())
     # A speaker whose peer-id is not attested by the token fails the binding check.
-    assert tv.verify_token_claims(token, p2p_peer="12D3KooWintruder") == (None, None, (), 0)
+    assert tv.verify_token_claims(token, p2p_peer="12D3KooWintruder") == (None, None, (), 0, None)
     assert tv.verify_token(token, p2p_peer="12D3KooWintruder") == (None, None)
 
 
 def test_verify_token_claims_rejects_expired_token():
     """A token whose exp is in the past is rejected by the required-exp decode, so
-    verify_token_claims returns (None, None, (), 0) even when the p2p_peer matches the binding."""
+    verify_token_claims returns (None, None, (), 0, None) even when the p2p_peer matches the binding."""
     priv, pub = _keypair()
     tv = TokenVerifier(pub)
     token = _mint(priv, **_valid_payload(exp=int(time.time()) - 10))
-    assert tv.verify_token_claims(token, p2p_peer=PEERS[0]) == (None, None, (), 0)
+    assert tv.verify_token_claims(token, p2p_peer=PEERS[0]) == (None, None, (), 0, None)
 
 
 def test_verify_token_claims_rejects_wrong_signature():
     """A token minted with one private key but verified against a different public key fails the
-    RS256 signature check, so verify_token_claims returns (None, None, (), 0)."""
+    RS256 signature check, so verify_token_claims returns (None, None, (), 0, None)."""
     priv, _ = _keypair()
     _, other_pub = _keypair()
     tv = TokenVerifier(other_pub)   # verifier holds a DIFFERENT public key
     token = _mint(priv, **_valid_payload())
-    assert tv.verify_token_claims(token, p2p_peer=PEERS[0]) == (None, None, (), 0)
+    assert tv.verify_token_claims(token, p2p_peer=PEERS[0]) == (None, None, (), 0, None)
 
 
 def test_verify_token_claims_returns_full_peer_ids_not_chars():
@@ -104,7 +117,7 @@ def test_verify_token_claims_returns_full_peer_ids_not_chars():
     priv, pub = _keypair()
     tv = TokenVerifier(pub)
     token = _mint(priv, **_valid_payload())
-    _, _, peers, exp = tv.verify_token_claims(token, p2p_peer=PEERS[0])
+    _, _, peers, exp, _ = tv.verify_token_claims(token, p2p_peer=PEERS[0])
     assert peers == tuple(PEERS)
     assert all(p in PEERS for p in peers)
     assert isinstance(exp, int)
@@ -119,5 +132,5 @@ def test_verify_token_claims_rejects_substring_of_peer():
     priv, pub = _keypair()
     tv = TokenVerifier(pub)
     token = _mint(priv, **_valid_payload())
-    assert tv.verify_token_claims(token, p2p_peer=PEERS[0][:20]) == (None, None, (), 0)
+    assert tv.verify_token_claims(token, p2p_peer=PEERS[0][:20]) == (None, None, (), 0, None)
     assert tv.verify_token(token, p2p_peer=PEERS[0][:20]) == (None, None)

@@ -93,8 +93,9 @@ class SessionManager:
         self._local_profile_factory = local_profile_factory
         self._decision_hook = decision_hook
         # Token capabilities (RT plumbing), forwarded into every Session this manager
-        # builds. token_verifier(token, p2p_peer) -> (node_id, cv_hash, p2p_peers, exp); token_factory()
-        # -> our current node token (re-sampled per handshake so periodic refresh shows).
+        # builds. token_verifier(token, p2p_peer) -> (node_id, cv_hash, p2p_peers, exp,
+        # code_hash); token_factory() -> our current node token (re-sampled per
+        # handshake so periodic refresh shows).
         self._token_verifier = token_verifier
         self._token_factory = token_factory
         # Last node token broadcast to peers; tick() pushes a TOKEN_UPDATE when

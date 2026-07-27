@@ -216,7 +216,7 @@ class Session:
         self.app_role = app_role
         # Token capabilities (RT), injected by the layer that owns them
         # (Coordinator/Node). token_verifier(token, p2p_peer) -> (node_id, cv_hash,
-        # p2p_peers, exp) backed by the root TokenVerifier; token_factory() -> our current
+        # p2p_peers, exp, code_hash) backed by the root TokenVerifier; token_factory() -> our current
         # node token. Both directions present and verify: the initiator's token rides
         # the PROFILE_OFFER and the responder's the PROFILE_DECISION, each verified by
         # the other against the transport peer-id (see _verify_peer_token). The
@@ -228,6 +228,7 @@ class Session:
         # refreshed in-session by TOKEN_UPDATE. exp 0 = no verifier / not yet seen.
         self.remote_token_exp: int = 0
         self.remote_cv_hash: Optional[str] = None
+        self.remote_code_hash: Optional[str] = None
         # A TOKEN_UPDATE that arrived before ESTABLISHED is buffered and applied on tick.
         self._buffered_token_update: Optional[SessMsg] = None
         self.is_world_join = is_world_join
@@ -575,10 +576,11 @@ class Session:
         this peer, a mismatch is rejected (we reached the right peer-id but the wrong
         node). On success the peer's attested token expiry / cv_hash are captured on
         the Session (``remote_token_exp`` / ``remote_cv_hash``) for the in-session
-        refresh."""
+        refresh, together with the attested world-code hash (``remote_code_hash``,
+        None when the token carries no such claim)."""
         if self.token_verifier is None:
             return None, None
-        node_id, cv_hash, p2p_peers, exp = await self.token_verifier(token or "", self.peer_id)
+        node_id, cv_hash, p2p_peers, exp, code_hash = await self.token_verifier(token or "", self.peer_id)
         if not node_id:
             return None, "bad_token"
         if self.remote_node_id_hint and self.remote_node_id_hint != node_id:
@@ -586,8 +588,9 @@ class Session:
         self.remote_node_id_hint = node_id
         self.remote_token_exp = exp
         self.remote_cv_hash = cv_hash
+        self.remote_code_hash = code_hash
         return VerifiedTokenClaims(node_id=node_id, cv_hash=cv_hash,
-                                   p2p_peers=p2p_peers, exp=exp), None
+                                   p2p_peers=p2p_peers, exp=exp, code_hash=code_hash), None
 
     async def _responder_on_profile_offer(self, offer: SessMsg) -> List[SessionEvent]:
         # Verify sig_a under the initiator's peer-id.
@@ -801,6 +804,10 @@ class Session:
                 "rendezvous_tag": int(grant.get("rendezvous_tag", 0)),
                 "code_bundle": bytes(grant.get("code_bundle") or b""),
                 "initial_stats": bytes(grant.get("initial_stats") or b""),
+                # Joiner-side annotation from the VERIFIED token claims of this
+                # Session (never from the grant message): the root-attested hash
+                # of the world's stored code, checked against the bundle at join.
+                "world_code_hash_claim": self.remote_code_hash,
             },
         })]
 
@@ -855,7 +862,8 @@ class Session:
         attested node-id to be unchanged (a divergent one rejects the update, not the
         session), and advance the cached expiry MONOTONICALLY so a replayed older
         token cannot shrink the validity window."""
-        node_id, cv_hash, _p2p_peers, exp = await self.token_verifier(msg.get("token") or "", self.peer_id)
+        node_id, cv_hash, _p2p_peers, exp, code_hash = await self.token_verifier(msg.get("token") or "",
+                                                                                 self.peer_id)
         if not node_id:
             log.session(f"{self!r} TOKEN_UPDATE failed verification — ignored", sub=self._sub)
             return
@@ -866,6 +874,8 @@ class Session:
             self.remote_token_exp = int(exp)
         if cv_hash:
             self.remote_cv_hash = cv_hash
+        if code_hash:
+            self.remote_code_hash = code_hash
         log.session(f"{self!r} TOKEN_UPDATE applied (exp={self.remote_token_exp})", sub=self._sub)
 
     # Control: session-level liveness (PING/PONG)

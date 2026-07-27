@@ -383,7 +383,7 @@ def test_responder_rejects_invalid_token(bob_conn, bob_p2p, bob_peer_id, alice_p
     """A configured verifier that rejects the token → reject(NOT_AUTHORIZED) + FAILED,
     before the application decision is ever reached."""
     async def _verifier(token, peer_id):
-        return (None, None, (), 0)   # verification failure
+        return (None, None, (), 0, None)   # verification failure
     sess = _mk(alice_peer_id, SessionRole.RESPONDER, bob_conn, bob_peer_id,
                local_node_id="bob-node", token_verifier=_verifier)
     _drive_responder_to_offer_wait(sess)
@@ -406,7 +406,7 @@ def test_responder_valid_token_overrides_profile_node_id(bob_conn, bob_p2p, bob_
     seen = {}
     async def _verifier(token, peer_id):
         seen["token"], seen["peer_id"] = token, peer_id
-        return ("root-attested-node", "cv-hash", (peer_id,), 9999999999)
+        return ("root-attested-node", "cv-hash", (peer_id,), 9999999999, None)
     sess = _mk(alice_peer_id, SessionRole.RESPONDER, bob_conn, bob_peer_id,
                local_node_id="bob-node", token_verifier=_verifier)
     _drive_responder_to_offer_wait(sess)
@@ -455,7 +455,7 @@ def test_initiator_verifies_responder_token(alice_conn, alice_p2p, alice_peer_id
     seen = {}
     async def _verifier(token, peer_id):
         seen["token"], seen["peer_id"] = token, peer_id
-        return ("bob-attested", "cv", (peer_id,), 9999999999)
+        return ("bob-attested", "cv", (peer_id,), 9999999999, None)
     alice_conn.connect_returns = (bob_peer_id, False)
     sess = _mk(bob_peer_id, SessionRole.INITIATOR, alice_conn, alice_peer_id,
                addresses=["/ip4/127.0.0.1/tcp/0"], token_verifier=_verifier)
@@ -473,7 +473,7 @@ def test_initiator_verifies_responder_token(alice_conn, alice_p2p, alice_peer_id
 def test_initiator_rejects_bad_responder_token(alice_conn, alice_p2p, alice_peer_id, bob_peer_id):
     """RT mutual: an invalid responder token fails the initiator's handshake."""
     async def _verifier(token, peer_id):
-        return (None, None, (), 0)
+        return (None, None, (), 0, None)
     alice_conn.connect_returns = (bob_peer_id, False)
     sess = _mk(bob_peer_id, SessionRole.INITIATOR, alice_conn, alice_peer_id,
                addresses=["/ip4/127.0.0.1/tcp/0"], token_verifier=_verifier)
@@ -491,7 +491,7 @@ def test_initiator_rejects_responder_node_id_mismatch(alice_conn, alice_p2p, ali
     """RT mutual: when the initiator expected a specific node-id at this peer and the
     responder's token attests a different one, the handshake fails."""
     async def _verifier(token, peer_id):
-        return ("someone-else", "cv", (peer_id,), 9999999999)
+        return ("someone-else", "cv", (peer_id,), 9999999999, None)
     alice_conn.connect_returns = (bob_peer_id, False)
     sess = _mk(bob_peer_id, SessionRole.INITIATOR, alice_conn, alice_peer_id,
                addresses=["/ip4/127.0.0.1/tcp/0"], token_verifier=_verifier,
@@ -926,6 +926,41 @@ def test_world_grant_arriving_before_decision_is_buffered(alice_conn, alice_peer
     assert established and established[0].data.get("world_grant") is not None
 
 
+def test_world_grant_event_carries_verified_code_hash_claim(alice_conn, alice_peer_id, bob_peer_id):
+    """The world_grant event is annotated with the code hash from the VERIFIED
+    token claims of the public Session (never from the grant message itself), so
+    the join body can check the received bundle against the root-attested hash."""
+    async def _verifier(token, peer_id):
+        return ("world-node", "cv", (peer_id,), 9999999999, "aa" * 32)
+    alice_conn.connect_returns = (bob_peer_id, False)
+    sess = Session(
+        peer_id=bob_peer_id, role=SessionRole.INITIATOR, p2p=alice_conn,
+        p2p_name=NodeConn.P2P_PUBLIC, local_peer_id=alice_peer_id,
+        local_node_id="local-node", local_profile_factory=lambda: {},
+        addresses=["/ip4/127.0.0.1/tcp/0"], is_world_join=True,
+        token_verifier=_verifier,
+    )
+    _start(sess)
+    _run(sess.process_inbound(SESSION_HELLO_PROTOCOL, SessMsg(SessMsg.KIND_HELLO_RESP, {
+        "chosen_version": "1.0", "nonce_b": b"\xbb" * 32, "sig_b": b"sig", "reason_code": OK,
+    })))
+    _run(sess.process_inbound(SESSION_PROFILE_PROTOCOL, SessMsg(SessMsg.KIND_PROFILE_DECISION, {
+        "accepted": True, "profile_b": b"{}", "reason_code": OK, "session_id": sess.session_id,
+        "token": "world-tok",
+    })))
+    assert sess.state == SessionState.AWAITING_WORLD_GRANT
+    grant = SessMsg(SessMsg.KIND_WORLD_GRANT, {
+        "grant_id": b"\x05" * 32,
+        "expiry_unix_ms": int(time.time() * 1000) + 30000,
+        "world_profile": b"{}",
+        "role": 3, "code_bundle": b"", "initial_stats": b"", "rendezvous_tag": 0,
+    })
+    events = _run(sess.process_inbound(SESSION_WORLD_PROTOCOL, grant))
+    established = [e for e in events if e.type == SessionEventType.ESTABLISHED]
+    assert established
+    assert established[0].data["world_grant"]["world_code_hash_claim"] == "aa" * 32
+
+
 def test_initiator_rejects_expired_world_grant(alice_conn, alice_peer_id, bob_peer_id):
     """The world joiner re-checks the grant expiry when the WORLD_GRANT lands on its
     public Session: a stale grant fails the handshake (the only expiry check is here,
@@ -968,7 +1003,7 @@ def test_token_update_advances_expiry_monotonically(bob_conn, bob_p2p, bob_peer_
     """An ESTABLISHED peer's TOKEN_UPDATE advances the cached exp; a replayed older
     token cannot shrink it (monotonic). The fake verifier reads exp from the token."""
     async def _verifier(token, peer_id):
-        return ("node-X", "cv2", (peer_id,), int(token))
+        return ("node-X", "cv2", (peer_id,), int(token), None)
     sess = _established_responder(bob_conn, bob_peer_id, alice_peer_id, _verifier)
     sess.remote_token_exp = 1000
     _run(sess.process_inbound(SESSION_CONTROL_PROTOCOL, SessMsg(SessMsg.KIND_TOKEN_UPDATE, {
@@ -983,7 +1018,7 @@ def test_token_update_rejects_node_id_mismatch(bob_conn, bob_p2p, bob_peer_id, a
     """A TOKEN_UPDATE whose token attests a different node-id is ignored — the update
     is dropped, the session is not."""
     async def _verifier(token, peer_id):
-        return ("intruder", "cv", (peer_id,), 9999999999)
+        return ("intruder", "cv", (peer_id,), 9999999999, None)
     sess = _established_responder(bob_conn, bob_peer_id, alice_peer_id, _verifier)
     sess.remote_token_exp = 1000
     _run(sess.process_inbound(SESSION_CONTROL_PROTOCOL, SessMsg(SessMsg.KIND_TOKEN_UPDATE, {
@@ -996,7 +1031,7 @@ def test_token_update_buffered_until_established(bob_conn, bob_p2p, bob_peer_id,
     """A TOKEN_UPDATE arriving before ESTABLISHED is buffered and applied on the next
     tick once established."""
     async def _verifier(token, peer_id):
-        return ("node-X", "cv", (peer_id,), 5000)
+        return ("node-X", "cv", (peer_id,), 5000, None)
     sess = _mk(alice_peer_id, SessionRole.RESPONDER, bob_conn, bob_peer_id,
                token_verifier=_verifier, remote_node_id_hint="node-X")
     sess._set_state(SessionState.RECONNECTING, 10.0)

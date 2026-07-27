@@ -301,8 +301,11 @@ class VerifiedTokenClaims:
     it to the decision hook, which trusts these over the self-asserted profile:
     ``node_id`` for the allow-list, ``cv_hash`` for the profile-CV integrity check,
     ``p2p_peers`` (the root-attested [public, world] peer-ids) for the public<->world
-    binding, and ``exp`` (JWT expiry, unix seconds) for the in-session refresh."""
+    binding, ``exp`` (JWT expiry, unix seconds) for the in-session refresh, and
+    ``code_hash`` (the root-attested hash of a world's stored code definition, None
+    when the token carries no such claim) for the joiner's code-integrity check."""
     node_id: str
     cv_hash: str
     p2p_peers: tuple = ()
     exp: int = 0
+    code_hash: str | None = None
