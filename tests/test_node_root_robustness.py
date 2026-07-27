@@ -100,3 +100,62 @@ def test_get_node_token_fetches_then_applies():
 
     assert node.node_token == "fresh"
     assert conn.tokens == ["fresh"]
+
+
+# World-definition upload (one-shot at world boot)
+
+
+def _world_ns(files, fsms):
+    from types import SimpleNamespace
+    from unaiverse.utils.misc import pack_py_files
+    return SimpleNamespace(packed_agent_files=pack_py_files(files), role_to_behav=fsms)
+
+
+def test_send_world_definition_posts_canonical_archive_and_fsms():
+    """The uploaded archive folds (server-side algorithm) to the canonical hash of
+    exactly the members that ride the grant bundle, and the payload field names
+    match the root API (code_b64, world_roles_fsm)."""
+    import base64
+
+    from test_world_definition import _server_side_hash
+    from unaiverse.utils.misc import canonical_world_hash, world_definition_members
+
+    files = {'player.py': "X = 1\n", 'stats.py': "class WStats:\n    pass\n"}
+    fsms = {'player': '{"role": "player"}'}
+    node = _mini_node(world=_world_ns(files, fsms))
+    calls = []
+
+    def fake_root(api, payload):
+        calls.append((api, payload))
+        if api.endswith("/code/post"):
+            return {"hash": canonical_world_hash(world_definition_members(files, fsms)),
+                    "size_bytes": 1}
+        return None
+
+    node._Node__root = fake_root
+    node.send_world_definition()
+
+    assert [a for a, _ in calls] == ["/account/node/code/post", "/account/node/fsm/post"]
+    code_payload = calls[0][1]
+    assert code_payload["node_id"] == "n1"
+    archive = base64.b64decode(code_payload["code_b64"])
+    assert _server_side_hash(archive) == canonical_world_hash(
+        world_definition_members(files, fsms))
+    assert calls[1][1]["world_roles_fsm"] == fsms
+
+
+def test_send_world_definition_gives_up_without_raising(monkeypatch):
+    """Three failed attempts must be logged, never fatal: the world still boots
+    (joiners simply have no stored hash to check against)."""
+    monkeypatch.setattr("time.sleep", lambda *_a, **_k: None)
+    node = _mini_node(world=_world_ns({'a.py': "x = 1\n"}, {}))
+    attempts = []
+
+    def fake_root(api, payload):
+        attempts.append(api)
+        raise RuntimeError("root down")
+
+    node._Node__root = fake_root
+    node.send_world_definition()  # Must not raise
+
+    assert attempts == ["/account/node/code/post"] * 3

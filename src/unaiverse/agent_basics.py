@@ -163,6 +163,7 @@ class AgentBasics:
         self.human_agents: dict[str, NodeProfile] = {}  # ID -> profile (human agents)
         self.artificial_agents: dict[str, NodeProfile] = {}  # ID -> profile (artificial agent)
         self.world_profile = None
+        self.world_role_fsms = None  # Dict role -> FSM (JSON string), delivered by the world's grant bundle
         self.is_world = False  # If this instance is about a world: it will be discovered at creation time
         self.last_sent_interaction = None
 
@@ -729,9 +730,6 @@ class AgentBasics:
                         behav = HybridStateMachine(dummy_agent)
                         behav.load(default_behav_file)
                         self.role_to_behav[role] = str(behav)
-
-                        # Adding roles and machines to profile
-                        self.node_profile.get_dynamic_profile()['world_roles_fsm'] = self.role_to_behav
                     except Exception as e:
                         raise GenException(f'Error while loading or handling '
                                            f'behav file {default_behav_file} for role {role} [{e}]')
@@ -1909,11 +1907,12 @@ class AgentBasics:
 
         self.node_profile.get_dynamic_profile()['connections']['role'] = full_role_str
 
-        default_behav = None  # A public role will not be found in the world map
-        if self.world_profile is not None:
-            base_role_to_behav = self.world_profile.get_dynamic_profile()['world_roles_fsm']
-            if base_role_str in base_role_to_behav:
-                default_behav = self.world_profile.get_dynamic_profile()['world_roles_fsm'][base_role_str]
+        # The role FSMs arrive with the grant bundle; profiles of legacy worlds still
+        # carry them in the dynamic section, so fall back there when the bundle had none
+        base_role_to_behav = self.world_role_fsms or {}
+        if not base_role_to_behav and self.world_profile is not None:
+            base_role_to_behav = self.world_profile.get_dynamic_profile().get('world_roles_fsm') or {}
+        default_behav = base_role_to_behav.get(base_role_str)  # A public role will not be found in the world map
 
         if default_behav is not None and isinstance(default_behav, str) and len(default_behav) > 0:
             default_behav_hsm = HybridStateMachine(self)
@@ -2609,7 +2608,7 @@ class AgentBasics:
 
     def agent_state_dict(self) -> dict:
         """Returns a dictionary containing an instance of the agent's state that can be saved."""
-        save_in_state = ['world_profile', ]
+        save_in_state = ['world_profile', 'world_role_fsms']
         return {k: getattr(self, k) for k in save_in_state}
 
     def save(self, where: str = "") -> bool:

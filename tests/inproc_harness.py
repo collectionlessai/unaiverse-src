@@ -386,7 +386,6 @@ def _build_node_profile(node_id: str, public_peer_id: str, world_peer_id: str,
         "proc_inputs": [],
         "proc_outputs": [],
         "streams": [],
-        "world_roles_fsm": {},
         "hidden": False,
         "connections": {
             "public_agents": [],

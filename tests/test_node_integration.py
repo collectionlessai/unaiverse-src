@@ -585,6 +585,12 @@ def test_world_host_grants_when_world_peer_bound():
         assert decision.accepted and decision.world_grant is not None
         assert "joiner-node-world-peer" in conn.world_agents_set
 
+        # The minted bundle is the world-definition single channel: packed files
+        # + role FSMs, and no legacy stats_code field.
+        bundle = json.loads(decision.world_grant.code_bundle.decode("utf-8"))
+        assert bundle == {"agent_files": world.packed_agent_files,
+                          "roles_fsm": world.role_to_behav}
+
     asyncio.run(_scenario())
 
 

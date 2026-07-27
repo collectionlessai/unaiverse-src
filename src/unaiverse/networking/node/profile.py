@@ -108,7 +108,6 @@ class NodeProfile:
                         "agent_badges": None,
                         "streams_count": None
                     },
-                    "world_roles_fsm": None,  # Dict of FSMs for world roles
                     "hidden": None
                 },
                 'cv': cv

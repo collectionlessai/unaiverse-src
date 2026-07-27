@@ -17,6 +17,7 @@ import sys
 import cv2
 import copy
 import json
+import base64
 import math
 import time
 import queue
@@ -47,7 +48,8 @@ from unaiverse.networking.session.sess_msg import (WORLD_DISENGAGEMENT,
 from unaiverse.streams.streams import DataProps, BufferedStream
 from unaiverse.utils.logger import log, ALWAYS_ON_CHANNELS, ALL_CHANNELS
 from unaiverse.utils.misc import (get_key_considering_multiple_sources, save_node_addresses_to_file,
-                                  prepare_app_dir, load_agent_in_memory, unpack_py_files, analyze_code)
+                                  prepare_app_dir, load_agent_in_memory, unpack_py_files, analyze_code,
+                                  world_definition_members, canonical_world_hash, build_world_archive)
 
 # Margin added past a quarantine ban when the rejoin watchdog pulls a retry in:
 # just enough to land on the open side of the gate.
@@ -175,6 +177,7 @@ class Node:
         self._interact_mode_opts: dict | None = None
         self.memory_finder = None
         self.world_agent_files = None
+        self.world_role_fsms: dict | None = None  # Role -> FSM (JSON string), from the world's grant bundle
         self.talk_to_relay_based_nodes = talk_to_relay_based_nodes
         self.keep_rejoining = False
         self.rejoining_kwargs: dict = {}
@@ -435,7 +438,6 @@ class Node:
                                                     profile_static['node_name']
                                                     if self.node_type is Node.WORLD else None
                                             },
-                                            "world_roles_fsm": None,  # This will be filled later if this is a world
                                             "hidden": hidden  # Marking the node as hidden (or not)
                                             },
                                    cv=cv)  # Adding CV here
@@ -446,9 +448,17 @@ class Node:
         self.hosted.set_node_info(self.conn, self.profile, self.ask_to_get_in_touch,
                                   self.__purge, self.node_identity_dir)
 
+        # World only: one-shot upload of the world definition (canonical code archive
+        # + role FSMs) to the root server, replacing the FSMs/code that used to ride
+        # the dynamic profile on every POST. The token is then re-requested so it is
+        # minted AFTER the upload (the root can attest the stored code hash in it).
+        if self.node_type is Node.WORLD:
+            self.send_world_definition()
+            self.get_node_token(peer_ids=[self.get_public_peer_id(), self.get_world_peer_id()])
+
         # Finally, sending dynamic profile to the root server
-        # (send AFTER set_node_info, not before, since set_node_info updates the profile,
-        # adding world roles and state machines)
+        # (send AFTER set_node_info, not before, since set_node_info updates the
+        # profile with the processor/stream info)
         self.send_dynamic_profile()
 
         # Save public addresses
@@ -611,6 +621,45 @@ class Node:
                 else:
                     log.critical(f"Error while getting CV from server [{e}]")
         return []
+
+    def send_world_definition(self) -> None:
+        """Uploads the world definition to the root server (world only, once at boot).
+
+        The canonical archive is built from the same members that ride the grant
+        code_bundle (pruned agent files + role FSMs), so the hash the root stores is
+        exactly the hash of what joiners receive and execute. The role FSMs are also
+        posted in structured form for the website. Failures are logged but not fatal:
+        the world still runs, and joiners simply have no stored hash to check against.
+        """
+        assert self.world is not None
+        members = world_definition_members(unpack_py_files(self.world.packed_agent_files),
+                                           self.world.role_to_behav)
+        archive = build_world_archive(members)
+        local_hash = canonical_world_hash(members)
+
+        for i in range(0, 3):  # It will try 3 times before giving up...
+            try:
+                ret = self.__root(api="/account/node/code/post",
+                                  payload={"node_id": self.node_id,
+                                           "code_b64": base64.b64encode(archive).decode('ascii')})
+                stored_hash = ret.get("hash") if isinstance(ret, dict) else None
+                if stored_hash is not None and stored_hash != local_hash:
+                    log.error(f"World-definition hash mismatch: root stored {stored_hash}, "
+                              f"locally computed {local_hash} (joiners will fail the code check)")
+                self.__root(api="/account/node/fsm/post",
+                            payload={"node_id": self.node_id,
+                                     "world_roles_fsm": self.world.role_to_behav})
+                log.misc(f"World definition uploaded to the root server (hash: {local_hash})")
+                return
+            except Exception as e:
+                log.error(f"Error while sending the world definition to the root server [{e}]")
+                if i < 2:
+                    log.misc("Retrying...")
+                    time.sleep(1)  # Wait a little bit
+                else:
+                    # log.error, NOT log.critical (which raises): per the contract above
+                    # a failed upload must not kill the world boot
+                    log.error(f"Giving up sending the world definition to the root server [{e}]")
 
     def send_dynamic_profile(self) -> None:
         """Sends the node's dynamic profile to the root server."""
@@ -916,7 +965,7 @@ class Node:
             new_agent = self.agent
 
         # Cloning attributes of the existing agent
-        skip = {'stats', 'world_profile', 'behav'}
+        skip = {'stats', 'world_profile', 'world_role_fsms', 'behav'}
         for key, value in self.agent.__dict__.items():
             if hasattr(new_agent, key):  # This will skip ROLE_BITS_TO_STR, CUSTOM_ROLES, etc...
                 if key in skip:
@@ -942,8 +991,13 @@ class Node:
         if new_agent.proc is not None and hasattr(new_agent.proc, 'set_agent'):
             new_agent.proc.set_agent(new_agent)
 
-        # Fixing role in the agent profile
-        new_agent.world_profile = None  # It is already None actually...
+        # Fixing role in the agent profile. Both world fields must be cleared HERE:
+        # on the non-WAgent branch new_agent IS self.agent, so the skip-set above
+        # cleans nothing, and accept_new_role reads world_role_fsms first — a stale
+        # dict would survive the leave (and get pickled into the saved state).
+        new_agent.world_profile = None
+        new_agent.world_role_fsms = None
+        self.world_role_fsms = None
         new_agent.accept_new_role(Agent.ROLE_PUBLIC)
 
         # Updating node-level references
@@ -2154,7 +2208,7 @@ class Node:
         # Session FSM owns handshake timeouts, retry, and reconnection.)
 
     async def __join_world(self, profile: NodeProfile, role: int,
-                           packed_agent_files: str,
+                           packed_agent_files: str, roles_fsm: dict[str, str] | None,
                            rendezvous_tag: int, initial_stats: dict[str, Any] | None,
                            peer_id: str | None = None,
                            legacy_stats_code: str | None = None) -> bool:
@@ -2165,6 +2219,8 @@ class Node:
             role: The role assigned to the agent in the world (int).
             packed_agent_files: The string encoding agent-code-files, defining the agent's actions
                 (including stats.py, when the world ships custom stats).
+            roles_fsm: Dict role -> FSM (JSON string) from the grant bundle; None with
+                legacy worlds, whose profile still carries the FSMs.
             legacy_stats_code: The stats.py source shipped by legacy worlds in the
                 dedicated code_bundle field; folded into the bundle when it lacks stats.py.
             rendezvous_tag: The rendezvous tag from the world's profile.
@@ -2228,14 +2284,17 @@ class Node:
             await self.__purge(peer_id, reason=WORLD_DISENGAGEMENT)
             return False
 
+        # Role FSMs, delivered by the grant bundle (the caller already folded in the
+        # legacy profile-carried variant when the bundle had none)
+        roles_fsm = roles_fsm or {}
+
         # Getting agent files
         try:
             agent_files = unpack_py_files(packed_agent_files)
         except Exception:
 
             # Assuming we are in the case of a single agent.py for all roles (still valid)
-            roles = profile.get_dynamic_profile()['world_roles_fsm'].keys()
-            agent_files = {f"{k}.py": packed_agent_files for k in roles}
+            agent_files = {f"{k}.py": packed_agent_files for k in roles_fsm}
 
         # Legacy stats channel: fold it into the bundle when absent there.
         if legacy_stats_code and 'stats.py' not in agent_files:
@@ -2265,8 +2324,9 @@ class Node:
             except Exception as e:
                 log.error(f"Failed to exec custom stats.py from world: {e}. Using default Stats.")
 
-        # Saving reference files (in memory - needed if switching role)
+        # Saving reference files and role FSMs (in memory - needed if switching role)
         self.world_agent_files = agent_files
+        self.world_role_fsms = roles_fsm
 
         # Replacing agent instance with a new one, accordingly to the role
         self.__replace_agent_instance_by_role(role, peer_id, profile, stats_class, initial_stats)
@@ -2454,10 +2514,12 @@ class Node:
                                                    provisional_ttl_s=Custom.WORLD_PREADMISSION_TTL)
 
             is_human = profile.get_static_profile().get("node_type") == self.hosted.HUMAN
-            # Single code channel: stats.py travels inside the packed agent files
-            # (forced member of the pruned bundle), so there is no stats_code field.
+            # World-definition bundle, the single channel for everything the joiner
+            # executes: the pruned agent files (stats.py rides inside them, so there
+            # is no stats_code field) and the role FSMs (no longer in the profile).
             code_bundle = json.dumps({
                 "agent_files": self.world.packed_agent_files,
+                "roles_fsm": self.world.role_to_behav,
             }).encode("utf-8")
             initial_stats = (json.dumps(self.world.stats.plot()).encode("utf-8")
                              if is_human else b"")
@@ -2904,25 +2966,30 @@ class Node:
             log.error("[session] join_world: missing grant blob")
             return False
         try:
-            world_profile = NodeProfile.from_dict(
-                json.loads(grant["world_profile_bytes"].decode("utf-8")))
+            raw_world_profile = json.loads(grant["world_profile_bytes"].decode("utf-8"))
+            world_profile = NodeProfile.from_dict(raw_world_profile)
         except Exception as e:
             log.error(f"[session] join_world: bad world profile: {e}")
             return False
         role = int(grant.get("role", 0))
         rendezvous_tag = int(grant.get("rendezvous_tag", 0))
 
-        agent_files = legacy_stats_code = None
+        agent_files = roles_fsm = legacy_stats_code = None
         code = grant.get("code_bundle") or b""
         if code:
             try:
                 bundle = json.loads(code.decode("utf-8"))
                 agent_files: str | None = bundle.get("agent_files")
+                roles_fsm: dict | None = bundle.get("roles_fsm")
                 # Legacy worlds shipped stats.py as a dedicated field (and their
                 # single-agent.py repack dropped it from the packed files)
                 legacy_stats_code: str | None = bundle.get("stats_code")
             except Exception as e:
                 log.error(f"[session] join_world: bad code_bundle: {e}")
+        if not roles_fsm:
+            # Legacy worlds shipped the FSMs inside the dynamic profile. The current
+            # NodeProfile template drops that key at parse time, so read the raw dict.
+            roles_fsm = (raw_world_profile.get('dynamic') or {}).get('world_roles_fsm')
 
         initial_stats = None
         istats = grant.get("initial_stats") or b""
@@ -2938,7 +3005,7 @@ class Node:
 
         return await self.__join_world(
             profile=world_profile, role=role,
-            packed_agent_files=agent_files,
+            packed_agent_files=agent_files, roles_fsm=roles_fsm,
             rendezvous_tag=rendezvous_tag, initial_stats=initial_stats,
             peer_id=world_peer_id, legacy_stats_code=legacy_stats_code,
         )
@@ -3084,8 +3151,8 @@ class Node:
 
         if self.world_agent_files is not None and len(self.world_agent_files) > 0:
 
-            # Getting roles from the just got world profile
-            world_roles = world_profile.get_dynamic_profile()['world_roles_fsm'].keys()
+            # Getting the roles delivered by the grant bundle at join time
+            world_roles = (self.world_role_fsms or {}).keys()
             role_bits_to_str, role_str_to_bits = Agent.build_augmented_roles_dictionaries(world_roles)
 
             # Creating a new agent with the received actions
@@ -3147,11 +3214,13 @@ class Node:
         if initial_stats is not None and isinstance(initial_stats, dict):
             self.agent.update_stats_view(initial_stats, overwrite=True)
 
-        # Saving the world profile
+        # Saving the world profile and the role FSMs (accept_new_role reads the FSM
+        # of the assigned role from them, at join time and on later role changes)
         self.agent.world_profile = world_profile
+        self.agent.world_role_fsms = self.world_role_fsms
 
         # Setting the assigned role and default behavior (do it after having recreated the new agent object)
-        self.agent.accept_new_role(role)  # Do this after having done 'self.agent.world_profile = profile'
+        self.agent.accept_new_role(role)  # Do this after having set world_profile/world_role_fsms
 
         # Updating wildcards
         self.agent.behav.update_wildcard(Custom.AGENT_WILDCARD, f"{self.get_world_peer_id()}")
