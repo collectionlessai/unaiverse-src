@@ -206,6 +206,18 @@ class Agent(AgentBasics):
         self.stats.update_view(received_view, overwrite)
 
     @action
+    async def ask_world_stats(self, filters: dict | None = None) -> bool:
+        """Ask the world for stats: 'filters' is interpreted by the World subclass (method answer_stats_request);
+        the answer arrives asynchronously as a STATS_RESPONSE and is stored in the stats-answers inbox."""
+        world_peer_id = self.node_conn.get_world_node_peer_id()
+        if world_peer_id is None:
+            log.error("Not in a world: cannot ask stats")
+            return False
+        return await self.node_conn.send(world_peer_id, channel_trail=None,
+                                         content=filters if filters is not None else {},
+                                         content_type=Msg.STATS_REQUEST)
+
+    @action
     async def suggest_role_to_world(self, agent: str | None, role: str) -> bool:
         """Suggests a role change for one or more agents to the world master. It iterates through the involved agents,
         checks if their current role differs from the suggested one, and sends a role suggestion message to the

@@ -2164,26 +2164,28 @@ class Node:
             elif msg.content_type == Msg.STATS_REQUEST:
                 log.misc("Received a stats request from " + msg.sender)
                 if self.node_type is Node.WORLD:
-                    # 1. Extract filters from content
-                    filters = msg.content or {}
-                    # default values are added to query without any filter
-                    # req_stats = filters.get('stat_names', [])
-                    # req_peers = filters.get('peer_ids', [])
-                    # time_range = filters.get('time_range', None)
-                    time_range = filters.get('time_range', 0)
-                    # value_range = filters.get('value_range', None)  # The numeric filter
-                    # limit = filters.get('limit', None)
-
-                    # # This is a fine-grain request, so we query the db
-                    # response_payload = self.world.stats.query_history(
-                    #     stat_names=req_stats,
-                    #     peer_ids=req_peers,
-                    #     time_range=time_range,
-                    #     value_range=value_range,
-                    #     limit=limit)
                     assert self.world is not None
                     assert self.world.stats is not None
-                    response_payload = self.world.stats.plot(since_timestamp=time_range)
+
+                    # Extract filters from content
+                    filters = msg.content or {}
+                    asker = msg.sender
+
+                    # If the filter is about one or more specific stats, then it is a fine-grain request,
+                    # otherwise it is a generic request, so we send back the rendered HTML
+                    stat_names = filters.get('stat_names', [])
+
+                    if stat_names is not None and len(stat_names) > 0:
+
+                        # This is a fine-grain request, so we query the DB. CONTRACT: the answer must be
+                        # a get_view()-shaped dict ({"world": ..., "peers": ...}) - the asker merges it
+                        # into its local stats view (update_stats_view)
+                        response_payload = self.world.answer_stats_request(filters, asker)
+                    else:
+
+                        # This is a generic request, so we respond generating an HTML
+                        time_range = filters.get('time_range', 0)
+                        response_payload = self.world.stats.plot(since_timestamp=time_range)
 
                     # Send back as STATS_RESPONSE
                     await self.conn.send(msg.sender, channel_trail=None,
@@ -2196,9 +2198,12 @@ class Node:
             elif msg.content_type == Msg.STATS_RESPONSE:
                 log.misc("Received a stats response from " + msg.sender)
                 if self.node_type is Node.AGENT:
+                    assert self.agent is not None
                     if msg.sender == self.conn.get_world_node_peer_id():
-                        # self.agent.update_stats_view(msg.content, self.agent.overwrite_stats)
-                        pass
+                        if isinstance(msg.content, dict) and ('world' in msg.content or 'peers' in msg.content):
+                            self.agent.update_stats_view(msg.content, self.agent.overwrite_stats)
+                        else:
+                            log.misc("Ignoring a stats response that is not view-shaped (e.g., HTML)")
                     else:
                         log.error(f"Received stats response from {msg.sender}, but it is not the world.")
                 elif self.node_type is Node.AGENT:
@@ -2471,7 +2476,7 @@ class Node:
         try:
             profile = NodeProfile.from_dict(remote_profile)
         except Exception as e:
-            log.error(f"[session] decision: bad remote profile from peer_id ...{peer_id[-5:]}: {e}")
+            log.error(f"Bad remote profile from peer_id {peer_id}: {e}")
             return ProfileDecisionResult(accepted=False, reason_code=HOSTED_REJECTED)
 
         # RT profile-integrity gate: the root attests the node's cv_hash, so an
@@ -2914,13 +2919,13 @@ class Node:
             world_profile = NodeProfile.from_dict(
                 json.loads(grant["world_profile_bytes"].decode("utf-8")))
         except Exception as e:
-            log.error(f"[session] world handoff: bad world profile: {e}")
+            log.error(f"World handoff, bad world profile: {e}")
             return
         world_dyn = world_profile.get_dynamic_profile()
         world_world_peer_id: str | None = world_dyn.get("private_peer_id")
         world_addrs = world_dyn.get("private_peer_addresses") or []
         if not world_world_peer_id:
-            log.error("[session] world handoff: world profile lacks private_peer_id")
+            log.error("World handoff, world profile lacks private_peer_id")
             return
 
         blob = dict(grant)
@@ -2987,13 +2992,13 @@ class Node:
         """Joiner side: run the world-join body against an already-connected world
         Session, decoding the grant blob carried from the public Session."""
         if not grant:
-            log.error("[session] join_world: missing grant blob")
+            log.error("join_world: missing grant blob")
             return False
         try:
             raw_world_profile = json.loads(grant["world_profile_bytes"].decode("utf-8"))
             world_profile = NodeProfile.from_dict(raw_world_profile)
         except Exception as e:
-            log.error(f"[session] join_world: bad world profile: {e}")
+            log.error(f"join_world: bad world profile: {e}")
             return False
         role = int(grant.get("role", 0))
         rendezvous_tag = int(grant.get("rendezvous_tag", 0))
@@ -3028,7 +3033,7 @@ class Node:
                 initial_stats = None
 
         if agent_files is None:
-            log.error("[session] join_world: missing agent files")
+            log.error("Missing agent files when joining the world")
             return False
 
         return await self.__join_world(

@@ -454,6 +454,25 @@ class World(AgentBasics):
         # Clean the graph from potentially stale peers
         self._prune_graph()
 
+    def answer_stats_request(self, filters: dict, asker: str) -> dict | None:
+        """Respond to a stat request."""
+        assert self.stats is not None
+        assert asker is not None  # Not used here, but might be used when overloading this method in custom worlds
+
+        # Default values are added to query without any filter
+        stat_names = filters.get('stat_names', [])
+        group_keys = filters.get('group_keys', [])
+        time_range = filters.get('time_range', 0)
+        value_range = filters.get('value_range', None)  # The numeric filter
+        limit = filters.get('limit', None)
+
+        return self.stats.query_history(
+            stat_names=stat_names,
+            group_keys=group_keys,
+            time_range=time_range,
+            value_range=value_range,
+            limit=limit)
+
     def debug_stats_dashboard(self) -> None:
         """Helper to verify the dashboard looks correct during development."""
         import tempfile

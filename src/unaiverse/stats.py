@@ -1321,14 +1321,25 @@ class Stats:
             Dictionary with the same structure as ``get_view()``. Returns an empty dict
             when called on the Agent side or when the DB connection is unavailable.
         """
-        if stat_names is None:
-            stat_names = []
-        if group_keys is None:
-            group_keys = []
         if not self.is_world or not self._db_conn:
             return {}
 
-        # Flush the cached upadtes to db before querying
+        def _as_str_list(v):
+            """Filters arrive from the network: accept only lists of non-empty strings."""
+            return [s for s in v if isinstance(s, str) and len(s) > 0] \
+                if isinstance(v, (list, tuple)) else []
+
+        stat_names = _as_str_list(stat_names)
+        group_keys = _as_str_list(group_keys)
+        if not (isinstance(time_range, int) and not isinstance(time_range, bool)) and \
+                not (isinstance(time_range, (tuple, list)) and len(time_range) == 2 and
+                     all(isinstance(t, (int, float)) and not isinstance(t, bool) for t in time_range)):
+            time_range = None
+        if not (isinstance(value_range, (tuple, list)) and len(value_range) == 2 and
+                all(isinstance(x, (int, float)) and not isinstance(x, bool) for x in value_range)):
+            value_range = None
+
+        # Flush the cached updates to db before querying
         self._save_static_to_db()
         self._save_dynamic_to_db()
         self._db_conn.commit()
@@ -1354,8 +1365,12 @@ class Stats:
             params_static.extend(group_keys)
 
         try:
-            cursor = self._db_conn.execute(' '.join(query_static), params_static)
-            for pid, sname, vjson in cursor:
+            rows = self._db_conn.execute(' '.join(query_static), params_static).fetchall()
+        except Exception as e:
+            log.error(f'Query history (static) failed: {e}')
+            rows = []
+        for pid, sname, vjson in rows:
+            try:
                 val = self._validate_type(sname, json.loads(vjson))
                 # Handle special Graph reconstruction if needed (legacy format support)
                 if sname == 'graph':
@@ -1378,78 +1393,56 @@ class Stats:
                     snapshot['world'][sname] = val
                 else:
                     snapshot['peers'].setdefault(pid, {})[sname] = val
-        except Exception as e:
-            log.error(f'Query history (static) failed: {e}')
+            except Exception as e:
+                log.error(f'Query history: skipping static row ({sname}, {pid}): {e}')
 
         # B. Query the dynamic stats
-        query_dyn = ['SELECT timestamp, peer_id, stat_name, val_num, val_str, val_json FROM dynamic_stats']
-        params_dyn = []
-
-        # 1. Stat Names
-        where_added = False
+        conditions, params_dyn = [], []
         if stat_names:
-            query_static.append("WHERE")
-            where_added = True
-            query_dyn.append(f"stat_name IN ({','.join(['?'] * len(stat_names))})")
+            conditions.append(f"stat_name IN ({','.join(['?'] * len(stat_names))})")
             params_dyn.extend(stat_names)
-
-        # 2. Group Keys
         if group_keys:
-            if not where_added:
-                query_static.append("WHERE")
-            else:
-                query_static.append("AND")
-            query_dyn.append(f"peer_id IN ({','.join(['?'] * len(group_keys))})")
+            conditions.append(f"peer_id IN ({','.join(['?'] * len(group_keys))})")
             params_dyn.extend(group_keys)
-
         if time_range is not None:
             if isinstance(time_range, int):
-                # Treated as "Since X"
-                if not where_added:
-                    query_static.append("WHERE")
-                else:
-                    query_static.append("AND")
-                query_dyn.append("timestamp >= ?")
+                conditions.append("timestamp >= ?")
                 params_dyn.append(time_range)
             elif isinstance(time_range, (tuple, list)) and len(time_range) == 2:
-                # Treated as "Between X and Y"
-                if not where_added:
-                    query_static.append("WHERE")
-                else:
-                    query_static.append("AND")
-                query_dyn.append("timestamp >= ? AND timestamp <= ?")
+                conditions.append("timestamp >= ? AND timestamp <= ?")
                 params_dyn.extend([time_range[0], time_range[1]])
-
-        # 4. Value Range (The logic requested by user)
         if value_range:
-            if not where_added:
-                query_static.append("WHERE")
-            else:
-                query_static.append("AND")
-            query_dyn.append("val_num IS NOT NULL AND val_num >= ? AND val_num <= ?")
+            conditions.append("val_num IS NOT NULL AND val_num >= ? AND val_num <= ?")
             params_dyn.extend([value_range[0], value_range[1]])
-
+        query_dyn = ['SELECT timestamp, peer_id, stat_name, val_num, val_str, val_json FROM dynamic_stats']
+        if conditions:
+            query_dyn.append("WHERE " + " AND ".join(conditions))
         query_dyn.append("ORDER BY timestamp ASC")
-
-        # add the limit
-        query_dyn.append("LIMIT 5000" if limit is None else f"LIMIT {limit}")
+        try:
+            limit = max(1, min(int(limit), 5000)) if limit is not None else 5000
+        except (ValueError, TypeError):
+            limit = 5000
+        query_dyn.append(f"LIMIT {limit}")
 
         try:
-            cursor = self._db_conn.execute(' '.join(query_dyn), params_dyn)
-            for ts, pid, sname, vnum, vstr, vjson in cursor:
-                ts = int(ts)
-                val = vnum if vnum is not None else (vstr if vstr is not None else json.loads(vjson))
-                val = self._validate_type(sname, val)
-
-                # Structure construction
-                if pid in (None, 'None', ''):  # Handling world stats
-                    target_ts = snapshot['world'].setdefault(sname, [])
-                else:  # Handling peer stats
-                    target_ts = snapshot['peers'].setdefault(pid, {}).setdefault(sname, [])
-                target_ts.append([ts, val])
-
+            rows = self._db_conn.execute(' '.join(query_dyn), params_dyn).fetchall()
         except Exception as e:
-            log.error(f'Query history failed: {e}')
+            log.error(f'Query history (dynamic) failed: {e}')
+            rows = []
+        for ts, pid, sname, vnum, vstr, vjson in rows:
+            try:
+                val = vnum if vnum is not None else \
+                    (vstr if vstr is not None else (json.loads(vjson) if vjson is not None else None))
+                if val is None:
+                    continue  # Row with no value in any of the three columns: nothing to report
+                val = self._validate_type(sname, val)
+                if pid in (None, 'None', ''):
+                    target_ts = snapshot['world'].setdefault(sname, [])
+                else:
+                    target_ts = snapshot['peers'].setdefault(pid, {}).setdefault(sname, [])
+                target_ts.append([int(ts), val])
+            except Exception as e:
+                log.error(f'Query history: skipping dynamic row ({sname}, {pid}, {ts}): {e}')
 
         return snapshot
 
