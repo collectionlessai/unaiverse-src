@@ -1652,6 +1652,7 @@ class HybridStateMachine:
         for from_state, to_states in self.transitions.items():
             j = 1
             for to_state, action_list in to_states.items():
+                loop_groups = {}  # (style, color) -> [merged label, id of first action]
                 for action in action_list:
                     args = action.args
                     s = "("
@@ -1694,12 +1695,21 @@ class HybridStateMachine:
                                 done = True
                             i += 1
                         label = z
+                    edge_style = 'dashed' if not action.is_ready() else 'solid'
                     edge_color = "#00000050" if action.is_teleport() else "#000000"
+
+                    if from_state == to_state and len(action_list) > 1:
+                        group = loop_groups.setdefault((edge_style, edge_color), ["", action.id])
+                        group[0] += ("\n" if group[0] else "") + label
+                    else:
+                        graph.edge(from_state, to_state, label=" " + label + " ", fontsize='8',
+                                   style=edge_style, color=edge_color, fontcolor=edge_color,
+                                   _attributes={'id': "edge" + str(action.id)})
+
+                for (edge_style, edge_color), (label, first_id) in loop_groups.items():
                     graph.edge(from_state, to_state, label=" " + label + " ", fontsize='8',
-                               style='dashed' if not action.is_ready() else 'solid',
-                               color=edge_color,
-                               fontcolor=edge_color,
-                               _attributes={'id': "edge" + str(action.id)})
+                               style=edge_style, color=edge_color, fontcolor=edge_color,
+                               _attributes={'id': "edge" + str(first_id)})
         return graph
 
     def save_pdf(self, filename: str) -> bool:

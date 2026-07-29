@@ -453,7 +453,7 @@ class Node:
         # the dynamic profile on every POST. The token is then re-requested so it is
         # minted AFTER the upload (the root can attest the stored code hash in it).
         if self.node_type is Node.WORLD:
-            self.send_world_definition()
+            # self.send_world_definition()  # TODO not ready yey
             self.get_node_token(peer_ids=[self.get_public_peer_id(), self.get_world_peer_id()])
 
         # Finally, sending dynamic profile to the root server
