@@ -142,13 +142,14 @@ class RootServerError(GenException):
 
     def __init__(self, message: str, *, api: str, api_rejected: bool = False,
                  state_code: str | None = None, state_message: str | None = None,
-                 data_code: str | None = None, flags: dict | None = None,
-                 status: int | None = None) -> None:
+                 data_code: str | None = None, data: dict | list | None = None,
+                 flags: dict | None = None, status: int | None = None) -> None:
         super().__init__(message)
         self.api = api
         self.api_rejected = api_rejected
         self.state_code = state_code
         self.state_message = state_message
         self.data_code = data_code
+        self.data = data  # The refusal's data payload (e.g. the legal acceptance state)
         self.flags = flags if flags is not None else {}
         self.status = status

@@ -558,6 +558,19 @@ class Node:
         """
         self._apply_node_token(self._request_node_token(peer_ids))
 
+    @staticmethod
+    def _outstanding_legal_documents(data) -> str:
+        """Human-readable list of the legal documents still to accept, read from the
+        acceptance state the root attaches to a legal_acceptance_required refusal."""
+        outstanding = []
+        state = data if isinstance(data, dict) else {}
+        for kind, label in (("tos", "Terms of Service"), ("privacy", "Privacy Policy")):
+            side = state.get(kind)
+            if isinstance(side, dict) and not side.get("up_to_date", False):
+                version = side.get("current_version")
+                outstanding.append(label + (f" {version}" if version else ""))
+        return ", ".join(outstanding) if outstanding else "Terms of Service, Privacy Policy"
+
     def _request_node_token(self, peer_ids: list[str]) -> dict:
         """Blocking HTTP to the root to (re)generate the node token. Reads self but does
         NOT mutate it, so it is safe to run off the event loop via asyncio.to_thread.
@@ -574,7 +587,15 @@ class Node:
                 break
             except RootServerError as e:
                 if e.api_rejected:
-                    raise  # The server answered and refused: retrying cannot change the outcome
+                    # The server answered and refused: retrying cannot change the outcome
+                    if e.flags.get('legal_acceptance_required'):
+                        log.error("The root server refuses to mint a node token until the owner accepts "
+                                  f"the current legal documents ({self._outstanding_legal_documents(e.data)}): "
+                                  "log in at https://unaiverse.io, accept them, then restart the node")
+                    elif e.flags.get('blocked_utc') is not None:
+                        log.error("The root server refuses to mint a node token: this node is blocked "
+                                  f"(since {e.flags['blocked_utc']})")
+                    raise
                 if i < 2:
                     log.error("Error while getting token from server, retrying...")
                     time.sleep(1)  # Wait a little bit
@@ -3201,6 +3222,7 @@ class Node:
                                   state_code=state.get('code'),
                                   state_message=state.get('message'),
                                   data_code=data.get('code') if isinstance(data, dict) else None,
+                                  data=data,
                                   flags=ret['flags'] if isinstance(ret['flags'], dict) else {},
                                   status=response.status_code)
         return ret['data']
