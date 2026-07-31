@@ -49,7 +49,8 @@ from unaiverse.streams.streams import DataProps, BufferedStream
 from unaiverse.utils.logger import log, ALWAYS_ON_CHANNELS, ALL_CHANNELS
 from unaiverse.utils.misc import (get_key_considering_multiple_sources, save_node_addresses_to_file,
                                   prepare_app_dir, load_agent_in_memory, unpack_py_files, analyze_code,
-                                  world_definition_members, canonical_world_hash, build_world_archive)
+                                  world_definition_members, canonical_world_hash, build_world_archive,
+                                  owner_handle)
 
 # Margin added past a quarantine ban when the rejoin watchdog pulls a retry in:
 # just enough to land on the open side of the gate.
@@ -1151,10 +1152,10 @@ class Node:
         elif self.hosted.world_profile is not None:
             # We resumed from a state in which we were in this world, so we reconnect
             world_name = self.hosted.world_profile.get_static_profile()['node_name']
-            owner_email = self.hosted.world_profile.get_static_profile()['email']
-            ret = await self.ask_to_join_world(node_name=f'{owner_email}/{world_name}', **kwargs)
+            owner = owner_handle(self.hosted.world_profile.get_static_profile())
+            ret = await self.ask_to_join_world(node_name=f'{owner}/{world_name}', **kwargs)
             if ret is None:
-                log.critical(f"Unable to connect to world: {owner_email}/{world_name}")
+                log.critical(f"Unable to connect to world: {owner}/{world_name}")
             else:
                 joined_this_world = ret  # saving peer ID
         elif get_in_touch is not None:
@@ -1297,7 +1298,7 @@ class Node:
 
                 log.user("\nRunning " + ("agent" if self.agent else "world") + " '" +
                          self.hosted.get_name() + "' ..."
-                         + f"\n- Owner:             {self.profile.get_static_profile()['email']}"
+                         + f"\n- Owner:             {owner_handle(self.profile.get_static_profile())}"
                          + f"\n- Node ID:           {self.node_id}"
                          + f"\n- Public peer ID:    {self.get_public_peer_id()}"
                          + f"\n- Private peer ID:   {self.get_world_peer_id()}")
@@ -1995,7 +1996,7 @@ class Node:
                         if net_hash in self.agent.known_streams:
                             peer_id = DataProps.peer_id_from_net_hash(net_hash)
                             group = DataProps.name_or_group_from_net_hash(net_hash)
-                            owner_account = self.agent.all_agents[peer_id].get_static_profile()['email']
+                            owner_account = owner_handle(self.agent.all_agents[peer_id].get_static_profile())
                             agent_name = self.agent.all_agents[peer_id].get_static_profile()['node_name']
                             for (user_hash, uuid) in added_data:
                                 if user_hash not in self.agent.known_streams_by_user_hash:

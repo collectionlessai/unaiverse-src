@@ -24,18 +24,21 @@ REQUIRED_STATIC_KEYS = [
     "node_id",
     "node_type",
     "node_name",
+]
+
+# Keys the constructor tolerates as missing: they default to None (or to the
+# back-compat values for location/location_method), so a field the server
+# stops sending does not crash the boot.
+OPTIONAL_STATIC_KEYS = [
     "node_description",
     "created_utc",
     "name",
     "surname",
     "title",
+    "nickname",
     "organization",
     "email",
     "max_nr_connections",
-]
-
-# Keys the constructor tolerates as missing (patched / backward-compat).
-OPTIONAL_STATIC_KEYS = [
     "allowed_node_ids",
     "world_masters_node_ids",
     "certified",
@@ -73,8 +76,7 @@ def make_static(**overrides):
         "name": "Mario",
         "surname": "Rossi",
         "title": "Dr",
-        "organization": "UNISI",
-        "email": "mario@example.com",
+        "nickname": "brave-otter",
         "max_nr_connections": 8,
     }
     static.update(overrides)
@@ -112,7 +114,7 @@ def test_provided_static_values_are_stored():
     static = profile.get_static_profile()
     assert static["node_id"] == "node-1"
     assert static["node_type"] == "agent"
-    assert static["email"] == "mario@example.com"
+    assert static["nickname"] == "brave-otter"
     assert static["max_nr_connections"] == 8
 
 
@@ -163,6 +165,8 @@ def test_untouched_optional_keys_default_to_none():
     assert static["allowed_node_ids"] is None
     assert static["world_masters_node_ids"] is None
     assert static["inspector_node_id"] is None
+    assert static["email"] is None
+    assert static["organization"] is None
 
 
 # --------------------------------------------------------------------------- #
@@ -292,7 +296,7 @@ def test_from_dict_round_trips():
 
     static = profile.get_static_profile()
     assert static["node_id"] == "node-1"
-    assert static["organization"] == "UNISI"
+    assert static["nickname"] == "brave-otter"
 
     dynamic = profile.get_dynamic_profile()
     assert dynamic["peer_id"] == "QmAbc"

@@ -22,6 +22,7 @@ from unaiverse.hsm import Action
 from unaiverse.stats import Stats
 from unaiverse.clock import clock
 from unaiverse.utils.logger import log
+from unaiverse.utils.misc import owner_handle
 from unaiverse.interaction import Interaction
 from unaiverse.agent_basics import AgentBasics
 from unaiverse.networking.p2p.messages import Msg
@@ -1416,7 +1417,7 @@ class Agent(AgentBasics):
                 log.user(f"Invalid evaluation result: {eval_result}")
                 return False
 
-            owner_account = self.all_agents[agent_peer_id].get_static_profile()['email']
+            owner_account = owner_handle(self.all_agents[agent_peer_id].get_static_profile())
             agent_name = self.all_agents[agent_peer_id].get_static_profile()['node_name']
 
             if cmp != "min" and cmp != "max":

@@ -35,7 +35,7 @@ class NodeProfile:
         """Initializes a NodeProfile from static, dynamic, and CV data.
 
         Args:
-            static: Dictionary of static profile fields (e.g. node_id, node_type, name, email).
+            static: Dictionary of static profile fields (e.g. node_id, node_type, name, nickname).
             dynamic: Dictionary of dynamic profile fields (e.g. os, memory, peer_id).  Only
                 keys that are expected by the internal template are copied in.
             cv: List of CV entry dictionaries; entries are sorted by ``last_edit_utc`` before storage.
@@ -62,8 +62,9 @@ class NodeProfile:
                     'name': None,
                     'surname': None,
                     'title': None,
-                    'organization': None,
-                    'email': None,
+                    'nickname': None,  # The owner's public identity
+                    'organization': None,  # Legacy: the server no longer sends it
+                    'email': None,  # Legacy: the server no longer sends it
                     'max_nr_connections': None,
                     'allowed_node_ids': None,
                     'world_masters_node_ids': None,
@@ -113,17 +114,17 @@ class NodeProfile:
                 'cv': cv
             }
 
-        # Checking the presence of basic static profile info
-        for k in self._profile_data['static'].keys():
+        # Backward compatibility
+        if "location" not in static:
+            static['location'] = {}
+        if "location_method" not in static:
+            static['location_method'] = "manual"
 
-            # Backward compatibility
-            if k not in static and k == "location":
-                static['location'] = {}
-            if k not in static and k == "location_method":
-                static['location_method'] = "manual"
-
-            if (k not in static and k != "certified" and
-                    k != "allowed_node_ids" and k != "world_masters_node_ids" and k != "inspector_node_id"):  # Patch
+        # Only the keys the SDK cannot run without are required: every other template key
+        # defaults to None, so a field the server stops sending degrades instead of
+        # crashing the boot
+        for k in ('node_id', 'node_type', 'node_name'):
+            if k not in static:
                 raise ValueError("Missing required static profile info: " + str(k))
 
         # Filling static profile info (there might be more information that the one shown above)

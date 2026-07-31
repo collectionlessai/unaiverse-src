@@ -1411,7 +1411,7 @@ class AgentBasics:
         if ref in self.all_agents:
             return ref
 
-        # Search by email@node_name (if only node_name is provided, assumes it is one of your agents)
+        # Search by owner/node_name (if only node_name is provided, assumes it is one of your agents)
         if '/' not in ref:
             ref = build_unaid(self.get_profile(), ref)
 

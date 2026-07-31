@@ -42,18 +42,26 @@ if TYPE_CHECKING:
     from unaiverse.networking.node.node import Node
 
 
+def owner_handle(static_profile: dict) -> str | None:
+    """The account's public identity: the nickname, with the e-mail address as a fallback
+    for old servers or cached profiles (the address is not an identifier anymore)."""
+    return static_profile.get('nickname') or static_profile.get('email')
+
+
 def build_unaid(profile, node_name: str | None = None):
     if not hasattr(profile, "get_static_profile"):
         return None
     static_profile = profile.get_static_profile()
     if not isinstance(static_profile, dict):
         return None
+    handle = owner_handle(static_profile)
+    if handle is None:
+        return None
     if node_name is None:
         if "node_name" not in static_profile:
             return None
-        return static_profile['email'] + '/' + static_profile['node_name']
-    else:
-        return static_profile['email'] + '/' + node_name
+        node_name = static_profile['node_name']
+    return handle + '/' + node_name
 
 
 def save_node_addresses_to_file(node: "Node", dir_path: str, public: bool,

@@ -16,6 +16,7 @@ from typing import Any
 from unaiverse.stats import Stats
 from unaiverse.clock import clock
 from unaiverse.utils.logger import log
+from unaiverse.utils.misc import owner_handle
 from unaiverse.agent import AgentBasics
 from unaiverse.networking.p2p.messages import Msg
 from unaiverse.networking.node.profile import NodeProfile
@@ -311,7 +312,7 @@ class World(AgentBasics):
 
         return {
             'Name': static_profile.get('node_name', '~'),
-            'Owner': static_profile.get('email', '~'),
+            'Owner': owner_handle(static_profile) or '~',
             'Role': dynamic_profile.get('connections', {}).get('role', 'unknown').split('~')[-1],
             'Type': static_profile.get('node_type', '~'),
             'Number of Badges': len(cv),
