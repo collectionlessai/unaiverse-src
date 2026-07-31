@@ -125,9 +125,9 @@ class TokenVerifier:
             A tuple `(node_id, cv_hash, p2p_peers, exp, code_hash)` if all checks pass,
             otherwise `(None, None, (), 0, None)`. `p2p_peers` is a tuple of the node's
             peer-ids, `exp` is the JWT expiry (unix seconds), used by the in-session
-            refresh, and `code_hash` is the root-attested hash of the node's stored
-            world definition (None when the token carries no such claim: agent nodes,
-            or a root that does not attest it yet).
+            refresh, and `code_hash` is the root-attested digest of the world's declared
+            code (None when the token carries no such claim: agent nodes, or a world
+            that declared no source repository).
         """
         payload = self._decode(token, node_id=node_id, ip=ip, hostname=hostname, port=port, p2p_peer=p2p_peer)
         if payload is None:

@@ -446,7 +446,7 @@ class Node:
                                                 'role': self.hosted.ROLE_BITS_TO_STR[self.hosted.ROLE_PUBLIC]
                                             },
                                             'world_summary': {
-                                                'world_name':
+                                                'world_title':
                                                     profile_static['node_name']
                                                     if self.node_type is Node.WORLD else None
                                             },
