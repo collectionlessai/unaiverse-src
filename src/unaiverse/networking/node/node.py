@@ -67,7 +67,7 @@ class Node:
                  unaiverse_key: str | None = None,
                  node_name: str | None = None,
                  node_id: str | None = None,
-                 hidden: bool = False,
+                 hidden: bool | None = None,
                  clock_delta: float = 1. / 25.,
                  base_identity_dir: str | None = None,
                  only_certified_agents: bool = False,
@@ -87,7 +87,9 @@ class Node:
                 or you will be asked for it).
             node_name: A human-readable name for the node (using node ID is preferable; use this or node ID, not both).
             node_id: A unique identifier for the node (use this or the node name, not both).
-            hidden: A flag to determine if the node is hidden (i.e., only the owner of the account can see it).
+            hidden: A flag to determine if the node is hidden (i.e., only the owner of the account can
+                see it). When None (the default) the visibility is not asserted at all, so whatever
+                the owner chose (e.g. in the web app) is preserved.
             clock_delta: The minimum time delta for the node's clock.
             base_identity_dir: Base directory for storing node identity files. If None, uses the default app directory.
             only_certified_agents: A flag to allow only certified agents to connect.
@@ -440,7 +442,8 @@ class Node:
                                                     profile_static['node_name']
                                                     if self.node_type is Node.WORLD else None
                                             },
-                                            "hidden": hidden  # Marking the node as hidden (or not)
+                                            "hidden": hidden  # True/False only when explicitly requested
+                                            #  (None means: do not touch the server-side visibility)
                                             },
                                    cv=cv)  # Adding CV here
 
@@ -696,9 +699,13 @@ class Node:
     def send_dynamic_profile(self) -> None:
         """Sends the node's dynamic profile to the root server."""
         try:
+            profile = dict(self.profile.get_dynamic_profile())  # Copy: the getter returns the internal dict
+            if profile.get('hidden') is None:
+                # Visibility never explicitly set this run: omit the key, so the server keeps
+                # whatever the owner chose (the API only touches hidden when the key is present)
+                profile.pop('hidden', None)
             self.__root(api="/account/node/profile/dynamic/post", payload={"node_id": self.node_id,
-                                                                           "profile":
-                                                                               self.profile.get_dynamic_profile()})
+                                                                           "profile": profile})
         except Exception as e:
             log.error(f"Error while sending dynamic profile to root server [{e}]")
 
