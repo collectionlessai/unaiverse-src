@@ -17,7 +17,6 @@ import sys
 import cv2
 import copy
 import json
-import base64
 import math
 import time
 import queue
@@ -49,8 +48,7 @@ from unaiverse.streams.streams import DataProps, BufferedStream
 from unaiverse.utils.logger import log, ALWAYS_ON_CHANNELS, ALL_CHANNELS
 from unaiverse.utils.misc import (get_key_considering_multiple_sources, save_node_addresses_to_file,
                                   prepare_app_dir, load_agent_in_memory, unpack_py_files, analyze_code,
-                                  world_definition_members, canonical_world_hash, build_world_archive,
-                                  owner_handle)
+                                  world_definition_members, canonical_world_hash, owner_handle)
 
 # Margin added past a quarantine ban when the rejoin watchdog pulls a retry in:
 # just enough to land on the open side of the gate.
@@ -68,6 +66,8 @@ class Node:
                  node_name: str | None = None,
                  node_id: str | None = None,
                  hidden: bool | None = None,
+                 code_repo: str | None = None,
+                 code_commit: str | None = None,
                  clock_delta: float = 1. / 25.,
                  base_identity_dir: str | None = None,
                  only_certified_agents: bool = False,
@@ -90,6 +90,12 @@ class Node:
             hidden: A flag to determine if the node is hidden (i.e., only the owner of the account can
                 see it). When None (the default) the visibility is not asserted at all, so whatever
                 the owner chose (e.g. in the web app) is preserved.
+            code_repo: World only: the public GitHub repository holding this world's published code,
+                as "owner/repo" or the full https://github.com/owner/repo URL. The root fetches it,
+                folds the canonical bundle and attests its digest in the node token. When absent the
+                world declares nothing and runs unpublished (joins work exactly as before).
+            code_commit: World only: the full 40-character id of the (pushed) commit to declare,
+                not a branch and not a tag.
             clock_delta: The minimum time delta for the node's clock.
             base_identity_dir: Base directory for storing node identity files. If None, uses the default app directory.
             only_certified_agents: A flag to allow only certified agents to connect.
@@ -165,6 +171,8 @@ class Node:
         self.node_id = node_id
         self.run_hook = run_hook
         self.unaiverse_key = unaiverse_key
+        self.code_repo = code_repo
+        self.code_commit = code_commit
         self.node_type = Node.AGENT if (isinstance(hosted, Agent) and not isinstance(hosted, World)) else Node.WORLD
         self.agent: Agent | None = hosted if isinstance(hosted, Agent) else None
         self.world: World | None = hosted if isinstance(hosted, World) else None
@@ -453,12 +461,12 @@ class Node:
         self.hosted.set_node_info(self.conn, self.profile, self.ask_to_get_in_touch,
                                   self.__purge, self.node_identity_dir)
 
-        # World only: one-shot upload of the world definition (canonical code archive
-        # + role FSMs) to the root server, replacing the FSMs/code that used to ride
-        # the dynamic profile on every POST. The token is then re-requested so it is
-        # minted AFTER the upload (the root can attest the stored code hash in it).
+        # World only: optionally declare where this world's code lives (a GitHub repo
+        # and commit) so the root can attest its digest, and post the role FSMs for the
+        # website. The token is then re-requested so it is minted AFTER the declaration
+        # (the code_hash claim is read from the stored declaration at mint time).
         if self.node_type is Node.WORLD:
-            # self.send_world_definition()  # TODO not ready yey
+            self.declare_world_source()
             self.get_node_token(peer_ids=[self.get_public_peer_id(), self.get_world_peer_id()])
 
         # Finally, sending dynamic profile to the root server
@@ -657,49 +665,120 @@ class Node:
             log.critical(f"Unexpected CV payload from the root server: {ret}")
         return ret
 
-    def send_world_definition(self) -> None:
-        """Uploads the world definition to the root server (world only, once at boot).
+    def declare_world_source(self) -> None:
+        """Posts the role FSMs and optionally declares where this world's code lives (world only).
 
-        The canonical archive is built from the same members that ride the grant
-        code_bundle (pruned agent files + role FSMs), so the hash the root stores is
-        exactly the hash of what joiners receive and execute. The role FSMs are also
-        posted in structured form for the website. Failures are logged but not fatal:
-        the world still runs, and joiners simply have no stored hash to check against.
+        Attestation only: the code still travels to joiners inside the world grant. The
+        root fetches the declared commit from GitHub, folds the canonical bundle
+        (code/ + fsm/ at the repository root) and stores its digest, which is minted
+        into the node token as the code_hash claim; the joiner-side gate compares the
+        grant bundle against that claim. With no code_repo/code_commit configured the
+        world declares nothing and runs unpublished, exactly as before.
+
+        Fatal when a declaration was requested and cannot be completed, or does not
+        match the code this world is about to hand out: a stale or wrong attested
+        digest would fail every join, on machines whose operators cannot see the cause.
         """
         assert self.world is not None
-        members = world_definition_members(unpack_py_files(self.world.packed_agent_files),
-                                           self.world.role_to_behav)
-        archive = build_world_archive(members)
-        local_hash = canonical_world_hash(members)
 
-        for i in range(0, 3):  # It will try 3 times before giving up...
+        # Structured role FSMs for the website: independent of the attestation, best-effort
+        try:
+            if self.world.role_to_behav:
+                self.__root(api="/account/node/fsm/post",
+                            payload={"node_id": self.node_id,
+                                     "world_roles_fsm": self.world.role_to_behav})
+            else:
+                # The API refuses an empty world_roles_fsm, and an empty dict does
+                # not mean "no roles" to it: simply skip the post
+                log.debug("No world roles to post (role_to_behav is empty), skipping fsm/post")
+        except Exception as e:
+            log.error(f"Error while posting the world role FSMs to the root server [{e}]")
+
+        if self.code_repo is None and self.code_commit is None:
+            # A declaration left on the server by a previous run would still mint its
+            # digest into the fresh token and fail every join against today's bundle:
+            # clear it (idempotent, a no-op for a world that never declared)
             try:
-                ret = self.__root(api="/account/node/code/post",
+                self.__root(api="/account/node/code/source/clear",
+                            payload={"node_id": self.node_id,
+                                     "caller_node_id": self.node_id,
+                                     "caller_node_token": self.node_token})
+                log.misc("No code_repo/code_commit configured: this world runs unpublished "
+                         "(no attested code hash, joins work as usual)")
+            except RootServerError as e:
+                log.error(f"Could not clear the world-source declaration [{e}]: if a previous "
+                          "run declared one, its stale attested digest will make every join fail")
+            return
+
+        if self.code_repo is None or self.code_commit is None:
+            # Exactly one of the two is set: a declaration was clearly requested, and
+            # silently running unpublished would defeat the author's intent
+            missing = "code_commit" if self.code_commit is None else "code_repo"
+            msg = (f"A world-source declaration was requested but {missing} is missing: "
+                   f"pass both code_repo and code_commit, or neither")
+            log.error(msg)
+            raise GenException(msg)
+
+        # Operator-facing hints for the refusal discriminators of code/source/set:
+        # each is a distinct author mistake, and the message should say what to fix
+        hints = {
+            "commit_invalid": "declare the full 40-character commit id (not a branch, not a tag)",
+            "commit_unreachable": "the commit is not reachable on GitHub: push it, and make sure "
+                                  "the repository is publicly readable without credentials",
+            "repo_no_bundle": "the repository must carry the canonical layout at its root: code/ "
+                              "for the shipped sources and fsm/ for the role FSMs",
+            "repo_bad_member": "only plain files are allowed inside code/ and fsm/ "
+                               "(no symlinks, no submodules)",
+            "repo_too_large": "the repository exceeds the server limits on the code/ and fsm/ trees",
+            "repo_unavailable": "the API host has no git available to read repositories",
+            "repo_timeout": "the server timed out reading the repository: try again later",
+        }
+
+        ret = None
+        for i in range(0, 3):  # Retrying transport failures (and server-side git timeouts) only
+            try:
+                # The caller_* pair is what authenticates this call (the node_token that
+                # __root injects is not read by this endpoint's decorator)
+                ret = self.__root(api="/account/node/code/source/set",
                                   payload={"node_id": self.node_id,
-                                           "code_b64": base64.b64encode(archive).decode('ascii')})
-                stored_hash = ret.get("hash") if isinstance(ret, dict) else None
-                if stored_hash is not None and stored_hash != local_hash:
-                    log.error(f"World-definition hash mismatch: root stored {stored_hash}, "
-                              f"locally computed {local_hash} (joiners will fail the code check)")
-                if self.world.role_to_behav:
-                    self.__root(api="/account/node/fsm/post",
-                                payload={"node_id": self.node_id,
-                                         "world_roles_fsm": self.world.role_to_behav})
-                else:
-                    # The API refuses an empty world_roles_fsm, and an empty dict does
-                    # not mean "no roles" to it: simply skip the post
-                    log.debug("No world roles to post (role_to_behav is empty), skipping fsm/post")
-                log.misc(f"World definition uploaded to the root server (hash: {local_hash})")
-                return
-            except Exception as e:
-                log.error(f"Error while sending the world definition to the root server [{e}]")
+                                           "caller_node_id": self.node_id,
+                                           "caller_node_token": self.node_token,
+                                           "repo": self.code_repo,
+                                           "commit_sha": self.code_commit})
+                break
+            except RootServerError as e:
+                if e.api_rejected and e.data_code == "repo_timeout" and i < 2:
+                    # The one transient refusal: the server's git read timed out
+                    log.error("The root server timed out reading the repository, retrying...")
+                    time.sleep(1)
+                    continue
+                if e.api_rejected:
+                    hint = hints.get(e.data_code)
+                    log.error(f"The root server refused the world-source declaration of "
+                              f"'{self.code_repo}' @ {self.code_commit}"
+                              + (f": {hint}" if hint else f" [{e}]"))
+                    raise
+                log.error(f"Error while declaring the world source to the root server [{e}]")
                 if i < 2:
                     log.misc("Retrying...")
                     time.sleep(1)  # Wait a little bit
                 else:
-                    # log.error, NOT log.critical (which raises): per the contract above
-                    # a failed upload must not kill the world boot
-                    log.error(f"Giving up sending the world definition to the root server [{e}]")
+                    raise
+
+        # The root folded the repository, while this world will hand out the grant
+        # bundle: the two must be byte-identical, or the joiner's fail-closed gate
+        # refuses every join. Refuse to start instead, here, where the author can fix it.
+        local_hash = canonical_world_hash(
+            world_definition_members(unpack_py_files(self.world.packed_agent_files),
+                                     self.world.role_to_behav))
+        stored_hash = ret.get("hash") if isinstance(ret, dict) else None
+        if stored_hash != local_hash:
+            msg = (f"The declared repository does not match the code this world is about to "
+                   f"hand out (root attested {stored_hash}, the local bundle folds to "
+                   f"{local_hash}): commit and push, then declare that commit")
+            log.error(msg)
+            raise GenException(msg)
+        log.misc(f"World source declared and attested by the root server (hash: {local_hash})")
 
     def send_dynamic_profile(self) -> None:
         """Sends the node's dynamic profile to the root server."""
@@ -2397,9 +2476,9 @@ class Node:
 
         # Code-integrity gate: when the world's root token attests a code hash, the
         # received bundle must fold to exactly that hash ("what you run is what the
-        # root has on file", same canonical members as the world's upload). Tokens
-        # without the claim (legacy worlds, or a root not attesting it yet) skip this,
-        # leaving analyze_code below as the only check.
+        # root attested", same canonical members the root read from the world's
+        # declared repository). Tokens without the claim skip this, leaving
+        # analyze_code below as the only check.
         if attested_code_hash:
             local_hash = canonical_world_hash(world_definition_members(agent_files, roles_fsm))
             if local_hash != attested_code_hash:
@@ -2408,9 +2487,9 @@ class Node:
                 return False
             log.misc(f"World-code hash verified against the root-attested claim ({local_hash})")
         else:
-            # Transitional fail-open: a world presenting a still-valid pre-upload token
-            # (no claim) is indistinguishable from a legacy one, so the check can be
-            # dodged until this branch turns fail-closed (root deploy of the claim).
+            # No claim in the token: the world declared no source repository, a fully
+            # supported outcome (it runs unpublished), so there is nothing to compare
+            # the grant bundle against and analyze_code below remains the only gate.
             log.misc("No world-code hash attested in the world's token, skipping the code-integrity check")
 
         # Checking files (single gate: stats.py, when shipped, is part of the bundle)

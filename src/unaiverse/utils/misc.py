@@ -12,7 +12,6 @@
                  Code Repositories:  https://github.com/collectionlessai/
                  Main Developers:    Stefano Melacci (Project Leader), Christian Di Maio, Tommaso Guidi
 """
-import io
 import os
 import ast
 import sys
@@ -20,7 +19,6 @@ import time
 import json
 import math
 import gzip
-import tarfile
 import random
 import base64
 import hashlib
@@ -510,9 +508,9 @@ def world_definition_members(agent_files: dict[str, str], roles_fsm: dict[str, s
     """Canonical member set of a world definition.
 
     ``code/<path>`` for every shipped source file (stats.py included) and
-    ``fsm/<role>.json`` for every role FSM. Shared by the root-server upload
-    (the server hashes the archive members) and by the joiner-side check, so
-    both ends fold exactly the same bytes.
+    ``fsm/<role>.json`` for every role FSM. The same member layout the root
+    server reads from a declared GitHub commit, and the one the joiner-side
+    check folds from the grant bundle, so all ends fold exactly the same bytes.
 
     Args:
         agent_files: Dict mapping relative paths to source text (the bundle).
@@ -530,9 +528,9 @@ def canonical_world_hash(members: dict[str, bytes]) -> str:
     """Deterministic BLAKE2b (256-bit) digest of a world-definition member set.
 
     Members are folded in alphabetical order as ``<name>\\x00<content>``, the
-    same folding the root server applies to the members of the uploaded tar
-    archive, so a joiner can recompute the stored hash from the grant bundle
-    without ever seeing the archive.
+    same folding the root server applies to the bundle it reads from a world's
+    declared repository, so a joiner can recompute the attested hash from the
+    grant bundle without ever touching the repository.
 
     Args:
         members: Dict mapping member names to content bytes.
@@ -546,33 +544,6 @@ def canonical_world_hash(members: dict[str, bytes]) -> str:
         h.update(b'\x00')
         h.update(members[name])
     return h.hexdigest()
-
-
-def build_world_archive(members: dict[str, bytes]) -> bytes:
-    """Builds a deterministic ``.tar.gz`` of a world-definition member set.
-
-    Member order, tar metadata and the gzip timestamp are all pinned, so the
-    same members always produce the same bytes and the root-side canonical
-    hash of the archive equals ``canonical_world_hash(members)``.
-
-    Args:
-        members: Dict mapping member names to content bytes.
-
-    Returns:
-        The gzip-compressed tar archive as bytes.
-    """
-    buf = io.BytesIO()
-    with gzip.GzipFile(fileobj=buf, mode='wb', mtime=0) as gz:
-        with tarfile.open(fileobj=gz, mode='w') as tar:
-            for name in sorted(members):
-                info = tarfile.TarInfo(name=name)
-                data = members[name]
-                info.size = len(data)
-                info.mtime = 0
-                info.uid = info.gid = 0
-                info.uname = info.gname = ''
-                tar.addfile(info, io.BytesIO(data))
-    return buf.getvalue()
 
 
 class _InMemoryLoader(importlib.abc.SourceLoader):

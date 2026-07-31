@@ -13,6 +13,7 @@ split that makes running the fetch off the event loop safe.
 
 import pytest
 
+from unaiverse.custom import GenException, RootServerError
 from unaiverse.networking.node.node import Node
 
 
@@ -63,13 +64,17 @@ def test_request_node_token_raises_after_retries(monkeypatch):
     monkeypatch.setattr("time.sleep", lambda *_a, **_k: None)  # skip the real backoff wait
     node = _mini_node()
 
+    attempts = []
+
     def fake_root(api, payload):
-        raise RuntimeError("root unreachable")
+        attempts.append(api)
+        raise RootServerError("root unreachable", api=api)
 
     node._Node__root = fake_root
-    with pytest.raises(Exception):
+    with pytest.raises(RootServerError):
         node._request_node_token(["p-pub"])
-    # No self-mutation on failure either.
+    # Three attempts for a transport failure, and no self-mutation on failure either.
+    assert len(attempts) == 3
     assert node.node_token == "old-token"
 
 
@@ -102,7 +107,11 @@ def test_get_node_token_fetches_then_applies():
     assert conn.tokens == ["fresh"]
 
 
-# World-definition upload (one-shot at world boot)
+# World-source declaration (one-shot at world boot)
+
+
+FILES = {'player.py': "X = 1\n", 'stats.py': "class WStats:\n    pass\n"}
+FSMS = {'player': '{"role": "player"}'}
 
 
 def _world_ns(files, fsms):
@@ -111,51 +120,185 @@ def _world_ns(files, fsms):
     return SimpleNamespace(packed_agent_files=pack_py_files(files), role_to_behav=fsms)
 
 
-def test_send_world_definition_posts_canonical_archive_and_fsms():
-    """The uploaded archive folds (server-side algorithm) to the canonical hash of
-    exactly the members that ride the grant bundle, and the payload field names
-    match the root API (code_b64, world_roles_fsm)."""
-    import base64
-
-    from test_world_definition import _server_side_hash
+def _local_hash(files, fsms):
     from unaiverse.utils.misc import canonical_world_hash, world_definition_members
+    return canonical_world_hash(world_definition_members(files, fsms))
 
-    files = {'player.py': "X = 1\n", 'stats.py': "class WStats:\n    pass\n"}
-    fsms = {'player': '{"role": "player"}'}
-    node = _mini_node(world=_world_ns(files, fsms))
+
+def _world_node(files=FILES, fsms=FSMS, **attrs):
+    return _mini_node(world=_world_ns(files, fsms),
+                      code_repo=attrs.pop("code_repo", "owner/repo"),
+                      code_commit=attrs.pop("code_commit", "c" * 40),
+                      **attrs)
+
+
+def test_declare_world_source_posts_fsms_and_declares():
+    """The declaration carries the caller_* auth pair (the endpoint's decorator does
+    not read the node_token that __root injects) and the repo/commit pointer; the
+    role FSMs are posted for the website, first and independently."""
+    node = _world_node()
     calls = []
 
     def fake_root(api, payload):
         calls.append((api, payload))
-        if api.endswith("/code/post"):
-            return {"hash": canonical_world_hash(world_definition_members(files, fsms)),
-                    "size_bytes": 1}
+        if api.endswith("/code/source/set"):
+            return {"hash": _local_hash(FILES, FSMS)}
         return None
 
     node._Node__root = fake_root
-    node.send_world_definition()
+    node.declare_world_source()
 
-    assert [a for a, _ in calls] == ["/account/node/code/post", "/account/node/fsm/post"]
-    code_payload = calls[0][1]
-    assert code_payload["node_id"] == "n1"
-    archive = base64.b64decode(code_payload["code_b64"])
-    assert _server_side_hash(archive) == canonical_world_hash(
-        world_definition_members(files, fsms))
-    assert calls[1][1]["world_roles_fsm"] == fsms
+    assert [a for a, _ in calls] == ["/account/node/fsm/post", "/account/node/code/source/set"]
+    assert calls[0][1]["world_roles_fsm"] == FSMS
+    declared = calls[1][1]
+    assert declared["node_id"] == "n1"
+    assert declared["caller_node_id"] == "n1"
+    assert declared["caller_node_token"] == "old-token"
+    assert declared["repo"] == "owner/repo"
+    assert declared["commit_sha"] == "c" * 40
 
 
-def test_send_world_definition_gives_up_without_raising(monkeypatch):
-    """Three failed attempts must be logged, never fatal: the world still boots
-    (joiners simply have no stored hash to check against)."""
+def test_declare_world_source_unconfigured_world_stays_unpublished():
+    """With no code_repo/code_commit the world declares nothing: the FSMs are still
+    posted, no source/set call is made, and any declaration left on the server by a
+    previous run is cleared (or a fresh token would still mint its stale digest)."""
+    node = _world_node(code_repo=None, code_commit=None)
+    calls = []
+
+    def fake_root(api, payload):
+        calls.append(api)
+        return None
+
+    node._Node__root = fake_root
+    node.declare_world_source()  # Must not raise
+
+    assert calls == ["/account/node/fsm/post", "/account/node/code/source/clear"]
+
+
+def test_declare_world_source_clear_failure_is_not_fatal():
+    """The clear is defensive (a no-op for a world that never declared): its failure
+    is loudly logged but must not stop an unpublished world from booting."""
+    node = _world_node(code_repo=None, code_commit=None)
+
+    def fake_root(api, payload):
+        if api.endswith("/source/clear"):
+            raise RootServerError("down", api=api)
+        return None
+
+    node._Node__root = fake_root
+    node.declare_world_source()  # Must not raise
+
+
+@pytest.mark.parametrize("attrs", [{"code_repo": None}, {"code_commit": None}])
+def test_declare_world_source_half_configured_is_fatal(attrs):
+    """Exactly one of code_repo/code_commit set is an author mistake: a declaration
+    was requested, so silently running unpublished would defeat the intent."""
+    node = _world_node(**attrs)
+    node._Node__root = lambda api, payload: None
+
+    with pytest.raises(GenException, match="missing"):
+        node.declare_world_source()
+
+
+def test_declare_world_source_repo_timeout_is_retried(monkeypatch):
+    """repo_timeout is the one transient refusal (the server's git read timed out):
+    it is retried like a transport failure instead of aborting the boot."""
     monkeypatch.setattr("time.sleep", lambda *_a, **_k: None)
-    node = _mini_node(world=_world_ns({'a.py': "x = 1\n"}, {}))
+    node = _world_node()
     attempts = []
 
     def fake_root(api, payload):
+        if api.endswith("/fsm/post"):
+            return None
         attempts.append(api)
-        raise RuntimeError("root down")
+        if len(attempts) < 3:
+            raise RootServerError("timeout", api=api, api_rejected=True,
+                                  data_code="repo_timeout")
+        return {"hash": _local_hash(FILES, FSMS)}
 
     node._Node__root = fake_root
-    node.send_world_definition()  # Must not raise
+    node.declare_world_source()  # Third attempt succeeds
 
-    assert attempts == ["/account/node/code/post"] * 3
+    assert len(attempts) == 3
+
+
+def test_declare_world_source_roleless_world_skips_fsm_post():
+    node = _world_node(fsms={})
+    calls = []
+
+    def fake_root(api, payload):
+        calls.append(api)
+        return {"hash": _local_hash(FILES, {})}
+
+    node._Node__root = fake_root
+    node.declare_world_source()
+
+    assert calls == ["/account/node/code/source/set"]
+
+
+def test_declare_world_source_hash_mismatch_refuses_to_start():
+    """The root folded the repository, the world hands out the grant bundle: on a
+    divergence every join would fail at the fail-closed joiner gate, so the world
+    must refuse to start instead."""
+    node = _world_node()
+
+    def fake_root(api, payload):
+        return {"hash": "0" * 64} if api.endswith("/code/source/set") else None
+
+    node._Node__root = fake_root
+    with pytest.raises(GenException, match="commit and push"):
+        node.declare_world_source()
+
+
+def test_declare_world_source_refusal_fails_fast():
+    """A refusal is deterministic: one attempt, then the typed error propagates
+    (fatal at boot, so a stale attested digest can never fail every join silently)."""
+    node = _world_node()
+    attempts = []
+
+    def fake_root(api, payload):
+        if api.endswith("/fsm/post"):
+            return None
+        attempts.append(api)
+        raise RootServerError("commit unreachable", api=api, api_rejected=True,
+                              data_code="commit_unreachable")
+
+    node._Node__root = fake_root
+    with pytest.raises(RootServerError):
+        node.declare_world_source()
+    assert len(attempts) == 1
+
+
+def test_declare_world_source_transport_failure_raises_after_retries(monkeypatch):
+    monkeypatch.setattr("time.sleep", lambda *_a, **_k: None)
+    node = _world_node()
+    attempts = []
+
+    def fake_root(api, payload):
+        if api.endswith("/fsm/post"):
+            return None
+        attempts.append(api)
+        raise RootServerError("root down", api=api)
+
+    node._Node__root = fake_root
+    with pytest.raises(RootServerError):
+        node.declare_world_source()
+    assert len(attempts) == 3
+
+
+def test_declare_world_source_fsm_post_failure_is_not_fatal():
+    """The FSM post feeds the website only: its failure must not stop the boot nor
+    the declaration."""
+    node = _world_node()
+    calls = []
+
+    def fake_root(api, payload):
+        calls.append(api)
+        if api.endswith("/fsm/post"):
+            raise RootServerError("fsm refused", api=api, api_rejected=True)
+        return {"hash": _local_hash(FILES, FSMS)}
+
+    node._Node__root = fake_root
+    node.declare_world_source()  # Must not raise
+
+    assert calls == ["/account/node/fsm/post", "/account/node/code/source/set"]
