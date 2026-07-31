@@ -1039,36 +1039,73 @@ class Node:
         self.agent = new_agent
         self.hosted = new_agent
 
-    def search(self, query_text: str, email: str | None = None) -> list[NodeProfile]:
+    @staticmethod
+    def _profile_from_search_element(element: dict) -> NodeProfile:
+        """Maps one element of /discover/search/query into a NodeProfile.
+
+        The element is a flat spread of the API's public node serialisation (plus
+        lat/lon/location): there is no static/dynamic/cv envelope, the owner fields
+        live under 'account', the stored dynamic profile under 'profile' and the
+        badge list under 'cv'.
+        """
+        account = element.get('account') if isinstance(element.get('account'), dict) else {}
+        static = {
+            'node_id': element.get('node_id'),
+            'node_type': element.get('node_type'),
+            'node_name': element.get('node_name'),
+            'node_description': element.get('description'),
+            'created_utc': element.get('created_utc'),
+            'max_nr_connections': element.get('max_connections'),
+            'certified': element.get('certified'),
+            'allowed_node_ids': element.get('allowed_node_ids'),
+            'world_masters_node_ids': element.get('world_masters_node_ids'),
+            'location_method': element.get('location_method'),
+            'nickname': account.get('nickname'),
+            'name': account.get('name'),
+            'surname': account.get('surname'),
+            'title': account.get('title'),
+            'organization': account.get('organization'),
+        }
+        dynamic = element.get('profile') if isinstance(element.get('profile'), dict) else {}
+        cv = element.get('cv') if isinstance(element.get('cv'), list) else []
+        return NodeProfile(static=static, dynamic=dynamic, cv=cv)
+
+    def search(self, query_text: str, nickname: str | None = None, email: str | None = None) -> list[NodeProfile]:
         """Searches the UNaIVERSE platform for nodes matching the given query.
 
         Args:
-            query_text: The text query used to search for nodes.
-            email: An optional email address to filter results by account owner.
+            query_text: The text query used to search for nodes (matched against node
+                names and descriptions).
+            nickname: An optional account nickname to filter results by owner.
+            email: Deprecated alias of nickname; addresses no longer identify accounts,
+                so filtering by an address matches nothing on current servers.
 
         Returns:
             A list of NodeProfile objects matching the search query.
         """
-        profiles_as_list_of_dict = []
+        if email is not None and nickname is None:
+            log.error("search(email=...) is deprecated: addresses no longer identify accounts, "
+                      "pass the owner's nickname instead (forwarding the value as a nickname)")
+            nickname = email
+
+        elements = []
         profiles = []
 
         try:
-            profiles_as_list_of_dict = self.__root(api="/discover/search/query", payload={
-                "query_text": query_text,
-                "email": email,
-                "account_token": self.unaiverse_key,
-                "peer_id": None,  # unused
-                "node_id": None  # unused
+            elements = self.__root(api="/discover/search/query", payload={
+                "message": query_text,
+                "nickname": nickname,
+                "account_token": self.unaiverse_key
             })
         except Exception as e:
-            log.critical(f"Error while searching! Query: {query_text}, email: {email} [{e}]")
+            log.critical(f"Error while searching! Query: {query_text}, nickname: {nickname} [{e}]")
 
         try:
-            for p in profiles_as_list_of_dict:
-                profiles.append(NodeProfile.from_dict(json.loads(p)))
+            for p in elements:
+                profiles.append(self._profile_from_search_element(p))
         except Exception as e:
             log.critical(f"Error while converting data returned by 'search'! "
-                         f"Query: {query_text}, email: {email} [{e}]")
+                         f"Query: {query_text}, nickname: {nickname} [{e}]")
         return profiles
 
     def run(self, keep_rejoining: bool = True, *args, **kwargs) -> None:
