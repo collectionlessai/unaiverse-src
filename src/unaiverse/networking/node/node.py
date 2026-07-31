@@ -36,7 +36,7 @@ from unaiverse.agent import Agent
 from collections.abc import Callable
 from datetime import datetime, timezone
 from unaiverse.networking.p2p.messages import Msg
-from unaiverse.custom import Custom, GenException
+from unaiverse.custom import Custom, GenException, RootServerError
 from unaiverse.networking.p2p import P2P, P2PError
 from unaiverse.networking.node.connpool import NodeConn
 from unaiverse.networking.node.profile import NodeProfile
@@ -369,7 +369,8 @@ class Node:
 
         # Get profile (static)
         profile_static = self.__root(api="/account/node/profile/static/get", payload={"node_id": self.node_id})
-        assert isinstance(profile_static, dict)
+        if not isinstance(profile_static, dict):
+            log.critical(f"Unexpected static-profile payload from the root server: {profile_static}")
 
         # Getting list of allowed nodes from the static profile,
         # if we did not already specify it when creating the node in the code (the code has higher priority)
@@ -571,14 +572,18 @@ class Node:
                                                 if self.node_token is None or len(self.node_token) == 0 else None,
                                                 "node_token": self.node_token, "peer_ids": json.dumps(peer_ids)})
                 break
-            except Exception as e:
+            except RootServerError as e:
+                if e.api_rejected:
+                    raise  # The server answered and refused: retrying cannot change the outcome
                 if i < 2:
                     log.error("Error while getting token from server, retrying...")
                     time.sleep(1)  # Wait a little bit
                 else:
-                    log.critical(f"Error while getting token from server [{e}]")  # Raise the exception
+                    log.error(f"Error while getting token from server [{e}]")
+                    raise
 
-        assert isinstance(response, dict)
+        if not isinstance(response, dict):
+            log.critical(f"Unexpected token payload from the root server: {response}")
         return response
 
     def _apply_node_token(self, response: dict) -> None:
@@ -609,19 +614,24 @@ class Node:
         Returns:
             The node's CV as a list of dictionaries dictionary.
         """
+        ret = None
         for i in range(0, 3):  # It will try 3 times before raising the exception...
             try:
                 ret = self.__root(api="/account/node/cv/get", payload={"node_id": self.node_id})
-                assert isinstance(ret, list)
-                return ret
-            except Exception as e:
+                break
+            except RootServerError as e:
+                if e.api_rejected:
+                    raise  # The server answered and refused: retrying cannot change the outcome
                 log.error(f"Error while getting CV from server [{e}]")
                 if i < 2:
                     log.misc("Retrying...")
                     time.sleep(1)  # Wait a little bit
                 else:
-                    log.critical(f"Error while getting CV from server [{e}]")
-        return []
+                    raise
+
+        if not isinstance(ret, list):
+            log.critical(f"Unexpected CV payload from the root server: {ret}")
+        return ret
 
     def send_world_definition(self) -> None:
         """Uploads the world definition to the root server (world only, once at boot).
@@ -718,6 +728,9 @@ class Node:
                         self.world.clear_badges()
                         break
                     except Exception as e:
+                        if isinstance(e, RootServerError) and e.api_rejected:
+                            log.error(f"Badge assignment refused by the root server [{e}] (stop trying)")
+                            break
                         log.error(f"Error while sending badges to server or when notifying peers [{e}]")
                         if i < 2:
                             log.misc("Retrying...")
@@ -3142,32 +3155,55 @@ class Node:
 
         Returns:
             The 'data' field from the server's JSON response.
+
+        Raises:
+            RootServerError: on transport failures and, with api_rejected set, on
+                API-level refusals (the API answers HTTP 200 with state.code != "ok");
+                refusals carry the response envelope (state code and message, the
+                data.code discriminator, the flags) for callers to branch on.
         """
-        response_fields = ["state", "flags", "data"]
+        url = self.root_endpoint.rstrip("/") + "/" + api.lstrip("/")
+        payload["node_token"] = self.node_token  # Adding token to let the server verify
 
         try:
-            api = self.root_endpoint.rstrip("/") + "/" + api.lstrip("/")
-            payload["node_token"] = self.node_token  # Adding token to let the server verify
-            response = requests.post(api,
+            response = requests.post(url,
                                      json=payload,
-                                     headers={"Content-Type": "application/json"})
-
-            if response.status_code == 200:
-                ret = response.json()
-                if response_fields is not None:
-                    for field in response_fields:
-                        if field not in ret:
-                            log.critical(f"Missing key '{field}' in the response to {api}: {ret}")
-                if ret['state']['code'] != "ok":
-                    log.critical("[" + api + "] " + ret['state']['message'])
-                    return []
-                return ret['data']
-            else:
-                log.critical(f"Request {api} failed with status code {response.status_code}")
-                return []
+                                     headers={"Content-Type": "application/json"},
+                                     timeout=Custom.ROOT_REQUEST_TIMEOUT)
         except Exception as e:
-            log.critical(f"An error occurred while making the POST request: {e}")
-            return []
+            log.error(f"Request {url} failed: {e}")
+            raise RootServerError(f"Request {api} failed: {e}", api=api) from e
+
+        if response.status_code != 200:
+            log.error(f"Request {url} failed with status code {response.status_code}")
+            raise RootServerError(f"Request {api} failed with status code {response.status_code}",
+                                  api=api, status=response.status_code)
+
+        try:
+            ret = response.json()
+        except Exception as e:
+            log.error(f"Request {url} returned a non-JSON body: {e}")
+            raise RootServerError(f"Request {api} returned a non-JSON body", api=api,
+                                  status=response.status_code) from e
+
+        for field in ("state", "flags", "data"):
+            if field not in ret:
+                log.error(f"Missing key '{field}' in the response to {url}: {ret}")
+                raise RootServerError(f"Missing key '{field}' in the response to {api}",
+                                      api=api, status=response.status_code)
+
+        state = ret['state'] if isinstance(ret['state'], dict) else {}
+        if state.get('code') != "ok":
+            data = ret['data']
+            log.error("[" + url + "] " + str(state.get('message')))
+            raise RootServerError("[" + api + "] " + str(state.get('message')),
+                                  api=api, api_rejected=True,
+                                  state_code=state.get('code'),
+                                  state_message=state.get('message'),
+                                  data_code=data.get('code') if isinstance(data, dict) else None,
+                                  flags=ret['flags'] if isinstance(ret['flags'], dict) else {},
+                                  status=response.status_code)
+        return ret['data']
 
     def __replace_agent_instance_by_role(self, role: int,
                                          world_peer_id: str | None = None,

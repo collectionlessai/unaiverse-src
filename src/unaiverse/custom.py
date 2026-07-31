@@ -7,6 +7,7 @@ class Custom:
     # NODE CONFIGURATION
     # ==================
     SEND_DYNAMIC_PROFILE_EVERY = 10.  # Seconds
+    ROOT_REQUEST_TIMEOUT = 20.  # Seconds, per attempt on every root-server HTTP call
     GET_NEW_TOKEN_EVERY = 23 * 60. * 60. + 30 * 60.  # Seconds (23 hours and 30 minutes, safer)
     PUBLISH_RENDEZVOUS_EVERY = 10.  # Seconds
     SEND_ALIVE_EVERY = 2.5 * 60.  # Seconds
@@ -128,3 +129,26 @@ class Custom:
 class GenException(Exception):
     """Base exception for this application (a simple wrapper around a generic Exception)."""
     pass
+
+
+class RootServerError(GenException):
+    """Failure of a root-server API call.
+
+    api_rejected distinguishes an API-level refusal (the server answered and said no:
+    retrying cannot change the outcome) from a transport failure (worth a retry).
+    Refusals carry the response envelope: the state code and message, the data.code
+    discriminator and the flags, so callers can branch on them.
+    """
+
+    def __init__(self, message: str, *, api: str, api_rejected: bool = False,
+                 state_code: str | None = None, state_message: str | None = None,
+                 data_code: str | None = None, flags: dict | None = None,
+                 status: int | None = None) -> None:
+        super().__init__(message)
+        self.api = api
+        self.api_rejected = api_rejected
+        self.state_code = state_code
+        self.state_message = state_message
+        self.data_code = data_code
+        self.flags = flags if flags is not None else {}
+        self.status = status
