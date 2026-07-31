@@ -681,9 +681,14 @@ class Node:
                 if stored_hash is not None and stored_hash != local_hash:
                     log.error(f"World-definition hash mismatch: root stored {stored_hash}, "
                               f"locally computed {local_hash} (joiners will fail the code check)")
-                self.__root(api="/account/node/fsm/post",
-                            payload={"node_id": self.node_id,
-                                     "world_roles_fsm": self.world.role_to_behav})
+                if self.world.role_to_behav:
+                    self.__root(api="/account/node/fsm/post",
+                                payload={"node_id": self.node_id,
+                                         "world_roles_fsm": self.world.role_to_behav})
+                else:
+                    # The API refuses an empty world_roles_fsm, and an empty dict does
+                    # not mean "no roles" to it: simply skip the post
+                    log.debug("No world roles to post (role_to_behav is empty), skipping fsm/post")
                 log.misc(f"World definition uploaded to the root server (hash: {local_hash})")
                 return
             except Exception as e:
