@@ -363,7 +363,7 @@ class Node:
 
         # Get first badge token
         if self.node_type is Node.WORLD:
-            self.badge_token = self.__root(api="account/node/cv/badge/token/get", payload={"node_id": self.node_id})
+            self.badge_token = self.__root(api="/account/node/cv/badge/token/get", payload={"node_id": self.node_id})
         else:
             self.badge_token = None
 
@@ -800,7 +800,7 @@ class Node:
                     payload["node_name"] = node_name
                 if node_id is not None:
                     payload["node_id"] = node_id
-                addresses = self.__root(api="account/node/get/addresses",
+                addresses = self.__root(api="/account/node/get/addresses",
                                         payload=payload)["addresses"]
             except Exception as e:
                 log.error(f"Error while retrieving addresses of node named {node_name} [{e}]")
@@ -3146,7 +3146,7 @@ class Node:
         response_fields = ["state", "flags", "data"]
 
         try:
-            api = self.root_endpoint + ("/" if self.root_endpoint[-1] != "/" and api[0] != "/" else "") + api
+            api = self.root_endpoint.rstrip("/") + "/" + api.lstrip("/")
             payload["node_token"] = self.node_token  # Adding token to let the server verify
             response = requests.post(api,
                                      json=payload,
