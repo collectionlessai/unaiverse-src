@@ -274,6 +274,27 @@ class Node:
                     if self.world_masters_node_ids is None:
                         self.world_masters_node_ids = set()
                     self.world_masters_node_ids.add(master_node_id)
+        
+        # Get profile (static)
+        profile_static = self.__root(api="/account/node/profile/static/get", payload={"node_id": self.node_id})
+        if not isinstance(profile_static, dict):
+            log.critical(f"Unexpected static-profile payload from the root server: {profile_static}")
+
+        # Getting list of allowed nodes from the static profile,
+        # if we did not already specify it when creating the node in the code (the code has higher priority)
+        if (self.allowed_node_ids is None and 'allowed_node_ids' in profile_static and
+                profile_static['allowed_node_ids'] is not None and len(profile_static['allowed_node_ids']) > 0):
+            self.allowed_node_ids = set(profile_static['allowed_node_ids'])
+
+        # Getting list of world master nodes from the static profile,
+        # if we did not already specify it when creating the node in the code (the code has higher priority)
+        if self.node_type is Node.WORLD:
+            if (self.world_masters_node_ids is None and 'world_masters_node_ids' in profile_static and
+                    profile_static['world_masters_node_ids'] is not None
+                    and len(profile_static['world_masters_node_ids']) > 0):
+                self.world_masters_node_ids = set(profile_static['world_masters_node_ids'])
+        else:
+            self.world_masters_node_ids = None  # Clearing this in case the user specified it for a non-world node
 
         # Here you can set up max_instances, max_channels, enable_logging at libp2p level etc.
         P2P.setup_library(enable_logging=Custom.LIBP2PLOG, unai_logger=log)
@@ -336,6 +357,16 @@ class Node:
                 # Store the exception if creation fails
                 results[name] = _e
             return True
+        
+        # Creating the connection manager
+        # guessing max number of connections (max number of valid
+        # the connection manager will ensure that this limit is fulfilled)
+        # however, the actual number of connection attempts handled by libp2p must be higher that
+        self.conn = NodeConn(max_connections=profile_static['max_nr_connections'],
+                                is_world_node=self.node_type is Node.WORLD,
+                                public_key=self.public_key,
+                                token=self.node_token,
+                                local_node_id=self.node_id)
 
         # 4. Create and start both threads
         thread_u = threading.Thread(target=create_p2p_instance, args=("p2p_u", p2p_u_config))
@@ -376,37 +407,6 @@ class Node:
             self.badge_token = self.__root(api="/account/node/cv/badge/token/get", payload={"node_id": self.node_id})
         else:
             self.badge_token = None
-
-        # Get profile (static)
-        profile_static = self.__root(api="/account/node/profile/static/get", payload={"node_id": self.node_id})
-        if not isinstance(profile_static, dict):
-            log.critical(f"Unexpected static-profile payload from the root server: {profile_static}")
-
-        # Getting list of allowed nodes from the static profile,
-        # if we did not already specify it when creating the node in the code (the code has higher priority)
-        if (self.allowed_node_ids is None and 'allowed_node_ids' in profile_static and
-                profile_static['allowed_node_ids'] is not None and len(profile_static['allowed_node_ids']) > 0):
-            self.allowed_node_ids = set(profile_static['allowed_node_ids'])
-
-        # Getting list of world master nodes from the static profile,
-        # if we did not already specify it when creating the node in the code (the code has higher priority)
-        if self.node_type is Node.WORLD:
-            if (self.world_masters_node_ids is None and 'world_masters_node_ids' in profile_static and
-                    profile_static['world_masters_node_ids'] is not None
-                    and len(profile_static['world_masters_node_ids']) > 0):
-                self.world_masters_node_ids = set(profile_static['world_masters_node_ids'])
-        else:
-            self.world_masters_node_ids = None  # Clearing this in case the user specified it for a non-world node
-
-        # Creating the connection manager
-        # guessing max number of connections (max number of valid
-        # the connection manager will ensure that this limit is fulfilled)
-        # however, the actual number of connection attempts handled by libp2p must be higher that
-        self.conn = NodeConn(max_connections=profile_static['max_nr_connections'],
-                             is_world_node=self.node_type is Node.WORLD,
-                             public_key=self.public_key,
-                             token=self.node_token,
-                             local_node_id=self.node_id)
 
         # The Coordinator (NodeConn) owns the two per-instance SessionManagers: it
         # builds them from its own P2P handles and the cross-instance capability, and
