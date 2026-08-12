@@ -208,7 +208,7 @@ class Node:
         self.run_start_time = 0.
 
         # Root server-related
-        self.root_endpoint = 'https://unaiverse.io:8443/api'  # WARNING: EDITING THIS ADDRESS VIOLATES THE LICENSE
+        self.root_endpoint = 'https://unaiverse.io/api'  # WARNING: EDITING THIS ADDRESS VIOLATES THE LICENSE
         self.node_token = ""
         self.public_key = ""
 
