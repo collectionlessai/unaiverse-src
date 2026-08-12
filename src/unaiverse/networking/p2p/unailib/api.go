@@ -1064,6 +1064,49 @@ func GetWebRTCConnections(instanceIndexC C.int) *C.char {
 	return C.CString(jsonSuccessResponse(result))
 }
 
+// UpdateICEConfig updates the (pointer to the) ICE configuration, useful when updating the list of TURN servers
+//
+//export UpdateICEConfig
+func UpdateICEConfig(instanceIndexC C.int, configJSONC *C.char) *C.char {
+    instanceIndex := int(instanceIndexC)
+    ni, err := getInstance(instanceIndex)
+    if err != nil {
+        return C.CString(jsonErrorResponse(
+            fmt.Sprintf("Instance %d not found", instanceIndex), err))
+    }
+
+    var patch struct {
+        STUNServers *[]string     `json:"stun_servers,omitempty"`
+        TURNServers *[]TURNServer `json:"turn_servers,omitempty"`
+    }
+    if err := json.Unmarshal([]byte(C.GoString(configJSONC)), &patch); err != nil {
+        return C.CString(jsonErrorResponse(
+            fmt.Sprintf("Instance %d: invalid ICE config JSON", instanceIndex), err))
+    }
+
+    ni.iceConfigMu.Lock()
+    cur := ni.iceConfig
+    if cur == nil {
+        cur = &ICEConfig{}
+    }
+    next := &ICEConfig{
+        STUNServers: cur.STUNServers,
+        TURNServers: cur.TURNServers,
+    }
+    if patch.STUNServers != nil {
+        next.STUNServers = *patch.STUNServers
+    }
+    if patch.TURNServers != nil {
+        next.TURNServers = *patch.TURNServers
+    }
+    ni.iceConfig = next
+    ni.iceConfigMu.Unlock()
+
+    logger.Debugf("[GO] 🔄 Instance %d: ICE config updated (%d STUN, %d TURN)\n",
+        instanceIndex, len(next.STUNServers), len(next.TURNServers))
+    return C.CString(jsonSuccessResponse(map[string]any{"updated": true}))
+}
+
 // SendMessageToPeer sends a message either directly to a specific peer or broadcasts it via PubSub for a specific instance.
 // Parameters:
 //   - instanceIndexC (C.int): The index of the node instance.

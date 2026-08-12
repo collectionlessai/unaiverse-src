@@ -505,6 +505,25 @@ class Node:
         if hasattr(self, 'conn') and self.conn is not None:
             self.conn.set_token(self.node_token)
 
+            # TURN-related information
+            turn_info = response.get("turn_info", None)
+            if turn_info is not None:
+                turn_info: dict
+                self.conn.p2p_public.set_turn_credentials(
+                    ice_turn_servers=[{
+                        "urls": turn_info["urls"],
+                        "username": turn_info["username"],
+                        "credential": turn_info["credential"],
+                    }],
+                )
+                self.conn.p2p_world.set_turn_credentials(
+                    ice_turn_servers=[{
+                        "urls": turn_info["urls"],
+                        "username": turn_info["username"],
+                        "credential": turn_info["credential"],
+                    }],
+                )
+
     def get_cv(self) -> list[dict]:
         """Retrieves the node's CV (Curriculum Vitae) from the root server.
 
@@ -1089,12 +1108,38 @@ class Node:
                 keyboard_listener = threading.Thread(target=keyboard_listener, args=(keyboard_queue,), daemon=True)
 
             if clock.get_cycle() == -1:
+
+                def format_list(items: list[str], base_indent: int = 21):
+                    blocks = []
+                    circuit_blocks = []
+                    indent = " " * base_indent
+                    for s in items:
+                        if "127.0.0.1" in s:
+                            continue
+                        circuit = "/p2p-circuit" in s
+                        s = s[1:]
+                        s = s[s.find("/") + 1:]
+                        s = s[0:s.find("/p2p")]  # Also covers /p2p-circuit
+                        if "/certhash/" in s:
+                            s = s[0:s.find("/certhash/"):]
+                        if circuit:
+                            circuit_blocks.append(indent + "@" + s)
+                        else:
+                            blocks.append(indent + s)
+                    blocks.sort()
+                    circuit_blocks.sort()
+                    blocks += circuit_blocks
+                    blocks[0] = blocks[0][base_indent:]
+                    return ",\n".join(blocks)
+
                 log.user("\nRunning " + ("agent" if self.agent else "world") + " '" +
                          self.hosted.get_name() + "' ..."
-                         + f"\n- Owner:           {self.profile.get_static_profile()['email']}"
-                         + f"\n- Node ID:         {self.node_id}"
-                         + f"\n- Public peer ID:  {self.get_public_peer_id()}"
-                         + f"\n- Private peer ID: {self.get_world_peer_id()}")
+                         + f"\n- Owner:             {self.profile.get_static_profile()['email']}"
+                         + f"\n- Node ID:           {self.node_id}"
+                         + f"\n- Public peer ID:    {self.get_public_peer_id()}"
+                         + f"\n- Private peer ID:   {self.get_world_peer_id()}")
+                log.user("- Public addresses:  " + format_list(self.get_public_addresses()))
+                log.user("- Private addresses: " + format_list(self.get_world_addresses()))
 
             # Main loop
             must_quit = False

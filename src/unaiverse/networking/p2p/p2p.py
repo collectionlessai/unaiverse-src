@@ -796,6 +796,42 @@ class P2P:
             logger.error(f"❌ GetWebRTCConnections failed: {e}")
             raise P2PError("GetWebRTCConnections failed") from e
 
+    def set_turn_credentials(self, ice_turn_servers: list[dict[str, Any]]):
+        self.set_ice_config(ice_turn_servers=ice_turn_servers)
+
+    def set_ice_config(self,
+                       ice_stun_servers: list[str] | None = None,
+                       ice_turn_servers: list[dict[str, Any]] | None = None) -> None:
+        """Update STUN/TURN servers used for *future* WebRTC connections.
+
+        Existing PeerConnections keep their captured ICE config; each newly
+        constructed PC reads the updated values.  Safe to call from any thread.
+
+        Pass ``None`` for a field to leave it unchanged on the Go side; pass
+        ``[]`` to explicitly clear it.  Typical usage rotates only TURN creds
+        while leaving STUN alone.
+
+        Args:
+            ice_stun_servers: STUN URIs, or ``None`` to keep existing STUN list.
+            ice_turn_servers: TURN dicts (urls/username/credential), or
+                ``None`` to keep existing TURN list.
+        """
+        cfg: dict[str, Any] = {}
+        if ice_stun_servers is not None:
+            cfg["stun_servers"] = ice_stun_servers
+        if ice_turn_servers is not None:
+            cfg["turn_servers"] = ice_turn_servers
+        if not cfg:
+            return  # nothing to update — no round-trip
+        result_ptr = P2P.libp2p.UpdateICEConfig(
+            P2P._type_interface.to_go_int(self._instance),
+            P2P._type_interface.to_go_json(cfg),
+        )
+        result = P2P._type_interface.from_go_ptr_to_json(result_ptr)
+        if result is None or result.get('state') == "Error":
+            msg: str = result.get('message', 'unknown error') if result else 'null result'
+            raise P2PError(f"[Instance {self._instance}] set_ice_config failed: {msg}")
+
     def get_connected_peers_info(self) -> List[Dict[str, Any]]:
         """
         Gets information about currently connected peers from the Go library.
