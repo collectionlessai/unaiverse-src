@@ -49,6 +49,22 @@ const RelayReservationTimeout = 60 * time.Second
 // StreamCreationTimeout is the timeout for opening a new libp2p stream to a peer.
 const StreamCreationTimeout = 20 * time.Second
 
+// ChatStreamIdleTimeout bounds how long a persistent chat stream may stay silent
+// before we reset it. The chat stream is long-lived and bidirectional, so we do
+// not set a hard one-shot deadline (unlike session streams); instead we renew an
+// idle deadline on every frame. A peer that opens the stream and then goes quiet
+// (slow-loris) gets pinned no longer than this. The window is a per-frame budget,
+// so it must comfortably exceed the time to transfer one MaxMessageSize frame on
+// a slow link.
+const ChatStreamIdleTimeout = 5 * time.Minute
+
+// WebRTCReassemblyTimeout bounds how long a multi-chunk DataChannel message may
+// take between its START and END chunks. Past this, the partial reassembly buffer
+// is discarded so a peer cannot pin up to MaxMessageSize of memory by sending a
+// START and then dribbling (or never finishing). Checked lazily on each incoming
+// chunk; a peer that goes fully silent is reclaimed via OnConnectionStateChange.
+const WebRTCReassemblyTimeout = 120 * time.Second
+
 // WebRTC DataChannel chunking constants.
 // Browser SCTP implementations cap individual DataChannel messages at ~64KB.
 // We split large frames into chunks of at most WebRTCMaxChunkPayload bytes
@@ -80,6 +96,19 @@ const (
 	// (total chunk size minus the 1-byte flags header).
 	webRTCMaxChunkPayload = WebRTCMaxChunkSize - 1
 )
+
+// popBinaryMagic is the first byte of the binary buffer returned by PopMessages
+// when there is at least one message. It lets the Python side tell the binary
+// message buffer apart from the JSON status responses (Empty/Error), which always
+// start with '{' (0x7B). The binary layout avoids the base64 (+33%) and the extra
+// string copies that JSON marshalling imposed on large image/tensor payloads:
+//
+//	[1B magic=0xB1][uint32 totalBytes][uint32 count]
+//	then per message: [uint32 fromLen][from][uint32 protoLen][proto][uint32 dataLen][data]
+//
+// totalBytes is the size of the whole buffer (magic + header + all frames). All
+// integers are big-endian. `from` is the textual peer-id, `data` is raw bytes.
+const popBinaryMagic byte = 0xB1
 
 // --- Create a package-level logger ---
 var logger = golog.Logger("unailib")
@@ -200,6 +229,11 @@ type NodeInstance struct {
 	// Static relay
 	privateRelayAddrs []ma.Multiaddr
 
+	// Reachability State (AutoNAT). Seeded in CreateNode; for non-ForcePublic nodes it is
+	// then kept live by handleReachabilityEvents, which is the only writer from that point.
+	reachMutex sync.RWMutex
+	isPublic   bool
+
 	// PubSub State
 	pubsubMutex   sync.RWMutex
 	topics        map[string]*pubsub.Topic
@@ -283,6 +317,11 @@ type WebRTCConn struct {
 	// Pion delivers OnMessage callbacks sequentially for a single DataChannel,
 	// so no mutex is needed here.
 	reassemblyBuf []byte
+
+	// reassemblyStart is when the current multi-chunk reassembly began (set on the
+	// START chunk). Used to enforce WebRTCReassemblyTimeout. Touched only inside the
+	// sequential OnMessage callback, like reassemblyBuf, so it needs no mutex.
+	reassemblyStart time.Time
 }
 
 // Define the list of default STUN servers to use if none are provided in the config.

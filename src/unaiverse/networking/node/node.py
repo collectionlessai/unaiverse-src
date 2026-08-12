@@ -35,14 +35,15 @@ from unaiverse.agent import Agent
 from collections.abc import Callable
 from datetime import datetime, timezone
 from unaiverse.networking.p2p.messages import Msg
-from unaiverse.custom import Custom, GenException
+from unaiverse.custom import Custom, GenException, RootServerError
 from unaiverse.networking.p2p import P2P, P2PError
 from unaiverse.networking.node.connpool import NodeConn
 from unaiverse.networking.node.profile import NodeProfile
 from unaiverse.streams.streams import DataProps, BufferedStream
 from unaiverse.utils.logger import log, ALWAYS_ON_CHANNELS, ALL_CHANNELS
 from unaiverse.utils.misc import (get_key_considering_multiple_sources, save_node_addresses_to_file,
-                                  prepare_app_dir, load_agent_in_memory, unpack_py_files, analyze_code)
+                                  prepare_app_dir, load_agent_in_memory, unpack_py_files, analyze_code,
+                                  world_definition_members, canonical_world_hash, owner_handle)
 
 
 class Node:
@@ -50,12 +51,16 @@ class Node:
     AGENT = "agent"  # Artificial agent
     WORLD = "world"  # World agent
 
+    _closed = False  # Set by aclose, which must run once (class-level: no __init__ needed)
+
     def __init__(self,
                  hosted: Agent | World,
                  unaiverse_key: str | None = None,
                  node_name: str | None = None,
                  node_id: str | None = None,
-                 hidden: bool = False,
+                 hidden: bool | None = None,
+                 code_repo: str | None = None,
+                 code_commit: str | None = None,
                  clock_delta: float = 1. / 25.,
                  base_identity_dir: str | None = None,
                  only_certified_agents: bool = False,
@@ -75,7 +80,15 @@ class Node:
                 or you will be asked for it).
             node_name: A human-readable name for the node (using node ID is preferable; use this or node ID, not both).
             node_id: A unique identifier for the node (use this or the node name, not both).
-            hidden: A flag to determine if the node is hidden (i.e., only the owner of the account can see it).
+            hidden: A flag to determine if the node is hidden (i.e., only the owner of the account can
+                see it). When None (the default) the visibility is not asserted at all, so whatever
+                the owner chose (e.g. in the web app) is preserved.
+            code_repo: World only: the public GitHub repository holding this world's published code,
+                as "owner/repo" or the full https://github.com/owner/repo URL. The root fetches it,
+                folds the canonical bundle and attests its digest in the node token. When absent the
+                world declares nothing and runs unpublished (joins work exactly as before).
+            code_commit: World only: the full 40-character id of the (pushed) commit to declare,
+                not a branch and not a tag.
             clock_delta: The minimum time delta for the node's clock.
             base_identity_dir: Base directory for storing node identity files. If None, uses the default app directory.
             only_certified_agents: A flag to allow only certified agents to connect.
@@ -107,11 +120,31 @@ class Node:
                          current_time=datetime.now(timezone.utc).timestamp())  # Node clock (not synced at all!)
 
         # Logging: we create a new logger and will share it with the agent/world as well
+        # "active" is the set of recorded channels, "screen" the subset also printed to stdout: they are
+        # independent knobs, so NODE_SCREEN_BASIC_PRINT must be honored even when NODE_LOG_CHANNELS selects
+        # a custom recording set.
+        if Custom.LOG_CHANNELS:
+            _valid = {c.name: c for c in ALL_CHANNELS}
+            _wanted = frozenset(_valid[n] for n in
+                                (s.strip().upper() for s in Custom.LOG_CHANNELS.split(",")) if n in _valid)
+            active = ALWAYS_ON_CHANNELS | _wanted
+        else:
+            active = ALWAYS_ON_CHANNELS if Custom.PRINT_LEVEL < 1 else ALL_CHANNELS
+        screen = ALWAYS_ON_CHANNELS if Custom.PRINT_SCREEN_BASIC_ONLY else active
         log.create(name=os.path.basename(sys.argv[0]), log_dir=os.path.dirname(os.path.abspath(sys.argv[0])),
-                   active=ALWAYS_ON_CHANNELS if Custom.PRINT_LEVEL < 1 else ALL_CHANNELS,
-                   screen=ALWAYS_ON_CHANNELS if Custom.PRINT_SCREEN_BASIC_ONLY else ALL_CHANNELS,
-                   no_color=False, file_enabled=Custom.LOG_TO_FILE)
+                   active=active, screen=screen, no_color=False, file_enabled=Custom.LOG_TO_FILE,
+                   file_append=Custom.LOG_APPEND)
         log.set_clock(clock)  # Wiring the clock
+
+        # Optional log sink plugin: an out-of-core module (resolved on PYTHONPATH) that observes the log
+        # stream, wired in through NODE_LOG_SINK_MODULE. It only needs to expose attach(log). Any failure
+        # here is logged and swallowed: an observability add-on must never abort the node boot.
+        if Custom.LOG_SINK_MODULE:
+            try:
+                import importlib
+                importlib.import_module(Custom.LOG_SINK_MODULE).attach(log)
+            except Exception as e:
+                log.error(f"Failed to attach log sink module '{Custom.LOG_SINK_MODULE}': {e}")
 
         # Checking main arguments
         if not (isinstance(hosted, Agent) or isinstance(hosted, World)):
@@ -131,12 +164,15 @@ class Node:
         self.node_id = node_id
         self.run_hook = run_hook
         self.unaiverse_key = unaiverse_key
+        self.code_repo = code_repo
+        self.code_commit = code_commit
         self.node_type = Node.AGENT if (isinstance(hosted, Agent) and not isinstance(hosted, World)) else Node.WORLD
         self.agent: Agent | None = hosted if isinstance(hosted, Agent) else None
         self.world: World | None = hosted if isinstance(hosted, World) else None
         self.conn: NodeConn  # Manages the network operations in the P2P network
         self.memory_finder = None
         self.world_agent_files = None
+        self.world_role_fsms = None  # Role -> FSM (JSON string), delivered with the world approval
         self.talk_to_relay_based_nodes = talk_to_relay_based_nodes
         self.keep_rejoining = False
         self.rejoining_kwargs: dict = {}
@@ -172,7 +208,7 @@ class Node:
         self.run_start_time = 0.
 
         # Root server-related
-        self.root_endpoint = 'https://unaiverse.io/api'  # WARNING: EDITING THIS ADDRESS VIOLATES THE LICENSE
+        self.root_endpoint = 'https://unaiverse.io:8443/api'  # WARNING: EDITING THIS ADDRESS VIOLATES THE LICENSE
         self.node_token = ""
         self.public_key = ""
 
@@ -223,7 +259,7 @@ class Node:
                     if self.world_masters_node_ids is None:
                         self.world_masters_node_ids = set()
                     self.world_masters_node_ids.add(master_node_id)
-
+        
         # Here you can set up max_instances, max_channels, enable_logging at libp2p level etc.
         P2P.setup_library(enable_logging=Custom.LIBP2PLOG, unai_logger=log)
 
@@ -322,17 +358,18 @@ class Node:
         private_peer_id = p2p_w.peer_id
         assert public_peer_id is not None
         assert private_peer_id is not None
-        self.get_node_token(peer_ids=[public_peer_id, private_peer_id])  # Passing both the peer IDs
+        token_response = self.get_node_token(peer_ids=[public_peer_id, private_peer_id])  # Passing both the peer IDs
 
         # Get first badge token
         if self.node_type is Node.WORLD:
-            self.badge_token = self.__root(api="account/node/cv/badge/token/get", payload={"node_id": self.node_id})
+            self.badge_token = self.__root(api="/account/node/cv/badge/token/get", payload={"node_id": self.node_id})
         else:
             self.badge_token = None
 
         # Get profile (static)
         profile_static = self.__root(api="/account/node/profile/static/get", payload={"node_id": self.node_id})
-        assert isinstance(profile_static, dict)
+        if not isinstance(profile_static, dict):
+            log.critical(f"Unexpected static-profile payload from the root server: {profile_static}")
 
         # Getting list of allowed nodes from the static profile,
         # if we did not already specify it when creating the node in the code (the code has higher priority)
@@ -360,6 +397,9 @@ class Node:
                              is_world_node=self.node_type is Node.WORLD,
                              public_key=self.public_key,
                              token=self.node_token)
+        # TODO: this is a mess. chicken-egg dilemma that does not allow to get the profile before getting the node_token.
+        # This doesn't allow to create the p2p instances already knowing the turn credentials, sent in the token.
+        self._apply_node_token(token_response)
 
         # Get CV
         cv = self.get_cv()
@@ -370,22 +410,34 @@ class Node:
                                             'peer_addresses': p2p_u.addresses,
                                             'private_peer_id': p2p_w.peer_id,
                                             'private_peer_addresses': p2p_w.addresses,
+                                            # A world node is a relay for its members only if its world instance is
+                                            # publicly reachable (the relay service is enabled iff node_type is WORLD).
+                                            # p2p_w keeps no DHT, so its reachability is fixed at boot: set once here.
+                                            'is_relay': (self.node_type is Node.WORLD) and bool(p2p_w.is_public),
                                             'connections': {
                                                 'role': self.hosted.ROLE_BITS_TO_STR[self.hosted.ROLE_PUBLIC]
                                             },
                                             'world_summary': {
-                                                'world_name':
+                                                'world_title':
                                                     profile_static['node_name']
                                                     if self.node_type is Node.WORLD else None
                                             },
-                                            "world_roles_fsm": None,  # This will be filled later if this is a world
-                                            "hidden": hidden  # Marking the node as hidden (or not)
+                                            "hidden": hidden  # True/False only when explicitly requested
+                                            #  (None means: do not touch the server-side visibility)
                                             },
                                    cv=cv)  # Adding CV here
 
         # Sharing node-level info with the hosted entity
         self.hosted.set_node_info(self.conn, self.profile, self.ask_to_get_in_touch,
                                   self.__purge, self.node_identity_dir, self.agents_expected_to_send_ack)
+
+        # World only: optionally declare where this world's code lives (a GitHub repo
+        # and commit) so the root can attest its digest, and post the role FSMs for the
+        # website. The token is then re-requested so it is minted AFTER the declaration
+        # (the code_hash claim is read from the stored declaration at mint time).
+        if self.node_type is Node.WORLD:
+            self.declare_world_source()
+            self.get_node_token(peer_ids=[self.get_public_peer_id(), self.get_world_peer_id()])
 
         # Finally, sending dynamic profile to the root server
         # (send AFTER set_node_info, not before, since set_node_info updates the profile,
@@ -474,12 +526,40 @@ class Node:
             log.error(f"Error while sending alive message to server! [{e}]")
             return False
 
-    def get_node_token(self, peer_ids: list[str]) -> None:
-        """Generates and retrieves a node token from the root server.
+    def get_node_token(self, peer_ids: list[str]) -> dict:
+        """Generates and retrieves a node token from the root server, then applies it.
+
+        Fatal on failure (the fetch raises): a node with no token cannot run, which is the
+        wanted behaviour at startup. In the main loop the fetch and the apply are split so
+        the fetch can run off the event loop under a timeout (see the periodic-refresh
+        call-site), without a late thread mutating the token/transport concurrently.
 
         Args:
             peer_ids: A list of public and private peer IDs.
+        Returns:
+            A dictionary containing the node token and related information.
         """
+        resp = self._request_node_token(peer_ids)
+        self._apply_node_token(resp)
+        return resp
+
+    @staticmethod
+    def _outstanding_legal_documents(data) -> str:
+        """Human-readable list of the legal documents still to accept, read from the
+        acceptance state the root attaches to a legal_acceptance_required refusal."""
+        outstanding = []
+        state = data if isinstance(data, dict) else {}
+        for kind, label in (("tos", "Terms of Service"), ("privacy", "Privacy Policy")):
+            side = state.get(kind)
+            if isinstance(side, dict) and not side.get("up_to_date", False):
+                version = side.get("current_version")
+                outstanding.append(label + (f" {version}" if version else ""))
+        return ", ".join(outstanding) if outstanding else "Terms of Service, Privacy Policy"
+
+    def _request_node_token(self, peer_ids: list[str]) -> dict:
+        """Blocking HTTP to the root to (re)generate the node token. Reads self but does
+        NOT mutate it, so it is safe to run off the event loop via asyncio.to_thread.
+        Raises on failure (fatal at startup, caught at the periodic-refresh call-site)."""
         response = None
 
         for i in range(0, 3):  # It will try 3 times before raising the exception...
@@ -490,14 +570,31 @@ class Node:
                                                 if self.node_token is None or len(self.node_token) == 0 else None,
                                                 "node_token": self.node_token, "peer_ids": json.dumps(peer_ids)})
                 break
-            except Exception as e:
+            except RootServerError as e:
+                if e.api_rejected:
+                    # The server answered and refused: retrying cannot change the outcome
+                    if e.flags.get('legal_acceptance_required'):
+                        log.error("The root server refuses to mint a node token until the owner accepts "
+                                  f"the current legal documents ({self._outstanding_legal_documents(e.data)}): "
+                                  "log in at https://unaiverse.io, accept them, then restart the node")
+                    elif e.flags.get('blocked_utc') is not None:
+                        log.error("The root server refuses to mint a node token: this node is blocked "
+                                  f"(since {e.flags['blocked_utc']})")
+                    raise
                 if i < 2:
                     log.error("Error while getting token from server, retrying...")
                     time.sleep(1)  # Wait a little bit
                 else:
-                    log.critical(f"Error while getting token from server [{e}]")  # Raise the exception
+                    log.error(f"Error while getting token from server [{e}]")
+                    raise
 
-        assert isinstance(response, dict)
+        if not isinstance(response, dict):
+            log.critical(f"Unexpected token payload from the root server: {response}")
+        return response
+
+    def _apply_node_token(self, response: dict) -> None:
+        """Apply a freshly fetched node token. Main-task only: mutates self and pushes the
+        token into the transport via FFI, so it must not run concurrently with the loop."""
         self.node_token = response["token"]
         self.public_key = response["public_key"]
 
@@ -524,32 +621,156 @@ class Node:
                     }],
                 )
 
+    def declare_world_source(self) -> None:
+        """Posts the role FSMs and optionally declares where this world's code lives (world only).
+
+        Attestation only: the code still travels to joiners inside the world grant. The
+        root fetches the declared commit from GitHub, folds the canonical bundle
+        (code/ + fsm/ at the repository root) and stores its digest, which is minted
+        into the node token as the code_hash claim; the joiner-side gate compares the
+        grant bundle against that claim. With no code_repo/code_commit configured the
+        world declares nothing and runs unpublished, exactly as before.
+
+        Fatal when a declaration was requested and cannot be completed, or does not
+        match the code this world is about to hand out: a stale or wrong attested
+        digest would fail every join, on machines whose operators cannot see the cause.
+        """
+        assert self.world is not None
+
+        # Structured role FSMs for the website: independent of the attestation, best-effort
+        try:
+            if self.world.role_to_behav:
+                self.__root(api="/account/node/fsm/post",
+                            payload={"node_id": self.node_id,
+                                     "world_roles_fsm": self.world.role_to_behav})
+            else:
+                # The API refuses an empty world_roles_fsm, and an empty dict does
+                # not mean "no roles" to it: simply skip the post
+                log.debug("No world roles to post (role_to_behav is empty), skipping fsm/post")
+        except Exception as e:
+            log.error(f"Error while posting the world role FSMs to the root server [{e}]")
+
+        if self.code_repo is None and self.code_commit is None:
+            # A declaration left on the server by a previous run would still mint its
+            # digest into the fresh token and fail every join against today's bundle:
+            # clear it (idempotent, a no-op for a world that never declared)
+            try:
+                self.__root(api="/account/node/code/source/clear",
+                            payload={"node_id": self.node_id,
+                                     "caller_node_id": self.node_id,
+                                     "caller_node_token": self.node_token})
+                log.misc("No code_repo/code_commit configured: this world runs unpublished "
+                         "(no attested code hash, joins work as usual)")
+            except RootServerError as e:
+                log.error(f"Could not clear the world-source declaration [{e}]: if a previous "
+                          "run declared one, its stale attested digest will make every join fail")
+            return
+
+        if self.code_repo is None or self.code_commit is None:
+            # Exactly one of the two is set: a declaration was clearly requested, and
+            # silently running unpublished would defeat the author's intent
+            missing = "code_commit" if self.code_commit is None else "code_repo"
+            msg = (f"A world-source declaration was requested but {missing} is missing: "
+                   f"pass both code_repo and code_commit, or neither")
+            log.error(msg)
+            raise GenException(msg)
+
+        # Operator-facing hints for the refusal discriminators of code/source/set:
+        # each is a distinct author mistake, and the message should say what to fix
+        hints = {
+            "commit_invalid": "declare the full 40-character commit id (not a branch, not a tag)",
+            "commit_unreachable": "the commit is not reachable on GitHub: push it, and make sure "
+                                  "the repository is publicly readable without credentials",
+            "repo_no_bundle": "the repository must carry the canonical layout at its root: code/ "
+                              "for the shipped sources and fsm/ for the role FSMs",
+            "repo_bad_member": "only plain files are allowed inside code/ and fsm/ "
+                               "(no symlinks, no submodules)",
+            "repo_too_large": "the repository exceeds the server limits on the code/ and fsm/ trees",
+            "repo_unavailable": "the API host has no git available to read repositories",
+            "repo_timeout": "the server timed out reading the repository: try again later",
+        }
+
+        ret = None
+        for i in range(0, 3):  # Retrying transport failures (and server-side git timeouts) only
+            try:
+                # The caller_* pair is what authenticates this call (the node_token that
+                # __root injects is not read by this endpoint's decorator)
+                ret = self.__root(api="/account/node/code/source/set",
+                                  payload={"node_id": self.node_id,
+                                           "caller_node_id": self.node_id,
+                                           "caller_node_token": self.node_token,
+                                           "repo": self.code_repo,
+                                           "commit_sha": self.code_commit})
+                break
+            except RootServerError as e:
+                if e.api_rejected and e.data_code == "repo_timeout" and i < 2:
+                    # The one transient refusal: the server's git read timed out
+                    log.error("The root server timed out reading the repository, retrying...")
+                    time.sleep(1)
+                    continue
+                if e.api_rejected:
+                    hint = hints.get(e.data_code)
+                    log.error(f"The root server refused the world-source declaration of "
+                              f"'{self.code_repo}' @ {self.code_commit}"
+                              + (f": {hint}" if hint else f" [{e}]"))
+                    raise
+                log.error(f"Error while declaring the world source to the root server [{e}]")
+                if i < 2:
+                    log.misc("Retrying...")
+                    time.sleep(1)  # Wait a little bit
+                else:
+                    raise
+
+        # The root folded the repository, while this world will hand out the grant
+        # bundle: the two must be byte-identical, or the joiner's fail-closed gate
+        # refuses every join. Refuse to start instead, here, where the author can fix it.
+        local_hash = canonical_world_hash(
+            world_definition_members(unpack_py_files(self.world.packed_agent_files),
+                                     self.world.role_to_behav))
+        stored_hash = ret.get("hash") if isinstance(ret, dict) else None
+        if stored_hash != local_hash:
+            msg = (f"The declared repository does not match the code this world is about to "
+                   f"hand out (root attested {stored_hash}, the local bundle folds to "
+                   f"{local_hash}): commit and push, then declare that commit")
+            log.error(msg)
+            raise GenException(msg)
+        log.misc(f"World source declared and attested by the root server (hash: {local_hash})")
+
     def get_cv(self) -> list[dict]:
         """Retrieves the node's CV (Curriculum Vitae) from the root server.
 
         Returns:
             The node's CV as a list of dictionaries dictionary.
         """
+        ret = None
         for i in range(0, 3):  # It will try 3 times before raising the exception...
             try:
                 ret = self.__root(api="/account/node/cv/get", payload={"node_id": self.node_id})
-                assert isinstance(ret, list)
-                return ret
-            except Exception as e:
+                break
+            except RootServerError as e:
+                if e.api_rejected:
+                    raise  # The server answered and refused: retrying cannot change the outcome
                 log.error(f"Error while getting CV from server [{e}]")
                 if i < 2:
                     log.misc("Retrying...")
                     time.sleep(1)  # Wait a little bit
                 else:
-                    log.critical(f"Error while getting CV from server [{e}]")
-        return []
+                    raise
+
+        if not isinstance(ret, list):
+            log.critical(f"Unexpected CV payload from the root server: {ret}")
+        return ret
 
     def send_dynamic_profile(self) -> None:
         """Sends the node's dynamic profile to the root server."""
         try:
+            profile = dict(self.profile.get_dynamic_profile())  # Copy: the getter returns the internal dict
+            if profile.get('hidden') is None:
+                # Visibility never explicitly set this run: omit the key, so the server keeps
+                # whatever the owner chose (the API only touches hidden when the key is present)
+                profile.pop('hidden', None)
             self.__root(api="/account/node/profile/dynamic/post", payload={"node_id": self.node_id,
-                                                                           "profile":
-                                                                               self.profile.get_dynamic_profile()})
+                                                                           "profile": profile})
         except Exception as e:
             log.error(f"Error while sending dynamic profile to root server [{e}]")
 
@@ -600,6 +821,9 @@ class Node:
                         self.world.clear_badges()
                         break
                     except Exception as e:
+                        if isinstance(e, RootServerError) and e.api_rejected:
+                            log.error(f"Badge assignment refused by the root server [{e}] (stop trying)")
+                            break
                         log.error(f"Error while sending badges to server or when notifying peers [{e}]")
                         if i < 2:
                             log.misc("Retrying...")
@@ -685,7 +909,7 @@ class Node:
                     payload["node_name"] = node_name
                 if node_id is not None:
                     payload["node_id"] = node_id
-                addresses = self.__root(api="account/node/get/addresses",
+                addresses = self.__root(api="/account/node/get/addresses",
                                         payload=payload)["addresses"]
             except Exception as e:
                 log.error(f"Error while retrieving addresses of node named {node_name} [{e}]")
@@ -868,36 +1092,73 @@ class Node:
         if self.profile.get_dynamic_profile()['connections']['world_peer_id'] is not None:
             await self.leave(self.profile.get_dynamic_profile()['connections']['world_peer_id'])
 
-    def search(self, query_text: str, email: str | None = None) -> list[NodeProfile]:
+    @staticmethod
+    def _profile_from_search_element(element: dict) -> NodeProfile:
+        """Maps one element of /discover/search/query into a NodeProfile.
+
+        The element is a flat spread of the API's public node serialisation (plus
+        lat/lon/location): there is no static/dynamic/cv envelope, the owner fields
+        live under 'account', the stored dynamic profile under 'profile' and the
+        badge list under 'cv'.
+        """
+        account = element.get('account') if isinstance(element.get('account'), dict) else {}
+        static = {
+            'node_id': element.get('node_id'),
+            'node_type': element.get('node_type'),
+            'node_name': element.get('node_name'),
+            'node_description': element.get('description'),
+            'created_utc': element.get('created_utc'),
+            'max_nr_connections': element.get('max_connections'),
+            'certified': element.get('certified'),
+            'allowed_node_ids': element.get('allowed_node_ids'),
+            'world_masters_node_ids': element.get('world_masters_node_ids'),
+            'location_method': element.get('location_method'),
+            'nickname': account.get('nickname'),
+            'name': account.get('name'),
+            'surname': account.get('surname'),
+            'title': account.get('title'),
+            'organization': account.get('organization'),
+        }
+        dynamic = element.get('profile') if isinstance(element.get('profile'), dict) else {}
+        cv = element.get('cv') if isinstance(element.get('cv'), list) else []
+        return NodeProfile(static=static, dynamic=dynamic, cv=cv)
+
+    def search(self, query_text: str, nickname: str | None = None, email: str | None = None) -> list[NodeProfile]:
         """Searches the UNaIVERSE platform for nodes matching the given query.
 
         Args:
-            query_text: The text query used to search for nodes.
-            email: An optional email address to filter results by account owner.
+            query_text: The text query used to search for nodes (matched against node
+                names and descriptions).
+            nickname: An optional account nickname to filter results by owner.
+            email: Deprecated alias of nickname; addresses no longer identify accounts,
+                so filtering by an address matches nothing on current servers.
 
         Returns:
             A list of NodeProfile objects matching the search query.
         """
-        profiles_as_list_of_dict = []
+        if email is not None and nickname is None:
+            log.error("search(email=...) is deprecated: addresses no longer identify accounts, "
+                      "pass the owner's nickname instead (forwarding the value as a nickname)")
+            nickname = email
+
+        elements = []
         profiles = []
 
         try:
-            profiles_as_list_of_dict = self.__root(api="/discover/search/query", payload={
-                "query_text": query_text,
-                "email": email,
-                "account_token": self.unaiverse_key,
-                "peer_id": None,  # unused
-                "node_id": None  # unused
+            elements = self.__root(api="/discover/search/query", payload={
+                "message": query_text,
+                "nickname": nickname,
+                "account_token": self.unaiverse_key
             })
         except Exception as e:
-            log.critical(f"Error while searching! Query: {query_text}, email: {email} [{e}]")
+            log.critical(f"Error while searching! Query: {query_text}, nickname: {nickname} [{e}]")
 
         try:
-            for p in profiles_as_list_of_dict:
-                profiles.append(NodeProfile.from_dict(json.loads(p)))
+            for p in elements:
+                profiles.append(self._profile_from_search_element(p))
         except Exception as e:
             log.critical(f"Error while converting data returned by 'search'! "
-                         f"Query: {query_text}, email: {email} [{e}]")
+                         f"Query: {query_text}, nickname: {nickname} [{e}]")
         return profiles
 
     def run(self, keep_rejoining: bool = True, *args, **kwargs) -> None:
@@ -907,8 +1168,14 @@ class Node:
             keep_rejoining = False
         self.keep_rejoining = keep_rejoining
 
+        async def _run_then_close():
+            try:
+                await self.run_async(*args, **kwargs)
+            finally:
+                await self.aclose()  # This entry point owns the whole node lifetime
+
         try:
-            asyncio.run(self.run_async(*args, **kwargs))
+            asyncio.run(_run_then_close())
         except KeyboardInterrupt:
             return  # CTRL+C
         except GenException:
@@ -945,21 +1212,40 @@ class Node:
         # time by matplotlib/PyTorch/etc.
         self.stop_requested = False
 
+        stop_requested_at = 0.0
+
+        # True only when the loop stops because the caller's cycle/time budget ran out,
+        # which is a pause and not a shutdown (see the finally at the end of this method)
+        budget_consumed = False
+
         def _request_stop() -> None:
+            nonlocal stop_requested_at
             if self.stop_requested:
-                os._exit(130)
+
+                # A single physical Ctrl+C can be DELIVERED here more than once: a
+                # terminal signals the whole foreground process group, and a wrapper
+                # like `uv run` additionally forwards the SIGINT to its child, so the
+                # second delivery would fire the force-quit escape hatch and
+                # os._exit(130) would truncate the graceful teardown at a random
+                # point. Debounce: within the window it is the same keypress and is
+                # ignored; past it, it is a real second Ctrl+C.
+                if time.monotonic() - stop_requested_at >= 1.0:
+                    os._exit(130)
+                return
             log.user("\nDetected Ctrl+C! Exiting gracefully... (Ctrl+C again to force-quit)")
             self.stop_requested = True
+            stop_requested_at = time.monotonic()
 
+        # Install ONE handler: the loop-integrated one when available, the plain
+        # signal handler only as a fallback. Installing both makes a single Ctrl+C
+        # call _request_stop twice.
         try:
             asyncio.get_running_loop().add_signal_handler(signal.SIGINT, _request_stop)  # noqa
         except (NotImplementedError, RuntimeError):
-            pass  # Windows or no event loop — fall back to signal.signal only
-
-        try:
-            signal.signal(signal.SIGINT, lambda signum, frame: _request_stop())
-        except (ValueError, OSError):
-            pass  # Not in main thread, etc.
+            try:
+                signal.signal(signal.SIGINT, lambda signum, frame: _request_stop())
+            except (ValueError, OSError):
+                pass  # Not in main thread, etc.
 
         # Subscribing/creating our own pubsub
         await self.hosted.subscribe_to_pubsub_owned_streams()
@@ -993,10 +1279,10 @@ class Node:
         elif self.hosted.world_profile is not None:
             # We resumed from a state in which we were in this world, so we reconnect
             world_name = self.hosted.world_profile.get_static_profile()['node_name']
-            owner_email = self.hosted.world_profile.get_static_profile()['email']
-            ret = await self.ask_to_join_world(node_name=f'{owner_email}/{world_name}', **kwargs)
+            owner = owner_handle(self.hosted.world_profile.get_static_profile())
+            ret = await self.ask_to_join_world(node_name=f'{owner}/{world_name}', **kwargs)
             if ret is None:
-                log.critical(f"Unable to connect to world: {owner_email}/{world_name}")
+                log.critical(f"Unable to connect to world: {owner}/{world_name}")
             else:
                 joined_this_world = ret  # saving peer ID
         elif get_in_touch is not None:
@@ -1054,7 +1340,7 @@ class Node:
 
                 public_streams = "lone_wolf_peer_id" in interact_mode_opts
                 assert self.agent is not None
-                proc_streams = self.agent.owned_streams[self.agent.get_proc_input_net_hash(public=public_streams)]
+                proc_streams = self.agent.owned_streams[self.agent.get_proc_output_net_hash(public=public_streams)]
                 for stream in proc_streams.values():
                     if processor_img_stream is None and stream.props.is_img():
                         processor_img_stream = stream
@@ -1134,7 +1420,7 @@ class Node:
 
                 log.user("\nRunning " + ("agent" if self.agent else "world") + " '" +
                          self.hosted.get_name() + "' ..."
-                         + f"\n- Owner:             {self.profile.get_static_profile()['email']}"
+                         + f"\n- Owner:             {owner_handle(self.profile.get_static_profile())}"
                          + f"\n- Node ID:           {self.node_id}"
                          + f"\n- Public peer ID:    {self.get_public_peer_id()}"
                          + f"\n- Private peer ID:   {self.get_world_peer_id()}")
@@ -1160,7 +1446,14 @@ class Node:
 
                 # Sending alive message every "K" seconds
                 if clock.get_time() - self.last_alive_time >= Custom.SEND_ALIVE_EVERY:
-                    was_alive = self.send_alive()
+                    try:
+                        # Capped and off the event loop: a hung POST to the root must not
+                        # freeze the pump, and a transient failure must not kill the node.
+                        was_alive = await asyncio.wait_for(asyncio.to_thread(self.send_alive),
+                                                           timeout=Custom.DEFAULT_TIMEOUT)
+                    except Exception as e:
+                        log.error(f"Error while sending alive message to server (going ahead) [{e}]")
+                        was_alive = False
 
                     # Checking only at the first run
                     if self.last_alive_time == 0 and was_alive and not Custom.SKIP_WAS_ALIVE_CHECK:
@@ -1204,14 +1497,20 @@ class Node:
 
                 # Move to the next cycle
                 while not clock.next_cycle():
-                    time.sleep(0.001)  # Seconds (lowest possible granularity level)
+                    await asyncio.sleep(0.001)  # Seconds (lowest possible granularity level); keeps the loop breathing
 
                 log.misc(f"=== Starting clock cycle {clock.get_cycle()} ===")
 
                 # Checking if a rejoin is needed
                 if 0. < self.rejoining_time <= clock.get_time():
                     if self.keep_rejoining:
-                        ret = await self.ask_to_join_world(**self.rejoining_kwargs)
+                        # A raising rejoin attempt must not unwind the main loop and kill the node:
+                        # log it and reschedule like any other failed attempt.
+                        try:
+                            ret = await self.ask_to_join_world(**self.rejoining_kwargs)
+                        except Exception as e:
+                            log.error(f"Rejoin attempt raised: {e}")
+                            ret = None
                         if ret is not None:
                             self.rejoining_time = -1.
                         else:
@@ -1331,15 +1630,30 @@ class Node:
                         last_dynamic_profile_time = clock.get_time()
                         self.profile.unmark_change_in_connections()
                         await self.send_badges()  # Sending and clearing badges
-                        self.send_dynamic_profile()  # Sending
+                        # Capped and off the event loop so a hung POST cannot freeze the pump.
+                        await asyncio.wait_for(asyncio.to_thread(self.send_dynamic_profile),
+                                               timeout=Custom.DEFAULT_TIMEOUT)  # Sending
                     except Exception as e:
                         log.error(f"Error while sending the update dynamic profile (or badges) to the server "
                                   f"(trying to go ahead...) [{e}]")
 
                 # Getting a new token every "N" seconds
                 if clock.get_time() - last_get_token_time >= Custom.GET_NEW_TOKEN_EVERY:
-                    self.get_node_token(peer_ids=[self.get_public_peer_id(), self.get_world_peer_id()])
-                    last_get_token_time = clock.get_time()
+                    try:
+                        # Fetch off the event loop (capped), apply on the main task: a hung
+                        # or failing refresh must neither freeze the pump nor kill the node.
+                        response = await asyncio.wait_for(
+                            asyncio.to_thread(self._request_node_token,
+                                              [self.get_public_peer_id(), self.get_world_peer_id()]),
+                            timeout=Custom.DEFAULT_TIMEOUT)
+                        self._apply_node_token(response)
+                        last_get_token_time = clock.get_time()  # success: next refresh in ~23.5h
+                    except Exception as e:
+                        log.error(f"Error while refreshing the node token (will retry shortly) [{e}]")
+                        # Asymmetric backoff: retry in ~DEFAULT_TIMEOUT, not every iteration
+                        # (busy-loop) nor in ~23.5h (the token would expire first).
+                        last_get_token_time = (clock.get_time()
+                                               - Custom.GET_NEW_TOKEN_EVERY + Custom.DEFAULT_TIMEOUT)
 
                 # Continuously check the addresses of the node for changes
                 try:
@@ -1443,10 +1757,13 @@ class Node:
                     except Exception as e:
                         log.error(f"Error in step_callback: {e}")
 
-                # Stop conditions
+                # Stop conditions. Consuming a bounded budget is NOT the end of the node:
+                # the caller asked for that many cycles and decides what happens next.
                 if cycles is not None and ((clock.get_cycle() + 1) >= cycles):
+                    budget_consumed = True
                     break
                 if max_time is not None and (clock.get_time() - self.run_start_time) >= max_time:
+                    budget_consumed = True
                     break
 
         except KeyboardInterrupt:
@@ -1461,42 +1778,76 @@ class Node:
             log.critical(f"An error occurred: {e}")
 
         finally:
+
+            # Any exit other than a consumed budget (the loop ending, Ctrl+C, an error)
+            # is the end of this node, so shut it down here as always. When the budget
+            # was merely consumed the node has to stay usable: a caller stepping it one
+            # cycle at a time (NodeSynchronizer) would otherwise get a node that says
+            # goodbye to every peer, drops its world and closes its hosts between one
+            # cycle and the next. Those callers own the lifetime and call aclose().
+            if not budget_consumed:
+                await self.aclose()
+
+    async def aclose(self) -> None:
+        """Shuts the node down: this is the point of no return, and it runs once.
+
+        Tells the root the node is gone, saves what has to survive, says goodbye to the
+        world and to every connected peer, closes the Go hosts (freeing their instance
+        slots, which a process embedding several Nodes would otherwise run out of) and
+        flushes the logger. Every step is guarded on its own: a failing goodbye must not
+        cost the transport close, and a failing close must not cost the flush.
+        """
+        if self._closed:
+            return
+        self._closed = True
+
+        try:
+            self.send_alive(alive=False)
+        except Exception as e:
+            log.error(f"Error telling the node is not alive anymore: {e}")
+
+        try:
+            if Custom.SAVE_CHECKPOINT_EVERY > 0.:
+                log.user("Saving hosted agent state to disk...")
+                self.hosted.save()
+        except Exception as e:
+            log.error(f"Error saving hosted agent state: {e}")
+
+        try:
+            if self.node_type is Node.WORLD and self.world is not None:
+                log.user("Shutting down stats database...")
+                assert self.world.stats is not None
+                self.world.stats.shutdown()
+        except Exception as e:
+            log.error(f"Error closing database: {e}")
+
+        try:
+            if self.node_type is Node.AGENT:
+                assert self.agent is not None
+                if self.agent.in_world():
+                    await self.leave_world()
+        except Exception:
+            pass
+
+        try:
+            connected_peer_ids = list(self.hosted.all_agents.keys())
+        except Exception:
+            connected_peer_ids = []
+        for peer_id in connected_peer_ids:
             try:
-                self.send_alive(alive=False)
+                await self.leave(peer_id)
             except Exception as e:
-                log.error(f"Error telling the node is not alive anymore: {e}")
+                log.error(f"Error leaving peer {peer_id} on shutdown: {e}")
 
-            try:
-                if Custom.SAVE_CHECKPOINT_EVERY > 0.:
-                    log.user("Saving hosted agent state to disk...")
-                    self.hosted.save()
-            except Exception as e:
-                log.error(f"Error saving hosted agent state: {e}")
+        try:
+            self.conn.close_transports()
+        except Exception as e:
+            log.error(f"Error closing the transports on shutdown: {e}")
 
-            try:
-                if self.node_type is Node.WORLD and self.world is not None:
-                    log.user("Shutting down stats database...")
-                    assert self.world.stats is not None
-                    self.world.stats.shutdown()
-            except Exception as e:
-                log.error(f"Error closing database: {e}")
-
-            try:
-                if self.node_type is Node.AGENT:
-                    assert self.agent is not None
-                    if self.agent.in_world():
-                        await self.leave_world()
-            except Exception:
-                pass
-
-            finally:
-                try:
-                    connected_peer_ids = list(self.hosted.all_agents.keys())
-                    for peer_id in connected_peer_ids:
-                        await self.leave(peer_id)
-                    log.close()  # Closing logger
-                except Exception:
-                    pass
+        try:
+            log.close()  # Closing logger
+        except Exception:
+            pass
 
     async def __handle_network_connections(self) -> None:
         """Manages new and lost network connections. (async)"""
@@ -1768,6 +2119,9 @@ class Node:
                                           + msg.sender)
                                 await self.__purge(msg.sender)
                             else:
+                                # TODO(review): sharp edge for custom assign_role overrides, an out-of-vocabulary
+                                # string raises KeyError at the lookup below instead of being rejected like None;
+                                # see tests/test_world_roles.py
                                 role = self.world.ROLE_STR_TO_BITS[role_str]  # The role is a bit-wise-interpretable int
                                 role = role | (Agent.ROLE_WORLD_MASTER if is_world_master else Agent.ROLE_WORLD_AGENT)
 
@@ -1785,8 +2139,13 @@ class Node:
                                                                  'world_profile': self.profile.get_all_profile(),
                                                                  'rendezvous_tag': clock.get_cycle(),
                                                                  'your_role': role,
+                                                                 # Single code channel: stats.py travels inside the
+                                                                 # packed agent files (forced member of the pruned
+                                                                 # bundle), so there is no separate stats-code field.
                                                                  'agent_actions': self.world.packed_agent_files,
-                                                                 'agent_stats_code': self.world.agent_stats_code,
+                                                                 # The role FSMs ride the approval: they are not
+                                                                 # published in the dynamic profile anymore.
+                                                                 'world_roles_fsm': self.world.role_to_behav,
                                                                  # 'initial_stats': self.world.stats.get_view()
                                                                  # if is_human else None,
                                                                  'initial_stats': self.world.stats.plot()
@@ -1868,9 +2227,15 @@ class Node:
                         await self.__join_world(profile=NodeProfile.from_dict(msg.content['world_profile']),
                                                 role=msg.content['your_role'],
                                                 packed_agent_files=msg.content['agent_actions'],
-                                                agent_stats_code=msg.content.get('agent_stats_code', None),
+                                                roles_fsm=msg.content.get('world_roles_fsm'),
+                                                # Root-attested code hash, read from the world's token
+                                                # (already verified when its message was received)
+                                                attested_code_hash=self.conn.get_peer_code_hash(msg.sender),
                                                 rendezvous_tag=msg.content['rendezvous_tag'],
-                                                initial_stats=msg.content['initial_stats'])
+                                                initial_stats=msg.content['initial_stats'],
+                                                # Legacy worlds shipped stats.py as a dedicated field (and their
+                                                # single-agent.py repack dropped it from the packed files)
+                                                legacy_stats_code=msg.content.get('agent_stats_code', None))
 
                         # Enabling interactive mode, if public
                         if (interact_mode and isinstance(interact_mode_opts, dict) and
@@ -1955,7 +2320,7 @@ class Node:
                         if net_hash in self.agent.known_streams:
                             peer_id = DataProps.peer_id_from_net_hash(net_hash)
                             group = DataProps.name_or_group_from_net_hash(net_hash)
-                            owner_account = self.agent.all_agents[peer_id].get_static_profile()['email']
+                            owner_account = owner_handle(self.agent.all_agents[peer_id].get_static_profile())
                             agent_name = self.agent.all_agents[peer_id].get_static_profile()['node_name']
                             for (user_hash, uuid) in added_data:
                                 if user_hash not in self.agent.known_streams_by_user_hash:
@@ -2021,7 +2386,7 @@ class Node:
                 log.misc("Received a role suggestion/new role...")
 
                 if self.node_type is Node.AGENT:
-                    if msg.sender == self.conn.get_world_peer_id():
+                    if msg.sender == self.conn.get_world_node_peer_id():
                         new_role_indication = msg.content
                         if new_role_indication['peer_id'] == self.get_world_peer_id():
                             self.__replace_agent_instance_by_role(role=new_role_indication['role'],
@@ -2173,26 +2538,28 @@ class Node:
             elif msg.content_type == Msg.STATS_REQUEST:
                 log.misc("Received a stats request from " + msg.sender)
                 if self.node_type is Node.WORLD:
-                    # 1. Extract filters from content
-                    filters = msg.content or {}
-                    # default values are added to query without any filter
-                    # req_stats = filters.get('stat_names', [])
-                    # req_peers = filters.get('peer_ids', [])
-                    # time_range = filters.get('time_range', None)
-                    time_range = filters.get('time_range', 0)
-                    # value_range = filters.get('value_range', None)  # The numeric filter
-                    # limit = filters.get('limit', None)
-
-                    # # This is a fine-grain request, so we query the db
-                    # response_payload = self.world.stats.query_history(
-                    #     stat_names=req_stats,
-                    #     peer_ids=req_peers,
-                    #     time_range=time_range,
-                    #     value_range=value_range,
-                    #     limit=limit)
                     assert self.world is not None
                     assert self.world.stats is not None
-                    response_payload = self.world.stats.plot(since_timestamp=time_range)
+
+                    # Extract filters from content
+                    filters = msg.content or {}
+                    asker = msg.sender
+
+                    # If the filter is about one or more specific stats, then it is a fine-grain request,
+                    # otherwise it is a generic request, so we send back the rendered HTML
+                    stat_names = filters.get('stat_names', [])
+
+                    if stat_names is not None and len(stat_names) > 0:
+
+                        # This is a fine-grain request, so we query the DB. CONTRACT: the answer must be
+                        # a get_view()-shaped dict ({"world": ..., "peers": ...}) - the asker merges it
+                        # into its local stats view (update_stats_view)
+                        response_payload = self.world.answer_stats_request(filters, asker)
+                    else:
+
+                        # This is a generic request, so we respond generating an HTML
+                        time_range = filters.get('time_range', 0)
+                        response_payload = self.world.stats.plot(since_timestamp=time_range)
 
                     # Send back as STATS_RESPONSE
                     await self.conn.send(msg.sender, channel_trail=None,
@@ -2205,35 +2572,54 @@ class Node:
             elif msg.content_type == Msg.STATS_RESPONSE:
                 log.misc("Received a stats response from " + msg.sender)
                 if self.node_type is Node.AGENT:
-                    if msg.sender == self.conn.get_world_peer_id():
-                        # self.agent.update_stats_view(msg.content, self.agent.overwrite_stats)
-                        pass
+                    assert self.agent is not None
+                    if msg.sender == self.conn.get_world_node_peer_id():
+                        if isinstance(msg.content, dict) and ('world' in msg.content or 'peers' in msg.content):
+                            self.agent.update_stats_view(msg.content, self.agent.overwrite_stats)
+                        else:
+                            log.misc("Ignoring a stats response that is not view-shaped (e.g., HTML)")
                     else:
                         log.error(f"Received stats response from {msg.sender}, but it is not the world.")
-                elif self.node_type is Node.AGENT:
+                elif self.node_type is Node.WORLD:
                     log.error("Receiving stats response is not expected for a world node.")
 
         await self.__interview_clean()
         await self.__handle_connected_without_ack()
 
     async def __join_world(self, profile: NodeProfile, role: int,
-                           packed_agent_files: str, agent_stats_code: str | None,
-                           rendezvous_tag: int, initial_stats: dict[str, Any] | None) -> bool:
+                           packed_agent_files: str, roles_fsm: dict[str, str] | None,
+                           rendezvous_tag: int, initial_stats: dict[str, Any] | None,
+                           attested_code_hash: str | None = None,
+                           legacy_stats_code: str | None = None) -> bool:
         """Performs the actual operation of joining a world after receiving confirmation. (async)
 
         Args:
             profile: The profile of the world to join.
             role: The role assigned to the agent in the world (int).
-            packed_agent_files: The string encoding agent-code-files, defining the agent's actions.
-            agent_stats_code: A string of code defining the statistics for this world.
+            packed_agent_files: The string encoding agent-code-files, defining the agent's actions
+                (including stats.py, when the world ships custom stats).
+            roles_fsm: Dict role -> FSM (JSON string), delivered with the world approval
+                (the dynamic profile does not carry the FSMs anymore).
+            attested_code_hash: The world-code hash attested by the root in the world's
+                verified token; None when the token carries no such claim (check skipped).
             rendezvous_tag: The rendezvous tag from the world's profile.
             initial_stats: When joining a world we eventually receive the recent history.
+            legacy_stats_code: The stats.py source shipped by legacy worlds in the
+                dedicated code_bundle field; folded into the bundle when it lacks stats.py.
 
         Returns:
             True if the join operation is successful, otherwise False.
         """
         addresses = profile.get_dynamic_profile()['private_peer_addresses']
         world_public_peer_id = profile.get_dynamic_profile()['peer_id']
+
+        # Symmetric to the joiner check on the host side: the world's private addresses come
+        # from the world itself, so a world that declares none (or a malformed approval) must
+        # fail the join, not blow up the dial with a non-iterable None.
+        if not addresses:
+            log.error("The world declares no private addresses: cannot join it")
+            return False
+
         log.user(f"\nActually joining world, role ID will be '{role}'")
 
         # Connecting to the world (private)
@@ -2246,8 +2632,13 @@ class Node:
 
         if peer_id is not None:
 
-            # Relay reservation logic for non-public peers
-            if not self.conn.p2p_world.is_public and self.conn.p2p_world.relay_is_enabled:
+            # Relay reservation logic: reserve a slot on the world node only when WE are not
+            # publicly reachable AND the world node actually offers a reachable relay (is_relay
+            # from its profile), not merely because our relay client is enabled. Note that a
+            # world that has not published is_relay yet (older release) disables the
+            # reservation: it would have failed against a non-relay world anyway.
+            world_is_relay = bool(profile.get_dynamic_profile().get('is_relay'))
+            if not self.conn.p2p_world.is_public and self.conn.p2p_world.relay_is_enabled and world_is_relay:
                 log.user("Node is not publicly reachable. Attempting to reserve a slot on the world's private network.")
                 expiry_utc = await self.conn.reserve(peer_id, NodeConn.P2P_WORLD)
 
@@ -2260,27 +2651,6 @@ class Node:
                 else:
                     log.error("An error occurred during relay reservation.")
             
-            # Load custom stats class if provided
-            stats_class = None
-            if agent_stats_code is not None and len(agent_stats_code) > 0:
-
-                # Checking stats code
-                if not analyze_code({"stats.py": agent_stats_code}):
-                    log.error("Invalid agent stats code (syntax errors or unsafe code) was provided by the world, "
-                              "blocking the join operation")
-                    return False
-
-                try:
-                    stats_mod = types.ModuleType("dynamic_stats_module")
-                    exec(agent_stats_code, stats_mod.__dict__)
-                    if not hasattr(stats_mod, 'WStats'):
-                        log.error("World sent stats.py, but it lacks a 'WStats' class. Using default Stats.")
-                    else:
-                        stats_class = stats_mod.WStats
-                        log.misc("Loaded custom WStats class from world.")
-                except Exception as e:
-                    log.error(f"Failed to exec custom stats.py from world: {e}. Using default Stats.")
-
             # Subscribing to the world rendezvous topic, from which we will get fresh information
             # about the world agents and masters
             log.misc("Subscribing to the world-members topic...")
@@ -2313,18 +2683,59 @@ class Node:
             except Exception:
 
                 # Assuming we are in the case of a single agent.py for all roles (still valid)
-                roles = profile.get_dynamic_profile()['world_roles_fsm'].keys()
-                agent_files = {f"{k}.py": packed_agent_files for k in roles}
+                agent_files = {f"{k}.py": packed_agent_files for k in roles_fsm}
 
-            # Checking files
+            # Legacy stats channel: fold it into the bundle when absent there. Harmless
+            # for attested worlds (they never ship the field; a tampering attempt would
+            # just change the fold below and fail the gate).
+            if legacy_stats_code and 'stats.py' not in agent_files:
+                agent_files['stats.py'] = legacy_stats_code
+
+            # Code-integrity gate: when the world's root token attests a code hash, the
+            # received bundle must fold to exactly that hash ("what you run is what the
+            # root attested", same canonical members the root read from the world's
+            # declared repository). Tokens without the claim skip this, leaving
+            # analyze_code below as the only check.
+            if attested_code_hash:
+                local_hash = canonical_world_hash(world_definition_members(agent_files, roles_fsm or {}))
+                if local_hash != attested_code_hash:
+                    log.error(f"World-code hash mismatch: the token attests {attested_code_hash}, the received "
+                              f"bundle folds to {local_hash}; blocking the join operation")
+                    return False
+                log.misc(f"World-code hash verified against the root-attested claim ({local_hash})")
+            else:
+                # No claim in the token: the world declared no source repository, a fully
+                # supported outcome (it runs unpublished), so there is nothing to compare
+                # the grant bundle against and analyze_code below remains the only gate.
+                log.misc("No world-code hash attested in the world's token, skipping the code-integrity check")
+
+            # Checking files (single gate: stats.py, when shipped, is part of the bundle)
             if not analyze_code(agent_files):
                 log.error(
                     f"Invalid agent-related code (syntax errors or unsafe code) was provided by "
                     f"the world, blocking the join operation")
                 return False
 
+            # Load the custom stats class when the bundle ships one. stats.py is executed
+            # in a bare module (no package), exactly as before: relative imports cannot
+            # resolve there, so it must stay self-contained on the joiner side.
+            stats_class = None
+            agent_stats_code = agent_files.get('stats.py')
+            if agent_stats_code:
+                try:
+                    stats_mod = types.ModuleType("dynamic_stats_module")
+                    exec(agent_stats_code, stats_mod.__dict__)
+                    if not hasattr(stats_mod, 'WStats'):
+                        log.error("World sent stats.py, but it lacks a 'WStats' class. Using default Stats.")
+                    else:
+                        stats_class = stats_mod.WStats
+                        log.misc("Loaded custom WStats class from world.")
+                except Exception as e:
+                    log.error(f"Failed to exec custom stats.py from world: {e}. Using default Stats.")
+
             # Saving reference files (in memory - needed if switching role)
             self.world_agent_files = agent_files
+            self.world_role_fsms = roles_fsm
 
             # Replacing agent instance with a new one, accordingly to the role
             self.__replace_agent_instance_by_role(role, peer_id, profile, stats_class, initial_stats)
@@ -2334,7 +2745,13 @@ class Node:
             log.misc(f"Rendezvous tag received with profile: {rendezvous_tag} "
                      f"(in conn pool: {self.conn.rendezvous_tag})")
             if self.conn.rendezvous_tag < rendezvous_tag:
-                self.conn.rendezvous_tag = rendezvous_tag
+                # Seed the gate one cycle BEHIND the grant tag: the first post-join publish
+                # can carry update_count == grant tag (the host's cycle may not have advanced
+                # between the grant and its next publish, e.g. on a slowed clock) and the
+                # strictly-greater gate would discard it, costing a whole publish cadence.
+                # A same-cycle publish is at worst marginally older than the grant snapshot
+                # applied right below, and the next publish repairs it.
+                self.conn.rendezvous_tag = rendezvous_tag - 1
                 num_world_masters = len(dynamic_profile['world_summary']['world_masters']) \
                     if dynamic_profile['world_summary']['world_masters'] is not None else 'none'
                 num_world_agents = len(dynamic_profile['world_summary']['world_agents']) \
@@ -2479,6 +2896,18 @@ class Node:
                                  f"but it is already part of another world")
                         return False
                     else:
+
+                        # A member is registered, published in the rendezvous roster and dialed
+                        # by the other members through its PRIVATE identity, which the joiner
+                        # itself declares here. Validate it before anything gets registered: a
+                        # missing peer-id would list an unreachable member, and a missing
+                        # address list would reach set_addresses_in_peer_info, which iterates it
+                        # and would raise, taking the whole world host down over one bad joiner.
+                        if not eval_dynamic_profile['private_peer_id'] or \
+                                not eval_dynamic_profile['private_peer_addresses']:
+                            log.error(f"Peer {peer_id} declares no private peer-id/addresses: it cannot be a "
+                                      f"routable world member, rejecting it")
+                            return False
                         return True
 
             else:
@@ -2612,32 +3041,56 @@ class Node:
 
         Returns:
             The 'data' field from the server's JSON response.
+
+        Raises:
+            RootServerError: on transport failures and, with api_rejected set, on
+                API-level refusals (the API answers HTTP 200 with state.code != "ok");
+                refusals carry the response envelope (state code and message, the
+                data.code discriminator, the flags) for callers to branch on.
         """
-        response_fields = ["state", "flags", "data"]
+        url = self.root_endpoint.rstrip("/") + "/" + api.lstrip("/")
+        payload["node_token"] = self.node_token  # Adding token to let the server verify
 
         try:
-            api = self.root_endpoint + ("/" if self.root_endpoint[-1] != "/" and api[0] != "/" else "") + api
-            payload["node_token"] = self.node_token  # Adding token to let the server verify
-            response = requests.post(api,
+            response = requests.post(url,
                                      json=payload,
-                                     headers={"Content-Type": "application/json"})
-
-            if response.status_code == 200:
-                ret = response.json()
-                if response_fields is not None:
-                    for field in response_fields:
-                        if field not in ret:
-                            log.critical(f"Missing key '{field}' in the response to {api}: {ret}")
-                if ret['state']['code'] != "ok":
-                    log.critical("[" + api + "] " + ret['state']['message'])
-                    return []
-                return ret['data']
-            else:
-                log.critical(f"Request {api} failed with status code {response.status_code}")
-                return []
+                                     headers={"Content-Type": "application/json"},
+                                     timeout=Custom.ROOT_REQUEST_TIMEOUT)
         except Exception as e:
-            log.critical(f"An error occurred while making the POST request: {e}")
-            return []
+            log.error(f"Request {url} failed: {e}")
+            raise RootServerError(f"Request {api} failed: {e}", api=api) from e
+
+        if response.status_code != 200:
+            log.error(f"Request {url} failed with status code {response.status_code}")
+            raise RootServerError(f"Request {api} failed with status code {response.status_code}",
+                                  api=api, status=response.status_code)
+
+        try:
+            ret = response.json()
+        except Exception as e:
+            log.error(f"Request {url} returned a non-JSON body: {e}")
+            raise RootServerError(f"Request {api} returned a non-JSON body", api=api,
+                                  status=response.status_code) from e
+
+        for field in ("state", "flags", "data"):
+            if field not in ret:
+                log.error(f"Missing key '{field}' in the response to {url}: {ret}")
+                raise RootServerError(f"Missing key '{field}' in the response to {api}",
+                                      api=api, status=response.status_code)
+
+        state = ret['state'] if isinstance(ret['state'], dict) else {}
+        if state.get('code') != "ok":
+            data = ret['data']
+            log.error("[" + url + "] " + str(state.get('message')))
+            raise RootServerError("[" + api + "] " + str(state.get('message')),
+                                  api=api, api_rejected=True,
+                                  state_code=state.get('code'),
+                                  state_message=state.get('message'),
+                                  data_code=data.get('code') if isinstance(data, dict) else None,
+                                  data=data,
+                                  flags=ret['flags'] if isinstance(ret['flags'], dict) else {},
+                                  status=response.status_code)
+        return ret['data']
 
     def __replace_agent_instance_by_role(self, role: int,
                                          world_peer_id: str | None = None,
@@ -2652,12 +3105,12 @@ class Node:
             world_profile = self.agent.world_profile
 
         if world_peer_id is None:
-            world_peer_id = self.conn.get_world_peer_id()
+            world_peer_id = self.conn.get_world_node_peer_id()
 
         if self.world_agent_files is not None and len(self.world_agent_files) > 0:
 
-            # Getting roles from the just got world profile
-            world_roles = world_profile.get_dynamic_profile()['world_roles_fsm'].keys()
+            # Getting the roles delivered with the world approval at join time
+            world_roles = (self.world_role_fsms or {}).keys()
             role_bits_to_str, role_str_to_bits = Agent.build_augmented_roles_dictionaries(world_roles)
 
             # Creating a new agent with the received actions
@@ -2719,8 +3172,12 @@ class Node:
         if initial_stats is not None and isinstance(initial_stats, dict):
             self.agent.update_stats_view(initial_stats, overwrite=True)
 
-        # Saving the world profile
+        # Saving the world profile and the role FSMs that came with the world approval.
+        # The FSMs must be handed over explicitly: accept_new_role reads them off the
+        # agent, while the approval stores them on the node, and the attribute cloning
+        # above would carry over the None of the agent this one is replacing.
         self.agent.world_profile = world_profile
+        self.agent.world_role_fsms = self.world_role_fsms
 
         # Setting the assigned role and default behavior (do it after having recreated the new agent object)
         self.agent.accept_new_role(role)  # Do this after having done 'self.agent.world_profile = profile'
@@ -2947,3 +3404,10 @@ class NodeSynchronizer:
                     break
         except KeyboardInterrupt:
             pass
+        finally:
+
+            # The synchronizer drives each node one cycle at a time, so it is the only
+            # one that knows when they are done: shut them down here (world last, as the
+            # agents still say goodbye to it while leaving).
+            for node in reversed(self.nodes):
+                await node.aclose()

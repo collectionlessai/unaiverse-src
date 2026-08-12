@@ -11,12 +11,13 @@ import (
 	"log"
 	"time"
 	"unsafe"
+	"bytes"
 	"context"
 	"strings"
 	"crypto/tls"
 	"encoding/json"
 	"path/filepath"
-	"encoding/base64"
+	"encoding/binary"
 	"github.com/caddyserver/certmagic"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -42,6 +43,21 @@ import (
 	autorelay "github.com/libp2p/go-libp2p/p2p/host/autorelay"
 	webtransport "github.com/libp2p/go-libp2p/p2p/transport/webtransport"
 )
+
+// recoverToCString is a defer helper for the exported FFI functions that return
+// a *C.char. A panic crossing the cgo boundary aborts the whole Python process,
+// so every //export with a *C.char result installs this via a named return:
+//
+//	func Foo(...) (ret *C.char) { defer recoverToCString(&ret, "Foo"); ... }
+//
+// On panic it overwrites the (unset) return value with a JSON error response so
+// the Python side sees a normal P2PError instead of a dead interpreter.
+func recoverToCString(ret **C.char, fname string) {
+	if r := recover(); r != nil {
+		logger.Errorf("[GO] 🛑 Recovered panic in %s: %v", fname, r)
+		*ret = C.CString(jsonErrorResponse(fmt.Sprintf("panic in %s", fname), fmt.Errorf("%v", r)))
+	}
+}
 
 // This function MUST be called once from Python before any other library function.
 //
@@ -101,6 +117,7 @@ func CreateNode(
 	instanceIndexC C.int,
 	configJSONC *C.char,
 ) (ret *C.char) {
+	defer recoverToCString(&ret, "CreateNode")
 
 	instanceIndex := int(instanceIndexC)
 
@@ -357,6 +374,36 @@ func CreateNode(
 		options = append(options, libp2p.DisableRelay()) // Explicitly disable using relays.
 		logger.Debugf("[GO]   - Instance %d: Relay client is DISABLED.\n", instanceIndex)
 	} else {
+		var defaultRelaysMaddrs []ma.Multiaddr
+		// Convert string addresses to Multiaddr, skipping any malformed entry
+		// instead of pushing a nil into the slice (which would then poison
+		// AddrInfosFromP2pAddrs below).
+		for _, s := range defaultRelays {
+				addr, err := ma.NewMultiaddr(s)
+				if err != nil {
+					logger.Warnf("[GO] ⚠️ Instance %d: Skipping malformed default relay '%s': %v\n", instanceIndex, s, err)
+					continue
+				}
+				defaultRelaysMaddrs = append(defaultRelaysMaddrs, addr)
+		}
+
+		// Convert to AddrInfo. Never log.Fatal here: this is a c-shared library,
+		// os.Exit would take down the whole hosting Python process.
+		defaultRelaysAddrInfo, err := peer.AddrInfosFromP2pAddrs(defaultRelaysMaddrs...)
+		if err != nil {
+			return C.CString(jsonErrorResponse(fmt.Sprintf("Instance %d: Failed to parse default relay addresses", instanceIndex), err))
+		}
+		// Always enable the autorelay client so a private node can be reached through
+		// our relays. Offering the relay service (below) is now additive and independent:
+		// libp2p gates both on the real AutoNAT reachability, so a private node keeps a
+		// dead /hop while a public one actually relays.
+		options = append(options, libp2p.EnableAutoRelayWithStaticRelays(
+			defaultRelaysAddrInfo,
+			autorelay.WithBootDelay(time.Second*10),
+			autorelay.WithMinCandidates(2),
+			autorelay.WithNumRelays(1),
+		))
+		logger.Debugf("[GO]   - Instance %d: AutoRelay client ENABLED.\n", instanceIndex)
 		// Configure Relay Service (ability to *be* a relay)
 		if cfg.Relay.EnableService {
 			resources := rc.DefaultResources() // open this to see the default resource limits
@@ -375,27 +422,6 @@ func CreateNode(
 			}
 			// This single option enables the node to act as a relay for others.
 			options = append(options, libp2p.EnableRelayService(rc.WithResources(resources)), libp2p.EnableNATService())
-		} else {
-			var defaultRelaysMaddrs []ma.Multiaddr
-			// Convert string addresses to Multiaddr
-			for _, s := range defaultRelays {
-					addr, _ := ma.NewMultiaddr(s)
-					defaultRelaysMaddrs = append(defaultRelaysMaddrs, addr)
-			}
-
-			// Convert to AddrInfo
-			defaultRelaysAddrInfo, err := peer.AddrInfosFromP2pAddrs(defaultRelaysMaddrs...)
-			if err != nil {
-				log.Fatal(err)
-			}
-			// In this case we want to use relays but not offer the service to others.
-			options = append(options, libp2p.EnableAutoRelayWithStaticRelays(
-				defaultRelaysAddrInfo,
-				autorelay.WithBootDelay(time.Second*10),
-				autorelay.WithMinCandidates(2),
-				autorelay.WithNumRelays(1),
-			))
-			logger.Debugf("[GO]   - Instance %d: AutoRelay client ENABLED.\n", instanceIndex)
 		}
 	}
 
@@ -433,6 +459,7 @@ func CreateNode(
 
 	if cfg.Network.ForcePublic {
 		isPublic = true
+		ni.setIsPublic(true) // authoritative: AutoNAT is bypassed, so there are no dynamic updates.
 		logger.Debugf("[GO] ⏳ Instance %d: ForcePublic is ON. Waiting for addresses to settle...", instanceIndex)
 		waitCtx, waitCancel := context.WithTimeout(ni.ctx, 5*time.Second)
 		defer waitCancel()
@@ -461,7 +488,8 @@ func CreateNode(
 		if err != nil {
 			return C.CString(jsonErrorResponse("Failed to subscribe to reachability events", err))
 		}
-		defer reachSub.Close()
+		// NB: reachSub is NOT closed here — it is handed to handleReachabilityEvents below
+		// (started after the boot verdict), which owns and closes it on shutdown.
 
 		timeoutCtx, timeoutCancel := context.WithTimeout(ni.ctx, PeerConnectionTimeout)
 		defer timeoutCancel()
@@ -488,6 +516,20 @@ func CreateNode(
 			case <-ni.ctx.Done():
 				return C.CString(jsonErrorResponse("Context cancelled during init", nil))
 			}
+		}
+		// Seed the shared reachability state with the boot verdict (the WAIT_LOOP's first event,
+		// or false on timeout). This runs for EVERY non-ForcePublic node, including the
+		// dht_keep=False ones that close the subscription below, so isPublic is always set once.
+		ni.setIsPublic(isPublic)
+
+		// Then keep it live only where AutoNAT survives, i.e. where the DHT is kept. Where the
+		// DHT is closed after boot (dht_keep=False, e.g. p2p_w) AutoNAT dies, so a listener would
+		// just sit idle holding a subscription for the node's lifetime: close it instead.
+		// (Making AutoNAT survive without the DHT is tracked separately.)
+		if cfg.DHT.Keep {
+			go handleReachabilityEvents(ni, reachSub)
+		} else {
+			reachSub.Close()
 		}
 	}
 
@@ -567,11 +609,12 @@ func CreateNode(
 func ConnectTo(
 	instanceIndexC C.int,
 	addrsJSONC *C.char,
-) *C.char {
+) (ret *C.char) {
+	defer recoverToCString(&ret, "ConnectTo")
 
 	ni, err := getInstance(int(instanceIndexC))
 	if err != nil {
-		return C.CString(jsonErrorResponse("Invalid instance", err))
+		return C.CString(jsonErrorResponse(fmt.Sprintf("Invalid instance index: %d", int(instanceIndexC)), err))
 	}
 	
 	goAddrsJSON := C.GoString(addrsJSONC)
@@ -676,11 +719,12 @@ func ConnectTo(
 func ReserveOnRelay(
 	instanceIndexC C.int,
 	relayPeerIDC *C.char,
-) *C.char {
+) (ret *C.char) {
+	defer recoverToCString(&ret, "ReserveOnRelay")
 
 	ni, err := getInstance(int(instanceIndexC))
 	if err != nil {
-		return C.CString(jsonErrorResponse("Invalid instance", err))
+		return C.CString(jsonErrorResponse(fmt.Sprintf("Invalid instance index: %d", int(instanceIndexC)), err))
 	}
 
 	// Convert C string input to Go string.
@@ -809,11 +853,12 @@ func ReserveOnRelay(
 func DisconnectFrom(
 	instanceIndexC C.int,
 	peerIDC *C.char,
-) *C.char {
+) (ret *C.char) {
+	defer recoverToCString(&ret, "DisconnectFrom")
 
 	ni, err := getInstance(int(instanceIndexC))
 	if err != nil {
-		return C.CString(jsonErrorResponse("Invalid instance", err))
+		return C.CString(jsonErrorResponse(fmt.Sprintf("Invalid instance index: %d", int(instanceIndexC)), err))
 	}
 
 	goPeerID := C.GoString(peerIDC)
@@ -911,13 +956,15 @@ func DisconnectFrom(
 //export GetConnectedPeers
 func GetConnectedPeers(
 	instanceIndexC C.int,
-) *C.char {
+) (ret *C.char) {
+	defer recoverToCString(&ret, "GetConnectedPeers")
 
 	ni, err := getInstance(int(instanceIndexC))
 	if err != nil {
 		// If getInstance errors, it means the host isn't ready.
 		// Return success with an empty list, as it's a query, not an operation.
-		logger.Warnf("[GO] ⚠️ Instance %d: GetConnectedPeers called but instance is not ready: %v\n", ni.instanceIndex, err)
+		// NOTE: ni is nil here, so log the raw C index, never ni.instanceIndex.
+		logger.Warnf("[GO] ⚠️ Instance %d: GetConnectedPeers called but instance is not ready: %v\n", int(instanceIndexC), err)
 		return C.CString(jsonSuccessResponse([]ExtendedPeerInfo{}))
 	}
 
@@ -938,6 +985,50 @@ func GetConnectedPeers(
 	return C.CString(jsonSuccessResponse(peersList)) // Caller frees.
 }
 
+// GetTopicPeers returns, de-duplicated across this instance's topics, the peers subscribed
+// to them (topic.ListPeers()): the directly-connected peers that receive this instance's
+// broadcasts. The pubsub router intersects its connected-peer set with each topic's
+// subscribers, so a peer we are not connected to never appears. (Not the gossipsub grafted
+// mesh, a degree-bounded subset; on the floodsub world instance it is every subscriber.)
+//
+// The world perimeter needs this because GetConnectedPeers reports only friendlyPeers (peers
+// that opened a stream); a peer whose only traffic is a subscription is invisible there yet
+// still receives every broadcast. Only ids are returned: enough to decide the cut, and
+// unlike GetConnectedPeers this must not feed pool admission (which stays stream-driven), so
+// fuller info would only mislead. A relay never subscribes and so never appears.
+//
+// Returns JSON `{"state":"Success","message":["<peer_id>", ...]}`. Caller MUST FreeString it.
+//
+//export GetTopicPeers
+func GetTopicPeers(
+	instanceIndexC C.int,
+) (ret *C.char) {
+	defer recoverToCString(&ret, "GetTopicPeers")
+
+	ni, err := getInstance(int(instanceIndexC))
+	if err != nil {
+		// Not ready yet: a query, so report no subscribers rather than an error.
+		logger.Warnf("[GO] ⚠️ Instance %d: GetTopicPeers called but instance is not ready: %v\n", int(instanceIndexC), err)
+		return C.CString(jsonSuccessResponse([]string{}))
+	}
+
+	// De-duplicate across topics: a peer subscribed to several topics must appear once.
+	seen := make(map[peer.ID]struct{})
+	ni.pubsubMutex.RLock()
+	for _, topic := range ni.topics {
+		for _, pid := range topic.ListPeers() {
+			seen[pid] = struct{}{}
+		}
+	}
+	ni.pubsubMutex.RUnlock()
+
+	peersList := make([]string, 0, len(seen))
+	for pid := range seen {
+		peersList = append(peersList, pid.String())
+	}
+	return C.CString(jsonSuccessResponse(peersList)) // Caller frees.
+}
+
 // GetRendezvousPeers returns a list of peers currently tracked as part of the world for a specific instance.
 // Note: This relies on the internal `rendezvousDiscoveredPeersInstances` map which is updated by pubsub
 // Parameters:
@@ -952,7 +1043,8 @@ func GetConnectedPeers(
 //export GetRendezvousPeers
 func GetRendezvousPeers(
 	instanceIndexC C.int,
-) *C.char {
+) (ret *C.char) {
+	defer recoverToCString(&ret, "GetRendezvousPeers")
 
 	ni, err := getInstance(int(instanceIndexC))
 	if err != nil {
@@ -996,11 +1088,12 @@ func GetRendezvousPeers(
 func GetNodeAddresses(
 	instanceIndexC C.int,
 	peerIDC *C.char,
-) *C.char {
+) (ret *C.char) {
+	defer recoverToCString(&ret, "GetNodeAddresses")
 
 	ni, err := getInstance(int(instanceIndexC))
 	if err != nil {
-		return C.CString(jsonErrorResponse("Invalid instance", err))
+		return C.CString(jsonErrorResponse(fmt.Sprintf("Invalid instance index: %d", int(instanceIndexC)), err))
 	}
 	peerIDStr := C.GoString(peerIDC) // Raw string from C
 	
@@ -1032,6 +1125,22 @@ func GetNodeAddresses(
 	return C.CString(jsonSuccessResponse(addresses))
 }
 
+// GetReachability returns the node's current AutoNAT reachability as a boolean. For a
+// ForcePublic node this is the seeded true; otherwise it reflects the latest
+// EvtLocalReachabilityChanged verdict kept live by handleReachabilityEvents.
+// Success: {"state":"Success","message":true|false}. Free the result with FreeString.
+//
+//export GetReachability
+func GetReachability(instanceIndexC C.int) (ret *C.char) {
+	defer recoverToCString(&ret, "GetReachability")
+
+	ni, err := getInstance(int(instanceIndexC))
+	if err != nil {
+		return C.CString(jsonErrorResponse(fmt.Sprintf("Invalid instance index: %d", int(instanceIndexC)), err))
+	}
+	return C.CString(jsonSuccessResponse(ni.getIsPublic()))
+}
+
 // GetWebRTCConnections returns a JSON array of all peers that currently have
 // an active WebRTC DataChannel with this node instance.
 //
@@ -1039,10 +1148,11 @@ func GetNodeAddresses(
 // The caller MUST free the returned string with FreeString.
 //
 //export GetWebRTCConnections
-func GetWebRTCConnections(instanceIndexC C.int) *C.char {
+func GetWebRTCConnections(instanceIndexC C.int) (ret *C.char) {
+	defer recoverToCString(&ret, "GetWebRTCConnections")
 	ni, err := getInstance(int(instanceIndexC))
 	if err != nil {
-		return C.CString(jsonErrorResponse("Invalid instance", err))
+		return C.CString(jsonErrorResponse(fmt.Sprintf("Invalid instance index: %d", int(instanceIndexC)), err))
 	}
 
 	type entry struct {
@@ -1124,11 +1234,12 @@ func SendMessageToPeer(
 	channelC *C.char,
 	dataC *C.char,
 	lengthC C.int,
-) *C.char {
+) (ret *C.char) {
+	defer recoverToCString(&ret, "SendMessageToPeer")
 
 	ni, err := getInstance(int(instanceIndexC))
 	if err != nil {
-		return C.CString(jsonErrorResponse("Invalid instance", err))
+		return C.CString(jsonErrorResponse(fmt.Sprintf("Invalid instance index: %d", int(instanceIndexC)), err))
 	}
 
 	// Convert C inputs
@@ -1290,11 +1401,12 @@ func SendMessageToPeer(
 func SubscribeToTopic(
 	instanceIndexC C.int,
 	channelC *C.char,
-) *C.char {
+) (ret *C.char) {
+	defer recoverToCString(&ret, "SubscribeToTopic")
 
 	ni, err := getInstance(int(instanceIndexC))
 	if err != nil {
-		return C.CString(jsonErrorResponse("Invalid instance", err))
+		return C.CString(jsonErrorResponse(fmt.Sprintf("Invalid instance index: %d", int(instanceIndexC)), err))
 	}
 
 	// Convert C string input to Go string.
@@ -1413,13 +1525,16 @@ func SubscribeToTopic(
 func UnsubscribeFromTopic(
 	instanceIndexC C.int,
 	channelC *C.char,
-) *C.char {
+) (ret *C.char) {
+	defer recoverToCString(&ret, "UnsubscribeFromTopic")
 
 	ni, err := getInstance(int(instanceIndexC))
 	if err != nil {
-		// If instance is already gone, we can consider it "unsubscribed"
-		logger.Warnf("[GO] ⚠️ Instance %d: Unsubscribe called but instance is not ready: %v\n", ni.instanceIndex, err)
-		return C.CString(jsonSuccessResponse(fmt.Sprintf("Instance %d: Not subscribed (instance not running)", ni.instanceIndex)))
+		// If instance is already gone, we can consider it "unsubscribed".
+		// NOTE: ni is nil here, so log/return the raw C index, never ni.instanceIndex.
+		idx := int(instanceIndexC)
+		logger.Warnf("[GO] ⚠️ Instance %d: Unsubscribe called but instance is not ready: %v\n", idx, err)
+		return C.CString(jsonSuccessResponse(fmt.Sprintf("Instance %d: Not subscribed (instance not running)", idx)))
 	}
 
 	// Convert C string input to Go string.
@@ -1488,43 +1603,6 @@ func UnsubscribeFromTopic(
 	)) // Caller frees.
 }
 
-// MessageQueueLength returns the total number of messages waiting across all channel queues for a specific instance.
-// Parameters:
-//   - instanceIndexC (C.int): The index of the node instance.
-//
-// Returns:
-//   - C.int: The total number of messages. Returns -1 if instance index is invalid.
-//
-//export MessageQueueLength
-func MessageQueueLength(
-	instanceIndexC C.int,
-) C.int {
-
-	ni, err := getInstance(int(instanceIndexC))
-	if err != nil {
-		logger.Errorf("[GO] ❌ MessageQueueLength: %v\n", err)
-		return -1 // Return -1 if instance isn't valid
-	}
-
-	// Get the message store for this instance
-	store := ni.messageStore
-	if store == nil {
-		logger.Errorf("[GO] ❌ Instance %d: Message store not initialized.\n", ni.instanceIndex)
-		return 0 // Return 0 if store is nil (effectively empty)
-	}
-
-	store.mu.Lock()
-	defer store.mu.Unlock()
-
-	totalLength := 0
-	// TODO: this makes sense but not for the check we are doing from python, think about it
-	for _, messageList := range store.messagesByChannel {
-		totalLength += messageList.Len()
-	}
-
-	return C.int(totalLength)
-}
-
 // PopMessages retrieves the oldest message from each channel's queue for a specific instance.
 // This function always pops one message per channel that has messages.
 // Parameters:
@@ -1539,11 +1617,12 @@ func MessageQueueLength(
 //export PopMessages
 func PopMessages(
 	instanceIndexC C.int,
-) *C.char {
+) (ret *C.char) {
+	defer recoverToCString(&ret, "PopMessages")
 
 	ni, err := getInstance(int(instanceIndexC))
 	if err != nil {
-		return C.CString(jsonErrorResponse("Invalid instance", err))
+		return C.CString(jsonErrorResponse(fmt.Sprintf("Invalid instance index: %d", int(instanceIndexC)), err))
 	}
 
 	// Get the message store for this instance
@@ -1580,27 +1659,34 @@ func PopMessages(
 		return C.CString(`{"state":"Empty"}`)
 	}
 
-	// Marshal the slice of popped messages into a JSON array.
-	// We create a temporary structure for JSON marshalling to include the base64-encoded data.
-	payloads := make([]map[string]interface{}, len(poppedMessages))
-	for i, msg := range poppedMessages {
-		payloads[i] = map[string]interface{}{
-			"from": msg.From,
-			"data": base64.StdEncoding.EncodeToString(msg.Data),
-		}
+	// Serialize the popped messages as a single binary buffer instead of JSON +
+	// base64. This avoids the +33% base64 blow-up and the extra string copies that
+	// hurt large image/tensor payloads; the queues already hold raw []byte. Layout
+	// (see popBinaryMagic in types.go): [1B magic][uint32 totalBytes][uint32 count]
+	// then per message [uint32 fromLen][from][uint32 protoLen][proto][uint32 dataLen][data].
+	// `from` is the textual peer-id (msg.From.String()), matching what the JSON path
+	// used to emit and what Python compares against the in-payload sender. The proto
+	// slot is written empty here (the queue carries no per-message protocol id) but
+	// kept in the layout so the reader stays one single format.
+	buf := new(bytes.Buffer)
+	buf.WriteByte(popBinaryMagic)
+	buf.Write([]byte{0, 0, 0, 0}) // totalBytes placeholder, patched below
+	_ = binary.Write(buf, binary.BigEndian, uint32(len(poppedMessages)))
+	for _, msg := range poppedMessages {
+		fromBytes := []byte(msg.From.String())
+		_ = binary.Write(buf, binary.BigEndian, uint32(len(fromBytes)))
+		buf.Write(fromBytes)
+		_ = binary.Write(buf, binary.BigEndian, uint32(0)) // protoLen: unused on this path
+		_ = binary.Write(buf, binary.BigEndian, uint32(len(msg.Data)))
+		buf.Write(msg.Data)
 	}
+	out := buf.Bytes()
+	binary.BigEndian.PutUint32(out[1:5], uint32(len(out))) // patch totalBytes
 
-	jsonBytes, err := json.Marshal(payloads)
-	if err != nil {
-		logger.Errorf("[GO] ❌ Instance %d: PopMessages: Failed to marshal messages to JSON: %v\n", ni.instanceIndex, err)
-		// Messages have already been popped from the queue at this point.
-		// Returning an error is the best we can do.
-		return C.CString(jsonErrorResponse(
-			fmt.Sprintf("Instance %d: Failed to marshal popped messages", ni.instanceIndex), err,
-		))
-	}
-
-	return C.CString(string(jsonBytes))
+	// C.CBytes copies into the C heap with malloc, so FreeString (C.free) frees it
+	// just like a C.CString. The leading magic byte distinguishes this from the
+	// JSON Empty/Error responses on the Python side.
+	return (*C.char)(C.CBytes(out))
 }
 
 // CloseNode gracefully shuts down the libp2p host, cancels subscriptions, closes connections,
@@ -1617,8 +1703,9 @@ func PopMessages(
 //export CloseNode
 func CloseNode(
 	instanceIndexC C.int,
-) *C.char {
-	
+) (ret *C.char) {
+	defer recoverToCString(&ret, "CloseNode")
+
 	instanceIndex := int(instanceIndexC)
 
 	if instanceIndex == -1 {

@@ -54,24 +54,20 @@ class FileContainer:
 
 
 class StreamType:
-    def __init__(self, *args: object, private_only: bool = False, public_only: bool = False, **kwargs: object) -> None:
+    def __init__(self, *args: object, private_only: bool = False, **kwargs: object) -> None:
         """Initializes a `Stream` object, which is a container for one or two `DataProps` instances. It creates a
          `DataProps` object for a private stream and, optionally, a public stream.
 
         Args:
             *args: Variable length argument list to be passed to the `DataProps` constructor.
             private_only: If True, only a private stream's `DataProps` is created.
-            public_only: If True, only a public stream's `DataProps` is created.
             **kwargs: Arbitrary keyword arguments passed to the `DataProps` constructor.
 
         Raises:
-            ValueError: If both `private_only` and `public_only` are set to True, or if the 'public' argument is passed
-                directly.
+            ValueError: If the 'public' argument is passed directly (it is a `DataProps` argument).
         """
         self.props = []
 
-        if public_only and private_only:
-            raise ValueError("Cannot set both private_only and public_only to True (it does not make any sense)")
         if 'public' in kwargs:
             raise ValueError("Invalid argument was provided to Stream: 'public' (it is an argument of DataProps)")
 
@@ -294,7 +290,13 @@ class DataProps:
                 f"Invalid tensor type: {tensor_dtype}"
 
             # Setting dtype
-            self.tensor_dtype = tensor_dtype if isinstance(tensor_dtype, torch.dtype) else eval(tensor_dtype)
+            if isinstance(tensor_dtype, torch.dtype):
+                self.tensor_dtype = tensor_dtype
+            else:
+                assert (isinstance(tensor_dtype, str) and tensor_dtype.startswith("torch.") and
+                        "." not in tensor_dtype[6:])
+                self.tensor_dtype = eval(tensor_dtype)
+                assert isinstance(self.tensor_dtype, torch.dtype)
 
             # Checking labels
             assert tensor_labels is None or (isinstance(tensor_labels, list) or
@@ -440,7 +442,8 @@ class DataProps:
                          data_desc=self.data_desc,
                          tensor_shape=self.tensor_shape,
                          tensor_dtype=self.tensor_dtype,
-                         tensor_labels=self.tensor_labels.labels if self.tensor_labels is not None else None,
+                         tensor_labels=list(self.tensor_labels.labels)
+                         if self.tensor_labels is not None and self.tensor_labels.labels is not None else None,
                          tensor_labeling_rule=self.tensor_labels.original_labeling_rule
                          if self.tensor_labels is not None else "max",
                          stream_to_proc_transforms=self.__original_stream_to_proc_transforms,

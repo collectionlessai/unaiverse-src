@@ -22,6 +22,7 @@ from unaiverse.hsm import Action
 from unaiverse.stats import Stats
 from unaiverse.clock import clock
 from unaiverse.utils.logger import log
+from unaiverse.utils.misc import owner_handle
 from unaiverse.interaction import Interaction
 from unaiverse.agent_basics import AgentBasics
 from unaiverse.networking.p2p.messages import Msg
@@ -96,13 +97,12 @@ def action(func: Callable) -> Callable:
                              "(it is tolerated to return non-None stuff and interpreted as True, "
                              "but not if it returns None, as happens here)")
         except Exception as e:
+            import traceback  # Debug
             if not isinstance(e, AssertionError):
                 log.error(f"Action '{func.__name__}' failed since it raised an exception: {e}")  # No-Debug
-                import traceback  # Debug
                 log.error(f"{traceback.format_exc()}")  # Debug
             else:
                 log.error(f"Action '{func.__name__}' failed since it raised an AssertionError")  # No-Debug
-                import traceback
                 log.error(f"{traceback.format_exc()}")
             ret = False
         return ret
@@ -147,6 +147,11 @@ class Agent(AgentBasics):
         t = clock.get_time_ms()
         try:
             info = self.node_conn['p2p_world'].get_connected_peers_info()
+            if info is None:
+                # FFI error, not "zero peers": skip this sample instead of storing a
+                # misleading empty list.
+                log.error("[Stats] Connected-peers FFI read failed, skipping this sample")
+                return
             peers_list = [i['id'] for i in info]
             self.stats.store_stat('connected_peers', peers_list, group_key=own_private_pid, timestamp=t)
         except Exception as e:
@@ -169,7 +174,7 @@ class Agent(AgentBasics):
             log.debug("[send_stats_to_world] Not in a world, skipping stats send.")
             return
 
-        world_peer_id = self.node_conn.get_world_peer_id()
+        world_peer_id = self.node_conn.get_world_node_peer_id()
         if world_peer_id is None:
             log.error("Agent in world, but world_peer_id is None.")
             return
@@ -198,6 +203,19 @@ class Agent(AgentBasics):
         """
         assert self.stats is not None
         self.stats.update_view(received_view, overwrite)
+
+    @action
+    async def ask_world_stats(self, filters: dict | None = None) -> bool:
+        """Ask the world for stats: 'filters' is interpreted by the World subclass (method answer_stats_request);
+        the answer arrives asynchronously as a STATS_RESPONSE and is merged into the agent's local stats view
+        (see update_stats_view)."""
+        world_peer_id = self.node_conn.get_world_node_peer_id()
+        if world_peer_id is None:
+            log.error("Not in a world: cannot ask stats")
+            return False
+        return await self.node_conn.send(world_peer_id, channel_trail=None,
+                                         content=filters if filters is not None else {},
+                                         content_type=Msg.STATS_REQUEST)
 
     @action
     async def suggest_role_to_world(self, agent: str | None, role: str) -> bool:
@@ -230,7 +248,7 @@ class Agent(AgentBasics):
                 content.append({'peer_id': _agent, 'role': role_bits})
 
         if len(content) > 0:
-            world_peer_id = self.node_conn.get_world_peer_id()
+            world_peer_id = self.node_conn.get_world_node_peer_id()
             if not (await self.node_conn.send(world_peer_id, channel_trail=None,
                                               content=content,
                                               content_type=Msg.ROLE_SUGGESTION)):
@@ -262,7 +280,7 @@ class Agent(AgentBasics):
             return False
 
         agents = self.__involved_agents(agent)
-        world_peer_id = self.node_conn.get_world_peer_id()
+        world_peer_id = self.node_conn.get_world_node_peer_id()
 
         if badge_type not in Agent.BADGE_TYPES:
             log.error(f"Unknown badge type: {badge_type}")
@@ -684,8 +702,6 @@ class Agent(AgentBasics):
         self._engaged_agents.discard(_requester)  # Remove if present
 
         if disconnect_too:
-            if interaction is not None:
-                interaction.send_status = False  # This will avoid sending back a confirmation for this interaction
             await self.node_purge_fcn(_requester)
 
         # Marking this agent as available if not engaged to any agent
@@ -735,7 +751,13 @@ class Agent(AgentBasics):
         log.misc(f"Disconnecting agents with role: {role}")
         if disengage_too:
             await self.send_disengage(send_disconnection_too=True)
-        if await self.find_agents(role):
+        # Target only enrolled peers (handshake done), not every role match in the
+        # rendezvous roster: disconnecting is meaningful only towards agents we are
+        # actually connected to. Without this, in the template engage-by-role loop
+        # this fires purge on not-yet-connected peers every behavior tick — a flood
+        # of no-op purges plus a synchronous cgo DisconnectFrom per peer, right on
+        # the main task's pump.
+        if await self.find_agents(role, handshake_completed=True):
             found_agents = copy.deepcopy(self._found_agents)
             for agent in found_agents:
                 await self.node_purge_fcn(agent)  # This will also call remove_agent, that will call remove_streams
@@ -815,7 +837,7 @@ class Agent(AgentBasics):
 
                             if data is not None:
                                 if _processing_fcn is None:
-                                    return True
+                                    return True  # If some data arrived and no further processing is expected, just True
                                 else:
                                     got_something = True
                                     _processing_fcn: Callable
@@ -984,17 +1006,22 @@ class Agent(AgentBasics):
                 return False
 
         # Adding new streams and subscribing (if compatible with our processor)
+        something_good_happened = False
         for stream_owner, prop_dict, prop_obj in zip(stream_owners, props_dicts, props_objs):
             if not unsubscribe:
                 if not (await self.add_compatible_streams(peer_id=stream_owner, streams_in_profile=[prop_dict],
                                                           buffered=False, public=False)):
                     log.error(f"Unable to add a pubsub stream ({prop_obj.get_name()}) from agent {stream_owner}: "
                               f"no compatible streams were found")
+                else:
+                    something_good_happened = True
             else:
                 if not (await self.remove_streams(peer_id=stream_owner, name=prop_obj.get_name())):
                     log.misc(f"Unable to unsubscribe from pubsub stream ({prop_obj.get_name()}) "
                              f"of agent {stream_owner}")
-        return True
+                else:
+                    something_good_happened = True
+        return something_good_happened
 
     @action
     async def record(self, interaction: Interaction | None = None,
@@ -1231,9 +1258,13 @@ class Agent(AgentBasics):
             return (self._cur_preferred_stream + len(self._preferred_streams) // self._repeat <
                     len(self._preferred_streams))
         elif what == "last_song":
+            if self._repeat <= 0 or len(self._preferred_streams) == 0:
+                return False
             num_streams_in_playlist = len(self._preferred_streams) // self._repeat
             return (self._cur_preferred_stream + 1) % num_streams_in_playlist == 0
         elif what == "not_last_song":
+            if self._repeat <= 0 or len(self._preferred_streams) == 0:
+                return False
             num_streams_in_playlist = len(self._preferred_streams) // self._repeat
             return (self._cur_preferred_stream + 1) % num_streams_in_playlist != 0
         else:
@@ -1286,12 +1317,16 @@ class Agent(AgentBasics):
         Returns:
             True if the evaluation is successful, False otherwise.
         """
-        if not self.buffer_generated_by_others:
+        if self.buffer_generated_by_others == 'none':
             log.error("Cannot evaluate if not buffering data generated by others")
             return False
 
         if stream_hash == "<playlist>":
-            net_hash = self._preferred_streams[self._cur_preferred_stream]
+            if len(self._preferred_streams) > self._cur_preferred_stream >= 0:
+                net_hash = self._preferred_streams[self._cur_preferred_stream]
+            else:
+                log.error("Invalid playlist index!")
+                return False
         else:
             net_hash = self.user_stream_hash_to_net_hash(stream_hash)
 
@@ -1369,7 +1404,7 @@ class Agent(AgentBasics):
                 log.user(f"Invalid evaluation result: {eval_result}")
                 return False
 
-            owner_account = self.all_agents[agent_peer_id].get_static_profile()['email']
+            owner_account = owner_handle(self.all_agents[agent_peer_id].get_static_profile())
             agent_name = self.all_agents[agent_peer_id].get_static_profile()['node_name']
 
             if cmp != "min" and cmp != "max":
@@ -1383,7 +1418,7 @@ class Agent(AgentBasics):
                 elif cmp == ">=" and eval_result >= thres:
                     outcome = True
 
-                if cmp[0] == "<" or cmp[0] == "<=":
+                if cmp[0] == "<":
                     alias = 'error level' if good_if_true else 'mark'
                 else:
                     alias = 'mark' if good_if_true else 'error level'
@@ -1408,7 +1443,7 @@ class Agent(AgentBasics):
                     best_so_far = eval_result
                     self._valid_cmp_agents = {agent_peer_id}
                     msgs = [f"The best agent is {owner_account}/{agent_name}"]
-                else:
+                elif best_so_far < 0:
                     msgs = [f"No best agent found for the considered threshold ({thres})"]
 
         for msg in msgs:
@@ -1437,7 +1472,8 @@ class Agent(AgentBasics):
         """
 
         if ref == "<playlist>":
-            return self._preferred_streams[self._cur_preferred_stream]
+            return self._preferred_streams[self._cur_preferred_stream] \
+                if len(self._preferred_streams) > self._cur_preferred_stream >= 0 else None
         else:
             return super().resolve_stream_ref(ref, public)
 
@@ -1699,7 +1735,7 @@ class Agent(AgentBasics):
             A list of peer IDs corresponding to the involved agents.
         """
         if isinstance(agent, list):
-            return agent
+            return agent  # Here we return the exact same list passed as argument, not a shallow copy
         if isinstance(agent, set):
             return list(agent)
         peer_id = agent
@@ -1729,7 +1765,8 @@ class Agent(AgentBasics):
             if net_hashes[i] == "<playlist>":
 
                 # From <playlist> to the current element of the playlist
-                net_hashes_copy.append(self._preferred_streams[self._cur_preferred_stream])
+                if len(self._preferred_streams) > self._cur_preferred_stream >= 0:
+                    net_hashes_copy.append(self._preferred_streams[self._cur_preferred_stream])
             else:
 
                 # From user specified hash to a net hash (e.g., peer_id:name_or_group to peer_id::ps:name_or_group)
@@ -1746,7 +1783,7 @@ class Agent(AgentBasics):
         to_remove = []
 
         in_world = self.behaving_in_world()
-        world_peer_id = self.get_connection_pool_manager().get_world_peer_id()
+        world_peer_id = self.get_connection_pool_manager().get_world_node_peer_id()
 
         for _peer_id, _interaction in self.proc_human_peer_id_to_interaction.items():
 
@@ -1779,7 +1816,8 @@ class Agent(AgentBasics):
         if not interaction.is_system():
 
             # If we are in a world, the reference peer ID is the one of the world, no matter who sent the interaction
-            peer_id = interaction.requester if not in_world else self.get_connection_pool_manager().get_world_peer_id()
+            # TODO(review): BUG 2 write side, in a world a non-system chat is stored under the world-node peer-id instead of interaction.requester; see tests/test_human_routing.py::test_rebind_world_should_store_under_requester
+            peer_id = interaction.requester if not in_world else self.get_connection_pool_manager().get_world_node_peer_id()
             self.proc_human_peer_id_to_interaction[peer_id] = interaction
 
         # Forcing default stdin binding (discarding the interaction-provided ones)
@@ -1794,6 +1832,10 @@ class Agent(AgentBasics):
 
         if interaction.requester in self.proc_human_peer_id_to_interaction:
             del self.proc_human_peer_id_to_interaction[interaction.requester]
+        elif self.behaving_in_world():
+            peer_id = self.get_connection_pool_manager().get_world_node_peer_id()
+            if peer_id in self.proc_human_peer_id_to_interaction:
+                del self.proc_human_peer_id_to_interaction[peer_id]
 
         # Clearing data from the stdin, to avoid garbage residuals
         streams_by_user_hash = self.get_default_stdin_bindings()

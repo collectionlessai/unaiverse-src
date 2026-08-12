@@ -16,6 +16,7 @@ from typing import Any
 from unaiverse.stats import Stats
 from unaiverse.clock import clock
 from unaiverse.utils.logger import log
+from unaiverse.utils.misc import owner_handle
 from unaiverse.agent import AgentBasics
 from unaiverse.networking.p2p.messages import Msg
 from unaiverse.networking.node.profile import NodeProfile
@@ -63,18 +64,19 @@ class World(AgentBasics):
                                cache_window_hours=2.0)
         assert self.stats is not None
 
-    def assign_role(self, profile: NodeProfile, is_world_master: bool) -> str:
+    def assign_role(self, profile: NodeProfile, is_world_master: bool) -> str | None:
         """Assigns an initial role to a newly connected agent.
 
-        In this basic implementation, the role is determined based on whether the agent is a world master or a regular
-        world agent, ensuring there's only one master.
+        In this basic implementation, the role is determined solely by whether the agent is a world master or a regular
+        world agent. Who may be a master is governed upstream by the world_masters_node_ids allow-list (see node.py),
+        not by a single-master cap here: this base policy places no limit on the number of masters.
 
         Args:
             profile: The NodeProfile of the new agent.
             is_world_master: A boolean indicating if the new agent is attempting to be a master.
 
         Returns:
-            A string representing the assigned role.
+            A string representing the assigned role or None if assignment was not possible.
         """
         assert self.is_world, "Assigning a role is expected to be done by the world"
 
@@ -82,12 +84,10 @@ class World(AgentBasics):
                 profile.get_dynamic_profile()['guessed_location'] == 'Some Dummy Location, Just An Example Here'):
             pass
 
-        # Currently, roles are only world masters and world agents
+        # Currently, roles are only world masters and world agents: this is expected to be overridden when creating a
+        # world
         if is_world_master:
-            if len(self.world_masters) < 1:
-                return AgentBasics.ROLE_BITS_TO_STR[AgentBasics.ROLE_WORLD_MASTER]
-            else:
-                return AgentBasics.ROLE_BITS_TO_STR[AgentBasics.ROLE_WORLD_AGENT]
+            return AgentBasics.ROLE_BITS_TO_STR[AgentBasics.ROLE_WORLD_MASTER]
         else:
             return AgentBasics.ROLE_BITS_TO_STR[AgentBasics.ROLE_WORLD_AGENT]
 
@@ -308,7 +308,7 @@ class World(AgentBasics):
 
         return {
             'Name': static_profile.get('node_name', '~'),
-            'Owner': static_profile.get('email', '~'),
+            'Owner': owner_handle(static_profile) or '~',
             'Role': dynamic_profile.get('connections', {}).get('role', 'unknown').split('~')[-1],
             'Type': static_profile.get('node_type', '~'),
             'Number of Badges': len(cv),
@@ -450,6 +450,25 @@ class World(AgentBasics):
 
         # Clean the graph from potentially stale peers
         self._prune_graph()
+
+    def answer_stats_request(self, filters: dict, asker: str) -> dict | None:
+        """Respond to a stat request."""
+        assert self.stats is not None
+        assert asker is not None  # Not used here, but might be used when overloading this method in custom worlds
+
+        # Default values are added to query without any filter
+        stat_names = filters.get('stat_names', [])
+        group_keys = filters.get('group_keys', [])
+        time_range = filters.get('time_range', 0)
+        value_range = filters.get('value_range', None)  # The numeric filter
+        limit = filters.get('limit', None)
+
+        return self.stats.query_history(
+            stat_names=stat_names,
+            group_keys=group_keys,
+            time_range=time_range,
+            value_range=value_range,
+            limit=limit)
 
     def debug_stats_dashboard(self) -> None:
         """Helper to verify the dashboard looks correct during development."""

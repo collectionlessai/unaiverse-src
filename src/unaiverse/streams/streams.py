@@ -479,6 +479,7 @@ class Stream:
             If all_uuids is True, then it returns a list of tuples (data_sample, tag, timestamp),
                 where each data_sample has the just mentioned properties.
         """
+        # previously stored data (tests/test_streams_io.py::test_disable_blocks_set_but_get_still_reads).
         if all_uuids:
             samples = []
             for _uuid in self.get_data_uuids():
@@ -878,7 +879,7 @@ class BufferedStream(Stream):
                     self.data_buffer_by_uuid[uuid].pop(0)
                     self.text_buffer_by_uuid[uuid].pop(0)
 
-            if new_tag >= 0:  # When tag == -1, then it means that the data was not present at all
+            if new_tag >= 0:  # When tag == -1, the data was not present at all
                 if first:
                     data_struct = Data(uuid=uuid)
                     self.limit_data_without_interactions()

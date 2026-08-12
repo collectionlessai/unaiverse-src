@@ -450,6 +450,9 @@ class StreamProxy:
             if user_hash.startswith("<default"):
                 user = "owner"
                 name = user_hash
+            elif user_hash.startswith("<data_sample"):
+                user = "sample"
+                name = user_hash
             else:
                 user = DataProps.peer_id_from_user_hash(user_hash)
                 name = DataProps.name_from_user_hash(user_hash)

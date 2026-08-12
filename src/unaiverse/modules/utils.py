@@ -100,7 +100,7 @@ def transforms_factory(trans_type: str, add_batch_dim: bool = True,
 
     if trans_type == "rgb*":
         trans = transforms.Compose([
-            transforms.Lambda(lambda img: img.convert("RGB") if img.mode != "RGB" else img),  # Ensure 3 channels
+            transforms.Lambda(lambda img: img.convert("RGB") if img.mode != "RGB" else img),  # Ensure 3 chans
             transforms.Resize(num),
             transforms.CenterCrop(num),
             transforms.ToTensor(),  # Convert PIL to tensor (3, H, W), float [0,1]
@@ -110,7 +110,8 @@ def transforms_factory(trans_type: str, add_batch_dim: bool = True,
         inverse_trans = transforms.Compose([
             transforms.Normalize(mean=[0., 0., 0.],
                                  std=[1. / 0.229, 1. / 0.224, 1. / 0.225]),
-            transforms.Lambda(lambda x: x + torch.tensor([0.485, 0.456, 0.406]).view(3, 1, 1)),
+            transforms.Lambda(lambda x: torch.clamp(x + torch.tensor([0.485, 0.456, 0.406]).view(3, 1, 1),
+                                                    min=0.0, max=1.0)),
             transforms.ToPILImage()
         ])
     elif trans_type == "gray*":
@@ -125,7 +126,7 @@ def transforms_factory(trans_type: str, add_batch_dim: bool = True,
         inverse_trans = transforms.Compose([
             transforms.Normalize(mean=[0.],
                                  std=[1. / 0.225]),
-            transforms.Lambda(lambda x: x + 0.45),
+            transforms.Lambda(lambda x: torch.clamp(x + 0.45, min=0.0, max=1.0)),
             transforms.ToPILImage()
         ])
     elif trans_type == "rgb-no_norm*":
@@ -154,7 +155,8 @@ def transforms_factory(trans_type: str, add_batch_dim: bool = True,
         inverse_trans = transforms.Compose([
             transforms.Normalize(mean=[0., 0., 0.],
                                  std=[1. / 0.229, 1. / 0.224, 1. / 0.225]),
-            transforms.Lambda(lambda x: x + torch.tensor([0.485, 0.456, 0.406]).view(3, 1, 1)),
+            transforms.Lambda(lambda x: torch.clamp(x + torch.tensor([0.485, 0.456, 0.406]).view(3, 1, 1),
+                                                    min=0.0, max=1.0)),
             transforms.ToPILImage()
         ])
     elif trans_type == "gray":
@@ -167,7 +169,7 @@ def transforms_factory(trans_type: str, add_batch_dim: bool = True,
         inverse_trans = transforms.Compose([
             transforms.Normalize(mean=[0.],
                                  std=[1. / 0.225]),
-            transforms.Lambda(lambda x: x + 0.45),
+            transforms.Lambda(lambda x: torch.clamp(x + 0.45, min=0.0, max=1.0)),
             transforms.ToPILImage()
         ])
     elif trans_type == "rgb-no_norm":
@@ -194,7 +196,7 @@ def transforms_factory(trans_type: str, add_batch_dim: bool = True,
         inverse_trans = transforms.Compose([
             transforms.Normalize(mean=[0.],
                                  std=[1. / 0.3081]),
-            transforms.Lambda(lambda x: x + 0.1307),
+            transforms.Lambda(lambda x: torch.clamp(x + 0.1307, min=0.0, max=1.0)),
             transforms.ToPILImage()
         ])
 
@@ -310,7 +312,32 @@ def isinstance_fcn(obj: object, class_to_check: type | tuple) -> bool:
 
 
 def error_rate_mnist_test_set(network: torch.nn.Module, mnist_data_save_path: str) -> float:
-    """Evaluates a network's classification error rate on the MNIST test set.
+    """Evaluates a network's classification error rate on the MNIST test set, in one
+    blocking call (drains the stepwise generator above).
+
+    Args:
+        network: The PyTorch module to evaluate.
+        mnist_data_save_path: Path where the MNIST dataset will be downloaded and cached.
+
+    Returns:
+        The fraction of misclassified test samples (in [0, 1]).
+    """
+    gen = error_rate_mnist_test_set_steps(network, mnist_data_save_path)
+    while True:
+        try:
+            next(gen)
+        except StopIteration as stop:
+            return stop.value
+
+
+def error_rate_mnist_test_set_steps(network: torch.nn.Module, mnist_data_save_path: str):
+    """Generator variant of error_rate_mnist_test_set, one chunk of work per yield: the
+    dataset setup is a chunk of its own (it may touch the disk), then one test batch per
+    chunk. Built for AgentBasics.stepwise, so the node loop keeps pumping during the
+    evaluation. torch.no_grad() is entered and exited within each chunk (grad mode is
+    thread-global: it must never stay flipped across a yield), and the train-mode
+    restore lives in a finally block, which also runs if an abandoned generator is
+    garbage-collected. Returns the error rate like the plain function.
 
     Args:
         network: The PyTorch module to evaluate.
@@ -328,25 +355,28 @@ def error_rate_mnist_test_set(network: torch.nn.Module, mnist_data_save_path: st
                                     transforms.Normalize((0.1307,), (0.3081,))
                                 ]))
     mnist_test = DataLoader(mnist_test, batch_size=200, shuffle=False)
+    yield
 
     # Checking error rate
     error_rate = 0.
     n = 0
     training_flag_backup = network.training
     network.eval()
-    device = next(network.parameters()).device
-    with torch.no_grad():
+    try:
+        device = next(network.parameters()).device
         for x, y in mnist_test:
-            x = x.to(device)
-            y = y.to(device)
-            o = network(x)
-            c = torch.argmax(o, dim=1)
-            error_rate += float(torch.sum(c != y).item())
-            n += x.shape[0]
-    error_rate /= n
-    network.train(training_flag_backup)
+            with torch.no_grad():
+                x = x.to(device)
+                y = y.to(device)
+                o = network(x)
+                c = torch.argmax(o, dim=1)
+                error_rate += float(torch.sum(c != y).item())
+                n += x.shape[0]
+            yield
+    finally:
+        network.train(training_flag_backup)
 
-    return error_rate
+    return error_rate / n
 
 
 class MultiIdentity(torch.nn.Module):
@@ -700,7 +730,7 @@ class AgentProcessorChecker:
             proc = agent
 
         if not (proc is None or isinstance_fcn(proc, torch.nn.Module) or isinstance_fcn(proc, ModuleWrapper) or
-                callable(proc)):
+                callable(proc) or (isinstance(proc, str) and proc == "human")):
             raise GenException("Processor (proc) must be either None or a torch.nn.Module, "
                                "or a ModuleWrapper, or a callable object")
         if not ((proc_inputs is None or (
@@ -763,7 +793,6 @@ class AgentProcessorChecker:
                                  agent=agent, device=torch.device("cpu"))
         else:
 
-            # String telling it is a human converted to a ModuleWrapper with HumanModule processor
             if isinstance(proc, str) and proc.lower().strip() == "human":
                 proc_inputs: list[StreamType] = [StreamType(data_type="text", pubsub=False, private_only=False),
                                                  StreamType(data_type="img", pubsub=False, private_only=False)]

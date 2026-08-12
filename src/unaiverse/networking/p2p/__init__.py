@@ -120,6 +120,9 @@ _shared_lib.GetNodeAddresses.restype = ctypes.c_void_p  # Treat returned *C.char
 _shared_lib.GetConnectedPeers.argtypes = [ctypes.c_int]
 _shared_lib.GetConnectedPeers.restype = ctypes.c_void_p  # Treat returned *C.char as opaque pointer
 
+_shared_lib.GetTopicPeers.argtypes = [ctypes.c_int]
+_shared_lib.GetTopicPeers.restype = ctypes.c_void_p  # Treat returned *C.char as opaque pointer
+
 _shared_lib.GetRendezvousPeers.argtypes = [ctypes.c_int]
 _shared_lib.GetRendezvousPeers.restype = ctypes.c_void_p  # Treat returned *C.char as opaque pointer
 
@@ -135,9 +138,6 @@ _shared_lib.SendMessageToPeer.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.
 _shared_lib.SendMessageToPeer.restype = ctypes.c_void_p  # Returns status code, not pointer
 
 # Message Queue
-_shared_lib.MessageQueueLength.argtypes = [ctypes.c_int]
-_shared_lib.MessageQueueLength.restype = ctypes.c_int  # Returns length, not pointer
-
 _shared_lib.PopMessages.argtypes = [ctypes.c_int]
 _shared_lib.PopMessages.restype = ctypes.c_void_p  # Treat returned *C.char as opaque pointer
 
@@ -155,6 +155,10 @@ _shared_lib.ReserveOnRelay.restype = ctypes.c_void_p  # Treat returned *C.char a
 # WebRTC Signaling
 _shared_lib.GetWebRTCConnections.argtypes = [ctypes.c_int]
 _shared_lib.GetWebRTCConnections.restype = ctypes.c_void_p  # Treat returned *C.char as opaque pointer
+
+# Reachability (AutoNAT)
+_shared_lib.GetReachability.argtypes = [ctypes.c_int]
+_shared_lib.GetReachability.restype = ctypes.c_void_p  # Treat returned *C.char as opaque pointer
 
 # Memory Management
 # FreeString now accepts the opaque pointer directly

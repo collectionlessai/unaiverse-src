@@ -49,7 +49,8 @@ func storeReceivedMessage(
 	// Check if this channel already has a message list.
 	messageList, channelExists := store.messagesByChannel[channel]
 	if !channelExists {
-		// If the channel does not exist, check if we can create a new message queue.
+		// The cap contains attacker-chosen chat/pubsub channel names: a flood of junk
+		// channels must not grow the store without bound.
 		if len(store.messagesByChannel) >= maxUniqueChannels {
 			logger.Warnf("[GO] 🗑️ Instance %d: Message store full. Discarding message for new channel '%s'.\n", ni.instanceIndex, channel)
 			return
@@ -77,6 +78,7 @@ func readFromSubscription(
 	ni *NodeInstance,
 	sub *pubsub.Subscription,
 ) {
+	defer recoverGoroutine("readFromSubscription")
 	// Get the topic string directly from the subscription object.
 	topic := sub.Topic()
 
@@ -125,7 +127,24 @@ func readFromSubscription(
 
 		// Handle Rendezvous or Standard Messages
 		if strings.HasSuffix(topic, ":rv") {
-			// This is a rendezvous update.
+			// A rendezvous roster. Only the host that owns the topic may write it: the
+			// topic embeds the host peer id and gossipsub authenticates the sender, so
+			// drop an update whose sender is not that host.
+			expectedHostStr, hasSuffix := strings.CutSuffix(topic, "::ps:rv")
+			if !hasSuffix {
+				logger.Warnf("[GO] ⚠️ Instance %d: rendezvous topic '%s' is not in '<host>::ps:rv' form; dropping update.\n", ni.instanceIndex, topic)
+				continue
+			}
+			expectedHost, decErr := peer.Decode(expectedHostStr)
+			if decErr != nil {
+				logger.Warnf("[GO] ⚠️ Instance %d: rendezvous topic '%s' has an undecodable host id: %v; dropping update.\n", ni.instanceIndex, topic, decErr)
+				continue
+			}
+			if msg.GetFrom() != expectedHost {
+				logger.Warnf("[GO] 🚫 Instance %d: rendezvous update on '%s' from %s is not the world host %s; dropping forged roster.\n", ni.instanceIndex, topic, msg.GetFrom(), expectedHost)
+				continue
+			}
+
 			// 1. First, unmarshal the outer Protobuf message.
 			var protoMsg pg.Message
 			if err := proto.Unmarshal(msg.Data, &protoMsg); err != nil {
@@ -159,10 +178,18 @@ func readFromSubscription(
 			// 5. Safely replace the old map with the new one.
 			ni.rendezvousMutex.Lock()
 			// If this is the first update for this instance, initialize the state struct.
-			if ni.rendezvousState == nil {
+			first := ni.rendezvousState == nil
+			if first {
 				ni.rendezvousState = &RendezvousState{}
 			}
 			rendezvousState := ni.rendezvousState
+			// Drop a roster that does not advance the counter: a replayed host-signed
+			// envelope must not reinstall a stale one. State resets on (un)subscribe.
+			if !first && updatePayload.UpdateCount <= rendezvousState.UpdateCount {
+				ni.rendezvousMutex.Unlock()
+				logger.Debugf("[GO] ⏮️ Instance %d: rendezvous update on '%s' tag %d does not advance past %d; ignoring stale/replayed roster.\n", ni.instanceIndex, topic, updatePayload.UpdateCount, rendezvousState.UpdateCount)
+				continue
+			}
 			rendezvousState.Peers = newPeerMap
 			rendezvousState.UpdateCount = updatePayload.UpdateCount
 			ni.rendezvousMutex.Unlock()
@@ -180,6 +207,7 @@ func readFromSubscription(
 // It expects the stream to start with a 4-byte length prefix, followed by a 1-byte channel name length,
 // the channel name itself, and finally the Protobuf-encoded payload.
 func handleStream(ni *NodeInstance, s network.Stream) {
+	defer recoverGoroutine("handleStream")
 	senderPeerID := s.Conn().RemotePeer()
 	streamID := s.ID()
 	ni.peersMutex.Lock()
@@ -233,6 +261,14 @@ func handleStream(ni *NodeInstance, s network.Stream) {
 	}()
 
 	for {
+		// Renew the idle deadline on each frame: a peer that opens the stream and
+		// then stops sending must not pin this goroutine forever (slow-loris). The
+		// existing net.Error/Timeout branch below turns the expiry into a clean
+		// return with stream cleanup via the defer above.
+		if err := s.SetReadDeadline(time.Now().Add(ChatStreamIdleTimeout)); err != nil {
+			logger.Warnf("[GO] ⚠️ Instance %d: SetReadDeadline failed on chat stream %s: %v\n", ni.instanceIndex, streamID, err)
+		}
+
 		// Read 4-byte total length
 		var totalLen uint32
 		if err := binary.Read(s, binary.BigEndian, &totalLen); err != nil {
@@ -258,6 +294,12 @@ func handleStream(ni *NodeInstance, s network.Stream) {
 		var channelLen uint8
 		if err := binary.Read(s, binary.BigEndian, &channelLen); err != nil {
 			logger.Errorf("[GO] ❌ Instance %d: Error reading channel len from Stream %s: %v\n", ni.instanceIndex, streamID, err)
+			return
+		}
+
+		if totalLen <= uint32(channelLen)+1 {
+			logger.Errorf("[GO] ❌ Instance %d: Total length %d too short for channel header on Stream %s, preventing underflow. Resetting.\n", ni.instanceIndex, totalLen, streamID)
+			s.Reset()
 			return
 		}
 

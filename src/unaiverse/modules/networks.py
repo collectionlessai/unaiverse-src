@@ -544,6 +544,8 @@ class CTB(ModuleWrapper):
                 self.B = torch.nn.Linear(u_dim + du_dim, h_dim, bias=False)
                 self.C = torch.nn.Linear(h_dim, y_dim, bias=False)
 
+                assert alpha == -1. or alpha >= 0., "Invalid alpha value (must be -1, 0, or > 0)."
+
                 if alpha > 0.:
                     self.project_method = 'const'
                     self.register_buffer('alpha', torch.full_like(self.omega.data, alpha))

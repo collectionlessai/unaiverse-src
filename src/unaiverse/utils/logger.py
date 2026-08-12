@@ -169,6 +169,10 @@ class _Logger:
                         (e.g. during unit tests or when only screen output is
                         wanted).  Can be toggled at runtime via
                         ``set_file_enabled()``.
+        file_append:    When ``True``, the JSONL file is opened in append mode,
+                        so records survive process restarts (useful when a run
+                        spans deliberate kills/restarts of the same node).
+                        Default ``False``: each run truncates the previous file.
     """
     def __init__(
             self,
@@ -179,6 +183,7 @@ class _Logger:
             no_color: bool = False,
             verbose_screen: bool = False,
             file_enabled: bool = True,
+            file_append: bool = False,
     ):
         self._lock = threading.RLock()
         self._name = name
@@ -186,10 +191,13 @@ class _Logger:
         self._verbose_screen = verbose_screen
         self._force_plain_msg_only = False
         self._file_enabled = file_enabled
+        self._file_mode = "a" if file_append else "w"
         self._cycle_idx: int = -1
         self._ctx: dict[str, Any] = {}
         self._sub: str = ""  # sticky subdomain tag (set via set_sub)
         self._clock = None
+        # Optional non-blocking observers of every emitted record (see add_record_sink)
+        self._record_sinks: list[Callable[[str, dict[str, Any]], None]] = []
         self._print_fcn: dict[str, dict[str, Callable[..., Any]]] = {ks: {k: print for k in ALL_CHANNELS}
                                                                      for ks in _ALL_SUBS}
         self._print_fcn_supports_html = {ks: {k: False for k in ALL_CHANNELS} for ks in _ALL_SUBS}
@@ -211,7 +219,7 @@ class _Logger:
         self._log_path = log_dir / f"{name}.jsonl"
         self._log_file = None
         if self._file_enabled and self._log_file is None:
-            self._log_file = open(self._log_path, "w", encoding="utf-8", buffering=1)
+            self._log_file = open(self._log_path, self._file_mode, encoding="utf-8", buffering=1)
 
         # Inspector only
         self.inspector_activated = False
@@ -226,6 +234,26 @@ class _Logger:
 
     def set_name(self, name: str) -> None:
         self._name = name
+
+    def add_record_sink(self, fn: Callable[[str, dict[str, Any]], None]) -> None:
+        """Register an observer invoked with ``(channel_name, record)`` for every emitted record.
+
+        Sinks see the same JSON-ready ``record`` dict that is written to the log file, only for channels
+        that pass the ``_active`` filter. They run under the logger lock, so they MUST be non-blocking:
+        do cheap, in-memory work (append to a buffer, ``put_nowait`` on a queue) and never any network or
+        file I/O. An exception raised by a sink is swallowed and does not disturb logging nor other sinks.
+        """
+        with self._lock:
+            if fn not in self._record_sinks:
+                self._record_sinks.append(fn)
+
+    def remove_record_sink(self, fn: Callable[[str, dict[str, Any]], None]) -> None:
+        """Unregister a previously added record sink (no-op if it was not registered)."""
+        with self._lock:
+            try:
+                self._record_sinks.remove(fn)
+            except ValueError:
+                pass
 
     def enable(self, *channels: Ch) -> None:
         """Enable one or more channels at runtime."""
@@ -276,7 +304,7 @@ class _Logger:
         """
         with self._lock:
             if enabled and self._log_file is None:
-                self._log_file = open(self._log_path, "w", encoding="utf-8", buffering=1)
+                self._log_file = open(self._log_path, self._file_mode, encoding="utf-8", buffering=1)
             self._file_enabled = enabled
 
     def set_clock(self, clock) -> None:
@@ -418,7 +446,7 @@ class _Logger:
 
     def p2p(self, msg: str, sub: str = "", **info: Any) -> None:
         """Log a raw line captured from the Go libp2p library (stdout/stderr)."""
-        self._log(Ch.P2P, msg[44:], info, sub=sub)  # Skipping timestamp and initial line info coming from GO
+        self._log(Ch.P2P, msg[43:], info, sub=sub)  # Skipping timestamp and initial line info coming from GO
 
     def _log(self, ch: Ch, msg: str, info: dict[str, Any], sub: str = "") -> None:
         with self._lock:
@@ -444,6 +472,15 @@ class _Logger:
             record["sub"] = effective_sub
             if info:
                 record["info"] = info
+
+            # Fan the record out to optional observers (must be non-blocking; see add_record_sink). A
+            # misbehaving sink must never break logging nor starve the others, hence the per-sink guard.
+            if self._record_sinks:
+                for _sink in self._record_sinks:
+                    try:
+                        _sink(ch.value, record)
+                    except Exception:
+                        pass
 
             if self._file_enabled:
                 assert self._log_file is not None
@@ -550,9 +587,14 @@ class _Logger:
     def close(self) -> None:
         """Flush and close the log file."""
         with self._lock:
-            assert self._log_file is not None
-            self._log_file.flush()
-            self._log_file.close()
+            if self._log_file is not None:
+                try:
+                    self._log_file.flush()
+                    self._log_file.close()
+                except Exception:
+                    pass
+                self._log_file = None
+            self._file_enabled = False
 
     def __enter__(self) -> "_Logger":
         return self

@@ -6,6 +6,7 @@ class Custom:
     # ==================
     # NODE CONFIGURATION
     # ==================
+    ROOT_REQUEST_TIMEOUT = 20.  # Seconds, per attempt on every root-server HTTP call
     SEND_DYNAMIC_PROFILE_EVERY = 10.  # Seconds
     GET_NEW_TOKEN_EVERY = 23 * 60. * 60. + 30 * 60.  # Seconds (23 hours and 30 minutes, safer)
     PUBLISH_RENDEZVOUS_EVERY = 10.  # Seconds
@@ -25,7 +26,10 @@ class Custom:
     # =====================
     PRINT_LEVEL = int(os.getenv("NODE_PRINT", "0"))  # 0, 1
     LOG_TO_FILE = int(os.getenv("NODE_LOG", "0")) == 1  # 0, 1
+    LOG_APPEND = int(os.getenv("NODE_LOG_APPEND", "0")) == 1  # 0, 1 (keep the JSONL across restarts)
+    LOG_CHANNELS = os.getenv("NODE_LOG_CHANNELS", "").strip()
     PRINT_SCREEN_BASIC_ONLY = int(os.getenv("NODE_SCREEN_BASIC_PRINT", "0")) == 1  # 0, 1
+    LOG_SINK_MODULE = os.getenv("NODE_LOG_SINK_MODULE", "").strip()  # import path of an optional log sink plugin
     SKIP_WAS_ALIVE_CHECK = os.getenv("NODE_IGNORE_ALIVE", "0") == "1"
     LIBP2PLOG = os.getenv("NODE_LIBP2PLOG", "0") == "1"
     ENV_IS_ISOLATED = os.getenv("NODE_IS_ISOLATED", "0") == "1"
@@ -125,3 +129,27 @@ class Custom:
 class GenException(Exception):
     """Base exception for this application (a simple wrapper around a generic Exception)."""
     pass
+
+
+class RootServerError(GenException):
+    """Failure of a root-server API call.
+
+    api_rejected distinguishes an API-level refusal (the server answered and said no:
+    retrying cannot change the outcome) from a transport failure (worth a retry).
+    Refusals carry the response envelope: the state code and message, the data.code
+    discriminator and the flags, so callers can branch on them.
+    """
+
+    def __init__(self, message: str, *, api: str, api_rejected: bool = False,
+                 state_code: str | None = None, state_message: str | None = None,
+                 data_code: str | None = None, data: dict | list | None = None,
+                 flags: dict | None = None, status: int | None = None) -> None:
+        super().__init__(message)
+        self.api = api
+        self.api_rejected = api_rejected
+        self.state_code = state_code
+        self.state_message = state_message
+        self.data_code = data_code
+        self.data = data  # The refusal's data payload (e.g. the legal acceptance state)
+        self.flags = flags if flags is not None else {}
+        self.status = status

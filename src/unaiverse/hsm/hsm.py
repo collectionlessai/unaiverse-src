@@ -256,7 +256,7 @@ class HybridStateMachine:
         """
         if obj is None:
             log.critical("Unexpected None for the agent HSM actionable")
-            return
+            return  # This is dead code, since log.critical raises a GenException, but I keep it here to remember
 
         self.agent = obj
 
@@ -294,7 +294,7 @@ class HybridStateMachine:
         """
         self.policy_filter = filter_fcn
         self.policy_filter_opts = filter_fcn_opts
-        self.policy_filter_opts.clear()
+        self.policy_filter_opts.clear()  # It is cleared on set, it will be filled up later
 
     def set_wildcards(self, wildcards: dict[str, str | float | int] | None, apply: bool = False) -> None:
         """Sets the dictionary of wildcards that are used to dynamically replace placeholder values in action
@@ -703,7 +703,9 @@ class HybridStateMachine:
         # Handling special state names
         if from_state == Custom.ALL_STATES_NAME:
             for from_state_obj in self.__id_to_state:
-                if from_state_obj.name == from_state:
+
+                # Skipping the destination state, mirroring the load-time 'all' expansion
+                if from_state_obj.name == to_state:
                     continue
 
                 # Adding a transition to the dest state
@@ -828,7 +830,8 @@ class HybridStateMachine:
                            args=_state.action.args if _state.action is not None else None,
                            state_id=None,
                            blocking=_state.blocking,
-                           msg=_state.msg_with_wildcards)
+                           msg=_state.msg_with_wildcards,
+                           msg_action=_state.action.msg_with_wildcards if _state.action is not None else None)
 
         # Copy all the transitions of the HSM
         for _from_state, _to_states in hsm.transitions.items():
@@ -851,7 +854,7 @@ class HybridStateMachine:
 
         if make_a_copy:
             self.state = hsm.state
-            self.prev_state = hsm.state
+            self.prev_state = hsm.prev_state
             self.initial_state = hsm.initial_state
             self.limbo_state = hsm.limbo_state
             self.set_welcome_message(hsm.welcome_msg_with_wildcards)
@@ -1204,7 +1207,7 @@ class HybridStateMachine:
 
             await self.act_states()
             ret = await self.act_transitions(self.must_wait())
-            if self.state != starting_state:
+            if self.state != starting_state:  # Value of self.state might change while act_transitions runs
                 changed_state = True
             if ret != 0 or (self.state is not None and self.states[self.state].blocking):
                 break
@@ -1378,8 +1381,8 @@ class HybridStateMachine:
             self.state = self.initial_state
             self.prev_state = None
             self.limbo_state = None
-            self.set_role(hsm_data['machine']['role'])
             self.set_welcome_message(hsm_data['machine'].get('msg', None))
+            self.set_role(hsm_data['machine']['role'])  # Do it AFTER having set the welcome message
             self.show_blocking_states = (
                 hsm_data['machine']['options'].get('highlight_blocking_states_in_messages', False))
             self.show_action_completion = (
@@ -1411,37 +1414,38 @@ class HybridStateMachine:
                            waiting_time=waiting_time, blocking=blocking, msg=msg)
 
         # Getting ordinary transitions (before teleports, to ensure higher priority)
-        for from_state, list_of_to_state_dicts in hsm_data['transitions'].items():
-            for to_state_dict in list_of_to_state_dicts:
-                to_state = to_state_dict["goto"]
-                action_dict = to_state_dict["on"]
+        if 'transitions' in hsm_data:
+            for from_state, list_of_to_state_dicts in hsm_data['transitions'].items():
+                for to_state_dict in list_of_to_state_dicts:
+                    to_state = to_state_dict["goto"]
+                    action_dict = to_state_dict["on"]
 
-                act_name = action_dict["action"]
-                act_args = action_dict.get("action_kwargs", {})
-                msg = action_dict.get("msg", None)
-                act_ready = action_dict.get("ready", True)
-                high_priority = action_dict.get("high_priority", False)
-                total_time = 0.
-                for k in Custom.SECONDS_ARG_NAMES:
-                    if k in action_dict:
-                        total_time = action_dict[k]
-                        break
-                timeout = 0.
-                for k in Custom.TIMEOUT_ARG_NAMES:
-                    if k in action_dict:
-                        timeout = action_dict[k]
-                        break
-                delay = 0.
-                for k in Custom.DELAY_ARG_NAMES:
-                    if k in action_dict:
-                        delay = action_dict[k]
-                        break
+                    act_name = action_dict["action"]
+                    act_args = action_dict.get("action_kwargs", {})
+                    msg = action_dict.get("msg", None)
+                    act_ready = action_dict.get("ready", True)
+                    high_priority = action_dict.get("high_priority", False)
+                    total_time = 0.
+                    for k in Custom.SECONDS_ARG_NAMES:
+                        if k in action_dict:
+                            total_time = action_dict[k]
+                            break
+                    timeout = 0.
+                    for k in Custom.TIMEOUT_ARG_NAMES:
+                        if k in action_dict:
+                            timeout = action_dict[k]
+                            break
+                    delay = 0.
+                    for k in Custom.DELAY_ARG_NAMES:
+                        if k in action_dict:
+                            delay = action_dict[k]
+                            break
 
-                self.add_transit(from_state, to_state,
-                                 action=act_name, args=act_args, ready=act_ready, msg=msg,
-                                 avoid_changing_ready="ready" in action_dict, total_time=total_time,
-                                 high_priority=high_priority,
-                                 timeout=timeout, delay=delay)
+                    self.add_transit(from_state, to_state,
+                                     action=act_name, args=act_args, ready=act_ready, msg=msg,
+                                     avoid_changing_ready="ready" in action_dict, total_time=total_time,
+                                     high_priority=high_priority,
+                                     timeout=timeout, delay=delay)
 
         # Getting teleports (do it after getting ordinary transitions, so teleports will have lower priority)
         if 'teleports' in hsm_data:
@@ -1509,14 +1513,17 @@ class HybridStateMachine:
                     for k in Custom.SECONDS_ARG_NAMES:
                         if k in action_dict:
                             total_time = action_dict[k]
+                            break
                     timeout = 0.
                     for k in Custom.TIMEOUT_ARG_NAMES:
                         if k in action_dict:
                             timeout = action_dict[k]
+                            break
                     delay = 0.
                     for k in Custom.DELAY_ARG_NAMES:
                         if k in action_dict:
                             delay = action_dict[k]
+                            break
 
                     self.add_transit(from_state, to_state,
                                      action=act_name, args=act_args, ready=act_ready, msg=msg,
@@ -1543,8 +1550,8 @@ class HybridStateMachine:
         self.state = hsm_data['state']
         self.prev_state = hsm_data['prev_state']
         self.limbo_state = hsm_data['limbo_state']
-        self.set_role(hsm_data.get('role', 'unknown'))
         self.set_welcome_message(hsm_data.get('welcome_msg', None))
+        self.set_role(hsm_data.get('role', 'unknown'))  # Do it AFTER set_welcome_message
         self.show_blocking_states = hsm_data.get('highlight_blocking_states_in_messages', False)
         self.show_action_completion = hsm_data.get('show_action_ticks_after_messages', False)
         self.show_action_request_info = hsm_data.get('show_action_request_after_messages', False)
@@ -1645,6 +1652,7 @@ class HybridStateMachine:
         for from_state, to_states in self.transitions.items():
             j = 1
             for to_state, action_list in to_states.items():
+                loop_groups = {}  # (style, color) -> [merged label, id of first action]
                 for action in action_list:
                     args = action.args
                     s = "("
@@ -1687,12 +1695,21 @@ class HybridStateMachine:
                                 done = True
                             i += 1
                         label = z
+                    edge_style = 'dashed' if not action.is_ready() else 'solid'
                     edge_color = "#00000050" if action.is_teleport() else "#000000"
+
+                    if from_state == to_state and len(action_list) > 1:
+                        group = loop_groups.setdefault((edge_style, edge_color), ["", action.id])
+                        group[0] += ("\n" if group[0] else "") + label
+                    else:
+                        graph.edge(from_state, to_state, label=" " + label + " ", fontsize='8',
+                                   style=edge_style, color=edge_color, fontcolor=edge_color,
+                                   _attributes={'id': "edge" + str(action.id)})
+
+                for (edge_style, edge_color), (label, first_id) in loop_groups.items():
                     graph.edge(from_state, to_state, label=" " + label + " ", fontsize='8',
-                               style='dashed' if not action.is_ready() else 'solid',
-                               color=edge_color,
-                               fontcolor=edge_color,
-                               _attributes={'id': "edge" + str(action.id)})
+                               style=edge_style, color=edge_color, fontcolor=edge_color,
+                               _attributes={'id': "edge" + str(first_id)})
         return graph
 
     def save_pdf(self, filename: str) -> bool:

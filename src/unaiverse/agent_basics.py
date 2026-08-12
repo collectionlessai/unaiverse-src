@@ -13,6 +13,7 @@
                  Main Developers:    Stefano Melacci (Project Leader), Christian Di Maio, Tommaso Guidi
 """
 import os
+import time
 import json
 import torch
 import pickle
@@ -35,7 +36,22 @@ from unaiverse.interaction import Interaction, InteractionManager
 from unaiverse.streams.dataprops import DataProps, StreamType, TensorLabels
 from unaiverse.modules.utils import AgentProcessorChecker, ModuleWrapper, HumanModule, has_human_processor
 from unaiverse.utils.misc import (GenException, FileTracker, collect_py_files, load_agent_in_memory, pack_py_files,
-                                  unpack_py_files)
+                                  unpack_py_files, prune_to_import_closure, build_unaid)
+
+
+_STEPWISE_RETRY_TIMEOUT_S = 60.0  # Default budget for a single stepwise computation
+
+
+class _StepwiseRun:
+    """In-flight state of a stepwise computation, parked in the interaction mark."""
+
+    __slots__ = ("gen", "deadline", "started_at", "chunks")
+
+    def __init__(self, gen, deadline: float, started_at: float):
+        self.gen = gen
+        self.deadline = deadline
+        self.started_at = started_at
+        self.chunks = 0
 
 
 class AgentBasics:
@@ -69,7 +85,7 @@ class AgentBasics:
     HUMAN = "human"  # Human agent
 
     def __init__(self,
-                 proc: ModuleWrapper | torch.nn.Module | Callable | None,
+                 proc: ModuleWrapper | torch.nn.Module | Callable | str | None,
                  proc_inputs: list[StreamType | str] | None = None,
                  proc_outputs: list[StreamType | str] | None = None,
                  proc_opts: dict | None = None,
@@ -82,7 +98,7 @@ class AgentBasics:
         """Create a new agent.
 
         Args:
-            proc: The processing module (e.g., a neural network) for the agent. Can be None.
+            proc: The processing module (e.g., a neural network) for the agent. Can be None (or string 'human').
             proc_inputs: list of DataProps defining the expected inputs for processor (if None it will be guessed).
             proc_outputs: list of DataProps defining the expected outputs from processor (if None it will be guessed).
             proc_opts: A dictionary of options for the processor.
@@ -146,6 +162,7 @@ class AgentBasics:
         self.human_agents: dict[str, NodeProfile] = {}  # ID -> profile (human agents)
         self.artificial_agents: dict[str, NodeProfile] = {}  # ID -> profile (artificial agent)
         self.world_profile = None
+        self.world_role_fsms = None  # Dict role -> FSM (JSON string), delivered by the world's grant bundle
         self.is_world = False  # If this instance is about a world: it will be discovered at creation time
         self.last_sent_interaction = None
 
@@ -165,7 +182,6 @@ class AgentBasics:
 
         # Stats
         self.stats: Stats | None = None
-        self.agent_stats_code = None
 
         # Information inherited from the node that hosts this agent
         self.node_name = "unk"
@@ -224,6 +240,97 @@ class AgentBasics:
             self.is_world = True
             if self.world_folder is None:
                 raise GenException("No world folder was indicated (world_folder argument)")
+
+    def stepwise(self, interaction: Interaction | None, make_gen, /, *args,
+                 retry_timeout: float = _STEPWISE_RETRY_TIMEOUT_S, **kwargs):
+        """Run a generator-based computation one chunk per tick across HSM retries.
+
+        Usage inside an @action body:
+            done, result = self.stepwise(interaction, core_gen_factory, arg1, kw=...)
+            if not done:
+                return False          # pedantic retry: the node loop keeps pumping
+            ... apply result on the main task ...
+
+        make_gen(*args, **kwargs) must build a fresh generator whose return value is the
+        result of the computation; every yield marks a chunk boundary. The first call
+        builds the generator, makes the action pedantic so that returning False means
+        "retry next tick", and advances ONE chunk; each later call advances one more
+        chunk, returning (False, None) until the generator returns, then (True, result).
+        Everything runs on the main task: no threads, no concurrency, just cooperative
+        slicing, so the pump latency is bounded by the longest single chunk.
+
+        The retry budget travels in the mark as a deadline: past it, the poll cleans up
+        and raises, which the @action wrapper turns into a single discard. A chunk that
+        raises is cleaned up and re-raised the same way.
+
+        Contract for the generator: self-contained compute in short chunks (each chunk
+        inflates the tick it runs in); never yield while holding a thread-global mode
+        (e.g. inside torch.no_grad(): enter and exit it within the chunk); re-runnable
+        from scratch (a discarded interaction abandons the generator, and a later
+        trigger calls make_gen again); any state flipped on shared objects (e.g. the
+        model train/eval mode) must be restored in a finally block, which also runs when
+        an abandoned generator is garbage-collected. Only viable on single-step actions
+        or from step >= 1 of a multi-step interaction (a False at step 0 of a multi-step
+        is discarded regardless of pedantic).
+
+        With interaction=None (direct call from code) the generator is drained inline,
+        blocking, like the plain synchronous function it wraps.
+        """
+        if interaction is None:
+            gen = make_gen(*args, **kwargs)
+            while True:
+                try:
+                    next(gen)
+                except StopIteration as stop:
+                    return True, stop.value
+        if retry_timeout <= 0.:
+            raise GenException("stepwise retry_timeout must be > 0")
+
+        run = interaction.get_mark()
+        if run is None:
+            action_ref = interaction.action_ref
+            assert isinstance(action_ref, Action)
+            if not action_ref.is_pedantic():
+                action_ref.set_timeout(retry_timeout)  # So that returning False means retry
+            now = time.perf_counter()
+            run = _StepwiseRun(make_gen(*args, **kwargs), now + retry_timeout, now)
+            interaction.set_mark(run)
+        assert isinstance(run, _StepwiseRun)
+
+        if time.perf_counter() >= run.deadline:
+            # Budget exhausted: give up in a single discard. The abandoned generator is
+            # collected once the mark is gone, running its finally cleanup.
+            self._finish_stepwise(interaction, healthy=False)
+            raise GenException(f"Stepwise computation exceeded its retry budget "
+                               f"({run.deadline - run.started_at:.0f} s, "
+                               f"{run.chunks} chunks done)")
+
+        try:
+            next(run.gen)
+        except StopIteration as stop:
+            self._finish_stepwise(interaction, healthy=True)
+            log.misc(f"Stepwise computation completed: {run.chunks} chunks in "
+                     f"{time.perf_counter() - run.started_at:.2f} s")
+            return True, stop.value
+        except Exception:
+            self._finish_stepwise(interaction, healthy=False)
+            raise  # -> @action wrapper -> False -> non-pedantic -> discarded in one shot
+
+        run.chunks += 1
+        return False, None
+
+    def _finish_stepwise(self, interaction: Interaction, healthy: bool) -> None:
+        """Terminal cleanup of a stepwise run: clear the mark and hand back the pedantic
+        grant (same restore dance as send(wait_completion=True)). On a healthy completion
+        inside a multi-step interaction the framework-forced default is kept, so the
+        remaining steps retain their retry semantics; on errors and give-ups the strip is
+        unconditional, so the failure is a single discard and cannot loop."""
+        interaction.clear_mark()
+        action_ref = interaction.action_ref
+        assert isinstance(action_ref, Action)
+        if not action_ref.is_pedantic_by_default():
+            if not healthy or not interaction.is_multi_steps():
+                action_ref.set_timeout(-1.)
 
     def set_node_info(self, conn: NodeConn, profile: NodeProfile,
                       ask_to_get_in_touch_fcn: Callable, purge_fcn: Callable, node_identity_dir: str,
@@ -337,17 +444,6 @@ class AgentBasics:
             # agent/world specific roles
             self.augment_roles()
 
-            # Loading the custom Stats code
-            if self.world_folder is not None:
-                stats_file = os.path.join(self.world_folder, 'stats.py')
-                if os.path.exists(stats_file):
-                    log.misc(f"Found custom stats.py at {stats_file}")
-                    try:
-                        with open(stats_file, 'r', encoding='utf-8') as file:
-                            self.agent_stats_code = file.read()
-                    except Exception as e:
-                        raise GenException(f'Error while reading/loading the stats.py file: {stats_file} [{e}]')
-
         # Creating streams associated to the processor input (right now we assume there is no need to buffer them)
         self.create_proc_input_streams(buffered=False)
 
@@ -439,7 +535,8 @@ class AgentBasics:
         self.set_default_stdin_binding(public)
 
         # Zero-step: if we are in a world, the peer ID used for indexing the interaction cache is the world peer ID
-        peer_id = peer_id if public else self.node_conn.get_world_peer_id()
+        # TODO(review): with public=False the broadcaster peer-id is overwritten by the world-node id before the per-broadcaster lookup, so the entry is missed and the human reply is misrouted to the world node; see tests/test_human_routing.py::test_prepare_world_should_return_broadcaster_interaction_uuid
+        peer_id = peer_id if public else self.node_conn.get_world_node_peer_id()
 
         # First of all, clearing residuals of interactions that were completed in the past
         to_remove = []
@@ -545,6 +642,8 @@ class AgentBasics:
         # Clear/reset
         await self.__remove_all_world_private_streams()
         await self.__remove_all_world_related_agents()
+        if world_peer_id in self.proc_human_peer_id_to_interaction:
+            del self.proc_human_peer_id_to_interaction[world_peer_id]
         self.node_conn.reset_rendezvous_tag()
         await self.node_conn.unsubscribe(world_peer_id, channel=f"{world_peer_id}::ps:rv")  # Special rendezvous (ps:rv)
 
@@ -563,6 +662,7 @@ class AgentBasics:
 
             # Guessing roles from the list of json files
             listdir = os.listdir(self.world_folder)  # Do this only once
+            listdir.sort()  # Keep it stable
             self.CUSTOM_ROLES = [os.path.splitext(f)[0] for f in listdir
                                  if os.path.isfile(os.path.join(self.world_folder, f))
                                  and f.lower().endswith(".json")]
@@ -598,50 +698,70 @@ class AgentBasics:
                 if found != len(self.CUSTOM_ROLES):
                     if found_agent_py:
                         code_content = agent_files["agent.py"]
+                        stats_source = agent_files.get('stats.py')
 
-                        # All roles go to the content of agent.py
+                        # All roles go to the content of agent.py; stats.py (when present)
+                        # must survive the rewrite, since it now travels inside the bundle
                         agent_files = {f"{k}.py": code_content for k in self.CUSTOM_ROLES}
-                        self.packed_agent_files = pack_py_files(agent_files)  # Repacking
+                        if stats_source is not None:
+                            agent_files['stats.py'] = stats_source
                     else:
                         raise GenException(f'Mismatching JSON-file roles and .py files in {self.world_folder}')
 
             for role, default_behav_file in zip(self.CUSTOM_ROLES, default_behav_files):
-
-                # Creating a dummy agent which supports the actions of the following state machines
-                try:
-                    dummy_agent, dummy_agent_memory_finder = load_agent_in_memory(agent_files, role, proc=None)
-                    dummy_agent.CUSTOM_ROLES = self.CUSTOM_ROLES
-                except Exception as e:
-                    raise GenException(f'Unable to create a valid dummy agent object for agent with role {role} [{e}]')
-
-                # Checking if the roles you wrote in agent.py are coherent with the JSON files in this folder
-                if dummy_agent.CUSTOM_ROLES != self.CUSTOM_ROLES:
-                    raise GenException(f"Mismatching roles. "
-                                       f"Roles in JSON files: {self.CUSTOM_ROLES}. "
-                                       f"Roles specified in the agent.py file: {dummy_agent.CUSTOM_ROLES}")
+                dummy_agent_memory_finder = None
 
                 try:
-                    behav = HybridStateMachine(dummy_agent)
-                    behav.load(default_behav_file)
-                    self.role_to_behav[role] = str(behav)
 
-                    # Adding roles and machines to profile
-                    self.node_profile.get_dynamic_profile()['world_roles_fsm'] = self.role_to_behav
-                except Exception as e:
-                    raise GenException(f'Error while loading or handling '
-                                       f'behav file {default_behav_file} for role {role} [{e}]')
+                    # Creating a dummy agent which supports the actions of the following state machines
+                    try:
+                        dummy_agent, dummy_agent_memory_finder = load_agent_in_memory(agent_files, role, proc=None)
+                        loaded_roles = dummy_agent.CUSTOM_ROLES
+                        dummy_agent.CUSTOM_ROLES = self.CUSTOM_ROLES
+                    except Exception as e:
+                        raise GenException(f'Unable to create a valid dummy agent object for agent with role {role} [{e}]')
 
-                # Refactoring and saving PDF
-                try:
-                    if (force_save or
-                            behav.save(os.path.join(self.world_folder, f'{role}.json'), only_if_changed=dummy_agent)):
-                        os.makedirs(os.path.join(self.world_folder, 'pdf'), exist_ok=True)
-                        behav.save_pdf(os.path.join(self.world_folder, 'pdf', f'{role}.pdf'))
-                except Exception as e:
-                    raise GenException(f'Error while saving the behav file {default_behav_file} for role {role} [{e}]')
+                    # Checking if the roles you wrote in agent.py are coherent with the JSON files in this folder;
+                    # most agents declare no roles at all (they inherit the world's ones by the injection above),
+                    # so the check only applies when the agent code takes a stance, and order does not matter
+                    if loaded_roles and set(loaded_roles) != set(self.CUSTOM_ROLES):
+                        raise GenException(f"Mismatching roles. "
+                                           f"Roles in JSON files: {self.CUSTOM_ROLES}. "
+                                           f"Roles specified in the agent.py file: {loaded_roles}")
 
-                # Clearing memory
-                dummy_agent_memory_finder.cleanup()
+                    try:
+                        behav = HybridStateMachine(dummy_agent)
+                        behav.load(default_behav_file)
+                        self.role_to_behav[role] = str(behav)
+                    except Exception as e:
+                        raise GenException(f'Error while loading or handling '
+                                           f'behav file {default_behav_file} for role {role} [{e}]')
+
+                    # Refactoring and saving PDF
+                    try:
+                        if (force_save or
+                                behav.save(os.path.join(self.world_folder, f'{role}.json'), only_if_changed=dummy_agent)):
+                            os.makedirs(os.path.join(self.world_folder, 'pdf'), exist_ok=True)
+                            behav.save_pdf(os.path.join(self.world_folder, 'pdf', f'{role}.pdf'))
+                    except Exception as e:
+                        raise GenException(f'Error while saving the behav file {default_behav_file} for role {role} [{e}]')
+
+                finally:
+
+                    # Clearing memory — runs on success AND on every GenException above
+                    if dummy_agent_memory_finder is not None:
+                        dummy_agent_memory_finder.cleanup()
+
+            # Ship only what joiners can execute: the role files plus the closure of
+            # their relative imports, with stats.py forced in (it is executed in a bare
+            # module on the joiner, so its own imports are world-side only and are not
+            # followed). World-side code and non-imported files stay private.
+            entry_files = [f"{role}.py" for role in self.CUSTOM_ROLES]
+            pruned_files = prune_to_import_closure(agent_files, entry_files, forced=('stats.py',))
+            kept_private = sorted(set(agent_files) - set(pruned_files))
+            self.packed_agent_files = pack_py_files(pruned_files)
+            log.misc(f"World code bundle: shipping {sorted(pruned_files)}" +
+                     (f", keeping private {kept_private}" if kept_private else ""))
 
     def create_behav_files(self):
         """This method is called when building a world object. In your custom world-class, you can overload this method
@@ -799,6 +919,7 @@ class AgentBasics:
             public = False
         else:
             log.error(f"Cannot add agent with peer ID {peer_id} - unknown role: {role}")
+            del self.all_agents[peer_id]
             return False
 
         # Human or artificial?
@@ -817,6 +938,7 @@ class AgentBasics:
                                                            buffered=False,
                                                            public=public,
                                                            skip_pubsub=not add_pubsub_streams))):
+                await self.remove_agent(peer_id)  # Clearing
                 return False
 
             # Check compatibility of the generated streams of the agent we are adding with our-agent's processor
@@ -826,6 +948,7 @@ class AgentBasics:
                                                            buffered=False,
                                                            public=public,
                                                            skip_pubsub=not add_pubsub_streams))):
+                await self.remove_agent(peer_id)  # Clearing
                 return False
 
         log.misc(f"Successfully added agent {profile.get_static_profile()['node_name']} "
@@ -1291,16 +1414,13 @@ class AgentBasics:
         if ref in self.all_agents:
             return ref
 
-        # Search by email@node_name (if only node_name is provided, assumes it is one of your agents)
-        if '@' not in ref:
-            your_email = self.get_profile().get_static_profile()['email']
-            ref = your_email + '@' + ref
+        # Search by owner/node_name (if only node_name is provided, assumes it is one of your agents)
+        if '/' not in ref:
+            ref = build_unaid(self.get_profile(), ref)
 
         for peer_id, profile in self.all_agents.items():
-            static_profile = profile.get_static_profile() if hasattr(profile, 'get_static_profile') else {}
-            if isinstance(static_profile, dict):
-                if (static_profile.get('email', '') + '@' + static_profile.get('node_name')) == ref:
-                    return peer_id
+            if build_unaid(profile) == ref:
+                return peer_id
 
         return None
 
@@ -1349,6 +1469,8 @@ class AgentBasics:
                 if ref == Stream.name_from_user_hash(user_hash):
                     return user_hash
             for net_hash, stream_dict in self.owned_streams.items():
+                if len(stream_dict) == 0:
+                    continue
                 if public and not next(iter(stream_dict.values())).is_public():
                     continue
                 if ref == Stream.name_or_group_from_net_hash(net_hash):
@@ -1362,6 +1484,8 @@ class AgentBasics:
                 if ref == Stream.name_from_user_hash(user_hash):
                     return user_hash
             for net_hash, stream_dict in self.known_streams.items():
+                if len(stream_dict) == 0:
+                    continue
                 if public and not next(iter(stream_dict.values())).is_public():
                     continue
                 if ref == Stream.name_or_group_from_net_hash(net_hash):
@@ -1785,11 +1909,12 @@ class AgentBasics:
 
         self.node_profile.get_dynamic_profile()['connections']['role'] = full_role_str
 
-        default_behav = None  # A public role will not be found in the world map
-        if self.world_profile is not None:
-            base_role_to_behav = self.world_profile.get_dynamic_profile()['world_roles_fsm']
-            if base_role_str in base_role_to_behav:
-                default_behav = self.world_profile.get_dynamic_profile()['world_roles_fsm'][base_role_str]
+        # The role FSMs arrive with the grant bundle; profiles of legacy worlds still
+        # carry them in the dynamic section, so fall back there when the bundle had none
+        base_role_to_behav = self.world_role_fsms or {}
+        if not base_role_to_behav and self.world_profile is not None:
+            base_role_to_behav = self.world_profile.get_dynamic_profile().get('world_roles_fsm') or {}
+        default_behav = base_role_to_behav.get(base_role_str)  # A public role will not be found in the world map
 
         if default_behav is not None and isinstance(default_behav, str) and len(default_behav) > 0:
             default_behav_hsm = HybridStateMachine(self)
@@ -2485,7 +2610,7 @@ class AgentBasics:
 
     def agent_state_dict(self) -> dict:
         """Returns a dictionary containing an instance of the agent's state that can be saved."""
-        save_in_state = ['world_profile', ]
+        save_in_state = ['world_profile', 'world_role_fsms']
         return {k: getattr(self, k) for k in save_in_state}
 
     def save(self, where: str = "") -> bool:

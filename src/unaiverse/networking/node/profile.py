@@ -35,7 +35,7 @@ class NodeProfile:
         """Initializes a NodeProfile from static, dynamic, and CV data.
 
         Args:
-            static: Dictionary of static profile fields (e.g. node_id, node_type, name, email).
+            static: Dictionary of static profile fields (e.g. node_id, node_type, name, nickname).
             dynamic: Dictionary of dynamic profile fields (e.g. os, memory, peer_id).  Only
                 keys that are expected by the internal template are copied in.
             cv: List of CV entry dictionaries; entries are sorted by ``last_edit_utc`` before storage.
@@ -62,8 +62,9 @@ class NodeProfile:
                     'name': None,
                     'surname': None,
                     'title': None,
-                    'organization': None,
-                    'email': None,
+                    'nickname': None,  # The owner's public identity
+                    'organization': None,  # Legacy: the server no longer sends it
+                    'email': None,  # Legacy: the server no longer sends it
                     'max_nr_connections': None,
                     'allowed_node_ids': None,
                     'world_masters_node_ids': None,
@@ -86,6 +87,7 @@ class NodeProfile:
                     'peer_addresses': None,
                     'private_peer_id': None,
                     'private_peer_addresses': None,
+                    'is_relay': None,  # True when this node is a world offering a reachable relay to its members
                     'proc_inputs': None,
                     'proc_outputs': None,
                     'streams': None,
@@ -107,23 +109,22 @@ class NodeProfile:
                         "agent_badges": None,
                         "streams_count": None
                     },
-                    "world_roles_fsm": None,  # Dict of FSMs for world roles
                     "hidden": None
                 },
                 'cv': cv
             }
 
-        # Checking the presence of basic static profile info
-        for k in self._profile_data['static'].keys():
+        # Backward compatibility
+        if "location" not in static:
+            static['location'] = {}
+        if "location_method" not in static:
+            static['location_method'] = "manual"
 
-            # Backward compatibility
-            if k not in static and k == "location":
-                static['location'] = {}
-            if k not in static and k == "location_method":
-                static['location_method'] = "manual"
-
-            if (k not in static and k != "certified" and
-                    k != "allowed_node_ids" and k != "world_masters_node_ids" and k != "inspector_node_id"):  # Patch
+        # Only the keys the SDK cannot run without are required: every other template key
+        # defaults to None, so a field the server stops sending degrades instead of
+        # crashing the boot
+        for k in ('node_id', 'node_type', 'node_name'):
+            if k not in static:
                 raise ValueError("Missing required static profile info: " + str(k))
 
         # Filling static profile info (there might be more information that the one shown above)
@@ -186,7 +187,8 @@ class NodeProfile:
 
         # Ensure essential 'node_id' is present
         static_combined_data = combined_data.get('static')
-        assert static_combined_data is not None
+        if static_combined_data is None:
+            raise ValueError("Input dictionary must contain a 'static' section.")
         static_combined_data: dict
         node_id = static_combined_data.get('node_id', None)
         if not node_id:
@@ -492,6 +494,9 @@ class NodeProfile:
         return specs_changed
 
     # Get profile data as dict: cv, dynamic_profile, static_profile
+    # TODO(review): these getters (and get_dynamic_profile/get_cv/get_all_profile below) return the internal mutable
+    # dict/list directly instead of a copy, so callers can mutate the profile's private state (encapsulation leak);
+    # see tests/test_profile.py::test_get_all_profile_structure
     def get_static_profile(self) -> dict:
         """Returns the static portion of the profile data.
 
@@ -553,6 +558,7 @@ class NodeProfile:
             the hashes are equal, and the second element contains both hash strings for
             diagnostic purposes.
         """
-        computed_hash = hashlib.blake2b(json.dumps(self._profile_data['cv']).encode("utf-8"),
+        cv = self._profile_data['cv']  # Should we sort keys?
+        computed_hash = hashlib.blake2b(json.dumps(cv).encode("utf-8"),
                                         digest_size=16).hexdigest()
         return cv_hash == computed_hash, (cv_hash, computed_hash)

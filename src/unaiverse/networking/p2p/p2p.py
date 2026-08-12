@@ -117,18 +117,21 @@ class P2P:
                 logger.setLevel(logging.INFO)
                 _log_config = {
                     'net/identify': 'info',
-                    'unailib': 'debug',
+                    'unailib': 'info',
                     # 'autotls': 'info',
                     # 'p2p-forge': 'info',
                     'nat': 'info',
                     'basichost': 'info',
-                    'p2p-circuit': 'debug',
-                    'relay': 'debug',
-                    'p2p-holepunch': 'debug',
+                    'p2p-circuit': 'info',
+                    'relay': 'info',
+                    'p2p-holepunch': 'info',
                     'tcp-tpt': 'info',
+                    'quic-transport': 'info',
+                    'quicreuse': 'info',
+                    'webtransport': 'info',
                     'connmgr': 'info',
                     'dht': 'info',
-                    'autorelay': 'debug',
+                    'autorelay': 'info',
                     'autonat': 'info',
                     # 'rcmgr': 'info',
                     'swarm2': 'info',
@@ -156,6 +159,14 @@ class P2P:
             _max_channels = max_channels if max_channels is not None else cls._MAX_NUM_CAHNNELS
             _max_queue = max_queue_per_channel if max_queue_per_channel is not None else cls._MAX_QUEUE_PER_CHANNEL
             _max_msg_size = max_message_size if max_message_size is not None else cls._MAX_MESSAGE_SIZE
+
+            # Validate the message-size cap: it is passed to Go as a C int and there
+            # reinterpreted as uint32. A non-positive or >2^31-1 value would wrap to a
+            # negative C int and then to a huge uint32, silently lifting the cap.
+            if not (0 < _max_msg_size <= 2 ** 31 - 1):
+                raise ValueError(
+                    f"max_message_size must be a positive int <= 2^31-1, got {_max_msg_size}."
+                )
 
             # Update class attributes if they were overridden
             cls._MAX_INSTANCES = _max_instances
@@ -324,6 +335,7 @@ class P2P:
             elif not initial_addresses:
                 err_msg = "Received empty addresses list from Go CreateNode."
                 logger.error(f"[Instance {self._instance}] {err_msg}")
+                raise P2PError(f"[Instance {self._instance}] {err_msg}")
 
             self._peer_id = initial_addresses[0].split("/")[-1]
 
@@ -344,7 +356,7 @@ class P2P:
                                 f"Reclaimed instance ID {self._instance} due to creation failure.")
             raise  # Re-raise the exception that caused the failure
 
-        logger.info("🎉 Node created successfully and background polling started.")
+        logger.info("🎉 Node created successfully.")
 
     # --- Core P2P Operations ---
     def connect_to(self, multiaddrs: list[str]) -> Dict[str, Any]:
@@ -448,6 +460,10 @@ class P2P:
         if not channel or not isinstance(channel, str):
             logger.error("Invalid channel provided.")
             raise ValueError("Invalid channel provided.")
+        if "::dm:" not in channel:
+            # Guard the split below: without "::dm:" it would raise a raw IndexError.
+            logger.error(f"Invalid direct-message channel format: '{channel}'.")
+            raise ValueError(f"Invalid direct-message channel format: '{channel}'.")
 
         # Serialize the entire message object to bytes using Protobuf.
         payload_len = len(msg_bytes)
@@ -495,6 +511,10 @@ class P2P:
         """
         if not channel or not isinstance(channel, str):
             raise ValueError("Invalid channel provided.")
+        
+        if "::ps:" not in channel:
+            logger.error(f"Invalid pubsub channel format: '{channel}'.")
+            raise ValueError(f"Invalid pubsub channel format: '{channel}'.")
 
         # Serialize the entire message object to bytes using Protobuf.
         payload_len = len(msg_bytes)
@@ -543,8 +563,10 @@ class P2P:
 
             result_ptr = P2P.libp2p.PopMessages(go_instance_c)
 
-            # From_go_ptr_to_json should handle freeing result_ptr
-            raw_result = P2P._type_interface.from_go_ptr_to_json(result_ptr)
+            # Binary message buffer (success) or JSON status dict (Empty/Error);
+            # from_go_pop_messages decodes either and frees result_ptr. On the binary
+            # path each message's "data" is already raw bytes (no base64).
+            raw_result = P2P._type_interface.from_go_pop_messages(result_ptr)
 
             if raw_result is None:
 
@@ -724,8 +746,11 @@ class P2P:
 
     @property
     def is_public(self) -> Optional[bool]:
-        """Returns a boolean stating whether the local node is publicly reachable."""
-        return self._is_public
+        """Returns whether the local node is publicly reachable, reading the live AutoNAT
+        verdict from Go on each access (O(1), cached Go-side, like ``addresses``). For a
+        ForcePublic node this is a fixed true; otherwise it tracks the latest AutoNAT
+        verdict, falling back to the last known value on FFI error."""
+        return self.get_reachability()
 
     @property
     def relay_is_enabled(self) -> bool:
@@ -769,6 +794,23 @@ class P2P:
         except Exception as e:
             logger.error(f"❌ Failed to get addresses for {target}: {e}")
             raise P2PError(f"Failed to get addresses for {target}") from e
+
+    def get_reachability(self) -> bool:
+        """Reads the current AutoNAT reachability from the Go engine (O(1), event-cached)
+        and updates the cached ``_is_public``. Returns the last known value on FFI error
+        rather than raising, since callers treat reachability as best-effort telemetry."""
+        try:
+            result_ptr = P2P.libp2p.GetReachability(P2P._type_interface.to_go_int(self._instance))
+            result = P2P._type_interface.from_go_ptr_to_json(result_ptr)
+            if result is None or result.get('state') == "Error":
+                msg = result.get('message', 'null result') if result is not None else 'null result'
+                logger.warning(f"Failed to read reachability: {msg}. Using last known value.")
+                return bool(self._is_public)
+            self._is_public = bool(result.get('message', False))
+            return self._is_public
+        except Exception as e:
+            logger.warning(f"Failed to read reachability: {e}. Using last known value.")
+            return bool(self._is_public)
 
     def get_webrtc_connections(self) -> List[Dict[str, Any]]:
         """
@@ -832,16 +874,18 @@ class P2P:
             msg: str = result.get('message', 'unknown error') if result else 'null result'
             raise P2PError(f"[Instance {self._instance}] set_ice_config failed: {msg}")
 
-    def get_connected_peers_info(self) -> List[Dict[str, Any]]:
+    def get_connected_peers_info(self) -> Optional[List[Dict[str, Any]]]:
         """
         Gets information about currently connected peers from the Go library.
 
         Returns:
-            A list of dictionaries, each representing a connected peer with
-            keys like 'addr_info' (containing 'ID', 'Addrs'), 'connected_at', 'direction', and 'misc'.
+            On success, a (possibly empty) list of dictionaries, each representing a
+            connected peer with keys like 'addr_info' (containing 'ID', 'Addrs'),
+            'connected_at', 'direction', and 'misc'. A real empty list means "zero peers".
 
-        Raises:
-            P2PError: If fetching connected peers fails.
+            ``None`` when the FFI call itself fails (transport state UNKNOWN), so a
+            transient error is not read as "zero peers": the reconcile skips the diff on
+            None (leaving the pools intact) instead of tearing every peer down.
         """
 
         # Logger.info("ℹ️ Fetching connected peers info...") # Can be noisy
@@ -853,24 +897,54 @@ class P2P:
 
             if result is None:
                 logger.error("Failed to get connected peers, received null result.")
-                raise P2PError("Failed to get connected peers, received null result.")
+                return None
             if result.get('state') == "Error":
                 logger.error(f"Failed to get connected peers: {result.get('message', 'Unknown Go error')}")
-                raise P2PError(f"Failed to get connected peers: {result.get('message', 'Unknown Go error')}")
+                return None
 
-            peers_list = result.get('message', [])
-
-            # Update internal map (optional)
-            # logger.info(f"  Connected peers count: {len(peers_list)}") # Can be noisy
-            return peers_list
+            # A successful call returns the real list (empty means genuinely zero peers).
+            return result.get('message', [])
 
         except Exception as e:
 
             # Avoid crashing the polling thread, just log the error
             logger.error(f"❌ Error fetching connected peers info: {e}")
 
-            # Optionally raise P2PError(f"Failed to get connected peers info") from e if called directly
-            return []  # Return empty list on error during polling
+            # None (not []) so the caller distinguishes "FFI errored" from "zero peers".
+            return None
+
+    def get_topic_peers(self) -> List[str]:
+        """
+        Gets the peer IDs subscribed to any of this instance's topics (the de-duplicated
+        union of topic.ListPeers()). Each is a peer we are DIRECTLY connected to that
+        announced a subscription: the pubsub router intersects its connected-peer set with the
+        topic subscribers, so a peer we are not connected to never appears. These are exactly
+        the peers that receive this instance's broadcasts; the world perimeter uses them to cut
+        the pubsub-only peers that open no stream and so never surface in
+        get_connected_peers_info. A relay does not subscribe, so it never appears here.
+
+        Returns:
+            A list of peer-id strings, empty on error so that a transient FFI failure never
+            triggers a spurious perimeter cut.
+        """
+        try:
+            result_ptr = P2P.libp2p.GetTopicPeers(P2P._type_interface.to_go_int(self._instance))
+            result = P2P._type_interface.from_go_ptr_to_json(result_ptr)
+
+            if result is None:
+                logger.error("Failed to get topic peers, received null result.")
+                raise P2PError("Failed to get topic peers, received null result.")
+            if result.get('state') == "Error":
+                logger.error(f"Failed to get topic peers: {result.get('message', 'Unknown Go error')}")
+                raise P2PError(f"Failed to get topic peers: {result.get('message', 'Unknown Go error')}")
+
+            return result.get('message', [])
+
+        except Exception as e:
+
+            # Avoid crashing the polling loop; empty means "cut nobody" (fail-safe).
+            logger.error(f"❌ Error fetching topic peers: {e}")
+            return []
 
     def get_rendezvous_peers_info(self) -> Dict[str, Any] | None:
         """
@@ -914,32 +988,9 @@ class P2P:
             # Avoid crashing the polling thread, just log the error
             logger.error(f"❌ Error fetching rendezvous peers info: {e}")
 
-            # Optionally raise P2PError(f"Failed to get rendezvous peers info") from e if called directly
-            return None  # Return empty list on error during polling
-
-    def get_message_queue_length(self) -> int:
-        """
-        Gets the current number of messages in the incoming queue.
-
-        Returns:
-            The number of messages waiting.
-
-        Raises:
-            P2PError: If querying the length fails (should be rare).
-        """
-        try:
-
-            # Call Go function, returns C.int directly
-            length_cint = P2P.libp2p.MessageQueueLength(P2P._type_interface.to_go_int(self._instance))
-            length = P2P._type_interface.from_go_int(length_cint)
-
-            # Print(f"  Current Message Queue Len: {length}") # Can be noisy
-            return length
-        except Exception as e:
-
-            # Avoid crashing polling thread
-            logger.error(f"❌ Error fetching message queue length: {e}")
-            return -1  # Indicate error
+            # Return None (not []) on error: the rest of this method uses None for
+            # "no data yet", and callers branch on `is None`.
+            return None
 
     # --- Lifecycle Management ---
 

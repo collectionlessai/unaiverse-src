@@ -147,8 +147,6 @@ class Interaction:
 
         # Status
         self.status: InteractionStatus = InteractionStatus.CREATED
-        self.data_sent_after_completion = False
-        self.buffered_stream_restarted = False
         self.volatile: bool = volatile
 
         # Pointers
@@ -211,7 +209,9 @@ class Interaction:
         return id + "_" + requester
 
     @staticmethod
-    def get_id_from_uuid(uuid: str) -> str:
+    def get_id_from_uuid(uuid: str | None) -> str | None:
+        if uuid is None:
+            return None  # Safety guard
         return uuid.split("_")[0]
 
     @property
@@ -244,6 +244,7 @@ class Interaction:
         """True when the interaction was registered as 'received'."""
         return self.type == InteractionType.RECEIVED
 
+    @property
     def registered_as_lazy(self) -> bool:
         """True when the interaction was registered as 'lazy'."""
         return self.type == InteractionType.LAZY
@@ -392,10 +393,6 @@ class Interaction:
     def is_completed(self) -> bool:
         """Return True if the interaction status is COMPLETED."""
         return self.status == InteractionStatus.COMPLETED
-
-    def was_data_sent_after_completion(self) -> bool:
-        """Return True if data was generated and sent after this interaction completed."""
-        return self.data_sent_after_completion
 
     def has_dummy_requester(self) -> bool:
         """Return True if no requester peer ID is set (system-generated interaction)."""
@@ -978,9 +975,6 @@ class InteractionManager:
 
         #  Ensuring all the streams mentioned in the interaction are known, and normalizing them
         _, expanded_owned_streams = self.expand_and_normalize_streams(interaction)
-        if expanded_owned_streams is None:
-            log.error(f"Invalid stream field in interaction: {interaction}")
-            return False
 
         # Converting format for owned streams (no matter what the matching routine decided)
         owned_user_hashes_to_stream_objs = {_stream_user_hash: self.agent.known_streams_by_user_hash[_stream_user_hash]
@@ -1040,9 +1034,6 @@ class InteractionManager:
 
         # Ensuring all the streams mentioned in the interaction are known, and normalizing them
         expanded_streams, expanded_owned_streams = self.expand_and_normalize_streams(interaction)
-        if expanded_streams is None:
-            log.error(f"Invalid stream field in interaction: {interaction}")
-            return False
 
         # 1. Filling the missing field of the different stream dictionaries, and assigning streams to stdin or stdext,
         # following the suggestions provided in 'redirect', when possible
@@ -1200,8 +1191,7 @@ class InteractionManager:
         Returns:
             A 2-tuple ``(expanded_streams, expanded_owned_streams)`` where each element is a dict
             keyed by redirection hint (``'stdin'``, ``'stdtar'``, ``'stdext'``, ``None``) mapping to
-            lists of fully-populated stream dicts.  Returns ``(None, None)`` if any stream hash cannot
-            be resolved.
+            lists of fully-populated stream dicts.
         """
 
         # Guessing net hash and specific name af each stream: if the name was not provided, then all the streams of the
@@ -1243,7 +1233,7 @@ class InteractionManager:
                 of fully-populated stream dicts.
 
         Returns:
-            A 4-tuple ``(valid, stdin_streams, stdtar_streams, stdext_streams)`` where ``valid`` is
+            A 5-tuple ``(valid, stdin_streams, stdtar_streams, stdext_streams, stdunk_streams)`` where ``valid`` is
             False if required processor inputs have no matching stream and no default value, and the
             remaining three elements are ``{user_hash: stream_obj}`` dicts for each category.
         """

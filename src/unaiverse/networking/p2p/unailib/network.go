@@ -3,6 +3,7 @@ package main
 
 import (
 	"os"
+	"net"
 	"fmt"
 	"time"
 	"context"
@@ -75,32 +76,45 @@ func getListenAddrs(ips []string, tcpPort int, tlsMode string) ([]ma.Multiaddr, 
 		webrtcPort = tcpPort +3
 	}
 
-	// --- Create Multiaddrs for both protocols from the single IP list ---
+	// --- Create Multiaddrs for each transport from the single IP list ---
 	for _, ip := range ips {
-		// TCP
-		tcpMaddr, _ := ma.NewMultiaddr(fmt.Sprintf("/ip4/%s/tcp/%d", ip, tcpPort))
-		// QUIC
-		quicMaddr, _ := ma.NewMultiaddr(fmt.Sprintf("/ip4/%s/udp/%d/quic-v1", ip, quicPort))
-		// WebTransport
-		webtransMaddr, _ := ma.NewMultiaddr(fmt.Sprintf("/ip4/%s/udp/%d/quic-v1/webtransport", ip, webtransPort))
-		// WebRTC Direct
-		webrtcMaddr, _ := ma.NewMultiaddr(fmt.Sprintf("/ip4/%s/udp/%d/webrtc-direct", ip, webrtcPort))
+		// Detect the address family instead of hardcoding /ip4/: a v6 literal
+		// under /ip4/ produces an invalid multiaddr. ParseIP also rejects garbage
+		// up front (previously the NewMultiaddr error was discarded, leaving a nil
+		// in the slice that then poisoned libp2p.ListenAddrs).
+		parsed := net.ParseIP(ip)
+		if parsed == nil {
+			return nil, fmt.Errorf("invalid listen IP %q", ip)
+		}
+		ipProto := "ip4"
+		if parsed.To4() == nil {
+			ipProto = "ip6"
+		}
 
-		listenAddrs = append(listenAddrs, tcpMaddr, quicMaddr, webtransMaddr, webrtcMaddr)
-
+		specs := []string{
+			fmt.Sprintf("/%s/%s/tcp/%d", ipProto, ip, tcpPort),                            // TCP
+			fmt.Sprintf("/%s/%s/udp/%d/quic-v1", ipProto, ip, quicPort),                   // QUIC
+			fmt.Sprintf("/%s/%s/udp/%d/quic-v1/webtransport", ipProto, ip, webtransPort),  // WebTransport
+			fmt.Sprintf("/%s/%s/udp/%d/webrtc-direct", ipProto, ip, webrtcPort),           // WebRTC Direct
+		}
 		switch tlsMode {
 		case "autotls":
-			// This is the special multiaddr that triggers AutoTLS
-			wssMaddr, _ := ma.NewMultiaddr(fmt.Sprintf("/ip4/%s/tcp/%d/tls/sni/*.%s/ws", ip, tcpPort, p2pforge.DefaultForgeDomain))
-			listenAddrs = append(listenAddrs, wssMaddr)
+			// Special multiaddr that triggers AutoTLS.
+			specs = append(specs, fmt.Sprintf("/%s/%s/tcp/%d/tls/sni/*.%s/ws", ipProto, ip, tcpPort, p2pforge.DefaultForgeDomain))
 		case "domain":
-			// This is the standard secure WebSocket address with provided domain
-			wssMaddr, _ := ma.NewMultiaddr(fmt.Sprintf("/ip4/%s/tcp/%d/tls/ws", ip, tcpPort))
-			listenAddrs = append(listenAddrs, wssMaddr)
+			// Standard secure WebSocket address with provided domain.
+			specs = append(specs, fmt.Sprintf("/%s/%s/tcp/%d/tls/ws", ipProto, ip, tcpPort))
 		default:
-			// Fallback to a standard, non-secure WebSocket address
-			wsMaddr, _ := ma.NewMultiaddr(fmt.Sprintf("/ip4/%s/tcp/%d/ws", ip, tcpPort))
-			listenAddrs = append(listenAddrs, wsMaddr)
+			// Fallback to a standard, non-secure WebSocket address.
+			specs = append(specs, fmt.Sprintf("/%s/%s/tcp/%d/ws", ipProto, ip, tcpPort))
+		}
+
+		for _, spec := range specs {
+			maddr, err := ma.NewMultiaddr(spec)
+			if err != nil {
+				return nil, fmt.Errorf("failed to build listen multiaddr %q: %w", spec, err)
+			}
+			listenAddrs = append(listenAddrs, maddr)
 		}
 	}
 
@@ -194,6 +208,7 @@ func setupNotifiers(ni *NodeInstance) {
 
 					// Run cleanup in a goroutine
 					go func() {
+						defer recoverGoroutine("disconnectionGracePeriod")
 						select {
 						case <-time.After(DisconnectionGracePeriod):
 							// Timer expired! Proceed to cleanup.
@@ -275,6 +290,7 @@ func enforceProtocolCompliance(ni *NodeInstance) {
 	logger.Infof("[GO] 🛡️ Instance %d: Strict Isolation ENABLED. Monitoring for non-compliant peers.", ni.instanceIndex)
 
 	go func() {
+		defer recoverGoroutine("enforceProtocolCompliance")
 		defer sub.Close()
 		for {
 			select {
@@ -325,6 +341,7 @@ func autoUpgradeWebRTC(ni *NodeInstance) {
 	}
 
 	go func() {
+		defer recoverGoroutine("autoUpgradeWebRTC")
 		defer sub.Close()
 		for {
 			select {
@@ -405,6 +422,7 @@ func autoUpgradeWebRTC(ni *NodeInstance) {
 
 				// Fire the timeout and upgrade asynchronously so we don't block the event loop
 				go func(pid peer.ID, wait time.Duration) {
+					defer recoverGoroutine("autoUpgradeWebRTC.upgrade")
 					// Wait for native DCUtR holepunching to do its thing
 					select {
 					case <-time.After(wait):
@@ -440,6 +458,7 @@ func autoUpgradeWebRTC(ni *NodeInstance) {
 
 // handleAddressUpdateEvents listens for libp2p address changes and updates the local cache.
 func handleAddressUpdateEvents(ni *NodeInstance, sub event.Subscription) {
+	defer recoverGoroutine("handleAddressUpdateEvents")
 	defer sub.Close()
 
 	// Initialize cache immediately with current state to avoid race conditions at startup
@@ -467,6 +486,53 @@ func handleAddressUpdateEvents(ni *NodeInstance, sub event.Subscription) {
                 addrsStr[i] = a.String()
             }
 			logger.Infof("[GO] 🔄 Instance %d: Updated local addresses (updating cache). Addrs: %v", ni.instanceIndex, addrsStr)
+		}
+	}
+}
+
+// setIsPublic / getIsPublic guard the reachability state shared between
+// handleReachabilityEvents (writer) and the GetReachability export (reader).
+func (ni *NodeInstance) setIsPublic(v bool) {
+	ni.reachMutex.Lock()
+	ni.isPublic = v
+	ni.reachMutex.Unlock()
+}
+
+func (ni *NodeInstance) getIsPublic() bool {
+	ni.reachMutex.RLock()
+	defer ni.reachMutex.RUnlock()
+	return ni.isPublic
+}
+
+// handleReachabilityEvents keeps ni.isPublic in sync with libp2p's AutoNAT verdict for the
+// node's lifetime. Unlike the address listener it does NOT seed an initial value from the
+// host (reachability is only observable via the event bus): CreateNode seeds it before
+// starting this goroutine, which is then the sole writer. Started only for non-ForcePublic
+// nodes, where AutoNAT actually emits verdicts (a ForcePublic node keeps its seeded true).
+func handleReachabilityEvents(ni *NodeInstance, sub event.Subscription) {
+	defer recoverGoroutine("handleReachabilityEvents")
+	defer sub.Close()
+
+	for {
+		select {
+		case <-ni.ctx.Done():
+			return
+		case ev, ok := <-sub.Out():
+			if !ok {
+				return
+			}
+			// Unknown means "AutoNAT can't tell", NOT "private": keep the last known verdict
+			// rather than regressing a valid Public/Private to false on a transient Unknown.
+			switch ev.(event.EvtLocalReachabilityChanged).Reachability {
+			case network.ReachabilityPublic:
+				ni.setIsPublic(true)
+				logger.Infof("[GO] 📶 Instance %d: Reachability -> public", ni.instanceIndex)
+			case network.ReachabilityPrivate:
+				ni.setIsPublic(false)
+				logger.Infof("[GO] 📶 Instance %d: Reachability -> private", ni.instanceIndex)
+			default: // ReachabilityUnknown: no new information, keep the current value.
+				logger.Debugf("[GO] 📶 Instance %d: Reachability -> unknown (keeping last value)", ni.instanceIndex)
+			}
 		}
 	}
 }
@@ -677,13 +743,17 @@ func (ni *NodeInstance) Close() error {
 	ni.disconnectionTimers = nil // Clear the map
 	ni.disconnectionMutex.Unlock()
 
-	// Nil out components to signify the instance is fully closed
-	ni.host = nil
-	ni.pubsub = nil
-	ni.ctx = nil
-	ni.cancel = nil
-	ni.certManager = nil
-	ni.messageStore = nil
+	// Deliberately DO NOT nil out host/pubsub/ctx/cancel/messageStore here.
+	// A call already in flight (e.g. SendMessageToPeer blocked up to 20s in
+	// NewStream, or ConnectTo, or a listener goroutine calling storeReceivedMessage)
+	// still holds this *NodeInstance and would dereference a nil field → panic →
+	// dead Python process. Instead we rely on:
+	//   - ctx already cancelled (cancel() above): select-on-Done goroutines exit;
+	//   - host already Close()d: in-flight transport ops return clean errors;
+	//   - the slot in allInstances[] set to nil by the caller (CloseNode): a NEW
+	//     CreateNode builds a fresh instance, this one is left orphaned but valid.
+	// host.Close() turning subsequent ops into errors (not panics) is exactly the
+	// behaviour we want for the close-while-busy race.
 
 	if hostErr != nil {
 		return hostErr

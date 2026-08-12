@@ -40,8 +40,26 @@ if TYPE_CHECKING:
     from unaiverse.networking.node.node import Node
 
 
-def build_unaid(profile):
-    return profile.get_static_profile()['email'] + '/' + profile.get_static_profile()['node_name']
+def owner_handle(static_profile: dict) -> str | None:
+    """The account's public identity: the nickname, with the e-mail address as a fallback
+    for old servers or cached profiles (the address is not an identifier anymore)."""
+    return static_profile.get('nickname') or static_profile.get('email')
+
+
+def build_unaid(profile, node_name: str | None = None):
+    if not hasattr(profile, "get_static_profile"):
+        return None
+    static_profile = profile.get_static_profile()
+    if not isinstance(static_profile, dict):
+        return None
+    handle = owner_handle(static_profile)
+    if handle is None:
+        return None
+    if node_name is None:
+        if "node_name" not in static_profile:
+            return None
+        node_name = static_profile['node_name']
+    return handle + '/' + node_name
 
 
 def save_node_addresses_to_file(node: "Node", dir_path: str, public: bool,
@@ -153,12 +171,15 @@ def countdown_start(seconds: int, msg: str) -> threading.Thread:
             pass  # Tqdm handles flushing
 
     def drawing(secs: int, message: str) -> None:
-        with tqdm(total=secs, desc=message, file=sys.__stdout__) as t:
-            sys.stdout = TqdmPrintRedirector(t)  # Redirect prints to tqdm.write
-            for i in range(secs):
-                time.sleep(1)
-                t.update(1.)
-            sys.stdout = sys.__stdout__  # Restore original stdout
+        saved_stdout = sys.stdout  # whatever was active, not sys.__stdout__
+        try:
+            with tqdm(total=secs, desc=message, file=sys.__stdout__) as t:
+                sys.stdout = TqdmPrintRedirector(t)  # Redirect prints to tqdm.write
+                for i in range(secs):
+                    time.sleep(1)
+                    t.update(1.)
+        finally:
+            sys.stdout = saved_stdout  # Restore the prior value, always
 
     sys.stdout.flush()
     handle = threading.Thread(target=drawing, args=(seconds, msg))
@@ -384,6 +405,239 @@ def unpack_py_files(packed: str) -> dict[str, str]:
         The original dict mapping relative paths to Python source text.
     """
     return json.loads(gzip.decompress(base64.b64decode(packed)).decode('utf-8'))
+
+
+def prune_to_import_closure(py_files: dict[str, str], entry_points: list[str],
+                            forced: tuple[str, ...] = ()) -> dict[str, str]:
+    """Restrict *py_files* to the entry points plus everything they can import.
+
+    Mirrors the resolution rules of the in-memory loader on the receiving side:
+    only relative imports (``from .x import y``) resolve against the shipped
+    set, so the closure follows ``ImportFrom`` nodes with ``level >= 1`` and
+    ignores absolute imports (stdlib, third-party, or siblings that would not
+    resolve anyway). ``__init__.py`` files of traversed sub-packages ride
+    along; the top-level ``__init__.py`` never does, because the finder serves
+    the root namespace as an empty package and its source is unreachable.
+    Static analysis is sound here because ``analyze_code`` rejects dynamic
+    imports (``importlib``, ``__import__``) in shipped code.
+
+    Args:
+        py_files: Dict mapping relative paths (forward slashes) to source text.
+        entry_points: Keys whose import closure must be kept (the role files).
+        forced: Keys included WITHOUT following their imports UNLESS some kept
+            file also imports them (e.g. ``stats.py``: when only exec'd it runs
+            in a bare module where relative imports cannot resolve, but a role
+            file importing it turns it into a real namespace module whose
+            dependencies must ship too).
+
+    Returns:
+        The filtered dict, preserving the iteration order of *py_files*.
+    """
+    kept: set[str] = set()
+    enqueued: set[str] = set()
+    queue: list[str] = []
+
+    # Directory prefixes present in the tree: the loader auto-creates a namespace
+    # package for each of them, so imports can legally target bare directories
+    dir_prefixes: set[str] = set()
+    for k in py_files:
+        parts = k.split('/')
+        for i in range(1, len(parts)):
+            dir_prefixes.add('/'.join(parts[:i]))
+
+    def _add(rel: str) -> None:
+        if rel not in py_files:
+            return
+        if rel not in kept:
+            kept.add(rel)
+            # Sub-package __init__.py files ride along (never the root one)
+            parts = rel.split('/')
+            for i in range(1, len(parts)):
+                _add('/'.join(parts[:i]) + '/__init__.py')
+        if rel not in enqueued:
+            enqueued.add(rel)
+            queue.append(rel)
+
+    def _add_subtree(prefix: str) -> None:
+        # Conservative: everything under a package targeted as a whole (namespace
+        # dirs, star-imports whose __all__ names submodules the AST cannot see)
+        for k in py_files:
+            if k.startswith(prefix + '/'):
+                _add(k)
+
+    for entry in entry_points:
+        _add(entry)
+    for name in forced:
+        if name in py_files:
+            kept.add(name)  # Not enqueued: traversed only if an import reaches it
+
+    while queue:
+        rel = queue.pop()
+        try:
+            tree = ast.parse(py_files[rel])
+        except SyntaxError:
+            continue  # Kept as-is; an unparsable file contributes no edges
+        base = rel.split('/')[:-1]
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ImportFrom) or node.level < 1:
+                continue
+            if node.level - 1 > len(base):
+                continue  # Escapes the shipped tree
+            anchor = base[:len(base) - (node.level - 1)] if node.level > 1 else list(base)
+            target = anchor + (node.module.split('.') if node.module else [])
+            prefix = '/'.join(target)
+            if node.module:
+                _add(prefix + '.py')
+                _add(prefix + '/__init__.py')
+            for alias in node.names:
+                if alias.name == '*':
+                    if prefix in dir_prefixes:
+                        _add_subtree(prefix)
+                    continue
+                leaf = (prefix + '/' if prefix else '') + alias.name
+                _add(leaf + '.py')
+                _add(leaf + '/__init__.py')
+                if (leaf + '.py' not in py_files and leaf + '/__init__.py' not in py_files
+                        and leaf in dir_prefixes):
+                    _add_subtree(leaf)  # Bare namespace package (no __init__.py)
+
+    return {k: v for k, v in py_files.items() if k in kept}
+
+
+class _InMemoryLoader(importlib.abc.SourceLoader):
+    """Serves Python source from a plain string."""
+
+    def __init__(self, source: str, virtual_path: str) -> None:
+        self._source = source
+        self._path = virtual_path
+
+    def get_data(self, path: str) -> bytes:           # called by SourceLoader machinery
+        return self._source.encode('utf-8')
+
+    def get_filename(self, fullname: str) -> str:
+        return self._path
+
+
+class InMemoryFinder(importlib.abc.MetaPathFinder):
+    """MetaPathFinder that resolves imports from an in-memory source dict.
+
+    Each instance owns a unique namespace (e.g. ``_dyn_abc12345``) so that
+    concurrent worlds loaded by different agents never collide in sys.modules.
+
+    Args:
+        py_files: Dict mapping relative paths (forward-slash, e.g.
+            ``'role1.py'``, ``'utils/helper.py'``) to Python source text.
+        namespace: Unique string used as the top-level package name.
+    """
+
+    def __init__(self, py_files: dict[str, str], namespace: str) -> None:
+        self._ns = namespace
+
+        # fullname -> (source, virtual_path, is_package)
+        self._mods: dict[str, tuple[str, str, bool]] = {}
+
+        # Discover all directories that contain at least one .py file,
+        # so we can auto-generate implicit namespace packages for them.
+        dirs: set[str] = set()
+        for rel in py_files:
+            parts = rel.split('/')
+            for depth in range(1, len(parts)):
+                dirs.add('/'.join(parts[:depth]))
+
+        for rel, source in py_files.items():
+            parts = rel.split('/')
+            filename = parts[-1]
+            sub_dirs = parts[:-1]
+
+            if filename == '__init__.py':
+                mod_name = namespace + ('.' + '.'.join(sub_dirs) if sub_dirs else '')
+                is_pkg = True
+            else:
+                stem = filename[:-3]  # strip .py
+                mod_name = namespace + '.' + '.'.join(sub_dirs + [stem])
+                is_pkg = False
+
+            v_path = f'<world:{namespace}>/{rel}'
+            self._mods[mod_name] = (source, v_path, is_pkg)
+
+        # Auto-create empty namespace packages for directories with no __init__.py
+        for d in dirs:
+            pkg_name = namespace + '.' + d.replace('/', '.')
+            if pkg_name not in self._mods:
+                self._mods[pkg_name] = ('', f'<world:{namespace}>/{d}/__init__.py', True)
+
+    def find_spec(self, fullname: str, path: object, target: object = None) -> importlib.machinery.ModuleSpec | None:
+
+        # Root namespace package
+        if fullname == self._ns:
+            spec = importlib.machinery.ModuleSpec(fullname, loader=None, origin=f'<world:{self._ns}>', is_package=True)
+            spec.submodule_search_locations = []
+            return spec
+
+        if fullname not in self._mods:
+            return None
+
+        source, v_path, is_pkg = self._mods[fullname]
+        loader = _InMemoryLoader(source, v_path)
+        spec = importlib.machinery.ModuleSpec(fullname, loader, origin=v_path, is_package=is_pkg)
+        if is_pkg:
+            spec.submodule_search_locations = []
+        return spec
+
+    def cleanup(self) -> None:
+        """Remove all owned modules from "sys.modules" and unregister this finder.
+
+        Call this when the agent that was built from these sources is destroyed.
+        """
+        for name in list(self._mods):
+            sys.modules.pop(name, None)
+        sys.modules.pop(self._ns, None)
+        try:
+            sys.meta_path.remove(self)
+        except ValueError:
+            pass
+
+
+def world_definition_members(agent_files: dict[str, str], roles_fsm: dict[str, str]) -> dict[str, bytes]:
+    """Canonical member set of a world definition.
+
+    ``code/<path>`` for every shipped source file (stats.py included) and
+    ``fsm/<role>.json`` for every role FSM. The same member layout the root
+    server reads from a declared GitHub commit, and the one the joiner-side
+    check folds from the grant bundle, so all ends fold exactly the same bytes.
+
+    Args:
+        agent_files: Dict mapping relative paths to source text (the bundle).
+        roles_fsm: Dict mapping role names to their FSM as a JSON string.
+
+    Returns:
+        Dict mapping canonical member names to their content bytes.
+    """
+    members = {f"code/{rel}": src.encode('utf-8') for rel, src in agent_files.items()}
+    members |= {f"fsm/{role}.json": fsm.encode('utf-8') for role, fsm in roles_fsm.items()}
+    return members
+
+
+def canonical_world_hash(members: dict[str, bytes]) -> str:
+    """Deterministic BLAKE2b (256-bit) digest of a world-definition member set.
+
+    Members are folded in alphabetical order as ``<name>\\x00<content>``, the
+    same folding the root server applies to the bundle it reads from a world's
+    declared repository, so a joiner can recompute the attested hash from the
+    grant bundle without ever touching the repository.
+
+    Args:
+        members: Dict mapping member names to content bytes.
+
+    Returns:
+        A 64-character lowercase hex digest.
+    """
+    h = hashlib.blake2b(digest_size=32)
+    for name in sorted(members):
+        h.update(name.encode('utf-8'))
+        h.update(b'\x00')
+        h.update(members[name])
+    return h.hexdigest()
 
 
 class _InMemoryLoader(importlib.abc.SourceLoader):

@@ -15,12 +15,21 @@
 import asyncio
 import time
 import math
-import base64
-import binascii
+from collections import namedtuple
 from unaiverse.utils.logger import log
 from unaiverse.networking.p2p.messages import Msg
 from unaiverse.networking.p2p.p2p import P2P, P2PError
 from unaiverse.networking.node.tokens import TokenVerifier
+
+
+# Immutable per-cycle view of the world membership that the perimeter routing
+# classifies against. Built once per update cycle so conn_routing_fcn reads a single
+# consistent snapshot instead of the live mutable sets. The world side is fed by the
+# rendezvous; the public side ignores it.
+WorldMembership = namedtuple(
+    "WorldMembership",
+    ["world_agents", "world_masters", "world_node_peer_id", "inspector_peer_id"],
+)
 
 
 class ConnectionPools:
@@ -165,12 +174,20 @@ class ConnectionPools:
         """
         return self.p2p_name_to_p2p[p2p_name]
 
-    async def conn_routing_fcn(self, connected_peer_infos: list, p2p: P2P) -> dict:
+    def membership_snapshot(self) -> "WorldMembership | None":
+        """The immutable per-cycle world-membership view handed to conn_routing_fcn.
+        The base pool has no world membership, so it returns None; NodeConn overrides
+        it with the real snapshot."""
+        return None
+
+    async def conn_routing_fcn(self, connected_peer_infos: list, p2p: P2P,
+                               membership: "WorldMembership | None" = None) -> dict:
         """A placeholder function that must be implemented to route connected peers to the correct pool (async).
 
         Args:
             connected_peer_infos: A list of dictionaries containing information about connected peers.
             p2p: The P2P network object from which the peers were connected.
+            membership: the immutable world-membership snapshot to classify against.
 
         Returns:
             A dictionary mapping pool names to a dictionary of peer IDs and their information.
@@ -178,7 +195,11 @@ class ConnectionPools:
         raise NotImplementedError("You must implement conn_routing_fcn!")
 
     async def __connect(self, p2p: P2P, addresses: list[str]) -> tuple[str | None, bool]:
-        """Establishes a connection to a peer via a P2P network (async).
+        """Establishes a connection to a peer via a P2P network (async): one connect_to
+        call with every non-loopback address. The libp2p swarm dials them in parallel
+        under a single Go-side budget (its dialer already ranks transports; the first
+        success wins), so there is no second sequential pass and the worst case is one
+        dial timeout.
 
         Args:
             p2p: The P2P network object to use for the connection.
@@ -196,28 +217,7 @@ class ConnectionPools:
             for a in _addresses:
                 addresses.append(a)
 
-        def sort_priority(s):
-            if "/udp/" in s:
-                return 0  # Highest priority
-            elif "/ws/" in s:
-                return 1  # Middle priority
-            else:
-                return 2  # Lowest priority
-
-        # Sort in place (sorting does not seem to have an effect, but it makes things more readable)
-        kept_addresses = sorted(
-            [s for s in addresses if "127.0.0.1" not in s and ("/tcp/" not in s or "/ws/" in s)],
-            key=sort_priority
-        )
-        discarded_addresses = sorted(
-            [s for s in addresses if "127.0.0.1" not in s and ("/tcp/" in s and "/ws/" not in s)],
-            key=sort_priority
-        )
-        if len(kept_addresses) > 0:
-            addresses = kept_addresses
-        else:
-            addresses = discarded_addresses
-            discarded_addresses = []
+        addresses = [a for a in addresses if "127.0.0.1" not in a]
 
         log.cpool(f"Connecting to {addresses}", sub=p2p.log_sub)
 
@@ -239,10 +239,18 @@ class ConnectionPools:
             return peer_id, through_relay
         except P2PError:
             log.error(f"Connection failed!", sub=p2p.log_sub)
-            if len(discarded_addresses) > 0:
-                return await self.__connect(p2p, discarded_addresses)
-            else:
-                return None, False
+            return None, False
+
+    def close_transports(self) -> None:
+        """Shutdown: close the Go host of every instance (world first), freeing its
+        slot — until now nothing ever called P2P.close, so embedding several Nodes in
+        one process leaked slots. Only the shutdown path calls this, once no traffic
+        is expected on the transports anymore."""
+        for p2p_name, p2p in reversed(list(self.p2p_name_to_p2p.items())):
+            try:
+                p2p.close()
+            except Exception as e:
+                log.error(f"close_transports: closing {p2p_name} failed: {e}")
 
     @staticmethod
     async def disconnect(p2p: P2P, peer_id: str) -> bool:
@@ -256,7 +264,7 @@ class ConnectionPools:
             True if the disconnection is successful, otherwise False.
         """
         try:
-            p2p.disconnect_from(peer_id)
+            await asyncio.to_thread(p2p.disconnect_from, peer_id)
         except P2PError:
             return False
         return True
@@ -284,6 +292,21 @@ class ConnectionPools:
         else:
             node_id, cv_hash = self.__token_verifier.verify_token(token, p2p_peer=peer_id)
             return node_id, cv_hash  # If the verification fails, this is None, None
+
+    def get_peer_code_hash(self, peer_id: str) -> str | None:
+        """The root-attested world-code hash carried by a peer's token, if any.
+
+        The token of every peer we exchange messages with is verified and stored on
+        receipt (see get_messages), so this re-reads the claims of that stored token
+        instead of asking the peer again. Returns None when there is no token, no
+        verifier, or the token carries no code_hash claim (a world that declared no
+        source repository), which the caller treats as "nothing to check".
+        """
+        token = self.peer_id_to_token.get(peer_id)
+        if token is None or self.__token_verifier is None:
+            return None
+        _, _, _, _, code_hash = self.__token_verifier.verify_token_claims(token, p2p_peer=peer_id)
+        return code_hash
 
     async def connect(self, addresses: list[str], p2p_name: str) -> tuple[str | None, bool]:
         """Connects to a peer on a specified P2P network (async).
@@ -313,7 +336,7 @@ class ConnectionPools:
         """
         p2p = self.p2p_name_to_p2p[p2p_name]
         try:
-            return p2p.reserve_on_relay(peer_id)
+            return await asyncio.to_thread(p2p.reserve_on_relay, peer_id)
         except P2PError:
             return None
 
@@ -421,13 +444,18 @@ class ConnectionPools:
         self.pool_name_to_added_in_last_update = {}
         self.pool_name_to_removed_in_last_update = {}
 
+        # One immutable membership view for the whole cycle: both instances are routed
+        # against the same snapshot, with no skew if the membership mutates afterwards.
+        membership = self.membership_snapshot()
+
         for p2p_name, p2p in self.p2p_name_to_p2p.items():
             connected_peer_infos = p2p.get_connected_peers_info()
 
             if connected_peer_infos is not None:
 
                 # Routing to the right queue / filtering
-                pool_name_and_peer_ids_to_peer_info = await self.conn_routing_fcn(connected_peer_infos, p2p)
+                pool_name_and_peer_ids_to_peer_info = await self.conn_routing_fcn(
+                    connected_peer_infos, p2p, membership)
 
                 # Parsing the generated index
                 for pool_name, connected_peer_ids_to_connected_peer_infos \
@@ -473,13 +501,11 @@ class ConnectionPools:
         for i, msg_dict in enumerate(byte_messages):
             msg_dict: dict
             try:
-                # Extract and validate required fields from the Go message structure
-                # Go structure: {"from":"Qm...", "data":"BASE64_ENCODED_DATA"}
+                # Extract and validate required fields from the Go message structure.
+                # The binary transport delivers "data" already as raw bytes (no base64).
+                # Go structure: {"from":"Qm...", "data":<bytes>}
                 verified_sender_id = msg_dict.get("from")
-                base64_data = msg_dict.get("data")
-
-                # Decode data
-                decoded_data = base64.b64decode(base64_data)  # noqa
+                decoded_data = msg_dict.get("data")
 
                 # Attempt to create the higher-level Msg object
                 # This assumes Msg.from_bytes can parse your message protocol from decoded_data
@@ -524,10 +550,6 @@ class ConnectionPools:
 
             except ValueError as ve:
                 log.error(f"Invalid message created, stopping. Error: {ve}", sub=p2p.log_sub)
-                continue  # Skip problematic message
-            except (TypeError, binascii.Error) as decode_err:
-                log.error(f"Failed to decode Base64 data for a message in batch: {decode_err}. "
-                          f"Message dict: {msg_dict}", sub=p2p.log_sub)
                 continue  # Skip problematic message
             except Exception as msg_proc_err:  # Catch errors from Msg.from_bytes or attribute setting
                 log.error(f"Error processing popped message item {i}: {msg_proc_err}. "
@@ -774,7 +796,7 @@ class ConnectionPools:
 
         # Sending message via GossipSub
         try:
-            p2p.broadcast_message(channel, msg_bytes=msg.to_bytes())
+            await asyncio.to_thread(p2p.broadcast_message, channel, msg_bytes=msg.to_bytes())
 
             # If the line above executes without raising an error, it was successful.
             return True
@@ -786,7 +808,7 @@ class ConnectionPools:
 
 class NodeConn(ConnectionPools):
     # Basic name
-    __ALL_UNIVERSE = "all_universe"
+    __ALL_UNIVERSE = "all_unaiverse"
     __WORLD_AGENTS_ONLY = "world_agents"
     __WORLD_NODE_ONLY = "world_node"
     __WORLD_MASTERS_ONLY = "world_masters"
@@ -859,7 +881,6 @@ class NodeConn(ConnectionPools):
         # These are the list of all the possible agents that might try to connect when we are in world
         self.world_agents_set = set()
         self.world_masters_set = set()
-        self.world_masters_first = None
         self.world_agents_and_world_masters_set = set()
         self.world_node_peer_id = None
         self.inspector_peer_id = None
@@ -873,16 +894,33 @@ class NodeConn(ConnectionPools):
         """Resets the rendezvous tag to its initial state."""
         self.rendezvous_tag = -1
 
-    async def conn_routing_fcn(self, connected_peer_infos: list, p2p: P2P) -> dict:
+    def membership_snapshot(self) -> WorldMembership:
+        """Freeze the current world membership into an immutable per-cycle view. The
+        sets are copied into frozensets so a snapshot already taken cannot change if
+        the membership mutates later (and cannot be mutated by the routing itself)."""
+        return WorldMembership(
+            world_agents=frozenset(self.world_agents_set),
+            world_masters=frozenset(self.world_masters_set),
+            world_node_peer_id=self.world_node_peer_id,
+            inspector_peer_id=self.inspector_peer_id,
+        )
+
+    async def conn_routing_fcn(self, connected_peer_infos: list, p2p: P2P,
+                               membership: WorldMembership = None) -> dict:
         """Routes connected peers to the correct connection pool based on their network and role (async).
 
         Args:
             connected_peer_infos: A list of dictionaries with information about connected peers.
             p2p: The P2P network object where the connections were found.
+            membership: the immutable world-membership snapshot to classify against.
+                Defaults to a fresh snapshot of the current membership when not passed
+                (so a standalone call still works); update() passes the per-cycle one.
 
         Returns:
             A dictionary mapping pool names to a dictionary of peer IDs and their information.
         """
+        if membership is None:
+            membership = self.membership_snapshot()
         pool_name_and_peer_id_to_peer_info = {k: {} for k in self.p2p_to_pool_names[p2p]}
         public = p2p == self.p2p_public
 
@@ -899,15 +937,15 @@ class NodeConn(ConnectionPools):
                 else:
                     log.critical(f"Connection direction is undefined: {c['direction']}", sub=p2p.log_sub)
             else:
-                is_world_agent = peer_id in self.world_agents_set
-                is_world_master = peer_id in self.world_masters_set
-                is_world_node = self.world_node_peer_id is not None and peer_id == self.world_node_peer_id
-                is_inspector = self.inspector_peer_id is not None and peer_id == self.inspector_peer_id
+                is_world_agent = peer_id in membership.world_agents
+                is_world_master = peer_id in membership.world_masters
+                is_world_node = membership.world_node_peer_id is not None and peer_id == membership.world_node_peer_id
+                is_inspector = membership.inspector_peer_id is not None and peer_id == membership.inspector_peer_id
                 if not is_world_node and not is_world_master and not is_world_agent and not is_inspector:
-                    log.cpool("World agents list:  " + str(self.world_agents_set), sub=p2p.log_sub)
-                    log.cpool("World masters list: " + str(self.world_masters_set), sub=p2p.log_sub)
-                    log.cpool("World node peer id: " + str(self.world_node_peer_id), sub=p2p.log_sub)
-                    log.cpool("Inspector peer id: " + str(self.inspector_peer_id), sub=p2p.log_sub)
+                    log.cpool("World agents list:  " + str(membership.world_agents), sub=p2p.log_sub)
+                    log.cpool("World masters list: " + str(membership.world_masters), sub=p2p.log_sub)
+                    log.cpool("World node peer id: " + str(membership.world_node_peer_id), sub=p2p.log_sub)
+                    log.cpool("Inspector peer id: " + str(membership.inspector_peer_id), sub=p2p.log_sub)
                     log.cpool(f"Unable to determine the peer type for {peer_id}: "
                               f"cannot say if world agent, master, world node, inspector (disconnecting it)",
                               sub=p2p.log_sub)
@@ -935,27 +973,20 @@ class NodeConn(ConnectionPools):
         """
         self.world_node_peer_id = world_peer_id
 
-    def set_inspector(self, inspector_peer_id: str | None) -> None:
-        """Sets the peer ID of the inspector.
-
-        Args:
-            inspector_peer_id: The peer ID of the inspector node.
-        """
-        self.inspector_peer_id = inspector_peer_id
-
-    def get_world_peer_id(self) -> str | None:
-        """Returns the peer ID of the world node.
+    def get_world_node_peer_id(self) -> str | None:
+        """Returns the PRIVATE peer ID of the world node, i.e. the REMOTE world host we joined,
+        as written by set_world. This is deliberately NOT our own world/private peer-id:
+        that one is Node.get_world_peer_id (conn[P2P_WORLD].peer_id). The accessor was named
+        get_world_peer_id, renamed to drop the collision with Node's same-named accessor
+        that means the opposite thing.
 
         Args:
             None.
 
         Returns:
-            The world node's peer ID.
+            The world node's peer ID, or None when unset.
         """
         return self.world_node_peer_id
-
-    def get_first_world_master(self) -> str | None:
-        return self.world_masters_first
 
     def set_addresses_in_peer_info(self, peer_id: str, addresses: list[str]) -> None:
         """Updates the list of addresses for a given peer.
@@ -1029,10 +1060,6 @@ class NodeConn(ConnectionPools):
 
         self.world_agents_and_world_masters_set = self.world_agents_set | self.world_masters_set
 
-    def get_world_masters(self) -> set[str]:
-        """Returns the set of world masters."""
-        return self.world_masters_set
-
     def set_world_masters_list(self, world_masters_list_peer_infos: list[dict] | None) -> None:
         """Sets the list of all world masters based on a provided list of peer information.
 
@@ -1054,13 +1081,11 @@ class NodeConn(ConnectionPools):
 
         # Setting new information
         if world_masters_list_peer_infos is not None and len(world_masters_list_peer_infos) > 0:
-            self.world_masters_first = world_masters_list_peer_infos[0]['id']
             self.world_masters_set = {x['id'] for x in world_masters_list_peer_infos}
             for x in world_masters_list_peer_infos:
                 self.peer_id_to_addrs[x['id']] = x['addrs']
                 self.set_role(x['id'], x['misc'])
         else:
-            self.world_masters_first = None
             self.world_masters_set = set()
 
         self.world_agents_and_world_masters_set = self.world_agents_set | self.world_masters_set
@@ -1091,9 +1116,6 @@ class NodeConn(ConnectionPools):
             role: The role assigned to the master.
         """
         self.world_masters_set.add(peer_id)
-
-        if len(self.world_masters_set) == 1:
-            self.world_masters_first = peer_id
 
         # This assumes that the WORLD MASTER/AGENT BIT is the first one
         assert role & 1 == 1, "Expecting the first bit of the role to be 1 for world masters"
@@ -1350,7 +1372,10 @@ class NodeConn(ConnectionPools):
                     elif (c['misc'] & 1) == 1 and (c['misc'] & 2) == 2:
                         world_masters_peer_infos.append(c)
                     else:
-                        log.critical("Unexpected value of the 'misc' field: " + str(c), sub=self.p2p_world.log_sub)
+                        # An unexpected 'misc' from the rendezvous must not be fatal (this runs
+                        # every cycle from the main loop): log and skip the entry.
+                        log.error("Unexpected value of the 'misc' field, skipping: " + str(c),
+                                  sub=self.p2p_world.log_sub)
 
                 # Updating lists
                 self.set_world_agents_list(world_agents_peer_infos)

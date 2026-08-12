@@ -222,14 +222,25 @@ func registerWebRTCDataChannel(ni *NodeInstance, remotePeer peer.ID, dc *pwebrtc
 
 		case webRTCChunkFlagStart:
 			// 0x80: first chunk of a multi-chunk message.
+			if conn.reassemblyBuf != nil {
+				logger.Warnf("[GO] ⚠️ Instance %d: New START chunk from %s while a reassembly was in progress; discarding %d partial bytes.",
+					ni.instanceIndex, remotePeer, len(conn.reassemblyBuf))
+			}
 			conn.reassemblyBuf = make([]byte, 0, len(chunkPayload)*2)
 			conn.reassemblyBuf = append(conn.reassemblyBuf, chunkPayload...)
+			conn.reassemblyStart = time.Now()
 
 		case webRTCChunkFlagEnd:
 			// 0x40: final chunk — append, check size, deliver.
 			if conn.reassemblyBuf == nil {
 				logger.Warnf("[GO] ⚠️ Instance %d: Received END chunk without preceding START from %s, discarding",
 					ni.instanceIndex, remotePeer)
+				return
+			}
+			if time.Since(conn.reassemblyStart) > WebRTCReassemblyTimeout {
+				logger.Warnf("[GO] ⚠️ Instance %d: Reassembly from %s exceeded %v before END; discarding partial message.",
+					ni.instanceIndex, remotePeer, WebRTCReassemblyTimeout)
+				conn.reassemblyBuf = nil
 				return
 			}
 			conn.reassemblyBuf = append(conn.reassemblyBuf, chunkPayload...)
@@ -251,6 +262,12 @@ func registerWebRTCDataChannel(ni *NodeInstance, remotePeer peer.ID, dc *pwebrtc
 			// is a continuation chunk; otherwise it is a legacy frame whose first
 			// byte happens to be 0x00 (MSB of a big-endian uint32 length < 16 MB).
 			if conn.reassemblyBuf != nil {
+				if time.Since(conn.reassemblyStart) > WebRTCReassemblyTimeout {
+					logger.Warnf("[GO] ⚠️ Instance %d: Reassembly from %s exceeded %v mid-stream; discarding partial message.",
+						ni.instanceIndex, remotePeer, WebRTCReassemblyTimeout)
+					conn.reassemblyBuf = nil
+					return
+				}
 				conn.reassemblyBuf = append(conn.reassemblyBuf, chunkPayload...)
 				if uint32(len(conn.reassemblyBuf)) > MaxMessageSize {
 					logger.Errorf("[GO] ❌ Instance %d: In-progress reassembly from %s exceeds MaxMessageSize (%d), discarding",
@@ -371,6 +388,7 @@ func setupWebRTCSignalHandler(ni *NodeInstance) {
 //  4. Send complete SDP answer (with all ICE candidates embedded).
 //  5. Wait for the offerer's DataChannel to open, then register it.
 func handleSignalingStream(ni *NodeInstance, s network.Stream) {
+	defer recoverGoroutine("handleSignalingStream")
 	defer s.Close()
 
 	remotePeer := s.Conn().RemotePeer()

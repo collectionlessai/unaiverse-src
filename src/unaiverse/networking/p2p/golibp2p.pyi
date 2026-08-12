@@ -42,6 +42,16 @@ class GoLibP2P:
         """
         ...
 
+    def GetTopicPeers(self, instance: int) -> int:
+        """
+        GetTopicPeers(instance: int) -> bytes
+
+        Returns a JSON string listing the de-duplicated peer IDs subscribed to any topic
+        this instance is subscribed to (union of topic.ListPeers()): the directly-connected
+        peers that receive this instance's broadcasts.
+        """
+        ...
+
     def GetRendezvousPeers(self, instance: int) -> int:
         """
         GetRendezvousPeers(instance: int) -> bytes
@@ -75,14 +85,6 @@ class GoLibP2P:
     ) -> int:
         """
         SendMessageToPeer(instance: int, channel: bytes, data: bytes, data_len: int) -> bytes
-        """
-        ...
-
-    def MessageQueueLength(self, instance: int) -> int:
-        """
-        MessageQueueLength(instance: int) -> int
-
-        Returns the current length of the message queue.
         """
         ...
 
@@ -123,6 +125,14 @@ class GoLibP2P:
         GetWebRTCConnections(instance: int) -> bytes
 
         Returns a list of all active WebRTC connections. Returns a JSON result.
+        """
+        ...
+
+    def GetReachability(self, instance: int) -> int:
+        """
+        GetReachability(instance: int) -> bytes
+
+        Returns the node's current AutoNAT reachability as a boolean. Returns a JSON result.
         """
         ...
 

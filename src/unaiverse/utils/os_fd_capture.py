@@ -113,40 +113,67 @@ class FdCapture:
             # 2. Save a copy of the real FD, so we can restore it (and write to it)
             self._saved_fd = os.dup(self._target_fd)
 
-            # 3. Create pipe
-            self._read_fd, self._write_fd = os.pipe()
+            try:
+                # 3. Create pipe
+                self._read_fd, self._write_fd = os.pipe()
 
-            # 4. Redirect target fd → write end of pipe.
-            #    Python's sys.stdout/stderr still point to their original file
-            #    objects, which internally hold the original fd number.  After
-            #    dup2, those file objects now also write into the pipe.  We
-            #    therefore reassign sys.stdout/stderr to write through saved_fd
-            #    so that Logger screen output bypasses the pipe.
-            assert self._write_fd is not None
-            os.dup2(self._write_fd, self._target_fd)
+                # 4. Redirect target fd → write end of pipe.
+                #    Python's sys.stdout/stderr still point to their original file
+                #    objects, which internally hold the original fd number.  After
+                #    dup2, those file objects now also write into the pipe.  We
+                #    therefore reassign sys.stdout/stderr to write through saved_fd
+                #    so that Logger screen output bypasses the pipe.
+                assert self._write_fd is not None
+                os.dup2(self._write_fd, self._target_fd)
 
-            if self._target_fd == 1:
-                assert self._saved_fd is not None
-                self._py_stream = sys.stdout
-                sys.stdout = open(self._saved_fd, "w",
-                                  encoding=self._encoding, errors=self._errors,
-                                  closefd=False)  # closefd=False: we own saved_fd
-            else:
-                self._py_stream = sys.stderr
-                assert self._saved_fd is not None
-                sys.stderr = open(self._saved_fd, "w",
-                                  encoding=self._encoding, errors=self._errors,
-                                  closefd=False)
+                if self._target_fd == 1:
+                    assert self._saved_fd is not None
+                    self._py_stream = sys.stdout
+                    sys.stdout = open(self._saved_fd, "w",
+                                      encoding=self._encoding, errors=self._errors,
+                                      closefd=False)  # closefd=False: we own saved_fd
+                else:
+                    self._py_stream = sys.stderr
+                    assert self._saved_fd is not None
+                    sys.stderr = open(self._saved_fd, "w",
+                                      encoding=self._encoding, errors=self._errors,
+                                      closefd=False)
 
-            # 5. Start reader thread
-            self._thread = threading.Thread(
-                target=self._reader_loop,
-                name=f"FdCapture-fd{self._target_fd}",
-                daemon=True,
-            )
-            self._active = True
-            assert self._thread is not None
-            self._thread.start()
+                # 5. Start reader thread
+                self._thread = threading.Thread(
+                    target=self._reader_loop,
+                    name=f"FdCapture-fd{self._target_fd}",
+                    daemon=True,
+                )
+                self._active = True
+                assert self._thread is not None
+                self._thread.start()
+
+            except Exception:
+
+                # Undo whatever partially succeeded, in reverse order
+                if self._py_stream is not None:
+                    if self._target_fd == 1:
+                        sys.stdout = self._py_stream
+                    else:
+                        sys.stderr = self._py_stream
+                    self._py_stream = None
+                try:
+                    if self._saved_fd is not None:
+                        os.dup2(self._saved_fd, self._target_fd)  # restore the real fd first
+                except OSError:
+                    pass
+                for attr in ("_write_fd", "_read_fd", "_saved_fd"):
+                    fd = getattr(self, attr)
+                    if fd is not None:
+                        try:
+                            os.close(fd)
+                        except OSError:
+                            pass
+                        setattr(self, attr, None)
+                self._active = False
+                self._thread = None
+                raise
 
     def stop(self, timeout: float = 2.0) -> None:
         """Stop capturing and restore the original fd.  No-op if not active.
