@@ -60,6 +60,8 @@ class Node:
     AGENT = "agent"  # Artificial agent
     WORLD = "world"  # World agent
 
+    _closed = False  # Set by aclose, which must run once (class-level: no __init__ needed)
+
     def __init__(self,
                  hosted: Agent | World,
                  unaiverse_key: str | None = None,
@@ -224,7 +226,7 @@ class Node:
         self.run_start_time = 0.
 
         # Root server-related
-        self.root_endpoint = 'https://unaiverse.io/api'  # WARNING: EDITING THIS ADDRESS VIOLATES THE LICENSE
+        self.root_endpoint = 'https://unaiverse.io:8443/api'  # WARNING: EDITING THIS ADDRESS VIOLATES THE LICENSE
         self.node_token = ""
         self.public_key = ""
 
@@ -1206,8 +1208,14 @@ class Node:
             keep_rejoining = False
         self.keep_rejoining = keep_rejoining
 
+        async def _run_then_close():
+            try:
+                await self.run_async(*args, **kwargs)
+            finally:
+                await self.aclose()  # This entry point owns the whole node lifetime
+
         try:
-            asyncio.run(self.run_async(*args, **kwargs))
+            asyncio.run(_run_then_close())
         except KeyboardInterrupt:
             return  # CTRL+C
         except GenException:
@@ -1244,6 +1252,10 @@ class Node:
         # matplotlib/PyTorch/etc.
         self.stop_requested = False
         stop_requested_at = 0.0
+
+        # True only when the loop stops because the caller's cycle/time budget ran out,
+        # which is a pause and not a shutdown (see the finally at the end of this method)
+        budget_consumed = False
 
         def _request_stop() -> None:
             nonlocal stop_requested_at
@@ -1808,10 +1820,13 @@ class Node:
                     except Exception as e:
                         log.error(f"Error in step_callback: {e}")
 
-                # Stop conditions
+                # Stop conditions. Consuming a bounded budget is NOT the end of the node:
+                # the caller asked for that many cycles and decides what happens next.
                 if cycles is not None and ((clock.get_cycle() + 1) >= cycles):
+                    budget_consumed = True
                     break
                 if max_time is not None and (clock.get_time() - self.run_start_time) >= max_time:
+                    budget_consumed = True
                     break
 
         except KeyboardInterrupt:
@@ -1826,70 +1841,100 @@ class Node:
             log.critical(f"An error occurred: {e}")
 
         finally:
+
+            # Any exit other than a consumed budget (the loop ending, Ctrl+C, an error)
+            # is the end of this node, so shut it down here as always. When the budget
+            # was merely consumed the node has to stay usable: a caller stepping it one
+            # cycle at a time (NodeSynchronizer) would otherwise get a node that GOAWAYs
+            # every peer, drains its sessions and closes its hosts between one cycle and
+            # the next. Those callers own the lifetime and call aclose().
+            if not budget_consumed:
+                await self.aclose()
+
+    async def aclose(self) -> None:
+        """Shuts the node down: this is the point of no return, and it runs once.
+
+        Tells the root the node is gone, saves what has to survive, GOAWAYs every peer
+        and every Session, drains the farewell round-trips, closes the Go hosts (freeing
+        their instance slots, which a process embedding several Nodes would otherwise
+        run out of) and flushes the logger. Every step is guarded on its own: a failing
+        goodbye must not cost the drain, and a failing drain must not cost the close.
+
+        The order matters and is the reason this is not a plain sequence of calls: the
+        transports must die AFTER the goodbyes, or the peers only ever observe a
+        liveness timeout.
+        """
+        if self._closed:
+            return
+        self._closed = True
+
+        try:
+            self.send_alive(alive=False)
+        except Exception as e:
+            log.error(f"Error telling the node is not alive anymore: {e}")
+
+        try:
+            if Custom.SAVE_CHECKPOINT_EVERY > 0.:
+                log.user("Saving hosted agent state to disk...")
+                self.hosted.save()
+        except Exception as e:
+            log.error(f"Error saving hosted agent state: {e}")
+
+        try:
+            if self.node_type is Node.WORLD and self.world is not None:
+                log.user("Shutting down stats database...")
+                assert self.world.stats is not None
+                self.world.stats.shutdown()
+        except Exception as e:
+            log.error(f"Error closing database: {e}")
+
+        try:
+            if self.node_type is Node.AGENT:
+                assert self.agent is not None
+                if self.agent.in_world():
+                    await self.leave_world()
+        except Exception:
+            pass
+
+        # Per-peer try/except so one peer that raises during purge does not skip the
+        # GOAWAY for the others, nor the close_all_sessions sweep below.
+        try:
+            connected_peer_ids = list(self.hosted.all_agents.keys())
+        except Exception:
+            connected_peer_ids = []
+        for peer_id in connected_peer_ids:
             try:
-                self.send_alive(alive=False)
+                await self.__purge(peer_id, reason=WORLD_DISENGAGEMENT)
             except Exception as e:
-                log.error(f"Error telling the node is not alive anymore: {e}")
+                log.error(f"Error purging a peer on shutdown: {e}")
 
-            try:
-                if Custom.SAVE_CHECKPOINT_EVERY > 0.:
-                    log.user("Saving hosted agent state to disk...")
-                    self.hosted.save()
-            except Exception as e:
-                log.error(f"Error saving hosted agent state: {e}")
+        try:
+            # GOAWAY any Session not covered by the per-peer leave above.
+            await self.conn.close_all_sessions()
+        except Exception as e:
+            log.error(f"Error closing all sessions on shutdown: {e}")
 
-            try:
-                if self.node_type is Node.WORLD and self.world is not None:
-                    log.user("Shutting down stats database...")
-                    assert self.world.stats is not None
-                    self.world.stats.shutdown()
-            except Exception as e:
-                log.error(f"Error closing database: {e}")
+        try:
+            # Drain the farewell round-trips: pump the session traffic until every
+            # GOAWAY got its ACK (or aborted) and the settlement cuts executed, so
+            # the transports die AFTER the goodbyes, not under them. Without this
+            # the process exits with the GOAWAYs still queued in the local muxer
+            # and the peers only ever observe a liveness timeout.
+            await self.conn.drain_teardown(budget_s=3.0)
+        except Exception as e:
+            log.error(f"Error draining the session teardown on shutdown: {e}")
 
-            try:
-                if self.node_type is Node.AGENT:
-                    assert self.agent is not None
-                    if self.agent.in_world():
-                        await self.leave_world()
-            except Exception:
-                pass
+        try:
+            # Close the Go hosts (frees their slots for processes embedding
+            # several Nodes); nothing else runs on the transports after the drain.
+            self.conn.close_transports()
+        except Exception as e:
+            log.error(f"Error closing the transports on shutdown: {e}")
 
-            finally:
-                # Per-peer try/except so one peer that raises during purge does not skip the
-                # GOAWAY for the others, nor the close_all_sessions sweep below.
-                try:
-                    connected_peer_ids = list(self.hosted.all_agents.keys())
-                except Exception:
-                    connected_peer_ids = []
-                for peer_id in connected_peer_ids:
-                    try:
-                        await self.__purge(peer_id, reason=WORLD_DISENGAGEMENT)
-                    except Exception as e:
-                        log.error(f"Error purging a peer on shutdown: {e}")
-                try:
-                    # GOAWAY any Session not covered by the per-peer leave above.
-                    await self.conn.close_all_sessions()
-                except Exception as e:
-                    log.error(f"Error closing all sessions on shutdown: {e}")
-                try:
-                    # Drain the farewell round-trips: pump the session traffic until every
-                    # GOAWAY got its ACK (or aborted) and the settlement cuts executed, so
-                    # the transports die AFTER the goodbyes, not under them. Without this
-                    # the process exits with the GOAWAYs still queued in the local muxer
-                    # and the peers only ever observe a liveness timeout.
-                    await self.conn.drain_teardown(budget_s=3.0)
-                except Exception as e:
-                    log.error(f"Error draining the session teardown on shutdown: {e}")
-                try:
-                    # Close the Go hosts (frees their slots for processes embedding
-                    # several Nodes); nothing else runs on the transports after the drain.
-                    self.conn.close_transports()
-                except Exception as e:
-                    log.error(f"Error closing the transports on shutdown: {e}")
-                try:
-                    log.close()  # Closing logger (asserts on a stdout-only logger)
-                except Exception:
-                    pass
+        try:
+            log.close()  # Closing logger (asserts on a stdout-only logger)
+        except Exception:
+            pass
 
     async def __handle_network_connections(self) -> None:
         """Manages new and lost network connections. (async)"""
@@ -3668,3 +3713,10 @@ class NodeSynchronizer:
                     break
         except KeyboardInterrupt:
             pass
+        finally:
+
+            # The synchronizer drives each node one cycle at a time, so it is the only
+            # one that knows when they are done: shut them down here (world last, as the
+            # agents still GOAWAY it while leaving).
+            for node in reversed(self.nodes):
+                await node.aclose()
