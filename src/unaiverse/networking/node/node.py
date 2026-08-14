@@ -229,6 +229,7 @@ class Node:
         self.root_endpoint = 'https://unaiverse.io:8443/api'  # WARNING: EDITING THIS ADDRESS VIOLATES THE LICENSE
         self.node_token = ""
         self.public_key = ""
+        self.turn_info = None  # TURN credentials from the node token, see inject_turn_credentials
 
         # Attributes: handshake-related. The legacy interview / ack / ping-pong
         # structures are gone — the per-peer Session FSM (SessionManager) now owns
@@ -276,27 +277,6 @@ class Node:
                     if self.world_masters_node_ids is None:
                         self.world_masters_node_ids = set()
                     self.world_masters_node_ids.add(master_node_id)
-        
-        # Get profile (static)
-        profile_static = self.__root(api="/account/node/profile/static/get", payload={"node_id": self.node_id})
-        if not isinstance(profile_static, dict):
-            log.critical(f"Unexpected static-profile payload from the root server: {profile_static}")
-
-        # Getting list of allowed nodes from the static profile,
-        # if we did not already specify it when creating the node in the code (the code has higher priority)
-        if (self.allowed_node_ids is None and 'allowed_node_ids' in profile_static and
-                profile_static['allowed_node_ids'] is not None and len(profile_static['allowed_node_ids']) > 0):
-            self.allowed_node_ids = set(profile_static['allowed_node_ids'])
-
-        # Getting list of world master nodes from the static profile,
-        # if we did not already specify it when creating the node in the code (the code has higher priority)
-        if self.node_type is Node.WORLD:
-            if (self.world_masters_node_ids is None and 'world_masters_node_ids' in profile_static and
-                    profile_static['world_masters_node_ids'] is not None
-                    and len(profile_static['world_masters_node_ids']) > 0):
-                self.world_masters_node_ids = set(profile_static['world_masters_node_ids'])
-        else:
-            self.world_masters_node_ids = None  # Clearing this in case the user specified it for a non-world node
 
         # Here you can set up max_instances, max_channels, enable_logging at libp2p level etc.
         P2P.setup_library(enable_logging=Custom.LIBP2PLOG, unai_logger=log)
@@ -359,16 +339,6 @@ class Node:
                 # Store the exception if creation fails
                 results[name] = _e
             return True
-        
-        # Creating the connection manager
-        # guessing max number of connections (max number of valid
-        # the connection manager will ensure that this limit is fulfilled)
-        # however, the actual number of connection attempts handled by libp2p must be higher that
-        self.conn = NodeConn(max_connections=profile_static['max_nr_connections'],
-                                is_world_node=self.node_type is Node.WORLD,
-                                public_key=self.public_key,
-                                token=self.node_token,
-                                local_node_id=self.node_id)
 
         # 4. Create and start both threads
         thread_u = threading.Thread(target=create_p2p_instance, args=("p2p_u", p2p_u_config))
@@ -397,12 +367,46 @@ class Node:
         if p2p_u.peer_id is None or p2p_w.peer_id is None:
             raise P2PError("P2P node creation did not correctly complete.")
 
-        # Get first node token
+        # Get first node token. This is the first root call that can succeed: it is the
+        # only one that bootstraps on the account key (see _request_node_token), while
+        # every other route wants a node token we do not have yet. It needs the peer-ids,
+        # which is why it waits for the transports.
         public_peer_id = p2p_u.peer_id
         private_peer_id = p2p_w.peer_id
         assert public_peer_id is not None
         assert private_peer_id is not None
         self.get_node_token(peer_ids=[public_peer_id, private_peer_id])  # Passing both the peer IDs
+
+        # Get profile (static), authenticated by the token we just stored
+        profile_static = self.__root(api="/account/node/profile/static/get", payload={"node_id": self.node_id})
+        if not isinstance(profile_static, dict):
+            log.critical(f"Unexpected static-profile payload from the root server: {profile_static}")
+
+        # Getting list of allowed nodes from the static profile,
+        # if we did not already specify it when creating the node in the code (the code has higher priority)
+        if (self.allowed_node_ids is None and 'allowed_node_ids' in profile_static and
+                profile_static['allowed_node_ids'] is not None and len(profile_static['allowed_node_ids']) > 0):
+            self.allowed_node_ids = set(profile_static['allowed_node_ids'])
+
+        # Getting list of world master nodes from the static profile,
+        # if we did not already specify it when creating the node in the code (the code has higher priority)
+        if self.node_type is Node.WORLD:
+            if (self.world_masters_node_ids is None and 'world_masters_node_ids' in profile_static and
+                    profile_static['world_masters_node_ids'] is not None
+                    and len(profile_static['world_masters_node_ids']) > 0):
+                self.world_masters_node_ids = set(profile_static['world_masters_node_ids'])
+        else:
+            self.world_masters_node_ids = None  # Clearing this in case the user specified it for a non-world node
+
+        # Creating the connection manager
+        # guessing max number of connections (max number of valid
+        # the connection manager will ensure that this limit is fulfilled)
+        # however, the actual number of connection attempts handled by libp2p must be higher that
+        self.conn = NodeConn(max_connections=profile_static['max_nr_connections'],
+                             is_world_node=self.node_type is Node.WORLD,
+                             public_key=self.public_key,
+                             token=self.node_token,
+                             local_node_id=self.node_id)
 
         # Get first badge token
         if self.node_type is Node.WORLD:
@@ -429,6 +433,12 @@ class Node:
             decision_hook=lambda *a: self._decision_policy(*a),
             token_factory=lambda: self.node_token,
         )
+
+        # The managers exist now, so the TURN credentials that arrived with the token can
+        # finally reach the two transports. This is the one point in the boot where that
+        # is possible: earlier there is nothing to inject into, later the instances would
+        # already be dialling without them.
+        self.inject_turn_credentials()
 
         # Get CV
         cv = self.get_cv()
@@ -622,25 +632,48 @@ class Node:
 
     def _apply_node_token(self, response: dict) -> None:
         """Apply a freshly fetched node token. Main-task only: mutates self and pushes the
-        token into the transport via FFI, so it must not run concurrently with the loop."""
+        token into the transport via FFI, so it must not run concurrently with the loop.
+
+        Storing the token and injecting the TURN credentials are deliberately two steps.
+        The credentials ride the token, but they can only reach a transport through the
+        SessionManagers, which are built last (attach_session_policy), while the token
+        itself is needed immediately: the static profile is fetched with it, and NodeConn
+        is constructed around it. So this stores what it can and remembers the rest for
+        inject_turn_credentials(), which the boot sequence calls once the managers exist.
+        On the periodic refresh both already exist, and the injection happens right here.
+        """
         self.node_token = response["token"]
         self.public_key = response["public_key"]
+        self.turn_info = response.get("turn_info", None)
 
-        # Sharing the token with the connection manager
-        if hasattr(self, 'conn') and self.conn is not None:
+        # Sharing the token with the connection manager (absent this early at boot)
+        if getattr(self, 'conn', None) is not None:
             self.conn.set_token(self.node_token)
+            self.inject_turn_credentials()
 
-            # TURN-related information: push the credentials through the Coordinator
-            # (Node -> NodeConn -> SM -> P2P), which fans them out to both instances. The
-            # raw transport handles stay custody-only behind the SMs.
-            turn_info = response.get("turn_info", None)
-            if turn_info is not None:
-                turn_info: dict
-                self.conn.set_turn_credentials(ice_turn_servers=[{
-                    "urls": turn_info["urls"],
-                    "username": turn_info["username"],
-                    "credential": turn_info["credential"],
-                }])
+    def inject_turn_credentials(self) -> None:
+        """Hand the TURN credentials that came with the node token to both transports.
+
+        Goes through the Coordinator (Node -> NodeConn -> SM -> P2P), which fans them out:
+        the raw transport handles stay custody-only behind the SessionManagers, so this
+        must not run before attach_session_policy has built them.
+
+        A no-op when the root sent no turn_info, which is the normal case for a deployment
+        that runs no TURN server: the node then relies on STUN and the relays alone. That
+        silence is the reason the precondition below is an assert and not another quiet
+        return: called too early it would look exactly like "no TURN configured", and a
+        node running without TURN only shows up much later, as one pair of peers behind
+        symmetric NATs failing to connect.
+        """
+        assert getattr(self, 'conn', None) is not None, \
+            "inject_turn_credentials() runs after attach_session_policy: nothing to inject into yet"
+        if self.turn_info is None:
+            return
+        self.conn.set_turn_credentials(ice_turn_servers=[{
+            "urls": self.turn_info["urls"],
+            "username": self.turn_info["username"],
+            "credential": self.turn_info["credential"],
+        }])
 
     def get_cv(self) -> list[dict]:
         """Retrieves the node's CV (Curriculum Vitae) from the root server.
