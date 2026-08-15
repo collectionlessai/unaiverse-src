@@ -1475,6 +1475,7 @@ class FeatherlessAPI(ModuleWrapper):
                  top_p: float = -1., top_k: int = -1, frequency_penalty: float | None = None,
                  presence_penalty: float | None = None, repetition_penalty: float | None = None,
                  min_p: float | None = None, sampler: dict | None = None, connect_timeout: float = 15.0,
+                 api_key: str | None = None, key_units: int | None = None,
                  *args, **kwargs):
         """Create a FeatherlessAPI handle and connect it to the shared gateway.
 
@@ -1493,6 +1494,11 @@ class FeatherlessAPI(ModuleWrapper):
             min_p: Minimum-probability cutoff, a vLLM/Featherless extension (None uses the default) (Default: None).
             sampler: Extra sampler params merged last (its keys win); use it for any knob not covered above.
             connect_timeout: Maximum seconds to wait for the gateway server to come up (Default: 15.0).
+            api_key: The Featherless API key (account) charged for every call; None falls back to the
+                FEATHERLESS_API_KEY environment variable (Default: None).
+            key_units: The total unit budget supported by the account of ``api_key``; None falls back to the
+                FEATHERLESS_KEY_UNITS environment variable (the gateway sizes each account's budget on first sight of
+                its key, later mismatching declarations are ignored) (Default: None).
         """
         if cost not in APIGatewayServer.VALID_COSTS:
             log.critical(f"Invalid cost {cost}: it must be one of {APIGatewayServer.VALID_COSTS}")
@@ -1510,6 +1516,15 @@ class FeatherlessAPI(ModuleWrapper):
                 self.model_name: str | None = model
                 self.cost: int = cost
                 self.system_prompt: str = system_prompt
+
+                # Account: the API key charged for every call and the total unit budget of that account. Both travel
+                # with each request, so the gateway can keep per-key queues/budgets whatever process spawned it
+                self.api_key: str = api_key or os.environ.get("FEATHERLESS_API_KEY", "")
+                self.key_units: int = key_units if key_units is not None else (
+                    int(os.environ.get("FEATHERLESS_KEY_UNITS", "8")))
+                if not self.api_key:
+                    log.critical("No API key: the api_key argument was not given "
+                                 "and FEATHERLESS_API_KEY was not set!")
 
                 # Per-call sampler: include each knob only when explicitly set, so unset ones fall back
                 # to the API default. The free-form `sampler` arg is merged last and overrides.
@@ -1552,7 +1567,8 @@ class FeatherlessAPI(ModuleWrapper):
                 msg = json.dumps({"op": "generate", "process_id": self.process_id,
                                   "sys_prompt": self.system_prompt, "prompt": prompt,
                                   "cost": self.cost, "model": self.model_name,
-                                  "sampler": self.sampler}) + "\n"
+                                  "sampler": self.sampler, "api_key": self.api_key,
+                                  "key_units": self.key_units}) + "\n"
                 self._req.sendall(msg.encode())
                 line = self._rf.readline()
                 if not line:
