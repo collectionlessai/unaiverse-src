@@ -27,6 +27,7 @@ from PIL import Image
 from typing import Callable
 from unaiverse.utils.logger import log
 from torch.utils.data import DataLoader
+from datetime import datetime, timezone
 from unaiverse.custom import GenException
 from torchvision import datasets, transforms
 from unaiverse.streams.dataprops import StreamType
@@ -1250,10 +1251,22 @@ async def featherless_call(sys_prompt: str, prompt: str, sampler: dict | None = 
     extra_body = {k: v for k, v in sampler.items() if k not in OPENAI_NATIVE_SAMPLER_PARAMS}
     native = {k: v for k, v in sampler.items() if k in OPENAI_NATIVE_SAMPLER_PARAMS}
 
+    def _account_log(row_to_add: str) -> None:
+        """Append a row to the per-account usage log, if the flag file enables it (crash-durable append)."""
+        flag_file = os.path.expanduser("~/DO_LOG_FEATHERLESS_AI")
+        if os.path.exists(flag_file):
+            file_path = os.path.join(os.path.expanduser("~"), f"featherless_ai_account_{(api_key or 'env')[-6:]}.log")
+            with open(file_path, "a") as f:
+                f.write(row_to_add + " \n")
+                f.flush()  # Flushes Python's internal buffer to OS buffer
+                os.fsync(f.fileno())  # Forces OS buffer to write to physical storage
+
     # Retry with exponential backoff, keeping the last error so a final failure reports its cause
     last_err = None
 
     for attempt in range(3):
+        current_time = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        t0 = time.perf_counter()
         try:
             # Always use chat completions; include the system message only when a system prompt is given
             msgs = [{"role": "system", "content": sys_prompt}] if sys_prompt else []
@@ -1264,7 +1277,6 @@ async def featherless_call(sys_prompt: str, prompt: str, sampler: dict | None = 
             if extra_body:
                 kwargs["extra_body"] = extra_body
 
-            t0 = time.perf_counter()
             resp = await client.chat.completions.create(**kwargs)  # type: ignore
             elapsed = time.perf_counter() - t0
 
@@ -1274,9 +1286,10 @@ async def featherless_call(sys_prompt: str, prompt: str, sampler: dict | None = 
             c_toks = getattr(usage, "completion_tokens", 0)
             finish_reason = resp.choices[0].finish_reason if resp.choices else "n/a"
             tps = f"{c_toks / elapsed:.1f}" if (c_toks and elapsed > 0) else "n/a"
-            log.user(f"[featherless_call] model={model} finish_reason={finish_reason} "
-                     f"completion_tokens={c_toks if c_toks is not None else 'n/a'} "
-                     f"elapsed={elapsed:.2f}s tokens/sec={tps}")
+
+            _account_log(f"{current_time} model={model} finish_reason={finish_reason} "
+                         f"completion_tokens={c_toks if c_toks is not None else 'n/a'} "
+                         f"elapsed={elapsed:.2f}s tokens/sec={tps}")
 
             # Return the first choice that carries non-empty text (content may be None)
             for choice in resp.choices:
@@ -1289,6 +1302,9 @@ async def featherless_call(sys_prompt: str, prompt: str, sampler: dict | None = 
             last_err = RuntimeError(f"Empty content from model (finish_reason={finish})")
         except Exception as e:
             last_err = e
+            elapsed = time.perf_counter() - t0
+            _account_log(f"{current_time} model={model} FAILED attempt={attempt + 1} "
+                         f"elapsed={elapsed:.2f}s error={e!r}")
 
         # Retry on either an exception or empty content
         log.error(f"Empty response or exception! (prompt={prompt}, attempt={attempt + 1}, last_err={last_err!r}), "
