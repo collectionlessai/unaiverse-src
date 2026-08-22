@@ -650,22 +650,6 @@ class Node:
         except Exception as e:
             log.error(f"Error while posting the world role FSMs to the root server [{e}]")
 
-        if self.code_repo is None and self.code_commit is None:
-            # A declaration left on the server by a previous run would still mint its
-            # digest into the fresh token and fail every join against today's bundle:
-            # clear it (idempotent, a no-op for a world that never declared)
-            try:
-                self.__root(api="/account/node/code/source/clear",
-                            payload={"node_id": self.node_id,
-                                     "caller_node_id": self.node_id,
-                                     "caller_node_token": self.node_token})
-                log.misc("No code_repo/code_commit configured: this world runs unpublished "
-                         "(no attested code hash, joins work as usual)")
-            except RootServerError as e:
-                log.error(f"Could not clear the world-source declaration [{e}]: if a previous "
-                          "run declared one, its stale attested digest will make every join fail")
-            return
-
         if self.code_repo is None or self.code_commit is None:
             # Exactly one of the two is set: a declaration was clearly requested, and
             # silently running unpublished would defeat the author's intent
