@@ -650,75 +650,78 @@ class Node:
         except Exception as e:
             log.error(f"Error while posting the world role FSMs to the root server [{e}]")
 
-        if self.code_repo is None or self.code_commit is None:
-            # Exactly one of the two is set: a declaration was clearly requested, and
-            # silently running unpublished would defeat the author's intent
-            missing = "code_commit" if self.code_commit is None else "code_repo"
-            msg = (f"A world-source declaration was requested but {missing} is missing: "
-                   f"pass both code_repo and code_commit, or neither")
-            log.error(msg)
-            raise GenException(msg)
+        # If there is no code repo and no code commit, we do not touch what is already there
+        # (maybe it was set by the GUI).
+        if self.code_repo is not None or self.code_commit is not None:
+            if self.code_repo is None or self.code_commit is None:
+                # Exactly one of the two is set: a declaration was clearly requested, and
+                # silently running unpublished would defeat the author's intent
+                missing = "code_commit" if self.code_commit is None else "code_repo"
+                msg = (f"A world-source declaration was requested but {missing} is missing: "
+                       f"pass both code_repo and code_commit, or neither")
+                log.error(msg)
+                raise GenException(msg)
 
-        # Operator-facing hints for the refusal discriminators of code/source/set:
-        # each is a distinct author mistake, and the message should say what to fix
-        hints = {
-            "commit_invalid": "declare the full 40-character commit id (not a branch, not a tag)",
-            "commit_unreachable": "the commit is not reachable on GitHub: push it, and make sure "
-                                  "the repository is publicly readable without credentials",
-            "repo_no_bundle": "the repository must carry the canonical layout at its root: code/ "
-                              "for the shipped sources and fsm/ for the role FSMs",
-            "repo_bad_member": "only plain files are allowed inside code/ and fsm/ "
-                               "(no symlinks, no submodules)",
-            "repo_too_large": "the repository exceeds the server limits on the code/ and fsm/ trees",
-            "repo_unavailable": "the API host has no git available to read repositories",
-            "repo_timeout": "the server timed out reading the repository: try again later",
-        }
+            # Operator-facing hints for the refusal discriminators of code/source/set:
+            # each is a distinct author mistake, and the message should say what to fix
+            hints = {
+                "commit_invalid": "declare the full 40-character commit id (not a branch, not a tag)",
+                "commit_unreachable": "the commit is not reachable on GitHub: push it, and make sure "
+                                      "the repository is publicly readable without credentials",
+                "repo_no_bundle": "the repository must carry the canonical layout at its root: code/ "
+                                  "for the shipped sources and fsm/ for the role FSMs",
+                "repo_bad_member": "only plain files are allowed inside code/ and fsm/ "
+                                   "(no symlinks, no submodules)",
+                "repo_too_large": "the repository exceeds the server limits on the code/ and fsm/ trees",
+                "repo_unavailable": "the API host has no git available to read repositories",
+                "repo_timeout": "the server timed out reading the repository: try again later",
+            }
 
-        ret = None
-        for i in range(0, 3):  # Retrying transport failures (and server-side git timeouts) only
-            try:
-                # The caller_* pair is what authenticates this call (the node_token that
-                # __root injects is not read by this endpoint's decorator)
-                ret = self.__root(api="/account/node/code/source/set",
-                                  payload={"node_id": self.node_id,
-                                           "caller_node_id": self.node_id,
-                                           "caller_node_token": self.node_token,
-                                           "repo": self.code_repo,
-                                           "commit_sha": self.code_commit})
-                break
-            except RootServerError as e:
-                if e.api_rejected and e.data_code == "repo_timeout" and i < 2:
-                    # The one transient refusal: the server's git read timed out
-                    log.error("The root server timed out reading the repository, retrying...")
-                    time.sleep(1)
-                    continue
-                if e.api_rejected:
-                    hint = hints.get(e.data_code)
-                    log.error(f"The root server refused the world-source declaration of "
-                              f"'{self.code_repo}' @ {self.code_commit}"
-                              + (f": {hint}" if hint else f" [{e}]"))
-                    raise
-                log.error(f"Error while declaring the world source to the root server [{e}]")
-                if i < 2:
-                    log.misc("Retrying...")
-                    time.sleep(1)  # Wait a little bit
-                else:
-                    raise
+            ret = None
+            for i in range(0, 3):  # Retrying transport failures (and server-side git timeouts) only
+                try:
+                    # The caller_* pair is what authenticates this call (the node_token that
+                    # __root injects is not read by this endpoint's decorator)
+                    ret = self.__root(api="/account/node/code/source/set",
+                                      payload={"node_id": self.node_id,
+                                               "caller_node_id": self.node_id,
+                                               "caller_node_token": self.node_token,
+                                               "repo": self.code_repo,
+                                               "commit_sha": self.code_commit})
+                    break
+                except RootServerError as e:
+                    if e.api_rejected and e.data_code == "repo_timeout" and i < 2:
+                        # The one transient refusal: the server's git read timed out
+                        log.error("The root server timed out reading the repository, retrying...")
+                        time.sleep(1)
+                        continue
+                    if e.api_rejected:
+                        hint = hints.get(e.data_code)
+                        log.error(f"The root server refused the world-source declaration of "
+                                  f"'{self.code_repo}' @ {self.code_commit}"
+                                  + (f": {hint}" if hint else f" [{e}]"))
+                        raise
+                    log.error(f"Error while declaring the world source to the root server [{e}]")
+                    if i < 2:
+                        log.misc("Retrying...")
+                        time.sleep(1)  # Wait a little bit
+                    else:
+                        raise
 
-        # The root folded the repository, while this world will hand out the grant
-        # bundle: the two must be byte-identical, or the joiner's fail-closed gate
-        # refuses every join. Refuse to start instead, here, where the author can fix it.
-        local_hash = canonical_world_hash(
-            world_definition_members(unpack_py_files(self.world.packed_agent_files),
-                                     self.world.role_to_behav))
-        stored_hash = ret.get("hash") if isinstance(ret, dict) else None
-        if stored_hash != local_hash:
-            msg = (f"The declared repository does not match the code this world is about to "
-                   f"hand out (root attested {stored_hash}, the local bundle folds to "
-                   f"{local_hash}): commit and push, then declare that commit")
-            log.error(msg)
-            raise GenException(msg)
-        log.misc(f"World source declared and attested by the root server (hash: {local_hash})")
+            # The root folded the repository, while this world will hand out the grant
+            # bundle: the two must be byte-identical, or the joiner's fail-closed gate
+            # refuses every join. Refuse to start instead, here, where the author can fix it.
+            local_hash = canonical_world_hash(
+                world_definition_members(unpack_py_files(self.world.packed_agent_files),
+                                         self.world.role_to_behav))
+            stored_hash = ret.get("hash") if isinstance(ret, dict) else None
+            if stored_hash != local_hash:
+                msg = (f"The declared repository does not match the code this world is about to "
+                       f"hand out (root attested {stored_hash}, the local bundle folds to "
+                       f"{local_hash}): commit and push, then declare that commit")
+                log.error(msg)
+                raise GenException(msg)
+            log.misc(f"World source declared and attested by the root server (hash: {local_hash})")
 
     def get_cv(self) -> list[dict]:
         """Retrieves the node's CV (Curriculum Vitae) from the root server.
