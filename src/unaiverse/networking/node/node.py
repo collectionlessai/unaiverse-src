@@ -35,6 +35,7 @@ from unaiverse.agent import Agent
 from collections.abc import Callable
 from datetime import datetime, timezone
 from unaiverse.networking.p2p.messages import Msg
+from unaiverse.uai import has_fence, to_model_text
 from unaiverse.custom import Custom, GenException, RootServerError
 from unaiverse.networking.p2p import P2P, P2PError
 from unaiverse.networking.node.connpool import NodeConn
@@ -2319,7 +2320,10 @@ class Node:
                                 if data is None:
                                     continue
                                 if stream_obj.props.is_text():
-                                    msg = data  # Getting message
+
+                                    # A human at the terminal reads what a model reads: the alternative text
+                                    # of a protocol block, never its JSON (the stream keeps the raw message)
+                                    msg = to_model_text(data) if has_fence(data) else data  # Getting message
                                     msg = "\n   ｜".join([line[i:i + 120] for line in msg.splitlines()
                                                          for i in range(0, len(line), 120)])
                                     log.user(f"\n💬 [{owner_account}/{agent_name}.{group}.{name}]\n   ｜{msg}")
