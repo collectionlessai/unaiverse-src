@@ -1,0 +1,952 @@
+{
+  "suite": "blocks",
+  "cases": [
+    {
+      "id": "prose-only",
+      "op": "parse",
+      "input": {
+        "text": "Ciao, come va?"
+      },
+      "expect": {
+        "parts": [
+          {
+            "type": "text",
+            "text": "Ciao, come va?"
+          }
+        ]
+      }
+    },
+    {
+      "id": "empty",
+      "op": "parse",
+      "input": {
+        "text": ""
+      },
+      "expect": {
+        "parts": []
+      }
+    },
+    {
+      "id": "prose-media-prose",
+      "op": "parse",
+      "input": {
+        "text": "Guarda qui:\n\n```uai\n{\"v\":1,\"type\":\"media\",\"src\":\"https://cdn.example.org/a.jpg\",\"mime\":\"image/jpeg\",\"alt\":\"[foto] un gatto\"}\n```\n\nCarino, no?"
+      },
+      "expect": {
+        "parts": [
+          {
+            "type": "text",
+            "text": "Guarda qui:"
+          },
+          {
+            "type": "media",
+            "alt": "[foto] un gatto",
+            "spec": {
+              "v": 1,
+              "type": "media",
+              "src": "https://cdn.example.org/a.jpg",
+              "mime": "image/jpeg",
+              "alt": "[foto] un gatto"
+            }
+          },
+          {
+            "type": "text",
+            "text": "Carino, no?"
+          }
+        ]
+      }
+    },
+    {
+      "id": "fence-with-spaces-and-four-ticks",
+      "op": "parse",
+      "input": {
+        "text": "````  uai  \n{\"v\":1,\"type\":\"x-demo\",\"alt\":\"demo\"}\n````"
+      },
+      "expect": {
+        "parts": [
+          {
+            "type": "x",
+            "alt": "demo",
+            "spec": {
+              "type": "x-demo"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "unterminated-fence-is-prose",
+      "op": "parse",
+      "input": {
+        "text": "```uai\n{\"v\":1,\"type\":\"media\"}"
+      },
+      "expect": {
+        "parts": [
+          {
+            "type": "text",
+            "text": "```uai\n{\"v\":1,\"type\":\"media\"}"
+          }
+        ]
+      }
+    },
+    {
+      "id": "tilde-fence-is-prose",
+      "op": "parse",
+      "input": {
+        "text": "~~~uai\n{\"v\":1,\"type\":\"x-a\",\"alt\":\"a\"}\n~~~"
+      },
+      "expect": {
+        "parts": [
+          {
+            "type": "text",
+            "text": "~~~uai\n{\"v\":1,\"type\":\"x-a\",\"alt\":\"a\"}\n~~~"
+          }
+        ]
+      }
+    },
+    {
+      "id": "other-code-fence-untouched",
+      "op": "parse",
+      "input": {
+        "text": "```js\nconsole.log(1)\n```"
+      },
+      "expect": {
+        "parts": [
+          {
+            "type": "text",
+            "text": "```js\nconsole.log(1)\n```"
+          }
+        ]
+      }
+    },
+    {
+      "id": "json-invalid-degrades-raw",
+      "op": "parse",
+      "input": {
+        "text": "```uai\n{not json\n```"
+      },
+      "expect": {
+        "parts": [
+          {
+            "type": "text",
+            "text": "{not json",
+            "degraded": true,
+            "errors": [
+              "json_invalid"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "alt-missing-degrades-raw",
+      "op": "parse",
+      "input": {
+        "text": "```uai\n{\"v\":1,\"type\":\"media\",\"src\":\"https://a.b/c.png\",\"mime\":\"image/png\"}\n```"
+      },
+      "expect": {
+        "parts": [
+          {
+            "type": "text",
+            "text": "{\"v\":1,\"type\":\"media\",\"src\":\"https://a.b/c.png\",\"mime\":\"image/png\"}",
+            "degraded": true,
+            "errors": [
+              "alt_missing"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "block-over-8kb-degrades-raw-truncated",
+      "op": "parse",
+      "input": {
+        "text": "```uai\n{\"v\":1,\"type\":\"x-big\",\"alt\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}\n```"
+      },
+      "expect": {
+        "parts": [
+          {
+            "type": "text",
+            "text": "{\"v\":1,\"type\":\"x-big\",\"alt\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "degraded": true,
+            "errors": [
+              "too_large"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "alt-empty-degrades-raw",
+      "op": "parse",
+      "input": {
+        "text": "```uai\n{\"v\":1,\"type\":\"x-a\",\"alt\":\"  \"}\n```"
+      },
+      "expect": {
+        "parts": [
+          {
+            "type": "text",
+            "degraded": true,
+            "errors": [
+              "alt_missing"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "unknown-type-degrades-alt",
+      "op": "parse",
+      "input": {
+        "text": "```uai\n{\"v\":1,\"type\":\"hologram\",\"alt\":\"[ologramma] un cubo\"}\n```"
+      },
+      "expect": {
+        "parts": [
+          {
+            "type": "text",
+            "text": "[ologramma] un cubo",
+            "degraded": true,
+            "errors": [
+              "type_unknown"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "x-block-renders-alt-not-answerable",
+      "op": "parse",
+      "input": {
+        "text": "```uai\n{\"v\":1,\"type\":\"x-poll3d\",\"alt\":\"[esperimento] sondaggio 3D\",\"payload\":{\"a\":1}}\n```"
+      },
+      "expect": {
+        "parts": [
+          {
+            "type": "x",
+            "alt": "[esperimento] sondaggio 3D",
+            "spec": {
+              "v": 1,
+              "type": "x-poll3d",
+              "alt": "[esperimento] sondaggio 3D"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "future-version-degrades-alt",
+      "op": "parse",
+      "input": {
+        "text": "```uai\n{\"v\":2,\"type\":\"media\",\"src\":\"https://a.b/c.png\",\"mime\":\"image/png\",\"alt\":\"[foto] c\"}\n```"
+      },
+      "expect": {
+        "parts": [
+          {
+            "type": "text",
+            "text": "[foto] c",
+            "degraded": true,
+            "errors": [
+              "v_unsupported"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "v-missing-degrades-alt",
+      "op": "parse",
+      "input": {
+        "text": "```uai\n{\"type\":\"media\",\"src\":\"https://a.b/c.png\",\"mime\":\"image/png\",\"alt\":\"[foto] c\"}\n```"
+      },
+      "expect": {
+        "parts": [
+          {
+            "type": "text",
+            "text": "[foto] c",
+            "degraded": true,
+            "errors": [
+              "v_missing"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "media-src-http-invalid",
+      "op": "parse",
+      "input": {
+        "text": "```uai\n{\"v\":1,\"type\":\"media\",\"src\":\"http://a.b/c.png\",\"mime\":\"image/png\",\"alt\":\"[foto] c\"}\n```"
+      },
+      "expect": {
+        "parts": [
+          {
+            "type": "text",
+            "text": "[foto] c",
+            "degraded": true,
+            "errors": [
+              "src_invalid"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "media-src-javascript-invalid",
+      "op": "parse",
+      "input": {
+        "text": "```uai\n{\"v\":1,\"type\":\"media\",\"src\":\"javascript:alert(1)\",\"mime\":\"image/png\",\"alt\":\"[foto] c\"}\n```"
+      },
+      "expect": {
+        "parts": [
+          {
+            "type": "text",
+            "text": "[foto] c",
+            "degraded": true,
+            "errors": [
+              "src_invalid"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "media-poster-data-uri-invalid",
+      "op": "parse",
+      "input": {
+        "text": "```uai\n{\"v\":1,\"type\":\"media\",\"src\":\"https://youtu.be/xyz\",\"mime\":\"video/youtube\",\"poster\":\"data:text/html,<b>x</b>\",\"alt\":\"[video] demo\"}\n```"
+      },
+      "expect": {
+        "parts": [
+          {
+            "type": "text",
+            "text": "[video] demo",
+            "degraded": true,
+            "errors": [
+              "poster_invalid"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "media-full",
+      "op": "parse",
+      "input": {
+        "text": "```uai\n{\"v\":1,\"type\":\"media\",\"src\":\"https://youtu.be/xyz\",\"mime\":\"video/youtube\",\"title\":\"Demo del prodotto\",\"poster\":\"https://cdn.example.org/poster.jpg\",\"alt\":\"[video] Demo del prodotto, 3 minuti e 20\"}\n```"
+      },
+      "expect": {
+        "parts": [
+          {
+            "type": "media",
+            "spec": {
+              "src": "https://youtu.be/xyz",
+              "mime": "video/youtube",
+              "title": "Demo del prodotto",
+              "poster": "https://cdn.example.org/poster.jpg"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "data-bar",
+      "op": "parse",
+      "input": {
+        "text": "```uai\n{\"v\":1,\"type\":\"data\",\"chart\":\"bar\",\"series\":[{\"label\":\"Vendite\",\"points\":[[\"gen\",120],[\"feb\",340],[\"mar\",210]]}],\"alt\":\"Vendite Q1: gennaio 120, febbraio 340, marzo 210.\"}\n```"
+      },
+      "expect": {
+        "parts": [
+          {
+            "type": "data",
+            "spec": {
+              "chart": "bar",
+              "series": [
+                {
+                  "label": "Vendite",
+                  "points": [
+                    [
+                      "gen",
+                      120
+                    ],
+                    [
+                      "feb",
+                      340
+                    ],
+                    [
+                      "mar",
+                      210
+                    ]
+                  ]
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "data-config-dropped",
+      "op": "parse",
+      "input": {
+        "text": "```uai\n{\"v\":1,\"type\":\"data\",\"chart\":\"line\",\"series\":[{\"label\":\"s\",\"points\":[[1,2]]}],\"options\":{\"onClick\":\"alert(1)\"},\"alt\":\"s: 1 2\"}\n```"
+      },
+      "expect": {
+        "parts": [
+          {
+            "type": "data",
+            "spec": {
+              "v": 1,
+              "type": "data",
+              "chart": "line",
+              "series": [
+                {
+                  "label": "s",
+                  "points": [
+                    [
+                      1,
+                      2
+                    ]
+                  ]
+                }
+              ],
+              "alt": "s: 1 2"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "data-unknown-chart-degrades",
+      "op": "parse",
+      "input": {
+        "text": "```uai\n{\"v\":1,\"type\":\"data\",\"chart\":\"radar\",\"series\":[{\"label\":\"s\",\"points\":[[1,2]]}],\"alt\":\"s: 1 2\"}\n```"
+      },
+      "expect": {
+        "parts": [
+          {
+            "type": "text",
+            "text": "s: 1 2",
+            "degraded": true,
+            "errors": [
+              "chart_invalid"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "form-minimal",
+      "op": "parse",
+      "input": {
+        "text": "```uai\n{\"v\":1,\"type\":\"form\",\"id\":\"a1\",\"name\":\"poll\",\"fields\":[{\"name\":\"scelta\",\"type\":\"select\",\"options\":[{\"value\":\"pizza\",\"label\":\"Pizza\"},{\"value\":\"sushi\",\"label\":\"Sushi\"}]}],\"alt\":\"Reply with lines 'field: value'. Fields: scelta (one of: Pizza, Sushi, optional).\"}\n```"
+      },
+      "expect": {
+        "parts": [
+          {
+            "type": "form",
+            "spec": {
+              "id": "a1",
+              "name": "poll",
+              "fields": [
+                {
+                  "name": "scelta",
+                  "type": "select",
+                  "max": 1,
+                  "options": [
+                    {
+                      "value": "pizza",
+                      "label": "Pizza"
+                    },
+                    {
+                      "value": "sushi",
+                      "label": "Sushi"
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "form-id-missing-degrades-alt",
+      "op": "parse",
+      "input": {
+        "text": "```uai\n{\"v\":1,\"type\":\"form\",\"name\":\"poll\",\"fields\":[{\"name\":\"a\",\"type\":\"text\"}],\"alt\":\"istruzione\"}\n```"
+      },
+      "expect": {
+        "parts": [
+          {
+            "type": "text",
+            "text": "istruzione",
+            "degraded": true,
+            "errors": [
+              "id_invalid"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "form-option-labels-duplicate-degrades",
+      "op": "parse",
+      "input": {
+        "text": "```uai\n{\"v\":1,\"type\":\"form\",\"id\":\"a2\",\"name\":\"p\",\"fields\":[{\"name\":\"c\",\"type\":\"select\",\"options\":[{\"value\":\"a\",\"label\":\"Roma\"},{\"value\":\"b\",\"label\":\" roma \"}]}],\"alt\":\"i\"}\n```"
+      },
+      "expect": {
+        "parts": [
+          {
+            "type": "text",
+            "text": "i",
+            "degraded": true,
+            "errors": [
+              "option_label_duplicate:c"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "form-option-label-comma-degrades",
+      "op": "parse",
+      "input": {
+        "text": "```uai\n{\"v\":1,\"type\":\"form\",\"id\":\"a3\",\"name\":\"p\",\"fields\":[{\"name\":\"c\",\"type\":\"select\",\"options\":[{\"value\":\"a\",\"label\":\"Roma, Lazio\"}]}],\"alt\":\"i\"}\n```"
+      },
+      "expect": {
+        "parts": [
+          {
+            "type": "text",
+            "text": "i",
+            "degraded": true,
+            "errors": [
+              "option_label_comma:c"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "form-unknown-field-type-becomes-text",
+      "op": "parse",
+      "input": {
+        "text": "```uai\n{\"v\":1,\"type\":\"form\",\"id\":\"a4\",\"name\":\"p\",\"fields\":[{\"name\":\"r\",\"type\":\"rating\",\"label\":\"Voto\",\"stars\":5}],\"alt\":\"i\"}\n```"
+      },
+      "expect": {
+        "parts": [
+          {
+            "type": "form",
+            "spec": {
+              "fields": [
+                {
+                  "name": "r",
+                  "type": "text",
+                  "label": "Voto"
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "form-unknown-hint-carried",
+      "op": "parse",
+      "input": {
+        "text": "```uai\n{\"v\":1,\"type\":\"form\",\"id\":\"a5\",\"name\":\"p\",\"fields\":[{\"name\":\"c\",\"type\":\"select\",\"ui\":\"wheel\",\"options\":[{\"value\":\"a\",\"label\":\"A\"}]}],\"alt\":\"i\"}\n```"
+      },
+      "expect": {
+        "parts": [
+          {
+            "type": "form",
+            "spec": {
+              "fields": [
+                {
+                  "name": "c",
+                  "type": "select",
+                  "ui": "wheel"
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "form-section-row-kept",
+      "op": "parse",
+      "input": {
+        "text": "```uai\n{\"v\":1,\"type\":\"form\",\"id\":\"a6\",\"name\":\"p\",\"fields\":[{\"type\":\"section\",\"label\":\"Dati\"},{\"name\":\"n\",\"type\":\"text\"}],\"alt\":\"i\"}\n```"
+      },
+      "expect": {
+        "parts": [
+          {
+            "type": "form",
+            "spec": {
+              "fields": [
+                {
+                  "type": "section",
+                  "label": "Dati"
+                },
+                {
+                  "name": "n",
+                  "type": "text"
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "form-only-sections-degrades",
+      "op": "parse",
+      "input": {
+        "text": "```uai\n{\"v\":1,\"type\":\"form\",\"id\":\"a7\",\"name\":\"p\",\"fields\":[{\"type\":\"section\",\"label\":\"Dati\"}],\"alt\":\"i\"}\n```"
+      },
+      "expect": {
+        "parts": [
+          {
+            "type": "text",
+            "text": "i",
+            "degraded": true,
+            "errors": [
+              "no_interactive_field"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "form-too-many-fields-degrades",
+      "op": "parse",
+      "input": {
+        "text": "```uai\n{\"v\":1,\"type\":\"form\",\"id\":\"a8\",\"name\":\"p\",\"fields\":[{\"name\":\"f1\",\"type\":\"text\"},{\"name\":\"f2\",\"type\":\"text\"},{\"name\":\"f3\",\"type\":\"text\"},{\"name\":\"f4\",\"type\":\"text\"},{\"name\":\"f5\",\"type\":\"text\"},{\"name\":\"f6\",\"type\":\"text\"},{\"name\":\"f7\",\"type\":\"text\"},{\"name\":\"f8\",\"type\":\"text\"},{\"name\":\"f9\",\"type\":\"text\"},{\"name\":\"f10\",\"type\":\"text\"},{\"name\":\"f11\",\"type\":\"text\"},{\"name\":\"f12\",\"type\":\"text\"},{\"name\":\"f13\",\"type\":\"text\"},{\"name\":\"f14\",\"type\":\"text\"},{\"name\":\"f15\",\"type\":\"text\"},{\"name\":\"f16\",\"type\":\"text\"},{\"name\":\"f17\",\"type\":\"text\"},{\"name\":\"f18\",\"type\":\"text\"},{\"name\":\"f19\",\"type\":\"text\"},{\"name\":\"f20\",\"type\":\"text\"},{\"name\":\"f21\",\"type\":\"text\"}],\"alt\":\"i\"}\n```"
+      },
+      "expect": {
+        "parts": [
+          {
+            "type": "text",
+            "text": "i",
+            "degraded": true,
+            "errors": [
+              "too_many_fields"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "reply-block",
+      "op": "parse",
+      "input": {
+        "text": "Nome: Mario; Altezza: 180 cm\n\n```uai\n{\"v\":1,\"kind\":\"reply\",\"to\":\"a7f3\",\"values\":{\"nome\":\"Mario\",\"altezza\":180}}\n```"
+      },
+      "expect": {
+        "parts": [
+          {
+            "type": "text",
+            "text": "Nome: Mario; Altezza: 180 cm"
+          },
+          {
+            "type": "reply",
+            "spec": {
+              "to": "a7f3",
+              "values": {
+                "nome": "Mario",
+                "altezza": 180
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "reply-with-alt-carried",
+      "op": "parse",
+      "input": {
+        "text": "```uai\n{\"v\":1,\"kind\":\"reply\",\"to\":\"a7f3\",\"values\":{\"nome\":\"Mario\"},\"alt\":\"Nome: Mario\"}\n```"
+      },
+      "expect": {
+        "parts": [
+          {
+            "type": "reply",
+            "spec": {
+              "to": "a7f3",
+              "values": {
+                "nome": "Mario"
+              }
+            },
+            "alt": "Nome: Mario"
+          }
+        ]
+      }
+    },
+    {
+      "id": "reply-alt-oversized-dropped-block-survives",
+      "op": "parse",
+      "input": {
+        "text": "```uai\n{\"v\":1,\"kind\":\"reply\",\"to\":\"a7f3\",\"values\":{\"nome\":\"Mario\"},\"alt\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}\n```"
+      },
+      "expect": {
+        "parts": [
+          {
+            "type": "reply",
+            "spec": {
+              "to": "a7f3",
+              "values": {
+                "nome": "Mario"
+              }
+            },
+            "alt": ""
+          }
+        ]
+      }
+    },
+    {
+      "id": "reply-alt-not-a-string-dropped",
+      "op": "parse",
+      "input": {
+        "text": "```uai\n{\"v\":1,\"kind\":\"reply\",\"to\":\"a7f3\",\"values\":{},\"alt\":42}\n```"
+      },
+      "expect": {
+        "parts": [
+          {
+            "type": "reply",
+            "spec": {
+              "to": "a7f3",
+              "values": {}
+            },
+            "alt": ""
+          }
+        ]
+      }
+    },
+    {
+      "id": "reply-to-missing-degrades-raw",
+      "op": "parse",
+      "input": {
+        "text": "```uai\n{\"v\":1,\"kind\":\"reply\",\"values\":{}}\n```"
+      },
+      "expect": {
+        "parts": [
+          {
+            "type": "text",
+            "degraded": true,
+            "errors": [
+              "to_invalid"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "type-and-kind-both-degrades",
+      "op": "parse",
+      "input": {
+        "text": "```uai\n{\"v\":1,\"type\":\"form\",\"kind\":\"reply\",\"alt\":\"x\"}\n```"
+      },
+      "expect": {
+        "parts": [
+          {
+            "type": "text",
+            "text": "x",
+            "degraded": true,
+            "errors": [
+              "type_and_kind"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "two-blocks-one-bad",
+      "op": "parse",
+      "input": {
+        "text": "```uai\n{\"v\":1,\"type\":\"media\",\"src\":\"https://a.b/c.png\",\"mime\":\"image/png\",\"alt\":\"[foto] c\"}\n```\n\n```uai\n{broken\n```\n\nfine"
+      },
+      "expect": {
+        "parts": [
+          {
+            "type": "media"
+          },
+          {
+            "type": "text",
+            "text": "{broken",
+            "degraded": true
+          },
+          {
+            "type": "text",
+            "text": "fine"
+          }
+        ]
+      }
+    },
+    {
+      "id": "label-with-angle-brackets-survives",
+      "op": "parse",
+      "input": {
+        "text": "```uai\n{\"v\":1,\"type\":\"form\",\"id\":\"a9\",\"name\":\"p\",\"fields\":[{\"name\":\"n\",\"type\":\"text\",\"label\":\"Nome <utente>\"}],\"alt\":\"i\"}\n```"
+      },
+      "expect": {
+        "parts": [
+          {
+            "type": "form",
+            "spec": {
+              "fields": [
+                {
+                  "name": "n",
+                  "label": "Nome <utente>"
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "crlf-input",
+      "op": "parse",
+      "input": {
+        "text": "Ciao\r\n```uai\r\n{\"v\":1,\"type\":\"x-a\",\"alt\":\"a\"}\r\n```\r\n"
+      },
+      "expect": {
+        "parts": [
+          {
+            "type": "text"
+          },
+          {
+            "type": "x",
+            "alt": "a"
+          }
+        ]
+      }
+    },
+    {
+      "id": "serialize-form-canonical-order",
+      "op": "serialize",
+      "input": {
+        "spec": {
+          "alt": "i",
+          "fields": [
+            {
+              "options": [
+                {
+                  "label": "A",
+                  "value": "a"
+                }
+              ],
+              "ui": "buttons",
+              "type": "select",
+              "required": true,
+              "name": "c",
+              "label": "C"
+            }
+          ],
+          "name": "p",
+          "type": "form",
+          "id": "z1",
+          "v": 1,
+          "lang": "it"
+        }
+      },
+      "expect": {
+        "text": "```uai\n{\"v\":1,\"type\":\"form\",\"id\":\"z1\",\"name\":\"p\",\"lang\":\"it\",\"fields\":[{\"name\":\"c\",\"type\":\"select\",\"label\":\"C\",\"required\":true,\"max\":1,\"options\":[{\"value\":\"a\",\"label\":\"A\"}],\"ui\":\"buttons\"}],\"alt\":\"i\"}\n```"
+      }
+    },
+    {
+      "id": "serialize-media-canonical-order",
+      "op": "serialize",
+      "input": {
+        "spec": {
+          "alt": "[foto] c",
+          "mime": "image/PNG",
+          "src": "https://a.b/c.png",
+          "type": "media",
+          "v": 1,
+          "title": "C"
+        }
+      },
+      "expect": {
+        "text": "```uai\n{\"v\":1,\"type\":\"media\",\"src\":\"https://a.b/c.png\",\"mime\":\"image/png\",\"title\":\"C\",\"alt\":\"[foto] c\"}\n```"
+      }
+    },
+    {
+      "id": "serialize-reply",
+      "op": "serialize",
+      "input": {
+        "spec": {
+          "v": 1,
+          "kind": "reply",
+          "to": "q1",
+          "values": {
+            "b": true,
+            "a": 1
+          }
+        }
+      },
+      "expect": {
+        "text": "```uai\n{\"v\":1,\"kind\":\"reply\",\"to\":\"q1\",\"values\":{\"b\":true,\"a\":1}}\n```"
+      }
+    },
+    {
+      "id": "model-text-replaces-blocks",
+      "op": "modelText",
+      "input": {
+        "text": "Nuova segnalazione.\n\n```uai\n{\"v\":1,\"type\":\"media\",\"src\":\"https://a.b/c.jpg\",\"mime\":\"image/jpeg\",\"alt\":\"[foto] Quadro elettrico\"}\n```\n\n```uai\n{\"v\":1,\"type\":\"form\",\"id\":\"fw12\",\"name\":\"s\",\"fields\":[{\"name\":\"a\",\"type\":\"text\"}],\"alt\":\"Rispondi con righe 'campo: valore'. Campi: a (testo, facoltativo).\"}\n```"
+      },
+      "expect": {
+        "text": "Nuova segnalazione.\n[foto] Quadro elettrico\nRispondi con righe 'campo: valore'. Campi: a (testo, facoltativo)."
+      }
+    },
+    {
+      "id": "serialize-reply-with-alt",
+      "op": "serialize",
+      "input": {
+        "spec": {
+          "v": 1,
+          "kind": "reply",
+          "to": "q1",
+          "values": {
+            "b": true,
+            "a": 1
+          },
+          "alt": "B: Si; A: 1"
+        }
+      },
+      "expect": {
+        "text": "```uai\n{\"v\":1,\"kind\":\"reply\",\"to\":\"q1\",\"values\":{\"b\":true,\"a\":1},\"alt\":\"B: Si; A: 1\"}\n```"
+      }
+    },
+    {
+      "id": "model-text-reply-lines",
+      "op": "modelText",
+      "input": {
+        "text": "Nome: Mario\n\n```uai\n{\"v\":1,\"kind\":\"reply\",\"to\":\"a7f3\",\"values\":{\"nome\":\"Mario\",\"tags\":[\"a\",\"b\"]}}\n```"
+      },
+      "expect": {
+        "text": "Nome: Mario\nnome: Mario\ntags: a, b"
+      }
+    },
+    {
+      "id": "model-text-reply-alt-is-not-used",
+      "op": "modelText",
+      "input": {
+        "text": "```uai\n{\"v\":1,\"kind\":\"reply\",\"to\":\"a7f3\",\"values\":{\"nome\":\"Mario\",\"tags\":[\"a\",\"b\"]},\"alt\":\"Nome: Mario; Tag: a, b\"}\n```"
+      },
+      "expect": {
+        "text": "nome: Mario\ntags: a, b"
+      }
+    },
+    {
+      "id": "model-text-no-blocks-unchanged",
+      "op": "modelText",
+      "input": {
+        "text": "Solo prosa\ncon due righe"
+      },
+      "expect": {
+        "text": "Solo prosa\ncon due righe"
+      }
+    }
+  ]
+}
