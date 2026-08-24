@@ -13,6 +13,7 @@
                  Main Developers:    Stefano Melacci (Project Leader), Christian Di Maio, Tommaso Guidi
 """
 import os
+import sys
 import time
 import json
 import torch
@@ -34,6 +35,9 @@ from unaiverse.networking.node.profile import NodeProfile
 from unaiverse.streams.streams import Stream, BufferedStream
 from unaiverse.interaction import Interaction, InteractionManager
 from unaiverse.streams.dataprops import DataProps, StreamType, TensorLabels
+from unaiverse.uai import (MAX_INBOX_PEERS, MAX_OUTPUT_BYTES, VIA_BLOCK, VIA_FREETEXT, AnswerOutcome,
+                                describe_answer, encode_partial, encode_reply, has_fence, newest_form,
+                                parse_message, parts_to_model_text, read_answer, reprompt_person, retry_prompt)
 from unaiverse.modules.utils import AgentProcessorChecker, ModuleWrapper, HumanModule, has_human_processor
 from unaiverse.utils.misc import (GenException, FileTracker, collect_py_files, load_agent_in_memory, pack_py_files,
                                   unpack_py_files, prune_to_import_closure, build_unaid)
@@ -63,6 +67,12 @@ class AgentBasics:
     ROLE_WORLD_MASTER = (1 << 0) | (1 << 1)  # 00000011 = 3 means "world master" (the first bit means "about world")
     ROLE_WORLD_AGENT = (1 << 0) | (0 << 1)  # 00000001 = 1 means "world agent" (the first bit means "about world")
     CUSTOM_ROLES = []
+
+    # How many times a model is asked again, within one turn, for an answer that does not honour the form it
+    # was given, and how many seconds are left unspent before the asking interaction expires. Both are
+    # class attributes so that a world's role file can tune them for its own models and time budgets.
+    UAI_MAX_RETRIES = 2
+    UAI_DEADLINE_MARGIN = 15.
 
     # From role bits (int) to string
     ROLE_BITS_TO_STR = {
@@ -124,6 +134,12 @@ class AgentBasics:
         self.proc_last_inputs = None
         self.proc_last_outputs = None
         self.proc_human_peer_id_to_interaction = {}
+
+        # Last interactive form received from each peer, with the time it arrived, so that what this agent
+        # writes next can be encoded as an answer to it. It is conversation memory, not node state: it is
+        # never saved nor restored.
+        self.uai_inbox = {}
+        self.uai_writing_to = None  # Who a person at a keyboard is writing to, when there is one
         self.proc_optional_inputs: list[dict] | None = None  # Must be None to be filled later: do not put an empty list
         self.proc_net_hash: dict[str, None | str] = {'public': None, 'private': None}
         self.proc_in_net_hash: dict[str, None | str] = {'public': None, 'private': None}
@@ -533,6 +549,10 @@ class AgentBasics:
 
     def prepare_stdin_if_human(self, public: bool, peer_id: str):
         self.set_default_stdin_binding(public)
+
+        # Who this person is writing to, taken before the world swap below: it is what tells an answer to a
+        # form apart from a message meant for somebody else
+        self.uai_writing_to = peer_id
 
         # Zero-step: if we are in a world, the peer ID used for indexing the interaction cache is the world peer ID
         # TODO(review): with public=False the broadcaster peer-id is overwritten by the world-node id before the per-broadcaster lookup, so the entry is missed and the human reply is misrouted to the world node; see tests/test_human_routing.py::test_prepare_world_should_return_broadcaster_interaction_uuid
@@ -2033,6 +2053,12 @@ class AgentBasics:
                     # Data to return
                     added_data.append((DataProps.user_hash_from_net_hash(net_hash, name), data_uuid))
 
+                    # A form somebody sent us is remembered here, because this is the only point every
+                    # message goes through: what a person is shown never reaches their processor, and their
+                    # answer would otherwise have nothing to be matched against
+                    if isinstance(data, str) and has_fence(data):
+                        self.uai_remember_form(DataProps.peer_id_from_net_hash(net_hash), data)
+
                     # Buffering data, if it was requested and if this sample comes from somebody's processor
                     if (self.buffer_generated_by_others != "none" and
                             DataProps.name_or_group_from_net_hash(net_hash) == "processor"):
@@ -2538,6 +2564,214 @@ class AgentBasics:
         """
         self.proc_last_outputs = outputs
         return outputs
+
+    def uai_preprocess(self, text: str) -> tuple[str, dict | None]:
+        """A callback method that renders an interactive message for the processor, right before execution.
+
+        It is called by ModuleWrapper.forward on every text input that carries protocol blocks, and only when
+        the module is a real processor: a passthrough echoes wire text and is skipped. The stream keeps the
+        message as it arrived; what is rewritten here is only what the module is handed.
+
+        Args:
+            text: The raw text of the message, blocks included.
+
+        Returns:
+            A tuple with the text the module should read (every block replaced by its alternative text) and the
+            spec of the form it is being asked, if any, which is what the answer will be matched against.
+        """
+        parts = parse_message(text)
+        return parts_to_model_text(parts), newest_form(parts)
+
+    def uai_postprocess(self, text: str, spec: dict, attempt: int = 0, asked_now: bool = True,
+                             model_view: str | None = None) -> AnswerOutcome:
+        """A callback method that decides what becomes of the processor's answer to a form, after execution.
+
+        A block is a message with a contract on its format, and an answer that does not honour it is not
+        sent as it is: a model is asked again within the same turn, with a corrective prompt, until it
+        satisfies the form, the retries are spent, or the interaction is about to expire; a person at a
+        keyboard is told what is wrong and nothing travels until they answer again. A world that wants its
+        own reading of what its agents write (a domain-specific vocabulary, a legacy format) overrides this
+        method, or the ones it delegates to, in its role file: the override is inherited by every agent that
+        joins.
+
+        Args:
+            text: What the processor produced.
+            spec: The spec of the form being answered, as returned by uai_preprocess or remembered from
+                an earlier message.
+            attempt: How many times the processor has already been asked again in this turn.
+            asked_now: True when the form was handed to the processor in this very call, False when it was
+                remembered from an earlier message (then a free text is ordinary chat, not a refusal).
+            model_view: What the processor read the first time, for the corrective prompt.
+
+        Returns:
+            The outcome: what should travel (a single block carrying its own readable projection, contract
+            section 3.6, or None for the words as written), the prompt to ask again with, or a withhold.
+        """
+        values, event = read_answer(text, spec)
+        if values is not None:
+            answer = encode_reply(spec, values)
+
+            # Whatever leaves here is wire text, and a world may still cut it to its own size limit: an answer
+            # that would push the message past what such limits usually are is not worth breaking
+            if len(answer.encode("utf-8")) > MAX_OUTPUT_BYTES:
+                return AnswerOutcome()
+            self.uai_forget_form(spec)
+            return AnswerOutcome(text=answer)
+
+        # A block the processor wrote on its own (a widget, a model writing JSON) is theirs and travels as it
+        # is; if it answers the form remembered here, that form is over, and what is typed next is not bound
+        # to it any more
+        if event is not None and event.via == VIA_BLOCK:
+            if event.to == spec.get("id"):
+                self.uai_forget_form(spec)
+            return AnswerOutcome()
+
+        # Nothing to read, or a text that was never an answer while a form was merely pending from before:
+        # the words travel as they are. Once the processor has been asked again, though, a free text is a
+        # refusal like any other.
+        if event is None or (event.via == VIA_FREETEXT and not asked_now and attempt == 0):
+            return AnswerOutcome()
+        return self.uai_answer_fell_short(text, spec, event, attempt, model_view)
+
+    def uai_answer_fell_short(self, text: str, spec: dict, event, attempt: int,
+                                   model_view: str | None = None) -> AnswerOutcome:
+        """A callback method for an answer that was meant for a form and does not satisfy it.
+
+        Args:
+            text: What was written.
+            spec: The form it was meant to answer.
+            event: How the text was read, carrying "missing" and "issues" (or nothing at all, for free text).
+            attempt: How many times the processor has already been asked again in this turn.
+            model_view: What the processor read the first time, if known.
+
+        Returns:
+            The outcome, see uai_postprocess.
+        """
+        # A person at a terminal is told what is wrong, through the same sink every message to them goes
+        # through, and asked to write again: nothing travels, the form stays pending, their next line is read
+        # against it. A person in the web application cannot be told (what this node prints never reaches
+        # their chat, and their bubble is already on their screen): their words travel as written, and the
+        # widget is their way to answer a form.
+        if has_human_processor(self):
+            if not self.uai_can_reprompt_person():
+                return AnswerOutcome()
+            log.user(f"⚠️ {reprompt_person(spec, event)}")
+            return AnswerOutcome(withhold=True)
+
+        # A module that gives back what it was given is a relay, not the author: there is nobody to ask
+        if self.uai_module_echoes():
+            return AnswerOutcome()
+
+        # The exchange is about to expire: asking once more would produce an answer nobody is waiting for,
+        # and an answer that never honoured the form is discarded rather than sent
+        if self.uai_time_left() <= 0.:
+            log.misc(f"The answer to '{spec.get('name', spec.get('id'))}' never satisfied it and the "
+                     f"interaction is expiring: nothing is sent ({describe_answer(spec, event)})")
+            return AnswerOutcome(withhold=True)
+
+        if attempt < self.UAI_MAX_RETRIES:
+            return AnswerOutcome(retry=retry_prompt(spec, text, event, model_view))
+
+        # The retries are spent: the words travel, together with whatever of them could be read, so that
+        # whoever asked gets the values there are and learns what is missing
+        log.misc(f"The answer to '{spec.get('name', spec.get('id'))}' still does not satisfy it after "
+                 f"{attempt} more attempts, it travels as written: {describe_answer(spec, event)}")
+        partial = encode_partial(spec, text, event)
+        if partial is not None:
+            self.uai_forget_form(spec)
+        return AnswerOutcome(text=partial)
+
+    def uai_time_left(self) -> float:
+        """Seconds still worth spending on the current turn before the interaction that asked expires.
+
+        An interaction lives at most Custom.DEFAULT_INTER_TIMEOUT seconds, less when it carries its own
+        timeout; a margin is kept, since whoever asked created their copy earlier than this agent did.
+        A self-driven turn has no asker waiting, and gets the default budget.
+        """
+        budget = Custom.DEFAULT_INTER_TIMEOUT
+        interaction = self.get_current_interaction()
+        if interaction is not None and not interaction.is_system():
+            if interaction.timeout is not None and interaction.timeout > 0.:
+                budget = min(budget, interaction.timeout)
+            budget -= self.clock.get_time() - interaction.timestamp_created
+        return budget - self.UAI_DEADLINE_MARGIN
+
+    def uai_can_reprompt_person(self) -> bool:
+        """Tells whether the person behind this agent can read what this node prints and write again.
+
+        True at a terminal. In the browser the agent runs under Pyodide and what it prints does not reach
+        the person's chat, so there is nobody to ask.
+        """
+        return has_human_processor(self) and sys.platform != "emscripten"
+
+    def uai_module_echoes(self) -> bool:
+        """Tells whether the processor gives back what it is handed (a person, a relay), in which case what
+        it produces is never rewritten on the way in and is never asked again on the way out."""
+        return self.proc is not None and bool(getattr(self.proc.module, "UAI_ECHOES_INPUT", False))
+
+    def uai_peer(self) -> str | None:
+        """The peer this processor turn is talking to.
+
+        It is whoever asked, when the turn was requested by somebody. When an agent writes on its own
+        initiative, which is what a person at a keyboard does, the turn is a system one: then it is whoever
+        that person is writing to, and failing that the partner the behavior is pointing at.
+        """
+        interaction = self.get_current_interaction()
+        if interaction is not None and not interaction.is_system() and interaction.requester is not None:
+            return interaction.requester
+        if self.uai_writing_to is not None:
+            return self.uai_writing_to
+        behav = self.behav if self.behaving_in_world() else self.behav_lone_wolf
+        wildcards = behav.get_wildcards() if behav is not None else {}
+        return wildcards.get(Custom.PARTNER_WILDCARD)
+
+    def uai_remember_form(self, peer_id: str | None, text: str) -> None:
+        """A callback method that remembers the last form a peer sent, to match a future answer against it.
+
+        This exists because the two halves of an exchange travel apart: what a person is shown never goes
+        through their processor, while their answer does, so without this the answer would have nothing to
+        be matched against. A form is remembered for as long as the interaction that asked it can live; a
+        world that needs more than the last form per peer (several open at a time, a duplicate flag)
+        overrides this together with uai_pending_form and uai_forget_form.
+
+        Args:
+            peer_id: Who sent the message.
+            text: The message, as it arrived.
+        """
+        if peer_id is None or not isinstance(text, str):
+            return
+        spec = newest_form(parse_message(text))
+        if spec is None:
+            return
+        self.uai_inbox.pop(peer_id, None)  # Re-inserted below, so that the oldest entry stays first
+        self.uai_inbox[peer_id] = (spec, self.clock.get_time())
+        while len(self.uai_inbox) > MAX_INBOX_PEERS:
+            self.uai_inbox.pop(next(iter(self.uai_inbox)))
+
+    def uai_pending_form(self) -> dict | None:
+        """A callback method that returns the form this agent is expected to be answering, if any."""
+        peer_id = self.uai_peer()
+        entry = self.uai_inbox.get(peer_id) if peer_id is not None else None
+        if entry is None:
+            return None
+        spec, remembered_at = entry
+
+        # Older than any interaction can be, so nobody is waiting for an answer any more
+        if self.clock.get_time() - remembered_at > Custom.DEFAULT_INTER_TIMEOUT:
+            del self.uai_inbox[peer_id]
+            return None
+        return spec
+
+    def uai_forget_form(self, spec: dict) -> None:
+        """A callback method that forgets a remembered form once an answer to it has travelled.
+
+        A form is answered once: forgetting it keeps a later message, which might well read as another
+        answer, from being delivered as a second one to something that is over.
+        """
+        peer_id = self.uai_peer()
+        entry = self.uai_inbox.get(peer_id) if peer_id is not None else None
+        if entry is not None and entry[0].get("id") == spec.get("id"):
+            del self.uai_inbox[peer_id]
 
     # noinspection PyUnusedLocal
     # noinspection PyMethodMayBeStatic

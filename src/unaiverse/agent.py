@@ -22,6 +22,7 @@ from unaiverse.hsm import Action
 from unaiverse.stats import Stats
 from unaiverse.clock import clock
 from unaiverse.utils.logger import log
+from unaiverse.uai import AnswerWithheld
 from unaiverse.utils.misc import owner_handle
 from unaiverse.interaction import Interaction
 from unaiverse.agent_basics import AgentBasics
@@ -481,6 +482,13 @@ class Agent(AgentBasics):
 
             if not isinstance(output_data, tuple):
                 output_data = (output_data,)
+        except AnswerWithheld as e:
+
+            # What the processor produced was an answer to a form that does not honour it, and the agent
+            # decided that nothing travels: the step fails quietly, the interaction that asked stays open,
+            # and whoever is at the keyboard has already been told to answer again
+            log.debug(f"Processor output withheld: {e}")
+            return False
         except Exception as e:
             log.error(f"Error running the processor: {e}")
             return False
