@@ -21,6 +21,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Callable
 from datetime import datetime, timezone
+from unaiverse.uai.fence import has_fence
+from unaiverse.uai.model import to_model_text
 from unaiverse.custom import Custom, GenException
 
 
@@ -201,6 +203,9 @@ class _Logger:
         self._print_fcn: dict[str, dict[str, Callable[..., Any]]] = {ks: {k: print for k in ALL_CHANNELS}
                                                                      for ks in _ALL_SUBS}
         self._print_fcn_supports_html = {ks: {k: False for k in ALL_CHANNELS} for ks in _ALL_SUBS}
+        # A sink that declares uai support receives messages with their protocol blocks untouched, to render
+        # them its own way; every other sink gets the reading view, each block replaced by its alt
+        self._print_fcn_supports_uai_blocks = {ks: {k: False for k in ALL_CHANNELS} for ks in _ALL_SUBS}
 
         # Resolve active channels
         if active is None:
@@ -519,7 +524,15 @@ class _Logger:
                     must_print = True
 
             if must_print:
-                if not self._print_fcn_supports_html:
+                sub = record.get("sub", "")
+
+                # Protocol blocks are rendered here, on the bare message, before any colour, gutter or
+                # preamble is glued to it: a decorated fence line would (rightly) parse as prose. This must
+                # also run before the HTML handling below, which could corrupt the block's JSON
+                if not self._print_fcn_supports_uai_blocks[sub][ch] and has_fence(msg):
+                    msg = to_model_text(msg)
+
+                if not self._print_fcn_supports_html[sub][ch]:
                     # Handle a bit of HTML (<br/>, <a href=...>...</a>, <strong>...</strong>)
                     msg = (msg.replace('<br/>', '\n').replace('<strong>', '')
                            .replace('</strong>', ''))
@@ -528,8 +541,6 @@ class _Logger:
 
                 # Replacing
                 record['msg'] = msg
-
-                sub = record.get("sub", "")
 
                 if self._force_plain_msg_only:
                     self._print_fcn[sub][ch](f"{record['msg']}", file=sys.stdout, flush=True)
@@ -569,7 +580,7 @@ class _Logger:
         """
         self._log(Ch.MISC, msg, info, sub=sub)
 
-    def set_print_fcn(self, print_fcn, ch, sub, supports_html):
+    def set_print_fcn(self, print_fcn, ch, sub, supports_html, supports_uai_blocks=False):
         if ch is None:
             chs = ALL_CHANNELS
         else:
@@ -583,6 +594,7 @@ class _Logger:
             for _ch in chs:
                 self._print_fcn[_sub][_ch] = print_fcn
                 self._print_fcn_supports_html[_sub][_ch] = supports_html
+                self._print_fcn_supports_uai_blocks[_sub][_ch] = supports_uai_blocks
 
     def close(self) -> None:
         """Flush and close the log file."""
