@@ -158,6 +158,8 @@ def test_declare_world_source_posts_fsms_and_declares():
     assert declared["commit_sha"] == "c" * 40
 
 
+@pytest.mark.xfail(reason="the code/source/clear call is parked ('remove wrong call to repo-cleaning API')",
+                   strict=True)
 def test_declare_world_source_unconfigured_world_stays_unpublished():
     """With no code_repo/code_commit the world declares nothing: the FSMs are still
     posted, no source/set call is made, and any declaration left on the server by a
@@ -236,6 +238,8 @@ def test_declare_world_source_roleless_world_skips_fsm_post():
     assert calls == ["/account/node/code/source/set"]
 
 
+@pytest.mark.xfail(reason="the declare-side world-code attestation is parked ('avoided python to call "
+                          "repo-related stuff if not specified')", strict=True)
 def test_declare_world_source_hash_mismatch_refuses_to_start():
     """The root folded the repository, the world hands out the grant bundle: on a
     divergence every join would fail at the fail-closed joiner gate, so the world

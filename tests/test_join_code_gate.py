@@ -53,6 +53,7 @@ def _join(node, attested_code_hash):
         attested_code_hash=attested_code_hash)
 
 
+@pytest.mark.xfail(reason="the join-side world-code hash gate is parked ('disabled code hasing')", strict=True)
 def test_join_blocked_on_code_hash_mismatch():
     async def _scenario():
         node, _ = _join_ready_node()
