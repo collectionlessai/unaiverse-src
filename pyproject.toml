@@ -24,8 +24,7 @@ dependencies = [
     "plotly",
     "prompt_toolkit",
     "tqdm",
-    "typing_extensions",
-    "pytest>=9.0.3",
+    "typing_extensions"
 ]
 license-files = ["LICENSE"]
 keywords = ["UNaIVERSE", "Collectionless AI", "AI", "Agentic AI", "Agents", "Machine Learning", "Learning Over Time"]
@@ -49,6 +48,20 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Topic :: Scientific/Engineering :: Artificial Intelligence"
+]
+
+# Development-only requirements: never install requirements of the published wheel.
+# Declared twice on purpose. The extra serves plain pip (`pip install -e ".[dev]"`);
+# the dependency group (PEP 735) is what `uv sync` installs by DEFAULT, so the test
+# tooling survives a bare sync instead of being pruned every time.
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
 ]
 
 [tool.setuptools.package-data]
