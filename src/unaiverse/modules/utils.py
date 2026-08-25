@@ -29,6 +29,7 @@ from unaiverse.utils.logger import log
 from torch.utils.data import DataLoader
 from datetime import datetime, timezone
 from unaiverse.custom import GenException
+from unaiverse.uai import has_fence, AnswerWithheld
 from torchvision import datasets, transforms
 from unaiverse.streams.dataprops import StreamType
 
@@ -384,6 +385,9 @@ def error_rate_mnist_test_set_steps(network: torch.nn.Module, mnist_data_save_pa
 class MultiIdentity(torch.nn.Module):
     """Identity module that passes one or more inputs through unchanged."""
 
+    # A relay gives back what it was given: rewriting its input would corrupt the message it forwards
+    UAI_ECHOES_INPUT = True
+
     def __init__(self) -> None:
         super().__init__()
 
@@ -407,6 +411,9 @@ class MultiIdentity(torch.nn.Module):
 
 class HumanModule(torch.nn.Module):
     """Dummy human-in-the-loop module that echoes text and image inputs unchanged."""
+
+    # A person's processor gives back what the person wrote: that text is already wire text
+    UAI_ECHOES_INPUT = True
 
     def __init__(self) -> None:
         super().__init__()
@@ -499,6 +506,10 @@ class LoggerModule(torch.nn.Module):
 
 class ModuleWrapper(torch.nn.Module):
     """Wraps a torch.nn.Module with Stream-based input/output preprocessing and optional learning support."""
+
+    # Backstop on how many times the module can be called again in one turn by the answer gate, whatever the
+    # agent's policy says: a runaway override must not turn one step into an endless loop
+    UAI_HARD_CAP = 8
 
     def __init__(self,
                  module: torch.nn.Module | Callable,
@@ -632,6 +643,40 @@ class ModuleWrapper(torch.nn.Module):
             del kwargs['last']
         self._last_raw_outputs = None
 
+        # A model reads the alternative text of a protocol block, never its JSON (INTERACT-PROTOCOL.md,
+        # section 4). A module that echoes its input is not a model: what it gives back is wire text and
+        # must leave exactly as it is, or a person's own answer would be rewritten on its way out. The
+        # stream is untouched either way: what is replaced here is only what the module is handed.
+        uai_spec, uai_arg = None, None
+        if self.agent is not None and not getattr(self.module, 'UAI_ECHOES_INPUT', False):
+            args = list(args)
+            for i in range(0, min(len(args), len(self.proc_inputs))):
+                if not (isinstance(args[i], str) and has_fence(args[i])):
+                    continue
+                try:
+                    args[i], spec = self.agent.uai_preprocess(args[i])
+                    if spec is not None:
+                        uai_spec, uai_arg = spec, i
+                except Exception as e:
+                    log.error(f"Error rendering an interactive message for the module, keeping it as it is: {e}")
+        rendered = list(args)
+
+        outputs = self.__run_module(args, kwargs)
+
+        # A block is a message with a contract on its format, and an answer that does not honour it does not
+        # leave as it is: the agent decides, and may ask the module again with a corrective prompt (a model
+        # that was handed the form in this very call, or that was shown it earlier), or withhold the answer
+        # altogether (a person, who is told to write again). The form may come from this call or from an
+        # earlier message, which is why this runs for echoing modules too: there it is a no-op on an answer
+        # that is already canonical. A failure of the gate itself never costs the answer.
+        if self.agent is not None:
+            outputs = self.__uai_answer(outputs, rendered, kwargs, uai_spec, uai_arg)
+
+        return tuple(outputs)
+
+    def __run_module(self, args: list, kwargs: dict) -> list:
+        """Preprocesses the inputs, calls the module once, and post-processes what it returned."""
+
         # Preprocessing data
         args = [self.proc_inputs[i].check_and_preprocess(args[i], device=self.device)
                 for i in range(0, len(self.proc_inputs))]  # Don't try to build a tuple here, keep a list!
@@ -644,10 +689,65 @@ class ModuleWrapper(torch.nn.Module):
         self._last_raw_outputs = outputs
 
         # Postprocessing data (this does not affect the raw outputs, that might be used while learning)
-        outputs = [self.proc_outputs[i].check_and_postprocess(outputs[i])
-                   for i in range(0, len(self.proc_outputs))]  # Don't try to build a tuple here, keep a list!
+        return [self.proc_outputs[i].check_and_postprocess(outputs[i])
+                for i in range(0, len(self.proc_outputs))]  # Don't try to build a tuple here, keep a list!
 
-        return tuple(outputs)
+    def __uai_answer(self, outputs: list, rendered: list, kwargs: dict,
+                          spec: dict | None, arg_index: int | None) -> list:
+        """Runs the agent's policy on the answer to a form, asking the module again as long as it says so.
+
+        Args:
+            outputs: The post-processed outputs of the first call.
+            rendered: The inputs as the module read them (blocks already replaced by their alternative text).
+            kwargs: The keyword arguments of the module call.
+            spec: The form handed to the module in this call, if any.
+            arg_index: Which input carried it.
+
+        Returns:
+            The outputs that should travel.
+
+        Raises:
+            AnswerWithheld: When the agent decided that nothing should travel.
+        """
+        out_index = next((i for i in range(0, len(outputs)) if isinstance(outputs[i], str)), None)
+        if out_index is None:
+            return outputs
+        asked_now = spec is not None
+        model_view = rendered[arg_index] if arg_index is not None else None
+        outcome = None
+        try:
+            if spec is None:
+                spec = self.agent.uai_pending_form()
+            if spec is None:
+                return outputs
+            attempt = 0
+            while True:
+                outcome = self.agent.uai_postprocess(outputs[out_index], spec, attempt=attempt,
+                                                          asked_now=asked_now, model_view=model_view)
+                if outcome.retry is None or attempt >= self.UAI_HARD_CAP:
+                    break
+
+                # The corrective prompt takes the place of the message that carried the form (or of the first
+                # text input, for a form remembered from an earlier message) and goes through the very same
+                # path the first input took
+                if arg_index is None:
+                    arg_index = next((i for i in range(0, min(len(rendered), len(self.proc_inputs)))
+                                      if self.proc_inputs[i].is_text()), None)
+                    if arg_index is None:
+                        break
+                rendered[arg_index] = outcome.retry
+                outputs = self.__run_module(list(rendered), kwargs)
+                attempt += 1
+        except Exception as e:
+            log.error(f"Error deciding about the answer to an interactive message, keeping it: {e}")
+            return outputs
+        if outcome is None:
+            return outputs
+        if outcome.withhold:
+            raise AnswerWithheld(f"The answer to form '{spec.get('id')}' was withheld")
+        if outcome.text is not None:
+            outputs[out_index] = outcome.text
+        return outputs
 
     def learn_backward(self, targets: list | None = None) -> list:
         """Runs a supervised or unsupervised backward pass and optimizer step.
