@@ -1434,7 +1434,8 @@ class Node:
                         clock.run_natural_speed()
 
                 # Sending alive message every "K" seconds
-                if clock.get_time() - self.last_alive_time >= Custom.SEND_ALIVE_EVERY:
+                if ((clock.get_time() - self.last_alive_time >= Custom.SEND_ALIVE_EVERY) and
+                        len(self.get_public_addresses()) > 0):
                     try:
                         # Capped and off the event loop: a hung POST to the root must not
                         # freeze the pump, and a transient failure must not kill the node.
