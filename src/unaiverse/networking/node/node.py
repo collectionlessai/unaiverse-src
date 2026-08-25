@@ -35,7 +35,7 @@ from unaiverse.agent import Agent
 from collections.abc import Callable
 from datetime import datetime, timezone
 from unaiverse.networking.p2p.messages import Msg
-from unaiverse.uai import has_fence, to_model_text
+from unaiverse.uai import has_fence
 from unaiverse.custom import Custom, GenException, RootServerError
 from unaiverse.networking.p2p import P2P, P2PError
 from unaiverse.networking.node.connpool import NodeConn
@@ -2238,12 +2238,15 @@ class Node:
                                     continue
                                 if stream_obj.props.is_text():
 
-                                    # A human at the terminal reads what a model reads: the alternative text
-                                    # of a protocol block, never its JSON (the stream keeps the raw message)
-                                    msg = to_model_text(data) if has_fence(data) else data  # Getting message
-                                    msg = "\n   ｜".join([line[i:i + 120] for line in msg.splitlines()
-                                                         for i in range(0, len(line), 120)])
-                                    log.user(f"\n💬 [{owner_account}/{agent_name}.{group}.{name}]\n   ｜{msg}")
+                                    # Rendering of protocol blocks happens in the logger, per sink: a message
+                                    # that carries one must reach it bare, since a gutter glued to the fence
+                                    # lines would make them parse as prose
+                                    if has_fence(data):
+                                        log.user(f"\n💬 [{owner_account}/{agent_name}.{group}.{name}]\n{data}")
+                                    else:
+                                        msg = "\n   ｜".join([line[i:i + 120] for line in data.splitlines()
+                                                             for i in range(0, len(line), 120)])
+                                        log.user(f"\n💬 [{owner_account}/{agent_name}.{group}.{name}]\n   ｜{msg}")
                                 elif stream_obj.props.is_img():
                                     img = data  # Getting image
                                     filename = f"{net_hash.replace(':', '_')}.{name}.png"
