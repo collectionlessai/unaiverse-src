@@ -1,0 +1,144 @@
+{
+  "suite": "alt",
+  "cases": [
+    {
+      "id": "it-profile",
+      "op": "alt",
+      "input": { "spec": { "v": 1, "type": "form", "id": "a7f3", "name": "profilo", "lang": "it", "fields": [
+        { "name": "nome", "type": "text", "label": "Nome", "required": true },
+        { "name": "cognome", "type": "text", "label": "Cognome", "required": true },
+        { "name": "altezza", "type": "number", "label": "Altezza", "unit": "cm", "min": 50, "max": 250 }
+      ], "alt": "x" } },
+      "expect": { "alt": "Rispondi con righe 'campo: valore'. Campi: Nome (testo, obbligatorio), Cognome (testo, obbligatorio), Altezza (numero, in cm, tra 50 e 250, facoltativo)." }
+    },
+    {
+      "id": "en-profile",
+      "op": "alt",
+      "input": { "spec": { "v": 1, "type": "form", "id": "a7f3", "name": "profile", "lang": "en", "fields": [
+        { "name": "name", "type": "text", "label": "Name", "required": true },
+        { "name": "height", "type": "number", "label": "Height", "unit": "cm", "min": 50, "max": 250 }
+      ], "alt": "x" } },
+      "expect": { "alt": "Reply with lines 'field: value'. Fields: Name (text, required), Height (number, in cm, between 50 and 250, optional)." }
+    },
+    {
+      "id": "unknown-lang-falls-back-to-en",
+      "op": "alt",
+      "input": { "spec": { "v": 1, "type": "form", "id": "a1", "name": "p", "lang": "de", "fields": [ { "name": "a", "type": "bool", "label": "Ok" } ], "alt": "x" } },
+      "expect": { "alt": "Reply with lines 'field: value'. Fields: Ok (yes or no, optional)." }
+    },
+    {
+      "id": "no-lang-is-en",
+      "op": "alt",
+      "input": { "spec": { "v": 1, "type": "form", "id": "a1", "name": "p", "fields": [ { "name": "a", "type": "integer", "label": "Age", "min": 18 } ], "alt": "x" } },
+      "expect": { "alt": "Reply with lines 'field: value'. Fields: Age (integer, at least 18, optional)." }
+    },
+    {
+      "id": "regional-tag-uses-primary",
+      "op": "alt",
+      "input": { "spec": { "v": 1, "type": "form", "id": "a1", "name": "p", "lang": "it-CH", "fields": [ { "name": "a", "type": "date", "label": "Data", "max": "2026-12-31" } ], "alt": "x" } },
+      "expect": { "alt": "Rispondi con righe 'campo: valore'. Campi: Data (data AAAA-MM-GG, al massimo 2026-12-31, facoltativo)." }
+    },
+    {
+      "id": "it-select-single-labels-not-values",
+      "op": "alt",
+      "input": { "spec": { "v": 1, "type": "form", "id": "fw12", "name": "smistamento", "lang": "it", "fields": [
+        { "name": "categoria", "type": "select", "label": "Categoria", "required": true, "options": [ { "value": "guasto", "label": "Guasto" }, { "value": "sicurezza", "label": "Rischio sicurezza" }, { "value": "altro", "label": "Altro" } ] },
+        { "name": "azione", "type": "select", "label": "Azione", "required": true, "ui": "buttons", "options": [ { "value": "inoltra_tutti", "label": "Inoltra a tutti" }, { "value": "inoltra_uno", "label": "Inoltra a uno" } ] }
+      ], "alt": "x" } },
+      "expect": { "alt": "Rispondi con righe 'campo: valore'. Campi: Categoria (una tra: Guasto, Rischio sicurezza, Altro, obbligatorio), Azione (una tra: Inoltra a tutti, Inoltra a uno, obbligatorio)." }
+    },
+    {
+      "id": "it-multi-select-unbounded",
+      "op": "alt",
+      "input": { "spec": { "v": 1, "type": "form", "id": "m1", "name": "p", "lang": "it", "fields": [
+        { "name": "gusti", "type": "select", "label": "Gusti", "max": 3, "options": [ { "value": "a", "label": "Cioccolato" }, { "value": "b", "label": "Vaniglia" }, { "value": "c", "label": "Fragola" } ] }
+      ], "alt": "x" } },
+      "expect": { "alt": "Rispondi con righe 'campo: valore'. Campi: Gusti (una o più tra: Cioccolato, Vaniglia, Fragola, facoltativo)." }
+    },
+    {
+      "id": "it-multi-select-bounded",
+      "op": "alt",
+      "input": { "spec": { "v": 1, "type": "form", "id": "m2", "name": "p", "lang": "it", "fields": [
+        { "name": "gusti", "type": "select", "label": "Gusti", "min": 1, "max": 2, "options": [ { "value": "a", "label": "Cioccolato" }, { "value": "b", "label": "Vaniglia" }, { "value": "c", "label": "Fragola" } ] }
+      ], "alt": "x" } },
+      "expect": { "alt": "Rispondi con righe 'campo: valore'. Campi: Gusti (da 1 a 2 tra: Cioccolato, Vaniglia, Fragola, facoltativo)." }
+    },
+    {
+      "id": "en-multi-select-max-only",
+      "op": "alt",
+      "input": { "spec": { "v": 1, "type": "form", "id": "m3", "name": "p", "lang": "en", "fields": [
+        { "name": "t", "type": "select", "label": "Toppings", "max": 2, "options": [ { "value": "a", "label": "Ham" }, { "value": "b", "label": "Olives" }, { "value": "c", "label": "Corn" } ] }
+      ], "alt": "x" } },
+      "expect": { "alt": "Reply with lines 'field: value'. Fields: Toppings (0 to 2 of: Ham, Olives, Corn, optional)." }
+    },
+    {
+      "id": "en-multi-select-unbounded",
+      "op": "alt",
+      "input": { "spec": { "v": 1, "type": "form", "id": "m4", "name": "p", "lang": "en", "fields": [
+        { "name": "t", "type": "select", "label": "Toppings", "max": 3, "options": [ { "value": "a", "label": "Ham" }, { "value": "b", "label": "Olives" }, { "value": "c", "label": "Corn" } ] }
+      ], "alt": "x" } },
+      "expect": { "alt": "Reply with lines 'field: value'. Fields: Toppings (one or more of: Ham, Olives, Corn, optional)." }
+    },
+    {
+      "id": "it-progress-prefix",
+      "op": "alt",
+      "input": { "spec": { "v": 1, "type": "form", "id": "w1", "name": "iscrizione", "lang": "it", "progress": [2, 3], "fields": [
+        { "name": "piva", "type": "text", "label": "Partita IVA", "required": true, "maxLength": 11 }
+      ], "alt": "x" } },
+      "expect": { "alt": "Passo 2 di 3. Rispondi con righe 'campo: valore'. Campi: Partita IVA (testo, massimo 11 caratteri, obbligatorio)." }
+    },
+    {
+      "id": "en-progress-prefix",
+      "op": "alt",
+      "input": { "spec": { "v": 1, "type": "form", "id": "w2", "name": "signup", "lang": "en", "progress": [1, 3], "fields": [
+        { "name": "email", "type": "text", "label": "Email", "required": true, "format": "email" }
+      ], "alt": "x" } },
+      "expect": { "alt": "Step 1 of 3. Reply with lines 'field: value'. Fields: Email (text, format email, required)." }
+    },
+    {
+      "id": "it-textarea-and-tel",
+      "op": "alt",
+      "input": { "spec": { "v": 1, "type": "form", "id": "t1", "name": "p", "lang": "it", "fields": [
+        { "name": "note", "type": "textarea", "label": "Note", "maxLength": 500 },
+        { "name": "tel", "type": "text", "label": "Telefono", "format": "tel" }
+      ], "alt": "x" } },
+      "expect": { "alt": "Rispondi con righe 'campo: valore'. Campi: Note (testo lungo, massimo 500 caratteri, facoltativo), Telefono (testo, formato telefono, facoltativo)." }
+    },
+    {
+      "id": "sections-and-help-not-in-instruction",
+      "op": "alt",
+      "input": { "spec": { "v": 1, "type": "form", "id": "s1", "name": "p", "lang": "en", "fields": [
+        { "type": "section", "label": "Personal data" },
+        { "name": "n", "type": "text", "label": "Name", "help": "As on your ID" }
+      ], "alt": "x" } },
+      "expect": { "alt": "Reply with lines 'field: value'. Fields: Name (text, optional)." }
+    },
+    {
+      "id": "label-defaults-to-name",
+      "op": "alt",
+      "input": { "spec": { "v": 1, "type": "form", "id": "s2", "name": "p", "lang": "en", "fields": [ { "name": "city", "type": "text" } ], "alt": "x" } },
+      "expect": { "alt": "Reply with lines 'field: value'. Fields: city (text, optional)." }
+    },
+    {
+      "id": "aiHint-overrides-everything",
+      "op": "alt",
+      "input": { "spec": { "v": 1, "type": "form", "id": "h1", "name": "p", "lang": "it", "progress": [1, 2], "aiHint": "Dimmi solo il tuo nome, una parola.", "fields": [ { "name": "nome", "type": "text", "label": "Nome", "required": true } ], "alt": "x" } },
+      "expect": { "alt": "Dimmi solo il tuo nome, una parola." }
+    },
+    {
+      "id": "aiHint-blank-is-ignored",
+      "op": "alt",
+      "input": { "spec": { "v": 1, "type": "form", "id": "h2", "name": "p", "lang": "it", "aiHint": "   ", "fields": [ { "name": "nome", "type": "text", "label": "Nome", "required": true } ], "alt": "x" } },
+      "expect": { "alt": "Rispondi con righe 'campo: valore'. Campi: Nome (testo, obbligatorio)." }
+    },
+    {
+      "id": "it-only-min-and-only-max",
+      "op": "alt",
+      "input": { "spec": { "v": 1, "type": "form", "id": "r1", "name": "p", "lang": "it", "fields": [
+        { "name": "a", "type": "integer", "label": "Quanti", "min": 1 },
+        { "name": "b", "type": "number", "label": "Peso", "unit": "kg", "max": 300 }
+      ], "alt": "x" } },
+      "expect": { "alt": "Rispondi con righe 'campo: valore'. Campi: Quanti (numero intero, almeno 1, facoltativo), Peso (numero, in kg, al massimo 300, facoltativo)." }
+    }
+  ]
+}

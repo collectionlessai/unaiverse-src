@@ -1,0 +1,603 @@
+{
+  "suite": "compose",
+  "cases": [
+    {
+      "id": "compose-smistamento",
+      "op": "compose",
+      "input": {
+        "elements": [
+          {
+            "el": "Description",
+            "args": [
+              "Nuova segnalazione dal cantiere 7, serve una decisione."
+            ]
+          },
+          {
+            "el": "Image",
+            "args": [
+              "https://cdn.unaiverse.io/w7/seg_401.jpg",
+              {
+                "alt": "[foto] Quadro elettrico con sportello aperto e cavi esposti",
+                "title": "Segnalazione 401"
+              }
+            ]
+          },
+          {
+            "el": "Select",
+            "args": [
+              "categoria",
+              {
+                "label": "Categoria",
+                "required": true,
+                "options": [
+                  [
+                    "guasto",
+                    "Guasto"
+                  ],
+                  [
+                    "sicurezza",
+                    "Rischio sicurezza"
+                  ],
+                  [
+                    "altro",
+                    "Altro"
+                  ]
+                ]
+              }
+            ]
+          },
+          {
+            "el": "Select",
+            "args": [
+              "destinatario",
+              {
+                "label": "Destinatario",
+                "options": [
+                  [
+                    "peer_anna",
+                    "Anna"
+                  ],
+                  [
+                    "peer_bruno",
+                    "Bruno"
+                  ]
+                ]
+              }
+            ]
+          },
+          {
+            "el": "Buttons",
+            "args": [
+              "azione",
+              [
+                [
+                  "inoltra_tutti",
+                  "Inoltra a tutti"
+                ],
+                [
+                  "inoltra_uno",
+                  "Inoltra a uno"
+                ]
+              ],
+              {
+                "label": "Azione",
+                "required": true
+              }
+            ]
+          }
+        ],
+        "options": {
+          "lang": "it",
+          "id": "fw12",
+          "name": "smistamento"
+        }
+      },
+      "expect": {
+        "text": "Nuova segnalazione dal cantiere 7, serve una decisione.\n\n```uai\n{\"v\":1,\"type\":\"media\",\"src\":\"https://cdn.unaiverse.io/w7/seg_401.jpg\",\"mime\":\"image/jpeg\",\"title\":\"Segnalazione 401\",\"alt\":\"[foto] Quadro elettrico con sportello aperto e cavi esposti\"}\n```\n\n```uai\n{\"v\":1,\"type\":\"form\",\"id\":\"fw12\",\"name\":\"smistamento\",\"lang\":\"it\",\"fields\":[{\"name\":\"categoria\",\"type\":\"select\",\"label\":\"Categoria\",\"required\":true,\"max\":1,\"options\":[{\"value\":\"guasto\",\"label\":\"Guasto\"},{\"value\":\"sicurezza\",\"label\":\"Rischio sicurezza\"},{\"value\":\"altro\",\"label\":\"Altro\"}]},{\"name\":\"destinatario\",\"type\":\"select\",\"label\":\"Destinatario\",\"max\":1,\"options\":[{\"value\":\"peer_anna\",\"label\":\"Anna\"},{\"value\":\"peer_bruno\",\"label\":\"Bruno\"}]},{\"name\":\"azione\",\"type\":\"select\",\"label\":\"Azione\",\"required\":true,\"max\":1,\"options\":[{\"value\":\"inoltra_tutti\",\"label\":\"Inoltra a tutti\"},{\"value\":\"inoltra_uno\",\"label\":\"Inoltra a uno\"}],\"ui\":\"buttons\"}],\"alt\":\"Rispondi con righe 'campo: valore'. Campi: Categoria (una tra: Guasto, Rischio sicurezza, Altro, obbligatorio), Destinatario (una tra: Anna, Bruno, facoltativo), Azione (una tra: Inoltra a tutti, Inoltra a uno, obbligatorio).\"}\n```"
+      }
+    },
+    {
+      "id": "compose-poll-short-options-derive-values",
+      "op": "compose",
+      "input": {
+        "elements": [
+          {
+            "el": "Title",
+            "args": [
+              "Pizza o sushi?"
+            ]
+          },
+          {
+            "el": "Buttons",
+            "args": [
+              "scelta",
+              [
+                "Pizza",
+                "Sushi"
+              ],
+              {
+                "required": true
+              }
+            ]
+          }
+        ],
+        "options": {
+          "lang": "it",
+          "id": "poll1"
+        }
+      },
+      "expect": {
+        "text": "## Pizza o sushi?\n\n```uai\n{\"v\":1,\"type\":\"form\",\"id\":\"poll1\",\"name\":\"Pizza o sushi?\",\"lang\":\"it\",\"fields\":[{\"name\":\"scelta\",\"type\":\"select\",\"required\":true,\"max\":1,\"options\":[{\"value\":\"pizza\",\"label\":\"Pizza\"},{\"value\":\"sushi\",\"label\":\"Sushi\"}],\"ui\":\"buttons\"}],\"alt\":\"Rispondi con righe 'campo: valore'. Campi: scelta (una tra: Pizza, Sushi, obbligatorio).\"}\n```"
+      }
+    },
+    {
+      "id": "compose-name-derived-from-label",
+      "op": "compose",
+      "input": {
+        "elements": [
+          {
+            "el": "Text",
+            "args": [
+              null,
+              {
+                "label": "Città di nascita",
+                "required": true
+              }
+            ]
+          },
+          {
+            "el": "Number",
+            "args": [
+              {
+                "label": "Height",
+                "unit": "cm",
+                "min": 50,
+                "max": 250
+              }
+            ]
+          }
+        ],
+        "options": {
+          "lang": "en",
+          "id": "n1",
+          "name": "signup"
+        }
+      },
+      "expect": {
+        "text": "```uai\n{\"v\":1,\"type\":\"form\",\"id\":\"n1\",\"name\":\"signup\",\"lang\":\"en\",\"fields\":[{\"name\":\"citta_di_nascita\",\"type\":\"text\",\"label\":\"Città di nascita\",\"required\":true},{\"name\":\"height\",\"type\":\"number\",\"label\":\"Height\",\"min\":50,\"max\":250,\"unit\":\"cm\"}],\"alt\":\"Reply with lines 'field: value'. Fields: Città di nascita (text, required), Height (number, in cm, between 50 and 250, optional).\"}\n```"
+      }
+    },
+    {
+      "id": "compose-form-placed-at-first-interactive-with-section-and-progress",
+      "op": "compose",
+      "input": {
+        "elements": [
+          {
+            "el": "Description",
+            "args": [
+              "Perfetto, ancora un dato."
+            ]
+          },
+          {
+            "el": "Progress",
+            "args": [
+              2,
+              3
+            ]
+          },
+          {
+            "el": "Section",
+            "args": [
+              "Dati fiscali"
+            ]
+          },
+          {
+            "el": "Text",
+            "args": [
+              "piva",
+              {
+                "label": "Partita IVA",
+                "required": true,
+                "maxLength": 11
+              }
+            ]
+          },
+          {
+            "el": "Description",
+            "args": [
+              "Grazie!"
+            ]
+          }
+        ],
+        "options": {
+          "lang": "it",
+          "id": "w2",
+          "name": "iscrizione"
+        }
+      },
+      "expect": {
+        "text": "Perfetto, ancora un dato.\n\n```uai\n{\"v\":1,\"type\":\"form\",\"id\":\"w2\",\"name\":\"iscrizione\",\"lang\":\"it\",\"fields\":[{\"type\":\"section\",\"label\":\"Dati fiscali\"},{\"name\":\"piva\",\"type\":\"text\",\"label\":\"Partita IVA\",\"required\":true,\"maxLength\":11}],\"progress\":[2,3],\"alt\":\"Passo 2 di 3. Rispondi con righe 'campo: valore'. Campi: Partita IVA (testo, massimo 11 caratteri, obbligatorio).\"}\n```\n\nGrazie!"
+      }
+    },
+    {
+      "id": "compose-multiselect-and-chart",
+      "op": "compose",
+      "input": {
+        "elements": [
+          {
+            "el": "Chart",
+            "args": [
+              "bar",
+              [
+                {
+                  "label": "Sales",
+                  "points": [
+                    [
+                      "jan",
+                      120
+                    ],
+                    [
+                      "feb",
+                      340
+                    ]
+                  ]
+                }
+              ],
+              {
+                "alt": "Sales: jan 120, feb 340."
+              }
+            ]
+          },
+          {
+            "el": "MultiSelect",
+            "args": [
+              "toppings",
+              {
+                "label": "Toppings",
+                "options": [
+                  "Ham",
+                  "Olives",
+                  "Corn"
+                ]
+              }
+            ]
+          },
+          {
+            "el": "Bool",
+            "args": [
+              "agree",
+              {
+                "label": "Agree",
+                "required": true
+              }
+            ]
+          },
+          {
+            "el": "Date",
+            "args": [
+              "when",
+              {
+                "label": "When",
+                "min": "2026-01-01"
+              }
+            ]
+          }
+        ],
+        "options": {
+          "lang": "en",
+          "id": "m1",
+          "name": "survey"
+        }
+      },
+      "expect": {
+        "text": "```uai\n{\"v\":1,\"type\":\"data\",\"chart\":\"bar\",\"series\":[{\"label\":\"Sales\",\"points\":[[\"jan\",120],[\"feb\",340]]}],\"alt\":\"Sales: jan 120, feb 340.\"}\n```\n\n```uai\n{\"v\":1,\"type\":\"form\",\"id\":\"m1\",\"name\":\"survey\",\"lang\":\"en\",\"fields\":[{\"name\":\"toppings\",\"type\":\"select\",\"label\":\"Toppings\",\"max\":3,\"options\":[{\"value\":\"ham\",\"label\":\"Ham\"},{\"value\":\"olives\",\"label\":\"Olives\"},{\"value\":\"corn\",\"label\":\"Corn\"}]},{\"name\":\"agree\",\"type\":\"bool\",\"label\":\"Agree\",\"required\":true},{\"name\":\"when\",\"type\":\"date\",\"label\":\"When\",\"min\":\"2026-01-01\"}],\"alt\":\"Reply with lines 'field: value'. Fields: Toppings (one or more of: Ham, Olives, Corn, optional), Agree (yes or no, required), When (date YYYY-MM-DD, at least 2026-01-01, optional).\"}\n```"
+      }
+    },
+    {
+      "id": "compose-video-guesses-mime-and-caption",
+      "op": "compose",
+      "input": {
+        "elements": [
+          {
+            "el": "Video",
+            "args": [
+              "https://youtu.be/xyz",
+              {
+                "alt": "[video] Demo, 3 min",
+                "poster": "https://cdn.example.org/p.jpg",
+                "caption": "La demo del prodotto"
+              }
+            ]
+          }
+        ],
+        "options": {}
+      },
+      "expect": {
+        "text": "```uai\n{\"v\":1,\"type\":\"media\",\"src\":\"https://youtu.be/xyz\",\"mime\":\"video/youtube\",\"poster\":\"https://cdn.example.org/p.jpg\",\"alt\":\"[video] Demo, 3 min\"}\n```\n\nLa demo del prodotto"
+      }
+    },
+    {
+      "id": "compose-error-duplicate-labels",
+      "op": "compose",
+      "input": {
+        "elements": [
+          {
+            "el": "Select",
+            "args": [
+              "c",
+              {
+                "options": [
+                  "Roma",
+                  " roma "
+                ]
+              }
+            ]
+          }
+        ],
+        "options": {
+          "id": "e1"
+        }
+      },
+      "expect": {
+        "error": "duplicate option label"
+      }
+    },
+    {
+      "id": "compose-error-comma-in-label",
+      "op": "compose",
+      "input": {
+        "elements": [
+          {
+            "el": "Buttons",
+            "args": [
+              "c",
+              [
+                "Roma, Lazio",
+                "Milano"
+              ]
+            ]
+          }
+        ],
+        "options": {
+          "id": "e2"
+        }
+      },
+      "expect": {
+        "error": "commas"
+      }
+    },
+    {
+      "id": "compose-error-too-many-fields",
+      "op": "compose",
+      "input": {
+        "elements": [
+          {
+            "el": "Text",
+            "args": [
+              "f0"
+            ]
+          },
+          {
+            "el": "Text",
+            "args": [
+              "f1"
+            ]
+          },
+          {
+            "el": "Text",
+            "args": [
+              "f2"
+            ]
+          },
+          {
+            "el": "Text",
+            "args": [
+              "f3"
+            ]
+          },
+          {
+            "el": "Text",
+            "args": [
+              "f4"
+            ]
+          },
+          {
+            "el": "Text",
+            "args": [
+              "f5"
+            ]
+          },
+          {
+            "el": "Text",
+            "args": [
+              "f6"
+            ]
+          },
+          {
+            "el": "Text",
+            "args": [
+              "f7"
+            ]
+          },
+          {
+            "el": "Text",
+            "args": [
+              "f8"
+            ]
+          },
+          {
+            "el": "Text",
+            "args": [
+              "f9"
+            ]
+          },
+          {
+            "el": "Text",
+            "args": [
+              "f10"
+            ]
+          },
+          {
+            "el": "Text",
+            "args": [
+              "f11"
+            ]
+          },
+          {
+            "el": "Text",
+            "args": [
+              "f12"
+            ]
+          },
+          {
+            "el": "Text",
+            "args": [
+              "f13"
+            ]
+          },
+          {
+            "el": "Text",
+            "args": [
+              "f14"
+            ]
+          },
+          {
+            "el": "Text",
+            "args": [
+              "f15"
+            ]
+          },
+          {
+            "el": "Text",
+            "args": [
+              "f16"
+            ]
+          },
+          {
+            "el": "Text",
+            "args": [
+              "f17"
+            ]
+          },
+          {
+            "el": "Text",
+            "args": [
+              "f18"
+            ]
+          },
+          {
+            "el": "Text",
+            "args": [
+              "f19"
+            ]
+          },
+          {
+            "el": "Text",
+            "args": [
+              "f20"
+            ]
+          }
+        ],
+        "options": {
+          "id": "e3"
+        }
+      },
+      "expect": {
+        "error": "max 20"
+      }
+    },
+    {
+      "id": "compose-error-name-underivable",
+      "op": "compose",
+      "input": {
+        "elements": [
+          {
+            "el": "Text",
+            "args": [
+              null,
+              {
+                "label": "???"
+              }
+            ]
+          }
+        ],
+        "options": {
+          "id": "e4"
+        }
+      },
+      "expect": {
+        "error": "derive"
+      }
+    },
+    {
+      "id": "compose-error-media-without-alt",
+      "op": "compose",
+      "input": {
+        "elements": [
+          {
+            "el": "Image",
+            "args": [
+              "https://a.b/c.png"
+            ]
+          }
+        ],
+        "options": {
+          "id": "e5"
+        }
+      },
+      "expect": {
+        "error": "alt is required"
+      }
+    },
+    {
+      "id": "compose-error-http-src",
+      "op": "compose",
+      "input": {
+        "elements": [
+          {
+            "el": "Image",
+            "args": [
+              "http://a.b/c.png",
+              {
+                "alt": "x"
+              }
+            ]
+          }
+        ],
+        "options": {
+          "id": "e6"
+        }
+      },
+      "expect": {
+        "error": "https"
+      }
+    },
+    {
+      "id": "compose-error-progress-without-fields",
+      "op": "compose",
+      "input": {
+        "elements": [
+          {
+            "el": "Description",
+            "args": [
+              "x"
+            ]
+          },
+          {
+            "el": "Progress",
+            "args": [
+              1,
+              2
+            ]
+          }
+        ],
+        "options": {
+          "id": "e7"
+        }
+      },
+      "expect": {
+        "error": "interactive"
+      }
+    }
+  ]
+}

@@ -1,0 +1,2409 @@
+{
+  "suite": "replies",
+  "shared": {
+    "note": "Specs used across cases are inlined in each case on purpose: every case must be self-contained so a Python runner needs no cross-references.",
+    "smistamento": "form fw12 (it): categoria select[Guasto,Rischio sicurezza,Altro] required; destinatario select[Anna,Bruno,Carla]; azione select buttons [Inoltra a tutti, Inoltra a uno] required",
+    "profilo": "form a7f3 (it): nome text required; cognome text required; altezza number cm 50..250"
+  },
+  "cases": [
+    {
+      "id": "block-canonical-with-spec",
+      "op": "interpret",
+      "input": {
+        "text": "```uai\n{\"v\":1,\"kind\":\"reply\",\"to\":\"fw12\",\"values\":{\"categoria\":\"sicurezza\",\"destinatario\":\"peer_anna\",\"azione\":\"inoltra_uno\"},\"alt\":\"Categoria: Rischio sicurezza; Destinatario: Anna; Azione: Inoltra a uno\"}\n```",
+        "pending": [
+          {
+            "v": 1,
+            "type": "form",
+            "id": "fw12",
+            "name": "smistamento",
+            "lang": "it",
+            "fields": [
+              {
+                "name": "categoria",
+                "type": "select",
+                "label": "Categoria",
+                "required": true,
+                "options": [
+                  {
+                    "value": "guasto",
+                    "label": "Guasto"
+                  },
+                  {
+                    "value": "sicurezza",
+                    "label": "Rischio sicurezza"
+                  },
+                  {
+                    "value": "altro",
+                    "label": "Altro"
+                  }
+                ]
+              },
+              {
+                "name": "destinatario",
+                "type": "select",
+                "label": "Destinatario",
+                "options": [
+                  {
+                    "value": "peer_anna",
+                    "label": "Anna"
+                  },
+                  {
+                    "value": "peer_bruno",
+                    "label": "Bruno"
+                  },
+                  {
+                    "value": "peer_carla",
+                    "label": "Carla"
+                  }
+                ]
+              },
+              {
+                "name": "azione",
+                "type": "select",
+                "label": "Azione",
+                "required": true,
+                "ui": "buttons",
+                "options": [
+                  {
+                    "value": "inoltra_tutti",
+                    "label": "Inoltra a tutti"
+                  },
+                  {
+                    "value": "inoltra_uno",
+                    "label": "Inoltra a uno"
+                  }
+                ]
+              }
+            ],
+            "alt": "i"
+          }
+        ]
+      },
+      "expect": {
+        "kind": "reply",
+        "to": "fw12",
+        "name": "smistamento",
+        "values": {
+          "categoria": "sicurezza",
+          "destinatario": "peer_anna",
+          "azione": "inoltra_uno"
+        },
+        "missing": [],
+        "issues": {},
+        "via": "block",
+        "duplicate": false
+      }
+    },
+    {
+      "id": "block-unknown-to-passes-through",
+      "op": "interpret",
+      "input": {
+        "text": "```uai\n{\"v\":1,\"kind\":\"reply\",\"to\":\"gone1\",\"values\":{\"a\":\"x\",\"n\":\"not-a-number\"}}\n```",
+        "pending": []
+      },
+      "expect": {
+        "to": "gone1",
+        "name": null,
+        "values": {
+          "a": "x",
+          "n": "not-a-number"
+        },
+        "missing": [],
+        "issues": {},
+        "via": "block",
+        "duplicate": false
+      }
+    },
+    {
+      "id": "block-canonical-typechecks-not-reparses",
+      "op": "interpret",
+      "input": {
+        "text": "```uai\n{\"v\":1,\"kind\":\"reply\",\"to\":\"a7f3\",\"values\":{\"nome\":\"Mario\",\"altezza\":\"180\",\"extra\":1}}\n```",
+        "pending": [
+          {
+            "v": 1,
+            "type": "form",
+            "id": "a7f3",
+            "name": "profilo",
+            "lang": "it",
+            "fields": [
+              {
+                "name": "nome",
+                "type": "text",
+                "label": "Nome",
+                "required": true
+              },
+              {
+                "name": "cognome",
+                "type": "text",
+                "label": "Cognome",
+                "required": true
+              },
+              {
+                "name": "altezza",
+                "type": "number",
+                "label": "Altezza",
+                "unit": "cm",
+                "min": 50,
+                "max": 250
+              }
+            ],
+            "alt": "i"
+          }
+        ]
+      },
+      "expect": {
+        "to": "a7f3",
+        "values": {
+          "nome": "Mario"
+        },
+        "missing": [
+          "cognome"
+        ],
+        "issues": {
+          "altezza": "type"
+        },
+        "via": "block"
+      }
+    },
+    {
+      "id": "block-duplicate-flag",
+      "op": "interpret",
+      "input": {
+        "text": "```uai\n{\"v\":1,\"kind\":\"reply\",\"to\":\"a7f3\",\"values\":{\"nome\":\"Mario\",\"cognome\":\"Rossi\"}}\n```",
+        "pending": [
+          {
+            "v": 1,
+            "type": "form",
+            "id": "a7f3",
+            "name": "profilo",
+            "fields": [
+              {
+                "name": "nome",
+                "type": "text",
+                "required": true
+              },
+              {
+                "name": "cognome",
+                "type": "text",
+                "required": true
+              }
+            ],
+            "alt": "i"
+          }
+        ],
+        "answered": [
+          "a7f3"
+        ]
+      },
+      "expect": {
+        "to": "a7f3",
+        "values": {
+          "nome": "Mario",
+          "cognome": "Rossi"
+        },
+        "via": "block",
+        "duplicate": true
+      }
+    },
+    {
+      "id": "labeled-lines-labels-to-values",
+      "op": "interpret",
+      "input": {
+        "text": "categoria: guasto\nazione: inoltra a tutti",
+        "pending": [
+          {
+            "v": 1,
+            "type": "form",
+            "id": "fw12",
+            "name": "smistamento",
+            "lang": "it",
+            "fields": [
+              {
+                "name": "categoria",
+                "type": "select",
+                "label": "Categoria",
+                "required": true,
+                "options": [
+                  {
+                    "value": "guasto",
+                    "label": "Guasto"
+                  },
+                  {
+                    "value": "sicurezza",
+                    "label": "Rischio sicurezza"
+                  },
+                  {
+                    "value": "altro",
+                    "label": "Altro"
+                  }
+                ]
+              },
+              {
+                "name": "destinatario",
+                "type": "select",
+                "label": "Destinatario",
+                "options": [
+                  {
+                    "value": "peer_anna",
+                    "label": "Anna"
+                  },
+                  {
+                    "value": "peer_bruno",
+                    "label": "Bruno"
+                  }
+                ]
+              },
+              {
+                "name": "azione",
+                "type": "select",
+                "label": "Azione",
+                "required": true,
+                "options": [
+                  {
+                    "value": "inoltra_tutti",
+                    "label": "Inoltra a tutti"
+                  },
+                  {
+                    "value": "inoltra_uno",
+                    "label": "Inoltra a uno"
+                  }
+                ]
+              }
+            ],
+            "alt": "i"
+          }
+        ]
+      },
+      "expect": {
+        "to": "fw12",
+        "name": "smistamento",
+        "values": {
+          "categoria": "guasto",
+          "azione": "inoltra_tutti"
+        },
+        "missing": [],
+        "issues": {},
+        "via": "labeled"
+      }
+    },
+    {
+      "id": "labeled-one-line-commas-and-label-keys",
+      "op": "interpret",
+      "input": {
+        "text": "Categoria: Rischio sicurezza, Destinatario: Anna, azione: Inoltra a uno",
+        "pending": [
+          {
+            "v": 1,
+            "type": "form",
+            "id": "fw12",
+            "name": "smistamento",
+            "lang": "it",
+            "fields": [
+              {
+                "name": "categoria",
+                "type": "select",
+                "label": "Categoria",
+                "required": true,
+                "options": [
+                  {
+                    "value": "guasto",
+                    "label": "Guasto"
+                  },
+                  {
+                    "value": "sicurezza",
+                    "label": "Rischio sicurezza"
+                  },
+                  {
+                    "value": "altro",
+                    "label": "Altro"
+                  }
+                ]
+              },
+              {
+                "name": "destinatario",
+                "type": "select",
+                "label": "Destinatario",
+                "options": [
+                  {
+                    "value": "peer_anna",
+                    "label": "Anna"
+                  },
+                  {
+                    "value": "peer_bruno",
+                    "label": "Bruno"
+                  }
+                ]
+              },
+              {
+                "name": "azione",
+                "type": "select",
+                "label": "Azione",
+                "required": true,
+                "options": [
+                  {
+                    "value": "inoltra_tutti",
+                    "label": "Inoltra a tutti"
+                  },
+                  {
+                    "value": "inoltra_uno",
+                    "label": "Inoltra a uno"
+                  }
+                ]
+              }
+            ],
+            "alt": "i"
+          }
+        ]
+      },
+      "expect": {
+        "values": {
+          "categoria": "sicurezza",
+          "destinatario": "peer_anna",
+          "azione": "inoltra_uno"
+        },
+        "via": "labeled"
+      }
+    },
+    {
+      "id": "labeled-unknown-key-line-does-not-swallow",
+      "op": "interpret",
+      "input": {
+        "text": "categoria: guasto\nazione: inoltra a tutti\naltezza: 999",
+        "pending": [
+          {
+            "v": 1,
+            "type": "form",
+            "id": "fw12",
+            "name": "s",
+            "lang": "it",
+            "fields": [
+              {
+                "name": "categoria",
+                "type": "select",
+                "label": "Categoria",
+                "options": [
+                  {
+                    "value": "guasto",
+                    "label": "Guasto"
+                  }
+                ]
+              },
+              {
+                "name": "azione",
+                "type": "select",
+                "label": "Azione",
+                "options": [
+                  {
+                    "value": "inoltra_tutti",
+                    "label": "Inoltra a tutti"
+                  },
+                  {
+                    "value": "inoltra_uno",
+                    "label": "Inoltra a uno"
+                  }
+                ]
+              }
+            ],
+            "alt": "i"
+          }
+        ]
+      },
+      "expect": {
+        "values": {
+          "categoria": "guasto",
+          "azione": "inoltra_tutti"
+        },
+        "issues": {},
+        "via": "labeled"
+      }
+    },
+    {
+      "id": "labeled-key-inside-value-is-not-a-separator",
+      "op": "interpret",
+      "input": {
+        "text": "note: la voce Nome: Mario va corretta\nnome: Luigi",
+        "pending": [
+          {
+            "v": 1,
+            "type": "form",
+            "id": "n1",
+            "name": "p",
+            "lang": "it",
+            "fields": [
+              {
+                "name": "nome",
+                "type": "text",
+                "label": "Nome"
+              },
+              {
+                "name": "note",
+                "type": "textarea",
+                "label": "Note"
+              }
+            ],
+            "alt": "i"
+          }
+        ]
+      },
+      "expect": {
+        "values": {
+          "note": "la voce Nome: Mario va corretta",
+          "nome": "Luigi"
+        },
+        "via": "labeled"
+      }
+    },
+    {
+      "id": "labeled-multiword-label-and-case",
+      "op": "interpret",
+      "input": {
+        "text": "PARTITA  IVA: 01234567890",
+        "pending": [
+          {
+            "v": 1,
+            "type": "form",
+            "id": "w1",
+            "name": "p",
+            "lang": "it",
+            "fields": [
+              {
+                "name": "piva",
+                "type": "text",
+                "label": "Partita IVA",
+                "required": true,
+                "maxLength": 11
+              }
+            ],
+            "alt": "i"
+          }
+        ]
+      },
+      "expect": {
+        "values": {
+          "piva": "01234567890"
+        },
+        "missing": [],
+        "via": "labeled"
+      }
+    },
+    {
+      "id": "labeled-longer-key-wins",
+      "op": "interpret",
+      "input": {
+        "text": "Nome completo: Mario Rossi",
+        "pending": [
+          {
+            "v": 1,
+            "type": "form",
+            "id": "k1",
+            "name": "p",
+            "fields": [
+              {
+                "name": "nome",
+                "type": "text",
+                "label": "Nome"
+              },
+              {
+                "name": "full",
+                "type": "text",
+                "label": "Nome completo"
+              }
+            ],
+            "alt": "i"
+          }
+        ]
+      },
+      "expect": {
+        "values": {
+          "full": "Mario Rossi"
+        },
+        "via": "labeled"
+      }
+    },
+    {
+      "id": "labeled-number-with-unit-and-decimal-comma",
+      "op": "interpret",
+      "input": {
+        "text": "nome: Mario\ncognome: Rossi\naltezza: 180,5 CM",
+        "pending": [
+          {
+            "v": 1,
+            "type": "form",
+            "id": "a7f3",
+            "name": "profilo",
+            "lang": "it",
+            "fields": [
+              {
+                "name": "nome",
+                "type": "text",
+                "label": "Nome",
+                "required": true
+              },
+              {
+                "name": "cognome",
+                "type": "text",
+                "label": "Cognome",
+                "required": true
+              },
+              {
+                "name": "altezza",
+                "type": "number",
+                "label": "Altezza",
+                "unit": "cm",
+                "min": 50,
+                "max": 250
+              }
+            ],
+            "alt": "i"
+          }
+        ]
+      },
+      "expect": {
+        "values": {
+          "nome": "Mario",
+          "cognome": "Rossi",
+          "altezza": 180.5
+        },
+        "issues": {},
+        "via": "labeled"
+      }
+    },
+    {
+      "id": "labeled-above-max-goes-to-issues",
+      "op": "interpret",
+      "input": {
+        "text": "nome: Mario\ncognome: Rossi\naltezza: 999",
+        "pending": [
+          {
+            "v": 1,
+            "type": "form",
+            "id": "a7f3",
+            "name": "profilo",
+            "lang": "it",
+            "fields": [
+              {
+                "name": "nome",
+                "type": "text",
+                "label": "Nome",
+                "required": true
+              },
+              {
+                "name": "cognome",
+                "type": "text",
+                "label": "Cognome",
+                "required": true
+              },
+              {
+                "name": "altezza",
+                "type": "number",
+                "label": "Altezza",
+                "unit": "cm",
+                "min": 50,
+                "max": 250
+              }
+            ],
+            "alt": "i"
+          }
+        ]
+      },
+      "expect": {
+        "values": {
+          "nome": "Mario",
+          "cognome": "Rossi"
+        },
+        "missing": [],
+        "issues": {
+          "altezza": "above_max"
+        },
+        "via": "labeled"
+      }
+    },
+    {
+      "id": "labeled-below-min-and-required-missing",
+      "op": "interpret",
+      "input": {
+        "text": "altezza: 20",
+        "pending": [
+          {
+            "v": 1,
+            "type": "form",
+            "id": "a7f3",
+            "name": "profilo",
+            "lang": "it",
+            "fields": [
+              {
+                "name": "nome",
+                "type": "text",
+                "label": "Nome",
+                "required": true
+              },
+              {
+                "name": "altezza",
+                "type": "number",
+                "label": "Altezza",
+                "unit": "cm",
+                "min": 50,
+                "max": 250
+              }
+            ],
+            "alt": "i"
+          }
+        ]
+      },
+      "expect": {
+        "values": {},
+        "missing": [
+          "nome"
+        ],
+        "issues": {
+          "altezza": "below_min"
+        },
+        "via": "labeled"
+      }
+    },
+    {
+      "id": "labeled-unknown-option",
+      "op": "interpret",
+      "input": {
+        "text": "categoria: incendio",
+        "pending": [
+          {
+            "v": 1,
+            "type": "form",
+            "id": "fw12",
+            "name": "s",
+            "lang": "it",
+            "fields": [
+              {
+                "name": "categoria",
+                "type": "select",
+                "label": "Categoria",
+                "required": true,
+                "options": [
+                  {
+                    "value": "guasto",
+                    "label": "Guasto"
+                  },
+                  {
+                    "value": "altro",
+                    "label": "Altro"
+                  }
+                ]
+              }
+            ],
+            "alt": "i"
+          }
+        ]
+      },
+      "expect": {
+        "values": {},
+        "missing": [],
+        "issues": {
+          "categoria": "unknown_option"
+        },
+        "via": "labeled"
+      }
+    },
+    {
+      "id": "labeled-integer-with-decimal-is-type-issue",
+      "op": "interpret",
+      "input": {
+        "text": "quanti: 2.5",
+        "pending": [
+          {
+            "v": 1,
+            "type": "form",
+            "id": "i1",
+            "name": "p",
+            "lang": "en",
+            "fields": [
+              {
+                "name": "quanti",
+                "type": "integer",
+                "label": "Quanti",
+                "min": 1
+              }
+            ],
+            "alt": "i"
+          }
+        ]
+      },
+      "expect": {
+        "values": {},
+        "issues": {
+          "quanti": "type"
+        },
+        "via": "labeled"
+      }
+    },
+    {
+      "id": "labeled-bool-it-and-en-words",
+      "op": "interpret",
+      "input": {
+        "text": "consenso: Sì\nnewsletter: no",
+        "pending": [
+          {
+            "v": 1,
+            "type": "form",
+            "id": "b1",
+            "name": "p",
+            "lang": "it",
+            "fields": [
+              {
+                "name": "consenso",
+                "type": "bool",
+                "label": "Consenso",
+                "required": true
+              },
+              {
+                "name": "newsletter",
+                "type": "bool",
+                "label": "Newsletter"
+              }
+            ],
+            "alt": "i"
+          }
+        ]
+      },
+      "expect": {
+        "values": {
+          "consenso": true,
+          "newsletter": false
+        },
+        "missing": [],
+        "via": "labeled"
+      }
+    },
+    {
+      "id": "labeled-bool-en-yes",
+      "op": "interpret",
+      "input": {
+        "text": "consent: yes",
+        "pending": [
+          {
+            "v": 1,
+            "type": "form",
+            "id": "b2",
+            "name": "p",
+            "lang": "en",
+            "fields": [
+              {
+                "name": "consent",
+                "type": "bool",
+                "label": "Consent",
+                "required": true
+              }
+            ],
+            "alt": "i"
+          }
+        ]
+      },
+      "expect": {
+        "values": {
+          "consent": true
+        },
+        "via": "labeled"
+      }
+    },
+    {
+      "id": "labeled-date-iso-then-it-shape",
+      "op": "interpret",
+      "input": {
+        "text": "nascita: 26/07/1990\ninizio: 2026-09-01",
+        "pending": [
+          {
+            "v": 1,
+            "type": "form",
+            "id": "d1",
+            "name": "p",
+            "lang": "it",
+            "fields": [
+              {
+                "name": "nascita",
+                "type": "date",
+                "label": "Nascita"
+              },
+              {
+                "name": "inizio",
+                "type": "date",
+                "label": "Inizio",
+                "min": "2026-01-01"
+              }
+            ],
+            "alt": "i"
+          }
+        ]
+      },
+      "expect": {
+        "values": {
+          "nascita": "1990-07-26",
+          "inizio": "2026-09-01"
+        },
+        "issues": {},
+        "via": "labeled"
+      }
+    },
+    {
+      "id": "labeled-date-en-shape",
+      "op": "interpret",
+      "input": {
+        "text": "start: 07/26/2026",
+        "pending": [
+          {
+            "v": 1,
+            "type": "form",
+            "id": "d2",
+            "name": "p",
+            "lang": "en",
+            "fields": [
+              {
+                "name": "start",
+                "type": "date",
+                "label": "Start"
+              }
+            ],
+            "alt": "i"
+          }
+        ]
+      },
+      "expect": {
+        "values": {
+          "start": "2026-07-26"
+        },
+        "via": "labeled"
+      }
+    },
+    {
+      "id": "labeled-date-invalid-is-type",
+      "op": "interpret",
+      "input": {
+        "text": "start: next tuesday",
+        "pending": [
+          {
+            "v": 1,
+            "type": "form",
+            "id": "d3",
+            "name": "p",
+            "lang": "en",
+            "fields": [
+              {
+                "name": "start",
+                "type": "date",
+                "label": "Start"
+              },
+              {
+                "name": "x",
+                "type": "text"
+              }
+            ],
+            "alt": "i"
+          }
+        ]
+      },
+      "expect": {
+        "values": {},
+        "issues": {
+          "start": "type"
+        },
+        "via": "labeled"
+      }
+    },
+    {
+      "id": "labeled-multi-select-mixed-values-and-labels",
+      "op": "interpret",
+      "input": {
+        "text": "gusti: cioccolato, Fragola, a",
+        "pending": [
+          {
+            "v": 1,
+            "type": "form",
+            "id": "m1",
+            "name": "p",
+            "lang": "it",
+            "fields": [
+              {
+                "name": "gusti",
+                "type": "select",
+                "label": "Gusti",
+                "max": 3,
+                "options": [
+                  {
+                    "value": "a",
+                    "label": "Cioccolato"
+                  },
+                  {
+                    "value": "b",
+                    "label": "Vaniglia"
+                  },
+                  {
+                    "value": "c",
+                    "label": "Fragola"
+                  }
+                ]
+              }
+            ],
+            "alt": "i"
+          }
+        ]
+      },
+      "expect": {
+        "values": {
+          "gusti": [
+            "a",
+            "c"
+          ]
+        },
+        "via": "labeled"
+      }
+    },
+    {
+      "id": "labeled-multi-select-too-many",
+      "op": "interpret",
+      "input": {
+        "text": "gusti: Cioccolato, Vaniglia, Fragola",
+        "pending": [
+          {
+            "v": 1,
+            "type": "form",
+            "id": "m2",
+            "name": "p",
+            "lang": "it",
+            "fields": [
+              {
+                "name": "gusti",
+                "type": "select",
+                "label": "Gusti",
+                "max": 2,
+                "options": [
+                  {
+                    "value": "a",
+                    "label": "Cioccolato"
+                  },
+                  {
+                    "value": "b",
+                    "label": "Vaniglia"
+                  },
+                  {
+                    "value": "c",
+                    "label": "Fragola"
+                  }
+                ]
+              }
+            ],
+            "alt": "i"
+          }
+        ]
+      },
+      "expect": {
+        "values": {},
+        "issues": {
+          "gusti": "above_max"
+        },
+        "via": "labeled"
+      }
+    },
+    {
+      "id": "labeled-text-format-email-and-too-long",
+      "op": "interpret",
+      "input": {
+        "text": "email: not-an-email\nnick: abcdefghijk",
+        "pending": [
+          {
+            "v": 1,
+            "type": "form",
+            "id": "f1",
+            "name": "p",
+            "lang": "en",
+            "fields": [
+              {
+                "name": "email",
+                "type": "text",
+                "format": "email"
+              },
+              {
+                "name": "nick",
+                "type": "text",
+                "maxLength": 5
+              }
+            ],
+            "alt": "i"
+          }
+        ]
+      },
+      "expect": {
+        "values": {},
+        "issues": {
+          "email": "format",
+          "nick": "too_long"
+        },
+        "via": "labeled"
+      }
+    },
+    {
+      "id": "labeled-best-of-two-pending",
+      "op": "interpret",
+      "input": {
+        "text": "nome: Mario\ncognome: Rossi",
+        "pending": [
+          {
+            "v": 1,
+            "type": "form",
+            "id": "old1",
+            "name": "anagrafica",
+            "fields": [
+              {
+                "name": "nome",
+                "type": "text"
+              },
+              {
+                "name": "cognome",
+                "type": "text"
+              }
+            ],
+            "alt": "i"
+          },
+          {
+            "v": 1,
+            "type": "form",
+            "id": "new1",
+            "name": "residenza",
+            "fields": [
+              {
+                "name": "citta",
+                "type": "text"
+              },
+              {
+                "name": "nome",
+                "type": "text",
+                "label": "Nome via"
+              }
+            ],
+            "alt": "i"
+          }
+        ]
+      },
+      "expect": {
+        "to": "old1",
+        "name": "anagrafica",
+        "values": {
+          "nome": "Mario",
+          "cognome": "Rossi"
+        },
+        "via": "labeled"
+      }
+    },
+    {
+      "id": "labeled-tie-goes-to-newest",
+      "op": "interpret",
+      "input": {
+        "text": "nome: Mario",
+        "pending": [
+          {
+            "v": 1,
+            "type": "form",
+            "id": "old1",
+            "name": "anagrafica",
+            "fields": [
+              {
+                "name": "nome",
+                "type": "text"
+              }
+            ],
+            "alt": "i"
+          },
+          {
+            "v": 1,
+            "type": "form",
+            "id": "new1",
+            "name": "altro",
+            "fields": [
+              {
+                "name": "nome",
+                "type": "text"
+              },
+              {
+                "name": "x",
+                "type": "text"
+              }
+            ],
+            "alt": "i"
+          }
+        ]
+      },
+      "expect": {
+        "to": "new1",
+        "values": {
+          "nome": "Mario"
+        },
+        "via": "labeled"
+      }
+    },
+    {
+      "id": "bare-single-select-by-label",
+      "op": "interpret",
+      "input": {
+        "text": "Roma",
+        "pending": [
+          {
+            "v": 1,
+            "type": "form",
+            "id": "c1",
+            "name": "citta",
+            "lang": "it",
+            "fields": [
+              {
+                "name": "citta",
+                "type": "select",
+                "label": "Città preferita",
+                "options": [
+                  {
+                    "value": "rome",
+                    "label": "Roma"
+                  },
+                  {
+                    "value": "milan",
+                    "label": "Milano"
+                  }
+                ]
+              }
+            ],
+            "alt": "i"
+          }
+        ]
+      },
+      "expect": {
+        "to": "c1",
+        "values": {
+          "citta": "rome"
+        },
+        "via": "bare"
+      }
+    },
+    {
+      "id": "bare-single-number-with-comma",
+      "op": "interpret",
+      "input": {
+        "text": "1,80",
+        "pending": [
+          {
+            "v": 1,
+            "type": "form",
+            "id": "h1",
+            "name": "altezza",
+            "lang": "it",
+            "fields": [
+              {
+                "name": "altezza",
+                "type": "number",
+                "label": "Altezza",
+                "unit": "m",
+                "min": 0.5,
+                "max": 2.5
+              }
+            ],
+            "alt": "i"
+          }
+        ]
+      },
+      "expect": {
+        "values": {
+          "altezza": 1.8
+        },
+        "via": "bare"
+      }
+    },
+    {
+      "id": "bare-constraint-failure-still-matches",
+      "op": "interpret",
+      "input": {
+        "text": "999",
+        "pending": [
+          {
+            "v": 1,
+            "type": "form",
+            "id": "h2",
+            "name": "altezza",
+            "lang": "it",
+            "fields": [
+              {
+                "name": "altezza",
+                "type": "number",
+                "label": "Altezza",
+                "unit": "cm",
+                "min": 50,
+                "max": 250
+              }
+            ],
+            "alt": "i"
+          }
+        ]
+      },
+      "expect": {
+        "values": {},
+        "issues": {
+          "altezza": "above_max"
+        },
+        "via": "bare"
+      }
+    },
+    {
+      "id": "bare-type-mismatch-falls-to-freetext",
+      "op": "interpret",
+      "input": {
+        "text": "non lo so, ci penso",
+        "pending": [
+          {
+            "v": 1,
+            "type": "form",
+            "id": "h3",
+            "name": "altezza",
+            "lang": "it",
+            "fields": [
+              {
+                "name": "altezza",
+                "type": "number",
+                "label": "Altezza",
+                "unit": "cm"
+              }
+            ],
+            "alt": "i"
+          }
+        ]
+      },
+      "expect": {
+        "to": null,
+        "name": null,
+        "values": {},
+        "via": "freetext"
+      }
+    },
+    {
+      "id": "bare-single-text-takes-anything",
+      "op": "interpret",
+      "input": {
+        "text": "Mario Rossi, detto il Rosso",
+        "pending": [
+          {
+            "v": 1,
+            "type": "form",
+            "id": "t1",
+            "name": "nome",
+            "fields": [
+              {
+                "name": "nome",
+                "type": "text",
+                "required": true
+              }
+            ],
+            "alt": "i"
+          }
+        ]
+      },
+      "expect": {
+        "values": {
+          "nome": "Mario Rossi, detto il Rosso"
+        },
+        "missing": [],
+        "via": "bare"
+      }
+    },
+    {
+      "id": "csv-positional",
+      "op": "interpret",
+      "input": {
+        "text": "Mario, Rossi, 180",
+        "pending": [
+          {
+            "v": 1,
+            "type": "form",
+            "id": "a7f3",
+            "name": "profilo",
+            "lang": "it",
+            "fields": [
+              {
+                "name": "nome",
+                "type": "text",
+                "label": "Nome",
+                "required": true
+              },
+              {
+                "name": "cognome",
+                "type": "text",
+                "label": "Cognome",
+                "required": true
+              },
+              {
+                "name": "altezza",
+                "type": "number",
+                "label": "Altezza",
+                "unit": "cm",
+                "min": 50,
+                "max": 250
+              }
+            ],
+            "alt": "i"
+          }
+        ]
+      },
+      "expect": {
+        "values": {
+          "nome": "Mario",
+          "cognome": "Rossi",
+          "altezza": 180
+        },
+        "missing": [],
+        "issues": {},
+        "via": "csv"
+      }
+    },
+    {
+      "id": "csv-decimal-comma-is-a-separator",
+      "op": "interpret",
+      "input": {
+        "text": "Mario, Rossi, 1,80",
+        "pending": [
+          {
+            "v": 1,
+            "type": "form",
+            "id": "a7f4",
+            "name": "profilo",
+            "lang": "it",
+            "fields": [
+              {
+                "name": "nome",
+                "type": "text",
+                "label": "Nome",
+                "required": true
+              },
+              {
+                "name": "cognome",
+                "type": "text",
+                "label": "Cognome",
+                "required": true
+              },
+              {
+                "name": "altezza",
+                "type": "number",
+                "label": "Altezza",
+                "unit": "m",
+                "min": 0.5,
+                "max": 2.5
+              },
+              {
+                "name": "note",
+                "type": "text"
+              }
+            ],
+            "alt": "i"
+          }
+        ]
+      },
+      "expect": {
+        "values": {
+          "nome": "Mario",
+          "cognome": "Rossi",
+          "altezza": 1,
+          "note": "80"
+        },
+        "via": "csv"
+      }
+    },
+    {
+      "id": "csv-partial-fewer-items-than-fields",
+      "op": "interpret",
+      "input": {
+        "text": "Mario, Rossi",
+        "pending": [
+          {
+            "v": 1,
+            "type": "form",
+            "id": "a7f3",
+            "name": "profilo",
+            "lang": "it",
+            "fields": [
+              {
+                "name": "nome",
+                "type": "text",
+                "label": "Nome",
+                "required": true
+              },
+              {
+                "name": "cognome",
+                "type": "text",
+                "label": "Cognome",
+                "required": true
+              },
+              {
+                "name": "altezza",
+                "type": "number",
+                "label": "Altezza",
+                "required": true
+              }
+            ],
+            "alt": "i"
+          }
+        ]
+      },
+      "expect": {
+        "values": {
+          "nome": "Mario",
+          "cognome": "Rossi"
+        },
+        "missing": [
+          "altezza"
+        ],
+        "via": "csv"
+      }
+    },
+    {
+      "id": "csv-too-many-items-is-freetext",
+      "op": "interpret",
+      "input": {
+        "text": "a, b, c",
+        "pending": [
+          {
+            "v": 1,
+            "type": "form",
+            "id": "c2",
+            "name": "p",
+            "fields": [
+              {
+                "name": "x",
+                "type": "text"
+              },
+              {
+                "name": "y",
+                "type": "text"
+              }
+            ],
+            "alt": "i"
+          }
+        ]
+      },
+      "expect": {
+        "via": "freetext"
+      }
+    },
+    {
+      "id": "csv-type-mismatch-is-freetext",
+      "op": "interpret",
+      "input": {
+        "text": "ciao, come va",
+        "pending": [
+          {
+            "v": 1,
+            "type": "form",
+            "id": "c3",
+            "name": "p",
+            "fields": [
+              {
+                "name": "x",
+                "type": "text"
+              },
+              {
+                "name": "n",
+                "type": "number"
+              }
+            ],
+            "alt": "i"
+          }
+        ]
+      },
+      "expect": {
+        "via": "freetext"
+      }
+    },
+    {
+      "id": "csv-constraint-failure-still-matches",
+      "op": "interpret",
+      "input": {
+        "text": "Mario, 999",
+        "pending": [
+          {
+            "v": 1,
+            "type": "form",
+            "id": "c4",
+            "name": "p",
+            "fields": [
+              {
+                "name": "x",
+                "type": "text"
+              },
+              {
+                "name": "n",
+                "type": "number",
+                "max": 250
+              }
+            ],
+            "alt": "i"
+          }
+        ]
+      },
+      "expect": {
+        "values": {
+          "x": "Mario"
+        },
+        "issues": {
+          "n": "above_max"
+        },
+        "via": "csv"
+      }
+    },
+    {
+      "id": "freetext-no-pending",
+      "op": "interpret",
+      "input": {
+        "text": "ciao a tutti",
+        "pending": []
+      },
+      "expect": {
+        "kind": "reply",
+        "to": null,
+        "name": null,
+        "values": {},
+        "missing": [],
+        "issues": {},
+        "raw": "ciao a tutti",
+        "via": "freetext",
+        "duplicate": false
+      }
+    },
+    {
+      "id": "freetext-multi-field-bare-word",
+      "op": "interpret",
+      "input": {
+        "text": "Mario",
+        "pending": [
+          {
+            "v": 1,
+            "type": "form",
+            "id": "a7f3",
+            "name": "profilo",
+            "fields": [
+              {
+                "name": "nome",
+                "type": "text"
+              },
+              {
+                "name": "cognome",
+                "type": "text"
+              }
+            ],
+            "alt": "i"
+          }
+        ]
+      },
+      "expect": {
+        "via": "freetext",
+        "values": {}
+      }
+    },
+    {
+      "id": "freetext-empty-text",
+      "op": "interpret",
+      "input": {
+        "text": "   ",
+        "pending": [
+          {
+            "v": 1,
+            "type": "form",
+            "id": "e1",
+            "name": "p",
+            "fields": [
+              {
+                "name": "x",
+                "type": "text"
+              }
+            ],
+            "alt": "i"
+          }
+        ]
+      },
+      "expect": {
+        "via": "freetext"
+      }
+    },
+    {
+      "id": "project-it",
+      "op": "project",
+      "input": {
+        "spec": {
+          "v": 1,
+          "type": "form",
+          "id": "fw12",
+          "name": "smistamento",
+          "lang": "it",
+          "fields": [
+            {
+              "name": "categoria",
+              "type": "select",
+              "label": "Categoria",
+              "options": [
+                {
+                  "value": "guasto",
+                  "label": "Guasto"
+                },
+                {
+                  "value": "sicurezza",
+                  "label": "Rischio sicurezza"
+                }
+              ]
+            },
+            {
+              "name": "destinatario",
+              "type": "select",
+              "label": "Destinatario",
+              "options": [
+                {
+                  "value": "peer_anna",
+                  "label": "Anna"
+                }
+              ]
+            },
+            {
+              "name": "urgente",
+              "type": "bool",
+              "label": "Urgente"
+            },
+            {
+              "name": "quando",
+              "type": "date",
+              "label": "Quando"
+            },
+            {
+              "name": "altezza",
+              "type": "number",
+              "label": "Altezza",
+              "unit": "cm"
+            },
+            {
+              "name": "gusti",
+              "type": "select",
+              "label": "Gusti",
+              "max": 2,
+              "options": [
+                {
+                  "value": "a",
+                  "label": "Cioccolato"
+                },
+                {
+                  "value": "b",
+                  "label": "Vaniglia"
+                }
+              ]
+            },
+            {
+              "name": "vuoto",
+              "type": "text",
+              "label": "Vuoto"
+            }
+          ],
+          "alt": "i"
+        },
+        "draft": {
+          "to": "fw12",
+          "values": {
+            "categoria": "sicurezza",
+            "destinatario": "peer_anna",
+            "urgente": true,
+            "quando": "2026-07-26",
+            "altezza": 180,
+            "gusti": [
+              "b",
+              "a"
+            ],
+            "vuoto": ""
+          }
+        }
+      },
+      "expect": {
+        "text": "Categoria: Rischio sicurezza; Destinatario: Anna; Urgente: Sì; Quando: 26/07/2026; Altezza: 180 cm; Gusti: Vaniglia, Cioccolato"
+      }
+    },
+    {
+      "id": "project-en",
+      "op": "project",
+      "input": {
+        "spec": {
+          "v": 1,
+          "type": "form",
+          "id": "p1",
+          "name": "p",
+          "lang": "en",
+          "fields": [
+            {
+              "name": "ok",
+              "type": "bool",
+              "label": "Agree"
+            },
+            {
+              "name": "when",
+              "type": "date",
+              "label": "When"
+            }
+          ],
+          "alt": "i"
+        },
+        "draft": {
+          "to": "p1",
+          "values": {
+            "ok": false,
+            "when": "2026-07-26"
+          }
+        }
+      },
+      "expect": {
+        "text": "Agree: No; When: 07/26/2026"
+      }
+    },
+    {
+      "id": "encode-full",
+      "op": "encode",
+      "input": {
+        "spec": {
+          "v": 1,
+          "type": "form",
+          "id": "fw12",
+          "name": "smistamento",
+          "lang": "it",
+          "fields": [
+            {
+              "name": "categoria",
+              "type": "select",
+              "label": "Categoria",
+              "required": true,
+              "options": [
+                {
+                  "value": "guasto",
+                  "label": "Guasto"
+                },
+                {
+                  "value": "sicurezza",
+                  "label": "Rischio sicurezza"
+                }
+              ]
+            },
+            {
+              "name": "destinatario",
+              "type": "select",
+              "label": "Destinatario",
+              "options": [
+                {
+                  "value": "peer_anna",
+                  "label": "Anna"
+                }
+              ]
+            },
+            {
+              "name": "azione",
+              "type": "select",
+              "label": "Azione",
+              "required": true,
+              "options": [
+                {
+                  "value": "inoltra_tutti",
+                  "label": "Inoltra a tutti"
+                },
+                {
+                  "value": "inoltra_uno",
+                  "label": "Inoltra a uno"
+                }
+              ]
+            }
+          ],
+          "alt": "i"
+        },
+        "draft": {
+          "to": "fw12",
+          "values": {
+            "categoria": "sicurezza",
+            "destinatario": "peer_anna",
+            "azione": "inoltra_uno"
+          }
+        }
+      },
+      "expect": {
+        "text": "```uai\n{\"v\":1,\"kind\":\"reply\",\"to\":\"fw12\",\"values\":{\"categoria\":\"sicurezza\",\"destinatario\":\"peer_anna\",\"azione\":\"inoltra_uno\"},\"alt\":\"Categoria: Rischio sicurezza; Destinatario: Anna; Azione: Inoltra a uno\"}\n```"
+      }
+    },
+    {
+      "id": "encode-partial-skip",
+      "op": "encode",
+      "input": {
+        "spec": {
+          "v": 1,
+          "type": "form",
+          "id": "fw12",
+          "name": "s",
+          "lang": "it",
+          "fields": [
+            {
+              "name": "categoria",
+              "type": "select",
+              "label": "Categoria",
+              "required": true,
+              "options": [
+                {
+                  "value": "guasto",
+                  "label": "Guasto"
+                }
+              ]
+            },
+            {
+              "name": "note",
+              "type": "text",
+              "label": "Note"
+            }
+          ],
+          "alt": "i"
+        },
+        "draft": {
+          "to": "fw12",
+          "values": {}
+        }
+      },
+      "expect": {
+        "text": "```uai\n{\"v\":1,\"kind\":\"reply\",\"to\":\"fw12\",\"values\":{}}\n```"
+      }
+    },
+    {
+      "id": "encode-drops-unknown-and-invalid",
+      "op": "encode",
+      "input": {
+        "spec": {
+          "v": 1,
+          "type": "form",
+          "id": "q1",
+          "name": "p",
+          "lang": "en",
+          "fields": [
+            {
+              "name": "n",
+              "type": "number",
+              "label": "N",
+              "max": 10
+            },
+            {
+              "name": "t",
+              "type": "text",
+              "label": "T"
+            }
+          ],
+          "alt": "i"
+        },
+        "draft": {
+          "to": "q1",
+          "values": {
+            "n": 99,
+            "t": "ok",
+            "ghost": "x"
+          }
+        }
+      },
+      "expect": {
+        "text": "```uai\n{\"v\":1,\"kind\":\"reply\",\"to\":\"q1\",\"values\":{\"t\":\"ok\"},\"alt\":\"T: ok\"}\n```"
+      }
+    },
+    {
+      "id": "encode-projection-over-alt-cap-is-cut",
+      "op": "encode",
+      "input": {
+        "spec": {
+          "v": 1,
+          "type": "form",
+          "id": "long1",
+          "name": "p",
+          "lang": "en",
+          "fields": [
+            {
+              "name": "t",
+              "type": "textarea",
+              "label": "T"
+            }
+          ],
+          "alt": "x"
+        },
+        "draft": {
+          "to": "long1",
+          "values": {
+            "t": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+          }
+        }
+      },
+      "expect": {
+        "text": "```uai\n{\"v\":1,\"kind\":\"reply\",\"to\":\"long1\",\"values\":{\"t\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"},\"alt\":\"T: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}\n```"
+      }
+    },
+    {
+      "id": "prose-beside-block-still-reads-the-block",
+      "op": "interpret",
+      "input": {
+        "text": "Categoria: Guasto\n\n```uai\n{\"v\":1,\"kind\":\"reply\",\"to\":\"fw12\",\"values\":{\"categoria\":\"guasto\"}}\n```",
+        "pending": [
+          {
+            "v": 1,
+            "type": "form",
+            "id": "fw12",
+            "name": "s",
+            "lang": "it",
+            "fields": [
+              {
+                "name": "categoria",
+                "type": "select",
+                "label": "Categoria",
+                "required": true,
+                "options": [
+                  {
+                    "value": "guasto",
+                    "label": "Guasto"
+                  }
+                ]
+              }
+            ],
+            "alt": "i"
+          }
+        ]
+      },
+      "expect": {
+        "values": {
+          "categoria": "guasto"
+        },
+        "via": "block",
+        "missing": []
+      }
+    },
+    {
+      "id": "registry-duplicate-and-cap",
+      "op": "registry",
+      "input": {
+        "steps": [
+          {
+            "register": {
+              "peerId": "p1",
+              "at": 1000,
+              "spec": {
+                "v": 1,
+                "type": "form",
+                "id": "f1",
+                "name": "one",
+                "fields": [
+                  {
+                    "name": "a",
+                    "type": "text"
+                  }
+                ],
+                "alt": "i"
+              }
+            }
+          },
+          {
+            "interpret": {
+              "peerId": "p1",
+              "at": 1001,
+              "text": "a: uno"
+            }
+          },
+          {
+            "interpret": {
+              "peerId": "p1",
+              "at": 1002,
+              "text": "a: due"
+            }
+          },
+          {
+            "register": {
+              "peerId": "p1",
+              "at": 2000,
+              "spec": {
+                "v": 1,
+                "type": "form",
+                "id": "f2",
+                "name": "two",
+                "fields": [
+                  {
+                    "name": "b",
+                    "type": "text"
+                  }
+                ],
+                "alt": "i"
+              }
+            }
+          },
+          {
+            "register": {
+              "peerId": "p1",
+              "at": 2001,
+              "spec": {
+                "v": 1,
+                "type": "form",
+                "id": "f3",
+                "name": "three",
+                "fields": [
+                  {
+                    "name": "c",
+                    "type": "text"
+                  }
+                ],
+                "alt": "i"
+              }
+            }
+          },
+          {
+            "register": {
+              "peerId": "p1",
+              "at": 2002,
+              "spec": {
+                "v": 1,
+                "type": "form",
+                "id": "f4",
+                "name": "four",
+                "fields": [
+                  {
+                    "name": "d",
+                    "type": "text"
+                  }
+                ],
+                "alt": "i"
+              }
+            }
+          },
+          {
+            "register": {
+              "peerId": "p1",
+              "at": 2003,
+              "spec": {
+                "v": 1,
+                "type": "form",
+                "id": "f5",
+                "name": "five",
+                "fields": [
+                  {
+                    "name": "e",
+                    "type": "text"
+                  }
+                ],
+                "alt": "i"
+              }
+            }
+          },
+          {
+            "register": {
+              "peerId": "p1",
+              "at": 2004,
+              "spec": {
+                "v": 1,
+                "type": "form",
+                "id": "f6",
+                "name": "six",
+                "fields": [
+                  {
+                    "name": "f",
+                    "type": "text"
+                  }
+                ],
+                "alt": "i"
+              }
+            }
+          },
+          {
+            "register": {
+              "peerId": "p1",
+              "at": 2005,
+              "spec": {
+                "v": 1,
+                "type": "form",
+                "id": "f7",
+                "name": "seven",
+                "fields": [
+                  {
+                    "name": "g",
+                    "type": "text"
+                  }
+                ],
+                "alt": "i"
+              }
+            }
+          },
+          {
+            "register": {
+              "peerId": "p1",
+              "at": 2006,
+              "spec": {
+                "v": 1,
+                "type": "form",
+                "id": "f8",
+                "name": "eight",
+                "fields": [
+                  {
+                    "name": "h",
+                    "type": "text"
+                  }
+                ],
+                "alt": "i"
+              }
+            }
+          },
+          {
+            "register": {
+              "peerId": "p1",
+              "at": 2007,
+              "spec": {
+                "v": 1,
+                "type": "form",
+                "id": "f9",
+                "name": "nine",
+                "fields": [
+                  {
+                    "name": "i",
+                    "type": "text"
+                  }
+                ],
+                "alt": "i"
+              }
+            }
+          },
+          {
+            "register": {
+              "peerId": "p1",
+              "at": 2008,
+              "spec": {
+                "v": 1,
+                "type": "form",
+                "id": "f10",
+                "name": "ten",
+                "fields": [
+                  {
+                    "name": "j",
+                    "type": "text"
+                  }
+                ],
+                "alt": "i"
+              }
+            }
+          },
+          {
+            "register": {
+              "peerId": "p1",
+              "at": 2009,
+              "spec": {
+                "v": 1,
+                "type": "form",
+                "id": "f11",
+                "name": "eleven",
+                "fields": [
+                  {
+                    "name": "k",
+                    "type": "text"
+                  }
+                ],
+                "alt": "i"
+              }
+            }
+          },
+          {
+            "register": {
+              "peerId": "p1",
+              "at": 2010,
+              "spec": {
+                "v": 1,
+                "type": "form",
+                "id": "f12",
+                "name": "twelve",
+                "fields": [
+                  {
+                    "name": "l",
+                    "type": "text"
+                  }
+                ],
+                "alt": "i"
+              }
+            }
+          },
+          {
+            "register": {
+              "peerId": "p1",
+              "at": 2011,
+              "spec": {
+                "v": 1,
+                "type": "form",
+                "id": "f13",
+                "name": "thirteen",
+                "fields": [
+                  {
+                    "name": "m",
+                    "type": "text"
+                  }
+                ],
+                "alt": "i"
+              }
+            }
+          },
+          {
+            "register": {
+              "peerId": "p1",
+              "at": 2012,
+              "spec": {
+                "v": 1,
+                "type": "form",
+                "id": "f14",
+                "name": "fourteen",
+                "fields": [
+                  {
+                    "name": "n",
+                    "type": "text"
+                  }
+                ],
+                "alt": "i"
+              }
+            }
+          },
+          {
+            "register": {
+              "peerId": "p1",
+              "at": 2013,
+              "spec": {
+                "v": 1,
+                "type": "form",
+                "id": "f15",
+                "name": "fifteen",
+                "fields": [
+                  {
+                    "name": "o",
+                    "type": "text"
+                  }
+                ],
+                "alt": "i"
+              }
+            }
+          },
+          {
+            "register": {
+              "peerId": "p1",
+              "at": 2014,
+              "spec": {
+                "v": 1,
+                "type": "form",
+                "id": "f16",
+                "name": "sixteen",
+                "fields": [
+                  {
+                    "name": "p",
+                    "type": "text"
+                  }
+                ],
+                "alt": "i"
+              }
+            }
+          },
+          {
+            "pending": {
+              "peerId": "p1",
+              "at": 2015
+            }
+          },
+          {
+            "register": {
+              "peerId": "p1",
+              "at": 2016,
+              "spec": {
+                "v": 1,
+                "type": "form",
+                "id": "f17",
+                "name": "seventeen",
+                "fields": [
+                  {
+                    "name": "q",
+                    "type": "number"
+                  }
+                ],
+                "alt": "i"
+              }
+            }
+          },
+          {
+            "pending": {
+              "peerId": "p1",
+              "at": 2017
+            }
+          },
+          {
+            "interpret": {
+              "peerId": "p1",
+              "at": 2018,
+              "text": "a: tre"
+            }
+          },
+          {
+            "pending": {
+              "peerId": "p1",
+              "at": 90000000
+            }
+          }
+        ]
+      },
+      "expect": {
+        "out": [
+          {
+            "to": "f1",
+            "values": {
+              "a": "uno"
+            },
+            "via": "labeled",
+            "duplicate": false
+          },
+          {
+            "to": "f1",
+            "values": {
+              "a": "due"
+            },
+            "via": "labeled",
+            "duplicate": true
+          },
+          [
+            "f1",
+            "f2",
+            "f3",
+            "f4",
+            "f5",
+            "f6",
+            "f7",
+            "f8",
+            "f9",
+            "f10",
+            "f11",
+            "f12",
+            "f13",
+            "f14",
+            "f15",
+            "f16"
+          ],
+          [
+            "f2",
+            "f3",
+            "f4",
+            "f5",
+            "f6",
+            "f7",
+            "f8",
+            "f9",
+            "f10",
+            "f11",
+            "f12",
+            "f13",
+            "f14",
+            "f15",
+            "f16",
+            "f17"
+          ],
+          {
+            "to": null,
+            "via": "freetext"
+          },
+          []
+        ]
+      }
+    }
+  ]
+}
