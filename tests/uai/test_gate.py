@@ -22,7 +22,8 @@ from unaiverse.custom import Custom
 import unaiverse.agent_basics as agent_basics_module
 from unaiverse.agent_basics import AgentBasics
 from unaiverse.streams.dataprops import StreamType
-from unaiverse.uai import AnswerOutcome, AnswerWithheld, build_form, encode_reply, parse_message, serialize_block
+from unaiverse.uai import (AnswerOutcome, AnswerWithheld, build_form, encode_reply, interpret_reply,
+                                parse_message, parts_to_model_text, serialize_block)
 from unaiverse.modules.utils import ModuleWrapper, MultiIdentity, HumanModule
 
 FORM = build_form("cena", [{"name": "scelta", "type": "select", "label": "Scelta", "required": True,
@@ -88,6 +89,7 @@ class FakeAgent:
     uai_answer_fell_short = AgentBasics.uai_answer_fell_short
     uai_time_left = AgentBasics.uai_time_left
     uai_module_echoes = AgentBasics.uai_module_echoes
+    uai_merge_reads = AgentBasics.uai_merge_reads
     uai_remember_form = AgentBasics.uai_remember_form
     uai_pending_form = AgentBasics.uai_pending_form
     uai_pending_view = AgentBasics.uai_pending_view
@@ -202,24 +204,39 @@ def test_a_model_answering_in_prose_to_a_form_it_was_just_asked_is_asked_again()
     assert parse_message(out)[0]["spec"]["values"] == {"scelta": "pizza"}
 
 
-def test_when_the_retries_are_spent_the_words_travel_with_what_they_gave():
+def test_when_the_retries_are_spent_one_block_travels_with_values_and_words():
     spy = Spy("Nome: Anna\nQuante persone: 30")
     out = wrapper(spy)(BIG_MESSAGE)[0]
     assert len(spy.calls) == 1 + AgentBasics.UAI_MAX_RETRIES
 
-    # The words as written, then one block with the values that could be read: whoever asked gets the name
-    # and learns the rest is missing, and the value that violates the form is nowhere
+    # One reply block: the values that could be read, and the words as written in its raw. Whoever asked
+    # gets the name, learns the rest is missing, and the value that violates the form is nowhere canonical
     parts = parse_message(out)
-    assert parts[0]["type"] == "text" and parts[0]["text"].startswith("Nome: Anna")
-    assert parts[-1]["type"] == "reply" and parts[-1]["spec"]["values"] == {"nome": "Anna"}
-    assert "30" not in parts[-1]["alt"]
+    assert len(parts) == 1 and parts[0]["type"] == "reply"
+    assert parts[0]["spec"]["values"] == {"nome": "Anna"}
+    assert parts[0]["spec"]["raw"] == ["Nome: Anna\nQuante persone: 30"]
+    assert "30" not in parts[0]["alt"]
+
+    # And a model reading the answer still sees both faces: the canonical value and the phrasing,
+    # including what the values missed
+    view = parts_to_model_text(parts)
+    assert "nome: Anna" in view and "Quante persone: 30" in view
 
 
-def test_when_the_retries_are_spent_and_nothing_could_be_read_the_words_travel_alone():
+def test_when_the_retries_are_spent_and_nothing_could_be_read_the_words_travel_inside_the_block():
+    agent = FakeAgent()
+    agent.uai_remember_form("peer1", MESSAGE)
+    assert agent.uai_pending_form() is not None
     spy = Spy("Boh, non saprei")
-    out = wrapper(spy)(MESSAGE)[0]
+    out = wrapper(spy, agent=agent)(MESSAGE)[0]
     assert len(spy.calls) == 1 + AgentBasics.UAI_MAX_RETRIES
-    assert out == "Boh, non saprei"
+
+    # Still one reply block, empty-handed but carrying the words: the answer is over (the remembered
+    # form is forgotten), and whoever asked can read how it was phrased
+    parts = parse_message(out)
+    assert len(parts) == 1 and parts[0]["type"] == "reply"
+    assert parts[0]["spec"]["values"] == {} and parts[0]["spec"]["raw"] == ["Boh, non saprei"]
+    assert agent.uai_pending_form() is None
 
 
 def test_a_blank_answer_to_a_form_just_asked_is_a_refusal_and_never_travels():
@@ -245,11 +262,85 @@ def test_a_blank_line_with_a_form_merely_pending_is_ordinary_silence():
 
 def test_a_blank_regeneration_never_replaces_the_words_of_an_earlier_attempt():
     # The first answer falls short and the retry gives up entirely: what travels is the best answer the
-    # module ever gave, as written, never the blank that came after it
+    # module ever gave, carried as the raw of the failure block, never the blank that came after it
     spy = Spy("scelta: Lasagne", "")
     out = wrapper(spy)(MESSAGE)[0]
     assert len(spy.calls) == 1 + AgentBasics.UAI_MAX_RETRIES
-    assert out == "scelta: Lasagne"
+    parts = parse_message(out)
+    assert len(parts) == 1 and parts[0]["type"] == "reply"
+    assert parts[0]["spec"]["values"] == {} and parts[0]["spec"]["raw"] == ["scelta: Lasagne"]
+
+
+def test_a_clean_answer_carries_its_words_as_the_raw_of_the_block():
+    spy = Spy("scelta: Sushi")
+    out = wrapper(spy)(MESSAGE)[0]
+    part = parse_message(out)[0]
+    assert part["type"] == "reply" and part["spec"]["values"] == {"scelta": "sushi"}
+    assert part["spec"]["raw"] == ["scelta: Sushi"]
+
+    # And the raw is what an interpreting receiver reads as the event's words
+    event = interpret_reply(out, pending=[FORM])
+    assert event.via == "block" and event.raw == "scelta: Sushi"
+
+
+def test_the_raw_field_is_transparent_and_optional():
+    # A block encoded without raw has no such field, byte-identical to the shape the vectors pin
+    plain = encode_reply(FORM, {"scelta": "pizza"})
+    assert '"raw"' not in plain
+    assert "raw" not in parse_message(plain)[0]["spec"]
+
+    # A raw-only failure block still reads as the words wherever a person or a model would see it
+    failed = encode_reply(FORM, {}, raw="Boh, non saprei")
+    assert parts_to_model_text(parse_message(failed)) == "Boh, non saprei"
+
+
+def test_a_giant_raw_is_cut_before_it_can_cost_the_values():
+    # The words must never cost the values: a raw that would push the block past the fence cap every
+    # receiver enforces is cut to fit, so the block survives the gate on arrival and the values are
+    # read whole (an uncut raw of this size would degrade the whole block to prose)
+    out = encode_reply(FORM, {"scelta": "pizza"}, raw="parola " * 4000)
+    part = parse_message(out)[0]
+    assert part["type"] == "reply" and part["spec"]["values"] == {"scelta": "pizza"}
+    assert len(part["spec"]["raw"]) == 1 and 0 < len(part["spec"]["raw"][0]) < len("parola " * 4000)
+
+    # With several texts, the oldest are dropped first: the latest words survive whole
+    out = encode_reply(FORM, {"scelta": "pizza"}, raw=["x" * 6000, "y" * 6000])
+    assert parse_message(out)[0]["spec"]["raw"] == ["y" * 6000]
+
+
+def test_an_answer_is_completed_across_the_corrective_rounds():
+    # The first attempt fills half the form; the correction asks ONLY for what is missing (restating
+    # what already stands), the second attempt supplies just that, and the merged answer travels as one
+    # block whose raw lists both contributing texts, oldest first
+    spy = Spy("Nome: Anna", "Quante persone: 4")
+    out = wrapper(spy)(BIG_MESSAGE)[0]
+    assert len(spy.calls) == 2
+    assert "SOLO i campi che mancano" in spy.calls[1] and "Nome: Anna" in spy.calls[1]
+    part = parse_message(out)[0]
+    assert part["type"] == "reply" and part["spec"]["values"] == {"nome": "Anna", "persone": 4}
+    assert part["spec"]["raw"] == ["Nome: Anna", "Quante persone: 4"]
+
+
+def test_a_fresh_complaint_blocks_the_merge_until_it_is_fixed():
+    # Attempt 2 retracts a good value with an out-of-range one: the merge must not ship the stale value
+    # over the fresh complaint, and the correction names the complaint, never "you said nothing about it"
+    spy = Spy("Quante persone: 4", "Nome: Bea\nQuante persone: 30", "Quante persone: 4")
+    out = wrapper(spy)(BIG_MESSAGE)[0]
+    assert len(spy.calls) == 3
+    assert "non sono accettabili" in spy.calls[2]
+    assert "non hai detto nulla su Quante persone" not in spy.calls[2]
+    assert parse_message(out)[0]["spec"]["values"] == {"nome": "Bea", "persone": 4}
+
+
+def test_the_raw_lists_only_the_texts_the_values_were_read_from():
+    # An attempt that gave nothing readable (an out-of-range value) is not part of the provenance: the
+    # raw of the final block lists the contributing texts only
+    spy = Spy("Quante persone: 30", "Nome: Bea\nQuante persone: 4")
+    out = wrapper(spy)(BIG_MESSAGE)[0]
+    assert len(spy.calls) == 2
+    part = parse_message(out)[0]
+    assert part["spec"]["values"] == {"nome": "Bea", "persone": 4}
+    assert part["spec"]["raw"] == ["Nome: Bea\nQuante persone: 4"]
 
 
 def test_a_retry_on_a_remembered_form_restates_the_message_that_asked():
@@ -489,7 +580,7 @@ def test_a_world_can_decide_that_falling_short_is_fine():
 class EndlessAgent(FakeAgent):
     """A broken override that asks again forever."""
 
-    def uai_answer_fell_short(self, text, spec, event, attempt, model_view=None):
+    def uai_answer_fell_short(self, text, spec, event, attempt, model_view=None, attempts=None):
         return AnswerOutcome(retry="again")
 
 

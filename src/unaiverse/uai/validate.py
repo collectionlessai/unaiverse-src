@@ -144,6 +144,16 @@ def validate_block(obj) -> dict:
         alt = obj.get("alt")
         if isinstance(alt, str) and alt.strip() and len(alt) <= MAX_ALT_CHARS:
             spec["alt"] = alt
+
+        # The words the values were read from may travel inside the block too, verbatim: a list of texts,
+        # oldest first. The field is transparent (a receiver that does not ask for it never sees it) and,
+        # like the alt, never fatal: whatever is not a list of usable texts is dropped. Its size is
+        # bounded by the fence cap, not by a cap of its own: fidelity is its point.
+        raw = obj.get("raw")
+        if isinstance(raw, list):
+            texts = [t for t in raw if non_empty(t)]
+            if texts:
+                spec["raw"] = texts
         return {"ok": True, "spec": spec, "errors": errors, "kind": "reply"}
 
     # Content blocks: alt is mandatory before anything else is looked at
