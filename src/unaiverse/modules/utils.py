@@ -718,6 +718,11 @@ class ModuleWrapper(torch.nn.Module):
         try:
             if spec is None:
                 spec = self.agent.uai_pending_form()
+                if spec is not None:
+                    # The form came in an earlier message: the rendering of THAT message, when still
+                    # known, is what a corrective prompt should restate, not the current input. The
+                    # getattr keeps a world that overrode the inbox trio before this method existed working
+                    model_view = getattr(self.agent, "uai_pending_view", lambda: None)()
             if spec is None:
                 return outputs
             attempt = 0
@@ -736,7 +741,13 @@ class ModuleWrapper(torch.nn.Module):
                     if arg_index is None:
                         break
                 rendered[arg_index] = outcome.retry
-                outputs = self.__run_module(list(rendered), kwargs)
+                new_outputs = self.__run_module(list(rendered), kwargs)
+
+                # A blank regeneration never replaces the words of an earlier attempt: the module just
+                # gave up, and the policy keeps judging (and eventually ships) the best answer it has seen
+                if not (isinstance(new_outputs[out_index], str) and not new_outputs[out_index].strip()
+                        and isinstance(outputs[out_index], str) and outputs[out_index].strip()):
+                    outputs = new_outputs
                 attempt += 1
         except Exception as e:
             log.error(f"Error deciding about the answer to an interactive message, keeping it: {e}")

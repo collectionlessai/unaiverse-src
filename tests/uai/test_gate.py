@@ -90,6 +90,7 @@ class FakeAgent:
     uai_module_echoes = AgentBasics.uai_module_echoes
     uai_remember_form = AgentBasics.uai_remember_form
     uai_pending_form = AgentBasics.uai_pending_form
+    uai_pending_view = AgentBasics.uai_pending_view
     uai_forget_form = AgentBasics.uai_forget_form
 
     def __init__(self, human: bool = False, interaction=None, browser: bool = False) -> None:
@@ -219,6 +220,47 @@ def test_when_the_retries_are_spent_and_nothing_could_be_read_the_words_travel_a
     out = wrapper(spy)(MESSAGE)[0]
     assert len(spy.calls) == 1 + AgentBasics.UAI_MAX_RETRIES
     assert out == "Boh, non saprei"
+
+
+def test_a_blank_answer_to_a_form_just_asked_is_a_refusal_and_never_travels():
+    # Silence is an answer in ordinary chat, but not to a question just asked: a model that answers
+    # nothing is asked again, and one that insists on silence is withheld, never shipped as an empty reply
+    spy = Spy("")
+    with pytest.raises(AnswerWithheld):
+        wrapper(spy)(MESSAGE)
+    assert len(spy.calls) == 1 + AgentBasics.UAI_MAX_RETRIES
+    assert "Pizza o sushi?" in spy.calls[-1] and "Non soddisfa" in spy.calls[-1]
+
+
+def test_a_blank_line_with_a_form_merely_pending_is_ordinary_silence():
+    # The form arrived earlier and this turn is not about it: an empty answer is the module staying
+    # silent, it travels as such and the form keeps waiting
+    agent = FakeAgent()
+    agent.uai_remember_form("peer1", MESSAGE)
+    spy = Spy("")
+    assert wrapper(spy, agent=agent)("come va?")[0] == ""
+    assert len(spy.calls) == 1
+    assert agent.uai_pending_form()["id"] == "poll1"
+
+
+def test_a_blank_regeneration_never_replaces_the_words_of_an_earlier_attempt():
+    # The first answer falls short and the retry gives up entirely: what travels is the best answer the
+    # module ever gave, as written, never the blank that came after it
+    spy = Spy("scelta: Lasagne", "")
+    out = wrapper(spy)(MESSAGE)[0]
+    assert len(spy.calls) == 1 + AgentBasics.UAI_MAX_RETRIES
+    assert out == "scelta: Lasagne"
+
+
+def test_a_retry_on_a_remembered_form_restates_the_message_that_asked():
+    # The form arrived in an earlier message: when the answer falls short, the corrective prompt repeats
+    # the rendering of THAT message (its question included), not the form's instruction alone
+    agent = FakeAgent()
+    agent.uai_remember_form("peer1", MESSAGE)
+    spy = Spy("scelta: Lasagne", "scelta: Sushi")
+    out = wrapper(spy, agent=agent)("dunque...")[0]
+    assert len(spy.calls) == 2 and "Pizza o sushi?" in spy.calls[1]
+    assert parse_message(out)[-1]["spec"]["values"] == {"scelta": "sushi"}
 
 
 def test_an_answer_that_never_satisfied_the_form_is_discarded_when_the_interaction_is_expiring():

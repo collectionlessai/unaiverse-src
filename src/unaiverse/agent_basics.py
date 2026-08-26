@@ -2628,8 +2628,12 @@ class AgentBasics:
 
         # Nothing to read, or a text that was never an answer while a form was merely pending from before:
         # the words travel as they are. Once the processor has been asked again, though, a free text is a
-        # refusal like any other.
+        # refusal like any other; and so is silence, when the form was handed over in this very turn: an
+        # empty answer to a question just asked is a refusal to answer it, not a message (an empty answer
+        # to an unrelated turn, with a form merely pending from before, is ordinary silence and travels)
         if event is None or (event.via == VIA_FREETEXT and not asked_now and attempt == 0):
+            if not text.strip() and (asked_now or attempt > 0):
+                return self.uai_answer_fell_short(text, spec, None, attempt, model_view)
             return AnswerOutcome()
         return self.uai_answer_fell_short(text, spec, event, attempt, model_view)
 
@@ -2671,6 +2675,14 @@ class AgentBasics:
 
         if attempt < self.UAI_MAX_RETRIES:
             return AnswerOutcome(retry=retry_prompt(spec, text, event, model_view))
+
+        # The retries are spent and nothing was ever said: silence has no words to send, and an empty
+        # string must not reach whoever asked as if it were an answer, so it is withheld like an
+        # expiring one (the form stays pending, the asker times out instead of reading an empty ballot)
+        if not text.strip():
+            log.misc(f"The answer to '{spec.get('name', spec.get('id'))}' was never given after "
+                     f"{attempt} more attempts: nothing is sent")
+            return AnswerOutcome(withhold=True)
 
         # The retries are spent: the words travel, together with whatever of them could be read, so that
         # whoever asked gets the values there are and learns what is missing
@@ -2732,7 +2744,7 @@ class AgentBasics:
         through their processor, while their answer does, so without this the answer would have nothing to
         be matched against. A form is remembered for as long as the interaction that asked it can live; a
         world that needs more than the last form per peer (several open at a time, a duplicate flag)
-        overrides this together with uai_pending_form and uai_forget_form.
+        overrides this together with uai_pending_form, uai_pending_view and uai_forget_form.
 
         Args:
             peer_id: Who sent the message.
@@ -2740,11 +2752,15 @@ class AgentBasics:
         """
         if peer_id is None or not isinstance(text, str):
             return
-        spec = newest_form(parse_message(text))
+        parts = parse_message(text)
+        spec = newest_form(parts)
         if spec is None:
             return
         self.uai_inbox.pop(peer_id, None)  # Re-inserted below, so that the oldest entry stays first
-        self.uai_inbox[peer_id] = (spec, self.clock.get_time())
+
+        # The rendered message is kept beside the spec: a corrective prompt built long after the message
+        # arrived can then restate the whole question, not only the form's own instruction
+        self.uai_inbox[peer_id] = (spec, self.clock.get_time(), parts_to_model_text(parts))
         while len(self.uai_inbox) > MAX_INBOX_PEERS:
             self.uai_inbox.pop(next(iter(self.uai_inbox)))
 
@@ -2754,13 +2770,24 @@ class AgentBasics:
         entry = self.uai_inbox.get(peer_id) if peer_id is not None else None
         if entry is None:
             return None
-        spec, remembered_at = entry
+        spec, remembered_at = entry[0], entry[1]
 
         # Older than any interaction can be, so nobody is waiting for an answer any more
         if self.clock.get_time() - remembered_at > Custom.DEFAULT_INTER_TIMEOUT:
             del self.uai_inbox[peer_id]
             return None
         return spec
+
+    def uai_pending_view(self) -> str | None:
+        """A callback method that returns the message that carried the pending form, as a processor reads
+        it (every block replaced by its alternative text), when it is still known. A corrective prompt for
+        a form remembered from an earlier message uses it to restate the question that was actually asked,
+        instead of repeating the form's instruction alone."""
+        if self.uai_pending_form() is None:
+            return None
+        peer_id = self.uai_peer()
+        entry = self.uai_inbox.get(peer_id) if peer_id is not None else None
+        return entry[2] if entry is not None and len(entry) > 2 else None
 
     def uai_forget_form(self, spec: dict) -> None:
         """A callback method that forgets a remembered form once an answer to it has travelled.
