@@ -36,8 +36,9 @@ from unaiverse.streams.streams import Stream, BufferedStream
 from unaiverse.interaction import Interaction, InteractionManager
 from unaiverse.streams.dataprops import DataProps, StreamType, TensorLabels
 from unaiverse.uai import (MAX_INBOX_PEERS, MAX_OUTPUT_BYTES, VIA_BLOCK, VIA_FREETEXT, AnswerOutcome,
-                                describe_answer, encode_partial, encode_reply, has_fence, newest_form,
-                                parse_message, parts_to_model_text, read_answer, reprompt_person, retry_prompt)
+                                ReplyEvent, describe_answer, encode_partial, encode_reply, has_fence,
+                                interactive_fields, newest_form, parse_message, parts_to_model_text,
+                                read_answer, reprompt_person, retry_prompt)
 from unaiverse.modules.utils import AgentProcessorChecker, ModuleWrapper, HumanModule, has_human_processor
 from unaiverse.utils.misc import (GenException, FileTracker, collect_py_files, load_agent_in_memory, pack_py_files,
                                   unpack_py_files, prune_to_import_closure, build_unaid)
@@ -2582,8 +2583,48 @@ class AgentBasics:
         parts = parse_message(text)
         return parts_to_model_text(parts), newest_form(parts)
 
+    def uai_merge_reads(self, spec: dict, attempts: list) -> tuple:
+        """Reads every attempt of the turn against the form and merges what they gave.
+
+        Later attempts override earlier ones on conflict, so an answer can be built across the corrective
+        rounds of one turn: what was already read stays good, and the processor is asked only for what is
+        still missing. An attempt whose reading is addressed to a different form contributes nothing.
+
+        Args:
+            spec: The form being answered.
+            attempts: The texts the processor produced this turn, oldest first.
+
+        Returns:
+            A tuple: the merged values when they satisfy the form, meaning nothing required is missing
+            AND the latest attempt raised no complaint (else None); the event describing the merged
+            reading; and the texts, oldest first, that anything was read from, which is what the raw of
+            the encoded block lists (the last attempt alone, when nothing was ever readable).
+        """
+        merged, contributors, issues, last_via = {}, [], {}, VIA_FREETEXT
+        for t in attempts:
+            _, e = read_answer(t, spec)
+            if e is None or (e.to is not None and e.to != spec.get("id")):
+                continue
+            if e.values:
+                contributors.append(t)
+                merged.update(e.values)
+            issues = dict(e.issues) if e.issues else {}  # Only the LATEST attempt's complaints stand
+            last_via = e.via
+
+        # A field the latest attempt complained about is not "missing" (it was addressed, badly): the
+        # correction words the complaint, never a self-contradictory "you said nothing about it"
+        missing = [f["name"] for f in interactive_fields(spec)
+                   if f.get("required") and f["name"] not in merged and f["name"] not in issues]
+        event = ReplyEvent(to=spec.get("id"), name=spec.get("name"), values=merged, missing=missing,
+                           issues=issues, raw=attempts[-1] if attempts else "", via=last_via,
+                           duplicate=False)
+
+        # Complete only when nothing required is missing AND the latest attempt raised no complaint: a
+        # fresh out-of-range value is a retraction being corrected, never something to ship over
+        return (merged if not missing and not issues else None), event, (contributors or attempts[-1:])
+
     def uai_postprocess(self, text: str, spec: dict, attempt: int = 0, asked_now: bool = True,
-                             model_view: str | None = None) -> AnswerOutcome:
+                             model_view: str | None = None, attempts: list | None = None) -> AnswerOutcome:
         """A callback method that decides what becomes of the processor's answer to a form, after execution.
 
         A block is a message with a contract on its format, and an answer that does not honour it is not
@@ -2602,14 +2643,29 @@ class AgentBasics:
             asked_now: True when the form was handed to the processor in this very call, False when it was
                 remembered from an earlier message (then a free text is ordinary chat, not a refusal).
             model_view: What the processor read the first time, for the corrective prompt.
+            attempts: Every text the processor produced this turn, oldest first (the current one last):
+                an answer can be completed across the corrective rounds, and the block's raw lists the
+                texts its values were read from.
 
         Returns:
             The outcome: what should travel (a single block carrying its own readable projection, contract
             section 3.6, or None for the words as written), the prompt to ask again with, or a withhold.
         """
         values, event = read_answer(text, spec)
+        raw_texts = [text]
+
+        # From the second round on, the attempts are read together: later ones override earlier ones on
+        # conflict, so a processor asked only for what was missing does not have to repeat the rest. A
+        # block the processor wrote on its own is never merged over: it is theirs, and is handled below
+        attempts = [t for t in (attempts or []) if isinstance(t, str) and t.strip()]
+        if len(attempts) > 1 and (event is None or event.via != VIA_BLOCK):
+            values, event, raw_texts = self.uai_merge_reads(spec, attempts)
+
         if values is not None:
-            answer = encode_reply(spec, values)
+
+            # The words the answer was read from travel inside the block, verbatim: transparent for every
+            # receiver, there for whoever asks (an audit, a stat, a study of how the answer was phrased)
+            answer = encode_reply(spec, values, raw=raw_texts)
 
             # Whatever leaves here is wire text, and a world may still cut it to its own size limit: an answer
             # that would push the message past what such limits usually are is not worth breaking
@@ -2635,18 +2691,21 @@ class AgentBasics:
             if not text.strip() and (asked_now or attempt > 0):
                 return self.uai_answer_fell_short(text, spec, None, attempt, model_view)
             return AnswerOutcome()
-        return self.uai_answer_fell_short(text, spec, event, attempt, model_view)
+        return self.uai_answer_fell_short(text, spec, event, attempt, model_view, attempts=raw_texts)
 
     def uai_answer_fell_short(self, text: str, spec: dict, event, attempt: int,
-                                   model_view: str | None = None) -> AnswerOutcome:
+                                   model_view: str | None = None, attempts: list | None = None) -> AnswerOutcome:
         """A callback method for an answer that was meant for a form and does not satisfy it.
 
         Args:
             text: What was written.
             spec: The form it was meant to answer.
-            event: How the text was read, carrying "missing" and "issues" (or nothing at all, for free text).
+            event: How the text was read, carrying "missing" and "issues" (or nothing at all, for free
+                text); after a corrective round it describes the MERGED reading of every attempt.
             attempt: How many times the processor has already been asked again in this turn.
             model_view: What the processor read the first time, if known.
+            attempts: The texts, oldest first, the event's values were read from: what the raw of an
+                encoded partial lists (the current text alone, when not given).
 
         Returns:
             The outcome, see uai_postprocess.
@@ -2684,11 +2743,13 @@ class AgentBasics:
                      f"{attempt} more attempts: nothing is sent")
             return AnswerOutcome(withhold=True)
 
-        # The retries are spent: the words travel, together with whatever of them could be read, so that
-        # whoever asked gets the values there are and learns what is missing
+        # The retries are spent: what travels is one reply block carrying whatever could be read and the
+        # words themselves as its raw, so that whoever asked gets the values there are, learns what is
+        # missing, and can still read how the answer was phrased. The form is over either way
         log.misc(f"The answer to '{spec.get('name', spec.get('id'))}' still does not satisfy it after "
-                 f"{attempt} more attempts, it travels as written: {describe_answer(spec, event)}")
-        partial = encode_partial(spec, text, event)
+                 f"{attempt} more attempts, it travels as a reply carrying its words: "
+                 f"{describe_answer(spec, event)}")
+        partial = encode_partial(spec, attempts if attempts else text, event)
         if partial is not None:
             self.uai_forget_form(spec)
         return AnswerOutcome(text=partial)
@@ -2787,7 +2848,7 @@ class AgentBasics:
             return None
         peer_id = self.uai_peer()
         entry = self.uai_inbox.get(peer_id) if peer_id is not None else None
-        return entry[2] if entry is not None and len(entry) > 2 else None
+        return entry[2] if entry is not None else None
 
     def uai_forget_form(self, spec: dict) -> None:
         """A callback method that forgets a remembered form once an answer to it has travelled.

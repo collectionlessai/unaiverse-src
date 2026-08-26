@@ -22,11 +22,11 @@
 # pieces of that loop live here (reading, describing what is wrong, wording the second request, encoding
 # what could be read once the asking is over); the loop itself sits around the processor.
 from dataclasses import dataclass
-from .draft import encode_reply
+from .draft import encode_reply, project_draft
 from .interpret import interpret_reply
 from .templates import template_for
 from .constants import VIA_BLOCK, VIA_FREETEXT
-from .validate import field_label, interactive_fields
+from .validate import field_label, interactive_fields, non_empty
 
 # Wording of the second request, by language. Reason codes stay the closed vocabulary of the contract.
 _RETRY = {
@@ -35,6 +35,9 @@ _RETRY = {
            "nothing": "non è stato possibile leggere nessun campo",
            "again": "La tua risposta era:\n{answer}\n\nNon soddisfa la richiesta: {problem}. Rispondi di nuovo, "
                     "una riga per campo nella forma 'campo: valore', senza altro testo.",
+           "again_partial": "La tua risposta era:\n{answer}\n\nNon soddisfa ancora la richiesta: {problem}. "
+                            "Quello che hai già detto vale ({have}): scrivi SOLO i campi che mancano, una "
+                            "riga per campo nella forma 'campo: valore', senza altro testo.",
            "person": "La risposta a '{form}' non soddisfa la richiesta ({problem}): non è stata inviata. "
                      "Scrivila di nuovo."},
     "en": {"missing": "nothing was said about {fields}",
@@ -42,6 +45,9 @@ _RETRY = {
            "nothing": "no field of it could be read",
            "again": "Your answer was:\n{answer}\n\nIt does not satisfy the request: {problem}. Answer again, "
                     "one line per field in the form 'field: value', with no other text.",
+           "again_partial": "Your answer was:\n{answer}\n\nIt does not satisfy the request yet: {problem}. "
+                            "What you already said stands ({have}): write ONLY the missing fields, one "
+                            "line per field in the form 'field: value', with no other text.",
            "person": "The answer to '{form}' does not satisfy the request ({problem}): it was not sent. "
                      "Write it again."},
 }
@@ -146,7 +152,17 @@ def retry_prompt(spec: dict, text: str, event, model_view: str | None = None) ->
     """
     words = _words(spec.get("lang"))
     view = model_view if model_view else spec.get("alt", "")
-    again = words["again"].format(answer=text.strip(), problem=describe_answer(spec, event))
+
+    # When something was already read (this attempt or the merged rounds before it), the request narrows:
+    # what stands is restated and only the missing fields are asked for, so an answer can be completed
+    # across rounds instead of being rewritten from scratch every time (the policy merges the rounds,
+    # which is what makes obeying the narrowed request safe)
+    have = getattr(event, "values", None) or {}
+    if have:
+        again = words["again_partial"].format(answer=text.strip(), problem=describe_answer(spec, event),
+                                              have=project_draft(spec, have))
+    else:
+        again = words["again"].format(answer=text.strip(), problem=describe_answer(spec, event))
     return f"{view.rstrip()}\n\n{again}" if view.strip() else again
 
 
@@ -156,14 +172,18 @@ def reprompt_person(spec: dict, event) -> str:
     return words["person"].format(form=spec.get("name", spec.get("id")), problem=describe_answer(spec, event))
 
 
-def encode_partial(spec: dict, text: str, event) -> str | None:
-    """What travels when the asking is over and the answer still falls short: the words, and what they gave.
+def encode_partial(spec: dict, text, event) -> str | None:
+    """What travels when the asking is over and the answer still falls short: one block, values and words.
 
-    The values that could be read are encoded beside the words, so that whoever asked reads them at the first
-    rung and learns the rest is missing; the ones that violate the form are left out, as the contract wants.
-    When nothing at all could be read there is nothing to add, and None says so.
+    The values that could be read are encoded so that whoever asked reads them at the first rung and learns
+    the rest is missing; the ones that violate the form are left out, as the contract wants. The words
+    themselves travel inside the block, verbatim, as its ``raw``: one text, or the list of the attempts the
+    (possibly merged) values were read from, oldest first. The answer stays one block whether it filled
+    everything, something, or nothing readable at all. Only an empty answer with nothing readable has
+    nothing to send, and None says so (the policy withholds that case before ever coming here).
     """
     values = getattr(event, "values", None) or {}
-    if not values:
+    texts = list(text) if isinstance(text, (list, tuple)) else [text]
+    if not values and not any(non_empty(t) for t in texts):
         return None
-    return f"{text.rstrip()}\n\n{encode_reply(spec, values)}"
+    return encode_reply(spec, values, raw=texts)

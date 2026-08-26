@@ -709,7 +709,7 @@ class ModuleWrapper(torch.nn.Module):
         Raises:
             AnswerWithheld: When the agent decided that nothing should travel.
         """
-        out_index = next((i for i in range(0, len(outputs)) if isinstance(outputs[i], str)), None)
+        out_index = next((i for i, item in enumerate(outputs) if isinstance(item, str)), None)
         if out_index is None:
             return outputs
         asked_now = spec is not None
@@ -720,15 +720,17 @@ class ModuleWrapper(torch.nn.Module):
                 spec = self.agent.uai_pending_form()
                 if spec is not None:
                     # The form came in an earlier message: the rendering of THAT message, when still
-                    # known, is what a corrective prompt should restate, not the current input. The
-                    # getattr keeps a world that overrode the inbox trio before this method existed working
-                    model_view = getattr(self.agent, "uai_pending_view", lambda: None)()
+                    # known, is what a corrective prompt should restate, not the current input
+                    model_view = self.agent.uai_pending_view()
             if spec is None:
                 return outputs
             attempt = 0
+            first_text = outputs[out_index]
+            attempts = [first_text] if isinstance(first_text, str) and first_text.strip() else []
             while True:
                 outcome = self.agent.uai_postprocess(outputs[out_index], spec, attempt=attempt,
-                                                          asked_now=asked_now, model_view=model_view)
+                                                          asked_now=asked_now, model_view=model_view,
+                                                          attempts=list(attempts))
                 if outcome.retry is None or attempt >= self.UAI_HARD_CAP:
                     break
 
@@ -736,18 +738,24 @@ class ModuleWrapper(torch.nn.Module):
                 # text input, for a form remembered from an earlier message) and goes through the very same
                 # path the first input took
                 if arg_index is None:
-                    arg_index = next((i for i in range(0, min(len(rendered), len(self.proc_inputs)))
-                                      if self.proc_inputs[i].is_text()), None)
+                    arg_index = next((i for i, inp in enumerate(self.self.proc_inputs[:len(rendered)])
+                                      if inp.is_text()), None)
                     if arg_index is None:
                         break
                 rendered[arg_index] = outcome.retry
                 new_outputs = self.__run_module(list(rendered), kwargs)
 
                 # A blank regeneration never replaces the words of an earlier attempt: the module just
-                # gave up, and the policy keeps judging (and eventually ships) the best answer it has seen
+                # gave up, and the policy keeps judging (and eventually ships) the best answer it has seen.
+                # Every adopted, distinct text joins the turn's attempts: the policy reads them together,
+                # so an answer can be completed across the corrective rounds
                 if not (isinstance(new_outputs[out_index], str) and not new_outputs[out_index].strip()
                         and isinstance(outputs[out_index], str) and outputs[out_index].strip()):
                     outputs = new_outputs
+                    new_text = outputs[out_index]
+                    if isinstance(new_text, str) and new_text.strip() and (
+                            not attempts or attempts[-1] != new_text):
+                        attempts.append(new_text)
                 attempt += 1
         except Exception as e:
             log.error(f"Error deciding about the answer to an interactive message, keeping it: {e}")

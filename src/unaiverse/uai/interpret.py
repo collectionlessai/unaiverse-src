@@ -73,15 +73,18 @@ def interpret_reply(text, pending=None, answered=None, lang=None) -> ReplyEvent:
     parts = parse_message(raw)
     prose = "\n".join(p["text"] for p in parts if p["type"] == "text").strip()
 
-    # Rung 1: canonical block
+    # Rung 1: canonical block. When the block carries the words it was read from, the LAST of them is the
+    # raw of the event (the author's most recent words), not the wire text around the block; a block
+    # without them keeps the message text as before (validation only ever stores a non-empty list)
     reply = find_reply(parts)
     if reply is not None:
+        event_raw = reply["raw"][-1] if "raw" in reply else raw
         spec = next((s for s in pending if s.get("id") == reply["to"]), None)
         if spec is None:
-            return ReplyEvent(to=reply["to"], name=None, values=dict(reply["values"]), raw=raw,
+            return ReplyEvent(to=reply["to"], name=None, values=dict(reply["values"]), raw=event_raw,
                               via=VIA_BLOCK, duplicate=reply["to"] in answered)
         values, issues = apply_canonical(spec, reply["values"])
-        return _finish(spec, values, issues, raw, VIA_BLOCK, answered)
+        return _finish(spec, values, issues, event_raw, VIA_BLOCK, answered)
 
     if len(newest_first) == 0 or prose == "":
         return _freetext(raw)

@@ -54,7 +54,14 @@ def parts_to_model_text(parts: list, max_blocks: int = MAX_BLOCKS_MODEL_VIEW,
             omitted += 1
             continue
         if p["type"] == "reply":
-            out.append("\n".join(f"{k}: {_value_to_text(v)}" for k, v in p["spec"]["values"].items()))
+
+            # A reply reads as its values and, when the block carries them, as the latest words they were
+            # read from: a partial answer keeps the phrasing (and whatever the values missed) visible,
+            # and a failed one reads as its words alone, never as an empty line
+            lines = "\n".join(f"{k}: {_value_to_text(v)}" for k, v in p["spec"]["values"].items())
+            raw_texts = p["spec"].get("raw")
+            raw = raw_texts[-1] if raw_texts else ""
+            out.append(f"{lines}\n{raw}" if lines and raw else (lines or raw))
         else:
             out.append(p["alt"])
     if omitted > 0:

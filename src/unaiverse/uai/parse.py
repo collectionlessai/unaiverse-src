@@ -29,7 +29,7 @@ def parse_message(text) -> list[dict]:
     Returns:
         A list of parts. Prose is ``{"type": "text", "text"}``; a valid content block is
         ``{"type": "media" | "data" | "form" | "x", "spec", "alt"}``; a valid reply block is
-        ``{"type": "reply", "spec": {"to", "values"}}``; anything invalid degrades to
+        ``{"type": "reply", "spec": {"to", "values", ("raw")}}``; anything invalid degrades to
         ``{"type": "text", "text", "degraded": True, "errors": [...]}``.
     """
     parts = []
@@ -62,8 +62,13 @@ def _block_to_part(seg: dict) -> dict:
     spec = result["spec"]
     if result["kind"] == "reply":
 
-        # The alt of a reply is its projection: a part always carries one, empty when the block had none
-        return {"type": "reply", "spec": {"to": spec["to"], "values": spec["values"]}, "alt": spec.get("alt", "")}
+        # The alt of a reply is its projection: a part always carries one, empty when the block had none.
+        # The raw words, when the block carries them, ride along for whoever asks; everybody else reads
+        # "to" and "values" exactly as before
+        part_spec = {"to": spec["to"], "values": spec["values"]}
+        if "raw" in spec:
+            part_spec["raw"] = spec["raw"]
+        return {"type": "reply", "spec": part_spec, "alt": spec.get("alt", "")}
     if spec["type"].startswith("x-"):
         return {"type": "x", "spec": spec, "alt": spec["alt"]}
     return {"type": spec["type"], "spec": spec, "alt": spec["alt"]}

@@ -24,7 +24,7 @@ BLOCK_ORDER = {
     "media": ("v", "type", "src", "mime", "title", "poster", "alt"),
     "data": ("v", "type", "chart", "series", "alt"),
     "form": ("v", "type", "id", "name", "lang", "fields", "progress", "aiHint", "alt"),
-    "reply": ("v", "kind", "to", "values", "alt"),
+    "reply": ("v", "kind", "to", "values", "alt", "raw"),
     "x": ("v", "type", "alt"),
 }
 FIELD_ORDER = ("name", "type", "label", "required", "help", "default",
