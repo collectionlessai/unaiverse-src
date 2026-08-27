@@ -428,8 +428,15 @@ def test_a_person_who_falls_short_is_told_and_nothing_travels_until_they_answer_
         wrapper(HumanModule(), agent=agent)("Nome: Mario")
     assert agent.uai_pending_form()["id"] == "p1"
 
-    # Chatting in the meantime is their own business, the form still waits
-    assert wrapper(HumanModule(), agent=agent)("un attimo")[0] == "un attimo"
+    # A form is the last thing a terminal person was shown: their next line IS the answer, so prose that
+    # cannot be read is told and withheld too, never delivered as if it were the reply (the free pass a
+    # merely-pending form grants to first free text is for processors, not for a person who can be told)
+    with pytest.raises(AnswerWithheld):
+        wrapper(HumanModule(), agent=agent)("un attimo")
+    assert agent.uai_pending_form()["id"] == "p1"
+
+    # A blank line is still nothing, not a refusal: silence travels as silence, the form keeps waiting
+    assert wrapper(HumanModule(), agent=agent)("")[0] == ""
     assert agent.uai_pending_form()["id"] == "p1"
 
     # The next proper answer is encoded and the form is over
