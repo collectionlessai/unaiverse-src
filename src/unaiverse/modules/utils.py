@@ -738,7 +738,7 @@ class ModuleWrapper(torch.nn.Module):
                 # text input, for a form remembered from an earlier message) and goes through the very same
                 # path the first input took
                 if arg_index is None:
-                    arg_index = next((i for i, inp in enumerate(self.self.proc_inputs[:len(rendered)])
+                    arg_index = next((i for i, inp in enumerate(self.proc_inputs[:len(rendered)])
                                       if inp.is_text()), None)
                     if arg_index is None:
                         break

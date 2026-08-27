@@ -2686,8 +2686,13 @@ class AgentBasics:
         # the words travel as they are. Once the processor has been asked again, though, a free text is a
         # refusal like any other; and so is silence, when the form was handed over in this very turn: an
         # empty answer to a question just asked is a refusal to answer it, not a message (an empty answer
-        # to an unrelated turn, with a form merely pending from before, is ordinary silence and travels)
-        if event is None or (event.via == VIA_FREETEXT and not asked_now and attempt == 0):
+        # to an unrelated turn, with a form merely pending from before, is ordinary silence and travels).
+        # A person at a terminal is the exception to the free pass: a form is the last thing they were
+        # shown, their next line IS the answer to it, and one that cannot be read is told and withheld
+        # rather than delivered as if it were the reply (their form is always "merely pending", since what
+        # they are shown never goes through their processor, so without this they would never be held)
+        if event is None or (event.via == VIA_FREETEXT and not asked_now and attempt == 0
+                             and not self.uai_can_reprompt_person()):
             if not text.strip() and (asked_now or attempt > 0):
                 return self.uai_answer_fell_short(text, spec, None, attempt, model_view)
             return AnswerOutcome()
@@ -2718,7 +2723,10 @@ class AgentBasics:
         if has_human_processor(self):
             if not self.uai_can_reprompt_person():
                 return AnswerOutcome()
-            log.user(f"⚠️ {reprompt_person(spec, event)}")
+
+            # rep=True: two failed attempts in a row often word the SAME complaint, and the screen sink
+            # suppresses consecutive identical lines; the person must see the reprompt every single time
+            log.user(f"⚠️ {reprompt_person(spec, event)}", rep=True)
             return AnswerOutcome(withhold=True)
 
         # A module that gives back what it was given is a relay, not the author: there is nobody to ask
