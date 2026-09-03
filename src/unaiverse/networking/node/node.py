@@ -167,6 +167,8 @@ class Node:
             log.critical("Cannot specify both node ID and node name")
         if not (node_name is not None or node_id is not None):
             log.critical("You must specify either node ID or node name: both are missing")
+        if node_name is not None and node_name.count("/") > 1:
+            log.critical("Invalid node name, it includes too many /")
         if not (unaiverse_key is None or isinstance(unaiverse_key, str)):
             log.critical("Invalid UNaIVERSE key")
 
@@ -1412,12 +1414,17 @@ class Node:
                 # handshake completes (same object, mutations are visible here).
                 self._interact_mode_opts = interact_mode_opts
 
+                # Checking if there is an output stream of type image; if so, later the camera will be activated
                 public_streams = "lone_wolf_peer_id" in interact_mode_opts
                 assert self.agent is not None
                 proc_streams = self.agent.owned_streams[self.agent.get_proc_output_net_hash(public=public_streams)]
                 for stream in proc_streams.values():
                     if processor_img_stream is None and stream.props.is_img():
                         processor_img_stream = stream
+
+                # Linux only: missing camera? stop processor_img_stream
+                if os.path.exists("/dev") and not os.path.exists(f"/dev/video0"):
+                    processor_img_stream = None
 
                 def is_debug():
                     return not (sys.gettrace() is None and
