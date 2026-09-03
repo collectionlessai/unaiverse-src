@@ -158,6 +158,8 @@ class Node:
             log.critical("Cannot specify both node ID and node name")
         if not (node_name is not None or node_id is not None):
             log.critical("You must specify either node ID or node name: both are missing")
+        if node_name is not None and node_name.count("/") > 1:
+            log.critical("Invalid node name, it includes too many /")
         if not (unaiverse_key is None or isinstance(unaiverse_key, str)):
             log.critical("Invalid UNaIVERSE key")
 
