@@ -1249,13 +1249,14 @@ class ImageFileStream(BufferedStream):
     A buffered dataset for image data.
     """
 
-    def __init__(self, image_dir: str, list_of_image_files: str,
+    def __init__(self, image_dir: str, list_of_image_files: str | list[str],
                  device: torch.device | None = None, circular: bool = True, show_images: bool = False):
         """Initialize an ImageFileStream instance for streaming image data.
 
         Args:
             image_dir: The directory containing image files.
-            list_of_image_files: Path to the file with list of file names of the images (one per line).
+            list_of_image_files: Path to the file with list of file names of the images (one per line);
+                it can also be the path to a list of file names.
             device: The device to store the tensors on. Default is CPU.
             circular: Whether to loop the dataset or not. Default is True.
             show_images: If True, display a clickable grid of the images. Default is False.
@@ -1275,10 +1276,14 @@ class ImageFileStream(BufferedStream):
                                          pubsub=True))
         self.is_read_only = True
 
-        with open(list_of_image_files, 'r') as f:
-            for line in f:
-                parts = line.strip().split(',')  # Tolerates if it is a CVS and the first field is the image file name
-                image_name = parts[0]
+        if isinstance(list_of_image_files, str):
+            with open(list_of_image_files, 'r') as f:
+                for line in f:
+                    parts = line.strip().split(',')  # Tolerates if it is a CVS and the first field is the file name
+                    image_name = parts[0]
+                    self.image_paths.append(os.path.join(image_dir, image_name))
+        else:
+            for image_name in list_of_image_files:
                 self.image_paths.append(os.path.join(image_dir, image_name))
 
         # It was buffered previously than every other thing (not strictly required due to the fact that
@@ -1290,6 +1295,10 @@ class ImageFileStream(BufferedStream):
         if show_images:
             show_images_grid(self.image_paths)
 
+    def add(self, image_file_name: str):
+        """Adds a new image to the set."""
+        self.image_paths.append(image_file_name)
+
     def __len__(self):
         """Return the number of images in the dataset.
 
@@ -1299,13 +1308,13 @@ class ImageFileStream(BufferedStream):
         return len(self.image_paths)
 
     def __getitem__(self, idx_and_uuid: tuple[int, str | None]) -> tuple[torch.Tensor | Image | str | None, int]:
-        """Get the image and label for the specified cycle number.
+        """Get an image.
 
         Args:
             idx_and_uuid (tuple[int, str | None]): The index to retrieve data for and its UUID (tuple).
 
         Returns:
-            tuple: A tuple of tensors (image, label) for the specified cycle.
+            tuple: A tuple (image, idx).
         """
         idx, uuid = idx_and_uuid
         if self.circular:
@@ -1399,7 +1408,7 @@ class LabelStream(BufferedStream):
             idx_and_uuid (tuple[int, str | None]): Index of the data to retrieve and UUID (tuple).
 
         Returns:
-            tuple: A tuple of tensors (image, label) for the specified cycle.
+            tuple: A tuple (image, idx) for the specified cycle.
         """
         idx, uuid = idx_and_uuid
         if self.circular:
@@ -1410,6 +1419,32 @@ class LabelStream(BufferedStream):
 
         label = self.labels[idx].to(self.device)  # Multi-label vector for the label
         return self.props.adapt_tensor_to_tensor_labels(label), clock.get_cycle() - self.first_cycle_by_uuid[uuid]
+
+
+class StringStream(ImageFileStream):
+    """
+    A buffered dataset for strings.
+    """
+    def __init__(self, strings: listr[str], circular: bool = True):
+        super().__init__(image_dir="./", list_of_image_files=strings, circular=circular, **kwargs)
+
+    def __getitem__(self, idx_and_uuid: tuple[int, str | None]) -> tuple[str | None, int]:
+        """Get a string.
+
+        Args:
+            idx_and_uuid (tuple[int, str | None]): The index to retrieve data for and its UUID (tuple).
+
+        Returns:
+            tuple: A tuple (str, idx).
+        """
+        idx, uuid = idx_and_uuid
+        if self.circular:
+            idx %= self.__len__()
+        else:
+            if idx >= self.__len__() or idx < 0:
+                return None, -1
+
+        return self.image_paths[idx], clock.get_cycle() - self.first_cycle_by_uuid[uuid]
 
 
 class TokensStream(BufferedStream):

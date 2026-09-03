@@ -887,6 +887,9 @@ class Node:
         # Checking arguments
         if node_name is None and addresses is None and node_id is None:
             return None
+        if node_name is not None and node_name.count("/") > 1:
+            log.error("Invalid node name, it includes too many /")
+            return None
         if sum(x is not None for x in [node_name, addresses, node_id]) > 1:
             log.error(f"Cannot specify more than one of node_name ({node_name}), addresses, or node_id ({node_id}), "
                       f"check your code!")
