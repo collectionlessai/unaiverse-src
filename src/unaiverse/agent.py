@@ -806,8 +806,8 @@ class Agent(AgentBasics):
         return all_disconnected
 
     @action
-    async def received_some_asked_data(self, processing_fcn: str | None = None, data_type: str | None = None) -> bool:
-        """Checks if any of the agents that were previously asked for data (e.g., via `ask_gen`) have sent a stream
+    async def on_received(self, processing_fcn: str | None = None, data_type: str | None = None) -> bool:
+        """Checks if any of the agents that received interactions from you have sent a stream
         sample back. Optionally, it can process the received data with a specified function (async).
 
         Args:
@@ -851,6 +851,9 @@ class Agent(AgentBasics):
                                     _processing_fcn: Callable
                                     _processing_fcn(agent, stream_obj.props, data, data_tag)
         return got_something
+
+    # Backward compatibility (deprecated)
+    received_some_asked_data = on_received
 
     @action
     async def nop(self, message: str | None = None) -> bool:

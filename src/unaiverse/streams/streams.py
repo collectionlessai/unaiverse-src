@@ -1425,7 +1425,7 @@ class StringStream(ImageFileStream):
     """
     A buffered dataset for strings.
     """
-    def __init__(self, strings: listr[str], circular: bool = True):
+    def __init__(self, strings: list[str], circular: bool = True):
         super().__init__(image_dir="./", list_of_image_files=strings, circular=circular, **kwargs)
 
     def __getitem__(self, idx_and_uuid: tuple[int, str | None]) -> tuple[str | None, int]:
