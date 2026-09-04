@@ -3178,6 +3178,9 @@ class AgentBasics:
             self.im.unregister(interaction)
             return None
 
+    def get_last_sent_interaction(self) -> Interaction:
+        return self.last_sent_interaction
+
     def __str__(self):
         """String representation of an agent.
 
