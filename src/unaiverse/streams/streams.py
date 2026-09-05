@@ -1427,6 +1427,7 @@ class StringStream(ImageFileStream):
     """
     def __init__(self, strings: list[str], circular: bool = True):
         super().__init__(image_dir="", list_of_image_files=strings, circular=circular)
+        self.props.data_type = "text"
 
     def __getitem__(self, idx_and_uuid: tuple[int, str | None]) -> tuple[str | None, int]:
         """Get a string.

@@ -1168,6 +1168,14 @@ class AgentBasics:
                     self.__env_streams_by_user_hash_pub[user_hash] = stream
                 else:
                     self.__env_streams_by_user_hash_prv[user_hash] = stream
+        else:
+            # If a stream is not owned (i.e., it is from somebody else), the delta property >= 0 must be cleared,
+            # since it is expected to limit the speed to the "set" operation on the owner-side. If we keep it here too
+            # then it will also limit the speed of our "set" operation, that in principle is fine (we are getting
+            # data at the speed the owner is setting it): however, a small network latency might end-up in making us
+            # discard a sample that was sent with the right timing.
+            if stream.props.delta >= 0.:
+                stream.props.delta = -1.  # Forcing
 
         # If needed, merging descriptor labels (attribute labels) and sharing them with all streams
         if self.merge_flat_stream_labels:
