@@ -556,7 +556,9 @@ class AgentBasics:
         self.uai_writing_to = peer_id
 
         # Zero-step: if we are in a world, the peer ID used for indexing the interaction cache is the world peer ID
-        # TODO(review): with public=False the broadcaster peer-id is overwritten by the world-node id before the per-broadcaster lookup, so the entry is missed and the human reply is misrouted to the world node; see tests/test_human_routing.py::test_prepare_world_should_return_broadcaster_interaction_uuid
+        # TODO(review): with public=False the broadcaster peer-id is overwritten by the world-node id before the
+        #  per-broadcaster lookup, so the entry is missed and the human reply is misrouted to the world node;
+        #  see tests/test_human_routing.py::test_prepare_world_should_return_broadcaster_interaction_uuid
         peer_id = peer_id if public else self.node_conn.get_world_node_peer_id()
 
         # First of all, clearing residuals of interactions that were completed in the past
@@ -1171,6 +1173,14 @@ class AgentBasics:
                     self.__env_streams_by_user_hash_pub[user_hash] = stream
                 else:
                     self.__env_streams_by_user_hash_prv[user_hash] = stream
+        else:
+            # If a stream is not owned (i.e., it is from somebody else), the delta property >= 0 must be cleared,
+            # since it is expected to limit the speed to the "set" operation on the owner-side. If we keep it here too
+            # then it will also limit the speed of our "set" operation, that in principle is fine (we are getting
+            # data at the speed the owner is setting it): however, a small network latency might end-up in making us
+            # discard a sample that was sent with the right timing.
+            if stream.props.delta >= 0.:
+                stream.props.delta = -1.  # Forcing
 
         # If needed, merging descriptor labels (attribute labels) and sharing them with all streams
         if self.merge_flat_stream_labels:
@@ -2144,7 +2154,7 @@ class AgentBasics:
 
         # If this stream is not known at all...
         else:
-            log.user(f"Skipping sample from {net_hash} (data stream is unknown)")  # Misc
+            log.misc(f"Skipping sample from {net_hash} (data stream is unknown)")  # Misc
             return added_data
 
     async def send_stream_samples(self):
