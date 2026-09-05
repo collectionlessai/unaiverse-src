@@ -511,13 +511,21 @@ class Agent(AgentBasics):
         Returns:
             True if the learning step ran successfully, False otherwise.
         """
-        if (self.proc_opts is None or self.proc_opts['optimizer'] is None
-                or self.proc_opts['losses'] is None
-                or len(self.proc_opts['losses']) == 0):
+        if not self.is_human() and (self.proc_opts is None or self.proc_opts['optimizer'] is None
+                                    or self.proc_opts['losses'] is None
+                                    or len(self.proc_opts['losses']) == 0):
             log.misc(f"Current processor has no learning skills (or learning options not specified)")
             return False
 
         assert interaction is not None
+
+        # Humans learn by themselves :)
+        if self.is_human():
+
+            # Printing
+            log.user(f"Step: {self.get_action_step()}, Tag: {self.stdin.get_tag()}, "
+                     f"Last Step: {interaction.num_steps-1}", rep=True),
+            return True
 
         # Inference first
         if await self.process(interaction):
