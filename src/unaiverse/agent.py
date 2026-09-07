@@ -336,6 +336,7 @@ class Agent(AgentBasics):
                    copy_sys: bool = False,
                    wait_completion: bool = False,
                    volatile: bool = False,
+                   num_samples_to_stream: int = -1,
                    interaction: Interaction | None = None) -> bool:
         """Send an interaction request to one or more target agents (async).
 
@@ -371,6 +372,8 @@ class Agent(AgentBasics):
                 from all the involved agents (Default: False).
             volatile: If True, it is marked so that the recipient is asked to not
                 send back any status about its completion.
+            num_samples_to_stream: The maximum number of samples to stream. By default, no limits (the nun_steps is on
+                the consumer side, the origin keeps streaming until timeout or completion). Default: -1 (no limits)
             interaction: The interaction triggered by the system to run this action (automatically set).
 
         Returns:
@@ -399,7 +402,7 @@ class Agent(AgentBasics):
             target = self.__involved_agents(target)
             sent_interaction = await self._send(None, action_name, target, action_kwargs, streams,
                                                 data_samples, num_steps, timeout, from_state, to_state, callback,
-                                                forced_uuid, id, copy_sys, volatile)
+                                                forced_uuid, id, copy_sys, volatile, num_samples_to_stream)
             if wait_completion:
                 assert system_interaction is not None
                 assert isinstance(system_interaction.action_ref, Action)
@@ -523,8 +526,8 @@ class Agent(AgentBasics):
         if self.is_human():
 
             # Printing
-            log.user(f"Step: {self.get_action_step()}, Tag: {self.stdin.get_tag()}, "
-                     f"Last Step: {interaction.num_steps-1}", rep=True),
+            log.debug(f"[learn] Step: {self.get_action_step()}, Tag: {self.stdin.get_tag()}, "
+                      f"Last Step: {interaction.num_steps - 1}", rep=True),
             return True
 
         # Inference first

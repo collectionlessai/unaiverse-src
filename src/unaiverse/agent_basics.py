@@ -2206,6 +2206,10 @@ class AgentBasics:
                     if recipient == [Custom.SYSTEM_INTERACTION_LABEL]:
                         continue
 
+                    # Skipping interactions that already provided all the required data
+                    if interaction.all_samples_streamed():
+                        continue
+
                     # Get data
                     data = stream.get(requested_by="send_stream_samples", uuid=uuid)
                     data_tag = stream.get_tag(uuid=uuid)
@@ -2256,6 +2260,7 @@ class AgentBasics:
                 for uuid, recipients in recipients_by_uuid.items():
                     content = contents_by_uuid[uuid]
                     content_data = contents_data_by_uuid[uuid]
+                    interaction = interactions_by_uuid[uuid]
 
                     for recipient in recipients:
                         log.debug(f"[send_stream_samples] " 
@@ -2273,6 +2278,9 @@ class AgentBasics:
                                                         content=content)
 
                         log.debug(f"[send_stream_samples] Sending returned: " + str(ret))
+
+                        if ret:
+                            interaction.inc_streamed_samples()
 
             # If pubsub...
             if Stream.is_pubsub_from_net_hash(net_hash):
@@ -2296,6 +2304,9 @@ class AgentBasics:
                                                        content=content)
 
                     log.debug(f"[send_stream_samples] Sending returned: " + str(ret))
+
+                    if ret:
+                        interaction.inc_streamed_samples()
 
     def disable_proc_input(self, public: bool):
         """Disable the processor input stream of this agent.
@@ -3096,7 +3107,8 @@ class AgentBasics:
                     forced_uuid: str | None = "do_not_force",
                     id: str | None = "random",
                     copy_sys: bool = False,
-                    volatile: bool = False) -> Interaction | None:
+                    volatile: bool = False,
+                    num_samples_to_stream: int = -1) -> Interaction | None:
         """Send an interaction request to one or more target agents (async).
 
         Accepts either a pre-built :class:`Interaction` object *or* raw arguments from which one will be created.
@@ -3131,6 +3143,8 @@ class AgentBasics:
                 to prepare initial data form the current interaction.
             volatile: If True, it is marked so that the recipient is asked to not
                 send back any status about its completion.
+            num_samples_to_stream: The maximum number of samples to stream. By default, no limits (the nun_steps is on
+                the consumer side, the origin keeps streaming until timeout or completion). Default: -1 (no limits)
 
         Returns:
             The Interaction on success, ``None`` on failure.
@@ -3144,7 +3158,7 @@ class AgentBasics:
                                       requester=self.get_peer_id(), target=target,
                                       from_state=from_state, to_state=to_state,
                                       timeout=timeout, callback=callback, forced_uuid=forced_uuid, id=id,
-                                      volatile=volatile)
+                                      volatile=volatile, num_samples_to_stream=num_samples_to_stream)
 
         # Resolve target agent(s)
         if len(interaction.target) == 0:

@@ -55,7 +55,8 @@ class Interaction:
                  callback: str | None = None,
                  volatile: bool = False,
                  forced_uuid: str | None = "do_not_force",
-                 id: str | None = "random"):
+                 id: str | None = "random",
+                 num_samples_to_stream: int = -1):
         """Create a new Interaction.
 
         Args:
@@ -84,6 +85,8 @@ class Interaction:
             id: Identifier string (might not be unique); ``"random"`` generates one automatically (default).
                 When set to None, it defaults to the UUID of a system interaction. The requester will be appended to
                 it (separated by "_") to get the final UUID, that is the "unique" identification of the interaction.
+            num_samples_to_stream: The maximum number of samples to stream. By default, no limits (the nun_steps is on
+                the consumer side, the origin keeps streaming until timeout or completion). Default: -1 (no limits)
         """
         # Participants
         self.requester: str | None = requester
@@ -124,6 +127,7 @@ class Interaction:
         self.streams: dict = {}
         self.data_samples = []
         self.num_steps: int = num_steps  # Generic not-data-based interactions have -1 here
+        self.num_samples_to_stream: int = num_samples_to_stream
 
         # Stream-based specification
         if streams is not None and len(streams) > 0:
@@ -144,6 +148,11 @@ class Interaction:
         elif len(self.streams) == 0 and (data_samples is not None and len(data_samples) > 0):
             self.data_samples = data_samples  # List of PIL.Image, torch.Tensor, str, or dict user hash -> sample
             self.num_steps = 1
+
+        # Checking
+        if self.num_samples_to_stream >= 0 and self.num_steps > self.num_samples_to_stream:
+            log.error(f"You cannot ask to stream {self.num_samples_to_stream} samples and require the consumer to "
+                      f"run {self.num_steps} action steps.")
 
         # Status
         self.status: InteractionStatus = InteractionStatus.CREATED
@@ -170,6 +179,7 @@ class Interaction:
         self.__starting_time = 0.
         self.__timeout_starting_time = 0.
         self.__mark = None
+        self.__num_streamed_samples = 0
         self.stdin_streams = {}  # User hash to stream object
         self.stdtar_streams = {}  # User hash to stream object
         self.stdext_streams = {}  # User hash to stream object
@@ -258,6 +268,12 @@ class Interaction:
         self.target_timestamp_completed = [-1.] * len(self.target)
         self.target_destination_state = [None] * len(self.target)
         self.target_cycle_completed = [-1] * len(self.target)
+
+    def inc_streamed_samples(self):
+        self.__num_streamed_samples += 1
+
+    def all_samples_streamed(self):
+        return self.__num_streamed_samples >= self.num_samples_to_stream
 
     def set_manager(self,
                     im: 'InteractionManager',
@@ -728,7 +744,8 @@ class Interaction:
             'to_state': self.to_state,
             'retry_timeout': self.timeout,
             'volatile': self.volatile,
-            'status': self.status.value
+            'status': self.status.value,
+            'num_samples_to_stream': self.num_samples_to_stream
         }
 
     @classmethod
@@ -754,6 +771,7 @@ class Interaction:
             to_state=d.get('to_state'),
             volatile=d.get('volatile', False),
             timeout=d.get('retry_timeout', -1.),
+            num_samples_to_stream=d.get('num_samples_to_stream', -1),
         )
         interaction.uuid = d['uuid']
         interaction.status = InteractionStatus(d['status'])
