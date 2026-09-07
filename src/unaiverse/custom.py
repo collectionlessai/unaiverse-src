@@ -99,7 +99,7 @@ class Custom:
     """
     INTERACTION_INJECT_NAMES = {'interaction'}
     INTERACTION_FIELD_NAMES = {'streams', 'num_steps', 'target', 'timeout', 'copy_sys', 'forced_uuid', 'id', 'volatile',
-                               'data_samples', 'callback'}
+                               'data_samples', 'callback', 'num_samples_to_stream'}
     HSM_TRANSIT_META_NAMES = {SECONDS_ARG_NAMES[0], TIMEOUT_ARG_NAMES[0], DELAY_ARG_NAMES[0]}
     WIRE_SENTINEL_NAMES = {'action_kwargs'}
     SPECIAL_ACTION_NAMES = {'send'}
