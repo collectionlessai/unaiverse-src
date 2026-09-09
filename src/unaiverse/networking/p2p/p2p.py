@@ -556,7 +556,11 @@ class P2P:
         the thread offload of the blocking Go call both live here, at the transport tier
         (the rewrite boundary toward OP2P.js): the Coordinator hands over a Msg object and
         awaits, it never serializes nor offloads. Outbound mirror of send_session."""
-        await asyncio.to_thread(self.send_message_to_peer, channel, msg.to_bytes())
+
+        # The lambda function moves the protobuf+PNG+gzip work (the expensive part) off the event loop
+        await asyncio.to_thread(lambda: self.send_message_to_peer(channel, msg_bytes=msg.to_bytes()))
+        # Previous version was:
+        # await asyncio.to_thread(self.send_message_to_peer, channel, msg.to_bytes())
 
     async def broadcast(self, channel: str, msg) -> None:
         """Encode and broadcast a chat Msg over pubsub. Like send, the codec and the
