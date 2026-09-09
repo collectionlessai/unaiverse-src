@@ -286,6 +286,14 @@ class Action:
         else:
             interaction.set_timeout_starting_time(time.perf_counter())
 
+            # Snapshot of the fresh tags this step is about to see: recorded below if and only if the step
+            # succeeds, preserving the ledger invariant "recorded <=> processed" that the freshness gate
+            # above relies on (a failed attempt must leave the sample fresh for the next attempt)
+            # They will be added only if the a
+            fresh_tags = interaction.get_new_stream_data_tags()
+            if fresh_tags:
+                interaction.record_data_tags(fresh_tags)
+
             if interaction.is_single_step():
                 interaction.clear_mark()
                 await self.__on_lazy_done()

@@ -688,7 +688,10 @@ class ConnectionPools:
 
         # Sending direct message (offloaded to a thread so the event loop stays unblocked)
         try:
-            await asyncio.to_thread(p2p.send_message_to_peer, channel, msg_bytes=msg.to_bytes())
+            # The lambda function moves the protobuf+PNG+gzip work (the expensive part) off the event loop
+            await asyncio.to_thread(lambda: p2p.send_message_to_peer(channel, msg_bytes=msg.to_bytes()))
+            # Previous version was:
+            # await asyncio.to_thread(p2p.send_message_to_peer, channel, msg_bytes=msg.to_bytes())
             return True
         except P2PError as e:
             log.error("Sending error is: " + str(e), sub=p2p.log_sub)

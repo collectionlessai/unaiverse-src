@@ -1110,9 +1110,6 @@ class HybridStateMachine:
             # Post-call operations
             if status == 0:  # Done
 
-                # Memorizing tags of data used in this action call
-                interaction.record_data_tags()
-
                 # State transition
                 self.prev_state = self.limbo_state
                 idx: int
@@ -1143,9 +1140,6 @@ class HybridStateMachine:
                 return 0  # Transition done, no need to check other actions!
 
             elif status == 1:  # Try again the same action (either a new step or an already done-and-failed one)
-
-                # Memorizing tags of data used in this action call
-                interaction.record_data_tags()
 
                 # Update status
                 self.__state_changed = False

@@ -18,6 +18,7 @@ import time
 import json
 import torch
 import pickle
+import asyncio
 import uuid as _uuid
 import importlib.resources
 from PIL.Image import Image
@@ -2218,6 +2219,12 @@ class AgentBasics:
                     log.debug(f"[send_stream_sample] data from stream {stream.props.get_name()} = {data}")
 
                     if data is not None:
+                        count_recipients = len(recipient) if recipient is not None else 1
+
+                        # Force the lazy decode now to avoid race condition afterward (PIL loads only when needed)
+                        if isinstance(data, Image):
+                            data.load()  # Forcing load here, for safety
+
                         log.debug(f"[send_stream_samples] Found something in stream {stream.props.get_name()} "
                                   f"uuid={uuid}, data_tag={data_tag}, recipient={recipient}")
 
@@ -2225,15 +2232,17 @@ class AgentBasics:
                         if uuid not in contents_by_uuid:
                             interactions_by_uuid[uuid] = interaction
                             recipients_by_uuid[uuid] = recipient
-                            contents_by_uuid[uuid] = {name: {'data': None, 'data_tag': None, 'data_uuid': None}
-                                                      for name in streams_dict.keys()}
+                            contents_by_uuid[uuid] = [{name: {'data': None, 'data_tag': None, 'data_uuid': None}
+                                                       for name in streams_dict.keys()}
+                                                      for _ in range(0, count_recipients)]
                             contents_data_by_uuid[uuid] = {name: None for name in streams_dict.keys()}
                             valid_samples_count[uuid] = 0
 
                         # Pack into the prepared data structures
-                        contents_by_uuid[uuid][name] = {'data': data,
-                                                        'data_tag': data_tag,
-                                                        'data_uuid': uuid}
+                        for i in range(0, count_recipients):
+                            contents_by_uuid[uuid][i][name] = {'data': data,
+                                                               'data_tag': data_tag,
+                                                               'data_uuid': uuid}
                         contents_data_by_uuid[uuid][name] = data
                         valid_samples_count[uuid] += 1
                     else:
@@ -2258,13 +2267,14 @@ class AgentBasics:
                 name_or_group = DataProps.name_or_group_from_net_hash(net_hash)
 
                 for uuid, recipients in recipients_by_uuid.items():
-                    content = contents_by_uuid[uuid]
+                    contents = contents_by_uuid[uuid]
                     content_data = contents_data_by_uuid[uuid]
                     interaction = interactions_by_uuid[uuid]
 
-                    for recipient in recipients:
+                    for i, recipient in enumerate(recipients):
                         log.debug(f"[send_stream_samples] " 
                                   f"Sending samples of {net_hash} by direct message to {recipient}...")
+                        content = contents[i]
                         for name in content.keys():
                             content[name]['data'] = self.hook_before_sending_sample(content_data[name],
                                                                                     content[name]['data_tag'],
@@ -2273,22 +2283,32 @@ class AgentBasics:
                                       f"(data_tag={content[name]['data_tag']}, data_uuid={uuid}, "
                                       f"data is None?={content[name]['data'] is None})")
 
-                        ret = await self.node_conn.send(recipient, channel_trail=name_or_group,
-                                                        content_type=Msg.STREAM_SAMPLE,
-                                                        content=content)
+                    # One send per recipient, concurrently (one failure does not cancel the others)
+                    results = await asyncio.gather(
+                        *(self.node_conn.send(recipient, channel_trail=name_or_group,
+                                              content_type=Msg.STREAM_SAMPLE, content=contents[i])
+                          for i, recipient in enumerate(recipients)),
+                        return_exceptions=True)
 
-                        log.debug(f"[send_stream_samples] Sending returned: " + str(ret))
+                    # Checking result of sending
+                    for r in results:
+                        if isinstance(r, Exception):
+                            log.debug(f"[send_stream_samples] Sending failed: {r}")
+                        else:
+                            log.debug(f"[send_stream_samples] Sending success")
 
-                        if ret:
-                            interaction.inc_streamed_samples()
+                    # Increase sent-samples-count on the interaction object
+                    if any(r is True for r in results):
+                        interaction.inc_streamed_samples()
 
             # If pubsub...
             if Stream.is_pubsub_from_net_hash(net_hash):
                 for uuid, recipients in recipients_by_uuid.items():
                     log.debug(f"[send_stream_samples] Sending stream samples of the whole {net_hash} by pubsub...")
 
-                    content = contents_by_uuid[uuid]
+                    content = contents_by_uuid[uuid][0]
                     content_data = contents_data_by_uuid[uuid]
+                    interaction = interactions_by_uuid[uuid]
 
                     for name in content.keys():
                         content[name]['data'] = self.hook_before_sending_sample(content_data[name],
@@ -2299,13 +2319,12 @@ class AgentBasics:
                             f"data is None?={content[name]['data'] is None}")
 
                     peer_id = Stream.peer_id_from_net_hash(net_hash)  # Guessing agent peer ID from the net hash
-                    ret = await self.node_conn.publish(peer_id, channel=net_hash,
-                                                       content_type=Msg.STREAM_SAMPLE,
-                                                       content=content)
+                    result = await self.node_conn.publish(peer_id, channel=net_hash,
+                                                          content_type=Msg.STREAM_SAMPLE,
+                                                          content=content)
+                    log.debug(f"[send_stream_samples] PubSub sending returned " + str(result))
 
-                    log.debug(f"[send_stream_samples] Sending returned: " + str(ret))
-
-                    if ret:
+                    if result:
                         interaction.inc_streamed_samples()
 
     def disable_proc_input(self, public: bool):
