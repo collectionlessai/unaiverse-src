@@ -210,7 +210,8 @@ class Agent(AgentBasics):
     @action
     async def ask_world_stats(self, filters: dict | None = None) -> bool:
         """Ask the world for stats: 'filters' is interpreted by the World subclass (method answer_stats_request);
-        the answer arrives asynchronously as a STATS_RESPONSE and is stored in the stats-answers inbox."""
+        the answer arrives asynchronously as a STATS_RESPONSE and is merged into the agent's local stats view
+        (see update_stats_view)."""
         world_peer_id = self.node_conn.get_world_node_peer_id()
         if world_peer_id is None:
             log.error("Not in a world: cannot ask stats")
@@ -825,7 +826,7 @@ class Agent(AgentBasics):
 
     @action
     async def on_received(self, processing_fcn: str | None = None, data_type: str | None = None) -> bool:
-        """Checks if any of the agents that received an interaction from you have sent a stream
+        """Checks if any of the agents that received interactions from you have sent a stream
         sample back. Optionally, it can process the received data with a specified function (async).
 
         Args:

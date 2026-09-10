@@ -134,12 +134,13 @@ class P2P:
                     'p2p-holepunch': 'info',
                     'tcp-tpt': 'info',
                     'connmgr': 'info',
+                    'dht': 'info',
                     'autorelay': 'info',
                     'autonat': 'info',
                     'autonatv2': 'info',
                     # 'rcmgr': 'info',
                     'swarm2': 'info',
-                    'yamux': 'info'
+                    'yamux': 'info',
                 }
 
             # --- Start OS-level fd capture BEFORE InitializeLibrary, so we

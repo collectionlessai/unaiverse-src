@@ -1705,7 +1705,7 @@ class Node:
                                         self.agent.stdin.set([msg], uuid=uuid, data_tag=tag, force=True)
                                     else:
                                         self.agent.stdin.set([msg, image_pil, whatever], uuid=uuid,
-                                                             data_tag = tag, force = True)
+                                                             data_tag=tag, force=True)
                                 else:
                                     log.error("Empty stdin!")
                         except queue.Empty:
@@ -2461,7 +2461,7 @@ class Node:
                             log.misc("Ignoring a stats response that is not view-shaped (e.g., HTML)")
                     else:
                         log.error(f"Received stats response from {msg.sender}, but it is not the world.")
-                elif self.node_type is Node.AGENT:
+                elif self.node_type is Node.WORLD:
                     log.error("Receiving stats response is not expected for a world node.")
 
         # (interview-queue cleanup + connected-without-ack retry removed — the

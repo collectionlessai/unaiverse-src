@@ -2162,7 +2162,7 @@ class AgentBasics:
 
         # If this stream is not known at all...
         else:
-            log.user(f"Skipping sample from {net_hash} (data stream is unknown)")  # Misc
+            log.misc(f"Skipping sample from {net_hash} (data stream is unknown)")  # Misc
             return added_data
 
     async def send_stream_samples(self):
