@@ -44,7 +44,7 @@ from unaiverse.streams.streams import DataProps, BufferedStream
 from unaiverse.utils.logger import log, ALWAYS_ON_CHANNELS, ALL_CHANNELS
 from unaiverse.utils.misc import (get_key_considering_multiple_sources, save_node_addresses_to_file,
                                   prepare_app_dir, load_agent_in_memory, unpack_py_files, analyze_code,
-                                  world_definition_members, canonical_world_hash, owner_handle)
+                                  build_unaid, owner_handle)
 
 
 class Node:
@@ -1584,6 +1584,14 @@ class Node:
                                 connected_peer_ids = list(self.agent.all_agents.keys())
                                 for peer_id in connected_peer_ids:
                                     await self.leave(peer_id)
+                            elif msg.lower() == "/leave":
+                                if self.agent.in_world():
+                                    await self.leave_world()
+                                else:
+                                    await self.leave(target_peer_id)
+                            elif msg.lower() == "/agents":
+                                for _, agent_profile in self.agent.all_agents.items():
+                                    log.user(f"{build_unaid(agent_profile)}")
                             elif msg.lower() == "/debug":
                                 self.agent.behav_lone_wolf.set_debug_messages_active(
                                     not self.agent.behav_lone_wolf.are_debug_messages_active())
@@ -1594,12 +1602,13 @@ class Node:
                                 # Writing message in the agent's default-stdin (that is where the human process will
                                 # pick up data, no matter what is the actual stdin from the point of view of the
                                 # interaction)
-                                uuid = self.agent.prepare_stdin_if_human(public, peer_id=target_peer_id)
+                                uuid, tag = self.agent.prepare_stdin_if_human(public, peer_id=target_peer_id)
                                 if len(self.agent.stdin) > 0:
                                     if len(self.agent.proc_inputs) == 1:
-                                        self.agent.stdin.set([msg], uuid=uuid, force=True)
+                                        self.agent.stdin.set([msg], uuid=uuid, data_tag=tag, force=True)
                                     else:
-                                        self.agent.stdin.set([msg, image_pil, whatever], uuid=uuid, force=True)
+                                        self.agent.stdin.set([msg, image_pil, whatever], uuid=uuid,
+                                                             data_tag=tag, force=True)
                                 else:
                                     log.error("Empty stdin!")
                         except queue.Empty:

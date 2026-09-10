@@ -573,9 +573,20 @@ class AgentBasics:
         # Getting existing interaction or defaulting to the system one
         if peer_id in self.proc_human_peer_id_to_interaction:
             interaction = self.proc_human_peer_id_to_interaction[peer_id]
-            return interaction.uuid
+            uuid = interaction.uuid
         else:
-            return Custom.SYSTEM_INTERACTION_UUID
+            interaction = None
+            uuid = Custom.SYSTEM_INTERACTION_UUID
+
+        # Getting data tag
+        if interaction is not None:
+            self.stdin.bind(interaction.stdin_streams, uuid=interaction.uuid)
+            tag = self.stdin.get_tag()
+            self.set_default_stdin_binding(public)
+        else:
+            tag = self.stdin.get_tag()
+
+        return uuid, tag
 
     @staticmethod
     def generate_id() -> str:
