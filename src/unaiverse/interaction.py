@@ -273,7 +273,7 @@ class Interaction:
         self.__num_streamed_samples += 1
 
     def all_samples_streamed(self):
-        return self.__num_streamed_samples >= self.num_samples_to_stream
+        return self.__num_streamed_samples >= self.num_samples_to_stream > 0
 
     def set_manager(self,
                     im: 'InteractionManager',
