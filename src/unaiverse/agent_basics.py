@@ -2310,8 +2310,9 @@ class AgentBasics:
                             log.debug(f"[send_stream_samples] Sending success")
 
                     # Increase sent-samples-count on the interaction object
-                    if any(r is True for r in results):
-                        interaction.inc_streamed_samples()
+                    if interaction is not None:
+                        if any(r is True for r in results):
+                            interaction.inc_streamed_samples()
 
             # If pubsub...
             if Stream.is_pubsub_from_net_hash(net_hash):
