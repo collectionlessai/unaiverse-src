@@ -2219,8 +2219,9 @@ class AgentBasics:
                         continue
 
                     # Skipping interactions that already provided all the required data
-                    if interaction.all_samples_streamed():
-                        continue
+                    if interaction is not None:
+                        if interaction.all_samples_streamed():
+                            continue
 
                     # Get data
                     data = stream.get(requested_by="send_stream_samples", uuid=uuid)
