@@ -2337,7 +2337,7 @@ class AgentBasics:
                                                           content=content)
                     log.debug(f"[send_stream_samples] PubSub sending returned " + str(result))
 
-                    if result:
+                    if interaction is not None and result:
                         interaction.inc_streamed_samples()
 
     def disable_proc_input(self, public: bool):
