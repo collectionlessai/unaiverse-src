@@ -579,7 +579,7 @@ class AgentBasics:
             uuid = Custom.SYSTEM_INTERACTION_UUID
 
         # Getting data tag
-        if interaction is not None:
+        if interaction is not None and interaction.stdin_streams is not None and len(interaction.stdin_streams) > 0:
             self.stdin.bind(interaction.stdin_streams, uuid=interaction.uuid)
             tag = self.stdin.get_tag()
             self.set_default_stdin_binding(public)
