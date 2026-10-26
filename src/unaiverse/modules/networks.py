@@ -32,6 +32,7 @@ from unaiverse.streams.dataprops import StreamType
 from transformers import pipeline, AutoProcessor, AutoModelForCausalLM, AutoTokenizer
 from unaiverse.modules.utils import get_proc_inputs_and_proc_outputs_for_image_classification, APIGatewayServer
 from unaiverse.modules.utils import ModuleWrapper, transforms_factory, get_proc_inputs_and_proc_outputs_for_rnn
+from unaiverse.modules.utils import OPENAI_NATIVE_SAMPLER_PARAMS
 
 
 class RNNTokenLM(ModuleWrapper):
@@ -1328,7 +1329,7 @@ class SiteRAG(ModuleWrapper):
         device_env = os.getenv("PROC_DEVICE", None)
         target_device = torch.device("cpu") if device_env is None else torch.device(device_env)
         model_id = "TheBloke/vicuna-7b-1.1-HF"
-        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        tokenizer = AutoTokenizer.from_pretrained(model_id)  # noqa
         model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=torch.float16,
                                                      device_map=target_device, offload_folder="offload")
         pipe = pipeline("text-generation", model=model, tokenizer=tokenizer, max_new_tokens=200)
@@ -1741,6 +1742,8 @@ class OpenRouterAPI(ModuleWrapper):
             def __init__(self):
                 super().__init__()
                 from openai import OpenAI
+                from openai.types.chat import ChatCompletion
+                self._completion_type = ChatCompletion
 
                 self.model_name: str = model or os.environ.get("OPENROUTER_MODEL_ID", "")
                 self.system_prompt: str = system_prompt
@@ -1797,16 +1800,18 @@ class OpenRouterAPI(ModuleWrapper):
                 msgs = [{"role": "system", "content": self.system_prompt}] if self.system_prompt else []
                 msgs.append({"role": "user", "content": prompt})
 
-                # The dict is typed dict[str, object] so PyCharm accepts the mixed value types (str / list / int / float)
-                kwargs: dict[str, object] = {"model": self.model_name, "messages": msgs, **self._native}
+                # The dict is typed dict[str, object] so PyCharm accepts the mixed value types (str/list/int/float)
+                _kwargs: dict[str, object] = {"model": self.model_name, "messages": msgs, **self._native}
                 if self._extra_body:
-                    kwargs["extra_body"] = self._extra_body
+                    _kwargs["extra_body"] = self._extra_body
 
                 # Retry with exponential backoff, keeping the last error so a final failure reports its cause
                 last_err = None
                 for attempt in range(self.max_retries):
                     try:
                         resp = self._client.chat.completions.create(**kwargs)  # type: ignore
+                        if not isinstance(resp, self._completion_type):
+                            log.critical(f"Unexpected response type {type(resp).__name__}: streaming is not supported")
 
                         # Return the first choice that carries non-empty text (content may be None)
                         for choice in resp.choices:
