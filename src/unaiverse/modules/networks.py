@@ -1687,3 +1687,172 @@ class FeatherlessAPI(ModuleWrapper):
             except OSError:
                 pass
             os.close(lock_fd)
+
+
+class OpenRouterAPI(ModuleWrapper):
+    """Callable handle onto the OpenRouter chat-completions API (OpenAI-compatible).
+
+    Typical usage::
+
+        api = OpenRouterAPI(model="meta-llama/llama-3.3-70b-instruct")
+        text = api("write me a haiku")  # Direct HTTPS call to OpenRouter
+
+    One instance per logical caller. The model is fixed at construction, so the callable takes only the prompt string.
+    Unlike FeatherlessAPI there is no shared gateway and no unit/cost budget: OpenRouter bills per token and signals
+    rate limits with HTTP 429, so each instance talks to the API directly through its own process-local client, and
+    transient failures (errors, rate limits, empty content) are handled by a retry loop with exponential backoff.
+    """
+
+    def __init__(self, model: str | None = None, system_prompt: str = "", max_tokens: int = -1,
+                 temperature: float = -1., top_p: float = -1., top_k: int = -1,
+                 frequency_penalty: float | None = None, presence_penalty: float | None = None,
+                 repetition_penalty: float | None = None, min_p: float | None = None, sampler: dict | None = None,
+                 api_key: str | None = None, timeout: float = 120., max_retries: int = 3,
+                 *args, **kwargs):
+        """Create an OpenRouterAPI handle with its own OpenAI-compatible client.
+
+        Args:
+            model: The OpenRouter model slug used for every call, e.g. "openai/gpt-4o" (None falls back to the
+                OPENROUTER_MODEL_ID environment variable) (Default: None).
+            system_prompt: The system prompt prepended to every call ("" means no system prompt) (Default: "").
+            max_tokens: Maximum number of tokens to generate per call (-1 means no limit) (Default: -1).
+            temperature: Sampling temperature for every call (negative lets the API use its default) (Default: -1.).
+            top_p: Nucleus-sampling probability (negative lets the API use its default) (Default: -1.).
+            top_k: Top-k sampling cutoff (negative lets the API use its default) (Default: -1).
+            frequency_penalty: Frequency penalty (None lets the API use its default) (Default: None).
+            presence_penalty: Presence penalty (None lets the API use its default) (Default: None).
+            repetition_penalty: Repetition penalty, ignored by providers not supporting it (Default: None).
+            min_p: Minimum-probability cutoff, ignored by providers not supporting it (Default: None).
+            sampler: Extra params merged last (its keys win); use it for any knob not covered above, including
+                OpenRouter-specific fields such as "provider", "models" (fallback chain) or "reasoning".
+            api_key: The OpenRouter API key charged for every call; None falls back to the OPENROUTER_API_KEY
+                environment variable (Default: None).
+            timeout: Maximum seconds to wait for a single HTTP request (Default: 120.).
+            max_retries: Maximum number of attempts per call, with exponential backoff in between (Default: 3).
+        """
+        if max_retries < 1:
+            log.critical(f"Invalid max_retries {max_retries}: it must be at least 1")
+
+        class Net(torch.nn.Module):
+            """Holds the sampler config and the OpenRouter client, and sends each `forward(prompt)` straight to the
+            API. Plain Python attributes (client, dict, str): none get registered as torch submodules since none are
+            `nn.Module`/`Parameter`/`Tensor`."""
+
+            def __init__(self):
+                super().__init__()
+                from openai import OpenAI
+
+                self.model_name: str = model or os.environ.get("OPENROUTER_MODEL_ID", "")
+                self.system_prompt: str = system_prompt
+                self.max_retries: int = max_retries
+                if not self.model_name:
+                    log.critical("No model: the model argument was not given "
+                                 "and OPENROUTER_MODEL_ID was not set!")
+
+                # Account: the API key charged for every call
+                key = api_key or os.environ.get("OPENROUTER_API_KEY", "")
+                if not key:
+                    log.critical("No API key: the api_key argument was not given "
+                                 "and OPENROUTER_API_KEY was not set!")
+
+                # Process-local client, reused for every call so HTTP keep-alive avoids a fresh TLS handshake per
+                # query. SDK-level retries are off: forward() retries on its own, also covering empty content
+                self._client = OpenAI(base_url="https://openrouter.ai/api/v1", api_key=key, timeout=timeout,
+                                      max_retries=0, default_headers={"HTTP-Referer": "https://unaiverse.io",
+                                                                      "X-Title": "UNaIVERSE"})
+
+                # Per-call sampler: include each knob only when explicitly set, so unset ones fall back
+                # to the API default. The free-form `sampler` arg is merged last and overrides.
+                self.sampler: dict = {}
+                if max_tokens > 0:
+                    self.sampler["max_tokens"] = max_tokens
+                if temperature >= 0.:
+                    self.sampler["temperature"] = temperature
+                if top_p >= 0.:
+                    self.sampler["top_p"] = top_p
+                if top_k >= 0:
+                    self.sampler["top_k"] = top_k
+                if frequency_penalty is not None:
+                    self.sampler["frequency_penalty"] = frequency_penalty
+                if presence_penalty is not None:
+                    self.sampler["presence_penalty"] = presence_penalty
+                if repetition_penalty is not None:
+                    self.sampler["repetition_penalty"] = repetition_penalty
+                if min_p is not None:
+                    self.sampler["min_p"] = min_p
+                if sampler:
+                    self.sampler.update(sampler)
+
+                # Split the sampler once: OpenAI-native keys go top-level, the rest (top_k, min_p, provider, models,
+                # ...) ride along in extra_body, otherwise the OpenAI SDK rejects them as unexpected arguments
+                self._native: dict = {k: v for k, v in self.sampler.items() if k in OPENAI_NATIVE_SAMPLER_PARAMS}
+                self._extra_body: dict = {k: v for k, v in self.sampler.items()
+                                          if k not in OPENAI_NATIVE_SAMPLER_PARAMS}
+
+            def forward(self, prompt: str) -> str:
+                if not isinstance(prompt, str):
+                    log.critical(f"Invalid prompt: it must be a str, got {type(prompt).__name__}")
+
+                # Always use chat completions; include the system message only when a system prompt is given
+                msgs = [{"role": "system", "content": self.system_prompt}] if self.system_prompt else []
+                msgs.append({"role": "user", "content": prompt})
+
+                # The dict is typed dict[str, object] so PyCharm accepts the mixed value types (str / list / int / float)
+                kwargs: dict[str, object] = {"model": self.model_name, "messages": msgs, **self._native}
+                if self._extra_body:
+                    kwargs["extra_body"] = self._extra_body
+
+                # Retry with exponential backoff, keeping the last error so a final failure reports its cause
+                last_err = None
+                for attempt in range(self.max_retries):
+                    try:
+                        resp = self._client.chat.completions.create(**kwargs)  # type: ignore
+
+                        # Return the first choice that carries non-empty text (content may be None)
+                        for choice in resp.choices:
+                            content = choice.message.content
+                            if content is not None and content.strip():
+                                return content
+
+                        # Empty/blank content: treat it as a transient failure so the loop retries instead of ""
+                        finish = resp.choices[0].finish_reason if resp.choices else "n/a"
+                        last_err = RuntimeError(f"Empty content from model (finish_reason={finish})")
+                    except Exception as e:
+                        last_err = e
+
+                    # No point sleeping after the last attempt
+                    if attempt + 1 < self.max_retries:
+                        log.error(f"Empty response or exception! (model={self.model_name}, attempt={attempt + 1}, "
+                                  f"last_err={last_err!r}), waiting {2 ** attempt} seconds before trying again...")
+                        time.sleep(2 ** attempt)
+
+                log.critical(f"OpenRouter call failed after retries: {last_err!r}")  # This will raise an exception
+                return ""  # Never reached
+
+            def close(self) -> None:
+                """Close the HTTP client, releasing its pooled connections."""
+                try:
+                    self._client.close()
+                except Exception:
+                    pass
+
+        super(OpenRouterAPI, self).__init__(
+            module=Net(),
+            proc_inputs=[StreamType(data_type="text", pubsub=False, private_only=False)],
+            proc_outputs=[StreamType(data_type="text", pubsub=False, private_only=False)],
+            *args, **kwargs
+        )
+
+    def close(self) -> None:
+        """Close the underlying HTTP client, releasing its pooled connections."""
+        assert self.module is not None
+        if hasattr(self.module, 'close'):
+            self.module.close()
+
+    def __enter__(self) -> 'OpenRouterAPI':
+        """Enter the context manager, returning this handle."""
+        return self
+
+    def __exit__(self, *exc) -> None:
+        """Exit the context manager, closing the handle."""
+        self.close()
