@@ -1809,7 +1809,7 @@ class OpenRouterAPI(ModuleWrapper):
                 last_err = None
                 for attempt in range(self.max_retries):
                     try:
-                        resp = self._client.chat.completions.create(**kwargs)  # type: ignore
+                        resp = self._client.chat.completions.create(**_kwargs)  # type: ignore
                         if not isinstance(resp, self._completion_type):
                             log.critical(f"Unexpected response type {type(resp).__name__}: streaming is not supported")
 
