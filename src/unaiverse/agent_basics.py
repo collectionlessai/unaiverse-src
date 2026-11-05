@@ -33,6 +33,7 @@ from unaiverse.networking.p2p.messages import Msg
 from unaiverse.streams.streamproxy import StreamProxy
 from unaiverse.networking.node.connpool import NodeConn
 from unaiverse.networking.node.profile import NodeProfile
+from unaiverse.networking.session.sess_msg import LOCAL_ERROR
 from unaiverse.streams.streams import Stream, BufferedStream
 from unaiverse.interaction import Interaction, InteractionManager
 from unaiverse.streams.dataprops import DataProps, StreamType, TensorLabels
@@ -207,7 +208,6 @@ class AgentBasics:
         self.node_profile = None
         self.node_ask_to_get_in_touch_fcn: Callable | None = None
         self.node_purge_fcn: Callable | None = None
-        self.node_agents_waiting = None
         self.node_identity_dir = ''
 
         # Utilities (keep the "__" prefix, or they will be cleared on world leaving!)
@@ -351,8 +351,8 @@ class AgentBasics:
                 action_ref.set_timeout(-1.)
 
     def set_node_info(self, conn: NodeConn, profile: NodeProfile,
-                      ask_to_get_in_touch_fcn: Callable, purge_fcn: Callable, node_identity_dir: str,
-                      agents_waiting: dict) -> bool:
+                      ask_to_get_in_touch_fcn: Callable, purge_fcn: Callable,
+                      node_identity_dir: str) -> bool:
         """Set the required information from the node that hosts this agent.
 
         Args:
@@ -361,7 +361,6 @@ class AgentBasics:
             ask_to_get_in_touch_fcn: The function to call to request getting in touch with another peer.
             purge_fcn: The function to call to purge (kill/disconnect) a connection.
             node_identity_dir: The folder where the node identity files are stored.
-            agents_waiting: Dict of agents that connected to this node but have not been evaluated yet to be added.
 
         Returns:
             True upon successful setup.
@@ -374,7 +373,6 @@ class AgentBasics:
         self.node_ask_to_get_in_touch_fcn = ask_to_get_in_touch_fcn
         self.node_purge_fcn = purge_fcn
         self.node_identity_dir = node_identity_dir
-        self.node_agents_waiting = agents_waiting
 
         # Checking if human, marking the node
         assert self.proc is None or isinstance(self.proc, ModuleWrapper)  # It is None in worlds!
@@ -557,9 +555,6 @@ class AgentBasics:
         self.uai_writing_to = peer_id
 
         # Zero-step: if we are in a world, the peer ID used for indexing the interaction cache is the world peer ID
-        # TODO(review): with public=False the broadcaster peer-id is overwritten by the world-node id before the
-        #  per-broadcaster lookup, so the entry is missed and the human reply is misrouted to the world node;
-        #  see tests/test_human_routing.py::test_prepare_world_should_return_broadcaster_interaction_uuid
         peer_id = peer_id if public else self.node_conn.get_world_node_peer_id()
 
         # First of all, clearing residuals of interactions that were completed in the past
@@ -695,7 +690,7 @@ class AgentBasics:
         # World only: the world discovers CUSTOM_ROLES from the JSON files in the world folder
         if self.world_folder is not None and self.is_world:
 
-            # Guessing roles from the list of json files
+            # Guessing roles from the list of JSON files
             listdir = os.listdir(self.world_folder)  # Do this only once
             listdir.sort()  # Keep it stable
             self.CUSTOM_ROLES = [os.path.splitext(f)[0] for f in listdir
@@ -1864,7 +1859,8 @@ class AgentBasics:
                         f"Failed to send interaction status to peer {interaction.requester}, disconnecting it")
 
                     assert self.node_purge_fcn is not None
-                    await self.node_purge_fcn(interaction.requester)
+                    # Send-failure teardown: LOCAL_ERROR (best-effort GOAWAY on a possibly dead link).
+                    await self.node_purge_fcn(interaction.requester, reason=LOCAL_ERROR)
 
     def learn_behave(self, state: int, last_action: int, prev_state: int):
         """A placeholder method for behavioral learning, intended to be implemented by child classes.

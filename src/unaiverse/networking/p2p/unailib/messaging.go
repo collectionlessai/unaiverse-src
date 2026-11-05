@@ -16,18 +16,34 @@ import (
 	"google.golang.org/protobuf/proto"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/core/network"
+	libp2pproto "github.com/libp2p/go-libp2p/core/protocol"
 	ma "github.com/multiformats/go-multiaddr"
 	pg "unailib/proto-go"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
 )
 
+// isSessionProtocol reports whether protocolID is one of the per-stage Session
+// handshake protocols. Session traffic is privileged in the message store so a
+// flood of attacker-chosen chat channels cannot starve the handshake.
+func isSessionProtocol(protocolID string) bool {
+	switch protocolID {
+	case SessionHelloProtocol, SessionProfileProtocol, SessionWorldProtocol, SessionControlProtocol:
+		return true
+	default:
+		return false
+	}
+}
+
 // storeReceivedMessage processes a raw message received either from a direct stream
-// or a PubSub topic. The sender peerID and the channel to store are retrieved in handleStream and readFromSubscription
+// or a PubSub topic. The libp2p protocol ID is preserved on the queued message so
+// Python can route by protocol instead of by content_type. Pass an empty string
+// for protocolID if not available.
 func storeReceivedMessage(
-	ni *NodeInstance,
-	from peer.ID,
-	channel string,
-	data []byte,
+    ni *NodeInstance,
+    from peer.ID,
+    channel string,
+    protocolID string,
+    data []byte,
 ) {
 	// Get the message store for this instance
 	store := ni.messageStore
@@ -38,8 +54,9 @@ func storeReceivedMessage(
 
 	// Create the minimal message envelope.
 	newMessage := &QueuedMessage{
-		From: from,
-		Data: data,
+		From:     from,
+		Data:     data,
+		Protocol: protocolID,
 	}
 
 	// Lock the store mutex before accessing the shared maps.
@@ -49,9 +66,12 @@ func storeReceivedMessage(
 	// Check if this channel already has a message list.
 	messageList, channelExists := store.messagesByChannel[channel]
 	if !channelExists {
-		// The cap contains attacker-chosen chat/pubsub channel names: a flood of junk
-		// channels must not grow the store without bound.
-		if len(store.messagesByChannel) >= maxUniqueChannels {
+		// Session-protocol channels are privileged and bypass the channel-count
+		// cap: their key is the protocol ID itself (a small fixed set), so they
+		// cannot cause unbounded growth. The cap exists to contain attacker-chosen
+		// chat/pubsub channel names; a flood of junk chat channels must never be
+		// able to evict (by exhausting maxUniqueChannels) an incoming handshake.
+		if !isSessionProtocol(protocolID) && len(store.messagesByChannel) >= maxUniqueChannels {
 			logger.Warnf("[GO] 🗑️ Instance %d: Message store full. Discarding message for new channel '%s'.\n", ni.instanceIndex, channel)
 			return
 		}
@@ -68,6 +88,218 @@ func storeReceivedMessage(
 
 	messageList.PushBack(newMessage)
 	logger.Debugf("[GO] 📥 Instance %d: Queued message on channel '%s' from %s. New queue length: %d\n", ni.instanceIndex, channel, from, messageList.Len())
+}
+
+// promoteFriendlyPeer records (or address-refreshes) a peer in friendlyPeers,
+// the map GetConnectedPeers reports from. Chat streams have always done this on
+// their first message (see handleStream); Session-protocol traffic must do it
+// too — on both the sending and the receiving side — otherwise a peer whose
+// only traffic is the Session handshake/keep-alive never surfaces to the
+// application connection pools.
+func promoteFriendlyPeer(ni *NodeInstance, peerID peer.ID, direction string, fallbackAddr ma.Multiaddr) {
+	ni.peersMutex.Lock()
+	defer ni.peersMutex.Unlock()
+	knownAddrs := ni.host.Peerstore().Addrs(peerID)
+	if len(knownAddrs) == 0 && fallbackAddr != nil {
+		knownAddrs = []ma.Multiaddr{fallbackAddr}
+	}
+	if existing, ok := ni.friendlyPeers[peerID]; ok {
+		// Keep ConnectedAt and Direction from the original first contact.
+		existing.Addrs = knownAddrs
+		ni.friendlyPeers[peerID] = existing
+		return
+	}
+	ni.friendlyPeers[peerID] = ExtendedPeerInfo{
+		ID:          peerID,
+		Addrs:       knownAddrs,
+		ConnectedAt: time.Now(),
+		Direction:   direction,
+		Relayed:     false,
+	}
+	logger.Infof("[GO] ➕ Instance %d: Peer %s promoted to App Peer (%s).", ni.instanceIndex, peerID, direction)
+}
+
+// connDirection maps a stream's underlying connection direction to the
+// "inbound"/"outbound" labels the Python pool routing expects.
+func connDirection(s network.Stream) string {
+	if s.Conn().Stat().Direction == network.DirOutbound {
+		return "outbound"
+	}
+	return "inbound"
+}
+
+// handleStream reads from a direct message stream on the UnaiverseChatProtocol using the new framing protocol.
+// It expects the stream to start with a 4-byte length prefix, followed by a 1-byte channel name length,
+// the channel name itself, and finally the Protobuf-encoded payload.
+func handleStream(ni *NodeInstance, s network.Stream) {
+	defer recoverGoroutine("handleStream")
+	senderPeerID := s.Conn().RemotePeer()
+	streamID := s.ID()
+	// Delegate peer promotion and address updates to the helper function.
+	// This safely handles the mutex locking and state management for us.
+	promoteFriendlyPeer(ni, senderPeerID, connDirection(s), s.Conn().RemoteMultiaddr())
+	logger.Debugf("[GO] 📥 Instance %d: Accepted INCOMING stream %s from %s. Storing for duplex use.\n", ni.instanceIndex, streamID, senderPeerID)
+
+	// Store the newly accepted stream so we can use it to send messages back to this peer.
+	incomingPS := &persistentStream{s: s}
+	ni.streamsMutex.Lock()
+	ni.persistentChatStreams[senderPeerID] = incomingPS
+	ni.streamsMutex.Unlock()
+
+	// This defer block ensures cleanup happens when the stream is closed by either side.
+	defer func() {
+		logger.Debugf("[GO] 🧹 Instance %d: Stream %s with %s closed. Removing from map.\n", ni.instanceIndex, streamID, senderPeerID)
+		ni.streamsMutex.Lock()
+		if current, ok := ni.persistentChatStreams[senderPeerID]; ok && current == incomingPS {
+			delete(ni.persistentChatStreams, senderPeerID)
+		}
+		ni.streamsMutex.Unlock()
+		s.Close() // Ensure the stream is fully closed.
+	}()
+
+	for {
+		// Renew the idle deadline on each frame: a peer that opens the stream and
+		// then stops sending must not pin this goroutine forever (slow-loris). The
+		// existing net.Error/Timeout branch below turns the expiry into a clean
+		// return with stream cleanup via the defer above.
+		if err := s.SetReadDeadline(time.Now().Add(ChatStreamIdleTimeout)); err != nil {
+			logger.Warnf("[GO] ⚠️ Instance %d: SetReadDeadline failed on chat stream %s: %v\n", ni.instanceIndex, streamID, err)
+		}
+
+		// Read 4-byte total length
+		var totalLen uint32
+		if err := binary.Read(s, binary.BigEndian, &totalLen); err != nil {
+			if err == io.EOF {
+				logger.Debugf("[GO] 🔌 Instance %d: Stream %s with %s closed (EOF).\n", ni.instanceIndex, streamID, senderPeerID)
+			} else if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+				logger.Warnf("[GO] ⏳ Instance %d: Timeout reading length from Stream %s (%s): %v\n", ni.instanceIndex, streamID, senderPeerID, err)
+			} else if errors.Is(err, network.ErrReset) {
+				logger.Warnf("[GO] ⚙️ Instance %d: Stream %s with %s reset.\n", ni.instanceIndex, streamID, senderPeerID)
+			} else {
+				logger.Errorf("[GO] ❌ Instance %d: Error reading length from Stream %s (%s): %v\n", ni.instanceIndex, streamID, senderPeerID, err)
+			}
+			return
+		}
+
+		if totalLen > MaxMessageSize {
+			logger.Errorf("[GO] ❌ Instance %d: Message len %d exceeds limit on Stream %s. Resetting.\n", ni.instanceIndex, totalLen, streamID)
+			s.Reset()
+			return
+		}
+
+		// Read Channel Length
+		var channelLen uint8
+		if err := binary.Read(s, binary.BigEndian, &channelLen); err != nil {
+			logger.Errorf("[GO] ❌ Instance %d: Error reading channel len from Stream %s: %v\n", ni.instanceIndex, streamID, err)
+			return
+		}
+
+		if totalLen <= uint32(channelLen) + 1 {
+			logger.Errorf("[GO] ❌ Instance %d: Total length %d too short for channel header on Stream %s, preventing underflow. Resetting.\n", ni.instanceIndex, totalLen, streamID)
+			s.Reset()
+			return
+		}
+
+		// Read Channel Name
+		channelBytes := make([]byte, channelLen)
+		if _, err := io.ReadFull(s, channelBytes); err != nil {
+			logger.Errorf("[GO] ❌ Instance %d: Error reading channel from Stream %s: %v\n", ni.instanceIndex, streamID, err)
+			return
+		}
+		channel := string(channelBytes)
+
+		// Read Payload
+		payloadLen := totalLen - uint32(channelLen) - 1
+		payload := make([]byte, payloadLen)
+		if _, err := io.ReadFull(s, payload); err != nil {
+			logger.Errorf("[GO] ❌ Instance %d: Error reading payload from Stream %s: %v\n", ni.instanceIndex, streamID, err)
+			return
+		}
+
+		logger.Infof("[GO] 📨 Instance %d: Received msg on channel '%s' via Stream %s from %s.\n", ni.instanceIndex, channel, streamID, senderPeerID)
+		storeReceivedMessage(ni, senderPeerID, channel, UnaiverseChatProtocol, payload)
+	}
+}
+
+// handleSessionStream reads a single length-prefixed protobuf payload from a Session
+// stream and enqueues it for Python with the protocol ID attached. Unlike handleStream
+// (chat), each Session stream carries exactly one message and is closed after read —
+// no persistent stream, no per-stream channel header. Framing: 4-byte big-endian
+// uint32 length, then the protobuf payload.
+func handleSessionStream(ni *NodeInstance, s network.Stream, protocolID string) {
+	defer recoverGoroutine("handleSessionStream")
+	senderPeerID := s.Conn().RemotePeer()
+	streamID := s.ID()
+	defer s.Close()
+
+	// Session traffic is application traffic: surface the peer to the pools.
+	promoteFriendlyPeer(ni, senderPeerID, connDirection(s), s.Conn().RemoteMultiaddr())
+
+	// Per-stream read budget — keeps a slow / malicious peer from holding the stream
+	// open indefinitely. The Session FSM enforces its own per-stage timeouts on the
+	// Python side; this is just a transport-level safety net.
+	if err := s.SetReadDeadline(time.Now().Add(StreamCreationTimeout)); err != nil {
+		logger.Warnf("[GO] ⚠️ Instance %d: SetReadDeadline failed on session stream %s: %v\n", ni.instanceIndex, streamID, err)
+	}
+
+	var payloadLen uint32
+	if err := binary.Read(s, binary.BigEndian, &payloadLen); err != nil {
+		if err != io.EOF {
+			logger.Warnf("[GO] ⚠️ Instance %d: session stream %s (%s) read-length failed: %v\n", ni.instanceIndex, streamID, protocolID, err)
+		}
+		return
+	}
+	if payloadLen == 0 || payloadLen > MaxMessageSize {
+		logger.Errorf("[GO] ❌ Instance %d: session stream %s (%s) bad payload length %d\n", ni.instanceIndex, streamID, protocolID, payloadLen)
+		s.Reset()
+		return
+	}
+	payload := make([]byte, payloadLen)
+	if _, err := io.ReadFull(s, payload); err != nil {
+		logger.Warnf("[GO] ⚠️ Instance %d: session stream %s (%s) read-payload failed: %v\n", ni.instanceIndex, streamID, protocolID, err)
+		return
+	}
+	logger.Infof("[GO] 📨 Instance %d: Session %s from %s (%d bytes)\n", ni.instanceIndex, protocolID, senderPeerID, payloadLen)
+
+	// Use the protocol ID as the channel key so messages are queued per-protocol.
+	// Python's connpool decoder treats any channel matching a session protocol ID
+	// as a session message and routes it to the SessionManager.
+	storeReceivedMessage(ni, senderPeerID, protocolID, protocolID, payload)
+}
+
+// setupDirectMessageHandler configures the libp2p host for a specific instance
+// to listen for incoming streams using the custom ChatProtocol.
+// When a peer opens a stream with this protocol ID, the provided handler function
+// is invoked to manage communication on that stream.
+func setupDirectMessageHandler(
+	ni *NodeInstance,
+) {
+	if ni.host == nil {
+		logger.Errorf("[GO] ❌ Instance %d: Cannot setup direct message handler: Host not initialized\n", ni.instanceIndex)
+		return
+	}
+
+	// Set a handler function for the UnaiverseChatProtocol. This function will be called
+	// automatically by libp2p whenever a new incoming stream for this protocol is accepted.
+	// Use a closure to capture the NodeInstance pointer.
+	ni.host.SetStreamHandler(UnaiverseChatProtocol, func(s network.Stream) {
+		handleStream(ni, s)
+	})
+
+	// Per-stage Session protocol handlers — one protobuf message per stream, no channel
+	// header in the framing (unlike chat which multiplexes channels over a persistent
+	// stream). See handleSessionStream below.
+	for _, proto := range []string{
+		SessionHelloProtocol,
+		SessionProfileProtocol,
+		SessionWorldProtocol,
+		SessionControlProtocol,
+	} {
+		protoCopy := proto // capture loop variable
+		ni.host.SetStreamHandler(libp2pproto.ID(protoCopy), func(s network.Stream) {
+			handleSessionStream(ni, s, protoCopy)
+		})
+	}
 }
 
 // readFromSubscription runs as a dedicated goroutine for each active PubSub subscription for a specific instance.
@@ -198,150 +430,25 @@ func readFromSubscription(
 		} else {
 			// This is a standard message. Queue it as before.
 			logger.Debugf("[GO] 📝 Instance %d: Storing new pubsub message from topic '%s'.\n", ni.instanceIndex, topic)
-			storeReceivedMessage(ni, msg.GetFrom(), topic, msg.Data)
+			storeReceivedMessage(ni, msg.GetFrom(), topic, "", msg.Data)  // Empty protocolID for PubSub messages, since they are identified by topic instead.
 		}
 	}
 }
 
-// handleStream reads from a direct message stream using the new framing protocol.
-// It expects the stream to start with a 4-byte length prefix, followed by a 1-byte channel name length,
-// the channel name itself, and finally the Protobuf-encoded payload.
-func handleStream(ni *NodeInstance, s network.Stream) {
-	defer recoverGoroutine("handleStream")
-	senderPeerID := s.Conn().RemotePeer()
-	streamID := s.ID()
-	ni.peersMutex.Lock()
-	existingPeer, peerExists := ni.friendlyPeers[senderPeerID]
-
-	// 1. Gather fresh info (Addresses & Direction)
-	direction := "inbound"
-	if s.Stat().Direction == network.DirOutbound {
-		direction = "outbound"
+// writeSessionFrame writes a single length-prefixed session payload onto a stream:
+// 4-byte big-endian uint32 length, then the protobuf bytes. Returns nil on success
+// (an error otherwise); a nil return means "written to the muxer", not delivered.
+func writeSessionFrame(w io.Writer, payload []byte) error {
+	if uint32(len(payload)) > MaxMessageSize {
+		return fmt.Errorf("session payload size (%d) exceeds limit (%d)", len(payload), MaxMessageSize)
 	}
-	knownAddrs := ni.host.Peerstore().Addrs(senderPeerID)
-	if len(knownAddrs) == 0 {
-		knownAddrs = []ma.Multiaddr{s.Conn().RemoteMultiaddr()}
+	if err := binary.Write(w, binary.BigEndian, uint32(len(payload))); err != nil {
+		return fmt.Errorf("failed to write session length prefix: %w", err)
 	}
-
-	if !peerExists {
-		// CASE A: New Application Peer
-		ni.friendlyPeers[senderPeerID] = ExtendedPeerInfo{
-			ID:          senderPeerID,
-			Addrs:       knownAddrs,
-			ConnectedAt: time.Now(),
-			Direction:   direction,
-			Relayed:     false,
-		}
-		logger.Infof("[GO] ➕ Instance %d: Peer %s promoted to App Peer via Stream %s (Incoming).", ni.instanceIndex, senderPeerID, streamID)
-	} else {
-		// CASE B: Existing Peer - Update Addresses
-		// We keep ConnectedAt and Direction from the original session start.
-		existingPeer.Addrs = knownAddrs
-		ni.friendlyPeers[senderPeerID] = existingPeer
-		logger.Debugf("[GO] 🔄 Instance %d: Refreshed addresses for Peer %s via Stream %s.", ni.instanceIndex, senderPeerID, streamID)
+	if _, err := w.Write(payload); err != nil {
+		return fmt.Errorf("failed to write session payload: %w", err)
 	}
-	ni.peersMutex.Unlock()
-	logger.Debugf("[GO] 📥 Instance %d: Accepted INCOMING stream %s from %s. Storing for duplex use.\n", ni.instanceIndex, streamID, senderPeerID)
-
-	// Store the newly accepted stream so we can use it to send messages back to this peer.
-	incomingPS := &persistentStream{s: s}
-	ni.streamsMutex.Lock()
-	ni.persistentChatStreams[senderPeerID] = incomingPS
-	ni.streamsMutex.Unlock()
-
-	// This defer block ensures cleanup happens when the stream is closed by either side.
-	defer func() {
-		logger.Debugf("[GO] 🧹 Instance %d: Stream %s with %s closed. Removing from map.\n", ni.instanceIndex, streamID, senderPeerID)
-		ni.streamsMutex.Lock()
-		if current, ok := ni.persistentChatStreams[senderPeerID]; ok && current == incomingPS {
-			delete(ni.persistentChatStreams, senderPeerID)
-		}
-		ni.streamsMutex.Unlock()
-		s.Close() // Ensure the stream is fully closed.
-	}()
-
-	for {
-		// Renew the idle deadline on each frame: a peer that opens the stream and
-		// then stops sending must not pin this goroutine forever (slow-loris). The
-		// existing net.Error/Timeout branch below turns the expiry into a clean
-		// return with stream cleanup via the defer above.
-		if err := s.SetReadDeadline(time.Now().Add(ChatStreamIdleTimeout)); err != nil {
-			logger.Warnf("[GO] ⚠️ Instance %d: SetReadDeadline failed on chat stream %s: %v\n", ni.instanceIndex, streamID, err)
-		}
-
-		// Read 4-byte total length
-		var totalLen uint32
-		if err := binary.Read(s, binary.BigEndian, &totalLen); err != nil {
-			if err == io.EOF {
-				logger.Debugf("[GO] 🔌 Instance %d: Stream %s with %s closed (EOF).\n", ni.instanceIndex, streamID, senderPeerID)
-			} else if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-				logger.Warnf("[GO] ⏳ Instance %d: Timeout reading length from Stream %s (%s): %v\n", ni.instanceIndex, streamID, senderPeerID, err)
-			} else if errors.Is(err, network.ErrReset) {
-				logger.Warnf("[GO] ⚙️ Instance %d: Stream %s with %s reset.\n", ni.instanceIndex, streamID, senderPeerID)
-			} else {
-				logger.Errorf("[GO] ❌ Instance %d: Error reading length from Stream %s (%s): %v\n", ni.instanceIndex, streamID, senderPeerID, err)
-			}
-			return
-		}
-
-		if totalLen > MaxMessageSize {
-			logger.Errorf("[GO] ❌ Instance %d: Message len %d exceeds limit on Stream %s. Resetting.\n", ni.instanceIndex, totalLen, streamID)
-			s.Reset()
-			return
-		}
-
-		// Read Channel Length
-		var channelLen uint8
-		if err := binary.Read(s, binary.BigEndian, &channelLen); err != nil {
-			logger.Errorf("[GO] ❌ Instance %d: Error reading channel len from Stream %s: %v\n", ni.instanceIndex, streamID, err)
-			return
-		}
-
-		if totalLen <= uint32(channelLen)+1 {
-			logger.Errorf("[GO] ❌ Instance %d: Total length %d too short for channel header on Stream %s, preventing underflow. Resetting.\n", ni.instanceIndex, totalLen, streamID)
-			s.Reset()
-			return
-		}
-
-		// Read Channel Name
-		channelBytes := make([]byte, channelLen)
-		if _, err := io.ReadFull(s, channelBytes); err != nil {
-			logger.Errorf("[GO] ❌ Instance %d: Error reading channel from Stream %s: %v\n", ni.instanceIndex, streamID, err)
-			return
-		}
-		channel := string(channelBytes)
-
-		// Read Payload
-		payloadLen := totalLen - uint32(channelLen) - 1
-		payload := make([]byte, payloadLen)
-		if _, err := io.ReadFull(s, payload); err != nil {
-			logger.Errorf("[GO] ❌ Instance %d: Error reading payload from Stream %s: %v\n", ni.instanceIndex, streamID, err)
-			return
-		}
-
-		logger.Infof("[GO] 📨 Instance %d: Received msg on channel '%s' via Stream %s from %s.\n", ni.instanceIndex, channel, streamID, senderPeerID)
-		storeReceivedMessage(ni, senderPeerID, channel, payload)
-	}
-}
-
-// setupDirectMessageHandler configures the libp2p host for a specific instance
-// to listen for incoming streams using the custom ChatProtocol.
-// When a peer opens a stream with this protocol ID, the provided handler function
-// is invoked to manage communication on that stream.
-func setupDirectMessageHandler(
-	ni *NodeInstance,
-) {
-	if ni.host == nil {
-		logger.Errorf("[GO] ❌ Instance %d: Cannot setup direct message handler: Host not initialized\n", ni.instanceIndex)
-		return
-	}
-
-	// Set a handler function for the UnaiverseChatProtocol. This function will be called
-	// automatically by libp2p whenever a new incoming stream for this protocol is accepted.
-	// Use a closure to capture the NodeInstance pointer.
-	ni.host.SetStreamHandler(UnaiverseChatProtocol, func(s network.Stream) {
-		handleStream(ni, s)
-	})
+	return nil
 }
 
 // This function constructs and writes a message using our new framing protocol for direct messages.

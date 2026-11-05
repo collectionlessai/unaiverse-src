@@ -218,7 +218,7 @@ class _Clock:
             self.cycle += 1  # Increment the cycle index
             # TODO(review): in real-time mode (min_delta <= 0) the gating is skipped, so two fast successive calls can
             # produce identical get_time() values and __add_timestamp then raises ValueError on the duplicate timestamp.
-            # See tests/test_clock.py::test_timestamps_are_strictly_increasing_across_cycles.
+            # See tests/test_clock.py::test_real_time_next_cycle_without_advance_raises.
             self.__add_timestamp(self.get_time())
             return True
 

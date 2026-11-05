@@ -160,6 +160,28 @@ _shared_lib.GetWebRTCConnections.restype = ctypes.c_void_p  # Treat returned *C.
 _shared_lib.GetReachability.argtypes = [ctypes.c_int]
 _shared_lib.GetReachability.restype = ctypes.c_void_p  # Treat returned *C.char as opaque pointer
 
+# Session abstraction (per-stage handshake protocols + signed peer record).
+# See unailib/session_api.go. (Liveness is session-level PING/PONG, not /ipfs/ping.)
+_shared_lib.SendOnProtocol.argtypes = [
+    ctypes.c_int,      # instanceIndex
+    ctypes.c_char_p,   # peerID
+    ctypes.c_char_p,   # protocolID
+    ctypes.c_char_p,   # payload
+    ctypes.c_int,      # payloadLen
+]
+_shared_lib.SendOnProtocol.restype = ctypes.c_void_p
+
+_shared_lib.SignWithHostKey.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int]
+_shared_lib.SignWithHostKey.restype = ctypes.c_void_p
+
+_shared_lib.VerifyPeerSignature.argtypes = [
+    ctypes.c_char_p,   # peerID
+    ctypes.c_char_p,   # data
+    ctypes.c_int,      # dataLen
+    ctypes.c_char_p,   # sigB64
+]
+_shared_lib.VerifyPeerSignature.restype = ctypes.c_void_p
+
 # Memory Management
 # FreeString now accepts the opaque pointer directly
 _shared_lib.FreeString.argtypes = [ctypes.c_void_p]

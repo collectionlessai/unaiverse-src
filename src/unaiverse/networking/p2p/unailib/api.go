@@ -19,10 +19,8 @@ import (
 	"path/filepath"
 	"encoding/binary"
 	"github.com/caddyserver/certmagic"
-	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/core/event"
-	"github.com/libp2p/go-libp2p/core/routing"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peerstore"
 	"github.com/libp2p/go-libp2p/p2p/transport/tcp"
@@ -30,13 +28,13 @@ import (
 	ma "github.com/multiformats/go-multiaddr"
 	rc "github.com/libp2p/go-libp2p/p2p/protocol/circuitv2/relay"
 	ws "github.com/libp2p/go-libp2p/p2p/transport/websocket"
-	dht "github.com/libp2p/go-libp2p-kad-dht"
 	quic "github.com/libp2p/go-libp2p/p2p/transport/quic"
 	golog "github.com/ipfs/go-log/v2"
 	manet "github.com/multiformats/go-multiaddr/net"
 	rcmgr "github.com/libp2p/go-libp2p/p2p/host/resource-manager"
-	libp2p "github.com/libp2p/go-libp2p"                         
+	libp2p "github.com/libp2p/go-libp2p"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
+	ping "github.com/libp2p/go-libp2p/p2p/protocol/ping"
 	webrtc "github.com/libp2p/go-libp2p/p2p/transport/webrtc"
 	pwebrtc "github.com/pion/webrtc/v4"
 	p2pforge "github.com/ipshipyard/p2p-forge/client"
@@ -97,14 +95,11 @@ func InitializeLibrary(
 }
 
 // CreateNode initializes and starts a new libp2p host (node) for a specific instance.
-// It configures the node based on the provided parameters (port, relay capabilities, UPnP).
 // Parameters:
 //   - instanceIndexC (C.int): The index for this node instance (0 to maxInstances-1).
-//   - predefinedPortC (C.int): The TCP port to listen on (0 for random).
-//   - enableRelayClientC (C.int): 1 if this node should enable relay communications (client mode)
-//   - enableRelayServiceC (C.int): 1 to set this node as a relay service (server mode),
-//   - knowsIsPublicC (C.int): 1 to assume public reachability, 0 otherwise (-> tries to assess it in any possible way).
-//   - maxConnectionsC (C.int): The maximum number of connections this node can maintain.
+//   - configJSONC (*C.char): A JSON-encoded NodeConfig (see types.go) with the listen
+//     addresses, relay/TLS/WebRTC settings, and the reachability probe peers that feed
+//     AutoNAT its dial-back servers.
 //
 // Returns:
 //   - *C.char: A JSON string indicating success (with node addresses) or failure (with an error message).
@@ -187,9 +182,15 @@ func CreateNode(
 		return C.CString(jsonErrorResponse(fmt.Sprintf("Instance %d: Cannot specify both a 'Domain' and 'AutoTLS'.", instanceIndex), nil))
 	}
 
-	// If we use AutoTLS we need the DHT on
-	if cfg.TLS.AutoTLS && !cfg.DHT.Enabled {
-		return C.CString(jsonErrorResponse(fmt.Sprintf("Instance %d: Using TLS requires DHT 'Enabled'.", instanceIndex), nil))
+	// Reachability probing is on unless the config passes an explicit empty list
+	// (nil falls back to defaultRelays). Without probing and without ForcePublic
+	// no AutoNAT verdict can ever arrive, so the features that need a Public
+	// verdict to activate are rejected up front.
+	probingEnabled := cfg.Reachability.ProbePeers == nil || len(cfg.Reachability.ProbePeers) > 0
+
+	// AutoTLS waits for a Public reachability event before requesting the certificate
+	if cfg.TLS.AutoTLS && !(probingEnabled || cfg.Network.ForcePublic) {
+		return C.CString(jsonErrorResponse(fmt.Sprintf("Instance %d: AutoTLS needs a reachability verdict: enable probe peers or ForcePublic.", instanceIndex), nil))
 	}
 
 	// If we want RelayService we must be public (either forced or via AutoNat)
@@ -197,14 +198,9 @@ func CreateNode(
 		if !cfg.Relay.EnableClient {
 			return C.CString(jsonErrorResponse(fmt.Sprintf("Instance %d: Cannot set libp2p.DisableRelay() if we want to offer relay services.", instanceIndex), nil))
 		}
-		if !(cfg.DHT.Enabled || cfg.Network.ForcePublic) {
+		if !(probingEnabled || cfg.Network.ForcePublic) {
 			return C.CString(jsonErrorResponse(fmt.Sprintf("Instance %d: A relay needs to be publicly reachable (forced or discovered).", instanceIndex), nil))
 		}
-	}
-
-	// If we want to keep dht it needs to be enabled
-	if cfg.DHT.Keep && !cfg.DHT.Enabled {
-		return C.CString(jsonErrorResponse(fmt.Sprintf("Instance %d: Cannot set 'DHT.Keep' if DHT is not 'Enabled'.", instanceIndex), nil))
 	}
 
 	// --- Load or Create Persistent Identity ---
@@ -212,6 +208,24 @@ func CreateNode(
 	privKey, err := loadOrCreateIdentity(keyPath)
 	if err != nil {
 		return C.CString(jsonErrorResponse(fmt.Sprintf("Instance %d: Failed to prepare identity", instanceIndex), err))
+	}
+
+	// --- Resolve Reachability Probe Peers ---
+	// The AutoNAT dial-back supply. Self is filtered out (the identity is known
+	// before the host exists), so the infrastructure nodes can probe each other.
+	// ForcePublic nodes skip probing entirely: their verdict is forced.
+	if probingEnabled && !cfg.Network.ForcePublic {
+		selfID, err := peer.IDFromPrivateKey(privKey)
+		if err != nil {
+			return C.CString(jsonErrorResponse(fmt.Sprintf("Instance %d: Failed to derive peer ID from identity", instanceIndex), err))
+		}
+		ni.probePeers = resolveProbePeers(cfg.Reachability.ProbePeers, selfID, instanceIndex)
+		// The guards above checked the raw list; re-check the resolved one, which
+		// can shrink to nothing (malformed entries, or a node listing only itself):
+		// the features gated on a reachability verdict would silently never activate.
+		if len(ni.probePeers) == 0 && (cfg.TLS.AutoTLS || cfg.Relay.EnableService) {
+			return C.CString(jsonErrorResponse(fmt.Sprintf("Instance %d: Probe peers resolved to none, but AutoTLS/RelayService need a reachability verdict.", instanceIndex), nil))
+		}
 	}
 
 	// --- AutoTLS Cert Manager Setup (if enabled) ---
@@ -298,6 +312,10 @@ func CreateNode(
 		libp2p.UserAgent(UnaiverseUserAgent),
 		libp2p.NATPortMap(),
 		libp2p.EnableHolePunching(),
+		// v1 (always created by the host) is what emits the EvtLocalReachabilityChanged
+		// verdict; v2 adds per-address confirmation and the event p2p-forge can use as
+		// an alternative trigger. Public nodes also serve v2 dial-backs to the network.
+		libp2p.EnableAutoNATv2(),
 	}
 
 	// Add WebSocket transport, with or without TLS based on cert availability
@@ -346,26 +364,6 @@ func CreateNode(
 		// No certificates, use plain WS
 		logger.Debugf("[GO]   - Instance %d: No certificates found, setting up non-secure WebSocket.\n", instanceIndex)
 		options = append(options, libp2p.Transport(ws.New))
-	}
-
-	// Prepare discovering the bootstrap peers
-	if cfg.DHT.Enabled {
-		// Add any possible option to be publicly reachable
-		discoveryOpts := []libp2p.Option{
-			libp2p.EnableAutoNATv2(),
-			libp2p.Routing(func(h host.Host) (routing.PeerRouting, error) {
-				bootstrapAddrInfos := dht.GetDefaultBootstrapPeerAddrInfos()
-				dhtOptions := []dht.Option{
-					dht.Mode(dht.ModeClient),
-					dht.BootstrapPeers(bootstrapAddrInfos...),
-				}
-				var err error
-				ni.dht, err = dht.New(ni.ctx, h, dhtOptions...)
-				return ni.dht, err
-			}),
-		}
-		options = append(options, discoveryOpts...)
-		logger.Debugf("[GO]   - Instance %d: Trying to be publicly reachable.\n", instanceIndex)
 	}
 
 	// EnableRelay (the ability to *use* relays) is default, we can explicitly disable it if needed.
@@ -438,6 +436,23 @@ func CreateNode(
 	ni.host = host
 	logger.Infof("[GO] ✅ Instance %d: Host created with ID: %s\n", instanceIndex, ni.host.ID())
 
+	// Construct the libp2p ping service so the Session keep-alive (Python-side) can
+	// run /ipfs/ping/1.0.0 round-trips on demand. Registers the inbound handler too,
+	// so peers we don't initiate against can still ping us.
+	ni.pingService = ping.NewPingService(ni.host)
+
+	// Register the chat protocol handler BEFORE any outbound boot connection: the
+	// probe peers run isolated (protocol police) and kick, right after identify,
+	// any peer that does not announce the unaiverse protocols. The announcement
+	// must therefore be in place before the first identify with them. The notifiers
+	// move up with it: with the handler live, an inbound peer can already enter
+	// friendlyPeers during the reachability wait, so its disconnect cleanup must
+	// be watching from the same moment.
+	setupDirectMessageHandler(ni)
+	logger.Debugf("[GO] ✅ Instance %d: Direct message handler set up.\n", instanceIndex)
+	setupNotifiers(ni)
+	logger.Debugf("[GO] 🔔 Instance %d: Registered network event notifier.\n", instanceIndex)
+
 	if cfg.Network.Isolated {
         // Turn on the "Protocol Police"
         enforceProtocolCompliance(ni)
@@ -491,12 +506,20 @@ func CreateNode(
 		// NB: reachSub is NOT closed here — it is handed to handleReachabilityEvents below
 		// (started after the boot verdict), which owns and closes it on shutdown.
 
+		// Dial the probe peers now that the subscription exists (no verdict can be
+		// missed): identify on those connections is what lets AutoNAT probe at all.
+		// probesDown is closed when no probe peer is reachable (or probing is off),
+		// so the WAIT_LOOP does not sit out the full timeout for a verdict that
+		// cannot arrive.
+		probesDown := make(chan struct{})
+		go connectProbePeers(ni, probesDown)
+
 		timeoutCtx, timeoutCancel := context.WithTimeout(ni.ctx, PeerConnectionTimeout)
 		defer timeoutCancel()
 		logger.Debugf("[GO] ⏳ Instance %d: Waiting for reachability update.", instanceIndex)
-		
+
 		WAIT_LOOP:
-		for {		
+		for {
 			select {
 			case evt := <-reachSub.Out():
 				rEvt := evt.(event.EvtLocalReachabilityChanged)
@@ -507,7 +530,11 @@ func CreateNode(
 					isPublic = false
 				}
 				break WAIT_LOOP
-		
+
+			case <-probesDown:
+				logger.Warnf("[GO] ⚠️ Instance %d: No AutoNAT probe available. Proceeding as private.", instanceIndex)
+				break WAIT_LOOP
+
 			case <-timeoutCtx.Done():
 				logger.Warnf("[GO] ⚠️ Instance %d: Timeout. Proceeding with best effort. (Public: %t)", instanceIndex, isPublic)
 				break WAIT_LOOP
@@ -517,20 +544,11 @@ func CreateNode(
 				return C.CString(jsonErrorResponse("Context cancelled during init", nil))
 			}
 		}
-		// Seed the shared reachability state with the boot verdict (the WAIT_LOOP's first event,
-		// or false on timeout). This runs for EVERY non-ForcePublic node, including the
-		// dht_keep=False ones that close the subscription below, so isPublic is always set once.
+		// Seed the shared reachability state with the boot verdict (the WAIT_LOOP's first
+		// event, or false on timeout/no-probes), then keep it live for the node's lifetime:
+		// handleReachabilityEvents is the sole writer from this point on.
 		ni.setIsPublic(isPublic)
-
-		// Then keep it live only where AutoNAT survives, i.e. where the DHT is kept. Where the
-		// DHT is closed after boot (dht_keep=False, e.g. p2p_w) AutoNAT dies, so a listener would
-		// just sit idle holding a subscription for the node's lifetime: close it instead.
-		// (Making AutoNAT survive without the DHT is tracked separately.)
-		if cfg.DHT.Keep {
-			go handleReachabilityEvents(ni, reachSub)
-		} else {
-			reachSub.Close()
-		}
+		go handleReachabilityEvents(ni, reachSub)
 	}
 
 	// --- PubSub Initialization ---
@@ -538,13 +556,6 @@ func CreateNode(
 		return C.CString(jsonErrorResponse(fmt.Sprintf("Instance %d: Failed to create PubSub", instanceIndex), err))
 	}
 	logger.Debugf("[GO] ✅ Instance %d: PubSub (GossipSub) initialized.\n", instanceIndex)
-
-	// --- Setup Notifiers and Handlers ---
-	setupNotifiers(ni)
-	logger.Debugf("[GO] 🔔 Instance %d: Registered network event notifier.\n", instanceIndex)
-
-	setupDirectMessageHandler(ni)
-	logger.Debugf("[GO] ✅ Instance %d: Direct message handler set up.\n", instanceIndex)
 
 	// --- WebRTC Signaling Handler ---
 	if cfg.WebRTC.Enabled {
@@ -554,17 +565,6 @@ func CreateNode(
 		setupWebRTCSignalHandler(ni)
 		autoUpgradeWebRTC(ni)
 		logger.Debugf("[GO] ✅ Instance %d: WebRTC signaling handler registered.\n", instanceIndex)
-	}
-
-	// --- Close DHT if needed ---
-	if !cfg.DHT.Keep {
-		if ni.dht != nil {
-			logger.Debugf("[GO]   - Instance %d: Closing DHT client...\n", instanceIndex)
-			if err := ni.dht.Close(); err != nil {
-				logger.Warnf("[GO] ⚠️ Instance %d: Error closing DHT: %v\n", instanceIndex, err)
-			}
-			ni.dht = nil
-		}
 	}
 
 	// --- Get Final Addresses ---
@@ -591,6 +591,14 @@ func CreateNode(
 	logger.Infof("[GO] 🌐 Instance %d: Node addresses: %v\n", instanceIndex, nodeAddresses)
 	reachabilityStatus := map[bool]string{true: "Public", false: "Private"}[isPublic]
 	logger.Infof("[GO] 🎉 Instance %d: Node creation complete. Reachability status: %s\n", instanceIndex, reachabilityStatus)
+
+	// Keep the AutoNAT dial-back supply alive so the verdict stays fresh for the
+	// node's lifetime. Not under Isolated: the protocol police would kick every
+	// probe peer right after identify and the maintainer would redial it forever.
+	if !cfg.Network.ForcePublic && !cfg.Network.Isolated && len(ni.probePeers) > 0 {
+		go maintainProbePeers(ni)
+	}
+
 	success = true // Mark success to avoid cleanup in defer.
 	return C.CString(jsonSuccessResponse(response))
 }
@@ -838,8 +846,12 @@ func ReserveOnRelay(
 	return C.CString(jsonSuccessResponse(reservation.Expiration))
 }
 
-// DisconnectFrom attempts to close any active connections to a specified peer
-// and removes the peer from the internally tracked list for a specific instance.
+// DisconnectFrom ABORTIVELY tears down the connections to a specified peer and
+// removes the peer from the internally tracked list for a specific instance:
+// every open stream is Reset() first (discarding any written-but-undelivered
+// frame on both muxers) and only then the connections are closed. Callers that
+// just wrote a farewell (GOAWAY/ACK) must not call this in the same breath —
+// the Python teardown defers it to the settlement cut.
 // Parameters:
 //   - instanceIndexC (C.int): The index of the node instance.
 //   - peerIDC (*C.char): The Peer ID string of the peer to disconnect from.
@@ -1665,18 +1677,18 @@ func PopMessages(
 	// (see popBinaryMagic in types.go): [1B magic][uint32 totalBytes][uint32 count]
 	// then per message [uint32 fromLen][from][uint32 protoLen][proto][uint32 dataLen][data].
 	// `from` is the textual peer-id (msg.From.String()), matching what the JSON path
-	// used to emit and what Python compares against the in-payload sender. The proto
-	// slot is written empty here (the queue carries no per-message protocol id) but
-	// kept in the layout so the reader stays one single format.
+	// used to emit and what Python compares against the in-payload sender.
 	buf := new(bytes.Buffer)
 	buf.WriteByte(popBinaryMagic)
 	buf.Write([]byte{0, 0, 0, 0}) // totalBytes placeholder, patched below
 	_ = binary.Write(buf, binary.BigEndian, uint32(len(poppedMessages)))
 	for _, msg := range poppedMessages {
 		fromBytes := []byte(msg.From.String())
+		protoBytes := []byte(msg.Protocol)
 		_ = binary.Write(buf, binary.BigEndian, uint32(len(fromBytes)))
 		buf.Write(fromBytes)
-		_ = binary.Write(buf, binary.BigEndian, uint32(0)) // protoLen: unused on this path
+		_ = binary.Write(buf, binary.BigEndian, uint32(len(protoBytes)))
+		buf.Write(protoBytes)
 		_ = binary.Write(buf, binary.BigEndian, uint32(len(msg.Data)))
 		buf.Write(msg.Data)
 	}

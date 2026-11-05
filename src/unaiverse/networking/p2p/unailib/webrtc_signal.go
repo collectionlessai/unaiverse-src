@@ -178,7 +178,7 @@ func parseDirectMessageFrame(data []byte) (channel string, payload []byte, err e
 }
 
 // registerWebRTCDataChannel stores a newly-opened DataChannel connection and
-// wires up message delivery + connection state monitoring.
+// wires up message delivery + connection state monitoring on the UnaiverseWebRTCSignalProtocol.
 func registerWebRTCDataChannel(ni *NodeInstance, remotePeer peer.ID, dc *pwebrtc.DataChannel, pc *pwebrtc.PeerConnection) {
 	conn := &WebRTCConn{pc: pc, dc: dc, remotePeer: remotePeer}
 
@@ -197,7 +197,7 @@ func registerWebRTCDataChannel(ni *NodeInstance, remotePeer peer.ID, dc *pwebrtc
 				ni.instanceIndex, remotePeer, err)
 			return
 		}
-		storeReceivedMessage(ni, remotePeer, ch, payload)
+		storeReceivedMessage(ni, remotePeer, ch, UnaiverseWebRTCSignalProtocol, payload)
 	}
 
 	// Deliver incoming DataChannel messages into the shared message queue.
