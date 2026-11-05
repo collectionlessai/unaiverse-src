@@ -28,7 +28,7 @@ no network or Go shared library.
 import pytest
 
 from unaiverse.agent import Agent
-from unaiverse.custom import Custom
+from unaiverse.custom import Custom, GenException
 
 pytestmark = pytest.mark.unit
 
@@ -38,18 +38,23 @@ pytestmark = pytest.mark.unit
 BROADCASTER = "BROADCASTER"
 WORLD_NODE = "WORLD_NODE"
 
+# What the default stdin binding puts on the proxy: never empty for a human agent.
+DEFAULT_STDIN_STREAMS = {"default-user-hash": object()}
+
 
 # Fakes
 
 class FakeInteraction:
-    """Minimal stand-in exposing only the four members both methods read:
-    ``requester``, ``uuid``, ``is_system()`` and ``is_completed()``. Avoids the
-    heavy real ``Interaction`` construction."""
+    """Minimal stand-in exposing only the members both methods read:
+    ``requester``, ``uuid``, ``stdin_streams``, ``is_system()`` and
+    ``is_completed()``. Avoids the heavy real ``Interaction`` construction."""
 
     def __init__(self, requester=BROADCASTER, uuid="int-uuid-123",
-                 is_system=False, is_completed=False):
+                 is_system=False, is_completed=False, stdin_streams=None):
         self.requester = requester
         self.uuid = uuid
+        # A real Interaction starts with an empty dict, never None
+        self.stdin_streams = stdin_streams if stdin_streams is not None else {}
         self._is_system = is_system
         self._is_completed = is_completed
 
@@ -114,18 +119,46 @@ class NonHumanRebindStub(RebindStub):
         return False
 
 
+class FakeStdin:
+    """Stand-in for the agent's stdin StreamProxy. It records the bindings and
+    returns the data tag of the uuid currently bound; like the real proxy,
+    asking for a tag with no streams bound raises GenException."""
+
+    TAG = 7
+
+    def __init__(self, tags=None):
+        self.bound = []
+        self._tags = tags if tags is not None else {}
+        self._streams = {}
+        self._uuid = None
+
+    def bind(self, streams, uuid=None):
+        self.bound.append((streams, uuid))
+        self._streams = streams
+        self._uuid = uuid
+
+    def get_tag(self):
+        if len(self._streams) == 0:
+            raise GenException("No streams bound to this StreamProxy")
+        return self._tags.get(self._uuid, self.TAG)
+
+
 class PrepareStub:
     """``self`` for ``AgentBasics.prepare_stdin_if_human``. Only ``node_conn``,
-    ``proc_human_peer_id_to_interaction`` and ``set_default_stdin_binding`` are
-    touched."""
+    ``proc_human_peer_id_to_interaction``, ``stdin``, ``uai_writing_to`` and
+    ``set_default_stdin_binding`` are touched."""
 
-    def __init__(self, cache=None, world_node_peer_id=WORLD_NODE):
+    def __init__(self, cache=None, world_node_peer_id=WORLD_NODE, tags=None):
         self.node_conn = FakeConnPool(world_node_peer_id)
         self.proc_human_peer_id_to_interaction = cache if cache is not None else {}
+        self.stdin = FakeStdin(tags)
+        self.uai_writing_to = None
         self.binding_public = []
 
     def set_default_stdin_binding(self, public=None):
+        # Same effect as the real method: the default streams, under the system uuid
         self.binding_public.append(public)
+        self.stdin.bind(DEFAULT_STDIN_STREAMS, uuid=Custom.SYSTEM_INTERACTION_UUID)
 
 
 # Convenience aliases for the unbound functions under test.
@@ -141,9 +174,10 @@ def test_prepare_public_returns_broadcaster_interaction_uuid():
     inter = FakeInteraction(requester=BROADCASTER, uuid="int-123")
     stub = PrepareStub(cache={BROADCASTER: inter})
 
-    result = _prepare(stub, public=True, peer_id=BROADCASTER)
+    uuid, tag = _prepare(stub, public=True, peer_id=BROADCASTER)
 
-    assert result == "int-123"
+    assert uuid == "int-123"
+    assert tag == FakeStdin.TAG
     # The binding is reset with the same `public` flag that was passed in.
     assert stub.binding_public == [True]
 
@@ -156,9 +190,9 @@ def test_prepare_world_ignores_requester_keyed_entries():
     inter = FakeInteraction(requester=BROADCASTER, uuid="int-123")
     stub = PrepareStub(cache={BROADCASTER: inter}, world_node_peer_id=WORLD_NODE)
 
-    result = _prepare(stub, public=False, peer_id=BROADCASTER)
+    uuid, _ = _prepare(stub, public=False, peer_id=BROADCASTER)
 
-    assert result == Custom.SYSTEM_INTERACTION_UUID == "sys_system"
+    assert uuid == Custom.SYSTEM_INTERACTION_UUID == "sys_system"
     assert stub.binding_public == [False]
 
 
@@ -169,9 +203,9 @@ def test_prepare_world_finds_entry_keyed_under_world_node():
     inter = FakeInteraction(requester=WORLD_NODE, uuid="int-world")
     stub = PrepareStub(cache={WORLD_NODE: inter}, world_node_peer_id=WORLD_NODE)
 
-    result = _prepare(stub, public=False, peer_id=BROADCASTER)
+    uuid, _ = _prepare(stub, public=False, peer_id=BROADCASTER)
 
-    assert result == "int-world"
+    assert uuid == "int-world"
 
 
 def test_prepare_purges_completed_entries_before_lookup():
@@ -181,9 +215,9 @@ def test_prepare_purges_completed_entries_before_lookup():
     done = FakeInteraction(requester="OLD", uuid="int-done", is_completed=True)
     stub = PrepareStub(cache={"OLD": done, BROADCASTER: live})
 
-    result = _prepare(stub, public=True, peer_id=BROADCASTER)
+    uuid, _ = _prepare(stub, public=True, peer_id=BROADCASTER)
 
-    assert result == "int-live"
+    assert uuid == "int-live"
     # The completed entry was removed; the live one kept.
     assert "OLD" not in stub.proc_human_peer_id_to_interaction
     assert BROADCASTER in stub.proc_human_peer_id_to_interaction
@@ -192,7 +226,41 @@ def test_prepare_purges_completed_entries_before_lookup():
 def test_prepare_miss_returns_system_uuid():
     """A genuine miss (empty cache) returns the SYSTEM interaction uuid."""
     stub = PrepareStub(cache={})
-    assert _prepare(stub, public=True, peer_id=BROADCASTER) == Custom.SYSTEM_INTERACTION_UUID
+    uuid, _ = _prepare(stub, public=True, peer_id=BROADCASTER)
+    assert uuid == Custom.SYSTEM_INTERACTION_UUID
+
+
+def test_prepare_reads_the_tag_on_the_interaction_stdin_streams():
+    """An interaction carrying its own stdin streams: the stdin is bound to them
+    under the interaction uuid just long enough to read the data tag, then the
+    default binding is restored."""
+    streams = {"interaction-user-hash": object()}
+    inter = FakeInteraction(requester=BROADCASTER, uuid="int-123", stdin_streams=streams)
+    stub = PrepareStub(cache={BROADCASTER: inter}, tags={"int-123": 42})
+
+    uuid, tag = _prepare(stub, public=True, peer_id=BROADCASTER)
+
+    assert uuid == "int-123"
+    assert tag == 42  # Read while bound to the interaction, not to the defaults
+    assert stub.stdin.bound == [(DEFAULT_STDIN_STREAMS, Custom.SYSTEM_INTERACTION_UUID),
+                                (streams, "int-123"),
+                                (DEFAULT_STDIN_STREAMS, Custom.SYSTEM_INTERACTION_UUID)]
+    assert stub.binding_public == [True, True]
+
+
+def test_prepare_empty_interaction_stdin_streams_keeps_the_default_binding():
+    """An interaction with no stdin streams of its own: binding the stdin to the
+    empty set would make get_tag raise, so the tag is read on the default
+    binding, while the uuid returned is still the interaction's."""
+    inter = FakeInteraction(requester=BROADCASTER, uuid="int-123", stdin_streams={})
+    stub = PrepareStub(cache={BROADCASTER: inter}, tags={"int-123": 42})
+
+    uuid, tag = _prepare(stub, public=True, peer_id=BROADCASTER)
+
+    assert uuid == "int-123"
+    assert tag == FakeStdin.TAG
+    assert stub.stdin.bound == [(DEFAULT_STDIN_STREAMS, Custom.SYSTEM_INTERACTION_UUID)]
+    assert stub.binding_public == [True]
 
 
 # WRITE side: Agent.__rebind_stdin_if_human

@@ -552,12 +552,20 @@ def test_the_peer_of_a_turn_is_whoever_asked_or_the_partner():
                      writing_to="mate", partner="other").uai_peer() == "asker"
 
 
+class StdinStub:
+    """The agent's stdin, reduced to the data tag that prepare_stdin_if_human reads."""
+
+    def get_tag(self) -> int:
+        return -1
+
+
 class PrepareStub:
     """What AgentBasics.prepare_stdin_if_human touches, and nothing else (see tests/test_human_routing.py)."""
 
     def __init__(self) -> None:
         self.proc_human_peer_id_to_interaction = {}
         self.uai_writing_to = None
+        self.stdin = StdinStub()
 
     def set_default_stdin_binding(self, public=None):
         pass
