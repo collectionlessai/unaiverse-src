@@ -29,7 +29,8 @@ jobs:
           go-version-file: src/unaiverse/networking/p2p/unailib/go.mod
           cache-dependency-path: src/unaiverse/networking/p2p/unailib/go.sum
 
-      - uses: astral-sh/setup-uv@v10
+      # setup-uv publishes immutable releases with no moving major tag, so it is pinned to a full version
+      - uses: astral-sh/setup-uv@v10.3.3
         with:
           python-version: ${{ matrix.python }}
 
@@ -57,7 +58,7 @@ jobs:
           go-version-file: src/unaiverse/networking/p2p/unailib/go.mod
           cache-dependency-path: src/unaiverse/networking/p2p/unailib/go.sum
 
-      - uses: astral-sh/setup-uv@v10
+      - uses: astral-sh/setup-uv@v10.3.3
         with:
           python-version: "3.12"
 
