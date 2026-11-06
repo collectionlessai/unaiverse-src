@@ -18,6 +18,7 @@ import uuid
 import argparse
 import subprocess
 from pathlib import Path
+from importlib import metadata
 
 # Configuration
 DOCKER_IMAGE_NAME = "unaiverse-sandbox"
@@ -70,10 +71,9 @@ def sandbox(file_to_run: str,
     # Clean up any remnants from previous runs first (safety)
     cleanup_docker_artifacts(where=abspath_of_unaiverse_code)
 
-    # Requirements
-    with open(os.path.join(abspath_of_unaiverse_code, "requirements.txt"), 'r') as req_file:
-        req_lines = req_file.readlines()
-    lines = [l.strip() for l in req_lines if l.strip()]
+    # Requirements: the dependencies declared by the installed package (pyproject.toml), without the optional
+    # extras (e.g., the dev tooling)
+    lines = [r for r in (metadata.requires("unaiverse") or []) if "extra ==" not in r]
     echoed_contents_of_requirements = 'printf "' + "\\n".join(lines) + '\\n" > requirements.txt'
 
     # Create Dockerfile
