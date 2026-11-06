@@ -23,7 +23,7 @@ Both modes print every SessionEvent emitted by the SessionManager dispatcher
 so you can verify behaviour across NATs, networks, OSes.
 
 Notes:
-  - This harness depends on a built `unailib.cpython-*.so` and is therefore
+  - This harness depends on the built Go library (`_unailib.so`) and is therefore
     *not* a pytest test. It's intentionally separate from the unit suite.
   - The Node class normally pulls a profile / JWT from the root server. This
     harness uses a *stub* node with the bare minimum surface needed to drive
