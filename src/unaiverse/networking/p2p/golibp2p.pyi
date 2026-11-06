@@ -144,6 +144,15 @@ class GoLibP2P:
         """
         ...
 
+    def UnailibBuildHash(self) -> int:
+        """
+        UnailibBuildHash() -> bytes
+
+        Returns the hash of the Go sources the library was built from ("unknown" if it was not built by
+        setup.py). The result must be freed with FreeString.
+        """
+        ...
+
     def FreeString(self, arg: bytes) -> None:
         """
         FreeString(arg: bytes) -> None

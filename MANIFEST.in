@@ -1,4 +1,6 @@
 # MANIFEST.in
 
-# Recursively include all files from the go package
-recursive-include src/unaiverse/networking/p2p/unailib/ *
+# The sdist carries the Go sources of the shared library, so that it can be built from scratch, and never a
+# binary left over from a local build
+recursive-include src/unaiverse/networking/p2p/unailib *.go go.mod go.sum
+global-exclude *.so *.dylib *.dll *.pyd *.h *.sha256

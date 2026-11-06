@@ -18,74 +18,56 @@ from . import golibp2p
 from . import lib_types
 import os
 import sys
-import glob
 import ctypes
-import hashlib
+import platform
 import warnings
-import itertools
 from typing import cast
 from .messages import Msg
 from .p2p import P2P, P2PError
 from .golibp2p import GoLibP2P  # Your stub interface definition
 from .lib_types import TypeInterface  # Assuming TypeInterface handles the void* results
+from ._unailib_source import lib_filename, source_hash
 
 
-def _get_dir_hash(dirpath):
-    """Calculates the SHA256 hash of all .go files in a directory."""
-    if not os.path.exists(dirpath):
-        return None
-        
-    sha256_hash = hashlib.sha256()
-    for filepath in sorted(glob.glob(os.path.join(dirpath, "*.go"))):
-        with open(filepath, "rb") as f:
-            for byte_block in iter(lambda: f.read(4096), b""):
-                sha256_hash.update(byte_block)
-                
-    return sha256_hash.hexdigest()
+def _developer_source_check(lib: ctypes.CDLL) -> None:
+    """In a source checkout, warns when the loaded library was not built from the Go sources next to it.
 
-
-def _developer_source_check():
+    Installed wheels carry no Go sources, so there is nothing to compare and the check is skipped.
     """
-    If source files are present (i.e., in a dev environment), check if the
-    compiled library is in sync with the source code.
-    """
-    go_source_dir = os.path.join(_lib_dir, 'unailib')
-    hash_file = os.path.join(_lib_dir, 'unailib.sha256')
-    
-    # This check only runs if all dev files are present. For users who
-    # installed from a wheel, these files won't exist, and this is skipped.
-    if os.path.exists(go_source_dir) and os.path.exists(hash_file):
-        current_source_hash = _get_dir_hash(go_source_dir)
+    current_source_hash = source_hash(os.path.join(_lib_dir, 'unailib'))
+    if current_source_hash is None:
+        return
 
-        with open(hash_file, 'r') as f:
-            stored_build_hash = f.read().strip()
-            
-        if current_source_hash != stored_build_hash:
-            # Use warnings.warn for a standard, non-intrusive developer warning.
-            warnings.warn(
-                "\033[93m" + "\n" + "="*80 +
-                "\nWARNING: The Go source files in 'unailib/' have been modified since the shared\n"
-                "library was last compiled. Your running code may not reflect recent changes.\n\n"
-                "To fix this, run: pip install -e .\n" +
-                "="*80 + "\033[0m",
-                UserWarning
-            )
+    # A library built before the hash was embedded has no such symbol, and counts as out of date
+    built_source_hash = None
+    if hasattr(lib, 'UnailibBuildHash'):
+        lib.UnailibBuildHash.argtypes = []
+        lib.UnailibBuildHash.restype = ctypes.c_void_p
+        ptr = lib.UnailibBuildHash()
+        if ptr:
+            built_source_hash = ctypes.string_at(ptr).decode()
+            lib.FreeString(ptr)
+
+    if built_source_hash != current_source_hash:
+        warnings.warn(
+            "\033[93m" + "\n" + "="*80 +
+            "\nWARNING: The Go source files in 'unailib/' differ from the ones the loaded shared library\n"
+            "was built from. Your running code may not reflect recent changes.\n\n"
+            "To fix this, reinstall the package from the repository root (e.g. `pip install -e .`)\n" +
+            "="*80 + "\033[0m",
+            UserWarning
+        )
 
 
 # --- Main Library Loading ---
-# The shared library is guaranteed by the build process to be in this directory.
+# The shared library is guaranteed by the build process to be in this directory, under a fixed name.
 _lib_dir = os.path.dirname(os.path.abspath(__file__))
-_shared_lib = None
+_lib_path = _lib_dir
 
 try:
-    _lib_path = _lib_dir
-    patterns = ["*.so", "*.pyd", "*.dll", "*.dylib"]
-    _results = list(itertools.chain.from_iterable(
-        glob.glob(os.path.join(_lib_dir, f"unailib{ext}")) for ext in patterns
-    ))
-    _lib_path = os.path.join(_lib_dir, _results[0])
+    _lib_path = os.path.join(_lib_dir, lib_filename(platform.system()))
     _shared_lib = ctypes.CDLL(_lib_path)
-except (IndexError, OSError) as e:
+except (RuntimeError, OSError) as e:
     print(
         f"FATAL: Could not load the required p2p shared library from {_lib_path}.\n"
         "This indicates a corrupted or missing installation. "
@@ -94,11 +76,6 @@ except (IndexError, OSError) as e:
         file=sys.stderr
     )
     raise ImportError("Failed to load the UNaIVERSE p2p shared library.") from e
-
-# Run the check after successfully loading the library.
-if _shared_lib is not None:
-    _developer_source_check()
-    # print(f"UNaIVERSE: Successfully loaded p2p library from {_lib_path}")
 
 # --- Function Prototypes (argtypes and restype) ---
 # Using void* for returned C strings, requiring TypeInterface for conversion/freeing.
@@ -189,6 +166,9 @@ _shared_lib.FreeString.restype = None  # Void return
 
 _shared_lib.FreeInt.argtypes = [ctypes.POINTER(ctypes.c_int)]  # Still expects a pointer to int
 _shared_lib.FreeInt.restype = None  # Void return
+
+# Run the check once FreeString is declared, since it frees the hash returned by the library
+_developer_source_check(_shared_lib)
 
 # TURN related
 _shared_lib.UpdateICEConfig.argtypes = [ctypes.c_int, ctypes.c_char_p]

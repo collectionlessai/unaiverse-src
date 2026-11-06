@@ -1,11 +1,11 @@
 [build-system]
-requires = ["setuptools>=61.0", "wheel"]
+requires = ["setuptools>=70.1"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "unaiverse"
 version = "0.1.31"
-requires-python = ">3.10"
+requires-python = ">=3.11"
 dependencies = [
     "opencv-python",
     "graphviz",
@@ -47,6 +47,8 @@ classifiers = [
     "Intended Audience :: Science/Research",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Scientific/Engineering :: Artificial Intelligence"
 ]
 
@@ -67,6 +69,27 @@ dev = [
 [tool.setuptools.package-data]
 "unaiverse" = ["utils/public.json"]
 
+# The Go sources of the shared library travel in the sdist only: a wheel carries the built library alone
+[tool.setuptools.packages.find]
+where = ["src"]
+exclude = ["unaiverse.networking.p2p.unailib*"]
+
+[tool.setuptools.exclude-package-data]
+"unaiverse.networking.p2p" = ["unailib/*", "unailib/*/*"]
+
+# Optional, read by uv only (pip and setuptools ignore it): uv rebuilds a local package only when one of
+# these files changes, so listing the Go sources makes `uv sync` and `uv run` rebuild the library by
+# themselves after a change to unailib/
+[tool.uv]
+cache-keys = [
+    { file = "pyproject.toml" },
+    { file = "setup.py" },
+    { file = "src/unaiverse/networking/p2p/_unailib_source.py" },
+    { file = "src/unaiverse/networking/p2p/unailib/**/*.go" },
+    { file = "src/unaiverse/networking/p2p/unailib/go.mod" },
+    { file = "src/unaiverse/networking/p2p/unailib/go.sum" },
+]
+
 [project.urls]
 A-ProjectHomepage = "https://unaiverse.io"
 B-Company = "https://unaiverse.ai"
@@ -81,15 +104,19 @@ package-dir = {"" = "src"}
 
 # --- CIBUILDWHEEL CONFIGURATION ---
 [tool.cibuildwheel]
-# Skip 32-bit builds to save CI time
-skip = ["*-win32", "*-manylinux_i686", "*-musllinux_*"]
+# The wheel is py3-none-<platform> (see setup.py), so cibuildwheel builds it on the first identifier and
+# reuses it for the others: one wheel per platform
+build = ["cp311-*", "cp312-*", "cp313-*", "cp314-*"]
+# Skip 32-bit, musl and free-threaded builds
+skip = ["*-win32", "*-manylinux_i686", "*-musllinux_*", "cp3??t-*"]
 
-# Platform-specific configurations
+# Platform-specific configurations. On macOS and Windows the build runs on the runner itself, where the
+# workflow installs Go with actions/setup-go; on Linux it runs inside the manylinux container.
 [tool.cibuildwheel.linux]
-# Step 1: Install the correct version of Go for the machine's architecture.
+# Install, inside the container, the Go version that go.mod declares, so that it is set in one place only
 before-all = '''
     set -euxo pipefail
-    
+
     # Detect architecture and set the corresponding Go arch name
     case "$(uname -m)" in
         x86_64)
@@ -104,25 +131,18 @@ before-all = '''
             ;;
     esac
 
-    # Download and install the correct Go binary
-    curl -L -o go.tar.gz "https://go.dev/dl/go1.24.5.linux-${GO_ARCH}.tar.gz"
+    GO_VERSION=$(sed -n 's/^go //p' {package}/src/unaiverse/networking/p2p/unailib/go.mod)
+    curl -fsSL -o go.tar.gz "https://go.dev/dl/go${GO_VERSION}.linux-${GO_ARCH}.tar.gz"
     rm -rf /usr/local/go
     tar -C /usr/local -xzf go.tar.gz
     rm go.tar.gz
 '''
-# Step 2: Persistently add Go to the PATH for all subsequent steps.
+# Persistently add Go to the PATH for all subsequent steps.
 environment = { PATH = "/usr/local/go/bin:$PATH" }
 
 [tool.cibuildwheel.macos]
-# Step 1: Install Go once on the runner.
-before-all = "brew install go@1.24"
-# Step 2: Persistently add the correct Go version to the PATH.
-environment = { PATH = "$(brew --prefix go@1.24)/bin:$PATH" }
-
-[tool.cibuildwheel.windows]
-# On Windows, choco handles the PATH modification automatically,
-# so we just need to install it once.
-before-all = "choco install golang --version 1.24.5 -y"
+# Go binaries require macOS 11, so the wheel must not claim support for older releases
+environment = { MACOSX_DEPLOYMENT_TARGET = "11.0" }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -1787,6 +1787,18 @@ func CloseNode(
 	}
 }
 
+// buildSourceHash is the hash of the Go sources this library was built from. setup.py sets it at
+// link time (-ldflags "-X main.buildSourceHash=..."), so that the Python loader can tell whether the
+// library it loaded matches the sources next to it; a plain `go build` leaves it at "unknown".
+var buildSourceHash = "unknown"
+
+// UnailibBuildHash returns buildSourceHash. The caller MUST free the result with FreeString.
+//
+//export UnailibBuildHash
+func UnailibBuildHash() *C.char {
+	return C.CString(buildSourceHash)
+}
+
 // FreeString is called from the C/Python side to release the memory allocated by Go
 // when returning a `*C.char` (via `C.CString`).
 // Parameters:

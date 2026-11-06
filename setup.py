@@ -1,122 +1,91 @@
 # setup.py
 import os
-import glob
-import shutil
-import hashlib
 import platform
 import subprocess
+import importlib.util
+from pathlib import Path
 from setuptools import setup, Extension
 from setuptools.command.build_ext import build_ext
+from setuptools.command.bdist_wheel import bdist_wheel
 
-
-GO_SOURCE_DIR = '.'
-HASH_FILE_SUFFIX = '.sha256'
+HERE = Path(__file__).parent.resolve()
+P2P_DIR = HERE / "src" / "unaiverse" / "networking" / "p2p"
+GO_DIR = P2P_DIR / "unailib"
 BUILD_PURE_WHEEL = os.environ.get("UNAI_BUILD_PURE", "0") == "1"
 
-def get_ext_filename_with_path():
-    system = platform.system()
-    if system == 'Linux':
-        lib_name = 'unailib.so'
-    elif system == 'Darwin':
-        lib_name = 'unailib.dylib'
-    elif system == 'Windows':
-        lib_name = 'unailib.dll'
-    else:
-        raise RuntimeError(f"Unsupported OS: {system}")
-    return os.path.join('src', 'unaiverse', 'networking', 'p2p', 'unailib', lib_name)
+# Artifacts of the previous build layout: the loader no longer reads them, so they are removed to keep a
+# source checkout from carrying several stale copies of the library
+LEGACY_ARTIFACTS = ("unailib*.so", "unailib*.dylib", "unailib*.dll", "unailib*.pyd", "unailib*.h",
+                    "unailib*.sha256")
 
-def get_dir_hash(dirpath):
-    sha256_hash = hashlib.sha256()
-    for filepath in sorted(glob.glob(os.path.join(dirpath, "*.go"))):
-        with open(filepath, "rb") as f:
-            for byte_block in iter(lambda: f.read(4096), b""):
-                sha256_hash.update(byte_block)
-    return sha256_hash.hexdigest()
 
-class GoBuildExtCommand(build_ext):
-    """Custom build_ext that builds the Go library."""
-    def _cleanup_old_artifacts(self, target_dir):
-        print("--- Cleaning old build artifacts ---")
-        patterns = [
-            os.path.join(target_dir, "unailib*.so"),
-            os.path.join(target_dir, "unailib*.dll"),
-            os.path.join(target_dir, "unailib*.pyd"),
-            os.path.join(target_dir, "unailib*.h"),
-            os.path.join(target_dir, "go-build*"),
-        ]
-        for pattern in patterns:
-            for path in glob.glob(pattern):
-                try:
-                    if os.path.isdir(path):
-                        shutil.rmtree(path, ignore_errors=True)
-                        print(f"Removed dir {path}")
-                    else:
-                        os.remove(path)
-                        print(f"Removed file {path}")
-                except Exception as e:
-                    print(f"Could not remove {path}: {e}")
+def _load_unailib_source():
+    # Loaded by path: importing the package would pull in its dependencies and the library being built
+    spec = importlib.util.spec_from_file_location("_unailib_source", P2P_DIR / "_unailib_source.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+unailib_source = _load_unailib_source()
+
+
+class GoBuildExt(build_ext):
+    """Builds the Go shared library in place of a C extension."""
+
+    def get_ext_filename(self, fullname):
+        # A plain shared library loaded through ctypes: its name carries no Python ABI tag
+        *package, _ = fullname.split(".")
+        return os.path.join(*package, unailib_source.lib_filename(platform.system()))
 
     def run(self):
-        go_dir = os.path.join('src', 'unaiverse', 'networking', 'p2p', 'unailib')
-        out_path = get_ext_filename_with_path()
-        hash_path = os.path.join(go_dir, "unailib" + HASH_FILE_SUFFIX)
-        os.makedirs(os.path.dirname(out_path), exist_ok=True)
-        
-        self._cleanup_old_artifacts(go_dir)
-        current_hash = get_dir_hash(go_dir)
-        stored_hash = None
-        if os.path.exists(hash_path):
-            with open(hash_path, 'r') as f:
-                stored_hash = f.read().strip()
+        for path in (p for d in (P2P_DIR, GO_DIR) for pattern in LEGACY_ARTIFACTS for p in d.glob(pattern)):
+            path.unlink(missing_ok=True)
 
-        # Only rebuild if Go source changed or lib missing
-        if current_hash != stored_hash or not os.path.exists(out_path):
-            print(f"--- Go source changed, building {out_path} ---")
-            subprocess.run(
-                ['go', 'build', '-buildmode=c-shared', '-ldflags', '-s -w',
-                 '-o', os.path.basename(out_path), GO_SOURCE_DIR],
-                check=True, cwd=go_dir
-            )
-            with open(hash_path, 'w') as f:
-                f.write(current_hash)
-        else:
-            print("--- Go source unchanged; skipping build. ---")
-        
-        # We get the final destination path for the extension and copy our pre-built library there.
-        dest_path = self.get_ext_fullpath(self.extensions[0].name)
-        os.makedirs(os.path.dirname(dest_path), exist_ok=True)
-        print(f"--- Copying {out_path} to {dest_path} ---")
-        shutil.copyfile(out_path, dest_path)
-        
-        # Also copy the generated hash file to the final package directory
-        dest_dir = os.path.dirname(dest_path)
-        if os.path.abspath(os.path.dirname(hash_path)) != os.path.abspath(dest_dir):
-            print(f"--- Copying {hash_path} to {dest_dir} ---")
-            shutil.copy(hash_path, dest_dir)
-        else:
-            print("--- Hash file is already in the source directory (editable install); skipping copy. ---")
-        
-        subprocess.run(['go', 'clean', '-cache', '-modcache', '-testcache', '-fuzzcache'],
-                       cwd=go_dir, check=False)
+        for ext in self.extensions:
+            dest = Path(self.get_ext_fullpath(ext.name)).resolve()
+            dest.parent.mkdir(parents=True, exist_ok=True)
+
+            # Always handed to the Go toolchain, whose build cache makes an unchanged rebuild cheap; the source
+            # hash is embedded so that the loader can verify the library it loads
+            ldflags = f"-s -w -X main.buildSourceHash={unailib_source.source_hash(GO_DIR)}"
+
+            # Exactly the toolchain go.mod declares (Go fetches it if the local one differs): with the default
+            # GOTOOLCHAIN=auto a newer local Go would win, and Go 1.26 builds a library whose quic-go v0.54
+            # panics at the first QUIC handshake
+            toolchain = f"go{unailib_source.go_version(GO_DIR)}"
+            print(f"--- Building the Go library into {dest} with {toolchain} ---")
+            subprocess.run(['go', 'build', '-buildmode=c-shared', '-ldflags', ldflags, '-o', str(dest), '.'],
+                           check=True, cwd=GO_DIR, env=dict(os.environ, GOTOOLCHAIN=toolchain))
+
+            # The C header that c-shared writes next to the library is not used: ctypes declares the prototypes
+            dest.with_suffix(".h").unlink(missing_ok=True)
+
+
+class PlatformWheel(bdist_wheel):
+    """One wheel per platform: the library is loaded through ctypes and does not depend on the Python ABI."""
+
+    def finalize_options(self):
+        super().finalize_options()
+        self.root_is_pure = False
+
+    def get_tag(self):
+        _, _, plat = super().get_tag()
+        return "py3", "none", plat
 
 
 if BUILD_PURE_WHEEL:
-    # If building for Pyodide/Pure Python, include NO extensions
+
+    # Pure Python wheel for Pyodide, without the Go library
     ext_modules = []
     cmdclass = {}
     print("--- Building Pure Python Wheel (No Go Extensions) ---")
 else:
-    # Standard native build with Go extension
-    go_extension = Extension(
-        "unaiverse.networking.p2p.unailib",
-        sources=[],
-    )
-    ext_modules = [go_extension]
-    cmdclass = {'build_ext': GoBuildExtCommand}
+    ext_modules = [Extension("unaiverse.networking.p2p._unailib", sources=[])]
+    cmdclass = {'build_ext': GoBuildExt, 'bdist_wheel': PlatformWheel}
 
 setup(
     cmdclass=cmdclass,
     ext_modules=ext_modules,
-    package_data={},
     zip_safe=False,
 )
