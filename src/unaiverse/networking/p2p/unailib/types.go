@@ -10,11 +10,11 @@ import (
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
 	ma "github.com/multiformats/go-multiaddr"
-	dht "github.com/libp2p/go-libp2p-kad-dht"
 	golog "github.com/ipfs/go-log/v2"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
 	pwebrtc "github.com/pion/webrtc/v4"
 	p2pforge "github.com/ipshipyard/p2p-forge/client"
+	ping "github.com/libp2p/go-libp2p/p2p/protocol/ping"
 )
 
 // ChatProtocol defines the protocol ID string used for direct peer-to-peer messaging streams.
@@ -23,6 +23,19 @@ import (
 const UnaiverseChatProtocol = "/unaiverse/chat/1.0.0"
 const UnaiverseUserAgent = "go-libp2p/example/autotls"
 const DisconnectionGracePeriod = 10 * time.Second
+
+// Session abstraction protocol IDs. Each stage of the Session handshake gets its own
+// libp2p protocol so timeouts / cancellation / version negotiation are independent.
+// One protobuf message per stream (no per-stream channel header), length-prefixed by
+// a single uint32. See session/session.proto for the message types and session/session.py
+// for the FSM that drives them. Keep these strings in sync with SESSION_*_PROTOCOL
+// in session/session.py.
+const (
+	SessionHelloProtocol   = "/unaiverse/session/hello/1.0.0"
+	SessionProfileProtocol = "/unaiverse/session/profile/1.0.0"
+	SessionWorldProtocol   = "/unaiverse/session/world/1.0.0"
+	SessionControlProtocol = "/unaiverse/session/control/1.0.0"
+)
 
 // WebRTC signaling constants
 const UnaiverseWebRTCSignalProtocol = "/unaiverse/webrtc-signal/1.0.0"
@@ -43,10 +56,21 @@ const WebRTCDCUtRWaitJSPeer = 3 * time.Second
 // PeerConnectionTimeout is the timeout for a single outbound connection attempt to a peer.
 const PeerConnectionTimeout = 30 * time.Second
 
+// ProbeDialTimeout is the timeout for one boot-time dial to a reachability probe peer.
+// Probe peers are project infrastructure on good links, so a dial that takes longer
+// than this is effectively down and the verdict should not wait for it.
+const ProbeDialTimeout = 10 * time.Second
+
+// ProbeMaintainInterval is how often maintainProbePeers checks that at least one
+// probe peer is still connected, so AutoNAT never runs out of dial-back servers.
+const ProbeMaintainInterval = 2 * time.Minute
+
 // RelayReservationTimeout is the timeout for reserving a slot on a relay node.
 const RelayReservationTimeout = 60 * time.Second
 
-// StreamCreationTimeout is the timeout for opening a new libp2p stream to a peer.
+// StreamCreationTimeout is the timeout for opening a new libp2p stream to a
+// peer. It is also reused as the per-stream READ deadline for inbound session
+// streams (see handleSessionStream), i.e. a 20s budget to receive one frame.
 const StreamCreationTimeout = 20 * time.Second
 
 // ChatStreamIdleTimeout bounds how long a persistent chat stream may stay silent
@@ -149,9 +173,15 @@ type RendezvousState struct {
 // This lightweight version stores the binary payload in the `Data` field,
 // while the `From` field contains the Peer ID of the sender for security reasons.
 // It has to match with the 'sender' field in the ProtoBuf payload of the message.
+//
+// Protocol is set to the libp2p protocol ID for session-protocol messages (one of the
+// Session*Protocol constants) and is empty for chat / pubsub messages — that's how
+// Python's connpool decoder decides whether to feed a message through Msg.from_bytes
+// (chat) or hand it raw to SessionManager.deliver (session).
 type QueuedMessage struct {
-	From peer.ID `json:"from"` // The VERIFIED peer ID of the sender from the network layer.
-	Data []byte  `json:"-"`    // The raw data payload (Protobuf encoded).
+	From     peer.ID `json:"from"`     // The VERIFIED peer ID of the sender from the network layer.
+	Data     []byte  `json:"-"`        // The raw data payload (Protobuf encoded).
+	Protocol string  `json:"protocol"` // libp2p protocol ID or "" for chat/pubsub.
 }
 
 // MessageStore holds the QueuedMessages for each channel in separate FIFO queues.
@@ -189,11 +219,13 @@ type NodeConfig struct {
 		FloodSub bool `json:"flood_sub"` // whether to use floodsub instead of gossipsub
     } `json:"network"`
 
-	// Group DHT logic
-	DHT struct {
-		Enabled bool `json:"enabled"`
-		Keep bool	`json:"keep"` // to keep it running after init
-    } `json:"dht"`
+	// Reachability probing (AutoNAT dial-back servers). ProbePeers is the list of
+	// multiaddrs (with peer IDs) dialed at boot so the AutoNAT client has someone to
+	// ask for dial-backs. nil/absent falls back to defaultRelays; an explicit empty
+	// list disables probing (no reachability verdict unless ForcePublic).
+	Reachability struct {
+		ProbePeers []string `json:"probe_peers"`
+	} `json:"reachability"`
 
 	// WebRTC signaling (application-level, not a libp2p transport)
 	WebRTC struct {
@@ -216,11 +248,13 @@ type NodeInstance struct {
 	// Core Components
 	host         host.Host
 	pubsub       *pubsub.PubSub
-	dht          *dht.IpfsDHT
 	ctx          context.Context
 	cancel       context.CancelFunc
 	certManager  *p2pforge.P2PForgeCertMgr
 	messageStore *MessageStore
+
+	// Reachability probe peers (self-filtered), the AutoNAT dial-back supply.
+	probePeers []peer.AddrInfo
 
 	// Address Cache
     addrMutex  sync.RWMutex
@@ -260,6 +294,9 @@ type NodeInstance struct {
 	webrtcConnections map[peer.ID]*WebRTCConn
 	iceConfigMu       sync.RWMutex  // protects iceConfig swaps
 	iceConfig         *ICEConfig // nil → use defaults (Google STUN)
+
+	// libp2p ping service for Session liveness keep-alive (called from Python).
+	pingService *ping.PingService
 
 	// a copy of its own index for logging
 	instanceIndex int

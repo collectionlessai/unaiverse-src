@@ -1,0 +1,158 @@
+// Session handshake messages — per-stage libp2p protocols.
+// One message per libp2p stream; length-prefixed framing identical to
+// the existing chat protocol (handleStream / handleSessionStream).
+//
+// Stage 1: /unaiverse/session/hello/1.0.0     -> HelloRequest / HelloResponse
+// Stage 2: /unaiverse/session/profile/1.0.0   -> ProfileOffer / ProfileDecision
+// Stage 3: /unaiverse/session/world/1.0.0     -> WorldGrant / WorldGrantAck
+// Control: /unaiverse/session/control/1.0.0   -> Goaway / GoawayAck
+
+syntax = "proto3";
+
+package unaiverse.session.v1;
+
+// Python-only schema. Go is a pure transport pipe for the session protocols (it
+// forwards the raw, length-prefixed bytes without parsing them), so no Go code is
+// generated from this proto — see compile_proto.sh, which compiles it to Python only.
+
+enum ReasonCode {
+  OK                       = 0;
+  VERSION_UNSUPPORTED      = 1;
+  OVERLOADED               = 2;
+  NOT_AUTHORIZED           = 3;
+  NOT_IN_ALLOW_LIST        = 4;
+  CV_HASH_MISMATCH         = 5;
+  ROLE_INCOMPATIBLE        = 6;
+  WORLD_BUSY               = 7;
+  HOSTED_REJECTED          = 8;
+  GRACEFUL_SHUTDOWN        = 9;
+  WORLD_DISENGAGEMENT      = 10;
+  WORLD_HANDOFF_COMPLETE   = 11;
+  ROLE_REVOKED             = 12;
+  TOKEN_REVOKED            = 13;
+  KICKED_BY_HOST           = 14;
+  LOCAL_ERROR              = 15;
+  GRANT_EXPIRED            = 16;
+  SIMULTANEOUS_OPEN_LOSS   = 17;
+  SESSION_UNKNOWN          = 18;  // liveness: peer holds no Session for this session_id
+  TOKEN_EXPIRED            = 19;  // peer's root token lapsed past the grace window
+  PERIMETER_CUT            = 20;  // world perimeter: peer is not (no longer) a member
+}
+
+// ── Stage 1 ──────────────────────────────────────────────────────────────────
+
+message HelloRequest {
+  bytes session_id          = 1;  // 16 bytes chosen by initiator
+  bytes nonce_a             = 2;  // 32 bytes random
+  repeated string protocol_versions = 3;
+  uint32 capabilities       = 4;  // bitmask
+  string client_id          = 5;
+}
+
+message HelloResponse {
+  string chosen_version     = 1;
+  uint32 capabilities       = 2;
+  bytes nonce_b             = 3;  // 32 bytes random
+  bytes sig_b               = 4;  // Ed25519(local_key, nonce_a || session_id)
+  ReasonCode reason_code    = 5;
+}
+
+// ── Stage 2 ──────────────────────────────────────────────────────────────────
+
+message ProfileOffer {
+  bytes profile             = 1;  // serialized NodeProfile JSON
+  bytes sig_a               = 2;  // Ed25519(local_key, nonce_b || session_id)
+  bytes session_id          = 3;
+  string token              = 4;  // root-server JWT (RT): node_id + p2p_peers + cv_hash + exp;
+                                  // the responder verifies it against the transport peer-id,
+                                  // then trusts node_id / cv_hash / the public<->world binding.
+}
+
+message ProfileDecision {
+  bool accepted             = 1;
+  bytes profile_b           = 2;  // serialized NodeProfile JSON (required when accepted)
+  ReasonCode reason_code    = 3;
+  repeated string hint_addrs = 4;
+  uint32 retry_after_ms     = 5;
+  bytes session_id          = 6;
+  string token              = 7;  // root-server JWT (RT, mutual): the responder's own token,
+                                  // verified by the initiator against the responder's peer-id
+                                  // so both ends end up with a root-attested peer identity.
+}
+
+// ── Stage 3 (world join) ────────────────────────────────────────────────────
+
+message WorldGrant {
+  bytes grant_id            = 1;  // 32 bytes random
+  uint64 expiry_unix_ms     = 2;
+  bytes world_profile       = 3;  // serialized WorldProfile JSON
+  uint32 role               = 4;  // role bitmask
+  bytes code_bundle         = 5;  // optional
+  bytes initial_stats       = 6;  // optional
+  uint64 rendezvous_tag     = 7;
+}
+
+message WorldGrantAck {
+  bool received             = 1;
+}
+
+// PrivateJoin / PrivateJoinAck were removed: the world join completes on the normal
+// PROFILE handshake of the world Session (mutually token-authenticated, gated by the
+// host pre-admission), with no separate grant-redemption round-trip.
+
+// ── Control ──────────────────────────────────────────────────────────────────
+
+message Goaway {
+  ReasonCode reason         = 1;
+  uint32 drain_window_ms    = 2;
+  bytes session_id          = 3;
+}
+
+message GoawayAck {
+  bool received             = 1;
+}
+
+// ── Liveness / resume (session-level keep-alive) ─────────────────────────────
+// NOTE: the Python conn-layer codec currently encodes the four messages below as
+// a small JSON control envelope (NOT protobuf) to avoid a protoc regen — see
+// connpool.py `_JSON_KIND_FIELDS`. They are declared here as the canonical schema
+// so a future unified protobuf codec (and the JS mirror) can adopt them directly;
+// when that happens, move them into _KIND_SPEC and drop the JSON path. They ride
+// /unaiverse/session/control/1.0.0 alongside Goaway.
+//
+// Liveness is session-level (carries session_id) on purpose: /ipfs/ping is a
+// transport probe that go-libp2p answers by dial-on-demand, so it cannot tell a
+// restarted peer (which has no Session) from a live one. PING/PONG bound to
+// session_id can: the peer answers ok=false (SESSION_UNKNOWN) when it holds no
+// matching Session, which drives the initiator to RESUME → re-handshake.
+
+message Ping {
+  bytes session_id          = 1;
+  bytes nonce               = 2;  // echoed in Pong for RTT / idempotency
+}
+
+message Pong {
+  bytes session_id          = 1;
+  bytes nonce               = 2;
+  bool  ok                  = 3;  // true iff responder holds this Session
+}
+
+message Resume {
+  bytes session_id          = 1;
+  bytes nonce               = 2;
+}
+
+message ResumeAck {
+  bytes session_id          = 1;
+  bytes nonce               = 2;
+  bool  accepted            = 3;
+  ReasonCode reason_code    = 4;  // SESSION_UNKNOWN when accepted=false
+}
+
+// One-way in-session refresh of the sender's root token (JSON-encoded like
+// the other control messages). The receiver re-verifies it against the same
+// transport peer-id and advances its cached expiry monotonically.
+message TokenUpdate {
+  bytes session_id          = 1;
+  string token              = 2;
+}

@@ -44,6 +44,7 @@ class Ch(str, Enum):
     DEBUG    - Fine-grained developer diagnostics; off by default.
     CPOOL    - Connection pool lifecycle events (slots, eviction, limits).
     P2P      - Raw output captured from the underlying Go libp2p library (stdout/stderr).
+    SESSION  - Session-FSM lifecycle and handshake events (dial, stages, keep-alive, close).
 
     Subdomain tag (``sub=`` kwarg, available on every channel)
     ------------------------------------------------------------
@@ -79,6 +80,7 @@ class Ch(str, Enum):
     DEBUG = "DEBUG"
     CPOOL = "CPOOL"
     P2P = "P2P"
+    SESSION = "SESSION"
 
 
 # Channels that are unconditionally always active (cannot be disabled)
@@ -86,7 +88,7 @@ ALWAYS_ON_CHANNELS: frozenset[Ch] = frozenset({Ch.CRITICAL, Ch.ERROR, Ch.USER})
 
 # All channels
 EXTRA_CHANNELS: frozenset[Ch] = frozenset({Ch.NETWORK, Ch.STREAMS, Ch.INTER,
-                                           Ch.MISC, Ch.DEBUG, Ch.STATEM, Ch.CPOOL, Ch.P2P})
+                                           Ch.MISC, Ch.DEBUG, Ch.STATEM, Ch.CPOOL, Ch.P2P, Ch.SESSION})
 
 # All channels
 ALL_CHANNELS: frozenset[Ch] = frozenset(ALWAYS_ON_CHANNELS | EXTRA_CHANNELS)
@@ -104,6 +106,7 @@ _COLORS: dict[Ch, str] = {
     Ch.DEBUG: "\033[2;37m",   # Dim white
     Ch.CPOOL: "\033[38;5;74m",  # Steel blue
     Ch.P2P: "\033[95m",    # Magenta
+    Ch.SESSION: "\033[38;5;42m",  # Green (256-colour)
 }
 
 # Misc
@@ -448,6 +451,10 @@ class _Logger:
     def cpool(self, msg: str, sub: str = "", **info: Any) -> None:
         """Log a connection pool lifecycle event (slot open/close, eviction, limit hit)."""
         self._log(Ch.CPOOL, msg, info, sub=sub)
+
+    def session(self, msg: str, sub: str = "", **info: Any) -> None:
+        """Log a Session-FSM lifecycle / handshake event (dial, stages, keep-alive, close)."""
+        self._log(Ch.SESSION, msg, info, sub=sub)
 
     def p2p(self, msg: str, sub: str = "", **info: Any) -> None:
         """Log a raw line captured from the Go libp2p library (stdout/stderr)."""

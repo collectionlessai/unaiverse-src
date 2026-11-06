@@ -1,0 +1,1272 @@
+"""Unit tests for ``SessionManager``: tie-breaker, quarantine, dispatch.
+
+These tests don't exercise full handshakes (covered by the in-process
+integration test) — they isolate SessionManager's own logic: how it tracks
+sessions per peer, how the tie-breaker resolves simultaneous open, and how
+the anti-flap quarantine gates re-dials after a Lost event.
+"""
+
+import asyncio
+import time
+
+import pytest
+
+from unaiverse.networking.session import (
+    SessionManager, Session, SessionRole, SessionState, SessionEventType, SessMsg,
+    SESSION_HELLO_PROTOCOL, SESSION_PROFILE_PROTOCOL, SESSION_CONTROL_PROTOCOL,
+)
+from unaiverse.networking.session.sess_msg import (
+    OK, NOT_AUTHORIZED, SIMULTANEOUS_OPEN_LOSS, WORLD_DISENGAGEMENT,
+)
+from unaiverse.networking.node.connpool import NodeConn
+
+pytestmark = pytest.mark.unit
+
+
+def _run(coro):
+    return asyncio.run(coro)
+
+
+def _make_sm(p2p, p2p_name, local_peer_id, profile_factory=None):
+    return SessionManager(
+        p2p=p2p,
+        p2p_name=p2p_name,
+        local_peer_id=local_peer_id,
+        local_node_id="local-node-id",
+        local_profile_factory=profile_factory or (lambda: {"node_id": "local"}),
+    )
+
+
+def _mk_session(p2p, peer_id, local_peer_id, role=SessionRole.INITIATOR):
+    return Session(
+        peer_id=peer_id, role=role, p2p=p2p,
+        p2p_name=NodeConn.P2P_PUBLIC, local_peer_id=local_peer_id,
+        local_node_id="alice", local_profile_factory=lambda: {},
+    )
+
+
+# initiate()
+
+def test_initiate_idempotent_when_already_healthy(alice_conn, alice_p2p, alice_peer_id, bob_peer_id):
+    """Calling initiate twice for the same healthy peer must be a no-op the second time."""
+    alice_conn.connect_returns = (bob_peer_id, False)
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    events_1 = _run(sm.initiate(bob_peer_id, ["/ip4/127.0.0.1/tcp/0"]))
+    assert events_1 == []
+    events_2 = _run(sm.initiate(bob_peer_id, ["/ip4/127.0.0.1/tcp/0"]))
+    assert events_2 == []
+    assert len(alice_conn.connect_calls) == 1
+
+
+def test_initiate_replaces_on_divergent_world_join_intent(alice_conn, alice_peer_id, bob_peer_id):
+    """A non-terminal Session whose world-join intent DIFFERS from the request is replaced
+    (closed + re-dialed), not silently reused: otherwise a world join would be lost to a
+    leftover plain Session and the caller would see success while nothing (re)starts (B8).
+    The transport is deliberately NOT disconnected: the live connection is what the
+    re-dial wants, and a disconnect would abort the replacement GOAWAY on the wire."""
+    alice_conn.connect_returns = (bob_peer_id, False)
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    _run(sm.initiate(bob_peer_id, ["/ip4/127.0.0.1/tcp/0"], is_world_join=False))
+    assert sm.get_session(bob_peer_id).is_world_join is False
+    # Same peer, now a WORLD-join intent → the plain Session must be replaced, not no-opped.
+    _run(sm.initiate(bob_peer_id, ["/ip4/127.0.0.1/tcp/0"], is_world_join=True))
+    assert sm.get_session(bob_peer_id).is_world_join is True
+    assert len(alice_conn.connect_calls) == 2                # re-dialed
+    assert bob_peer_id not in alice_conn.disconnect_calls    # transport kept for the re-dial
+
+
+def test_initiate_replace_stale_forces_replacement_at_matching_intent(alice_conn, alice_peer_id, bob_peer_id):
+    """replace_stale (the Coordinator's spent-carrier flag) replaces a non-terminal Session
+    even when the world-join intent matches, so a spent carrier does not no-op forever (B8)."""
+    alice_conn.connect_returns = (bob_peer_id, False)
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    _run(sm.initiate(bob_peer_id, ["/ip4/127.0.0.1/tcp/0"], is_world_join=True))
+    # Matching intent, no flag → no-op (idempotent).
+    _run(sm.initiate(bob_peer_id, ["/ip4/127.0.0.1/tcp/0"], is_world_join=True))
+    assert len(alice_conn.connect_calls) == 1
+    # Matching intent, but replace_stale set → replace and re-dial.
+    _run(sm.initiate(bob_peer_id, ["/ip4/127.0.0.1/tcp/0"], is_world_join=True, replace_stale=True))
+    assert len(alice_conn.connect_calls) == 2
+
+
+def test_initiate_passes_dial_policy_to_session(alice_conn, alice_peer_id, bob_peer_id):
+    """ensure/initiate forward the per-Session dial policy (the world redeemer's
+    single grant-bounded attempt) down to the Session they create, and start()
+    arms CONNECTING with that budget."""
+    alice_conn.connect_returns = (bob_peer_id, False)
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    _run(sm.initiate(bob_peer_id, ["/ip4/127.0.0.1/tcp/0"],
+                     dial_attempts=1, dial_budget_s=21.0))
+    sess = sm.get_session(bob_peer_id)
+    assert sess._max_dial_attempts == 1
+    assert sess._dial_budget_s == 21.0
+    assert sess._timeout_s == 21.0
+
+
+def test_has_established_world_join_carrier(alice_conn, alice_peer_id, bob_peer_id):
+    """The spent-carrier detector is True only for an ESTABLISHED world-join Session: an
+    in-flight handshake (not yet ESTABLISHED) and a plain Session are never flagged, so a
+    live join is never mistaken for a spent carrier."""
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    assert sm.has_established_world_join_carrier(bob_peer_id) is False   # no Session
+    s = _mk_session(alice_conn, bob_peer_id, alice_peer_id)
+    s.is_world_join = True
+    sm._sessions[bob_peer_id] = s
+    s._set_state(SessionState.HELLO_SENT, None)
+    assert sm.has_established_world_join_carrier(bob_peer_id) is False   # in-flight, not spent
+    s._set_state(SessionState.ESTABLISHED, None)
+    assert sm.has_established_world_join_carrier(bob_peer_id) is True    # established carrier
+    s.is_world_join = False
+    assert sm.has_established_world_join_carrier(bob_peer_id) is False   # plain session
+
+
+def test_initiate_during_quarantine_returns_failed(alice_conn, alice_peer_id, bob_peer_id):
+    """A Lost event must put the peer in quarantine; the next dial returns
+    [FAILED] immediately without touching the wire."""
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    sm._quarantine[bob_peer_id] = time.monotonic() + 30.0
+    events = _run(sm.initiate(bob_peer_id, ["/ip4/127.0.0.1/tcp/0"]))
+    assert len(events) == 1 and events[0].type == SessionEventType.FAILED
+    assert events[0].data["reason"].startswith("quarantined")
+    assert alice_conn.connect_calls == []
+
+
+# deliver() — basics
+
+def test_deliver_unknown_protocol_drops(alice_conn, alice_peer_id, bob_peer_id):
+    """A message on a protocol id the manager doesn't route is dropped silently,
+    yielding no events and spawning no Session."""
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    events = _run(sm.deliver(bob_peer_id, "/something/else/1.0.0", SessMsg(SessMsg.KIND_HELLO_REQ, {})))
+    assert events == []
+
+
+def test_deliver_unknown_peer_non_hello_drops(alice_conn, alice_peer_id, bob_peer_id):
+    """A PROFILE message from a peer we have no session with → silently dropped."""
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    events = _run(sm.deliver(bob_peer_id, SESSION_PROFILE_PROTOCOL,
+                             SessMsg(SessMsg.KIND_PROFILE_OFFER, {})))
+    assert events == []
+
+
+def test_deliver_inbound_hello_spawns_responder(alice_conn, alice_p2p, alice_peer_id, bob_peer_id):
+    """Unknown peer sends HelloRequest → SessionManager spawns a responder Session
+    and runs the message through it."""
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    hello = SessMsg(SessMsg.KIND_HELLO_REQ, {
+        "session_id": b"\x02" * 16, "nonce_a": b"\xaa" * 32,
+        "protocol_versions": ["1.0"], "client_id": "test",
+    })
+    events = _run(sm.deliver(bob_peer_id, SESSION_HELLO_PROTOCOL, hello))
+    assert events == []
+    sess = sm.get_session(bob_peer_id)
+    assert sess is not None
+    assert sess.role == SessionRole.RESPONDER
+    assert sess.state == SessionState.HELLO_ACK_SENT
+
+
+@pytest.mark.parametrize("stale_state, stale_timeout", [
+    (SessionState.RECONNECTING, 45.0),   # link dropped, riding the grace window
+    (SessionState.CLOSING, 10.0),        # our GOAWAY still in flight
+])
+def test_deliver_fresh_hello_supersedes_stale_responder(
+    alice_conn, alice_peer_id, bob_peer_id, stale_state, stale_timeout
+):
+    """A fresh inbound HELLO from a peer we still hold a leftover responder Session
+    for must be answered, not shadowed by the dead handshake.
+
+    A responder Session parked in a terminal-adjacent state (RECONNECTING after a
+    link drop, or CLOSING while a GOAWAY is in flight) is superseded by a fresh
+    inbound HELLO_REQ: the peer re-dialing is its declaration that the old session
+    is dead on its side. deliver aborts the stale FSM silently and spawns a fresh
+    responder, so the re-dial handshakes in ~1 RTT instead of dying of HELLO_SENT
+    timeout against a zombie (the "re-dial into a just-closed session" failure).
+    """
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+
+    # A leftover responder Session for bob, from the session that just went away.
+    stale = _mk_session(alice_conn, bob_peer_id, alice_peer_id, role=SessionRole.RESPONDER)
+    stale.session_id = b"\x11" * 16
+    stale._set_state(stale_state, stale_timeout)
+    sm._set_active(bob_peer_id, stale)
+
+    # bob re-dials and opens a brand-new handshake (a different session_id).
+    hello = SessMsg(SessMsg.KIND_HELLO_REQ, {
+        "session_id": b"\x02" * 16, "nonce_a": b"\xaa" * 32,
+        "protocol_versions": ["1.0"], "client_id": "test",
+    })
+    events = _run(sm.deliver(bob_peer_id, SESSION_HELLO_PROTOCOL, hello))
+    assert events == []
+
+    # The fresh HELLO must be answered with a HELLO_ACK (reason OK)...
+    acks = [s for s in alice_conn.sent
+            if s[1] == SESSION_HELLO_PROTOCOL
+            and s[2].kind == SessMsg.KIND_HELLO_RESP
+            and s[2].fields.get("reason_code") == OK]
+    assert acks, "stale responder Session shadowed the fresh HELLO: no HELLO_ACK sent"
+
+    # ...backed by a brand-new responder Session bound to the new session_id.
+    sess_after = sm.get_session(bob_peer_id)
+    assert sess_after is not stale
+    assert sess_after.role == SessionRole.RESPONDER
+    assert sess_after.state == SessionState.HELLO_ACK_SENT
+    assert sess_after.session_id == b"\x02" * 16
+
+
+# Reborn-peer supersede (ESTABLISHED / initiator-RECONNECTING, guarded by session_id)
+
+def _plant(sm, conn, peer_id, local_peer_id, role, state, session_id):
+    sess = _mk_session(conn, peer_id, local_peer_id, role=role)
+    sess.session_id = session_id
+    sess._set_state(state, None)
+    sm._set_active(peer_id, sess)
+    return sess
+
+
+@pytest.mark.parametrize("role", [SessionRole.INITIATOR, SessionRole.RESPONDER])
+def test_deliver_reborn_hello_supersedes_established(alice_conn, alice_peer_id, bob_peer_id, role):
+    """A peer killed and restarted (same peer_id, NEW session_id) re-dials while we
+    still hold an ESTABLISHED Session for it. The fresh HELLO must supersede the stale
+    session and be answered, for EITHER role of the survivor, instead of being silently
+    ignored (which forced a ~55s ping-miss recovery in the field)."""
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    stale = _plant(sm, alice_conn, bob_peer_id, alice_peer_id, role,
+                   SessionState.ESTABLISHED, b"\x11" * 16)
+
+    hello = SessMsg(SessMsg.KIND_HELLO_REQ, {
+        "session_id": b"\x02" * 16, "nonce_a": b"\xaa" * 32,
+        "protocol_versions": ["1.0"], "client_id": "test",
+    })
+    events = _run(sm.deliver(bob_peer_id, SESSION_HELLO_PROTOCOL, hello))
+    assert events == []                       # silent abort, no terminal event → no purge
+    assert stale.state == SessionState.FAILED
+
+    acks = [s for s in alice_conn.sent
+            if s[1] == SESSION_HELLO_PROTOCOL and s[2].kind == SessMsg.KIND_HELLO_RESP
+            and s[2].fields.get("reason_code") == OK]
+    assert acks, "stale ESTABLISHED shadowed the reborn HELLO: no HELLO_ACK sent"
+    sess_after = sm.get_session(bob_peer_id)
+    assert sess_after is not stale
+    assert sess_after.role == SessionRole.RESPONDER
+    assert sess_after.state == SessionState.HELLO_ACK_SENT
+    assert sess_after.session_id == b"\x02" * 16
+
+
+def test_established_ignores_same_session_id_hello(alice_conn, alice_peer_id, bob_peer_id):
+    """A replay of the establishing HELLO carries the SAME session_id: it must NOT tear
+    down the live session (the guard requires a different id). Falls through, ignored."""
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    stale = _plant(sm, alice_conn, bob_peer_id, alice_peer_id, SessionRole.RESPONDER,
+                   SessionState.ESTABLISHED, b"\x11" * 16)
+
+    hello = SessMsg(SessMsg.KIND_HELLO_REQ, {
+        "session_id": b"\x11" * 16, "nonce_a": b"\xaa" * 32, "protocol_versions": ["1.0"],
+    })
+    events = _run(sm.deliver(bob_peer_id, SESSION_HELLO_PROTOCOL, hello))
+    assert events == []
+    assert sm.get_session(bob_peer_id) is stale
+    assert stale.state == SessionState.ESTABLISHED
+    assert not [s for s in alice_conn.sent if s[1] == SESSION_HELLO_PROTOCOL]
+
+
+def test_established_ignores_empty_session_id_hello(alice_conn, alice_peer_id, bob_peer_id):
+    """A malformed HELLO with an empty session_id must NOT supersede a live session:
+    the non-empty guard prevents a single bad frame from tearing an ESTABLISHED down."""
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    stale = _plant(sm, alice_conn, bob_peer_id, alice_peer_id, SessionRole.RESPONDER,
+                   SessionState.ESTABLISHED, b"\x11" * 16)
+
+    hello = SessMsg(SessMsg.KIND_HELLO_REQ, {
+        "session_id": b"", "nonce_a": b"\xaa" * 32, "protocol_versions": ["1.0"],
+    })
+    events = _run(sm.deliver(bob_peer_id, SESSION_HELLO_PROTOCOL, hello))
+    assert events == []
+    assert sm.get_session(bob_peer_id) is stale
+    assert stale.state == SessionState.ESTABLISHED
+
+
+def test_reborn_hello_supersedes_initiator_reconnecting(alice_conn, alice_peer_id, bob_peer_id):
+    """An INITIATOR reconnecting toward a peer that got reborn (new session_id HELLO)
+    must supersede, NOT reject it via the simultaneous-open tie-breaker. Uses the
+    smaller-peer-id fixture (alice < bob) so the pre-fix code would have rejected."""
+    assert alice_peer_id < bob_peer_id, "fixture invariant (smaller local would tie-break-win)"
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    stale = _plant(sm, alice_conn, bob_peer_id, alice_peer_id, SessionRole.INITIATOR,
+                   SessionState.RECONNECTING, b"\x11" * 16)
+
+    hello = SessMsg(SessMsg.KIND_HELLO_REQ, {
+        "session_id": b"\x02" * 16, "nonce_a": b"\xaa" * 32, "protocol_versions": ["1.0"],
+    })
+    events = _run(sm.deliver(bob_peer_id, SESSION_HELLO_PROTOCOL, hello))
+    assert events == []
+    assert stale.state == SessionState.FAILED
+    assert not [s for s in alice_conn.sent if s[1] == SESSION_HELLO_PROTOCOL
+                and s[2].fields.get("reason_code") == SIMULTANEOUS_OPEN_LOSS], \
+        "reborn peer was rejected by the tie-breaker instead of superseded"
+    sess_after = sm.get_session(bob_peer_id)
+    assert sess_after is not stale
+    assert sess_after.role == SessionRole.RESPONDER
+    assert sess_after.session_id == b"\x02" * 16
+
+
+def test_late_simultaneous_open_hello_supersedes_established(alice_conn, alice_peer_id, bob_peer_id):
+    """Accepted residual (design option A): a genuine simultaneous open whose losing
+    HELLO arrives reordered AFTER the session is ESTABLISHED will supersede a healthy
+    session (a ~15-25s self-healing outage where today it is a no-op). This pins that
+    behaviour as a conscious, tested trade for the ~1 RTT reborn-peer recovery."""
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    stale = _plant(sm, alice_conn, bob_peer_id, alice_peer_id, SessionRole.INITIATOR,
+                   SessionState.ESTABLISHED, b"\x11" * 16)
+
+    late = SessMsg(SessMsg.KIND_HELLO_REQ, {
+        "session_id": b"\x07" * 16, "nonce_a": b"\xaa" * 32, "protocol_versions": ["1.0"],
+    })
+    events = _run(sm.deliver(bob_peer_id, SESSION_HELLO_PROTOCOL, late))
+    assert events == []
+    assert stale.state == SessionState.FAILED   # healthy session torn down — the known residual
+
+
+# Tie-breaker on simultaneous open
+
+def test_tiebreak_smaller_peer_keeps_initiator(alice_conn, alice_p2p, alice_peer_id, bob_peer_id):
+    """When local_peer_id < remote_peer_id (alice < bob), Alice keeps her
+    initiator and rejects Bob's inbound HELLO with SIMULTANEOUS_OPEN_LOSS."""
+    assert alice_peer_id < bob_peer_id, "fixture invariant"
+    alice_conn.connect_returns = (bob_peer_id, False)
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    _run(sm.initiate(bob_peer_id, ["/ip4/1.2.3.4/tcp/0"]))
+    sess_before = sm.get_session(bob_peer_id)
+    assert sess_before.role == SessionRole.INITIATOR
+    hello = SessMsg(SessMsg.KIND_HELLO_REQ, {
+        "session_id": b"\x09" * 16, "nonce_a": b"\xaa" * 32, "protocol_versions": ["1.0"],
+    })
+    events = _run(sm.deliver(bob_peer_id, SESSION_HELLO_PROTOCOL, hello))
+    assert events == []
+    sess_after = sm.get_session(bob_peer_id)
+    assert sess_after is sess_before
+    assert sess_after.role == SessionRole.INITIATOR
+    sent_helloresponses = [s for s in alice_conn.sent if s[1] == SESSION_HELLO_PROTOCOL]
+    last = sent_helloresponses[-1]
+    assert last[2].kind == SessMsg.KIND_HELLO_RESP
+    assert last[2].fields["reason_code"] == SIMULTANEOUS_OPEN_LOSS
+
+
+def test_tiebreak_larger_peer_yields_to_responder(bob_conn, bob_p2p, bob_peer_id, alice_peer_id):
+    """When local_peer_id > remote_peer_id (bob > alice), Bob aborts his
+    initiator and accepts Alice's inbound HELLO as a responder."""
+    assert bob_peer_id > alice_peer_id, "fixture invariant"
+    bob_conn.connect_returns = (alice_peer_id, False)
+    sm = _make_sm(bob_conn, NodeConn.P2P_PUBLIC, bob_peer_id)
+    _run(sm.initiate(alice_peer_id, ["/ip4/1.2.3.4/tcp/0"]))
+    sess_before = sm.get_session(alice_peer_id)
+    assert sess_before.role == SessionRole.INITIATOR
+    initiator_session_id_before = sess_before.session_id
+    hello = SessMsg(SessMsg.KIND_HELLO_REQ, {
+        "session_id": b"\x42" * 16, "nonce_a": b"\xab" * 32, "protocol_versions": ["1.0"],
+    })
+    _run(sm.deliver(alice_peer_id, SESSION_HELLO_PROTOCOL, hello))
+    sess_after = sm.get_session(alice_peer_id)
+    assert sess_after is not sess_before
+    assert sess_after.role == SessionRole.RESPONDER
+    assert sess_after.session_id == b"\x42" * 16
+    assert sess_after.session_id != initiator_session_id_before
+
+
+# tick()
+
+def test_tick_drains_timeouts_and_cleans_terminal_sessions(alice_conn, alice_peer_id, bob_peer_id):
+    """Sessions in a state past their timeout → FAILED event; terminal
+    sessions are removed from the registry on the same tick."""
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    sess = _mk_session(alice_conn, bob_peer_id, alice_peer_id)
+    sm._set_active(bob_peer_id, sess)
+    sess._set_state(SessionState.HELLO_SENT, 0.001)
+    time.sleep(0.005)
+    events = _run(sm.tick())
+    assert any(e.type == SessionEventType.FAILED for e in events)
+    assert sm.get_session(bob_peer_id) is None
+
+
+def test_lost_event_enters_quarantine(alice_conn, alice_peer_id, bob_peer_id):
+    """A Lost event from grace expiry must put the peer in quarantine."""
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    sess = _mk_session(alice_conn, bob_peer_id, alice_peer_id)
+    sm._set_active(bob_peer_id, sess)
+    sess._set_state(SessionState.RECONNECTING, 0.001)
+    time.sleep(0.005)
+    events = _run(sm.tick())
+    assert any(e.type == SessionEventType.LOST for e in events)
+    ban_until = sm._quarantine.get(bob_peer_id)
+    assert ban_until is not None
+    assert ban_until > time.monotonic() + 20.0
+
+
+# on_peer_disconnected()
+
+def test_disconnect_during_handshake_fails_immediately(alice_conn, alice_peer_id, bob_peer_id):
+    """Connection drop while still mid-handshake → FAILED event right away."""
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    sess = _mk_session(alice_conn, bob_peer_id, alice_peer_id)
+    sm._sessions[bob_peer_id] = sess
+    sess._set_state(SessionState.HELLO_SENT, 5.0)
+    events = _run(sm.on_peer_disconnected(bob_peer_id))
+    assert len(events) == 1 and events[0].type == SessionEventType.FAILED
+    assert sm.get_session(bob_peer_id) is None
+
+
+def test_disconnect_from_established_emits_reconnecting(alice_conn, alice_peer_id, bob_peer_id):
+    """Disconnect from ESTABLISHED → RECONNECTING (grace), session still live."""
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    sess = _mk_session(alice_conn, bob_peer_id, alice_peer_id)
+    sm._sessions[bob_peer_id] = sess
+    sess._set_state(SessionState.ESTABLISHED, None)
+    events = _run(sm.on_peer_disconnected(bob_peer_id))
+    assert len(events) == 1 and events[0].type == SessionEventType.RECONNECTING
+    assert sm.get_session(bob_peer_id) is sess
+    assert sess.state == SessionState.RECONNECTING
+
+
+def test_disconnect_unknown_peer_is_noop(alice_conn, alice_peer_id, bob_peer_id):
+    """A disconnect for a peer the manager holds no Session for is a no-op: no events."""
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    events = _run(sm.on_peer_disconnected(bob_peer_id))
+    assert events == []
+
+
+# close_session()
+
+def test_close_session_sends_goaway(alice_conn, alice_p2p, alice_peer_id, bob_peer_id):
+    """close_session on an ESTABLISHED session moves it to CLOSING and emits a single
+    GOAWAY on the control protocol carrying the given reason code."""
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    sess = _mk_session(alice_conn, bob_peer_id, alice_peer_id)
+    sm._sessions[bob_peer_id] = sess
+    sess._set_state(SessionState.ESTABLISHED, None)
+    _run(sm.close_session(bob_peer_id, WORLD_DISENGAGEMENT))
+    assert sess.state == SessionState.CLOSING
+    sent = [s for s in alice_conn.sent if s[1] == SESSION_CONTROL_PROTOCOL]
+    assert len(sent) == 1
+    assert sent[0][2].kind == SessMsg.KIND_GOAWAY
+    assert sent[0][2].fields["reason"] == WORLD_DISENGAGEMENT
+
+
+# Unknown-session liveness reply (restarted-peer detection)
+
+def test_deliver_unknown_session_ping_replies_pong_not_ok(alice_conn, alice_peer_id, bob_peer_id):
+    """A PING for a peer we hold no Session for (we are the restarted peer) must
+    get a PONG ok=false so the initiator stops waiting and re-handshakes."""
+    from unaiverse.networking.session.sess_msg import SESSION_UNKNOWN
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    ping = SessMsg(SessMsg.KIND_PING, {"session_id": b"\x01" * 16, "nonce": b"n1"})
+    events = _run(sm.deliver(bob_peer_id, SESSION_CONTROL_PROTOCOL, ping))
+    assert events == []
+    assert sm.get_session(bob_peer_id) is None       # no Session spawned
+    sent = [s for s in alice_conn.sent if s[1] == SESSION_CONTROL_PROTOCOL]
+    assert sent and sent[-1][2].kind == SessMsg.KIND_PONG
+    assert sent[-1][2].fields["ok"] is False
+    assert sent[-1][2].fields["nonce"] == b"n1"
+
+
+def test_deliver_unknown_session_resume_naks(alice_conn, alice_peer_id, bob_peer_id):
+    """A RESUME for a peer we hold no Session for is NAK'd: a RESUME_ACK with
+    accepted=false and reason_code SESSION_UNKNOWN, and no Session is spawned."""
+    from unaiverse.networking.session.sess_msg import SESSION_UNKNOWN
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    resume = SessMsg(SessMsg.KIND_RESUME, {"session_id": b"\x01" * 16, "nonce": b"r1"})
+    events = _run(sm.deliver(bob_peer_id, SESSION_CONTROL_PROTOCOL, resume))
+    assert events == []
+    sent = [s for s in alice_conn.sent if s[1] == SESSION_CONTROL_PROTOCOL]
+    assert sent and sent[-1][2].kind == SessMsg.KIND_RESUME_ACK
+    assert sent[-1][2].fields["accepted"] is False
+    assert sent[-1][2].fields["reason_code"] == SESSION_UNKNOWN
+
+
+def test_deliver_unknown_session_goaway_replies_goaway_ack(alice_conn, alice_peer_id, bob_peer_id):
+    """A GOAWAY for a peer we hold no Session for (we already forgot it) is acked with
+    GOAWAY_ACK received=true, so the remote's CLOSING completes in one RTT instead of
+    riding its full timeout; no Session is spawned."""
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    goaway = SessMsg(SessMsg.KIND_GOAWAY, {"reason": WORLD_DISENGAGEMENT, "drain_window_ms": 0})
+    events = _run(sm.deliver(bob_peer_id, SESSION_CONTROL_PROTOCOL, goaway))
+    assert events == []
+    assert sm.get_session(bob_peer_id) is None       # no Session spawned
+    sent = [s for s in alice_conn.sent if s[1] == SESSION_CONTROL_PROTOCOL]
+    assert sent and sent[-1][2].kind == SessMsg.KIND_GOAWAY_ACK
+    assert sent[-1][2].fields["received"] is True
+
+
+# close_all()
+
+def test_close_all_goaways_established_sessions(alice_conn, alice_peer_id, bob_peer_id):
+    """close_all moves each ESTABLISHED session to CLOSING and sends it a GOAWAY on the
+    control protocol carrying the given reason code."""
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    sess = _mk_session(alice_conn, bob_peer_id, alice_peer_id)
+    sess._set_state(SessionState.ESTABLISHED, None)
+    sm._sessions[bob_peer_id] = sess
+    _run(sm.close_all(WORLD_DISENGAGEMENT))
+    assert sess.state == SessionState.CLOSING
+    sent = [s for s in alice_conn.sent if s[1] == SESSION_CONTROL_PROTOCOL]
+    assert sent and sent[-1][2].kind == SessMsg.KIND_GOAWAY
+    assert sent[-1][2].fields["reason"] == WORLD_DISENGAGEMENT
+
+
+def test_close_all_skips_already_closing(alice_conn, alice_peer_id, bob_peer_id):
+    """A Session already CLOSING (e.g. intentional world-handoff GOAWAY) must not
+    be re-GOAWAY'd by close_all."""
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    sess = _mk_session(alice_conn, bob_peer_id, alice_peer_id)
+    sess._set_state(SessionState.CLOSING, 10.0)
+    sm._sessions[bob_peer_id] = sess
+    _run(sm.close_all())
+    sent = [s for s in alice_conn.sent if s[1] == SESSION_CONTROL_PROTOCOL]
+    assert sent == []   # Session.close is a no-op outside ESTABLISHED/RECONNECTING
+
+
+def test_session_manager_injects_token_capabilities_into_sessions(alice_p2p, alice_peer_id, bob_peer_id):
+    """RT plumbing: the manager forwards token_verifier and token_factory to every
+    Session it builds, on both the initiator path (ensure) and the responder path
+    (spawn). Not consumed yet — they must just reach the Session. With none injected
+    the Sessions carry None (no silent default)."""
+    verifier = object()            # sentinel; identity-checked, not called here
+    factory = lambda: "tok-123"    # noqa: E731
+    sm = SessionManager(
+        p2p=alice_p2p, p2p_name=NodeConn.P2P_PUBLIC, local_peer_id=alice_peer_id,
+        local_node_id="alice", local_profile_factory=lambda: {},
+        token_verifier=verifier, token_factory=factory,
+    )
+    initiator = sm.ensure(bob_peer_id, ["/ip4/127.0.0.1/tcp/0"])
+    responder = sm._spawn_responder(bob_peer_id)
+    for sess in (initiator, responder):
+        assert sess.token_verifier is verifier
+        assert sess.token_factory is factory
+        assert sess.token_factory() == "tok-123"
+
+    sm_bare = SessionManager(
+        p2p=alice_p2p, p2p_name=NodeConn.P2P_PUBLIC, local_peer_id=alice_peer_id,
+        local_node_id="alice", local_profile_factory=lambda: {},
+    )
+    bare = sm_bare._spawn_responder(bob_peer_id)
+    assert bare.token_verifier is None and bare.token_factory is None
+
+
+# KNOWN state and ensure()/activate() split
+
+def test_ensure_creates_known_session_without_dialing(alice_conn, alice_peer_id, bob_peer_id):
+    """ensure() registers an initiator Session in KNOWN without dialing; activate() is
+    what starts it."""
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    sess = sm.ensure(bob_peer_id, ["/ip4/127.0.0.1/tcp/0"])
+    assert sess.state == SessionState.KNOWN
+    assert alice_conn.connect_calls == []          # no dial yet
+    assert sm.get_session(bob_peer_id) is sess     # registered
+
+
+def test_ensure_is_idempotent_for_healthy_session(alice_conn, alice_peer_id, bob_peer_id):
+    """A second ensure() returns the same (non-terminal) Session, not a fresh one."""
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    s1 = sm.ensure(bob_peer_id, ["/ip4/127.0.0.1/tcp/0"])
+    s2 = sm.ensure(bob_peer_id, ["/ip4/127.0.0.1/tcp/0"])
+    assert s1 is s2
+
+
+def test_initiate_is_ensure_plus_activate(alice_conn, alice_peer_id, bob_peer_id):
+    """initiate() = ensure() + activate(): the Session is dialed and moves past KNOWN,
+    unchanged from before the split."""
+    alice_conn.connect_returns = (bob_peer_id, False)
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    _run(sm.initiate(bob_peer_id, ["/ip4/127.0.0.1/tcp/0"]))
+    assert len(alice_conn.connect_calls) == 1
+    sess = sm.get_session(bob_peer_id)
+    assert sess is not None and sess.state != SessionState.KNOWN
+
+
+def test_spawn_responder_starts_in_init(alice_conn, alice_peer_id, bob_peer_id):
+    """A responder is engaged from the start (awaiting HELLO), so it lives in INIT,
+    not KNOWN."""
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    sess = sm._spawn_responder(bob_peer_id)
+    assert sess.state == SessionState.INIT
+
+
+# Double view: tick-active vs known
+
+def test_ensure_keeps_known_out_of_active_view(alice_conn, alice_peer_id, bob_peer_id):
+    """A KNOWN Session lives in the full registry but not in the tick-active view, so
+    the per-cycle tick skips it in O(1)."""
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    sess = sm.ensure(bob_peer_id, ["/ip4/127.0.0.1/tcp/0"])
+    assert sess.state == SessionState.KNOWN
+    assert bob_peer_id in sm._sessions
+    assert bob_peer_id not in sm._active_sessions
+
+
+def test_activate_promotes_known_into_active_view(alice_conn, alice_peer_id, bob_peer_id):
+    """activate() moves a started initiator out of KNOWN into the tick-active view."""
+    alice_conn.connect_returns = (bob_peer_id, False)
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    sm.ensure(bob_peer_id, ["/ip4/127.0.0.1/tcp/0"])
+    assert bob_peer_id not in sm._active_sessions
+    _run(sm.activate(bob_peer_id))
+    assert bob_peer_id in sm._active_sessions
+    assert sm._active_sessions[bob_peer_id] is sm.get_session(bob_peer_id)
+
+
+def test_spawn_responder_is_tick_active(alice_conn, alice_peer_id, bob_peer_id):
+    """A responder is engaged from the start, so it enters the tick-active view."""
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    sm._spawn_responder(bob_peer_id)
+    assert bob_peer_id in sm._active_sessions
+
+
+def test_tick_does_not_sweep_known_sessions(alice_conn, alice_peer_id, bob_peer_id):
+    """The tick iterates only the active view: a KNOWN Session's tick hooks are never
+    invoked (here they would raise), so a large KNOWN roster costs nothing per cycle."""
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    sess = sm.ensure(bob_peer_id, ["/ip4/127.0.0.1/tcp/0"])
+    assert sess.state == SessionState.KNOWN
+
+    def _boom(*a, **k):
+        raise AssertionError("tick touched a KNOWN session")
+    sess.check_timeout = _boom
+    sess.tick_dial = _boom
+    sess.tick_keepalive = _boom
+
+    events = _run(sm.tick())
+    assert events == []
+    assert sess.state == SessionState.KNOWN
+
+
+def test_terminal_session_leaves_both_views(alice_conn, alice_peer_id, bob_peer_id):
+    """A Session that fails (here via a transport drop mid-handshake) is removed from
+    both the full registry and the tick-active view, so neither leaks a dead FSM."""
+    alice_conn.connect_returns = (bob_peer_id, False)
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    _run(sm.initiate(bob_peer_id, ["/ip4/127.0.0.1/tcp/0"]))
+    assert bob_peer_id in sm._active_sessions
+    _run(sm.on_peer_disconnected(bob_peer_id))
+    assert bob_peer_id not in sm._sessions
+    assert bob_peer_id not in sm._active_sessions
+
+
+# KNOWN is not an in-flight handshake on inbound
+
+def test_known_session_yields_to_responder_on_inbound_hello(alice_conn, alice_peer_id, bob_peer_id):
+    """A KNOWN initiator (registered, not yet dialed) that receives an inbound HELLO
+    yields: the peer dialed us first, so the KNOWN intent is dropped and a responder
+    takes over the inbound session — no simultaneous-open tie-breaker, nothing was in
+    flight."""
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    known = sm.ensure(bob_peer_id, ["/ip4/127.0.0.1/tcp/0"])
+    assert known.state == SessionState.KNOWN
+    hello = SessMsg(SessMsg.KIND_HELLO_REQ, {
+        "session_id": b"\x42" * 16, "nonce_a": b"\xaa" * 32, "protocol_versions": ["1.0"],
+    })
+    _run(sm.deliver(bob_peer_id, SESSION_HELLO_PROTOCOL, hello))
+    sess = sm.get_session(bob_peer_id)
+    assert sess is not None and sess is not known          # KNOWN replaced
+    assert sess.role == SessionRole.RESPONDER
+    assert sess.session_id == b"\x42" * 16                 # adopted the inbound session
+    assert bob_peer_id in sm._active_sessions              # responder is tick-active
+
+
+def test_known_session_survives_inbound_ping(alice_conn, alice_peer_id, bob_peer_id):
+    """A liveness PING for a session we never established does not destroy a standing
+    KNOWN intent: we reply 'unknown session' and keep the KNOWN (which a later
+    activate() can still dial)."""
+    from unaiverse.networking.session.sess_msg import SESSION_UNKNOWN
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    known = sm.ensure(bob_peer_id, ["/ip4/127.0.0.1/tcp/0"])
+    ping = SessMsg(SessMsg.KIND_PING, {"session_id": b"\x02" * 16, "nonce": b"\xbb"})
+    events = _run(sm.deliver(bob_peer_id, SESSION_CONTROL_PROTOCOL, ping))
+    assert events == []
+    assert sm.get_session(bob_peer_id) is known            # KNOWN intact
+    assert known.state == SessionState.KNOWN
+    assert bob_peer_id not in sm._active_sessions          # still inert
+    sent = [s for s in alice_conn.sent if s[1] == SESSION_CONTROL_PROTOCOL]
+    assert sent[-1][2].kind == SessMsg.KIND_PONG
+    assert sent[-1][2].fields["ok"] is False
+
+
+# Known roster sync from rendezvous
+
+def test_sync_known_peers_registers_inert_known(alice_conn, alice_peer_id, bob_peer_id):
+    """sync_known_peers registers a KNOWN Session (inert: not dialed, not tick-active)
+    for each known peer that has no Session yet, carrying its rendezvous addresses and
+    applicative role."""
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    sm.sync_known_peers({bob_peer_id: (["/ip4/1.1.1.1/tcp/1"], 1)})
+    sess = sm.get_session(bob_peer_id)
+    assert sess is not None and sess.state == SessionState.KNOWN
+    assert sess.addresses == ["/ip4/1.1.1.1/tcp/1"]
+    assert sess.app_role == 1
+    assert bob_peer_id not in sm._active_sessions
+    assert alice_conn.connect_calls == []
+
+
+def test_sync_known_peers_is_idempotent(alice_conn, alice_peer_id, bob_peer_id):
+    """A second sync with the same peer keeps the existing KNOWN Session, not a fresh one."""
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    sm.sync_known_peers({bob_peer_id: (["/ip4/1.1.1.1/tcp/1"], 1)})
+    s1 = sm.get_session(bob_peer_id)
+    sm.sync_known_peers({bob_peer_id: (["/ip4/1.1.1.1/tcp/1"], 1)})
+    assert sm.get_session(bob_peer_id) is s1
+
+
+def test_sync_known_peers_refreshes_role_and_addrs_on_existing(alice_conn, alice_peer_id, bob_peer_id):
+    """A later sync refreshes addresses and app_role on the existing Session without
+    replacing it or touching its FSM state."""
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    sm.sync_known_peers({bob_peer_id: (["/ip4/1.1.1.1/tcp/1"], 1)})
+    sess = sm.get_session(bob_peer_id)
+    sm.sync_known_peers({bob_peer_id: (["/ip4/2.2.2.2/tcp/2"], 3)})   # promoted to master
+    assert sm.get_session(bob_peer_id) is sess        # same Session, not replaced
+    assert sess.app_role == 3
+    assert sess.addresses == ["/ip4/2.2.2.2/tcp/2"]
+    assert sess.state == SessionState.KNOWN           # FSM untouched
+
+
+def test_sync_known_peers_refreshes_active_session_metadata(alice_conn, alice_peer_id, bob_peer_id):
+    """The metadata refresh reaches an active (non-KNOWN) Session too: its app_role and
+    addresses update while its FSM state is left untouched."""
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    sess = _mk_session(alice_conn, bob_peer_id, alice_peer_id)
+    sm._set_active(bob_peer_id, sess)
+    sess._set_state(SessionState.ESTABLISHED, None)
+    sm.sync_known_peers({bob_peer_id: (["/ip4/3.3.3.3/tcp/3"], 3)})
+    assert sm.get_session(bob_peer_id) is sess
+    assert sess.app_role == 3
+    assert sess.addresses == ["/ip4/3.3.3.3/tcp/3"]
+    assert sess.state == SessionState.ESTABLISHED
+
+
+def test_sync_known_peers_prunes_vanished_known(alice_conn, alice_peer_id, bob_peer_id):
+    """A KNOWN Session whose peer is no longer advertised is pruned on the next sync."""
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    sm.sync_known_peers({bob_peer_id: (["/ip4/1.1.1.1/tcp/1"], 1)})
+    assert sm.get_session(bob_peer_id) is not None
+    sm.sync_known_peers({})
+    assert sm.get_session(bob_peer_id) is None
+
+
+def test_sync_known_peers_does_not_prune_active_session(alice_conn, alice_peer_id, bob_peer_id):
+    """sync never prunes a non-KNOWN Session: an ESTABLISHED peer that drops out of the
+    rendezvous keeps its live Session (the transport, not the roster, ends it)."""
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    sess = _mk_session(alice_conn, bob_peer_id, alice_peer_id)
+    sm._set_active(bob_peer_id, sess)
+    sess._set_state(SessionState.ESTABLISHED, None)
+    sm.sync_known_peers({})
+    assert sm.get_session(bob_peer_id) is sess
+
+
+def test_initiate_activates_existing_known_placeholder(alice_conn, alice_peer_id, bob_peer_id):
+    """initiate() on a peer that already has a KNOWN placeholder dials it instead of
+    no-op'ing: the placeholder is replaced by the caller's parameters and started."""
+    alice_conn.connect_returns = (bob_peer_id, False)
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    sm.sync_known_peers({bob_peer_id: (["/ip4/1.1.1.1/tcp/1"], 1)})
+    assert sm.get_session(bob_peer_id).state == SessionState.KNOWN
+    _run(sm.initiate(bob_peer_id, ["/ip4/2.2.2.2/tcp/2"]))
+    assert len(alice_conn.connect_calls) == 1
+    sess = sm.get_session(bob_peer_id)
+    assert sess is not None and sess.state != SessionState.KNOWN
+    assert sess.app_role == 1                          # rendezvous role carried across the replacement
+    assert bob_peer_id in sm._active_sessions
+
+
+# Quarantine gate in activate(), FAILED-quarantines
+
+def test_activate_refused_during_quarantine(alice_conn, alice_peer_id, bob_peer_id):
+    """activate() is the single dial gate: a quarantined peer is refused immediately
+    with FAILED(quarantined), without dialing, and the inert KNOWN stays in place for a
+    later activate after the window."""
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    sm.sync_known_peers({bob_peer_id: (["/ip4/1.1.1.1/tcp/1"], 1)})   # KNOWN exists
+    sm._quarantine[bob_peer_id] = time.monotonic() + 30.0
+    events = _run(sm.activate(bob_peer_id))
+    assert len(events) == 1 and events[0].type == SessionEventType.FAILED
+    assert events[0].data["reason"].startswith("quarantined")
+    assert alice_conn.connect_calls == []
+    assert sm.get_session(bob_peer_id).state == SessionState.KNOWN   # still inert, not dialed
+
+
+def test_quarantine_refusal_reason_carries_remaining_seconds(alice_conn, alice_peer_id, bob_peer_id):
+    """The refusal must be visible: the FAILED reason keeps the 'quarantined' prefix
+    (robust to future substring checks) and names the remaining wait so the operator
+    sees the wall instead of a silent instant failure."""
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    sm._quarantine[bob_peer_id] = time.monotonic() + 30.0
+    events = _run(sm.initiate(bob_peer_id, ["/ip4/127.0.0.1/tcp/0"]))
+    reason = events[0].data["reason"]
+    assert reason.startswith("quarantined:") and reason.endswith("s")
+    # The countdown is a positive number of seconds close to the window.
+    secs = float(reason[len("quarantined:"):-1])
+    assert 0.0 < secs <= 30.0
+    # Machine-readable twin of the human reason: the rejoin watchdog schedules its
+    # retry just past this instead of parsing the string.
+    retry_after = events[0].data["retry_after_s"]
+    assert isinstance(retry_after, float)
+    assert abs(retry_after - secs) < 0.2
+
+
+def test_failed_event_enters_quarantine(alice_conn, alice_peer_id, bob_peer_id):
+    """A non-stall FAILED (here a profile-stage timeout) keeps the full anti-flap
+    window, like a LOST: only the hello-stage stalls get the short one."""
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    sess = _mk_session(alice_conn, bob_peer_id, alice_peer_id)
+    sm._set_active(bob_peer_id, sess)
+    sess._set_state(SessionState.PROFILE_SENT, 0.001)
+    time.sleep(0.005)
+    events = _run(sm.tick())
+    assert any(e.type == SessionEventType.FAILED for e in events)
+    assert sm._quarantine.get(bob_peer_id, 0.0) > time.monotonic() + 20.0
+
+
+def test_handshake_stall_failure_gets_short_quarantine(alice_conn, alice_peer_id, bob_peer_id):
+    """timeout:hello_sent / timeout:hello_ack_sent mean the peer's pump missed one
+    handshake window (slow, not flapping): the quarantine is short so a retry
+    scheduled right after does not bounce off the dial gate."""
+    for state, role in ((SessionState.HELLO_SENT, SessionRole.INITIATOR),
+                        (SessionState.HELLO_ACK_SENT, SessionRole.RESPONDER)):
+        sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+        sess = _mk_session(alice_conn, bob_peer_id, alice_peer_id, role=role)
+        sm._set_active(bob_peer_id, sess)
+        sess._set_state(state, 0.001)
+        time.sleep(0.005)
+        events = _run(sm.tick())
+        assert any(e.type == SessionEventType.FAILED for e in events)
+        remaining = sm._quarantine[bob_peer_id] - time.monotonic()
+        assert 0.0 < remaining <= 5.5, f"state={state.value}: got {remaining:.1f}s"
+
+
+def test_failed_then_known_recreated_then_gated_then_dials(alice_conn, alice_peer_id, bob_peer_id):
+    """Full cycle: a FAILED quarantines and drops the Session; the rendezvous still
+    advertises the peer so the next sync recreates an inert KNOWN; activating it is
+    refused until the window expires, then dials."""
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    sess = _mk_session(alice_conn, bob_peer_id, alice_peer_id)
+    sm._set_active(bob_peer_id, sess)
+    sess._set_state(SessionState.HELLO_SENT, 0.001)
+    time.sleep(0.005)
+    _run(sm.tick())
+    assert sm.get_session(bob_peer_id) is None                       # dropped on FAILED
+    assert sm._quarantine.get(bob_peer_id, 0.0) > time.monotonic()   # quarantined
+
+    sm.sync_known_peers({bob_peer_id: (["/ip4/1.1.1.1/tcp/1"], 1)})  # rendezvous still has bob
+    assert sm.get_session(bob_peer_id).state == SessionState.KNOWN
+
+    events = _run(sm.activate(bob_peer_id))                          # gated
+    assert events[0].type == SessionEventType.FAILED and events[0].data["reason"].startswith("quarantined")
+    assert alice_conn.connect_calls == []
+
+    sm._quarantine[bob_peer_id] = time.monotonic() - 1.0            # window expired
+    alice_conn.connect_returns = (bob_peer_id, False)
+    _run(sm.activate(bob_peer_id))
+    assert len(alice_conn.connect_calls) == 1                        # dials now
+
+
+# Session-first teardown: settlement cuts + state-dispatched drop
+#
+# The transport follows the Session's terminal state: drop with a reason only
+# GOAWAYs (the CLOSING machinery finally gets to complete via ACK), the deferred
+# settlement cut severs the transport after a linger, and only the coercive paths
+# (mid-handshake purge, sessionless/KNOWN, perimeter) disconnect inline.
+
+def _established(sm, conn, peer_id, local_peer_id):
+    """Plant a real Session in ESTABLISHED into the manager's active view."""
+    sess = _mk_session(conn, peer_id, local_peer_id)
+    sess._set_state(SessionState.ESTABLISHED, None)
+    sm._set_active(peer_id, sess)
+    return sess
+
+
+def test_closing_completes_via_ack_with_transport_alive(alice_conn, alice_peer_id, bob_peer_id):
+    """drop(reason) GOAWAYs and leaves the transport up, so the GOAWAY_ACK can come
+    back and complete CLOSING via the ACK path (not the 10s timeout); the transport
+    is severed only by the settlement cut once the linger expires."""
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    sess = _established(sm, alice_conn, bob_peer_id, alice_peer_id)
+
+    events = _run(sm.drop(bob_peer_id, WORLD_DISENGAGEMENT))
+    assert events == []
+    goaways = [s for s in alice_conn.sent if s[2].kind == SessMsg.KIND_GOAWAY]
+    assert len(goaways) == 1
+    assert alice_conn.disconnect_calls == []              # no cut under the GOAWAY
+    assert sess.state == SessionState.CLOSING
+
+    # The ACK lands on the still-alive transport -> CLOSED via ACK.
+    events = _run(sm.deliver(bob_peer_id, SESSION_CONTROL_PROTOCOL,
+                             SessMsg(SessMsg.KIND_GOAWAY_ACK, {"received": True})))
+    assert [e.type for e in events] == [SessionEventType.CLOSED]
+    assert "local_goaway_acked" in events[0].data["reason"]
+    assert sm.get_session(bob_peer_id) is None            # settled: forgotten...
+    assert bob_peer_id in sm._pending_cuts                # ...cut scheduled...
+    assert alice_conn.disconnect_calls == []              # ...but not executed yet
+
+    # The linger expires -> the executor severs the transport.
+    _run(sm.tick(now=time.monotonic() + 3.0))
+    assert alice_conn.disconnect_calls == [bob_peer_id]
+    assert bob_peer_id not in sm._pending_cuts
+
+
+def test_settlement_precedes_dispatch_on_remote_goaway(alice_conn, alice_peer_id, bob_peer_id):
+    """By the time deliver returns the CLOSED of a remote GOAWAY, the SM has already
+    forgotten the Session and scheduled the deferred cut: the purge coming back down
+    from Node (drop with no reason) lands on the tearing-down branch and is a no-op,
+    so it cannot abort the GOAWAY_ACK written moments earlier."""
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    _established(sm, alice_conn, bob_peer_id, alice_peer_id)
+
+    events = _run(sm.deliver(bob_peer_id, SESSION_CONTROL_PROTOCOL,
+                             SessMsg(SessMsg.KIND_GOAWAY,
+                                     {"reason": WORLD_DISENGAGEMENT, "drain_window_ms": 0})))
+    assert [e.type for e in events] == [SessionEventType.CLOSED]
+    acks = [s for s in alice_conn.sent if s[2].kind == SessMsg.KIND_GOAWAY_ACK]
+    assert len(acks) == 1
+    # Settled BEFORE the events were returned.
+    assert sm.get_session(bob_peer_id) is None
+    assert bob_peer_id in sm._pending_cuts
+
+    # Node's purge lands back here reasonless: must NOT disconnect under the ACK.
+    _run(sm.drop(bob_peer_id))
+    assert alice_conn.disconnect_calls == []
+
+
+def test_pending_cut_cancelled_by_new_live_session(alice_conn, alice_peer_id, bob_peer_id):
+    """A due settlement cut is cancelled by a live (non-KNOWN) Session for the peer
+    existing again: cancelled eagerly at the Session's birth (_set_active), with the
+    executor's lazy guard as the belt — the re-handshake reuses the transport."""
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    sm._pending_cuts[bob_peer_id] = time.monotonic() - 0.1   # already due
+    hello = SessMsg(SessMsg.KIND_HELLO_REQ, {
+        "session_id": b"\x02" * 16, "nonce_a": b"\xaa" * 32,
+        "protocol_versions": ["1.0"], "client_id": "test",
+    })
+    _run(sm.deliver(bob_peer_id, SESSION_HELLO_PROTOCOL, hello))
+    assert sm.get_session(bob_peer_id).state == SessionState.HELLO_ACK_SENT
+
+    _run(sm.tick())
+    assert alice_conn.disconnect_calls == []                 # cancelled, not executed
+    assert bob_peer_id not in sm._pending_cuts
+
+
+def test_pending_cut_not_cancelled_by_known_placeholder(alice_conn, alice_peer_id, bob_peer_id):
+    """A KNOWN placeholder (rendezvous metadata, recreated every sync) is not a live
+    relation: it must NOT cancel a due settlement cut, or a peer that stays on the
+    rendezvous roster would keep its half-open transport forever."""
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    sm._pending_cuts[bob_peer_id] = time.monotonic() - 0.1   # already due
+    sm.ensure(bob_peer_id, ["/ip4/127.0.0.1/tcp/1"])         # KNOWN placeholder
+
+    _run(sm.tick())
+    assert alice_conn.disconnect_calls == [bob_peer_id]      # executed anyway
+    assert bob_peer_id not in sm._pending_cuts
+
+
+def test_drop_on_known_forgets_and_severs_without_goaway(alice_conn, alice_peer_id, bob_peer_id):
+    """drop on a KNOWN placeholder sends no GOAWAY (nothing was ever handshaked) but
+    severs any half-open transport inline: this is the only cure for a chat-only
+    peer that never went past KNOWN."""
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    sm.ensure(bob_peer_id, ["/ip4/127.0.0.1/tcp/1"])
+
+    _run(sm.drop(bob_peer_id, WORLD_DISENGAGEMENT))
+    assert alice_conn.sent == []                             # no GOAWAY
+    assert sm.get_session(bob_peer_id) is None
+    assert alice_conn.disconnect_calls == [bob_peer_id]
+
+
+def test_drop_none_on_live_session_aborts_and_cuts(alice_conn, alice_peer_id, bob_peer_id):
+    """A reasonless drop on a live Session is the silent coercive teardown: abort
+    (no event), forget, disconnect inline — no zombie left to RESUME a relation the
+    node already dismantled."""
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    sess = _established(sm, alice_conn, bob_peer_id, alice_peer_id)
+
+    events = _run(sm.drop(bob_peer_id))
+    assert events == []
+    assert sess.state == SessionState.FAILED                 # aborted silently
+    assert sm.get_session(bob_peer_id) is None
+    assert alice_conn.disconnect_calls == [bob_peer_id]
+    goaways = [s for s in alice_conn.sent if s[2].kind == SessMsg.KIND_GOAWAY]
+    assert goaways == []
+
+
+def test_drop_mid_handshake_aborts_and_cuts(alice_conn, alice_peer_id, bob_peer_id):
+    """A reasoned drop on a mid-handshake Session cannot GOAWAY (close() only covers
+    ESTABLISHED/RECONNECTING): it must abort the handshake and cut, not leave it
+    running to completion behind the purge."""
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    sess = _mk_session(alice_conn, bob_peer_id, alice_peer_id)
+    sess._set_state(SessionState.HELLO_SENT, 5.0)
+    sm._set_active(bob_peer_id, sess)
+
+    _run(sm.drop(bob_peer_id, WORLD_DISENGAGEMENT))
+    assert sess.state == SessionState.FAILED
+    assert sm.get_session(bob_peer_id) is None
+    assert alice_conn.disconnect_calls == [bob_peer_id]
+
+
+def test_failed_from_deliver_quarantines_and_schedules_cut(alice_conn, alice_peer_id, bob_peer_id):
+    """Settlement is path-uniform: a FAILED produced on the deliver path (a rejected
+    HELLO_ACK) quarantines and schedules the cut exactly like a tick-path FAILED.
+    (The old cleanup exempted deliver-path FAILED from quarantine — deliberate
+    change.) The deferred cut also closes the FAILED half-open leak: transport up,
+    pools populated, no Session."""
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    sess = _mk_session(alice_conn, bob_peer_id, alice_peer_id)
+    sess._set_state(SessionState.HELLO_SENT, 5.0)
+    sm._set_active(bob_peer_id, sess)
+
+    events = _run(sm.deliver(bob_peer_id, SESSION_HELLO_PROTOCOL,
+                             SessMsg(SessMsg.KIND_HELLO_RESP, {"reason_code": NOT_AUTHORIZED})))
+    assert [e.type for e in events] == [SessionEventType.FAILED]
+    assert bob_peer_id in sm._quarantine
+    assert bob_peer_id in sm._pending_cuts
+    assert sm.get_session(bob_peer_id) is None
+
+    _run(sm.tick(now=time.monotonic() + 3.0))
+    assert alice_conn.disconnect_calls == [bob_peer_id]
+
+
+def test_drop_on_awaiting_handoff_goaways(alice_conn, alice_peer_id, bob_peer_id):
+    """AWAITING_HANDOFF is closable: a world host tearing down (shutdown, leave) must
+    be able to GOAWAY a parked grant carrier instead of leaving it to die of its 30s
+    timeout after the process is gone. drop routes it through the cooperative branch."""
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    sess = _mk_session(alice_conn, bob_peer_id, alice_peer_id, role=SessionRole.RESPONDER)
+    sess._set_state(SessionState.AWAITING_HANDOFF, 30.0)
+    sm._set_active(bob_peer_id, sess)
+
+    _run(sm.drop(bob_peer_id, WORLD_DISENGAGEMENT))
+    goaways = [s for s in alice_conn.sent if s[2].kind == SessMsg.KIND_GOAWAY]
+    assert len(goaways) == 1
+    assert sess.state == SessionState.CLOSING
+    assert alice_conn.disconnect_calls == []      # cut deferred to settlement, as usual
+
+
+def test_close_all_goaways_live_and_aborts_handshakes(alice_conn, alice_peer_id, bob_peer_id):
+    """close_all (shutdown sweep) GOAWAYs the closable Sessions and silently aborts
+    the in-flight handshakes: no farewell is owed mid-handshake, and the shutdown
+    drain needs every non-terminal FSM either CLOSING (waited on) or gone."""
+    other_peer = "12D3KooWother_peer_for_close_all_test"
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    live = _mk_session(alice_conn, bob_peer_id, alice_peer_id)
+    live._set_state(SessionState.ESTABLISHED, None)
+    sm._set_active(bob_peer_id, live)
+    inflight = _mk_session(alice_conn, other_peer, alice_peer_id)
+    inflight._set_state(SessionState.HELLO_SENT, 5.0)
+    sm._set_active(other_peer, inflight)
+
+    _run(sm.close_all())
+
+    assert live.state == SessionState.CLOSING            # GOAWAY out, waiting the ACK
+    goaways = [s for s in alice_conn.sent if s[2].kind == SessMsg.KIND_GOAWAY]
+    assert [g[0] for g in goaways] == [bob_peer_id]      # only the live one got a GOAWAY
+    assert inflight.state == SessionState.FAILED         # aborted silently
+    assert sm.get_session(other_peer) is None            # and forgotten (drain can exit)
+
+
+def test_drop_honored_on_live_session_born_inside_linger(alice_conn, alice_peer_id, bob_peer_id):
+    """A pending settlement cut (the OLD relation's) must not swallow a drop aimed at
+    a NEW live Session born inside the linger (the peer re-handshaked inbound after
+    its old relation settled): the stale ledger entry is cancelled at the Session's
+    birth, so the purge is honored — GOAWAY on the live Session. Without this, a
+    rejected re-enrolment (hosted refuses -> purge) would be silently lost and the
+    peer would stay ESTABLISHED and pool-resident forever."""
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    sm._pending_cuts[bob_peer_id] = time.monotonic() + 1.5   # old relation, still lingering
+    sess = _established(sm, alice_conn, bob_peer_id, alice_peer_id)   # new live relation
+
+    events = _run(sm.drop(bob_peer_id, WORLD_DISENGAGEMENT))
+
+    assert events == []
+    assert bob_peer_id not in sm._pending_cuts               # stale entry dropped
+    goaways = [s for s in alice_conn.sent if s[2].kind == SessMsg.KIND_GOAWAY]
+    assert len(goaways) == 1                                 # the purge was honored
+    assert sess.state == SessionState.CLOSING
+
+    # Counterpart: with nothing past a KNOWN placeholder behind the pending cut,
+    # the drop stays the double-purge no-op (the cut still owns the transport).
+    other = "12D3KooWother_peer_for_linger_test"
+    sm._pending_cuts[other] = time.monotonic() + 1.5
+    sm.ensure(other, ["/ip4/127.0.0.1/tcp/1"])               # KNOWN placeholder only
+    _run(sm.drop(other, WORLD_DISENGAGEMENT))
+    assert other in sm._pending_cuts                         # entry kept
+    assert other not in alice_conn.disconnect_calls          # no inline disconnect
+
+
+# Control-protocol guards (post-audit hardening)
+
+def _awaiting_handoff(sm, conn, peer_id, local_peer_id):
+    """Plant a responder Session parked in AWAITING_HANDOFF (a grant carrier)."""
+    sess = _mk_session(conn, peer_id, local_peer_id, role=SessionRole.RESPONDER)
+    sess.session_id = b"\x11" * 16
+    sess._set_state(SessionState.AWAITING_HANDOFF, 30.0)
+    sm._set_active(peer_id, sess)
+    return sess
+
+
+def test_ping_and_resume_answered_ok_in_awaiting_handoff(alice_conn, alice_peer_id, bob_peer_id):
+    """A grant carrier parked in AWAITING_HANDOFF is alive: the joiner's keepalive
+    PING gets ok=True and a blip's RESUME gets accepted=True. Answering false there
+    collapsed the handoff at the first PING (~15s effective budget) and NACKed a
+    mid-handoff blip into LOST."""
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    sess = _awaiting_handoff(sm, alice_conn, bob_peer_id, alice_peer_id)
+
+    _run(sm.deliver(bob_peer_id, SESSION_CONTROL_PROTOCOL,
+                    SessMsg(SessMsg.KIND_PING, {"session_id": sess.session_id, "nonce": b"n1"})))
+    pongs = [s for s in alice_conn.sent if s[2].kind == SessMsg.KIND_PONG]
+    assert len(pongs) == 1 and pongs[0][2].fields.get("ok") is True
+
+    _run(sm.deliver(bob_peer_id, SESSION_CONTROL_PROTOCOL,
+                    SessMsg(SessMsg.KIND_RESUME, {"session_id": sess.session_id, "nonce": b"n2"})))
+    acks = [s for s in alice_conn.sent if s[2].kind == SessMsg.KIND_RESUME_ACK]
+    assert len(acks) == 1 and acks[0][2].fields.get("accepted") is True
+    assert sess.state == SessionState.AWAITING_HANDOFF   # still parked, untouched
+
+
+def test_stale_goaway_does_not_close_fresh_session(alice_conn, alice_peer_id, bob_peer_id):
+    """A GOAWAY carrying ANOTHER incarnation's session_id (cross-protocol reordering
+    on replace-stale) is courtesy-ACKed — so the closer's CLOSING completes — but it
+    must not kill the fresh Session it lands on. A matching (or absent, legacy)
+    session_id still closes."""
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    sess = _established(sm, alice_conn, bob_peer_id, alice_peer_id)
+
+    events = _run(sm.deliver(bob_peer_id, SESSION_CONTROL_PROTOCOL,
+                             SessMsg(SessMsg.KIND_GOAWAY,
+                                     {"reason": WORLD_DISENGAGEMENT, "drain_window_ms": 0,
+                                      "session_id": b"\x99" * 16})))   # not ours
+    assert events == []
+    assert sess.state == SessionState.ESTABLISHED        # survived
+    acks = [s for s in alice_conn.sent if s[2].kind == SessMsg.KIND_GOAWAY_ACK]
+    assert len(acks) == 1                                # courtesy ack went out
+
+    events = _run(sm.deliver(bob_peer_id, SESSION_CONTROL_PROTOCOL,
+                             SessMsg(SessMsg.KIND_GOAWAY,
+                                     {"reason": WORLD_DISENGAGEMENT, "drain_window_ms": 0,
+                                      "session_id": sess.session_id})))  # ours
+    assert [e.type for e in events] == [SessionEventType.CLOSED]
+
+
+def test_settlement_linger_is_refreshed_not_inherited(alice_conn, alice_peer_id, bob_peer_id):
+    """A terminal settling while a PREVIOUS relation's ledger entry still lingers
+    must overwrite the deadline: the last farewell owns its full linger. Inheriting
+    a nearly-due deadline would execute the cut right under the just-written ACK."""
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    stale_deadline = time.monotonic() + 0.01             # previous relation, nearly due
+    sm._pending_cuts[bob_peer_id] = stale_deadline
+    _established(sm, alice_conn, bob_peer_id, alice_peer_id)
+
+    _run(sm.deliver(bob_peer_id, SESSION_CONTROL_PROTOCOL,
+                    SessMsg(SessMsg.KIND_GOAWAY, {"reason": WORLD_DISENGAGEMENT,
+                                                  "drain_window_ms": 0})))
+    assert sm._pending_cuts[bob_peer_id] > stale_deadline + 1.0   # refreshed, not inherited
+
+
+def test_initiate_supersedes_closing_session_and_dials(alice_conn, alice_peer_id, bob_peer_id):
+    """A dial landing inside the CLOSING window (our GOAWAY out, up to 10s) starts a
+    fresh Session instead of being swallowed by the healthy-session no-op: leave(X)
+    immediately followed by a new dial to X used to report success while nothing
+    ever dialed. Outbound mirror of deliver's inbound supersede; the transport is
+    kept (the re-dial wants it) and no farewell is re-sent."""
+    alice_conn.connect_returns = (bob_peer_id, False)
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    sess = _established(sm, alice_conn, bob_peer_id, alice_peer_id)
+    _run(sm.drop(bob_peer_id, WORLD_DISENGAGEMENT))          # GOAWAY -> CLOSING
+    assert sess.state == SessionState.CLOSING
+
+    events = _run(sm.initiate(bob_peer_id, ["/ip4/127.0.0.1/tcp/0"]))
+
+    assert events == []
+    fresh = sm.get_session(bob_peer_id)
+    assert fresh is not None and fresh is not sess           # replaced, not reused
+    assert len(alice_conn.connect_calls) == 1                # the dial actually started
+    assert bob_peer_id not in alice_conn.disconnect_calls    # transport kept
+    goaways = [s for s in alice_conn.sent if s[2].kind == SessMsg.KIND_GOAWAY]
+    assert len(goaways) == 1                                 # only the original close's
+
+
+def test_transport_drop_leaves_awaiting_handoff_parked(alice_conn, alice_peer_id, bob_peer_id):
+    """A transport blip visible to the poll must not fail the parked grant carrier:
+    the joiner's re-dial + RESUME is accepted in AWAITING_HANDOFF, and failing here
+    would quarantine the joiner and collapse the handoff on any blip. The 30s state
+    timeout stays as the backstop."""
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    sess = _awaiting_handoff(sm, alice_conn, bob_peer_id, alice_peer_id)
+
+    events = _run(sm.on_peer_disconnected(bob_peer_id))
+
+    assert events == []
+    assert sess.state == SessionState.AWAITING_HANDOFF   # still parked
+    assert bob_peer_id not in sm._quarantine             # joiner not punished for a blip
+
+
+def test_new_live_session_cancels_pending_cut_at_birth(alice_conn, alice_peer_id, bob_peer_id):
+    """The eager cancel: the moment a live Session is registered (responder spawn,
+    dial promotion) any settlement cut left by the previous relation is dropped from
+    the ledger — the new relation owns the transport, and the stale cut must neither
+    fire under it nor keep the peer flagged tearing-down for its residual linger."""
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    sm._pending_cuts[bob_peer_id] = time.monotonic() + 1.5
+    hello = SessMsg(SessMsg.KIND_HELLO_REQ, {
+        "session_id": b"\x02" * 16, "nonce_a": b"\xaa" * 32,
+        "protocol_versions": ["1.0"], "client_id": "test",
+    })
+    _run(sm.deliver(bob_peer_id, SESSION_HELLO_PROTOCOL, hello))
+    assert bob_peer_id not in sm._pending_cuts        # cancelled at birth, no tick needed
+    assert not sm.is_tearing_down(bob_peer_id)
+
+
+def test_no_settlement_cut_for_simultaneous_open_loss(alice_conn, alice_peer_id, bob_peer_id):
+    """The tie-break loser's FAILED must not schedule a settlement cut: its transport
+    is shared with the WINNER's handshake still in flight, and a slow winner dial
+    (e.g. via relay) would get its connection severed under it. Quarantine still
+    applies (it gates only our own dials, not the winner's inbound handshake)."""
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    sess = _mk_session(alice_conn, bob_peer_id, alice_peer_id)
+    sess._set_state(SessionState.HELLO_SENT, 5.0)
+    sm._set_active(bob_peer_id, sess)
+
+    events = _run(sm.deliver(bob_peer_id, SESSION_HELLO_PROTOCOL,
+                             SessMsg(SessMsg.KIND_HELLO_RESP,
+                                     {"reason_code": SIMULTANEOUS_OPEN_LOSS})))
+    assert [e.type for e in events] == [SessionEventType.FAILED]
+    assert bob_peer_id in sm._quarantine              # dial door still gated
+    assert bob_peer_id not in sm._pending_cuts        # but the shared transport survives
+
+
+def test_acked_close_cuts_without_linger(alice_conn, alice_peer_id, bob_peer_id):
+    """A CLOSED completed by the received GOAWAY_ACK needs no linger: the ACK is the
+    end-to-end proof that nothing of ours is still in flight, so the cut executes at
+    the very next tick (this is what keeps shutdowns from idling ~2s in the drain)."""
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    _established(sm, alice_conn, bob_peer_id, alice_peer_id)
+    _run(sm.drop(bob_peer_id, WORLD_DISENGAGEMENT))
+    _run(sm.deliver(bob_peer_id, SESSION_CONTROL_PROTOCOL,
+                    SessMsg(SessMsg.KIND_GOAWAY_ACK, {"received": True})))
+    assert sm._pending_cuts[bob_peer_id] <= time.monotonic()   # due immediately
+
+    _run(sm.tick())                                            # no time travel needed
+    assert alice_conn.disconnect_calls == [bob_peer_id]
+
+
+def test_failed_goaway_write_closes_fast(alice_conn, alice_peer_id, bob_peer_id):
+    """When the GOAWAY write itself fails (link already dead) no ACK can ever come:
+    CLOSING gets the short fallback timeout instead of the full 10s, so a shutdown
+    drain with an unreachable peer does not burn its whole budget waiting."""
+    async def _send_fails(peer_id, protocol_id, sess_msg):
+        return False
+    alice_conn.send_session = _send_fails
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    sess = _established(sm, alice_conn, bob_peer_id, alice_peer_id)
+
+    _run(sm.drop(bob_peer_id, WORLD_DISENGAGEMENT))
+    assert sess.state == SessionState.CLOSING
+    assert sess._timeout_s == 1.0                              # short fallback, not 10s
+
+    ev = sess.check_timeout(now=time.monotonic() + 1.2)
+    assert ev is not None and ev.type == SessionEventType.CLOSED

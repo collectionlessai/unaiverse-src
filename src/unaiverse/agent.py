@@ -27,6 +27,7 @@ from unaiverse.utils.misc import owner_handle
 from unaiverse.interaction import Interaction
 from unaiverse.agent_basics import AgentBasics
 from unaiverse.networking.p2p.messages import Msg
+from unaiverse.networking.session.sess_msg import WORLD_DISENGAGEMENT, GRACEFUL_SHUTDOWN
 from unaiverse.custom import Custom, GenException
 from unaiverse.streams.dataprops import DataProps
 from unaiverse.modules.utils import ModuleWrapper
@@ -146,18 +147,19 @@ class Agent(AgentBasics):
 
         _, own_private_pid = self.get_peer_ids()
         t = clock.get_time_ms()
-        try:
-            info = self.node_conn['p2p_world'].get_connected_peers_info()
-            if info is None:
-                # FFI error, not "zero peers": skip this sample instead of storing a
-                # misleading empty list.
-                log.error("[Stats] Connected-peers FFI read failed, skipping this sample")
-                return
-            peers_list = [i['id'] for i in info]
-            self.stats.store_stat('connected_peers', peers_list, group_key=own_private_pid, timestamp=t)
-        except Exception as e:
-            self.stats.store_stat('connected_peers', [], group_key=own_private_pid, timestamp=t)
-            log.error(f"[Stats] Error collecting and storing own stats, clearing: {e}")
+        info = self.node_conn.get_world_connected_peers_info()
+        if info is None:
+            # The FFI call failed (transport state unknown): skip this sample rather than
+            # record a false "zero peers", which would poison the world connectivity graph
+            # with a phantom drop of every peer on a transient error.
+            log.error("[Stats] connected peers unavailable (FFI error); skipping the sample")
+        else:
+            try:
+                peers_list = [i['id'] for i in info]
+                self.stats.store_stat('connected_peers', peers_list, group_key=own_private_pid, timestamp=t)
+            except Exception as e:
+                self.stats.store_stat('connected_peers', [], group_key=own_private_pid, timestamp=t)
+                log.error(f"[Stats] Error collecting and storing own stats, clearing: {e}")
 
         try:
             behav = self.behav
@@ -721,7 +723,10 @@ class Agent(AgentBasics):
         self._engaged_agents.discard(_requester)  # Remove if present
 
         if disconnect_too:
-            await self.node_purge_fcn(_requester)
+            # Graceful disengage: carry WORLD_DISENGAGEMENT so __purge GOAWAYs the Session
+            # and the remote sees Session.Closed instead of timing out via liveness (the
+            # transport falls with the deferred settlement cut, after the farewell).
+            await self.node_purge_fcn(_requester, reason=WORLD_DISENGAGEMENT)
 
         # Marking this agent as available if not engaged to any agent
         self._available = len(self._engaged_agents) == 0
@@ -752,7 +757,8 @@ class Agent(AgentBasics):
             Always True.
         """
         log.misc(f"Disconnecting agent: {agent}")
-        await self.node_purge_fcn(agent)  # This will also call remove_agent, that will call remove_streams
+        # Deliberate local teardown: GRACEFUL_SHUTDOWN so the remote sees a clean close.
+        await self.node_purge_fcn(agent, reason=GRACEFUL_SHUTDOWN)  # also calls remove_agent -> remove_streams
         return True
 
     @action
@@ -774,12 +780,14 @@ class Agent(AgentBasics):
         # rendezvous roster: disconnecting is meaningful only towards agents we are
         # actually connected to. Without this, in the template engage-by-role loop
         # this fires purge on not-yet-connected peers every behavior tick — a flood
-        # of no-op purges plus a synchronous cgo DisconnectFrom per peer, right on
-        # the main task's pump.
+        # of "close called in state known" no-ops plus a synchronous cgo
+        # DisconnectFrom per peer, right on the main task's pump.
         if await self.find_agents(role, handshake_completed=True):
             found_agents = copy.deepcopy(self._found_agents)
             for agent in found_agents:
-                await self.node_purge_fcn(agent)  # This will also call remove_agent, that will call remove_streams
+                # Role-based disconnect happens only in a world (roles exist only there), so
+                # carry WORLD_DISENGAGEMENT, consistent with disengage.
+                await self.node_purge_fcn(agent, reason=WORLD_DISENGAGEMENT)  # Also calls remove_agent->remove_streams
         return True
 
     @action
@@ -929,12 +937,14 @@ class Agent(AgentBasics):
         Returns:
             True if there are waiting agents, False otherwise.
         """
-        log.misc(f"Current set of {len(self.node_agents_waiting)} connected peer IDs non managed yet: "
-                 f"{list(self.node_agents_waiting.keys())}")
-        for found_agent in self._found_agents:
-            if found_agent in self.node_agents_waiting:
-                return True
-        return False
+        # Session-era replacement for the old `_node_agents_waiting` dict: a found
+        # agent is "waiting" while its per-peer Session exists but has not yet
+        # reached ESTABLISHED (handshake in flight). The hosted entity only holds
+        # `conn`, so this state is queried through NodeConn.is_peer_session_pending.
+        waiting = [a for a in self._found_agents if self.node_conn.is_peer_session_pending(a)]
+        log.misc(f"Current set of {len(waiting)} found agents with an in-flight (not yet "
+                 f"established) session: {waiting}")
+        return len(waiting) > 0
 
     @action
     async def send_subscribe(self, agent: str | None = None,
@@ -1176,6 +1186,10 @@ class Agent(AgentBasics):
 
             log.misc(f"Found addresses ({len(found_addresses)}) with role: {role}")
             for f_addr, f_peer_id in zip(found_addresses, found_peer_ids):
+                # is_connected reads pool residency, which a Session riding its reconnect
+                # grace (up to 45s) still holds: the re-dial is deliberately skipped there,
+                # RESUME on the surviving Session is the preferred recovery. Only the
+                # terminal LOST evicts the pool and re-opens this dial path.
                 if not self.node_conn.is_connected(f_peer_id):
                     log.misc(f"Asking to get in touch with {f_peer_id}...")
                     peer_id = await self.node_ask_to_get_in_touch_fcn(addresses=f_addr, public=False)
@@ -1838,9 +1852,9 @@ class Agent(AgentBasics):
         if not interaction.is_system():
 
             # If we are in a world, the reference peer ID is the one of the world, no matter who sent the interaction
-            # TODO(review): BUG 2 write side, in a world a non-system chat is stored under the world-node peer-id instead of interaction.requester; see tests/test_human_routing.py::test_rebind_world_should_store_under_requester
-            peer_id = interaction.requester if not in_world else self.get_connection_pool_manager().get_world_node_peer_id()
-            self.proc_human_peer_id_to_interaction[peer_id] = interaction
+            peer_id = interaction.requester if not in_world else (
+                self.get_connection_pool_manager().get_world_node_peer_id())
+            self.proc_human_peer_id_to_interaction[peer_id] = interaction  # HERE ONLY
 
         # Forcing default stdin binding (discarding the interaction-provided ones)
         self.set_default_stdin_binding()

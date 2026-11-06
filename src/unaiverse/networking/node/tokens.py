@@ -118,14 +118,14 @@ class TokenVerifier:
                             port: int | None = None,
                             p2p_peer: str | None = None):
         """Like `verify_token` but also returns the root-attested `p2p_peers`
-        binding, for callers that need the full root-attested claims instead of
-        trusting an offered profile.
+        binding, used by the Session handshake (RT) to consume the public<->world
+        peer-id binding instead of trusting the offered profile.
 
         Returns:
             A tuple `(node_id, cv_hash, p2p_peers, exp, code_hash)` if all checks pass,
             otherwise `(None, None, (), 0, None)`. `p2p_peers` is a tuple of the node's
-            peer-ids, `exp` is the JWT expiry (unix seconds) for callers that track
-            token lapse, and `code_hash` is the root-attested digest of the world's declared
+            peer-ids, `exp` is the JWT expiry (unix seconds), used by the in-session
+            refresh, and `code_hash` is the root-attested digest of the world's declared
             code (None when the token carries no such claim: agent nodes, or a world
             that declared no source repository).
         """

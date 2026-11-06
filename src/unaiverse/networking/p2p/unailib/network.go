@@ -537,6 +537,140 @@ func handleReachabilityEvents(ni *NodeInstance, sub event.Subscription) {
 	}
 }
 
+// resolveProbePeers turns the configured probe-peer multiaddrs (nil falls back to
+// defaultRelays) into AddrInfos, skipping malformed entries and filtering out the
+// node itself so an infrastructure relay probes its sibling, never itself.
+func resolveProbePeers(configured []string, self peer.ID, instanceIndex int) []peer.AddrInfo {
+	if configured == nil {
+		configured = defaultRelays
+	}
+	var maddrs []ma.Multiaddr
+	for _, s := range configured {
+		addr, err := ma.NewMultiaddr(s)
+		if err != nil {
+			logger.Warnf("[GO] ⚠️ Instance %d: Skipping malformed probe peer '%s': %v", instanceIndex, s, err)
+			continue
+		}
+		maddrs = append(maddrs, addr)
+	}
+	addrInfos, err := peer.AddrInfosFromP2pAddrs(maddrs...)
+	if err != nil {
+		logger.Warnf("[GO] ⚠️ Instance %d: Failed to parse probe peers: %v", instanceIndex, err)
+		return nil
+	}
+	probes := make([]peer.AddrInfo, 0, len(addrInfos))
+	for _, ai := range addrInfos {
+		if ai.ID == self {
+			continue
+		}
+		probes = append(probes, ai)
+	}
+	return probes
+}
+
+// connectProbePeers dials the reachability probe peers in parallel so the AutoNAT
+// client has dial-back servers right away: identify completes on these connections
+// and AutoNAT force-probes shortly after, which is what produces the boot verdict.
+// A failed round is retried once after a short pause, so a transient blip on the
+// infrastructure does not freeze a wrong Private verdict into the boot response.
+// Only when every attempt fails (or the probe list is empty) probesDown is closed,
+// so the boot WAIT_LOOP can stop waiting for a verdict that cannot arrive. The
+// budget (two 10s rounds plus the pause) stays within the WAIT_LOOP's 30s ceiling.
+func connectProbePeers(ni *NodeInstance, probesDown chan<- struct{}) {
+	defer recoverGoroutine("connectProbePeers")
+
+	if len(ni.probePeers) == 0 {
+		close(probesDown)
+		return
+	}
+
+	const dialRounds = 2
+	for round := 0; round < dialRounds; round++ {
+		if round > 0 {
+			select {
+			case <-ni.ctx.Done():
+				return
+			case <-time.After(3 * time.Second):
+			}
+		}
+
+		results := make(chan bool, len(ni.probePeers))
+		for _, ai := range ni.probePeers {
+			go func(ai peer.AddrInfo) {
+				defer recoverGoroutine("connectProbePeers.dial")
+				ok := false
+				defer func() { results <- ok }()
+
+				dialCtx, cancel := context.WithTimeout(ni.ctx, ProbeDialTimeout)
+				defer cancel()
+				if err := ni.host.Connect(dialCtx, ai); err != nil {
+					logger.Warnf("[GO] ⚠️ Instance %d: Probe peer %s unreachable: %v", ni.instanceIndex, ai.ID, err)
+					return
+				}
+				// No-op without a connection manager; keeps the dial-back supply
+				// pinned if one is ever configured.
+				ni.host.ConnManager().Protect(ai.ID, "reachability-probe")
+				logger.Debugf("[GO] 📡 Instance %d: Connected to probe peer %s", ni.instanceIndex, ai.ID)
+				ok = true
+			}(ai)
+		}
+
+		connected := 0
+		for range ni.probePeers {
+			if <-results {
+				connected++
+			}
+		}
+		if connected > 0 {
+			return
+		}
+	}
+
+	logger.Warnf("[GO] ⚠️ Instance %d: No probe peer reachable after %d rounds, no AutoNAT verdict will arrive.", ni.instanceIndex, dialRounds)
+	close(probesDown)
+}
+
+// maintainProbePeers keeps the AutoNAT dial-back supply alive for the node's
+// lifetime: on every tick it checks whether any probe peer is still connected and,
+// if none is, redials one candidate (rotating through the list). Private nodes
+// usually hold a relay connection anyway (autorelay uses the same hosts), so this
+// mostly serves public nodes and recovery after an infrastructure outage.
+func maintainProbePeers(ni *NodeInstance) {
+	defer recoverGoroutine("maintainProbePeers")
+
+	ticker := time.NewTicker(ProbeMaintainInterval)
+	defer ticker.Stop()
+	next := 0
+	for {
+		select {
+		case <-ni.ctx.Done():
+			return
+		case <-ticker.C:
+			connected := false
+			for _, ai := range ni.probePeers {
+				if ni.host.Network().Connectedness(ai.ID) == network.Connected {
+					connected = true
+					break
+				}
+			}
+			if connected {
+				continue
+			}
+			ai := ni.probePeers[next%len(ni.probePeers)]
+			next++
+			dialCtx, cancel := context.WithTimeout(ni.ctx, ProbeDialTimeout)
+			err := ni.host.Connect(dialCtx, ai)
+			cancel()
+			if err != nil {
+				logger.Debugf("[GO] 📡 Instance %d: Probe redial to %s failed: %v", ni.instanceIndex, ai.ID, err)
+				continue
+			}
+			ni.host.ConnManager().Protect(ai.ID, "reachability-probe")
+			logger.Infof("[GO] 📡 Instance %d: Reconnected to probe peer %s", ni.instanceIndex, ai.ID)
+		}
+	}
+}
+
 // goGetNodeAddresses is the internal Go function that performs the core logic
 // of fetching and formatting node addresses.
 // It takes a pointer to a NodeInstance and a targetPID. If targetPID is empty (peer.ID("")),
@@ -644,15 +778,6 @@ func (ni *NodeInstance) Close() error {
 
 	// Give goroutines time to react to context cancellation
 	time.Sleep(200 * time.Millisecond)
-
-	// --- Close DHT Client ---
-	if ni.dht != nil {
-		logger.Debugf("[GO]   - Instance %d: Closing DHT...\n", ni.instanceIndex)
-		if err := ni.dht.Close(); err != nil {
-			logger.Warnf("[GO] ⚠️ Instance %d: Error closing DHT: %v\n", ni.instanceIndex, err)
-		}
-		ni.dht = nil
-	}
 
 	// --- Close WebRTC DataChannel Connections ---
 	ni.webrtcMutex.Lock()

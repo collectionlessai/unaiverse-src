@@ -6,13 +6,10 @@ class Custom:
     # ==================
     # NODE CONFIGURATION
     # ==================
-    ROOT_REQUEST_TIMEOUT = 20.  # Seconds, per attempt on every root-server HTTP call
     SEND_DYNAMIC_PROFILE_EVERY = 10.  # Seconds
+    ROOT_REQUEST_TIMEOUT = 20.  # Seconds, per attempt on every root-server HTTP call
     GET_NEW_TOKEN_EVERY = 23 * 60. * 60. + 30 * 60.  # Seconds (23 hours and 30 minutes, safer)
     PUBLISH_RENDEZVOUS_EVERY = 10.  # Seconds
-    INTERVIEW_TIMEOUT = 60.  # Seconds
-    CONNECT_WITHOUT_ACK_RETRY_TIMEOUT = 30.  # Seconds
-    CONNECT_WITHOUT_ACK_TOTAL_TIMEOUT = 60.  # Seconds
     SEND_ALIVE_EVERY = 2.5 * 60.  # Seconds
     SAVE_STATS_EVERY = 10.  # Seconds
     SEND_STATS_EVERY = 30.  # Seconds (warning: modified in Node constructor!)
@@ -20,6 +17,9 @@ class Custom:
     SLOW_DOWN_CLOCK_AFTER = 10.0  # Seconds without networks exchanges and 0 interaction (stats are not considered)
     SLOW_CLOCK_DELTA = 2.0  # Clock delta when running in slow-mode
     REJOINING_WAIT = 30.0  # Time to wait before trying to rejoin a world from which we were disconnected
+    WORLD_PREADMISSION_TTL = 90.0  # Seconds a grant-time pre-admission may sit unredeemed before the
+    # world host unlists it (ghost bound; must exceed the worst-case redemption: grant-bounded dial
+    # ~35s + HELLO/PROFILE stages 15s each, plus margin)
 
     # =====================
     # ENVIRONMENT VARIABLES

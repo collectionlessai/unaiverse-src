@@ -1661,7 +1661,7 @@ class Stats:
                 x, y = get_xy(p_data)
                 if x:
                     c = color_override or self._get_consistent_color(pid)
-                    panel.add_line(x, y, name=f'{pid[-6:]}', color=c,
+                    panel.add_line(x, y, name=f'...{pid[-5:]}', color=c,
                                    legend_group=pid, show_legend=show_legend)
 
     # noinspection PyMethodMayBeStatic
@@ -1713,7 +1713,7 @@ class Stats:
         for pid in targets:
             val = peers_dict.get(pid, {}).get(stat_name)
             if val is not None:
-                col_ent.append(pid[-6:])
+                col_ent.append(pid[-5:])
                 col_val.append(str(val))  # Simple stringification
 
         panel.add_table(headers, [col_ent, col_val])
@@ -1792,7 +1792,7 @@ class Stats:
             node_y.append(y)
 
             # Node labels
-            node_labels.append(pid[-6:])
+            node_labels.append(pid[-5:])
             # Build hover text
             if nodes_data:
                 hover_text = ''

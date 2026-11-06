@@ -18,4 +18,3 @@ from . import streamproxy
 from .dataprops import DataProps, StreamType
 from .streams import (Stream, TokensStream, BufferedStream, serialize_payload, deserialize_payload, ImageFileStream,
                       LabelStream, Dataset, StringStream)
-

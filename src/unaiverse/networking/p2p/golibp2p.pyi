@@ -159,3 +159,28 @@ class GoLibP2P:
         Frees an integer previously allocated by the shared library.
         """
         ...
+
+    def SendOnProtocol(self, instance: int, peer_id: bytes, protocol_id: bytes, payload: bytes, payload_len: bytes) -> int:
+        """
+        SendOnProtocol(instance: int, peer_id: bytes, protocol_id: bytes, payload: bytes, payload_len: bytes) -> int
+
+        Open a fresh outbound stream on `protocol_id` to `peer_id`, write a single
+        length-prefixed protobuf payload, and close the stream.
+        """
+        ...
+
+    def SignWithHostKey(self, instance:int, data: bytes, len_data: int) -> int:
+        """
+        SignWithHostKey(self, instance:int, data: bytes, len_data: int) -> int
+
+        Sign `data` with the host's libp2p private key (Ed25519 by default).
+        """
+        ...
+
+    def VerifyPeerSignature(self, peer_id: bytes, data: bytes, len_data: int, signature: bytes) -> int:
+        """
+        VerifyPeerSignature(self, peer_id: bytes, data: bytes, len_data: int, signature: bytes) -> int
+
+        Verify that `signature` over `data` is valid under the public key derivable from `peer_id`.
+        """
+        ...

@@ -20,13 +20,14 @@ from typing import List, Any
 
 from .golibp2p import GoLibP2P  # Assuming this class loads the library
 
+logger = logging.getLogger('LIB-TYPES')
+logger.setLevel(logging.WARNING)
+
 # First byte of the binary buffer returned by PopMessages when it carries at least
 # one message. The JSON status responses (Empty/Error) start with '{' (0x7B), so a
 # single peek byte tells the two apart. Keep in sync with popBinaryMagic in
 # unailib/types.go.
 _POP_BINARY_MAGIC = 0xB1
-
-logger = logging.getLogger('LIB-TYPES')
 
 
 class TypeInterface:

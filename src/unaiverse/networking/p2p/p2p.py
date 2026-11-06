@@ -13,10 +13,17 @@
                  Main Developers:    Stefano Melacci (Project Leader), Christian Di Maio, Tommaso Guidi
 """
 import os
+import base64
+import asyncio
 import logging
 import threading
 from .lib_types import TypeInterface
 from typing import Optional, List, Dict, Any, TYPE_CHECKING
+
+# The session-layer wire codec lives in the leaf module sess_msg (no FSM, no cycle back
+# into the conn layer): P2P.get_messages decodes inbound Session frames with it.
+from unaiverse.networking.session.sess_msg import SessMsg, SESSION_PROTOCOL_IDS, SessionInbound
+from unaiverse.networking.p2p.messages import Msg
 
 # FdCapture and Logger are optional — gracefully degrade if not present
 try:
@@ -133,9 +140,10 @@ class P2P:
                     'dht': 'info',
                     'autorelay': 'info',
                     'autonat': 'info',
+                    'autonatv2': 'info',
                     # 'rcmgr': 'info',
                     'swarm2': 'info',
-                    'yamux': 'info'
+                    'yamux': 'info',
                 }
 
             # --- Start OS-level fd capture BEFORE InitializeLibrary, so we
@@ -198,8 +206,7 @@ class P2P:
                  domain_name: Optional[str] = None,
                  tls_cert_path: Optional[str] = None,
                  tls_key_path: Optional[str] = None,
-                 dht_enabled: bool = True,
-                 dht_keep: bool = False,
+                 probe_peers: Optional[List[str]] = None,
                  webrtc_enabled: bool = True,
                  flood_sub: bool = False,
                  ice_stun_servers: Optional[List[str]] = None,
@@ -217,8 +224,11 @@ class P2P:
             enable_relay_service: Enable relay service capabilities for this node.
             knows_is_public: If you already know that the node is public this forces its public reachability.
                 Otherwise, it tries every possible attempt to make the node publicly reachable (UPnP, HolePunching,
-                AutoNat via DHT...).
+                AutoNAT dial-backs from the probe peers...).
             enable_tls: Whether to enable AutoTLS certificate management (requires internet access).
+            probe_peers: Multiaddrs (with peer IDs) dialed at boot as AutoNAT dial-back servers, so the
+                node can discover its own reachability. None uses the built-in infrastructure relays;
+                an empty list disables probing entirely (no reachability verdict unless knows_is_public).
             domain_name: Optional domain name for TLS certificate (required if enable_tls is True).
             tls_cert_path: Optional path to a custom TLS certificate file (PEM format).
             tls_key_path: Optional path to a custom TLS private key file (PEM format).
@@ -291,9 +301,8 @@ class P2P:
                 "force_public": knows_is_public,
                 "flood_sub": flood_sub,
             },
-            "dht": {
-                "enabled": dht_enabled,
-                "keep": dht_keep and dht_enabled,
+            "reachability": {
+                "probe_peers": probe_peers,
             },
             "webrtc": {
                 "enabled": webrtc_enabled,
@@ -489,7 +498,7 @@ class P2P:
                 raise P2PError(f"Failed to send direct message to '{peer_id}': "
                                f"{result.get('message', 'Unknown Go error')}")
 
-            logger.info(f"✅ Successfully sent direct message to {peer_id[-5:]}.")
+            logger.info(f"✅ Successfully sent direct message to ...{peer_id[-5:]}.")
 
         except Exception as e:
             logger.error(f"❌ Sending direct message to {peer_id} failed: {e}")
@@ -545,6 +554,22 @@ class P2P:
             raise P2PError(f"Broadcasting to {channel} failed") from e
 
         logger.info(f"✅ Successfully broadcasted message on channel {channel}.")
+
+    async def send(self, channel: str, msg) -> None:
+        """Encode and send a direct chat Msg to a peer. The wire codec (Msg.to_bytes) and
+        the thread offload of the blocking Go call both live here, at the transport tier
+        (the rewrite boundary toward OP2P.js): the Coordinator hands over a Msg object and
+        awaits, it never serializes nor offloads. Outbound mirror of send_session."""
+
+        # The lambda function moves the protobuf+PNG+gzip work (the expensive part) off the event loop
+        await asyncio.to_thread(lambda: self.send_message_to_peer(channel, msg_bytes=msg.to_bytes()))
+        # Previous version was:
+        # await asyncio.to_thread(self.send_message_to_peer, channel, msg.to_bytes())
+
+    async def broadcast(self, channel: str, msg) -> None:
+        """Encode and broadcast a chat Msg over pubsub. Like send, the codec and the
+        thread offload live here; the Coordinator hands over a Msg object and awaits."""
+        await asyncio.to_thread(self.broadcast_message, channel, msg.to_bytes())
 
     def pop_messages(self) -> List[bytes]:
         """
@@ -681,6 +706,230 @@ class P2P:
             logger.error(f"❌ Unsubscription from {channel} failed: {e}")
             raise P2PError(f"Unsubscription from {channel} failed") from e
 
+    # --- Session abstraction (per-stage handshake / liveness / signed peer record) ---
+
+    def send_on_protocol(self, peer_id: str, protocol_id: str, payload: bytes) -> bool:
+        """
+        Open a fresh outbound stream on `protocol_id` to `peer_id`, write a single
+        length-prefixed protobuf payload, and close the stream. Returns True on
+        send success, False on transport failure.
+
+        The response (if any) is delivered asynchronously as a pop_messages entry
+        whose `protocol` field equals `protocol_id`.
+        """
+        if not peer_id or not isinstance(peer_id, str):
+            raise ValueError("send_on_protocol: peer_id must be a non-empty string")
+        if not protocol_id or not isinstance(protocol_id, str):
+            raise ValueError("send_on_protocol: protocol_id must be a non-empty string")
+        if not isinstance(payload, (bytes, bytearray)):
+            raise TypeError("send_on_protocol: payload must be bytes")
+
+        try:
+            result_ptr = P2P.libp2p.SendOnProtocol(
+                P2P._type_interface.to_go_int(self._instance),
+                P2P._type_interface.to_go_string(peer_id),
+                P2P._type_interface.to_go_string(protocol_id),
+                P2P._type_interface.to_go_bytes(bytes(payload)),
+                P2P._type_interface.to_go_int(len(payload)),
+            )
+            result = P2P._type_interface.from_go_ptr_to_json(result_ptr)
+            if result is None or result.get('state') == 'Error':
+                logger.warning(f"send_on_protocol(...{peer_id[-5:]}, {protocol_id}) failed: "
+                               f"{result.get('message') if result else 'null result'}")
+                return False
+            return True
+        except Exception as e:
+            logger.error(f"send_on_protocol(...{peer_id[-5:]}, {protocol_id}) exception: {e}")
+            return False
+
+    def _sign_with_host_key_sync(self, data: bytes) -> Optional[bytes]:
+        """Sign `data` with the host's libp2p private key (Ed25519 by default).
+        Returns the raw signature bytes, or None on error. Used by Session to
+        produce sig_a / sig_b over (nonce || session_id) for replay defence."""
+        if not isinstance(data, (bytes, bytearray)):
+            raise TypeError("sign_with_host_key: data must be bytes")
+        try:
+            result_ptr = P2P.libp2p.SignWithHostKey(
+                P2P._type_interface.to_go_int(self._instance),
+                P2P._type_interface.to_go_bytes(bytes(data)),
+                P2P._type_interface.to_go_int(len(data)),
+            )
+            result = P2P._type_interface.from_go_ptr_to_json(result_ptr)
+            if result is None or result.get('state') == 'Error':
+                return None
+            b64 = result.get('message', '')
+            return base64.b64decode(b64) if b64 else None
+        except Exception as e:
+            logger.error(f"sign_with_host_key exception: {e}")
+            return None
+
+    def _verify_peer_signature_sync(self, peer_id: str, data: bytes, signature: bytes) -> bool:
+        """Verify that `signature` over `data` is valid under the public key derivable
+        from `peer_id`. Works for Ed25519 peer-ids (libp2p default — pubkey is
+        embedded in the id); fails for RSA peer-ids."""
+        if not isinstance(data, (bytes, bytearray)):
+            raise TypeError("verify_peer_signature: data must be bytes")
+        if not isinstance(signature, (bytes, bytearray)):
+            raise TypeError("verify_peer_signature: signature must be bytes")
+        try:
+            sig_b64 = base64.b64encode(bytes(signature)).decode("ascii")
+            result_ptr = P2P.libp2p.VerifyPeerSignature(
+                P2P._type_interface.to_go_string(peer_id),
+                P2P._type_interface.to_go_bytes(bytes(data)),
+                P2P._type_interface.to_go_int(len(data)),
+                P2P._type_interface.to_go_string(sig_b64),
+            )
+            result = P2P._type_interface.from_go_ptr_to_json(result_ptr)
+            return bool(result) and result.get('state') == 'Success'
+        except Exception as e:
+            logger.error(f"verify_peer_signature exception: {e}")
+            return False
+
+    # --- High-level Session transport surface (CPython twin of OP2P.js)
+    #
+    # These are the methods the Session/SessionManager call directly on their
+    # injected P2P instance, with no p2p_name argument (each P2P is already a single
+    # instance). They wrap the raw Go primitives above, adding the address
+    # sorting/retry/relay logic and the SessMsg serialization that used to live in
+    # connpool, plus thread offload for the blocking Go calls. The crypto wrappers
+    # are async so session.py `await`s the same way in CPython and in Pyodide/JS.
+
+    async def connect(self, addresses: list[str]) -> tuple[str | None, bool]:
+        """Establish a connection to a peer: one ConnectTo with every non-loopback
+        address. The libp2p swarm dials them in parallel under a single Go-side
+        budget (its dialer already ranks transports; the first success wins), so
+        there is no second sequential pass and the worst case is one dial timeout.
+        Returns (peer_id, through_relay)."""
+        force: str | None = None
+        # force: str | None = '/tcp'
+        if force is not None:
+            _addresses = [a for a in addresses if force in a]
+            addresses.clear()
+            for a in _addresses:
+                addresses.append(a)
+        addresses = [a for a in addresses if "127.0.0.1" not in a]
+        if len(addresses) == 0:
+            logger.error("Connection failed! (not even tried, no usable addresses)")
+            return None, False
+        logger.info(f"Connecting to {addresses}")
+        try:
+            # Off the event loop: the dial can block up to its timeout, and other
+            # sessions must keep ticking meanwhile (e.g. during a re-dial).
+            winning_addr_info_dict = await asyncio.to_thread(self.connect_to, addresses)
+            peer_id = winning_addr_info_dict.get('ID')
+            addrs = winning_addr_info_dict.get('Addrs')
+            assert addrs is not None and isinstance(addrs, (tuple, list))
+            connected_addr_str = addrs[0]
+            through_relay = '/p2p-circuit/' in connected_addr_str
+            logger.info(f"Connected to peer {peer_id} via {connected_addr_str} "
+                        f"(through relay: {through_relay})")
+            return peer_id, through_relay
+        except P2PError:
+            logger.error("Connection failed!")
+            return None, False
+
+    async def disconnect(self, peer_id: str) -> bool:
+        """Abortively tear down the connection to `peer_id`. Go resets every open
+        stream before closing the connection, so any frame written but not yet
+        delivered (e.g. a GOAWAY queued microseconds earlier) is DESTROYED, not
+        flushed: callers that just sent a farewell must not disconnect in the same
+        stack — schedule the teardown after the Session reaches a terminal state.
+        Returns True on success, False on a transport-level failure. The canonical
+        transport-disconnect primitive the SessionManager delegates to; best-effort,
+        any error (including a malformed peer_id) means 'gone' rather than
+        propagating into the caller. The blocking Go round-trip (WebRTC teardown +
+        stream resets + ClosePeer) runs off the event loop, same as `send`."""
+        try:
+            await asyncio.to_thread(self.disconnect_from, peer_id)
+        except (P2PError, ValueError):
+            return False
+        return True
+
+    async def send_session(self, peer_id: str, protocol_id: str, sess_msg) -> bool:
+        """Serialize `sess_msg` via its own `to_bytes()` and open a fresh outbound
+        stream on `protocol_id` to `peer_id`, writing one length-prefixed payload and
+        closing the stream. Returns True when the payload was ACCEPTED by the local
+        muxer (written + half-closed) — NOT when it was delivered: delivery needs the
+        connection to stay alive for the transport to flush/retransmit, and an
+        abortive disconnect (or process exit) right after a True return destroys the
+        frame. End-to-end confirmation is the Session protocol's own ACKs.
+
+        The Session FSM passes a `SessMsg` value object (not bytes), so this method
+        stays protobuf-free: it just calls `.to_bytes()` on whatever it receives. The
+        Go call runs off the event loop, same as `send`.
+        """
+        try:
+            payload = sess_msg.to_bytes()
+        except Exception as e:
+            logger.error(f"send_session(...{peer_id[-5:]}, {protocol_id}) encode failed: {e}")
+            return False
+        try:
+            return await asyncio.to_thread(self.send_on_protocol, peer_id, protocol_id, payload)
+        except Exception as e:
+            logger.error(f"send_session(...{peer_id[-5:]}, {protocol_id}) failed: {e}")
+            return False
+
+    def get_messages(self) -> tuple:
+        """Pop this instance's inbound batch and split it. The whole wire codec lives here,
+        in the transport tier (this is the rewrite boundary toward OP2P.js): Session-protocol
+        frames are decoded into SessionInbound(peer_id, protocol_id, SessMsg) via
+        SessMsg.from_bytes, chat frames into Msg objects via Msg.from_bytes. Chat frames are
+        also sender-verified here (the sender claimed inside the payload must match the
+        cryptographically verified network sender); spoofed or undecodable frames are dropped.
+        The Node-bound chat path downstream only gates membership and verifies the JWT
+        piggyback, it never touches the codec. Inbound mirror of send_session / send.
+
+        Returns (chat_messages, session_inbounds): chat_messages a list of decoded,
+        sender-verified Msg; session_inbounds a list of SessionInbound.
+        """
+        chat_messages = []
+        session_inbounds = []
+        for msg_dict in self.pop_messages():
+            protocol_id = msg_dict.get("protocol") or ""
+            if protocol_id in SESSION_PROTOCOL_IDS:
+                try:
+                    sess_msg = SessMsg.from_bytes(msg_dict.get("data"), protocol_id)
+                except Exception as e:
+                    logger.error(f"get_messages: failed to decode session message on "
+                                 f"{protocol_id} from {msg_dict.get('from')}: {e}")
+                    continue
+                session_inbounds.append(SessionInbound(
+                    peer_id=msg_dict.get("from"), protocol_id=protocol_id, sess_msg=sess_msg))
+            else:
+                # Chat path (Node-bound). The binary transport delivers "data" already as
+                # raw bytes (Go structure: {"from":"Qm...", "data":<bytes>, "protocol":"..."}).
+                verified_sender_id = msg_dict.get("from")
+                try:
+                    msg_obj = Msg.from_bytes(msg_dict.get("data"))
+                except Exception as e:
+                    logger.error(f"get_messages: failed to decode chat message from "
+                                 f"{verified_sender_id}: {e}")
+                    continue
+
+                # --- CRITICAL SECURITY CHECK ---
+                # Verify that the sender claimed inside the message payload matches the
+                # cryptographically verified sender from the network layer.
+                if msg_obj.sender != verified_sender_id:
+                    logger.error(f"SENDER MISMATCH! Network sender '{verified_sender_id}' "
+                                 f"does not match payload sender '{msg_obj.sender}'. "
+                                 f"Discarding message.")
+                    continue
+
+                chat_messages.append(msg_obj)
+        return chat_messages, session_inbounds
+
+    # --- Async crypto wrappers (Session awaits these)
+    # Thin async wrappers over the synchronous Go FFI primitives above so session.py
+    # `await`s identically in CPython and in Pyodide-over-JS.
+
+    async def sign_with_host_key(self, data: bytes) -> Optional[bytes]:
+        """Async wrapper over the host-key signer (see sync impl)."""
+        return self._sign_with_host_key_sync(data)
+
+    async def verify_peer_signature(self, peer_id: str, data: bytes, signature: bytes) -> bool:
+        """Async wrapper over the peer-signature verifier (see sync impl)."""
+        return self._verify_peer_signature_sync(peer_id, data, signature)
+
     # --- Relay Operations ---
     def reserve_on_relay(self, relay_peer_id: str) -> str:
         """
@@ -725,6 +974,13 @@ class P2P:
             logger.error(f"❌ Reservation on {relay_peer_id} failed: {e}")
             print(e)
             raise P2PError(f"Reservation on {relay_peer_id} failed") from e
+
+    async def reserve(self, relay_peer_id: str) -> str:
+        """Reserve a relay slot, offloading the blocking Go call to a thread. The async
+        boundary lives here, at the transport tier (like send / broadcast / send_session),
+        so the Coordinator just awaits and never offloads. Returns the expiry timestamp;
+        raises P2PError on failure (the Coordinator catches it)."""
+        return await asyncio.to_thread(self.reserve_on_relay, relay_peer_id)
 
     # --- Node Information ---
     @property
@@ -883,9 +1139,12 @@ class P2P:
             connected peer with keys like 'addr_info' (containing 'ID', 'Addrs'),
             'connected_at', 'direction', and 'misc'. A real empty list means "zero peers".
 
-            ``None`` when the FFI call itself fails (transport state UNKNOWN), so a
-            transient error is not read as "zero peers": the reconcile skips the diff on
-            None (leaving the pools intact) instead of tearing every peer down.
+            ``None`` on an FFI-LEVEL failure — a Go panic reported as ``state == "Error"``,
+            a NULL/unparseable result pointer, or a marshalling exception — so such a
+            transient is not read as "zero peers": the reconcile skips the diff on None
+            (leaving the pools intact) instead of tearing every peer down. Note this does
+            NOT cover a Go "instance not ready", which Go reports as a successful empty list
+            (read here as a genuine zero-peers), not as an error.
         """
 
         # Logger.info("ℹ️ Fetching connected peers info...") # Can be noisy
@@ -996,22 +1255,18 @@ class P2P:
 
     def close(self, close_all: bool = False) -> None | str:
         """
-        Gracefully shuts down the libp2p node and stops background threads.
+        Shuts down this instance's libp2p host via the Go CloseNode, freeing its
+        slot (there are no Python-side background threads to stop). Closing the
+        host abortively tears every remaining connection, so callers must drain
+        their farewells first (see NodeConn.drain_teardown). Blocking FFI: the
+        shutdown path calls it after the main loop has ended.
 
         Args:
-            close_all: If True, closes all instances of the node. Default is False.
+            close_all: If True, closes ALL instances in the process (Go slot -1),
+                not just this one. Default is False.
         """
         logger.info("🛑 Closing node...")
 
-        # 1. Signal background threads to stop
-        logger.info("  - Stopping background threads...")
-
-        # 2. Wait briefly for threads to finish (optional, they are daemons)
-        # self._get_connected_peers_thread.join(retry_timeout=2)
-        # self._check_message_queue_thread.join(retry_timeout=2)
-        # print("  - Background threads signaled.")
-
-        # 3. Call the Go CloseNode function
         try:
             if close_all:
                 result_ptr = P2P.libp2p.CloseNode(P2P._type_interface.to_go_int(-1))

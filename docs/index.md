@@ -29,7 +29,7 @@ UNaIVERSE uses a layered architecture where **Nodes** are the primary network co
 The **Node** is the network container that hosts an Agent or World. It handles:
 
 - **Dual P2P Networks**: Each node maintains two P2P network layers:
-  . **Public P2P**: For discovery, DHT, initial connections (handshake), lonewolf communications
+  . **Public P2P**: For discovery, initial connections (handshake), lonewolf communications
   . **Private P2P**: For world-internal communication
 - **Root Server Integration**: Authentication, tokens, profiles via `unaiverse.io`
 
@@ -140,7 +140,7 @@ When a human accesses the platform through their browser, the system instantiate
 
 | Layer | Purpose |
 |-------|---------|
-| **Public P2P** | Discovery, DHT, initial connections, handshake, and lonewolf communications |
+| **Public P2P** | Discovery, initial connections, handshake, and lonewolf communications |
 | **World P2P** | World-internal communication for agents participating in shared environments |
 
 This dual-layer approach ensures that human agents have identical networking capabilities to their artificial counterparts.
