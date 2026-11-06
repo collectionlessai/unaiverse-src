@@ -1,0 +1,71 @@
+name: Tests
+
+# Runs the test suite; it never builds release artifacts nor publishes anything.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    name: Tests (Python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        # The oldest and the newest supported versions
+        python: ["3.11", "3.14"]
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: src/unaiverse/networking/p2p/unailib/go.mod
+          cache-dependency-path: src/unaiverse/networking/p2p/unailib/go.sum
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Install
+        run: |
+          uv venv
+          # CPU-only torch keeps the install small: the tests never use a GPU
+          uv pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+          uv pip install -e ".[dev]"
+
+      - name: Unit and in-process e2e tests
+        run: .venv/bin/python -m pytest -q
+
+  p2p:
+    name: Real-network tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Real libp2p nodes over loopback: reported, but not allowed to block until proven stable on runners
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: src/unaiverse/networking/p2p/unailib/go.mod
+          cache-dependency-path: src/unaiverse/networking/p2p/unailib/go.sum
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install
+        run: |
+          uv venv
+          uv pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+          uv pip install -e ".[dev]"
+
+      - name: Real-network tests
+        run: .venv/bin/python -m pytest -q -m p2p

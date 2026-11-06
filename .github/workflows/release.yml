@@ -1,124 +1,98 @@
-name: Build & Publish to PyPI
+name: Release
 
+# Publishing starts only from a v* tag, which release.sh (unaiverse-dev) pushes after its own checks. A
+# manual run is a dry run: tests and build, without publishing.
+#
+# Keep this file name and the publish job here: the PyPI trusted publisher is registered on this file and
+# does not accept the publish step inside a reusable workflow.
 on:
   push:
-    tags:
-      - "v*"
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
-  build_wheels:
-    name: Build wheels on ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        os: [ubuntu-latest, ubuntu-24.04-arm, windows-latest, macos-15-intel, macos-14]
-
-    steps:
-      - name: Checkout source
-        uses: actions/checkout@v5
-
-      - name: Build wheels with cibuildwheel
-        uses: pypa/cibuildwheel@v3.2.1
-
-      - name: Upload wheels as artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: python-wheels-${{ matrix.os }}
-          path: ./wheelhouse/*.whl
-
-  build_sdist:
-    name: Build source distribution
+  verify:
+    name: Tag matches the package version
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
+    outputs:
+      prerelease: ${{ steps.version.outputs.prerelease }}
     steps:
-      - name: Checkout source
-        uses: actions/checkout@v5
+      - uses: actions/checkout@v5
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Build sdist
+      - id: version
         run: |
-          pip install build
-          python -m build --sdist
+          version=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")
+          if [ "v${version}" != "${GITHUB_REF_NAME}" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} does not match the version in pyproject.toml (${version})"
+            exit 1
+          fi
+          # PEP 440 pre-releases (a, b, rc, dev) are marked as such on GitHub too
+          if [[ "${version}" =~ (a|b|rc|\.dev)[0-9]+$ ]]; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
 
-      - name: Upload sdist as artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: sdist-artifact
-          path: dist/*.tar.gz
+  tests:
+    uses: ./.github/workflows/tests.yml
 
-  build_pure_wheel:
-    name: Build Pure Python Wheel (Pyodide)
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout source
-        uses: actions/checkout@v5
+  build:
+    uses: ./.github/workflows/build.yml
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Build Pure Wheel
-        env:
-          UNAI_BUILD_PURE: "1"
-        run: |
-          pip install build
-          python -m build --wheel
-
-      - name: Upload Pure Wheel artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: python-wheels-pure
-          path: dist/*.whl
-
-  publish_package:
+  publish_pypi:
     name: Publish to PyPI
-    needs: [build_wheels, build_sdist]
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [verify, tests, build]
     runs-on: ubuntu-latest
     permissions:
       id-token: write
-
     steps:
-      - name: Download wheel artifacts
-        uses: actions/download-artifact@v4
+      # Native wheels and sdist only: the pure wheel would be installed on platforms without a native one,
+      # where the package cannot work
+      - uses: actions/download-artifact@v4
         with:
-          pattern: python-wheels-*
+          pattern: wheels-*
           path: dist
           merge-multiple: true
 
-      - name: Download sdist artifact
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4
         with:
-          name: sdist-artifact
+          name: sdist
           path: dist
-      
-      - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
-  
-  create_github_release:
-    name: Create GitHub Release
-    needs: [build_wheels, build_sdist]
+
+      - uses: pypa/gh-action-pypi-publish@release/v1
+
+  github_release:
+    name: GitHub release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [verify, tests, build]
     runs-on: ubuntu-latest
     permissions:
       contents: write
-
     steps:
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
-        with:
-          pattern: python-wheels-*
-          path: dist
-          merge-multiple: true
       - uses: actions/download-artifact@v4
         with:
-          name: sdist-artifact
+          pattern: wheels-*
           path: dist
-          
-      - name: Create Release and Upload Assets
-        uses: softprops/action-gh-release@v2
+          merge-multiple: true
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: sdist
+          path: dist
+
+      # The pure wheel for Pyodide is published here only
+      - uses: actions/download-artifact@v4
+        with:
+          name: wheel-pure
+          path: dist
+
+      - uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
+          prerelease: ${{ needs.verify.outputs.prerelease == 'true' }}
           files: dist/*
