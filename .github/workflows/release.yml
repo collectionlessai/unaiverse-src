@@ -53,13 +53,13 @@ jobs:
     steps:
       # Native wheels and sdist only: the pure wheel would be installed on platforms without a native one,
       # where the package cannot work
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: wheels-*
           path: dist
           merge-multiple: true
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: sdist
           path: dist
@@ -74,24 +74,24 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: wheels-*
           path: dist
           merge-multiple: true
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: sdist
           path: dist
 
       # The pure wheel for Pyodide is published here only
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: wheel-pure
           path: dist
 
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           generate_release_notes: true
           prerelease: ${{ needs.verify.outputs.prerelease == 'true' }}

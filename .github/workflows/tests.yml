@@ -24,12 +24,12 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: src/unaiverse/networking/p2p/unailib/go.mod
           cache-dependency-path: src/unaiverse/networking/p2p/unailib/go.sum
 
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v10
         with:
           python-version: ${{ matrix.python }}
 
@@ -52,12 +52,12 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: src/unaiverse/networking/p2p/unailib/go.mod
           cache-dependency-path: src/unaiverse/networking/p2p/unailib/go.sum
 
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v10
         with:
           python-version: "3.12"
 

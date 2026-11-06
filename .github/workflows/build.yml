@@ -43,7 +43,7 @@ jobs:
 
       # On macOS and Windows cibuildwheel builds on the runner, so Go comes from here; on Linux it builds
       # inside the manylinux container, where before-all (pyproject.toml) installs it
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         if: runner.os != 'Linux'
         with:
           go-version-file: src/unaiverse/networking/p2p/unailib/go.mod
@@ -51,7 +51,7 @@ jobs:
 
       - uses: pypa/cibuildwheel@v3.2.1
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
@@ -59,7 +59,7 @@ jobs:
         shell: bash
         run: python .github/scripts/smoke_wheel.py wheelhouse/*.whl
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: wheels-${{ matrix.os }}
           path: wheelhouse/*.whl
@@ -70,7 +70,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
@@ -89,7 +89,7 @@ jobs:
             exit 1
           fi
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: sdist
           path: dist/*.tar.gz
@@ -100,7 +100,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
@@ -112,7 +112,7 @@ jobs:
           python -m build --wheel
           ls dist/*-py3-none-any.whl
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: wheel-pure
           path: dist/*.whl
