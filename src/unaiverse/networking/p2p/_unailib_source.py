@@ -61,7 +61,8 @@ def source_hash(go_dir: str | Path) -> str | None:
     digest = hashlib.sha256()
     for path in source_files(root):
 
-        # The path is part of the digest, so that renaming or moving a file changes it too
+        # The path is part of the digest, so that renaming or moving a file changes it too; line endings are
+        # normalized, so that a CRLF checkout (Windows) yields the same hash as everywhere else
         digest.update(path.relative_to(root).as_posix().encode() + b"\0")
-        digest.update(path.read_bytes() + b"\0")
+        digest.update(path.read_bytes().replace(b"\r\n", b"\n") + b"\0")
     return digest.hexdigest()
