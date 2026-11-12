@@ -42,7 +42,7 @@ The modules are marked `unit` or `e2e` (`pytest -m unit`, `pytest -m e2e`), exce
 | Handshake, reconnection and world join between SessionManagers | `test_handshake_e2e.py`, `test_session_reconnect_e2e.py`, `test_world_join_e2e.py` |
 | Coordinator (`NodeConn`): routing, perimeter, teardown, codecs, tokens | `test_connpool_routing.py`, `test_connpool_teardown.py`, `test_messages.py`, `test_tokens.py` |
 | Node over real SessionManagers and a fake conn (`node_harness.py`) | `test_node_integration.py`, `test_join_code_gate.py`, `test_node_lifecycle.py`, `test_node_root_robustness.py` |
-| Node over the real `NodeConn` and fake transports (`node_harness.py`) | `test_world_roster_e2e.py`, `test_profile_connections_e2e.py` |
+| Node over the real `NodeConn` and fake transports (`node_harness.py`) | `test_world_roster_e2e.py`, `test_profile_connections_e2e.py`, `test_inspector_presence_e2e.py` |
 | Real agents in process (`inproc_harness.py`): chat, pubsub, engage, world purge | `test_agent_chat_e2e.py`, `test_pubsub_e2e.py`, `test_engage_lifecycle_e2e.py`, `test_human_world_routing_e2e.py`, `test_inproc_harness_smoke.py` |
 | Agent surface: actions, resolution, interactions, human routing, disengage, stepwise compute | `test_agent_actions_pure.py`, `test_agent_resolution.py`, `test_interaction.py`, `test_interaction_manager.py`, `test_human_routing.py`, `test_disengage_goaway.py`, `test_stepwise_compute.py` |
 | World: roles, definition hash, shipped-code closure | `test_world_roles.py`, `test_world_definition.py`, `test_import_closure.py` |

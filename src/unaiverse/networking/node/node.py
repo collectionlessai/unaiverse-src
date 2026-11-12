@@ -1554,55 +1554,8 @@ class Node:
                                      "(set env variable NODE_IGNORE_ALIVE=1 to ignore this control)")
                     self.last_alive_time = clock.get_time()
 
-                # Check inspector
-                if self.inspector_activated:
-                    if self.__inspector_told_to_pause:
-                        log.misc("Paused by the inspector, waiting...")
-
-                        while self.__inspector_told_to_pause:
-                            if not self.inspector_activated:  # Disconnected
-                                self.__inspector_told_to_pause = False
-                                log.misc("Inspector is not active/connected anymore, resuming...")
-                                break
-
-                            public_messages, public_session_inbound = await self.conn.get_messages(
-                                p2p_name=NodeConn.P2P_PUBLIC)
-                            for msg in public_messages:
-                                if msg.content_type == Msg.INSPECT_CMD:
-
-                                    # Unpacking piggyback
-                                    sender_node_id, sender_inspector_mode_on = (msg.piggyback[0:-1],
-                                                                                msg.piggyback[-1] == "1")
-
-                                    # Is message from inspector?
-                                    sender_is_inspector = (sender_node_id == self.profile.get_static_profile()[
-                                        'inspector_node_id'] and
-                                                           sender_inspector_mode_on)
-
-                                    if sender_is_inspector:
-                                        await self.__handle_inspector_command(msg.content['cmd'], msg.content['arg'])
-                                    else:
-                                        log.error(
-                                            "Inspector command was not sent by the expected inspector node ID "
-                                            "or no inspector connected")
-                                        await self.__purge(msg.sender)
-                            # get_messages pops the session frames off the transport, so we must
-                            # still pump them or peers get no PONG/keepalive and mark us LOST while
-                            # paused. Dispatch normally (the pause freezes the agent's behave, not
-                            # the network); wrap it so a raising dispatch branch does not kill the
-                            # node under the inspector's eyes.
-                            _, world_session_inbound = await self.conn.get_messages(
-                                p2p_name=NodeConn.P2P_WORLD)
-                            try:
-                                events = await self.conn.pump_sessions(
-                                    {NodeConn.P2P_PUBLIC: public_session_inbound,
-                                     NodeConn.P2P_WORLD: world_session_inbound},
-                                    now=time.monotonic())
-                                for ev in events:
-                                    await self._dispatch_session_event(ev)
-                            except Exception as e:
-                                log.error(f"[pause] session pump/dispatch failed (going ahead): {e}")
-                            await asyncio.sleep(0.1)  # Don't block the loop
+                # Check inspector (the node stays here while the inspector keeps it paused)
+                await self._wait_while_paused_by_inspector()
 
                 # Move to the next cycle. The wait must be an ASYNC sleep: the
                 # main loop is mostly synchronous (FFI calls), so this is where
@@ -1847,7 +1800,8 @@ class Node:
                         except Exception as e:
                             log.error(f"Error while saving stats to disk [{e}]")
 
-                # Taking to the inspector
+                # Taking to the inspector (which may have left during this very cycle)
+                self._drop_inspector_if_gone()
                 if self.inspector_activated:
                     await self.__send_to_inspector()
 
@@ -2028,13 +1982,8 @@ class Node:
                 # leaves the world and arms the rejoin. Deciding here, on the transport diff,
                 # would tear the world down on a brief blip and skip the grace entirely.
 
-                # Checking if the inspector disconnected
-                if peer_id == self.inspector_peer_id:
-                    self.inspector_activated = False
-                    log.inspector_enabled(False)
-                    self.inspector_peer_id = None
-                    self.__inspector_cache = {"behav": None, "known_streams_count": 0, "all_agents_count": 0}
-                    log.misc("Inspector disconnected")
+        # Checking if the inspector disconnected
+        self._drop_inspector_if_gone()
 
         # Handling newly connected peers.
         # Every peer (re)appearing in the pool diff is a potential transport
@@ -3608,6 +3557,82 @@ class Node:
         # Clearing memory
         if old_memory_finder is not None:
             old_memory_finder.cleanup()
+
+    def _drop_inspector_if_gone(self) -> None:
+        """Deactivates the inspector once its peer is in no pool anymore.
+
+        The pools are read directly, and not the diff of update(): an inspector whose
+        Session ends on a Session event (a clean GOAWAY, a failed handshake) is evicted
+        outside update(), so no diff ever reports it, and the node would keep feeding an
+        inspector that left, or stay paused by it. A transport drop evicts it too, so a
+        blip deactivates it as before and the inspector announces itself again.
+        """
+        if not self.inspector_activated:
+            return
+        if self.inspector_peer_id is not None and self.conn.get_pool_of(self.inspector_peer_id) is not None:
+            return
+        self.inspector_activated = False
+        log.inspector_enabled(False)
+        self.inspector_peer_id = None
+        self.__inspector_cache = {"behav": None, "known_streams_count": 0, "all_agents_count": 0}
+        log.misc("Inspector disconnected")
+
+    async def _wait_while_paused_by_inspector(self) -> None:
+        """Holds the main loop while the inspector keeps the node paused. (async)
+
+        The pause freezes the behaviour of the hosted entity, not the network: the
+        inspector commands and the Session traffic keep being served, which is also how
+        the node learns that the inspector left and resumes on its own.
+        """
+        if not (self.inspector_activated and self.__inspector_told_to_pause):
+            return
+        log.misc("Paused by the inspector, waiting...")
+
+        while self.__inspector_told_to_pause:
+            self._drop_inspector_if_gone()
+            if not self.inspector_activated:  # Disconnected
+                self.__inspector_told_to_pause = False
+                log.misc("Inspector is not active/connected anymore, resuming...")
+                break
+
+            public_messages, public_session_inbound = await self.conn.get_messages(
+                p2p_name=NodeConn.P2P_PUBLIC)
+            for msg in public_messages:
+                if msg.content_type == Msg.INSPECT_CMD:
+
+                    # Unpacking piggyback
+                    sender_node_id, sender_inspector_mode_on = (msg.piggyback[0:-1],
+                                                                msg.piggyback[-1] == "1")
+
+                    # Is message from inspector?
+                    sender_is_inspector = (sender_node_id == self.profile.get_static_profile()[
+                        'inspector_node_id'] and
+                                           sender_inspector_mode_on)
+
+                    if sender_is_inspector:
+                        await self.__handle_inspector_command(msg.content['cmd'], msg.content['arg'])
+                    else:
+                        log.error(
+                            "Inspector command was not sent by the expected inspector node ID "
+                            "or no inspector connected")
+                        await self.__purge(msg.sender)
+            # get_messages pops the session frames off the transport, so we must
+            # still pump them or peers get no PONG/keepalive and mark us LOST while
+            # paused. Dispatch normally (the pause freezes the agent's behave, not
+            # the network); wrap it so a raising dispatch branch does not kill the
+            # node under the inspector's eyes.
+            _, world_session_inbound = await self.conn.get_messages(
+                p2p_name=NodeConn.P2P_WORLD)
+            try:
+                events = await self.conn.pump_sessions(
+                    {NodeConn.P2P_PUBLIC: public_session_inbound,
+                     NodeConn.P2P_WORLD: world_session_inbound},
+                    now=time.monotonic())
+                for ev in events:
+                    await self._dispatch_session_event(ev)
+            except Exception as e:
+                log.error(f"[pause] session pump/dispatch failed (going ahead): {e}")
+            await asyncio.sleep(0.1)  # Don't block the loop
 
     async def __handle_inspector_command(self, cmd: str, arg: str | None) -> None:
         """Handles commands received from an inspector node. (async)

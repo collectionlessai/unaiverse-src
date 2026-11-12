@@ -459,6 +459,8 @@ def build_agent_node_shell(node_peer_id: str, node_id: str = "shell-node",
     node.talk_to_relay_based_nodes = True
     node.inspector_peer_id = None
     node.inspector_activated = False
+    node._Node__inspector_cache = {"behav": None, "known_streams_count": 0, "all_agents_count": 0}
+    node._Node__inspector_told_to_pause = False
     node.reconnected = set()
     node.joining_world_info = None
     node.memory_finder = None
@@ -512,6 +514,7 @@ class WireP2P:
         self._fake = FakeP2P(peer_id=peer_id, log_sub=log_sub)
         self.links = {}          # peer_id -> connected-peer info, as the Go side reports it
         self.inbox = deque()     # (sender, protocol, SessMsg), the shape FakeConn forwards
+        self.chat_inbox = []     # decoded chat Msg objects, handed over as the codec would
         self.routes = {}         # remote peer_id -> that remote's inbox
         self.broadcasts = []     # (channel, Msg) after a codec round-trip
         self.failing_broadcasts = 0   # how many of the next broadcasts raise P2PError
@@ -536,9 +539,11 @@ class WireP2P:
         return None
 
     def get_messages(self):
+        chat = list(self.chat_inbox)
+        self.chat_inbox.clear()
         session_inbound = [SessionInbound(*item) for item in self.inbox]
         self.inbox.clear()
-        return [], session_inbound
+        return chat, session_inbound
 
     async def connect(self, addresses):
         return None, False
