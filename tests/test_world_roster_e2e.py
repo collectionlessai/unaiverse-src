@@ -308,6 +308,43 @@ def test_unredeemed_preadmission_never_reaches_the_roster(stepped_clock, root_ke
     asyncio.run(_scenario())
 
 
+@pytest.mark.parametrize("verdict", ["refused", "raised"])
+def test_joiner_the_world_does_not_register_is_never_advertised(stepped_clock, root_keys, verdict):
+    """A joiner redeems its grant but the world object turns it down, or its
+    registration raises. It was never taken in, so the host must reject it without
+    confirming it: no trace in the world lists, in the summary or in the rendezvous."""
+    async def _scenario():
+        private_pem, public_pem = root_keys
+        host = _Host(public_pem)
+        if verdict == "refused":
+            host.world.add_agent_returns = False
+        else:
+            async def _raise(peer_id, profile):
+                raise RuntimeError("registration blew up")
+            host.world.add_agent = _raise
+        joiner = _Joiner("unwanted", host, private_pem)
+
+        grant = await _get_grant(host, joiner)
+        await joiner.dial_world(grant)
+        await host.cycle()                            # HELLO -> HELLO_ACK
+        await joiner.offer_world()
+        await host.cycle()                            # OFFER -> ESTABLISHED, registration attempt
+        assert joiner.world_peer_id not in host.conn._sm_world.world_agents_set
+        assert joiner.world_peer_id not in host.conn.world_preadmissions
+        assert host.conn.get_pool_of(joiner.world_peer_id) is None
+        # The joiner sees its world Session come up and be closed right away (GOAWAY).
+        events = await apump(joiner.inbox_world, joiner.sm_world)
+        assert [e.type for e in events] == [SessionEventType.ESTABLISHED, SessionEventType.CLOSED]
+
+        for _ in range(3):
+            await host.cycle()
+        assert host.conn.get_world_roster_peer_infos() == ([], [])
+        assert host.summary["world_agents"] == [] and host.summary["total_agents"] == 0
+        assert host.rendezvous() == [(0, [])]
+
+    asyncio.run(_scenario())
+
+
 def test_idle_world_publishes_on_the_periodic_slot_only(stepped_clock, root_keys):
     """With a steady roster the rendezvous keeps its PUBLISH_RENDEZVOUS_EVERY cadence:
     no publish per cycle, one when the slot comes due."""

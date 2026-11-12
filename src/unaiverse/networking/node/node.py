@@ -3232,23 +3232,32 @@ class Node:
             self._world_host_unlist_member(ev)
             await self.__purge(private_peer_id, reason=HOSTED_REJECTED)
             return
+        registered = False
         try:
-            # conn pools (routing) + world object (membership). Re-adding WITHOUT a TTL
-            # confirms the grant-time pre-admission (the provisional deadline is dropped:
-            # the member is now registered). That puts it in the confirmed roster, which
-            # the next __handle_network_connections picks up to refresh the world summary
-            # and to publish the rendezvous at once.
-            if role & Agent.ROLE_WORLD_MASTER == Agent.ROLE_WORLD_MASTER:
-                self.conn.add_to_world_masters_list(private_peer_id, private_addr, role)
-            else:
-                self.conn.add_to_world_agents_list(private_peer_id, private_addr, role)
-            if private_addr:
+            # The world object (membership) gives its verdict first. The grant-time
+            # pre-admission already carries the role add_agent reads, and it stays
+            # provisional until then.
+            registered = await self.world.add_agent(peer_id=private_peer_id, profile=profile)
+            if registered:
+                # conn pools (routing). Re-adding WITHOUT a TTL confirms the pre-admission
+                # (the provisional deadline is dropped: the member is now registered). That
+                # puts it in the confirmed roster, which the next __handle_network_connections
+                # picks up to refresh the world summary and to publish the rendezvous at once.
+                if role & Agent.ROLE_WORLD_MASTER == Agent.ROLE_WORLD_MASTER:
+                    self.conn.add_to_world_masters_list(private_peer_id, private_addr, role)
+                else:
+                    self.conn.add_to_world_agents_list(private_peer_id, private_addr, role)
                 self.conn.set_addresses_in_peer_info(private_peer_id, private_addr)
-            if not (await self.world.add_agent(peer_id=private_peer_id, profile=profile)):
-                log.error(f"[session] world.add_agent rejected ...{private_peer_id[-5:]}; purging")
-                await self.__purge(private_peer_id, reason=HOSTED_REJECTED)
         except Exception as e:
             log.error(f"[session] world register failed for ...{private_peer_id[-5:]}: {e}")
+            registered = False
+        if not registered:
+            # Turned down by the world, or the registration raised: reject it like the
+            # joiner with no private addresses above. A joiner left confirmed here would
+            # be advertised as a member the world never took in.
+            log.error(f"[session] world did not register ...{private_peer_id[-5:]}; rejecting")
+            self._world_host_unlist_member(ev)
+            await self.__purge(private_peer_id, reason=HOSTED_REJECTED)
 
     async def _join_world_after_session(self, world_peer_id: str, grant: dict | None) -> bool:
         """Joiner side: run the world-join body against an already-connected world
