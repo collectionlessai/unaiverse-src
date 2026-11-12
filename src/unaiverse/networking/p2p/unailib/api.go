@@ -1616,7 +1616,8 @@ func UnsubscribeFromTopic(
 }
 
 // PopMessages retrieves the oldest message from each channel's queue for a specific instance.
-// This function always pops one message per channel that has messages.
+// It pops one message per chat/pubsub channel that has messages, and every queued frame of the
+// Session-protocol channels, which all the peers of the node share (see MessageStore.popBatch).
 // Parameters:
 //   - instanceIndexC (C.int): The index of the node instance.
 //
@@ -1651,20 +1652,8 @@ func PopMessages(
 		return C.CString(`{"state":"Empty"}`)
 	}
 
-	// Create a slice to hold the popped messages. Capacity is the number of channels.
-	var poppedMessages []*QueuedMessage
-	for channel, messageList := range store.messagesByChannel {
-		if messageList.Len() > 0 {
-			element := messageList.Front()
-			msg := element.Value.(*QueuedMessage)
-			poppedMessages = append(poppedMessages, msg)
-			messageList.Remove(element)
-		}
-		// if the queue is now empty, we can delete it from the map to save space
-		if messageList.Len() == 0 {
-			delete(store.messagesByChannel, channel)
-		}
-	}
+	// One message per chat/pubsub channel, every queued frame of the Session protocols.
+	poppedMessages := store.popBatch()
 
 	// After iterating, check if we actually popped anything
 	if len(poppedMessages) == 0 {

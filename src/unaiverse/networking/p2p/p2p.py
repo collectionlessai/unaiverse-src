@@ -573,7 +573,9 @@ class P2P:
 
     def pop_messages(self) -> List[bytes]:
         """
-        Retrieves and removes the first message from the queue of each channel for this node instance.
+        Retrieves and removes the first message from the queue of each chat/pubsub channel for this
+        node instance, and every queued frame of the Session protocols (their queues are shared by
+        all the peers, so they are drained in full at every call, oldest frame first).
 
         Returns:
             A list of byte arrays (messages). Returns an empty list if no messages were available.

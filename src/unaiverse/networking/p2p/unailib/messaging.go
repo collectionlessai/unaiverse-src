@@ -90,6 +90,35 @@ func storeReceivedMessage(
 	logger.Debugf("[GO] 📥 Instance %d: Queued message on channel '%s' from %s. New queue length: %d\n", ni.instanceIndex, channel, from, messageList.Len())
 }
 
+// popBatch removes and returns what one PopMessages call hands to the caller: the
+// oldest message of every chat/pubsub channel, and every queued message of the
+// Session-protocol channels, oldest first. The caller must hold store.mu.
+//
+// A Session-protocol queue is keyed by the protocol ID, so all the peers of the node
+// share it. Popping one frame per call, as for the other channels, made them wait in
+// line behind each other at one frame per cycle of the caller: a GOAWAY or a PONG was
+// read as many cycles late as there were frames ahead of it, whoever had sent them,
+// and a node with enough peers could not keep up with their keep-alives at all.
+func (store *MessageStore) popBatch() []*QueuedMessage {
+	var popped []*QueuedMessage
+	for channel, messageList := range store.messagesByChannel {
+		drain := isSessionProtocol(channel)
+		for messageList.Len() > 0 {
+			element := messageList.Front()
+			popped = append(popped, element.Value.(*QueuedMessage))
+			messageList.Remove(element)
+			if !drain {
+				break
+			}
+		}
+		// if the queue is now empty, we can delete it from the map to save space
+		if messageList.Len() == 0 {
+			delete(store.messagesByChannel, channel)
+		}
+	}
+	return popped
+}
+
 // promoteFriendlyPeer records (or address-refreshes) a peer in friendlyPeers,
 // the map GetConnectedPeers reports from. Chat streams have always done this on
 // their first message (see handleStream); Session-protocol traffic must do it
@@ -207,6 +236,15 @@ func handleStream(ni *NodeInstance, s network.Stream) {
 			return
 		}
 		channel := string(channelBytes)
+
+		// The channel name is chosen by the sender. One named like a Session protocol
+		// would land in that protocol's queue, which is reserved to Session frames (it
+		// bypasses the channel cap and is drained in full): no honest peer does that.
+		if isSessionProtocol(channel) {
+			logger.Warnf("[GO] 🗑️ Instance %d: Chat message on the reserved channel '%s' via Stream %s from %s. Resetting.\n", ni.instanceIndex, channel, streamID, senderPeerID)
+			s.Reset()
+			return
+		}
 
 		// Read Payload
 		payloadLen := totalLen - uint32(channelLen) - 1
