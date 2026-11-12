@@ -40,6 +40,7 @@ in `pyproject.toml`). Covers:
 | connpool routing + SessMsg codec  | `test_connpool_routing.py`    |
 | Full in-process handshake         | `test_handshake_e2e.py`       |
 | World-join handoff (mocked)        | `test_world_join_e2e.py`      |
+| World roster: summary + rendezvous | `test_world_roster_e2e.py`    |
 
 `test_full_handshake_happy_path` is the keystone: it wires two `SessionManager`s
 through a fake bidirectional transport and drives the full Stage-1/Stage-2

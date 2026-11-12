@@ -1749,6 +1749,26 @@ class NodeConn:
             ret += list(self.pool_name_to_peer_infos[p].values())
         return ret
 
+    def get_world_roster_peer_infos(self) -> tuple[list[dict], list[dict]]:
+        """World host: the peer infos of the confirmed world members, the roster the
+        host advertises (world summary of its profile and rendezvous publish alike).
+
+        A pre-admitted joiner enters the world pools as soon as its transport connects,
+        because the perimeter needs it there, but it is not a member until the world-side
+        registration drops its pre-admission deadline. Advertising it earlier would send
+        the other members to dial a peer that does not know them yet, which cuts them and
+        quarantines them.
+
+        Returns:
+            A tuple with the peer infos of the world agents and of the world masters.
+        """
+        provisional = self.world_preadmissions
+        agents = [c for c in self.get_all_connected_peer_infos(NodeConn.WORLD_AGENTS)
+                  if c['id'] not in provisional]
+        masters = [c for c in self.get_all_connected_peer_infos(NodeConn.WORLD_MASTERS)
+                   if c['id'] not in provisional]
+        return agents, masters
+
     async def set_world_agents_and_world_masters_lists_from_rendezvous(self) -> None:
         """Updates the lists of world agents and masters using data from the rendezvous topic (async)."""
         rendezvous_state = self._sm_world.rendezvous_peers()

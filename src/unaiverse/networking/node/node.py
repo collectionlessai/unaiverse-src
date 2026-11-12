@@ -207,8 +207,9 @@ class Node:
         # Profile
         self.profile: NodeProfile
 
-        # Rendezvous
+        # Rendezvous (the pending flag asks for a publish ahead of the periodic one)
         self.last_rendezvous_time = 0.
+        self.rendezvous_pending = False
 
         # Automatic address update and relay refresh (if needed)
         self.relay_reservation_expiry: datetime | None = None
@@ -1999,7 +2000,6 @@ class Node:
             log.cpool("Current status of the pools, right after the update:\n" + str(self.conn))
 
         # Checking if some peers were removed
-        an_agent_left_the_world = False
         removed_peers = False
         for pool_name, removed_peer_ids in removed_peer_ids_by_pool.items():
             for peer_id in removed_peer_ids:
@@ -2024,10 +2024,6 @@ class Node:
                 if not self.conn.is_in_grace(peer_id):
                     await self.__purge(peer_id, settled=True)
 
-                # Checking if we removed an agent from this world
-                if self.node_type is Node.WORLD and pool_name in self.conn.WORLD:
-                    an_agent_left_the_world = True
-
                 # The world host dropping out of the pool is NOT where we leave/rejoin: a
                 # transport blip must ride the world Session's reconnect grace (RESUME), and
                 # only its terminal LOST/FAILED event (in _maybe_leave_world_on_session_end)
@@ -2043,7 +2039,6 @@ class Node:
                     log.misc("Inspector disconnected")
 
         # Handling newly connected peers
-        an_agent_joined_the_world = False
         added_peers = False
         # Every peer (re)appearing in the pool diff is a potential transport
         # reconnect for a Session riding its grace period: on_peer_reconnected
@@ -2078,33 +2073,44 @@ class Node:
                 # dispatch (_world_host_register_agent / add_agent). Nothing to do here.
                 continue
 
-        # Updating list of world agents & friends, if needed
-        # (it happens only if the node hosts a world, otherwise 'an_agent_joined_the_world' and
-        # 'an_agent_left_the_world' are certainly False)
-        world_agents_peer_infos = None
-        world_masters_peer_infos = None
+        # World host: keeping what the world advertises about its members aligned with the
+        # roster of the confirmed ones. That is the world summary of the profile, which
+        # rides every grant and is posted to the root server, and the rendezvous.
         if self.node_type is Node.WORLD:
             assert self.world is not None
-            enter_left = an_agent_joined_the_world or an_agent_left_the_world
+            roster_agents, roster_masters = self.conn.get_world_roster_peer_infos()
+
+            # The change is read off the roster itself, compared with what the summary
+            # lists, and not signalled by the paths that mutate it: a Session-driven join
+            # or clean leave never shows up in the pool diff above, and a path that forgot
+            # to raise a flag would leave the summary stale without anybody noticing. Both
+            # sides hold the very peer-info objects of the pools, so the comparison is
+            # cheap. The summary of a just-started world lists None, which counts as a change.
+            world_summary = self.profile.get_dynamic_profile()['world_summary']
+            roster_changed = (world_summary.get('world_agents') != roster_agents or
+                              world_summary.get('world_masters') != roster_masters)
+
+            if roster_changed or self.world.role_changed_by_world:
+                world_summary['world_agents'] = roster_agents
+                world_summary['world_masters'] = roster_masters
+                world_summary["world_agents_count"] = len(roster_agents)
+                world_summary["world_masters_count"] = len(roster_masters)
+                world_summary["total_agents"] = len(roster_agents) + len(roster_masters)
+                self.profile.mark_change_in_connections()
+
+            # A roster change is published right away instead of at the next periodic slot:
+            # a joiner reads the members from its grant and dials them at once, and a member
+            # that has not heard of it yet cuts it and quarantines it. The request stays
+            # pending until a publish succeeds.
+            if roster_changed:
+                self.rendezvous_pending = True
             timeout = (clock.get_time() - self.last_rendezvous_time) >= Custom.PUBLISH_RENDEZVOUS_EVERY
 
-            if enter_left or timeout or self.world.role_changed_by_world or self.world.received_address_update:
-                if enter_left or self.world.role_changed_by_world:
-                    # Updating world-node profile with the summary of currently connected agents in the world
-                    world_agents_peer_infos = self.conn.get_all_connected_peer_infos(NodeConn.WORLD_AGENTS)
-                    world_masters_peer_infos = self.conn.get_all_connected_peer_infos(NodeConn.WORLD_MASTERS)
-
-                    dynamic_profile = self.profile.get_dynamic_profile()
-                    dynamic_profile['world_summary']['world_agents'] = world_agents_peer_infos
-                    dynamic_profile['world_summary']['world_masters'] = world_masters_peer_infos
-                    dynamic_profile['world_summary']["world_agents_count"] = len(world_agents_peer_infos)
-                    dynamic_profile['world_summary']["world_masters_count"] = len(world_masters_peer_infos)
-                    dynamic_profile['world_summary']["total_agents"] = (len(world_agents_peer_infos) +
-                                                                        len(world_masters_peer_infos))
-                    self.profile.mark_change_in_connections()
+            if (self.rendezvous_pending or timeout or self.world.role_changed_by_world or
+                    self.world.received_address_update):
 
                 # Publish updated list of (all) world agents (i.e., both agents and masters)
-                world_all_peer_infos = self.conn.get_all_connected_peer_infos(NodeConn.WORLD)
+                world_all_peer_infos = roster_agents + roster_masters
                 if not (await self.conn.publish(self.get_world_peer_id(),
                                                 f"{self.conn.world_peer_id}::ps:rv",
                                                 content_type=Msg.WORLD_AGENTS_LIST,
@@ -2113,6 +2119,7 @@ class Node:
                     log.error("Failed to publish the updated list of (all) world agents (ignoring)", sub="prv")
                 else:
                     self.last_rendezvous_time = clock.get_time()
+                    self.rendezvous_pending = False
                     log.misc(f"Rendezvous messages just published "
                              f"(tag: {clock.get_cycle()}, peers: {len(world_all_peer_infos)})", sub="prv")
                     log.misc(f"Rendezvous message included peer IDs: "
@@ -2125,11 +2132,9 @@ class Node:
         # Updating list of node connections (being this a world or a plain agent)
         if added_peers or removed_peers:
 
-            # The following could have been already computed in the code above, let's reuse
-            if world_agents_peer_infos is None:
-                world_agents_peer_infos = self.conn.get_all_connected_peer_infos(NodeConn.WORLD_AGENTS)
-            if world_masters_peer_infos is None:
-                world_masters_peer_infos = self.conn.get_all_connected_peer_infos(NodeConn.WORLD_MASTERS)
+            # Every connected peer of the world pools, not the roster of the confirmed members
+            world_agents_peer_infos = self.conn.get_all_connected_peer_infos(NodeConn.WORLD_AGENTS)
+            world_masters_peer_infos = self.conn.get_all_connected_peer_infos(NodeConn.WORLD_MASTERS)
             world_private_peer_id = self.conn.get_all_connected_peer_infos(NodeConn.WORLD_NODE)
             world_private_peer_id = world_private_peer_id[0]['id'] if len(world_private_peer_id) > 0 else None
 
@@ -3228,10 +3233,11 @@ class Node:
             await self.__purge(private_peer_id, reason=HOSTED_REJECTED)
             return
         try:
-            # conn pools (routing) + world object (membership). The periodic rendezvous
-            # publish (PUBLISH_RENDEZVOUS_EVERY) advertises the new member to the world.
-            # Re-adding WITHOUT a TTL confirms the grant-time pre-admission (the
-            # provisional deadline is dropped: the member is now registered).
+            # conn pools (routing) + world object (membership). Re-adding WITHOUT a TTL
+            # confirms the grant-time pre-admission (the provisional deadline is dropped:
+            # the member is now registered). That puts it in the confirmed roster, which
+            # the next __handle_network_connections picks up to refresh the world summary
+            # and to publish the rendezvous at once.
             if role & Agent.ROLE_WORLD_MASTER == Agent.ROLE_WORLD_MASTER:
                 self.conn.add_to_world_masters_list(private_peer_id, private_addr, role)
             else:

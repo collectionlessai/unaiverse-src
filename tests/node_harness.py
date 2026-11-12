@@ -13,6 +13,11 @@ The SessionManagers are REAL (so is the Session FSM); only the surfaces below
 them (conn / hosted / profile / world) are fakes. A remote peer is represented
 by a plain SessionManager on a FakeConn wired into the shell's inbox, exactly
 like the e2e handshake tests.
+
+``build_world_host_on_real_conn`` is the variant for what the fakes cannot show:
+the same shell over a REAL ``NodeConn`` and a real ``NodeProfile``, with only the
+two transports faked (``WireP2P``), so the pools, the perimeter, the pre-admissions
+and the profile summaries behave as in production.
 """
 
 import time
@@ -22,6 +27,9 @@ from conftest import FakeP2P, FakeConn
 
 from unaiverse.networking.node.connpool import (NodeConn, SessionInbound, HandoffCorrelation,
                                                 _WORLD_DIAL_MIN_BUDGET_S, _WORLD_DIAL_MAX_BUDGET_S)
+from unaiverse.networking.node.profile import NodeProfile
+from unaiverse.networking.p2p.messages import Msg
+from unaiverse.networking.p2p.p2p import P2PError
 from unaiverse.networking.session import SessionManager
 from unaiverse.networking.session.sess_msg import WORLD_HANDOFF_COMPLETE
 
@@ -166,6 +174,9 @@ class FakeWorld:
         self.assigned = []
         self.added = []
         self.add_agent_returns = True
+        # Read (and cleared) by the world host's rendezvous publish.
+        self.role_changed_by_world = False
+        self.received_address_update = False
 
     def assign_role(self, profile, is_world_master):
         self.assigned.append((profile, is_world_master))
@@ -480,8 +491,109 @@ def build_agent_node_shell(node_peer_id: str, node_id: str = "shell-node",
     return node, conn
 
 
+class WireP2P:
+    """One fake transport instance under a REAL ``NodeConn``, which hands it to a real
+    SessionManager. It serves the planted transport links to ``update()`` and the
+    inbound Session frames to ``get_messages()``, routes the outbound frames into the
+    remote peers' inboxes, and records what is broadcast and who gets disconnected."""
+
+    def __init__(self, peer_id: str, log_sub: str):
+        self.peer_id = peer_id
+        self.log_sub = log_sub
+        self.addresses = [f"/ip4/10.0.0.1/tcp/4001/p2p/{peer_id}"]
+        self.is_public = True
+        self.relay_is_enabled = False
+        self._fake = FakeP2P(peer_id=peer_id, log_sub=log_sub)
+        self.links = {}          # peer_id -> connected-peer info, as the Go side reports it
+        self.inbox = deque()     # (sender, protocol, SessMsg), the shape FakeConn forwards
+        self.routes = {}         # remote peer_id -> that remote's inbox
+        self.broadcasts = []     # (channel, Msg) after a codec round-trip
+        self.failing_broadcasts = 0   # how many of the next broadcasts raise P2PError
+        self.disconnected = []
+
+    def link(self, peer_id: str, direction: str = "inbound") -> None:
+        """Plant a transport connection with ``peer_id`` (what a real dial produces)."""
+        self.links[peer_id] = {"id": peer_id, "direction": direction, "addrs": [],
+                               "connected_at": 0}
+
+    def unlink(self, peer_id: str) -> None:
+        self.links.pop(peer_id, None)
+
+    def get_connected_peers_info(self):
+        # Fresh dicts on every call, like the FFI: the pool keeps the one it admitted.
+        return [dict(c) for c in self.links.values()]
+
+    def get_topic_peers(self):
+        return []
+
+    def get_rendezvous_peers_info(self):
+        return None
+
+    def get_messages(self):
+        session_inbound = [SessionInbound(*item) for item in self.inbox]
+        self.inbox.clear()
+        return [], session_inbound
+
+    async def connect(self, addresses):
+        return None, False
+
+    async def disconnect(self, peer_id: str) -> bool:
+        self.disconnected.append(peer_id)
+        self.links.pop(peer_id, None)
+        return True
+
+    async def send_session(self, peer_id: str, protocol_id: str, sess_msg) -> bool:
+        inbox = self.routes.get(peer_id)
+        if inbox is None:
+            return False
+        inbox.append((self.peer_id, protocol_id, sess_msg))
+        return True
+
+    async def broadcast(self, channel: str, msg) -> None:
+        if self.failing_broadcasts > 0:
+            self.failing_broadcasts -= 1
+            raise P2PError("broadcast failed (planted by the test)")
+        self.broadcasts.append((channel, Msg.from_bytes(msg.to_bytes())))
+
+    async def sign_with_host_key(self, data: bytes):
+        return await self._fake.sign_with_host_key(data)
+
+    async def verify_peer_signature(self, peer_id: str, data: bytes, signature: bytes) -> bool:
+        return await self._fake.verify_peer_signature(peer_id, data, signature)
+
+
+def build_world_host_on_real_conn(node_peer_id: str, world: FakeWorld,
+                                  node_id: str = "world-node", public_key=None,
+                                  max_connections: int = 32):
+    """World-host Node shell over a REAL ``NodeConn`` on two ``WireP2P`` transports,
+    with a real ``NodeProfile``. Unlike ``build_agent_node_shell`` this keeps the real
+    pools, perimeter, pre-admissions and profile summary in the loop, which is what a
+    test about the roster the world advertises needs (``NodeFakeConn`` has no pools).
+
+    Pass the root ``public_key`` to have the handshake verify real tokens (the remote
+    peers then need a ``token_factory``). Returns (node, conn, p2p_public, p2p_world).
+    """
+    node, _ = build_agent_node_shell(node_peer_id, node_id=node_id, world=world)
+    p2p_public = WireP2P(node_peer_id, "pub")
+    p2p_world = WireP2P(node_peer_id + "-w", "prv")
+    conn = NodeConn(max_connections=max_connections, is_world_node=True,
+                    public_key=public_key, token="host-token", local_node_id=node_id)
+    conn.attach_session_policy(p2p_u=p2p_public, p2p_w=p2p_world,
+                               local_profile_factory=lambda: node.profile.get_all_profile(),
+                               decision_hook=lambda *a: node._decision_policy(*a))
+    node.conn = conn
+    node.profile = NodeProfile.from_dict(full_profile_dict(
+        node_id, peer_id=node_peer_id, private_peer_id=node_peer_id + "-w",
+        private_peer_addresses=list(p2p_world.addresses)))
+    # Rendezvous state (Node.__init__ sets these; the shell bypasses __init__).
+    node.last_rendezvous_time = 0.
+    node.rendezvous_pending = False
+    return node, conn, p2p_public, p2p_world
+
+
 def make_remote_peer(remote_peer_id: str, node_id: str, node_inbox: deque,
-                     p2p_name: str = NodeConn.P2P_PUBLIC, profile_factory=None):
+                     p2p_name: str = NodeConn.P2P_PUBLIC, profile_factory=None,
+                     token_factory=None):
     """A remote peer talking to the shell: a bare SessionManager on a FakeConn
     whose sends land in `node_inbox` (one of conn.inbox_by_p2p). Returns
     (sm, conn, remote_inbox); pump the remote with apump(remote_inbox, sm)."""
@@ -496,5 +608,6 @@ def make_remote_peer(remote_peer_id: str, node_id: str, node_inbox: deque,
         local_peer_id=remote_peer_id,
         local_node_id=node_id,
         local_profile_factory=profile_factory or (lambda: full_profile_dict(node_id)),
+        token_factory=token_factory,
     )
     return sm, remote_conn, remote_inbox
