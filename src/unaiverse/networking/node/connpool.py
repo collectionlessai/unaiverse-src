@@ -90,6 +90,11 @@ class HandoffCorrelation:
         """True if this world peer-id is the world side of an in-flight handoff."""
         return world_peer_id in self.world_to_public
 
+    def carrier_of(self, world_peer_id: str) -> "str | None":
+        """The public carrier whose grant opened the handoff to this world peer-id, or
+        None when the peer-id is not the world side of an in-flight handoff."""
+        return self.world_to_public.get(world_peer_id)
+
     async def rollback(self, peer_id: str) -> None:
         """Roll back the correlation for a terminal Session, whichever side died.
 
@@ -1118,6 +1123,12 @@ class NodeConn:
         Session was opened by start_world_handoff), as opposed to a plain in-world
         agent-to-agent connection that carries no grant correlation."""
         return self._handoff.is_pending(world_peer_id)
+
+    def handoff_carrier_of(self, world_peer_id: str) -> "str | None":
+        """The public peer whose grant opened the in-flight handoff to this world peer-id
+        (its carrier), or None when there is none. Node matches it against the join in
+        progress before running the join body."""
+        return self._handoff.carrier_of(world_peer_id)
 
     async def complete_world_handoff(self, world_peer_id: str) -> None:
         """The world Session established: retire the correlated public carrier — GOAWAY

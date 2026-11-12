@@ -795,6 +795,8 @@ def test_world_handoff_failure_cleans_pending_maps(failure_mode):
     peer), the handoff bookkeeping must be rolled back."""
     async def _scenario():
         node, conn = build_agent_node_shell(NODE_PEER)
+        # The join in progress, as ask_to_join_world records it: its grant is redeemed.
+        node.joining_world_info = {"world_public_peer_id": "public-world-peer", "options": {}}
         world_world_peer = "world-node-id-world-peer"
         if failure_mode == "dial_failed":
             conn.connect_returns = (None, False)
@@ -1066,9 +1068,12 @@ def test_failed_join_body_tears_down_world_session_and_rearms():
         node.rejoining_kwargs = {}
         node.joining_world_info = {"world_public_peer_id": "host-pub",
                                    "options": {"world_name": "w"}}
+        # What start_world_handoff left behind: the correlation with the carrier of the
+        # join in progress, and the routing pointed at the world host.
+        conn._handoff.start("host-pub", REMOTE_PEER)
         conn.set_world(REMOTE_PEER)
 
-        async def _join_fails(peer_id, data, grant):
+        async def _join_fails(world_peer_id, grant):
             return False
         node._join_world_after_session = _join_fails
 
@@ -1081,5 +1086,125 @@ def test_failed_join_body_tears_down_world_session_and_rearms():
         assert REMOTE_PEER in conn.removed_calls      # world session purged (reasoned)
         assert None in conn.set_world_calls           # routing un-pointed
         assert node.rejoining_time > 0.               # retry armed (involuntary end)
+
+    asyncio.run(_scenario())
+
+
+def _world_established(world_peer_id, grant):
+    """The ESTABLISHED of a world Session opened by a handoff, as the joiner sees it."""
+    return SessionEvent(type=SessionEventType.ESTABLISHED, session_id="00" * 8,
+                        peer_id=world_peer_id, role=SessionRole.INITIATOR,
+                        p2p_name=NodeConn.P2P_WORLD, data={"profile_b": {}, "grant": grant})
+
+
+def _record_join_body(node):
+    """Replace the join body with a recorder that reports a successful join."""
+    calls = []
+
+    async def _join(world_peer_id, grant):
+        calls.append((world_peer_id, grant))
+        return True
+    node._join_world_after_session = _join
+    return calls
+
+
+@pytest.mark.parametrize("intent_carrier", ["host-pub", None])
+def test_world_session_of_the_join_in_progress_runs_the_join_body(intent_carrier):
+    """The world Session opened by the grant of the join in progress runs the join body
+    and retires its carrier. A join that has not resolved its carrier yet (None) is the
+    same request, so it takes the Session as its own."""
+    async def _scenario():
+        node, conn = build_agent_node_shell(NODE_PEER)
+        node.joining_world_info = {"world_public_peer_id": intent_carrier, "options": {}}
+        conn._handoff.start("host-pub", REMOTE_PEER)
+        conn.set_world(REMOTE_PEER)
+        calls = _record_join_body(node)
+
+        grant = {"role": 1}
+        await node._dispatch_session_event(_world_established(REMOTE_PEER, grant))
+
+        assert calls == [(REMOTE_PEER, grant)]
+        assert conn._world_to_public == {}                 # carrier retired, correlation dropped
+        assert REMOTE_PEER not in conn.removed_calls       # the world Session stays
+        assert conn.get_world_node_peer_id() == REMOTE_PEER
+
+    asyncio.run(_scenario())
+
+
+@pytest.mark.parametrize("newer_join", ["other_world", "given_up"])
+def test_world_session_of_a_replaced_join_does_not_run_the_join_body(newer_join):
+    """A grant was redeemed, then the join was replaced by one to another world (or given
+    up) while its world Session was still coming up. When that Session establishes the
+    node must not enter the world: no join body, carrier retired, world Session closed
+    (the host registered us on its side), routing un-pointed, and no rejoin armed."""
+    async def _scenario():
+        node, conn = build_agent_node_shell(NODE_PEER)
+        node.keep_rejoining = True
+        node.rejoining_time = -1.
+        conn._handoff.start("old-host-pub", REMOTE_PEER)   # the handoff of the first join
+        conn.set_world(REMOTE_PEER)
+        node.joining_world_info = ({"world_public_peer_id": "new-host-pub", "options": {}}
+                                   if newer_join == "other_world" else None)
+        calls = _record_join_body(node)
+
+        await node._dispatch_session_event(_world_established(REMOTE_PEER, {"role": 1}))
+
+        assert calls == []
+        assert node.hosted.accepted_roles == []            # never entered the world
+        assert conn._world_to_public == {} and conn._pending_world_handoff == {}
+        assert REMOTE_PEER in conn.removed_calls           # world Session closed
+        assert conn.get_world_node_peer_id() is None       # it pointed at the old world
+        assert node.rejoining_time == -1.
+
+    asyncio.run(_scenario())
+
+
+def test_closing_an_unwanted_world_session_keeps_the_routing_of_the_newer_join():
+    """By the time the old world Session establishes, the newer join may already have
+    pointed the routing at its own world: closing the old one must not clear it."""
+    async def _scenario():
+        node, conn = build_agent_node_shell(NODE_PEER)
+        conn._handoff.start("old-host-pub", REMOTE_PEER)
+        conn._handoff.start("new-host-pub", "new-world-peer")
+        conn.set_world("new-world-peer")
+        node.joining_world_info = {"world_public_peer_id": "new-host-pub", "options": {}}
+        calls = _record_join_body(node)
+
+        await node._dispatch_session_event(_world_established(REMOTE_PEER, {"role": 1}))
+
+        assert calls == []
+        assert conn.get_world_node_peer_id() == "new-world-peer"
+        assert conn._world_to_public == {"new-world-peer": "new-host-pub"}   # the newer handoff is intact
+
+    asyncio.run(_scenario())
+
+
+@pytest.mark.parametrize("intent, redeemed", [
+    ({"world_public_peer_id": "public-world-peer", "options": {}}, True),
+    ({"world_public_peer_id": None, "options": {}}, True),
+    ({"world_public_peer_id": "another-world-pub", "options": {}}, False),
+    (None, False),
+])
+def test_only_the_grant_of_the_join_in_progress_is_redeemed(intent, redeemed):
+    """A grant opens its world Session only when it comes over the carrier of the join in
+    progress. One that arrives after the join was replaced (or given up) is not redeemed:
+    no correlation, no routing change, no world dial, and its carrier is closed."""
+    async def _scenario():
+        node, conn = build_agent_node_shell(NODE_PEER)
+        node.joining_world_info = intent
+        conn.connect_returns = ("world-node-id-world-peer", False)
+
+        await node._start_world_handoff("public-world-peer", _world_grant_blob())
+
+        if redeemed:
+            assert conn._pending_world_handoff == {"public-world-peer": "world-node-id-world-peer"}
+            assert conn.get_world_node_peer_id() == "world-node-id-world-peer"
+            assert conn._sm_world.get_session("world-node-id-world-peer") is not None
+            assert "public-world-peer" not in conn.removed_calls
+        else:
+            assert conn._pending_world_handoff == {}
+            assert conn.set_world_calls == []
+            assert conn._sm_world.get_session("world-node-id-world-peer") is None
+            assert "public-world-peer" in conn.removed_calls   # carrier closed
 
     asyncio.run(_scenario())

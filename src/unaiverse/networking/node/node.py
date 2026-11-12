@@ -3111,6 +3111,30 @@ class Node:
                     except Exception as e:
                         log.error(f"[session] __join_agent failed for ...{ev.peer_id[-5:]}: {e}")
                 return
+
+            # The join body runs only for the join in progress. Once a grant is out nothing
+            # stops the world Session it opened, so one can establish after its join was
+            # given up or replaced by a join to another world: entering that world would
+            # put the node where nobody is asking it to be.
+            if not self._is_join_in_progress(self.conn.handoff_carrier_of(ev.peer_id)):
+                log.misc(f"[session] world Session to ...{ev.peer_id[-5:]} does not belong to the "
+                         f"join in progress; closing it", sub="prv")
+                # Retire the carrier and drop the correlation, then say goodbye on the world
+                # Session: the host registered us when it established on its side.
+                try:
+                    await self.conn.complete_world_handoff(ev.peer_id)
+                except Exception as e:
+                    log.error(f"[session] complete_world_handoff failed for ...{ev.peer_id[-5:]}: {e}")
+                try:
+                    await self.__purge(ev.peer_id, reason=WORLD_DISENGAGEMENT)
+                except Exception as e:
+                    log.error(f"[session] closing the unwanted world Session failed "
+                              f"for ...{ev.peer_id[-5:]}: {e}")
+                # The routing may already point at the world of the newer join.
+                if self.conn.get_world_node_peer_id() == ev.peer_id:
+                    self.conn.set_world(None)
+                return
+
             # We joined a world: run the join body and retire the public Session.
             ok = False
             try:
@@ -3172,10 +3196,34 @@ class Node:
         if ev.role == SessionRole.RESPONDER and is_world and self.node_type is Node.WORLD:
             await self._world_host_register_agent(ev, profile_b)
 
+    def _is_join_in_progress(self, carrier: str | None) -> bool:
+        """Joiner side: True when the handoff whose grant came over the public Session to
+        ``carrier`` belongs to the join in progress, the one ask_to_join_world recorded
+        last. A join that has not resolved its carrier yet is taken as the same request;
+        no join at all (never asked, given up, or the world was left) owns no handoff."""
+        if self.joining_world_info is None:
+            return False
+        wanted_carrier = self.joining_world_info.get("world_public_peer_id")
+        return wanted_carrier is None or wanted_carrier == carrier
+
     async def _start_world_handoff(self, public_peer_id: str, grant: dict) -> None:
         """Joiner side: the public Session yielded a WorldGrant. Parse the world profile
         (profile domain, stays on Node) and hand the public<->world correlation + the
         world Session open to the Coordinator, dispatching the events it returns."""
+        # Only the grant of the join in progress is redeemed. One that comes over another
+        # carrier belongs to a join that was replaced before its grant arrived: opening
+        # its world Session would only get the node registered in a world it then has to
+        # leave, so the carrier is closed here instead.
+        if not self._is_join_in_progress(public_peer_id):
+            log.misc(f"[session] grant from ...{public_peer_id[-5:]} does not belong to the join "
+                     f"in progress; closing its carrier")
+            try:
+                await self.__purge(public_peer_id, reason=WORLD_DISENGAGEMENT)
+            except Exception as e:
+                log.error(f"[session] closing the carrier of an unwanted grant failed "
+                          f"for ...{public_peer_id[-5:]}: {e}")
+            return
+
         try:
             world_profile = NodeProfile.from_dict(
                 json.loads(grant["world_profile_bytes"].decode("utf-8")))

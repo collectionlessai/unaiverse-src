@@ -342,6 +342,9 @@ class NodeFakeConn(FakeConn):
     def is_pending_handoff(self, world_peer_id):
         return self._handoff.is_pending(world_peer_id)
 
+    def handoff_carrier_of(self, world_peer_id):
+        return self._handoff.carrier_of(world_peer_id)
+
     async def complete_world_handoff(self, world_peer_id):
         # Retirement effects stay harness-side (GOAWAY record + fake pool evict);
         # the correlation bookkeeping is the shared ledger's.
