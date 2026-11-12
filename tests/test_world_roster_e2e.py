@@ -18,10 +18,7 @@ import json
 import time
 import asyncio
 
-import jwt
 import pytest
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric import rsa
 
 from unaiverse.clock import clock
 from unaiverse.custom import Custom
@@ -33,36 +30,15 @@ from unaiverse.networking.session import SessionEventType
 from unaiverse.networking.session.sess_msg import WORLD_HANDOFF_COMPLETE, WORLD_DISENGAGEMENT
 
 from conftest import apump
-from inproc_harness import HarnessClock
 from node_harness import (
-    build_world_host_on_real_conn, make_remote_peer, full_profile_dict, FakeWorld,
+    build_node_shell_on_real_conn, wire_remote_peer, mint_node_token, full_profile_dict,
+    FakeWorld,
 )
 
 pytestmark = pytest.mark.e2e
 
 HOST_PEER = "12D3KooWhost1worldhosttttttttttttttttttttttttttttttt"
 MASTER_NODE_ID = "master-node"
-
-
-class _SteppedClock(HarnessClock):
-    """Cycles advance one by one while the time stands still unless a test moves it,
-    so the periodic rendezvous slot only comes due when the test says so."""
-
-    def next_cycle(self) -> bool:
-        self.cycle += 1
-        return True
-
-    def advance(self, seconds: float) -> None:
-        self._time += seconds
-
-
-@pytest.fixture
-def stepped_clock():
-    saved = getattr(clock, "_Clock__instance", None)
-    fc = _SteppedClock()
-    clock.set(fc)
-    yield fc
-    setattr(clock, "_Clock__instance", saved)
 
 
 @pytest.fixture(autouse=True)
@@ -73,25 +49,13 @@ def _offline_node_profile(monkeypatch):
                         staticmethod(lambda: "203.0.113.1"))
 
 
-@pytest.fixture(scope="module")
-def root_keys():
-    """The root server's key pair: (private PEM, public PEM)."""
-    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    private_pem = key.private_bytes(serialization.Encoding.PEM,
-                                    serialization.PrivateFormat.PKCS8,
-                                    serialization.NoEncryption())
-    public_pem = key.public_key().public_bytes(serialization.Encoding.PEM,
-                                               serialization.PublicFormat.SubjectPublicKeyInfo)
-    return private_pem, public_pem
-
-
 class _Host:
     """The world host under test, with the accessors the assertions read."""
 
     def __init__(self, root_public_key):
         self.world = FakeWorld()
-        self.node, self.conn, self.p2p_public, self.p2p_world = build_world_host_on_real_conn(
-            HOST_PEER, self.world, public_key=root_public_key)
+        self.node, self.conn, self.p2p_public, self.p2p_world = build_node_shell_on_real_conn(
+            HOST_PEER, world=self.world, node_id="world-node", public_key=root_public_key)
         self.node.world_masters_node_ids = {MASTER_NODE_ID}
         self.public_peer_id = self.p2p_public.peer_id
         self.world_peer_id = self.p2p_world.peer_id
@@ -128,24 +92,12 @@ class _Joiner:
         profile = full_profile_dict(self.node_id, peer_id=self.public_peer_id,
                                     private_peer_id=self.world_peer_id,
                                     private_peer_addresses=self.world_addrs)
-        _, (_, cv_hash) = NodeProfile.from_dict(profile).verify_cv_hash("")
-        token = jwt.encode({"node_id": self.node_id, "cv_hash": cv_hash,
-                            "p2p_peers": json.dumps([self.public_peer_id, self.world_peer_id]),
-                            "exp": int(time.time()) + 3600},
-                           root_private_key, algorithm="RS256")
-
-        self.sm_public, conn_public, self.inbox_public = make_remote_peer(
-            self.public_peer_id, self.node_id, host.p2p_public.inbox,
-            profile_factory=lambda: profile, token_factory=lambda: token)
-        conn_public.connect_returns = (host.public_peer_id, False)
-        host.p2p_public.routes[self.public_peer_id] = self.inbox_public
-
-        self.sm_world, conn_world, self.inbox_world = make_remote_peer(
-            self.world_peer_id, self.node_id, host.p2p_world.inbox,
-            p2p_name=NodeConn.P2P_WORLD,
-            profile_factory=lambda: profile, token_factory=lambda: token)
-        conn_world.connect_returns = (host.world_peer_id, False)
-        host.p2p_world.routes[self.world_peer_id] = self.inbox_world
+        token = mint_node_token(root_private_key, profile,
+                                [self.public_peer_id, self.world_peer_id])
+        self.sm_public, self.inbox_public = wire_remote_peer(
+            host.p2p_public, self.public_peer_id, profile, token)
+        self.sm_world, self.inbox_world = wire_remote_peer(
+            host.p2p_world, self.world_peer_id, profile, token, p2p_name=NodeConn.P2P_WORLD)
 
     async def dial_public(self) -> None:
         """Open the public world-join Session: the HELLO lands in the host's inbox."""

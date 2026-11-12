@@ -41,6 +41,7 @@ in `pyproject.toml`). Covers:
 | Full in-process handshake         | `test_handshake_e2e.py`       |
 | World-join handoff (mocked)        | `test_world_join_e2e.py`      |
 | World roster: summary + rendezvous | `test_world_roster_e2e.py`    |
+| Profile connections follow the pools | `test_profile_connections_e2e.py` |
 
 `test_full_handshake_happy_path` is the keystone: it wires two `SessionManager`s
 through a fake bidirectional transport and drives the full Stage-1/Stage-2

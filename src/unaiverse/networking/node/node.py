@@ -2000,10 +2000,8 @@ class Node:
             log.cpool("Current status of the pools, right after the update:\n" + str(self.conn))
 
         # Checking if some peers were removed
-        removed_peers = False
         for pool_name, removed_peer_ids in removed_peer_ids_by_pool.items():
             for peer_id in removed_peer_ids:
-                removed_peers = True
                 log.misc("Removing a not-connected-anymore peer, "
                          "pool_name: " + pool_name + ", peer_id: " + peer_id + "...",
                          sub="prv" if pool_name in self.conn.WORLD or pool_name in self.conn.WORLD_NODE else "pub")
@@ -2038,8 +2036,7 @@ class Node:
                     self.__inspector_cache = {"behav": None, "known_streams_count": 0, "all_agents_count": 0}
                     log.misc("Inspector disconnected")
 
-        # Handling newly connected peers
-        added_peers = False
+        # Handling newly connected peers.
         # Every peer (re)appearing in the pool diff is a potential transport
         # reconnect for a Session riding its grace period: on_peer_reconnected
         # is a no-op unless the Session is RECONNECTING, so feeding it fresh
@@ -2061,7 +2058,6 @@ class Node:
         self.reconnected.clear()
         for pool_name, new_peer_ids in new_peer_ids_by_pool.items():
             for peer_id in new_peer_ids:
-                added_peers = True
                 log.misc("Processing a newly connected peer, "
                          "pool_name: " + pool_name + ", peer_id: " + peer_id + "...",
                          sub="prv" if pool_name in self.conn.WORLD or pool_name in self.conn.WORLD_NODE else "pub")
@@ -2129,24 +2125,28 @@ class Node:
                     self.world.role_changed_by_world = False
                     self.world.received_address_update = False
 
-        # Updating list of node connections (being this a world or a plain agent)
-        if added_peers or removed_peers:
+        # Updating list of node connections (being this a world or a plain agent): every
+        # connected peer of the pools, not the roster of the confirmed members
+        public_agents_peer_infos = self.conn.get_all_connected_peer_infos(NodeConn.PUBLIC)
+        world_agents_peer_infos = self.conn.get_all_connected_peer_infos(NodeConn.WORLD_AGENTS)
+        world_masters_peer_infos = self.conn.get_all_connected_peer_infos(NodeConn.WORLD_MASTERS)
+        world_private_peer_id = self.conn.get_all_connected_peer_infos(NodeConn.WORLD_NODE)
+        world_private_peer_id = world_private_peer_id[0]['id'] if len(world_private_peer_id) > 0 else None
 
-            # Every connected peer of the world pools, not the roster of the confirmed members
-            world_agents_peer_infos = self.conn.get_all_connected_peer_infos(NodeConn.WORLD_AGENTS)
-            world_masters_peer_infos = self.conn.get_all_connected_peer_infos(NodeConn.WORLD_MASTERS)
-            world_private_peer_id = self.conn.get_all_connected_peer_infos(NodeConn.WORLD_NODE)
-            world_private_peer_id = world_private_peer_id[0]['id'] if len(world_private_peer_id) > 0 else None
-
-            # This is only computed here
-            public_agents_peer_infos = self.conn.get_all_connected_peer_infos(NodeConn.PUBLIC)
-
-            # Updating node profile with the summary of currently connected peers
-            dynamic_profile = self.profile.get_dynamic_profile()
-            dynamic_profile['connections']['public_agents'] = public_agents_peer_infos
-            dynamic_profile['connections']['world_agents'] = world_agents_peer_infos
-            dynamic_profile['connections']['world_masters'] = world_masters_peer_infos
-            dynamic_profile['connections']['world_peer_id'] = world_private_peer_id
+        # As for the world roster above, the change is read off the pools, compared with
+        # what the profile lists, and not off the diff of update(): a peer evicted on a
+        # Session event (a clean leave, a failed handshake, a kick) leaves its pool
+        # outside update(), so no diff ever reports it. None and the empty list are the
+        # same here: an idle node, or one that just left a world, has nothing to write.
+        connections = self.profile.get_dynamic_profile()['connections']
+        if ((connections.get('public_agents') or []) != public_agents_peer_infos or
+                (connections.get('world_agents') or []) != world_agents_peer_infos or
+                (connections.get('world_masters') or []) != world_masters_peer_infos or
+                connections.get('world_peer_id') != world_private_peer_id):
+            connections['public_agents'] = public_agents_peer_infos
+            connections['world_agents'] = world_agents_peer_infos
+            connections['world_masters'] = world_masters_peer_infos
+            connections['world_peer_id'] = world_private_peer_id
             self.profile.mark_change_in_connections()
 
     async def __handle_network_messages(self, interact_mode_opts: dict | None = None) -> None:

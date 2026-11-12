@@ -14,14 +14,17 @@ them (conn / hosted / profile / world) are fakes. A remote peer is represented
 by a plain SessionManager on a FakeConn wired into the shell's inbox, exactly
 like the e2e handshake tests.
 
-``build_world_host_on_real_conn`` is the variant for what the fakes cannot show:
+``build_node_shell_on_real_conn`` is the variant for what the fakes cannot show:
 the same shell over a REAL ``NodeConn`` and a real ``NodeProfile``, with only the
 two transports faked (``WireP2P``), so the pools, the perimeter, the pre-admissions
 and the profile summaries behave as in production.
 """
 
+import json
 import time
 from collections import deque
+
+import jwt
 
 from conftest import FakeP2P, FakeConn
 
@@ -562,22 +565,76 @@ class WireP2P:
         return await self._fake.verify_peer_signature(peer_id, data, signature)
 
 
-def build_world_host_on_real_conn(node_peer_id: str, world: FakeWorld,
-                                  node_id: str = "world-node", public_key=None,
-                                  max_connections: int = 32):
-    """World-host Node shell over a REAL ``NodeConn`` on two ``WireP2P`` transports,
-    with a real ``NodeProfile``. Unlike ``build_agent_node_shell`` this keeps the real
-    pools, perimeter, pre-admissions and profile summary in the loop, which is what a
-    test about the roster the world advertises needs (``NodeFakeConn`` has no pools).
+class SteppedClock:
+    """Stand-in for the global clock in tests that drive a Node cycle by cycle: the
+    cycles advance one by one while the time stands still unless the test moves it,
+    so nothing time-driven (the periodic rendezvous slot) fires behind its back."""
 
-    Pass the root ``public_key`` to have the handshake verify real tokens (the remote
-    peers then need a ``token_factory``). Returns (node, conn, p2p_public, p2p_world).
+    def __init__(self):
+        self.cycle = -1
+        self._time = 1000.0
+
+    def get_cycle(self) -> int:
+        return self.cycle
+
+    def get_cycle_time(self) -> float:
+        return float(self.cycle)
+
+    def get_time(self, passed: bool = False) -> float:
+        return self._time
+
+    def get_time_ms(self, monotonic: bool = False) -> int:
+        return int(self._time * 1000)
+
+    def next_cycle(self) -> bool:
+        self.cycle += 1
+        return True
+
+    def advance(self, seconds: float) -> None:
+        self._time += seconds
+
+
+def make_root_keys() -> tuple[bytes, bytes]:
+    """A key pair standing in for the root server's: (private PEM, public PEM)."""
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    private_pem = key.private_bytes(serialization.Encoding.PEM,
+                                    serialization.PrivateFormat.PKCS8,
+                                    serialization.NoEncryption())
+    public_pem = key.public_key().public_bytes(serialization.Encoding.PEM,
+                                               serialization.PublicFormat.SubjectPublicKeyInfo)
+    return private_pem, public_pem
+
+
+def mint_node_token(root_private_pem: bytes, profile: dict, peer_ids: list[str]) -> str:
+    """The token the root would mint for the node of ``profile`` (shaped like
+    ``full_profile_dict``): it attests the node-id, the hash of the profile's CV and
+    the peer-ids the node speaks from, which is what the handshake checks."""
+    _, (_, cv_hash) = NodeProfile.from_dict(profile).verify_cv_hash("")
+    return jwt.encode({"node_id": profile["static"]["node_id"], "cv_hash": cv_hash,
+                       "p2p_peers": json.dumps(peer_ids), "exp": int(time.time()) + 3600},
+                      root_private_pem, algorithm="RS256")
+
+
+def build_node_shell_on_real_conn(node_peer_id: str, world: FakeWorld | None = None,
+                                  node_id: str = "shell-node", public_key=None,
+                                  max_connections: int = 32):
+    """Node shell over a REAL ``NodeConn`` on two ``WireP2P`` transports, with a real
+    ``NodeProfile``: a world host when ``world`` is given, an agent otherwise. Unlike
+    ``build_agent_node_shell`` this keeps the real pools, perimeter, pre-admissions and
+    profile summaries in the loop, which is what a test about what a node reports of
+    its peers needs (``NodeFakeConn`` has no pools).
+
+    A real ``NodeConn`` always verifies the tokens of the handshake: pass the root
+    ``public_key`` and wire the remote peers with ``wire_remote_peer``.
+    Returns (node, conn, p2p_public, p2p_world).
     """
     node, _ = build_agent_node_shell(node_peer_id, node_id=node_id, world=world)
     p2p_public = WireP2P(node_peer_id, "pub")
     p2p_world = WireP2P(node_peer_id + "-w", "prv")
-    conn = NodeConn(max_connections=max_connections, is_world_node=True,
-                    public_key=public_key, token="host-token", local_node_id=node_id)
+    conn = NodeConn(max_connections=max_connections, is_world_node=world is not None,
+                    public_key=public_key, token="shell-token", local_node_id=node_id)
     conn.attach_session_policy(p2p_u=p2p_public, p2p_w=p2p_world,
                                local_profile_factory=lambda: node.profile.get_all_profile(),
                                decision_hook=lambda *a: node._decision_policy(*a))
@@ -589,6 +646,21 @@ def build_world_host_on_real_conn(node_peer_id: str, world: FakeWorld,
     node.last_rendezvous_time = 0.
     node.rendezvous_pending = False
     return node, conn, p2p_public, p2p_world
+
+
+def wire_remote_peer(p2p: WireP2P, remote_peer_id: str, profile: dict, token: str,
+                     p2p_name: str = NodeConn.P2P_PUBLIC):
+    """A remote peer of a shell built on a real conn, on the instance served by ``p2p``:
+    a bare SessionManager presenting ``profile`` and ``token``, whose frames reach the
+    shell and which receives what the shell sends to ``remote_peer_id``. The transport
+    link is planted apart (``p2p.link``), when the test wants the peer connected.
+    Returns (sm, remote_inbox); pump the remote with apump(remote_inbox, sm)."""
+    sm, remote_conn, remote_inbox = make_remote_peer(
+        remote_peer_id, profile["static"]["node_id"], p2p.inbox, p2p_name=p2p_name,
+        profile_factory=lambda: profile, token_factory=lambda: token)
+    remote_conn.connect_returns = (p2p.peer_id, False)
+    p2p.routes[remote_peer_id] = remote_inbox
+    return sm, remote_inbox
 
 
 def make_remote_peer(remote_peer_id: str, node_id: str, node_inbox: deque,

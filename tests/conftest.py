@@ -334,6 +334,28 @@ def _pump_call(sm, peer_id, protocol_id, payload):
 # inherited by tests/p2p/ tests; they are lazy, so the fast suite never starts a
 # real P2P node.
 
+# Fixtures for the Node shells built on a real NodeConn (node_harness.py)
+
+@pytest.fixture(scope="session")
+def root_keys():
+    """The root server's key pair, (private PEM, public PEM): the shell verifies the
+    tokens of its peers with the public one, the tests mint them with the private one."""
+    from node_harness import make_root_keys
+    return make_root_keys()
+
+
+@pytest.fixture
+def stepped_clock():
+    """Replace the global clock with a SteppedClock for the test (restored after)."""
+    from unaiverse.clock import clock
+    from node_harness import SteppedClock
+    saved = getattr(clock, "_Clock__instance", None)
+    fc = SteppedClock()
+    clock.set(fc)
+    yield fc
+    setattr(clock, "_Clock__instance", saved)
+
+
 @pytest.fixture(scope="session")
 def _libp2p_setup():
     """Initialize the Go shared library exactly once for the whole session."""
