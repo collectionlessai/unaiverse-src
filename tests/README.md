@@ -1,56 +1,62 @@
-# Session tests
+# Tests
 
 Three layers, fastest first:
 
-  * **Go-mocked unit + in-process integration** (`test_session_fsm.py`,
-    `test_session_manager.py`, `test_connpool_routing.py`, `test_handshake_e2e.py`,
-    `test_world_join_e2e.py`) — pure Python. The Go shared library is stubbed
-    (`FakeP2P`/`FakeConn` in `conftest.py`); runnable on any machine in ~2 s. This
-    is the default suite and the per-commit gate.
+  * **Default suite** (every `test_*.py` in this folder, plus `uai/`). Pure Python:
+    whatever would call into the Go shared library is replaced by fakes (`FakeP2P` and
+    `FakeConn` in `conftest.py`, the Node shells of `node_harness.py`, the in-process
+    agents of `inproc_harness.py`), so it runs on any machine. This is the per-commit
+    gate.
 
-  * **Real-libp2p integration** (`tests/p2p/`, marked `@pytest.mark.p2p`) — boots
+  * **Real-libp2p integration** (`tests/p2p/`, marked `@pytest.mark.p2p`). Boots
     *real* `P2P` instances over the built `unailib.*.so` and talks over real
-    loopback/LAN TCP, in one process. Covers handshake, intentional close, and the
-    full world-join handoff (with real cross-instance crypto). **Opt-in** — not run
-    by default (needs the `.so` and a usable NIC). Helpers live in
-    `realnet_helpers.py`.
+    loopback/LAN TCP, in one process. **Opt-in**: not run by default (it needs the
+    `.so` and a usable NIC). Helpers live in `realnet_helpers.py`.
 
-  * **`tools/session_runner.py`** — manual cross-machine / liveness harness. Boots
+  * **`tools/session_runner.py`**, the manual cross-machine / liveness harness. Boots
     the real stack and drives a Session against a remote peer. Use it for what the
     automated suites *can't* do: two physical machines, real network disruption,
     and live observation of `RECONNECTING`/`RESUMED`/`LOST`. It does **not** check
-    handshake/world-join correctness — the `-m p2p` suite owns that now.
+    handshake/world-join correctness, the `-m p2p` suite owns that.
 
 All commands below run from the repository root, inside the project's Python
 environment.
 
-## Running the default (go-mocked) suite
+## Running the default suite
 
 ```bash
 pytest -q
 ```
 
-48 tests, ~2 s, `p2p` tests excluded automatically (via `addopts = -m 'not p2p'`
-in `pyproject.toml`). Covers:
+About 950 tests in about 15 s. The `p2p` tests are excluded automatically (via
+`addopts = -m 'not p2p'` in `pyproject.toml`). A few tests are skipped or expected
+to fail on purpose (parked gates, vector operations not implemented on this side):
+`pytest -q -rsx` lists them with their reason.
 
-| Area                              | File                          |
-|-----------------------------------|-------------------------------|
-| Session FSM (every transition)    | `test_session_fsm.py`         |
-| SessionManager (tie-breaker, etc) | `test_session_manager.py`     |
-| connpool routing + SessMsg codec  | `test_connpool_routing.py`    |
-| Full in-process handshake         | `test_handshake_e2e.py`       |
-| World-join handoff (mocked)        | `test_world_join_e2e.py`      |
-| World roster: summary + rendezvous | `test_world_roster_e2e.py`    |
-| Profile connections follow the pools | `test_profile_connections_e2e.py` |
+The modules are marked `unit` or `e2e` (`pytest -m unit`, `pytest -m e2e`), except
+`test_node_root_robustness.py` and `uai/`, which carry no marker. By area:
 
-`test_full_handshake_happy_path` is the keystone: it wires two `SessionManager`s
-through a fake bidirectional transport and drives the full Stage-1/Stage-2
-sequence with real protobufs. A regression in the FSM, the protocol routing, or
-the message schemas breaks it.
+| Area | Files |
+|---|---|
+| Session FSM and SessionManager | `test_session_fsm.py`, `test_session_manager.py` |
+| Handshake, reconnection and world join between SessionManagers | `test_handshake_e2e.py`, `test_session_reconnect_e2e.py`, `test_world_join_e2e.py` |
+| Coordinator (`NodeConn`): routing, perimeter, teardown, codecs, tokens | `test_connpool_routing.py`, `test_connpool_teardown.py`, `test_messages.py`, `test_tokens.py` |
+| Node over real SessionManagers and a fake conn (`node_harness.py`) | `test_node_integration.py`, `test_join_code_gate.py`, `test_node_lifecycle.py`, `test_node_root_robustness.py` |
+| Node over the real `NodeConn` and fake transports (`node_harness.py`) | `test_world_roster_e2e.py`, `test_profile_connections_e2e.py` |
+| Real agents in process (`inproc_harness.py`): chat, pubsub, engage, world purge | `test_agent_chat_e2e.py`, `test_pubsub_e2e.py`, `test_engage_lifecycle_e2e.py`, `test_human_world_routing_e2e.py`, `test_inproc_harness_smoke.py` |
+| Agent surface: actions, resolution, interactions, human routing, disengage, stepwise compute | `test_agent_actions_pure.py`, `test_agent_resolution.py`, `test_interaction.py`, `test_interaction_manager.py`, `test_human_routing.py`, `test_disengage_goaway.py`, `test_stepwise_compute.py` |
+| World: roles, definition hash, shipped-code closure | `test_world_roles.py`, `test_world_definition.py`, `test_import_closure.py` |
+| HSM, streams, clock, profile, modules, logger | `test_hsm.py`, `test_streams_dataprops.py`, `test_streams_io.py`, `test_clock.py`, `test_profile.py`, `test_modules.py`, `test_logger_sinks.py` |
+| Interactive-messages protocol (`unaiverse.uai`), with the golden vectors shared with unaiverse-js | `uai/` |
 
-Note these are go-mocked: crypto/ping/SPR are canned (`FakeP2P` returns fixed
-values), so they verify *protocol logic*, not real Ed25519 signing or the wire.
-That's what the `-m p2p` suite is for.
+`test_full_handshake_happy_path` (in `test_handshake_e2e.py`) is the keystone of the
+Session layer: it wires two `SessionManager`s through a fake bidirectional transport
+and drives the full Stage-1/Stage-2 sequence with real protobufs. A regression in the
+FSM, the protocol routing, or the message schemas breaks it.
+
+Note that nothing here touches the wire: crypto/ping/SPR are canned (`FakeP2P` returns
+fixed values), so the suite verifies *protocol and application logic*, not real
+Ed25519 signing or the transport. That's what the `-m p2p` suite is for.
 
 ## Running the real-libp2p suite (`-m p2p`)
 
@@ -58,14 +64,21 @@ That's what the `-m p2p` suite is for.
 pytest -m p2p -v
 ```
 
-3 tests, ~5 s (the CLI `-m p2p` overrides the default exclusion). Requires a
-built `unailib.*.so` and a non-loopback (LAN) address — see the gotcha below.
+18 tests in 10 files (the CLI `-m p2p` overrides the default exclusion). Requires a
+built `unailib.*.so` and a non-loopback (LAN) address, see the gotcha below.
 
-| Test | What it proves over the real wire |
+| File (`tests/p2p/`) | What it covers over the real wire |
 |---|---|
-| `test_real_handshake_happy_path` | both sides ESTABLISHED, matching `session_id` |
-| `test_real_intentional_close_reaches_peer` | peer sees `CLOSED` (with reason), not `LOST` |
-| `test_real_world_join_full_handoff` | 4 instances; WorldGrant signed/verified with the **world** key cross-instance; public session closed via `WORLD_HANDOFF_COMPLETE` |
+| `test_session_realnet.py` | handshake to ESTABLISHED on both sides, intentional close seen as `CLOSED` and not `LOST` |
+| `test_world_join_realnet.py` | the full world-join handoff across four real instances |
+| `test_reconnect_realnet.py` | transport drop then re-dial and `RESUME`, peer restart and re-handshake, a reborn peer superseding the survivor's Session |
+| `test_keepalive_idle_realnet.py` | an idle Session stays ESTABLISHED across keep-alive cycles, on a public link and on the world link after a handoff |
+| `test_disengage_goaway_realnet.py` | a graceful GOAWAY drives the remote to `CLOSED`, a bare transport drop to `RECONNECTING` |
+| `test_perimeter_security_realnet.py` | forged rendezvous roster rejected, pubsub-only intruder cut, revoked member cut and unresumable |
+| `test_pool_promotion_realnet.py` | Session-only peers enter the pools on both sides and the pool diffs fire |
+| `test_interaction_over_session_realnet.py` | an application `Msg` crosses the membership and token gates of `get_messages` |
+| `test_human_world_routing_realnet.py` | the world's purge primitive: GOAWAY(`LOCAL_ERROR`) to a sender of application content |
+| `test_stepwise_compute_realnet.py` | a handshake completes during a heavy stepwise computation |
 
 These build real nodes via the `real_nodes` fixture (`conftest.py`), which closes
 every `P2P` on teardown to free instance slots (32-slot global cap). If the host
