@@ -1434,6 +1434,8 @@ class Node:
                     return not (sys.gettrace() is None and
                                 not any(env in os.environ for env in ['DEBUGPY_RUNNING', 'PYCHARM_HOSTED']))
 
+                main_loop = asyncio.get_running_loop()
+
                 def keyboard_listener(k_queue):
                     prev_keyboard_msg = None
                     with (patch_stdout(raw=True)):  # type: ignore
@@ -1441,7 +1443,14 @@ class Node:
                             webcam_shot = None
                             keyboard_msg: str | None = None
                             if not is_debug():
-                                keyboard_msg = prompt("\n👉 ")  # Get from keyboards
+                                try:
+                                    keyboard_msg = prompt("\n👉 ")  # Get from keyboards
+                                except (KeyboardInterrupt, EOFError):
+                                    # While the prompt owns the terminal, Ctrl+C (and Ctrl+D) is a key it
+                                    # reads and raises here, in this thread, not a SIGINT for the main loop:
+                                    # hand it over as the stop request it is, and give the terminal back
+                                    main_loop.call_soon_threadsafe(_request_stop)
+                                    break
                             else:
                                 if keyboard_msg is None or len(keyboard_msg) == 0:
                                     if os.path.exists("human_input.txt"):
@@ -1634,7 +1643,7 @@ class Node:
                                     await self.leave_world()
                                 connected_peer_ids = list(self.agent.all_agents.keys())
                                 for peer_id in connected_peer_ids:
-                                    await self.__purge(peer_id, reason=WORLD_DISENGAGEMENT)
+                                    await self.__purge(peer_id, reason=self._shutdown_reason_for(peer_id))
                             elif msg.lower() == "/leave":
                                 if self.agent.in_world():
                                     await self.leave_world()
@@ -1847,6 +1856,18 @@ class Node:
             if not budget_consumed:
                 await self.aclose()
 
+    def _shutdown_reason_for(self, peer_id: str) -> int:
+        """The GOAWAY reason for a peer the node says goodbye to while shutting down.
+
+        A link that belongs to a world (the role of the peer carries the world bit: a
+        member of the world we host, or a companion of the one we are in) ends because
+        the world relation ends. Any other link, a lone-wolf one, has nothing to do with
+        a world and is told that the node is just shutting down.
+        """
+        if self.conn.get_role(peer_id) & Agent.ROLE_WORLD_AGENT == Agent.ROLE_WORLD_AGENT:
+            return WORLD_DISENGAGEMENT
+        return GRACEFUL_SHUTDOWN
+
     async def aclose(self) -> None:
         """Shuts the node down: this is the point of no return, and it runs once.
 
@@ -1900,7 +1921,7 @@ class Node:
             connected_peer_ids = []
         for peer_id in connected_peer_ids:
             try:
-                await self.__purge(peer_id, reason=WORLD_DISENGAGEMENT)
+                await self.__purge(peer_id, reason=self._shutdown_reason_for(peer_id))
             except Exception as e:
                 log.error(f"Error purging a peer on shutdown: {e}")
 

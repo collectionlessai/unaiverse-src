@@ -17,7 +17,9 @@ import asyncio
 
 import pytest
 
+from unaiverse.agent import Agent
 from unaiverse.networking.node.node import Node, NodeSynchronizer
+from unaiverse.networking.session.sess_msg import GRACEFUL_SHUTDOWN, WORLD_DISENGAGEMENT
 
 pytestmark = pytest.mark.unit
 
@@ -29,6 +31,15 @@ class _RecordingConn:
         self.closes = 0
         self.fail = fail
         self.steps: list[str] = []
+        self.roles: dict[str, int] = {}       # peer_id -> role (0, the default, is a public peer)
+        self.goodbyes: dict[str, int] = {}    # peer_id -> reason of its per-peer GOAWAY
+
+    def get_role(self, peer_id: str) -> int:
+        return self.roles.get(peer_id, 0)
+
+    async def drop_peer(self, peer_id, reason=None, settled=False):
+        self.goodbyes[peer_id] = reason
+        return []
 
     async def close_all_sessions(self):
         self.steps.append("goaway")
@@ -44,7 +55,12 @@ class _RecordingConn:
 
 
 class _Hosted:
-    all_agents: dict = {}
+
+    def __init__(self, agents: dict | None = None):
+        self.all_agents = dict(agents or {})
+
+    async def remove_agent(self, peer_id):
+        self.all_agents.pop(peer_id, None)
 
     @staticmethod
     def save():
@@ -100,6 +116,22 @@ def test_aclose_swallows_a_failing_transport_close():
     node = _node_shell(fail=True)
     asyncio.run(node.aclose())  # must not raise
     assert node.conn.closes == 1
+
+
+def test_aclose_tells_each_peer_why_its_link_ends():
+    """A link that belongs to a world ends with WORLD_DISENGAGEMENT, a lone-wolf one with
+    GRACEFUL_SHUTDOWN: it has nothing to do with a world, and the peer shows the reason."""
+    node = _node_shell()
+    node.hosted = _Hosted({"lone-wolf": object(), "world-agent": object(), "world-master": object()})
+    node.conn.roles = {"world-agent": Agent.ROLE_WORLD_AGENT | (1 << 2),
+                       "world-master": Agent.ROLE_WORLD_MASTER | (1 << 2)}
+
+    asyncio.run(node.aclose())
+
+    assert node.conn.goodbyes == {"lone-wolf": GRACEFUL_SHUTDOWN,
+                                  "world-agent": WORLD_DISENGAGEMENT,
+                                  "world-master": WORLD_DISENGAGEMENT}
+    assert node.hosted.all_agents == {}
 
 
 class _FakeNode:
