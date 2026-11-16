@@ -52,6 +52,16 @@ _QUARANTINE_STALL_S = 5.0
 # < the CLOSING window (10s) and < the quarantine (25s).
 _CUT_LINGER_S = 2.0
 
+# Linger before the transport cut of a peer that was answered on behalf of no Session
+# (PONG ok=false, refused RESUME, GOAWAY_ACK). No Session of ours will ever settle that
+# transport, so with no cut the peer stays connected, and in the pools, for as long as
+# the connection lives. The reply also tells the peer to start over: an initiator answers
+# a negative PONG with RESUME and the refusal of that with a fresh HELLO, which cancels
+# the cut and keeps the transport. The linger is the time given to that HELLO, the same
+# a responder told that its Session is gone waits for it (_TIMEOUT_PEER_LOST_SESSION_S in
+# session.py), sized like it for a slow peer pump and not for the wire.
+_UNKNOWN_REPLY_LINGER_S = 10.0
+
 
 def _p2p_label(name: str) -> str:
     return "pub" if "public" in name else "prv" if "world" in name else name
@@ -122,12 +132,18 @@ class SessionManager:
         self._quarantine: Dict[str, float] = {}
 
         # peer_id → monotonic deadline of a deferred transport cut (the settlement
-        # cut), scheduled by _on_terminal when a Session ends and executed by tick
-        # once the linger expires. Only settlement cuts live here: the coercive
-        # perimeter cut never goes through the ledger (it must not be cancellable).
+        # cut), scheduled by _on_terminal when a Session ends, or after a reply sent
+        # on behalf of no Session, and executed by tick once the linger expires. Only
+        # settlement cuts live here: the coercive perimeter cut never goes through the
+        # ledger (it must not be cancellable).
         # A live non-KNOWN Session found at execution time cancels the entry (lazy
         # guard), so a re-handshake that reused the transport keeps it.
         self._pending_cuts: Dict[str, float] = {}
+
+        # The membership snapshot of the last reconcile, None on an instance with no
+        # perimeter. Read by the one cut that is scheduled on a frame of the peer and
+        # not on the end of a Session, see _send_unknown_session_reply.
+        self._perimeter_membership = None
 
         # Pure world membership, owned here so it sits next to the Sessions it gates.
         # Meaningful only on the world instance, where the Coordinator populates these
@@ -194,6 +210,7 @@ class SessionManager:
         and treats a missing pool as empty, so removals are still detected.
         """
         classified: dict = {}
+        self._perimeter_membership = membership
         if connected_peer_infos is None or self._routing_classifier is None:
             return classified
         seen: set = set()
@@ -595,8 +612,9 @@ class SessionManager:
                 # instead of dropping silently: PING/RESUME get "unknown session" so
                 # the initiator re-handshakes rather than riding its grace to LOST;
                 # a GOAWAY gets a GOAWAY_ACK so the remote's CLOSING ends in one RTT
-                # instead of its full timeout (it already forgot us, nothing to tear
-                # down here). Only the manager knows "no Session for this peer".
+                # instead of its full timeout (it already forgot us, no Session to tear
+                # down here). Only the manager knows "no Session for this peer", so it
+                # also settles the transport, which no Session will.
                 await self._send_unknown_session_reply(peer_id, sess_msg)
                 return []
             else:
@@ -699,7 +717,9 @@ class SessionManager:
         Session (we are the restarted/forgetful peer): PONG ok=false / RESUME_ACK
         accepted=false with SESSION_UNKNOWN / GOAWAY_ACK received=true, echoing
         session_id + nonce. Mirrors the simultaneous-open reject pattern — a one-shot
-        send on the control protocol, no Session object."""
+        send on the control protocol, no Session object. The transport the frame came
+        on, or the one our reply dialled, belongs to no Session: a settlement cut is
+        scheduled for it, which the HELLO of a peer that starts over cancels."""
         if sess_msg.kind == SessMsg.KIND_PING:
             reply = SessMsg(SessMsg.KIND_PONG, {
                 "session_id": bytes(sess_msg.get("session_id") or b""),
@@ -724,6 +744,19 @@ class SessionManager:
             )
         except Exception as e:
             log.error(f"unknown-session reply to ...{peer_id[-5:]} failed: {e}", sub=self._label)
+
+        # Inside a perimeter, a peer that is not a member gets no entry: the ledger makes
+        # the reconcile skip a peer, and anybody can send the frame that brought us here,
+        # as often as needed to keep an entry alive. The coercive cut deals with it at
+        # the next reconcile, as it does without this reply.
+        if (self._perimeter_membership is not None and self._routing_classifier is not None and
+                self._routing_classifier({'id': peer_id, 'direction': 'inbound'},
+                                         self._perimeter_membership) is None):
+            return
+        # Overwrite, as in _on_terminal: each reply restarts the wait for the peer's HELLO.
+        self._pending_cuts[peer_id] = time.monotonic() + _UNKNOWN_REPLY_LINGER_S
+        log.session(f"no Session for ...{peer_id[-5:]}: settlement cut in "
+                    f"{_UNKNOWN_REPLY_LINGER_S}s unless it starts over", sub=self._label)
 
     async def _handle_simultaneous_open(self, peer_id: str):
         """Deterministic tie-breaker: smaller peer-id keeps initiator, larger

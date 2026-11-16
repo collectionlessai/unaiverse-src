@@ -19,7 +19,8 @@ from unaiverse.networking.session.sess_msg import (
     OK, NOT_AUTHORIZED, SIMULTANEOUS_OPEN_LOSS, WORLD_DISENGAGEMENT,
 )
 from unaiverse.networking.session import session as session_mod
-from unaiverse.networking.node.connpool import NodeConn
+from unaiverse.networking.session import session_manager as session_manager_mod
+from unaiverse.networking.node.connpool import NodeConn, WorldMembership
 
 pytestmark = pytest.mark.unit
 
@@ -546,6 +547,119 @@ def test_deliver_unknown_session_goaway_replies_goaway_ack(alice_conn, alice_pee
     sent = [s for s in alice_conn.sent if s[1] == SESSION_CONTROL_PROTOCOL]
     assert sent and sent[-1][2].kind == SessMsg.KIND_GOAWAY_ACK
     assert sent[-1][2].fields["received"] is True
+
+
+# The settlement cut after a reply sent on behalf of no Session
+
+_SESSIONLESS_FRAMES = {
+    "ping": SessMsg(SessMsg.KIND_PING, {"session_id": b"\x01" * 16, "nonce": b"n1"}),
+    "resume": SessMsg(SessMsg.KIND_RESUME, {"session_id": b"\x01" * 16, "nonce": b"r1"}),
+    "goaway": SessMsg(SessMsg.KIND_GOAWAY, {"reason": WORLD_DISENGAGEMENT, "drain_window_ms": 0}),
+}
+
+
+def _hello(session_id=b"\x02" * 16):
+    return SessMsg(SessMsg.KIND_HELLO_REQ, {
+        "session_id": session_id, "nonce_a": b"\xaa" * 32,
+        "protocol_versions": ["1.0"], "client_id": "test",
+    })
+
+
+@pytest.mark.parametrize("kind", sorted(_SESSIONLESS_FRAMES))
+def test_unknown_session_reply_schedules_a_settlement_cut(alice_conn, alice_peer_id, bob_peer_id, kind):
+    """A frame for a Session we do not hold arrives on a transport that no Session of
+    ours will ever settle (and our reply dials one when the peer has hung up). Left
+    alone, the peer stays connected with no Session for the life of that connection. The
+    reply therefore schedules the cut that follows every ended Session, after a linger
+    of its own: nothing is severed under the reply, and the transport goes when the
+    linger expires."""
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    before = time.monotonic()
+    _run(sm.deliver(bob_peer_id, SESSION_CONTROL_PROTOCOL, _SESSIONLESS_FRAMES[kind]))
+
+    linger = session_manager_mod._UNKNOWN_REPLY_LINGER_S
+    deadline = sm._pending_cuts[bob_peer_id]
+    assert before + linger <= deadline <= time.monotonic() + linger
+    assert sm.is_tearing_down(bob_peer_id)
+    assert alice_conn.disconnect_calls == []
+
+    _run(sm.tick(now=deadline - 0.1))
+    assert alice_conn.disconnect_calls == []
+    _run(sm.tick(now=deadline + 0.1))
+    assert alice_conn.disconnect_calls == [bob_peer_id]
+    assert bob_peer_id not in sm._pending_cuts
+
+
+def test_hello_of_a_peer_that_starts_over_keeps_the_transport(alice_conn, alice_peer_id, bob_peer_id):
+    """The reply tells the peer to start over, and an initiator does: RESUME after the
+    negative PONG, a fresh HELLO after the refused RESUME. Each reply restarts the
+    linger, and the HELLO cancels the cut: the handshake goes on over the transport the
+    peer already has."""
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    _run(sm.deliver(bob_peer_id, SESSION_CONTROL_PROTOCOL, _SESSIONLESS_FRAMES["ping"]))
+    sm._pending_cuts[bob_peer_id] -= 5.0                  # five seconds go by
+    after_ping = sm._pending_cuts[bob_peer_id]
+    _run(sm.deliver(bob_peer_id, SESSION_CONTROL_PROTOCOL, _SESSIONLESS_FRAMES["resume"]))
+    assert sm._pending_cuts[bob_peer_id] > after_ping + 4.0
+
+    _run(sm.deliver(bob_peer_id, SESSION_HELLO_PROTOCOL, _hello()))
+    assert sm.get_session(bob_peer_id).state == SessionState.HELLO_ACK_SENT
+    assert bob_peer_id not in sm._pending_cuts
+    _run(sm.tick(now=time.monotonic() + session_manager_mod._UNKNOWN_REPLY_LINGER_S + 1.0))
+    assert alice_conn.disconnect_calls == []
+
+
+def test_linger_after_an_unknown_session_reply_waits_for_a_slow_peer():
+    """The linger is the time given to the HELLO of a peer that starts over. That peer may
+    be a slow pump (a browser, a node busy computing), which is what the other waits for a
+    peer's next move are sized for: no shorter than the wait of a responder told that its
+    Session is gone, and longer than the linger of a farewell, which only has to let one
+    frame out."""
+    linger = session_manager_mod._UNKNOWN_REPLY_LINGER_S
+    assert linger >= session_mod._TIMEOUT_PEER_LOST_SESSION_S
+    assert linger > session_manager_mod._CUT_LINGER_S
+
+
+def test_peer_answered_on_behalf_of_no_session_stays_out_of_the_pools(alice_conn, alice_peer_id,
+                                                                     bob_peer_id):
+    """The pools are filled from the connected peers by direction, with no look at the
+    Sessions. A peer whose late frame got an unknown-session reply is connected and has no
+    Session: until its cut it must not be classified into a pool, and a peer that starts
+    over is classified again."""
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    sm._routing_classifier = NodeConn._route_public
+    connected = [{"id": bob_peer_id, "direction": "inbound"}]
+    assert list(_run(sm.reconcile(connected, None))) == [NodeConn.IN_PUBLIC]
+
+    _run(sm.deliver(bob_peer_id, SESSION_CONTROL_PROTOCOL, _SESSIONLESS_FRAMES["ping"]))
+    assert _run(sm.reconcile(connected, None)) == {}
+
+    _run(sm.deliver(bob_peer_id, SESSION_HELLO_PROTOCOL, _hello()))
+    assert list(_run(sm.reconcile(connected, None))) == [NodeConn.IN_PUBLIC]
+
+
+def test_unknown_session_reply_does_not_shield_from_the_perimeter(alice_conn, alice_peer_id,
+                                                                 bob_peer_id):
+    """The reconcile skips a peer that holds a pending cut, and the frame that earns an
+    unknown-session reply can be sent by anybody, as often as needed. On the world
+    instance that must not keep a non-member connected: it gets no entry, and the next
+    reconcile cuts it as it would have. A member gets the cut like any other peer."""
+    sm = _make_sm(alice_conn, NodeConn.P2P_WORLD, alice_peer_id)
+    sm._routing_classifier = NodeConn._route_world
+    membership = WorldMembership(world_agents=frozenset({bob_peer_id}), world_masters=frozenset(),
+                                world_node_peer_id=None, inspector_peer_id=None)
+    sm.topic_peers = lambda: []
+    _run(sm.reconcile([], membership))
+
+    ghost = "12D3KooWghost"
+    _run(sm.deliver(ghost, SESSION_CONTROL_PROTOCOL, _SESSIONLESS_FRAMES["ping"]))
+    assert ghost not in sm._pending_cuts
+    _run(sm.reconcile([{"id": ghost, "direction": "inbound"}], membership))
+    assert alice_conn.disconnect_calls == [ghost]
+    assert ghost in sm._quarantine
+
+    _run(sm.deliver(bob_peer_id, SESSION_CONTROL_PROTOCOL, _SESSIONLESS_FRAMES["ping"]))
+    assert bob_peer_id in sm._pending_cuts
 
 
 # close_all()
