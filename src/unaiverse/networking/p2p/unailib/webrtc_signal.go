@@ -282,9 +282,18 @@ func registerWebRTCDataChannel(ni *NodeInstance, remotePeer peer.ID, dc *pwebrtc
 		}
 	})
 
+	// The readers of the table look at the state of the DataChannel, the cleanup below at
+	// the state of the peer connection: the log has to show both.
+	dc.OnClose(func() {
+		logger.Infof("[GO] 🔒 Instance %d: WebRTC DataChannel with %s closed", ni.instanceIndex, remotePeer)
+	})
+	dc.OnError(func(err error) {
+		logger.Warnf("[GO] ⚠️ Instance %d: WebRTC DataChannel with %s reported an error: %v", ni.instanceIndex, remotePeer, err)
+	})
+
 	// Clean up when the peer connection dies.
 	pc.OnConnectionStateChange(func(state pwebrtc.PeerConnectionState) {
-		logger.Debugf("[GO] 🔄 Instance %d: WebRTC state with %s → %s",
+		logger.Infof("[GO] 🔄 Instance %d: WebRTC state with %s → %s",
 			ni.instanceIndex, remotePeer, state)
 		switch state {
 		case pwebrtc.PeerConnectionStateFailed,
