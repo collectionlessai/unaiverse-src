@@ -25,6 +25,7 @@ from unaiverse.networking.session import (
     SESSION_HELLO_PROTOCOL, SESSION_PROFILE_PROTOCOL,
     SESSION_WORLD_PROTOCOL, SESSION_CONTROL_PROTOCOL,
 )
+from unaiverse.networking.session import session as session_mod
 from unaiverse.networking.session.sess_msg import (
     OK, VERSION_UNSUPPORTED, NOT_AUTHORIZED, GRACEFUL_SHUTDOWN, WORLD_DISENGAGEMENT,
     SESSION_UNKNOWN, TOKEN_EXPIRED,
@@ -656,6 +657,88 @@ def test_pong_not_ok_starts_reconnect(alice_conn, alice_peer_id, bob_peer_id):
     events = _run(sess.process_inbound(SESSION_CONTROL_PROTOCOL, pong))
     assert len(events) == 1 and events[0].type == SessionEventType.RECONNECTING
     assert sess.state == SessionState.RECONNECTING
+    # An initiator has the RESUME path ahead: it keeps the whole reconnect window.
+    assert sess._timeout_s == session_mod._TIMEOUT_RECONNECT_S
+    assert sess._reconnect_substep == "redial"
+
+
+def _responder_told_its_session_is_gone(bob_conn, bob_peer_id, alice_peer_id):
+    """An ESTABLISHED responder that has just received PONG ok=false for its ping.
+    Returns the Session and the events of that PONG."""
+    sess = _mk(alice_peer_id, SessionRole.RESPONDER, bob_conn, bob_peer_id)
+    sess._set_state(SessionState.ESTABLISHED, None)
+    sess.session_id = b"\x02" * 16
+    sess._ping_in_flight = True
+    sess._ping_nonce = b"nonce-123"
+    pong = SessMsg(SessMsg.KIND_PONG, {"session_id": sess.session_id, "nonce": b"nonce-123", "ok": False})
+    events = _run(sess.process_inbound(SESSION_CONTROL_PROTOCOL, pong))
+    return sess, events
+
+
+def test_pong_not_ok_on_responder_waits_a_short_window_then_is_lost(bob_conn, bob_peer_id, alice_peer_id):
+    """A responder cannot dial, and no RESUME comes from a peer that has just said it holds
+    no Session: it must not ride the whole reconnect window. It goes RECONNECTING like
+    any other loss (same event), waits a short window of its own for a fresh HELLO or a
+    late GOAWAY, and is then LOST with a reason that says what happened."""
+    sess, events = _responder_told_its_session_is_gone(bob_conn, bob_peer_id, alice_peer_id)
+    assert len(events) == 1 and events[0].type == SessionEventType.RECONNECTING
+    assert events[0].data == {"cause": "transport_disconnected"}
+    assert sess.state == SessionState.RECONNECTING
+
+    window = session_mod._TIMEOUT_PEER_LOST_SESSION_S
+    assert window < session_mod._TIMEOUT_RECONNECT_S
+    entered = sess._state_entered_at
+    assert sess.check_timeout(entered + window - 0.1) is None
+    ev = sess.check_timeout(entered + window + 0.1)
+    assert ev is not None and ev.type == SessionEventType.LOST
+    assert ev.data["reason"] == "peer_lost_session"
+    assert sess.state == SessionState.FAILED
+
+
+def test_transport_loss_does_not_restart_the_window_of_a_lost_session(bob_conn, bob_peer_id, alice_peer_id):
+    """The transport usually drops right after the peer said the Session is gone. That
+    adds nothing to wait for: the short window keeps its deadline (an ordinary reconnect
+    window is restarted by a new transport loss)."""
+    sess, _ = _responder_told_its_session_is_gone(bob_conn, bob_peer_id, alice_peer_id)
+    window = session_mod._TIMEOUT_PEER_LOST_SESSION_S
+    entered = sess._state_entered_at
+
+    assert sess.on_transport_disconnected() is None
+    assert sess._state_entered_at == entered
+    assert sess._timeout_s == window
+    ev = sess.check_timeout(entered + window + 0.1)
+    assert ev is not None and ev.data["reason"] == "peer_lost_session"
+
+
+def test_goaway_inside_the_window_of_a_lost_session_closes(bob_conn, bob_peer_id, alice_peer_id):
+    """The negative PONG may have overtaken the GOAWAY of a peer that is closing: the
+    GOAWAY that follows must still end the Session as CLOSED, not leave it to LOST."""
+    sess, _ = _responder_told_its_session_is_gone(bob_conn, bob_peer_id, alice_peer_id)
+    ga = SessMsg(SessMsg.KIND_GOAWAY, {"reason": GRACEFUL_SHUTDOWN, "session_id": sess.session_id})
+    events = _run(sess.process_inbound(SESSION_CONTROL_PROTOCOL, ga))
+    assert len(events) == 1 and events[0].type == SessionEventType.CLOSED
+    assert events[0].data["reason"] == "remote_goaway:GRACEFUL_SHUTDOWN"
+    assert sess.state == SessionState.CLOSED
+    assert _last_sent(bob_conn, SESSION_CONTROL_PROTOCOL)[2].kind == SessMsg.KIND_GOAWAY_ACK
+
+
+def test_resume_inside_the_window_of_a_lost_session_resumes(bob_conn, bob_peer_id, alice_peer_id):
+    """A RESUME for the id we hold is still honoured inside the short window, and the
+    Session it brings back is an ordinary one: its next transport loss gets the whole
+    reconnect window and the usual reason."""
+    sess, _ = _responder_told_its_session_is_gone(bob_conn, bob_peer_id, alice_peer_id)
+    resume = SessMsg(SessMsg.KIND_RESUME, {"session_id": sess.session_id, "nonce": b"r1"})
+    events = _run(sess.process_inbound(SESSION_CONTROL_PROTOCOL, resume))
+    assert len(events) == 1 and events[0].type == SessionEventType.RESUMED
+    assert sess.state == SessionState.ESTABLISHED
+    last = _last_sent(bob_conn, SESSION_CONTROL_PROTOCOL)
+    assert last[2].kind == SessMsg.KIND_RESUME_ACK and last[2].fields["accepted"] is True
+
+    ev = sess.on_transport_disconnected()
+    assert ev is not None and ev.type == SessionEventType.RECONNECTING
+    assert sess._timeout_s == session_mod._TIMEOUT_RECONNECT_S
+    ev = sess.check_timeout(sess._state_entered_at + session_mod._TIMEOUT_RECONNECT_S + 0.1)
+    assert ev is not None and ev.data["reason"] == "grace_period_expired"
 
 
 def test_keepalive_two_misses_trigger_reconnecting(alice_conn, alice_peer_id, bob_peer_id):

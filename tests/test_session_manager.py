@@ -18,6 +18,7 @@ from unaiverse.networking.session import (
 from unaiverse.networking.session.sess_msg import (
     OK, NOT_AUTHORIZED, SIMULTANEOUS_OPEN_LOSS, WORLD_DISENGAGEMENT,
 )
+from unaiverse.networking.session import session as session_mod
 from unaiverse.networking.node.connpool import NodeConn
 
 pytestmark = pytest.mark.unit
@@ -211,6 +212,58 @@ def test_deliver_fresh_hello_supersedes_stale_responder(
     assert sess_after.role == SessionRole.RESPONDER
     assert sess_after.state == SessionState.HELLO_ACK_SENT
     assert sess_after.session_id == b"\x02" * 16
+
+
+def _responder_after_negative_pong(sm, conn, peer_id, local_peer_id):
+    """Plant an ESTABLISHED responder for the peer and deliver PONG ok=false to its ping.
+    Returns the Session and the events of that delivery."""
+    sess = _mk_session(conn, peer_id, local_peer_id, role=SessionRole.RESPONDER)
+    sess.session_id = b"\x11" * 16
+    sess._set_state(SessionState.ESTABLISHED, None)
+    sess._ping_in_flight = True
+    sess._ping_nonce = b"nonce-1"
+    sm._set_active(peer_id, sess)
+    pong = SessMsg(SessMsg.KIND_PONG, {"session_id": sess.session_id, "nonce": b"nonce-1", "ok": False})
+    return sess, _run(sm.deliver(peer_id, SESSION_CONTROL_PROTOCOL, pong))
+
+
+def test_fresh_hello_supersedes_a_responder_told_its_session_is_gone(alice_conn, alice_peer_id, bob_peer_id):
+    """The short window a responder waits after PONG ok=false is there for this: the peer
+    that lost the Session dials again, and its HELLO must supersede the old Session with
+    no terminal event, so that the state of the relation survives until the new
+    ESTABLISHED."""
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    stale, events = _responder_after_negative_pong(sm, alice_conn, bob_peer_id, alice_peer_id)
+    assert [e.type for e in events] == [SessionEventType.RECONNECTING]
+
+    hello = SessMsg(SessMsg.KIND_HELLO_REQ, {
+        "session_id": b"\x02" * 16, "nonce_a": b"\xaa" * 32,
+        "protocol_versions": ["1.0"], "client_id": "test",
+    })
+    assert _run(sm.deliver(bob_peer_id, SESSION_HELLO_PROTOCOL, hello)) == []
+    sess_after = sm.get_session(bob_peer_id)
+    assert sess_after is not stale
+    assert sess_after.state == SessionState.HELLO_ACK_SENT
+    assert sess_after.session_id == b"\x02" * 16
+    # The old window does not fire on the new Session.
+    late = time.monotonic() + session_mod._TIMEOUT_PEER_LOST_SESSION_S + 1.0
+    assert not any(e.type == SessionEventType.LOST for e in _run(sm.tick(now=late)))
+
+
+def test_responder_told_its_session_is_gone_is_lost_after_the_short_window(alice_conn, alice_peer_id, bob_peer_id):
+    """With nothing arriving, the manager reports the Session LOST once the short window
+    is over, well before the reconnect window, and settles it as any other LOST."""
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    sess, _ = _responder_after_negative_pong(sm, alice_conn, bob_peer_id, alice_peer_id)
+    entered = sess._state_entered_at
+    window = session_mod._TIMEOUT_PEER_LOST_SESSION_S
+
+    assert _run(sm.tick(now=entered + window - 0.1)) == []
+    events = _run(sm.tick(now=entered + window + 0.1))
+    assert [e.type for e in events] == [SessionEventType.LOST]
+    assert events[0].data["reason"] == "peer_lost_session"
+    assert sm.get_session(bob_peer_id) is None
+    assert bob_peer_id in sm._quarantine
 
 
 # Reborn-peer supersede (ESTABLISHED / initiator-RECONNECTING, guarded by session_id)

@@ -52,6 +52,12 @@ _TIMEOUT_WORLD_S = 30.0     # Stage 3: WORLD_GRANT expiry
 _TIMEOUT_RECONNECT_S = 45.0 # Session-level reconnect ceiling before Session.Lost. Longer than the
                             # Go transport grace (DisconnectionGracePeriod) so several backoff'd
                             # re-dial + RESUME cycles fit inside the window (see tick_dial).
+# A responder whose peer answered a PING with ok=false: the peer holds no Session for our id.
+# A responder cannot dial, and no RESUME comes from a peer that has just said so, hence
+# nothing can end this wait but its timeout. It is kept short and not zero for what may
+# still be on its way: a fresh HELLO, which supersedes this Session and spares the pool
+# state, or a GOAWAY that the PONG overtook, which closes it cleanly.
+_TIMEOUT_PEER_LOST_SESSION_S = 10.0
 _TIMEOUT_CLOSING_S = 10.0   # GOAWAY sent; wait for GOAWAY_ACK
 _TIMEOUT_CLOSING_FAILED_SEND_S = 1.0  # GOAWAY write failed (link dead): no ACK can
                                       # ever come, finalize fast so the shutdown
@@ -283,6 +289,8 @@ class Session:
 
         # Active re-dial + RESUME state (initiator drives recovery while RECONNECTING).
         self._reconnect_substep: str = ""   # "" | "redial" | "resume_sent"
+        # True while RECONNECTING because the peer said it lost the Session (responder only).
+        self._peer_lost_session: bool = False
         self._reconnect_attempts: int = 0
         self._next_redial_at: float = 0.0   # monotonic gate, set/advanced by tick_dial
         self._resume_nonce: bytes = b""
@@ -906,10 +914,13 @@ class Session:
         if msg.get("ok"):
             self._consecutive_ping_failures = 0
             return None
-        # Peer holds no Session for our session_id (restarted / forgot us): treat as
-        # a hard liveness failure and begin the reconnect + RESUME path immediately.
+        # Peer holds no Session for our session_id (restarted / forgot us): a hard liveness
+        # failure. An initiator begins the reconnect + RESUME path immediately. A responder
+        # has no such path and waits its own short window, not the reconnect one.
         self._consecutive_ping_failures = 0
         log.session(f"{self!r} PONG ok=false (peer lost our session) → reconnecting", sub=self._sub)
+        if self.role == SessionRole.RESPONDER and self.state == SessionState.ESTABLISHED:
+            return self._enter_reconnecting(_TIMEOUT_PEER_LOST_SESSION_S, peer_lost_session=True)
         return self.on_transport_disconnected()
 
     # Control: RESUME (fast-path recovery before re-handshake)
@@ -1051,7 +1062,7 @@ class Session:
             return self._fail(f"timeout:{self.state.value}")
 
         if self.state == SessionState.RECONNECTING:
-            return self._lose("grace_period_expired")
+            return self._lose("peer_lost_session" if self._peer_lost_session else "grace_period_expired")
 
         if self.state == SessionState.CLOSING:
             return self._finalize_close(
@@ -1066,16 +1077,24 @@ class Session:
         liveness fails. ESTABLISHED → RECONNECTING, arming the active re-dial +
         RESUME loop (tick_dial). Already reconnecting: reset the grace timer."""
         if self.state == SessionState.ESTABLISHED:
-            self._set_state(SessionState.RECONNECTING, _TIMEOUT_RECONNECT_S)
-            self._reconnect_substep = "redial"
-            self._reconnect_attempts = 0
-            self._next_redial_at = 0.0   # re-dial on the next tick_dial
-            self._ping_in_flight = False
-            log.session(f"{self!r} link lost, starting {_TIMEOUT_RECONNECT_S}s reconnect window", sub=self._sub)
-            return self._emit(SessionEventType.RECONNECTING, {"cause": "transport_disconnected"})
-        if self.state == SessionState.RECONNECTING:
+            return self._enter_reconnecting(_TIMEOUT_RECONNECT_S)
+        # The window of a peer that lost the Session is not restarted: a transport loss
+        # adds nothing to wait for.
+        if self.state == SessionState.RECONNECTING and not self._peer_lost_session:
             self._state_entered_at = time.monotonic()
         return None
+
+    def _enter_reconnecting(self, window_s: float, peer_lost_session: bool = False) -> SessionEvent:
+        """ESTABLISHED → RECONNECTING with the given window. The event is the same whatever
+        the cause, so the layers above see one RECONNECTING and then its outcome."""
+        self._set_state(SessionState.RECONNECTING, window_s)
+        self._peer_lost_session = peer_lost_session
+        self._reconnect_substep = "redial"
+        self._reconnect_attempts = 0
+        self._next_redial_at = 0.0   # re-dial on the next tick_dial
+        self._ping_in_flight = False
+        log.session(f"{self!r} link lost, starting {window_s}s reconnect window", sub=self._sub)
+        return self._emit(SessionEventType.RECONNECTING, {"cause": "transport_disconnected"})
 
     def on_transport_reconnected(self) -> Optional[SessionEvent]:
         """Transport-diff reconnect signal. Do NOT blindly resume — a reconnect can
