@@ -75,6 +75,13 @@ const RelayReservationTimeout = 60 * time.Second
 // retries toward the same relay.
 const AutoRelayBackoff = time.Minute
 
+// SessionSendTimeout bounds the send of one Session frame: the dial when there is no
+// connection to the peer, the opening of the stream and the write. The Python node waits
+// for every send inside its single loop, so this is how long a peer that stopped answering
+// holds the whole node, at each frame sent to it. A dial through a relay takes a few tenths
+// of a second.
+const SessionSendTimeout = 3 * time.Second
+
 // StreamCreationTimeout is the timeout for opening a new libp2p stream to a
 // peer. It is also reused as the per-stream READ deadline for inbound session
 // streams (see handleSessionStream), i.e. a 20s budget to receive one frame.

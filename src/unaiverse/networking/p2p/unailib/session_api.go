@@ -14,7 +14,6 @@ import "C"
 import (
 	"context"
 	"fmt"
-	"time"
 	"unsafe"
 	"encoding/base64"
 
@@ -22,11 +21,6 @@ import (
 	"github.com/libp2p/go-libp2p/core/peer"
 	libp2pproto "github.com/libp2p/go-libp2p/core/protocol"
 )
-
-// sessionOpenStreamTimeout bounds how long we wait for a new outbound stream on
-// a Session protocol. Sessions enforce their own per-stage timeouts (5s for HELLO,
-// 15s for PROFILE, etc.); this is the safety net at the libp2p layer.
-const sessionOpenStreamTimeout = 10 * time.Second
 
 // SendOnProtocol opens a fresh outbound libp2p stream to peerID on the given
 // protocol, writes a single length-prefixed protobuf payload, and closes the
@@ -66,21 +60,36 @@ func SendOnProtocol(
 		return C.CString(jsonErrorResponse("SendOnProtocol: refusing to dial self", nil))
 	}
 
-	ctx, cancel := context.WithTimeout(ni.ctx, sessionOpenStreamTimeout)
+	if err := sendSessionFrame(ni, pid, protocolIDStr, payload); err != nil {
+		return C.CString(jsonErrorResponse("SendOnProtocol", err))
+	}
+	return C.CString(jsonSuccessResponse(fmt.Sprintf("Sent %d bytes on %s to %s", len(payload), protocolIDStr, pid)))
+}
+
+// sendSessionFrame opens a fresh stream to pid on a Session protocol, writes one frame and
+// closes the stream. The dial (when there is no connection), the opening of the stream and
+// the write share the budget of SessionSendTimeout.
+func sendSessionFrame(ni *NodeInstance, pid peer.ID, protocolID string, payload []byte) error {
+	ctx, cancel := context.WithTimeout(ni.ctx, SessionSendTimeout)
 	defer cancel()
 	s, err := ni.host.NewStream(
-		network.WithAllowLimitedConn(ctx, protocolIDStr),
+		network.WithAllowLimitedConn(ctx, protocolID),
 		pid,
-		libp2pproto.ID(protocolIDStr),
+		libp2pproto.ID(protocolID),
 	)
 	if err != nil {
-		return C.CString(jsonErrorResponse(fmt.Sprintf("SendOnProtocol: NewStream(%s, %s) failed", pid, protocolIDStr), err))
+		return fmt.Errorf("NewStream(%s, %s) failed: %w", pid, protocolID, err)
 	}
 	// The sending side of Session traffic must surface the peer to the pools
 	// too (the receiving side does it in handleSessionStream). ConnectTo stays
 	// promotion-free on purpose: it also dials relays, which must never enter
 	// the application pools.
 	promoteFriendlyPeer(ni, pid, connDirection(s), s.Conn().RemoteMultiaddr())
+	// The write can wait as well: on the stream window, when the frame is larger than it
+	// and the peer does not read, or behind a connection that stopped draining.
+	if deadline, ok := ctx.Deadline(); ok {
+		_ = s.SetWriteDeadline(deadline)
+	}
 	// One-shot stream: write, then close BOTH sides. CloseWrite is graceful (FIN
 	// ordered after the data, delivery still guaranteed while the connection
 	// lives); responses always arrive on a fresh inbound stream, so the read side
@@ -88,17 +97,19 @@ func SendOnProtocol(
 	// "delivered" — an abortive DisconnectFrom (stream Reset) issued right after
 	// destroys the frame, which is why the Python teardown defers the disconnect.
 	if err := writeSessionFrame(s, payload); err != nil {
-		_ = s.Reset()
-		return C.CString(jsonErrorResponse(fmt.Sprintf("SendOnProtocol: write to %s failed", pid), err))
+		// Not inline: behind a connection that stopped draining the reset has to queue
+		// like any other frame, and no deadline applies to it.
+		go s.Reset()
+		return fmt.Errorf("write to %s failed: %w", pid, err)
 	}
 	if err := s.CloseWrite(); err != nil {
-		logger.Warnf("[GO] ⚠️ Instance %d: SendOnProtocol CloseWrite to %s on %s failed: %v\n", ni.instanceIndex, pid, protocolIDStr, err)
+		logger.Warnf("[GO] ⚠️ Instance %d: SendOnProtocol CloseWrite to %s on %s failed: %v\n", ni.instanceIndex, pid, protocolID, err)
 	}
 	// CloseRead too — we don't expect inbound on this stream.
 	_ = s.CloseRead()
 
-	logger.Infof("[GO] 📤 Instance %d: Sent %d bytes on %s to %s\n", ni.instanceIndex, len(payload), protocolIDStr, pid)
-	return C.CString(jsonSuccessResponse(fmt.Sprintf("Sent %d bytes on %s to %s", len(payload), protocolIDStr, pid)))
+	logger.Infof("[GO] 📤 Instance %d: Sent %d bytes on %s to %s\n", ni.instanceIndex, len(payload), protocolID, pid)
+	return nil
 }
 
 // SignWithHostKey signs `data` with the host's libp2p private key (Ed25519 by default).
