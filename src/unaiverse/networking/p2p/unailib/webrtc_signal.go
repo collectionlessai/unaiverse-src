@@ -13,7 +13,10 @@ import (
 	"fmt"
 	"time"
 	"bytes"
+	"errors"
+	"slices"
 	"context"
+	"strings"
 	"encoding/json"
 	"encoding/binary"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -72,12 +75,16 @@ import (
 // }
 
 // getWebRTCConfig builds a pion WebRTC configuration from the node's stored ICE config.
-// Falls back to Google's public STUN servers when no config is present.
-func getWebRTCConfig(ni *NodeInstance) pwebrtc.Configuration {
+// Falls back to Google's public STUN servers when no config is present. The direct stage
+// has no TURN server; every other stage, and an offer that names none, has the whole list.
+func getWebRTCConfig(ni *NodeInstance, stage string) pwebrtc.Configuration {
     ni.iceConfigMu.RLock()
     cfg := ni.iceConfig
     ni.iceConfigMu.RUnlock()
 	if cfg != nil && (len(cfg.STUNServers) > 0 || len(cfg.TURNServers) > 0) {
+		if stage == WebRTCStageDirect {
+			return pwebrtc.Configuration{ICEServers: []pwebrtc.ICEServer{{URLs: stunURLs(cfg)}}}
+		}
 		var STUNServers []pwebrtc.ICEServer
 		if len(cfg.STUNServers) > 0 {
 			STUNServers = append(STUNServers, pwebrtc.ICEServer{URLs: cfg.STUNServers})
@@ -97,6 +104,28 @@ func getWebRTCConfig(ni *NodeInstance) pwebrtc.Configuration {
 			{URLs: defaultSTUNServers},
 		},
 	}
+}
+
+// stunURLs returns the servers of an ICE config as STUN servers alone: its STUN URLs, and
+// each TURN URL turned into the STUN URL of the same server. A TURN server answers STUN
+// requests too, and with a TURN URL in the list pion already asks it for the reflexive
+// address: a node whose config holds its TURN credentials and nothing else (what the root
+// server gives) keeps that address in the direct stage, and gets no relay candidate.
+func stunURLs(cfg *ICEConfig) []string {
+	urls := append([]string(nil), cfg.STUNServers...)
+	for _, t := range cfg.TURNServers {
+		for _, url := range t.URLs {
+			scheme, rest, _ := strings.Cut(url, ":")
+			if strings.EqualFold(scheme, "turn") || strings.EqualFold(scheme, "turns") {
+				server, _, _ := strings.Cut(rest, "?")
+				url = "stun:" + server
+			}
+			if !slices.Contains(urls, url) {
+				urls = append(urls, url)
+			}
+		}
+	}
+	return urls
 }
 
 // writeSignalMessage encodes msg as JSON and writes it length-prefixed to w.
@@ -377,9 +406,15 @@ func registerWebRTCDataChannel(ni *NodeInstance, conn *WebRTCConn) {
 
 	logger.Infof("[GO] 🔗 Instance %d: WebRTC DataChannel open with %s (label=%s, session frames: %v)",
 		ni.instanceIndex, remotePeer, dc.Label(), conn.peerSessionFrames)
+	stage := conn.stage
+	if stage == "" {
+		stage = "none"
+	}
+	logger.Infof("[GO] 🧭 Instance %d: WebRTC path with %s: %s, stage of the offer: %s",
+		ni.instanceIndex, remotePeer, webRTCPath(pc), stage)
 	if replaced != nil {
-		logger.Infof("[GO] ♻️ Instance %d: It replaces a WebRTC DataChannel with %s, whose connection is closed",
-			ni.instanceIndex, remotePeer)
+		logger.Infof("[GO] ♻️ Instance %d: It replaces a WebRTC DataChannel with %s, whose connection is closed (stage of the offer that replaces it: %s)",
+			ni.instanceIndex, remotePeer, stage)
 		if replaced.dc != nil {
 			replaced.dc.Close()
 		}
@@ -434,6 +469,24 @@ func registerWebRTCDataChannel(ni *NodeInstance, conn *WebRTCConn) {
 				ni.instanceIndex, remotePeer)
 		}
 	})
+}
+
+// webRTCPath says, for the log, what the candidate pair of a peer connection runs on:
+// "direct" or "turn", with the types of the two candidates.
+func webRTCPath(pc *pwebrtc.PeerConnection) string {
+	sctp := pc.SCTP()
+	if sctp == nil || sctp.Transport() == nil || sctp.Transport().ICETransport() == nil {
+		return "unknown"
+	}
+	pair, err := sctp.Transport().ICETransport().GetSelectedCandidatePair()
+	if err != nil || pair == nil {
+		return "unknown"
+	}
+	path := "direct"
+	if pair.Local.Typ == pwebrtc.ICECandidateTypeRelay || pair.Remote.Typ == pwebrtc.ICECandidateTypeRelay {
+		path = "turn"
+	}
+	return fmt.Sprintf("%s (local %s, remote %s)", path, pair.Local.Typ, pair.Remote.Typ)
 }
 
 // writeToWebRTCDataChannel sends a framed message over an open DataChannel.
@@ -548,8 +601,10 @@ func handleSignalingStream(ni *NodeInstance, s network.Stream) {
 	}
 	logger.Debugf("[GO] 📥 Instance %d: Successfully received SDP offer from %s (length: %d bytes)", ni.instanceIndex, remotePeer, len(offerMsg.SDP))
 
-	// Create PeerConnection & set remote description using custom API
-	pc, err := pwebrtc.NewPeerConnection(getWebRTCConfig(ni))
+	// Create PeerConnection & set remote description using custom API. The offerer chooses
+	// the stage: for a direct-stage offer this side leaves TURN out as well, since a relay
+	// pair needs an allocation on one side only.
+	pc, err := pwebrtc.NewPeerConnection(getWebRTCConfig(ni, offerMsg.Stage))
 	if err != nil {
 		logger.Errorf("[GO] ❌ Instance %d: NewPeerConnection: %v", ni.instanceIndex, err)
 		writeSignalMessage(s, SignalMessage{Type: "error", Message: err.Error()})
@@ -566,6 +621,7 @@ func handleSignalingStream(ni *NodeInstance, s network.Stream) {
 			conn := &WebRTCConn{
 				pc: pc, dc: dc, remotePeer: remotePeer,
 				peerSessionFrames: offerMsg.SessionFrames,
+				stage:             offerMsg.Stage,
 				direction:         direction,
 				remoteAddr:        remoteAddr,
 			}
@@ -627,10 +683,26 @@ func handleSignalingStream(ni *NodeInstance, s network.Stream) {
 	}
 	logger.Debugf("[GO] ✅ Instance %d: Sent SDP answer to %s.", ni.instanceIndex, remotePeer)
 
+	// An offerer that stages its offers keeps the stream open until its channel is open,
+	// and says so on it when it gives the offer up, before it makes the next one. Without
+	// this the connection of a direct stage that failed would wait here for its whole time.
+	// The end of the stream says nothing: an offerer may close it as soon as it has the answer.
+	aborted := make(chan SignalMessage, 1)
+	go func() {
+		defer recoverGoroutine("handleSignalingStream.abort")
+		if msg, err := readSignalMessage(s); err == nil && (msg.Type == "abort" || msg.Type == "error") {
+			aborted <- msg
+		}
+	}()
+
 	// Wait for DataChannel to open
 	select {
 	case conn := <-dcReady:
 		registerWebRTCDataChannel(ni, conn)
+	case msg := <-aborted:
+		logger.Infof("[GO] ↪️ Instance %d: %s gave up its WebRTC offer (stage: %s): %s",
+			ni.instanceIndex, remotePeer, msg.Stage, msg.Message)
+		pc.Close()
 	case <-ctx.Done():
 		logger.Errorf("[GO] ❌ Instance %d: Timeout waiting for DataChannel from %s",
 			ni.instanceIndex, remotePeer)
@@ -638,9 +710,78 @@ func handleSignalingStream(ni *NodeInstance, s network.Stream) {
 	}
 }
 
+// errSignalingStreamEnded says that the answerer closed the signalling stream with no
+// answer: what a browser does to an offer that finds its previous exchange still running.
+var errSignalingStreamEnded = errors.New("the answerer closed the signaling stream with no answer")
+
+// trustsWebRTCDataChannel reports whether we hold a DataChannel to the peer that makes an
+// offer of ours pointless: open and, for a peer that takes Session frames on it, fresh.
+// With such a peer a channel that is alive is never silent for long. For a peer that takes
+// none, nothing is due on an idle channel and silence says nothing: the state decides.
+func trustsWebRTCDataChannel(ni *NodeInstance, remotePeer peer.ID) bool {
+	ni.webrtcMutex.RLock()
+	existing := ni.webrtcConnections[remotePeer]
+	ni.webrtcMutex.RUnlock()
+	return existing != nil && existing.isOpen() && (!existing.peerSessionFrames || existing.isFresh(ni.now()))
+}
+
 // initiateWebRTCConnection is the offerer path. Call this when we want to
 // establish a direct WebRTC DataChannel to a peer we are already connected to
 // (typically via a relay).
+//
+// The offer is made in two stages, as the browser makes its own. The direct stage has
+// STUN alone on both sides and WebRTCDirectStageTimeout in all. Only when it fails, and
+// the peer has gained no direct path meanwhile, the TURN stage offers again with the
+// whole ICE list.
+func initiateWebRTCConnection(ni *NodeInstance, remotePeer peer.ID) error {
+	logger.Infof("[GO] 🚀 Instance %d: Initiating WebRTC connection to %s", ni.instanceIndex, remotePeer)
+
+	// Skip only over a DataChannel that we trust. One that is open and not trusted is
+	// offered over, and the new channel replaces it when it opens.
+	if trustsWebRTCDataChannel(ni, remotePeer) {
+		return fmt.Errorf("already have an open WebRTC DataChannel with %s", remotePeer)
+	}
+	ni.webrtcMutex.RLock()
+	existing := ni.webrtcConnections[remotePeer]
+	ni.webrtcMutex.RUnlock()
+	if existing != nil && existing.isOpen() {
+		logger.Infof("[GO] ♻️ Instance %d: The WebRTC DataChannel with %s is open and gave no sign of life for %v: offering a new one",
+			ni.instanceIndex, remotePeer, WebRTCFreshnessWindow)
+	}
+
+	directErr := offerWebRTC(ni, remotePeer, WebRTCStageDirect, WebRTCDirectStageTimeout)
+	if directErr == nil {
+		return nil
+	}
+	logger.Infof("[GO] ↪️ Instance %d: The direct stage of the WebRTC offer to %s failed: %v", ni.instanceIndex, remotePeer, directErr)
+
+	for attempt, pause := 1, WebRTCStagePause; ; attempt, pause = attempt+1, WebRTCStageRetryDelay {
+		select {
+		case <-time.After(pause):
+		case <-ni.ctx.Done():
+			return ni.ctx.Err()
+		}
+		// The TURN stage is an offer like any other: it is not made when a path that is
+		// not relayed appeared meanwhile, a direct libp2p connection or a DataChannel we
+		// trust (one the peer offered, or the old one that gave a sign of life). Over an
+		// entry that is still open and not trusted it is made, and its channel replaces
+		// the entry although it may run through TURN.
+		if bestConnRank(ni, remotePeer) == connRankDirect || trustsWebRTCDataChannel(ni, remotePeer) {
+			logger.Infof("[GO] ✅ Instance %d: %s has a path that is not relayed after the direct stage: no TURN stage", ni.instanceIndex, remotePeer)
+			return nil
+		}
+		logger.Infof("[GO] ↪️ Instance %d: TURN stage of the WebRTC offer to %s (attempt %d)", ni.instanceIndex, remotePeer, attempt)
+		err := offerWebRTC(ni, remotePeer, WebRTCStageTURN, WebRTCSignalingTimeout)
+		if err == nil {
+			return nil
+		}
+		if attempt == 2 || !errors.Is(err, errSignalingStreamEnded) {
+			return fmt.Errorf("TURN stage: %w (direct stage: %v)", err, directErr)
+		}
+	}
+}
+
+// offerWebRTC makes one offer to the peer, of the given stage and within the given time.
 //
 // Sequence (vanilla / batch ICE):
 //
@@ -649,26 +790,8 @@ func handleSignalingStream(ni *NodeInstance, s network.Stream) {
 //  3. Send complete SDP offer (with all ICE candidates embedded).
 //  4. Read SDP answer, set remote description.
 //  5. Wait for DataChannel to open, then register it.
-func initiateWebRTCConnection(ni *NodeInstance, remotePeer peer.ID) error {
-	logger.Infof("[GO] 🚀 Instance %d: Initiating WebRTC connection to %s", ni.instanceIndex, remotePeer)
-
-	// Skip only over a DataChannel that we trust: open and, for a peer that takes Session
-	// frames on it, fresh. With such a peer a channel that is alive is never silent for
-	// long, so one that is open and not fresh is offered over, and the new channel
-	// replaces it when it opens. For a peer that takes none, nothing is due on an idle
-	// channel and silence says nothing: the state decides, as before.
-	ni.webrtcMutex.RLock()
-	existing := ni.webrtcConnections[remotePeer]
-	ni.webrtcMutex.RUnlock()
-	if existing != nil && existing.isOpen() {
-		if !existing.peerSessionFrames || existing.isFresh(ni.now()) {
-			return fmt.Errorf("already have an open WebRTC DataChannel with %s", remotePeer)
-		}
-		logger.Infof("[GO] ♻️ Instance %d: The WebRTC DataChannel with %s is open and gave no sign of life for %v: offering a new one",
-			ni.instanceIndex, remotePeer, WebRTCFreshnessWindow)
-	}
-
-	ctx, cancel := context.WithTimeout(ni.ctx, WebRTCSignalingTimeout)
+func offerWebRTC(ni *NodeInstance, remotePeer peer.ID, stage string, budget time.Duration) (err error) {
+	ctx, cancel := context.WithTimeout(ni.ctx, budget)
 	defer cancel()
 
 	// Open signaling stream over existing (relayed) connection
@@ -681,24 +804,37 @@ func initiateWebRTCConnection(ni *NodeInstance, remotePeer peer.ID) error {
 		return fmt.Errorf("open signaling stream to %s: %w", remotePeer, err)
 	}
 	defer s.Close()
-	_ = s.SetDeadline(time.Now().Add(WebRTCSignalingTimeout))
+	_ = s.SetDeadline(time.Now().Add(budget))
 
 	// Create PeerConnection & set remote description using custom API
-	pc, err := pwebrtc.NewPeerConnection(getWebRTCConfig(ni))
+	pc, err := pwebrtc.NewPeerConnection(getWebRTCConfig(ni, stage))
 	if err != nil {
 		return fmt.Errorf("NewPeerConnection: %w", err)
 	}
+	// An offer that is given up is told to the answerer, which is waiting for our
+	// DataChannel: a browser refuses the offer of the next stage until it knows.
+	offerSent := false
+	defer func() {
+		if err == nil {
+			return
+		}
+		if offerSent {
+			_ = s.SetWriteDeadline(time.Now().Add(WebRTCAbortWriteTimeout))
+			_ = writeSignalMessage(s, SignalMessage{Type: "abort", Stage: stage, Message: err.Error()})
+		}
+		pc.Close()
+	}()
 
 	ordered := true
 	dc, err := pc.CreateDataChannel(WebRTCDataChannelLabel, &pwebrtc.DataChannelInit{Ordered: &ordered})
 	if err != nil {
-		pc.Close()
 		return fmt.Errorf("CreateDataChannel: %w", err)
 	}
 
 	// The handlers go in before the channel can open (see wireWebRTCDataChannel).
 	conn := &WebRTCConn{
 		pc: pc, dc: dc, remotePeer: remotePeer,
+		stage:      stage,
 		direction:  connDirection(s),
 		remoteAddr: s.Conn().RemoteMultiaddr(),
 	}
@@ -720,11 +856,9 @@ func initiateWebRTCConnection(ni *NodeInstance, remotePeer peer.ID) error {
 
 	offer, err := pc.CreateOffer(nil)
 	if err != nil {
-		pc.Close()
 		return fmt.Errorf("CreateOffer: %w", err)
 	}
 	if err := pc.SetLocalDescription(offer); err != nil {
-		pc.Close()
 		return fmt.Errorf("SetLocalDescription: %w", err)
 	}
 
@@ -733,30 +867,26 @@ func initiateWebRTCConnection(ni *NodeInstance, remotePeer peer.ID) error {
 	case <-gatherDone:
 		logger.Debugf("[GO] ✅ Instance %d: ICE gathering complete (offerer).", ni.instanceIndex)
 	case <-ctx.Done():
-		pc.Close()
 		return fmt.Errorf("ICE gathering timeout for %s", remotePeer)
 	}
 
 	// Send complete SDP offer
-	offerMsg := SignalMessage{Type: "offer", SDP: pc.LocalDescription().SDP, SessionFrames: true}
+	offerMsg := SignalMessage{Type: "offer", Stage: stage, SDP: pc.LocalDescription().SDP, SessionFrames: true}
 	if err := writeSignalMessage(s, offerMsg); err != nil {
-		pc.Close()
-		return fmt.Errorf("send offer to %s: %w", remotePeer, err)
+		return fmt.Errorf("send offer to %s: %w", remotePeer, signalingStreamError(err))
 	}
-	logger.Debugf("[GO] ✅ Instance %d: Sent SDP offer to %s.", ni.instanceIndex, remotePeer)
+	offerSent = true
+	logger.Debugf("[GO] ✅ Instance %d: Sent SDP offer to %s (stage: %s).", ni.instanceIndex, remotePeer, stage)
 
 	// Read SDP answer
 	answerMsg, err := readSignalMessage(s)
 	if err != nil {
-		pc.Close()
-		return fmt.Errorf("read answer from %s: %w", remotePeer, err)
+		return fmt.Errorf("read answer from %s: %w", remotePeer, signalingStreamError(err))
 	}
 	if answerMsg.Type == "error" {
-		pc.Close()
 		return fmt.Errorf("remote signaling error from %s: %s", remotePeer, answerMsg.Message)
 	}
 	if answerMsg.Type != "answer" {
-		pc.Close()
 		return fmt.Errorf("expected answer from %s, got %q", remotePeer, answerMsg.Type)
 	}
 	logger.Debugf("[GO] 📥 Instance %d: Successfully received SDP answer from %s (length: %d bytes)", ni.instanceIndex, remotePeer, len(answerMsg.SDP))
@@ -764,7 +894,6 @@ func initiateWebRTCConnection(ni *NodeInstance, remotePeer peer.ID) error {
 	conn.peerSessionFrames = answerMsg.SessionFrames
 	answer := pwebrtc.SessionDescription{Type: pwebrtc.SDPTypeAnswer, SDP: answerMsg.SDP}
 	if err := pc.SetRemoteDescription(answer); err != nil {
-		pc.Close()
 		return fmt.Errorf("SetRemoteDescription from %s: %w", remotePeer, err)
 	}
 
@@ -776,7 +905,14 @@ func initiateWebRTCConnection(ni *NodeInstance, remotePeer peer.ID) error {
 			ni.instanceIndex, remotePeer)
 		return nil
 	case <-ctx.Done():
-		pc.Close()
 		return fmt.Errorf("timeout waiting for DataChannel to open with %s", remotePeer)
 	}
+}
+
+// signalingStreamError marks the error of a signalling stream that the answerer ended.
+func signalingStreamError(err error) error {
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, network.ErrReset) {
+		return fmt.Errorf("%w (%v)", errSignalingStreamEnded, err)
+	}
+	return err
 }

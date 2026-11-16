@@ -41,8 +41,39 @@ const (
 // WebRTC signaling constants
 const UnaiverseWebRTCSignalProtocol = "/unaiverse/webrtc-signal/1.0.0"
 const WebRTCDataChannelLabel = "unaiverse-data"
-// Total budget for the entire signaling handshake (offer → answer → DC open).
+// Total budget for one signaling handshake (offer → answer → DC open): of the answerer,
+// and of the offerer in the TURN stage.
 const WebRTCSignalingTimeout = 60 * time.Second
+
+// The stages of a WebRTC offer, as the browser names them in the "stage" field of its
+// signalling messages. An offer of the direct stage is made with STUN alone and asks the
+// answerer for the same; one of the TURN stage, like an offer that names no stage, has
+// the whole ICE list on both sides. With every server in one attempt ICE takes the first
+// pair that answers, and a TURN allocation is often ready before a hole is punched: a
+// link that could be direct ended on TURN by a few hundred milliseconds.
+const (
+	WebRTCStageDirect = "direct"
+	WebRTCStageTURN   = "turn"
+)
+
+// WebRTCDirectStageTimeout is the budget of the direct stage, signalling and opening of
+// the DataChannel together: the 15 s the browser gives its own.
+const WebRTCDirectStageTimeout = 15 * time.Second
+
+// WebRTCStagePause is the pause between the end of a direct stage that failed and the
+// offer of the TURN stage. A browser takes one signalling exchange per peer at a time
+// and closes the stream of an offer that finds the previous one still running: the
+// pause gives it the time to read our abort and let that exchange go.
+const WebRTCStagePause = 750 * time.Millisecond
+
+// WebRTCStageRetryDelay is how long the TURN stage waits before its one retry, made
+// when the answerer closed the stream with no answer. When our abort did not arrive,
+// a browser holds the previous exchange for 3 s after the end of its stream.
+const WebRTCStageRetryDelay = 3 * time.Second
+
+// WebRTCAbortWriteTimeout bounds the write of the abort that ends a stage: the stream
+// may be gone, and the next stage waits for this write.
+const WebRTCAbortWriteTimeout = time.Second
 
 // WebRTCDCUtRWaitGoPeer is how long a Go node waits for native libp2p DCUtR/hole-punching
 // before falling back to our custom WebRTC signaling, when the remote is also a Go peer
@@ -376,7 +407,11 @@ type TURNServer struct {
 //
 //	[4-byte big-endian uint32: JSON length][JSON payload]
 type SignalMessage struct {
-	Type    string `json:"type"`              // "offer" | "answer" | "error"
+	Type    string `json:"type"`              // "offer" | "answer" | "error" | "abort"
+	// Stage is the stage of an offer (WebRTCStage*), repeated in the abort that gives the
+	// offer up. A side that does not stage its offers leaves it out, and one that does
+	// not know the field ignores it.
+	Stage   string `json:"stage,omitempty"`
 	SDP     string `json:"sdp,omitempty"`     // full SDP (offer/answer; includes all ICE candidates)
 	Message string `json:"message,omitempty"` // human-readable error detail
 	// SessionFrames is set, in an offer and in an answer, by a side that accepts Session
@@ -422,6 +457,10 @@ type WebRTCConn struct {
 	// created this DataChannel, that it accepts Session frames on it. It belongs to the
 	// channel, not to the peer: a later exchange decides again.
 	peerSessionFrames bool
+
+	// stage is the stage of the offer that created this DataChannel, ours or the peer's:
+	// empty for the offer of a peer that names none.
+	stage string
 
 	// The libp2p connection the signalling ran on, as a peer first seen through a Session
 	// frame of this channel is surfaced to the application pools with: its direction, and
