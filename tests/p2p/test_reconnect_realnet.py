@@ -21,6 +21,7 @@ import asyncio
 import pytest
 
 from unaiverse.networking.session import SessionState, SessionEventType
+from unaiverse.networking.session import session as session_mod
 from unaiverse.networking.node.connpool import NodeConn
 
 from realnet_helpers import pick_dialable_addr, pump_until
@@ -177,3 +178,46 @@ def test_reborn_peer_supersedes_established_survivor(real_nodes):
     # A brand-new session replaced the stale one alice was still holding.
     assert a_sess.session_id != old_sid
     assert a_sess.session_id == b_sess.session_id
+
+
+def test_real_probe_of_a_reconnecting_responder_meets_a_restarted_peer(real_nodes, monkeypatch):
+    """alice dialled bob, then restarts (same identity and port, fresh SessionManager)
+    and stays silent. bob is the responder: it cannot dial her and no RESUME will come.
+    Told that the transport dropped, bob probes: the send of the PING re-opens a
+    connection to alice by itself, her manager answers PONG ok=false for a Session it
+    does not hold, and bob is LOST with the reason of a peer that lost the Session after
+    the short window, not after the reconnect window of 45 s."""
+    monkeypatch.setattr(session_mod, "_TIMEOUT_PEER_LOST_SESSION_S", 2.0)
+    alice_port = _free_tcp_port()
+    a_p2p, a_conn, a_sm = real_nodes.node("alice", port=alice_port)
+    b_p2p, b_conn, b_sm = real_nodes.node("bob")
+    bob_addr = pick_dialable_addr(b_p2p)
+
+    async def _establish():
+        await asyncio.wait_for(a_sm.initiate(b_p2p.peer_id, [bob_addr]), timeout=10.0)
+        await pump_until(
+            [(a_conn, a_sm, NodeConn.P2P_PUBLIC), (b_conn, b_sm, NodeConn.P2P_PUBLIC)],
+            predicate=lambda: a_sm.is_established(b_p2p.peer_id)
+            and b_sm.is_established(a_p2p.peer_id),
+            timeout=20.0)
+
+    asyncio.run(_establish())
+    alice_peer_id = a_p2p.peer_id
+
+    a_p2p.close()
+    a_p2p, a_conn, a_sm = real_nodes.node("alice", port=alice_port)
+    assert a_p2p.peer_id == alice_peer_id, "restart must preserve the peer identity"
+
+    async def _probe():
+        events = await b_sm.on_peer_disconnected(alice_peer_id)
+        assert [e.type for e in events] == [SessionEventType.RECONNECTING]
+        return await pump_until(
+            [(a_conn, a_sm, NodeConn.P2P_PUBLIC), (b_conn, b_sm, NodeConn.P2P_PUBLIC)],
+            predicate=lambda: b_sm.get_session(alice_peer_id) is None,
+            timeout=15.0)
+
+    captured = asyncio.run(_probe())
+
+    lost = [e for e in captured.get(b_sm, []) if e.type == SessionEventType.LOST]
+    assert [e.data["reason"] for e in lost] == ["peer_lost_session"]
+    assert a_sm.get_session(b_p2p.peer_id) is None

@@ -20,6 +20,7 @@ import pytest
 from unaiverse.networking.session import (
     SessionManager, SessionState, SessionEventType,
 )
+from unaiverse.networking.session import session as session_mod
 from unaiverse.networking.session.sess_msg import WORLD_DISENGAGEMENT
 from unaiverse.networking.node.connpool import NodeConn
 
@@ -221,6 +222,44 @@ def test_keepalive_pong_not_ok_from_restarted_peer(bidirectional_fakeconns,
         alice_events = await apump(alice_inbox, sm_alice)
         assert [e.type for e in alice_events] == [SessionEventType.RECONNECTING]
         assert a_sess.state == SessionState.RECONNECTING
+
+    asyncio.run(_scenario())
+
+
+def test_probe_of_a_reconnecting_responder_meets_a_peer_without_the_session(
+        bidirectional_fakeconns, alice_peer_id, bob_peer_id):
+    """The initiator lost the Session and stays silent (it restarted, or it gave the
+    Session up while the responder was frozen), and the responder sees a transport loss
+    and nothing else. It cannot dial and no RESUME will come: its probe is what reaches
+    the peer, whose manager answers PONG ok=false for a Session it does not hold. The
+    responder is then LOST after the short window with the reason of a peer that lost the
+    Session, where it used to wait the whole reconnect window."""
+    alice_conn, bob_conn, alice_inbox, bob_inbox = bidirectional_fakeconns
+    alice_conn.connect_returns = (bob_peer_id, False)
+
+    async def _scenario():
+        sm_alice = _make_sm(alice_conn, alice_peer_id, "alice")
+        sm_bob = _make_sm(bob_conn, bob_peer_id, "bob")
+        await establish_pair(sm_alice, sm_bob, alice_inbox, bob_inbox, bob_peer_id)
+
+        sm_alice = _make_sm(alice_conn, alice_peer_id, "alice")   # Alice restarts, does not dial
+
+        ev_b = await sm_bob.on_peer_disconnected(alice_peer_id)
+        assert [e.type for e in ev_b] == [SessionEventType.RECONNECTING]
+        b_sess = sm_bob.get_session(alice_peer_id)
+        assert b_sess._timeout_s == session_mod._TIMEOUT_RECONNECT_S
+
+        assert await sm_bob.tick() == []
+        await asyncio.sleep(0)                               # the probe send is a task
+        assert await apump(alice_inbox, sm_alice) == []      # manager replies ok=false
+        assert await apump(bob_inbox, sm_bob) == []          # no second RECONNECTING
+        window = session_mod._TIMEOUT_PEER_LOST_SESSION_S
+        assert b_sess.state == SessionState.RECONNECTING and b_sess._timeout_s == window
+
+        events = await sm_bob.tick(b_sess._state_entered_at + window + 0.1)
+        assert [e.type for e in events] == [SessionEventType.LOST]
+        assert events[0].data["reason"] == "peer_lost_session"
+        assert sm_bob.get_session(alice_peer_id) is None
 
     asyncio.run(_scenario())
 

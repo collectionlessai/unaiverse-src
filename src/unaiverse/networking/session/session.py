@@ -56,7 +56,8 @@ _TIMEOUT_RECONNECT_S = 45.0 # Session-level reconnect ceiling before Session.Los
 # A responder cannot dial, and no RESUME comes from a peer that has just said so, hence
 # nothing can end this wait but its timeout. It is kept short and not zero for what may
 # still be on its way: a fresh HELLO, which supersedes this Session and spares the pool
-# state, or a GOAWAY that the PONG overtook, which closes it cleanly.
+# state, or a GOAWAY that the PONG overtook, which closes it cleanly. The PING is the
+# keep-alive of an ESTABLISHED Session or the probe of one that is reconnecting.
 _TIMEOUT_PEER_LOST_SESSION_S = 10.0
 _TIMEOUT_CLOSING_S = 10.0   # GOAWAY sent; wait for GOAWAY_ACK
 _TIMEOUT_CLOSING_FAILED_SEND_S = 1.0  # GOAWAY write failed (link dead): no ACK can
@@ -280,6 +281,8 @@ class Session:
         self._ping_in_flight: bool = False
         self._ping_nonce: bytes = b""
         self._ping_deadline: float = 0.0
+        # The send of a probe in flight (responder, while RECONNECTING), see _start_probe.
+        self._probe_task: Optional[asyncio.Task] = None
         # Reason string of the GOAWAY we sent (close()), echoed in the local
         # CLOSED event so both sides observe the same close reason.
         self._local_goaway_reason: str = ""
@@ -918,6 +921,15 @@ class Session:
         # failure. An initiator begins the reconnect + RESUME path immediately. A responder
         # has no such path and waits its own short window, not the reconnect one.
         self._consecutive_ping_failures = 0
+        if self._is_probing():
+            # The answer to a probe. The layers above have already seen RECONNECTING: only
+            # the window changes, counted from this answer.
+            log.session(f"{self!r} PONG ok=false to the probe (peer lost our session), "
+                        f"{_TIMEOUT_PEER_LOST_SESSION_S}s left", sub=self._sub)
+            self._peer_lost_session = True
+            self._state_entered_at = time.monotonic()
+            self._timeout_s = _TIMEOUT_PEER_LOST_SESSION_S
+            return None
         log.session(f"{self!r} PONG ok=false (peer lost our session) → reconnecting", sub=self._sub)
         if self.role == SessionRole.RESPONDER and self.state == SessionState.ESTABLISHED:
             return self._enter_reconnecting(_TIMEOUT_PEER_LOST_SESSION_S, peer_lost_session=True)
@@ -1093,6 +1105,7 @@ class Session:
         self._reconnect_attempts = 0
         self._next_redial_at = 0.0   # re-dial on the next tick_dial
         self._ping_in_flight = False
+        self._last_ping_at = float("-inf")   # a responder probes on the next tick_keepalive
         log.session(f"{self!r} link lost, starting {window_s}s reconnect window", sub=self._sub)
         return self._emit(SessionEventType.RECONNECTING, {"cause": "transport_disconnected"})
 
@@ -1112,11 +1125,19 @@ class Session:
     async def tick_keepalive(self, now: Optional[float] = None) -> Optional[SessionEvent]:
         """Time out an unanswered ping, then send a new one if due. The PONG
         itself is handled inbound (_on_pong). Returns at most one SessionEvent
-        (RECONNECTING on the miss threshold). The PING is sent inline: a
+        (RECONNECTING on the miss threshold). The keep-alive PING is sent inline: a
         fire-and-forget task would only start when the loop yields, which the
-        mostly-synchronous main loop cannot guarantee."""
+        mostly-synchronous main loop cannot guarantee. The probe of a responder
+        that is reconnecting is the exception, see _start_probe."""
         if now is None:
             now = time.monotonic()
+
+        # Reap the send of the last probe. Its outcome changes nothing, it is only logged.
+        task = self._probe_task
+        if task is not None and task.done():
+            self._probe_task = None
+            if not task.cancelled() and not task.result():   # _run_probe never raises
+                log.session(f"{self!r} probe PING send failed", sub=self._sub)
 
         # Apply a TOKEN_UPDATE that arrived before we were ESTABLISHED.
         if self._buffered_token_update is not None and self.state == SessionState.ESTABLISHED:
@@ -1132,25 +1153,34 @@ class Session:
             await self.close(TOKEN_EXPIRED)
             return None
 
-        # An in-flight ping that has not been PONGed within the RTT window is a miss.
+        # An in-flight ping that has not been PONGed within the RTT window is a miss. A probe
+        # is not counted: the Session is already reconnecting, silence adds nothing.
+        probing = self._is_probing()
         if self._ping_in_flight and now >= self._ping_deadline:
             self._ping_in_flight = False
-            self._consecutive_ping_failures += 1
-            log.session(f"{self!r} ping miss ({self._consecutive_ping_failures}/{_KEEPALIVE_FAIL_THRESHOLD})", sub=self._sub)
-            if (self._consecutive_ping_failures >= _KEEPALIVE_FAIL_THRESHOLD and
-                    self.state == SessionState.ESTABLISHED):
-                self._consecutive_ping_failures = 0
-                return self.on_transport_disconnected()
+            if probing:
+                log.session(f"{self!r} probe unanswered", sub=self._sub)
+            else:
+                self._consecutive_ping_failures += 1
+                log.session(f"{self!r} ping miss ({self._consecutive_ping_failures}/{_KEEPALIVE_FAIL_THRESHOLD})", sub=self._sub)
+                if (self._consecutive_ping_failures >= _KEEPALIVE_FAIL_THRESHOLD and
+                        self.state == SessionState.ESTABLISHED):
+                    self._consecutive_ping_failures = 0
+                    return self.on_transport_disconnected()
 
-        # Schedule a new ping when due (ESTABLISHED only, one in flight at a time).
-        if (self.state == SessionState.ESTABLISHED and
+        # Schedule a new ping when due, one in flight at a time: the keep-alive of an
+        # ESTABLISHED Session, or the probe of a responder that is reconnecting.
+        if ((self.state == SessionState.ESTABLISHED or probing) and
                 not self._ping_in_flight and
                 now - self._last_ping_at >= _KEEPALIVE_PERIOD_S):
             self._last_ping_at = now
             self._ping_in_flight = True
             self._ping_nonce = secrets.token_bytes(8)
             self._ping_deadline = now + _PING_RTT_TIMEOUT_S
-            await self._send_ping()
+            if probing:
+                self._start_probe()
+            else:
+                await self._send_ping()
         return None
 
     async def _send_ping(self) -> None:
@@ -1160,6 +1190,39 @@ class Session:
             "session_id": self.session_id, "nonce": self._ping_nonce,
         })):
             log.session(f"{self!r} keepalive PING send failed", sub=self._sub)
+
+    def _is_probing(self) -> bool:
+        """True for a responder that is reconnecting after a transport loss. It cannot dial
+        and would learn nothing until its window expires, so it asks: a PING at the
+        keep-alive period, whose send re-opens a connection when it can. A PONG ok=false
+        ends the wait early (_on_pong). A PONG ok=true changes nothing: the way back to
+        ESTABLISHED stays the RESUME of the initiator. An initiator has its own path."""
+        return (self.role == SessionRole.RESPONDER and
+                self.state == SessionState.RECONNECTING and not self._peer_lost_session)
+
+    def _start_probe(self) -> None:
+        """Send the probe PING as a background task, as the dial is and for the same reason:
+        with the transport gone the send dials first, for as long as the transport gives a
+        Session frame when the peer does not answer, and a node has one such send per
+        reconnecting peer. The tick serves every Session and must not wait for them.
+        Nothing is timed on this send (an unanswered probe is not a miss), so a late start
+        costs nothing. The task reads only its arguments, see _run_probe."""
+        if self._probe_task is not None and not self._probe_task.done():
+            return
+        ping = SessMsg(SessMsg.KIND_PING, {"session_id": self.session_id, "nonce": self._ping_nonce})
+        log.session(f"{self!r} probe PING", sub=self._sub)
+        self._probe_task = asyncio.create_task(self._run_probe(self.p2p, self.peer_id, ping))
+
+    @staticmethod
+    async def _run_probe(p2p, peer_id: str, ping: SessMsg) -> bool:
+        """The probe send, run as a background task: no Session state is read or written.
+        Returns whether the PING was accepted by the transport; never raises."""
+        try:
+            return await p2p.send_session(peer_id=peer_id, protocol_id=SESSION_CONTROL_PROTOCOL,
+                                          sess_msg=ping)
+        except Exception as e:
+            log.error(f"probe PING raised: {e}")
+            return False
 
     # Internal FSM helpers
 

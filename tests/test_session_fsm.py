@@ -741,6 +741,172 @@ def test_resume_inside_the_window_of_a_lost_session_resumes(bob_conn, bob_peer_i
     assert ev is not None and ev.data["reason"] == "grace_period_expired"
 
 
+# The probe of a responder that is reconnecting
+
+def _reconnecting_responder(bob_conn, bob_peer_id, alice_peer_id):
+    """A responder that has just lost its transport while ESTABLISHED."""
+    sess = _mk(alice_peer_id, SessionRole.RESPONDER, bob_conn, bob_peer_id)
+    sess._set_state(SessionState.ESTABLISHED, None)
+    sess.session_id = b"\x03" * 16
+    sess._last_ping_at = time.monotonic()   # its keep-alive ping is not due
+    ev = sess.on_transport_disconnected()
+    assert ev is not None and ev.type == SessionEventType.RECONNECTING
+    return sess
+
+
+def _pings(conn):
+    return [e[2] for e in conn.sent
+            if e[1] == SESSION_CONTROL_PROTOCOL and e[2].kind == SessMsg.KIND_PING]
+
+
+async def _tick_and_let_the_probe_run(sess, now):
+    """One keep-alive tick, then one loop turn for the probe task it may have started."""
+    ev = await sess.tick_keepalive(now)
+    await asyncio.sleep(0)
+    return ev
+
+
+def _answer_the_probe(sess, ok):
+    pong = SessMsg(SessMsg.KIND_PONG, {"session_id": sess.session_id,
+                                       "nonce": sess._ping_nonce, "ok": ok})
+    return _run(sess.process_inbound(SESSION_CONTROL_PROTOCOL, pong))
+
+
+def test_reconnecting_responder_probes_at_once_and_at_the_keepalive_period(bob_conn, bob_peer_id,
+                                                                          alice_peer_id):
+    """A responder cannot dial, so while it is reconnecting it asks the peer: a PING on its
+    first tick in the state, bound to the session id, then one per keep-alive period. A
+    probe that gets no answer is not a ping miss and changes nothing."""
+    sess = _reconnecting_responder(bob_conn, bob_peer_id, alice_peer_id)
+    entered, window = sess._state_entered_at, sess._timeout_s
+    period, rtt = session_mod._KEEPALIVE_PERIOD_S, session_mod._PING_RTT_TIMEOUT_S
+    now = time.monotonic()
+
+    assert _run(_tick_and_let_the_probe_run(sess, now)) is None
+    assert len(_pings(bob_conn)) == 1
+    assert _pings(bob_conn)[0].fields["session_id"] == sess.session_id
+    first_nonce = sess._ping_nonce
+
+    assert _run(_tick_and_let_the_probe_run(sess, now + rtt + 0.1)) is None
+    assert sess._ping_in_flight is False and sess._consecutive_ping_failures == 0
+    assert _run(_tick_and_let_the_probe_run(sess, now + period - 0.1)) is None
+    assert len(_pings(bob_conn)) == 1
+
+    assert _run(_tick_and_let_the_probe_run(sess, now + period)) is None
+    assert len(_pings(bob_conn)) == 2
+    assert _pings(bob_conn)[1].fields["nonce"] != first_nonce
+
+    assert sess.state == SessionState.RECONNECTING
+    assert (sess._state_entered_at, sess._timeout_s) == (entered, window)
+
+
+def test_probe_answered_not_ok_starts_the_short_window(bob_conn, bob_peer_id, alice_peer_id):
+    """PONG ok=false to the probe: the peer holds no Session for our id, so the wait is
+    cut to the short window, counted from the answer, and ends LOST with the reason of a
+    peer that lost the Session. The layers above have already seen RECONNECTING, so no
+    event comes with the answer, and no further probe is sent."""
+    sess = _reconnecting_responder(bob_conn, bob_peer_id, alice_peer_id)
+    now = time.monotonic()
+    _run(_tick_and_let_the_probe_run(sess, now))
+
+    assert _answer_the_probe(sess, ok=False) == []
+    assert sess.state == SessionState.RECONNECTING
+    window = session_mod._TIMEOUT_PEER_LOST_SESSION_S
+    assert sess._timeout_s == window
+
+    _run(_tick_and_let_the_probe_run(sess, now + session_mod._KEEPALIVE_PERIOD_S))
+    assert len(_pings(bob_conn)) == 1
+
+    entered = sess._state_entered_at
+    assert sess.check_timeout(entered + window - 0.1) is None
+    ev = sess.check_timeout(entered + window + 0.1)
+    assert ev is not None and ev.type == SessionEventType.LOST
+    assert ev.data["reason"] == "peer_lost_session"
+
+
+def test_probe_answered_ok_changes_nothing(bob_conn, bob_peer_id, alice_peer_id):
+    """PONG ok=true to the probe says the peer still holds the Session. The way back to
+    ESTABLISHED stays the RESUME of the initiator: state and window are untouched."""
+    sess = _reconnecting_responder(bob_conn, bob_peer_id, alice_peer_id)
+    entered, window = sess._state_entered_at, sess._timeout_s
+    _run(_tick_and_let_the_probe_run(sess, time.monotonic()))
+
+    assert _answer_the_probe(sess, ok=True) == []
+    assert sess.state == SessionState.RECONNECTING
+    assert (sess._state_entered_at, sess._timeout_s) == (entered, window)
+    ev = sess.check_timeout(entered + window + 0.1)
+    assert ev is not None and ev.data["reason"] == "grace_period_expired"
+
+
+def test_probe_whose_send_fails_changes_nothing(bob_conn, bob_peer_id, alice_peer_id):
+    """The probe dials a peer that may be gone for good. A send that fails leaves the
+    Session where it was, and the next probe leaves at the keep-alive period."""
+    async def _refused(peer_id, protocol_id, sess_msg):
+        bob_conn.sent.append((peer_id, protocol_id, sess_msg))
+        return False
+    bob_conn.send_session = _refused
+    sess = _reconnecting_responder(bob_conn, bob_peer_id, alice_peer_id)
+    entered, window = sess._state_entered_at, sess._timeout_s
+    period = session_mod._KEEPALIVE_PERIOD_S
+    now = time.monotonic()
+
+    assert _run(_tick_and_let_the_probe_run(sess, now)) is None
+    assert _run(_tick_and_let_the_probe_run(sess, now + period)) is None
+    assert len(_pings(bob_conn)) == 2
+    assert sess.state == SessionState.RECONNECTING
+    assert (sess._state_entered_at, sess._timeout_s) == (entered, window)
+
+
+def test_probe_send_does_not_hold_the_tick(bob_conn, bob_peer_id, alice_peer_id):
+    """With the transport gone the send of the probe dials first, for seconds when the peer
+    does not answer. The tick serves every Session of the node from one task, so it must
+    come back at once and leave the send behind."""
+    async def _runner():
+        release = asyncio.Event()
+
+        async def _slow(peer_id, protocol_id, sess_msg):
+            await release.wait()
+            return False
+        bob_conn.send_session = _slow
+        sess = _reconnecting_responder(bob_conn, bob_peer_id, alice_peer_id)
+        await asyncio.wait_for(sess.tick_keepalive(time.monotonic()), timeout=0.5)
+        await asyncio.sleep(0)
+        held = sess._probe_task is not None and not sess._probe_task.done()
+        release.set()
+        await sess._probe_task
+        return held
+    assert asyncio.run(_runner()) is True
+
+
+def test_resume_drops_a_probe_in_flight(bob_conn, bob_peer_id, alice_peer_id):
+    """A RESUME that lands while a probe is unanswered brings the Session back, and the
+    answer to that probe, whatever it says, no longer counts."""
+    sess = _reconnecting_responder(bob_conn, bob_peer_id, alice_peer_id)
+    _run(_tick_and_let_the_probe_run(sess, time.monotonic()))
+    resume = SessMsg(SessMsg.KIND_RESUME, {"session_id": sess.session_id, "nonce": b"r1"})
+    events = _run(sess.process_inbound(SESSION_CONTROL_PROTOCOL, resume))
+    assert len(events) == 1 and events[0].type == SessionEventType.RESUMED
+
+    assert _answer_the_probe(sess, ok=False) == []
+    assert sess.state == SessionState.ESTABLISHED
+
+
+def test_only_a_responder_that_lost_its_transport_probes(alice_conn, bob_conn, alice_peer_id,
+                                                         bob_peer_id):
+    """An initiator that is reconnecting has its own path (re-dial and RESUME), and a
+    responder already told that its Session is gone has nothing left to ask."""
+    initiator = _mk(bob_peer_id, SessionRole.INITIATOR, alice_conn, alice_peer_id)
+    initiator._set_state(SessionState.ESTABLISHED, None)
+    initiator._last_ping_at = time.monotonic()
+    initiator.on_transport_disconnected()
+    _run(_tick_and_let_the_probe_run(initiator, time.monotonic()))
+    assert _pings(alice_conn) == []
+
+    told, _ = _responder_told_its_session_is_gone(bob_conn, bob_peer_id, alice_peer_id)
+    _run(_tick_and_let_the_probe_run(told, time.monotonic()))
+    assert _pings(bob_conn) == []
+
+
 def test_keepalive_two_misses_trigger_reconnecting(alice_conn, alice_peer_id, bob_peer_id):
     """Two consecutive unanswered pings while ESTABLISHED → RECONNECTING."""
     sess = _mk(bob_peer_id, SessionRole.INITIATOR, alice_conn, alice_peer_id)
