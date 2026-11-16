@@ -97,6 +97,33 @@ const StreamCreationTimeout = 20 * time.Second
 // a slow link.
 const ChatStreamIdleTimeout = 5 * time.Minute
 
+// The ranks of a connection as the place of the chat stream of a peer. It is the order in
+// which go-libp2p picks the connection of a new stream (swarm.isBetterConn, without its
+// tie-breakers): a circuit with no limits is the one through a world host.
+const (
+	connRankLimited = iota
+	connRankRelayed
+	connRankDirect
+)
+
+// ChatStreamMoveTimeout bounds the opening of the chat stream on a better connection than
+// the one it sits on. That connection is already there, so nothing is dialled, and the send
+// that makes the move waits for it.
+const ChatStreamMoveTimeout = 2 * time.Second
+
+// ChatStreamMoveRetry is how long a chat stream is left where it is after a move that
+// failed. Without it every send toward a peer whose better connection stopped answering
+// would wait ChatStreamMoveTimeout again.
+const ChatStreamMoveRetry = 30 * time.Second
+
+// ChatStreamDrainTimeout is how long, from the last write on a chat stream that was
+// replaced, the first write on its replacement waits for the old one to be read to its
+// end. The two streams are read by two goroutines of the peer, so a frame written on the
+// new one at once could be queued before the last ones of the old. A Go node closes a
+// stream when it has read it to the end, and the wait ends there; a peer that does not
+// (a browser) costs the whole of it.
+const ChatStreamDrainTimeout = time.Second
+
 // WebRTCReassemblyTimeout bounds how long a multi-chunk DataChannel message may
 // take between its START and END chunks. Past this, the partial reassembly buffer
 // is discarded so a peer cannot pin up to MaxMessageSize of memory by sending a
@@ -318,7 +345,8 @@ type NodeInstance struct {
 	webrtcConnections map[peer.ID]*WebRTCConn
 	iceConfigMu       sync.RWMutex  // protects iceConfig swaps
 	iceConfig         *ICEConfig // nil → use defaults (Google STUN)
-	// clock is what the freshness of a DataChannel is measured with: nil → time.Now.
+	// clock is what the freshness of a DataChannel and the retry of a chat stream move
+	// are measured with: nil → time.Now.
 	clock func() time.Time
 
 	// libp2p ping service for Session liveness keep-alive (called from Python).
@@ -362,11 +390,25 @@ type SignalMessage struct {
 // writeDirectMessageFrame calls so concurrent senders cannot interleave frame
 // bytes on the wire (mirrors WebRTCConn.sendMu for the libp2p path).
 //
-// Lock ordering: sendMu is always acquired and released BEFORE streamsMutex.
-// Never hold both at the same time.
+// Lock ordering: sendMu comes before streamsMutex. The move of the stream to a
+// better connection takes streamsMutex while it holds sendMu, of the old stream
+// and of the new one; nothing takes a sendMu while it holds streamsMutex.
 type persistentStream struct {
 	s      network.Stream
 	sendMu sync.Mutex
+
+	// rank is the rank of the connection the stream sits on (connRank*).
+	rank int
+	// done is closed when the reader of the stream ends: the peer closed it, or it broke.
+	done chan struct{}
+
+	// The fields below are guarded by sendMu. retired says that the stream was replaced
+	// by one on a better connection and is closed for writing. lastWrite is when a frame
+	// was last written on it. nextMoveAt is when a move may be tried again after one
+	// that failed.
+	retired    bool
+	lastWrite  time.Time
+	nextMoveAt time.Time
 }
 
 // WebRTCConn holds the live state of an established WebRTC DataChannel connection

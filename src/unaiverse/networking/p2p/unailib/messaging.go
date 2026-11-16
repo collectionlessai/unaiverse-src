@@ -163,27 +163,39 @@ func connDirection(s network.Stream) string {
 func handleStream(ni *NodeInstance, s network.Stream) {
 	defer recoverGoroutine("handleStream")
 	senderPeerID := s.Conn().RemotePeer()
+	logger.Debugf("[GO] 📥 Instance %d: Accepted INCOMING stream %s from %s. Storing for duplex use.\n", ni.instanceIndex, s.ID(), senderPeerID)
+
+	// Store the newly accepted stream so we can use it to send messages back to this peer.
+	incomingPS := newPersistentStream(s)
+	ni.streamsMutex.Lock()
+	ni.persistentChatStreams[senderPeerID] = incomingPS
+	ni.streamsMutex.Unlock()
+
+	readChatStream(ni, incomingPS)
+}
+
+// readChatStream reads the frames of a chat stream, of either direction, until the stream
+// ends, and queues them. A stream that was replaced as the one to write on is still read
+// here to its end.
+func readChatStream(ni *NodeInstance, ps *persistentStream) {
+	defer recoverGoroutine("readChatStream")
+	s := ps.s
+	senderPeerID := s.Conn().RemotePeer()
 	streamID := s.ID()
 	// Delegate peer promotion and address updates to the helper function.
 	// This safely handles the mutex locking and state management for us.
 	promoteFriendlyPeer(ni, senderPeerID, connDirection(s), s.Conn().RemoteMultiaddr())
-	logger.Debugf("[GO] 📥 Instance %d: Accepted INCOMING stream %s from %s. Storing for duplex use.\n", ni.instanceIndex, streamID, senderPeerID)
-
-	// Store the newly accepted stream so we can use it to send messages back to this peer.
-	incomingPS := &persistentStream{s: s}
-	ni.streamsMutex.Lock()
-	ni.persistentChatStreams[senderPeerID] = incomingPS
-	ni.streamsMutex.Unlock()
 
 	// This defer block ensures cleanup happens when the stream is closed by either side.
 	defer func() {
 		logger.Debugf("[GO] 🧹 Instance %d: Stream %s with %s closed. Removing from map.\n", ni.instanceIndex, streamID, senderPeerID)
 		ni.streamsMutex.Lock()
-		if current, ok := ni.persistentChatStreams[senderPeerID]; ok && current == incomingPS {
+		if current, ok := ni.persistentChatStreams[senderPeerID]; ok && current == ps {
 			delete(ni.persistentChatStreams, senderPeerID)
 		}
 		ni.streamsMutex.Unlock()
 		s.Close() // Ensure the stream is fully closed.
+		close(ps.done)
 	}()
 
 	for {
@@ -256,6 +268,197 @@ func handleStream(ni *NodeInstance, s network.Stream) {
 
 		logger.Infof("[GO] 📨 Instance %d: Received msg on channel '%s' via Stream %s from %s.\n", ni.instanceIndex, channel, streamID, senderPeerID)
 		storeReceivedMessage(ni, senderPeerID, channel, UnaiverseChatProtocol, payload)
+	}
+}
+
+func newPersistentStream(s network.Stream) *persistentStream {
+	return &persistentStream{s: s, rank: connRank(s.Conn()), done: make(chan struct{})}
+}
+
+// connRank ranks a connection as the place of the chat stream of a peer.
+func connRank(c network.Conn) int {
+	if c.Stat().Limited {
+		return connRankLimited
+	}
+	if _, err := c.RemoteMultiaddr().ValueForProtocol(ma.P_CIRCUIT); err == nil {
+		return connRankRelayed
+	}
+	return connRankDirect
+}
+
+func connRankName(rank int) string {
+	switch rank {
+	case connRankDirect:
+		return "direct"
+	case connRankRelayed:
+		return "relayed"
+	default:
+		return "relayed, limited"
+	}
+}
+
+// bestConnRank returns the rank of the best open connection to the peer, -1 with none.
+func bestConnRank(ni *NodeInstance, pid peer.ID) int {
+	best := -1
+	for _, c := range ni.host.Network().ConnsToPeer(pid) {
+		if c.IsClosed() {
+			continue
+		}
+		if rank := connRank(c); rank > best {
+			best = rank
+		}
+	}
+	return best
+}
+
+// sendOnChatStream sends one chat frame to the peer on its persistent stream. It opens the
+// stream when there is none, and moves it first when a better connection to the peer than
+// the one it sits on has appeared. The text it returns is the one of the reply to the
+// caller, for both outcomes.
+func sendOnChatStream(ni *NodeInstance, pid peer.ID, channel string, data []byte) (string, error) {
+	for {
+		ni.streamsMutex.Lock()
+		ps, streamExists := ni.persistentChatStreams[pid]
+		ni.streamsMutex.Unlock()
+
+		how := "reused stream"
+		if !streamExists {
+			opened, err := openChatStream(ni, pid)
+			if err != nil {
+				return fmt.Sprintf("Failed to open new stream to %s.", pid), err
+			}
+			if opened == nil {
+				continue
+			}
+			ps, how = opened, "new stream"
+		}
+
+		ps.sendMu.Lock()
+		if ps.retired {
+			// Another sender moved the stream while this one was getting here.
+			ps.sendMu.Unlock()
+			continue
+		}
+		if streamExists {
+			logger.Debugf("[GO]   ↳ Instance %d: Reusing stream %s to %s\n", ni.instanceIndex, ps.s.ID(), pid)
+			if next := moveChatStream(ni, pid, ps); next != nil {
+				lastWrite := ps.lastWrite
+				ps.sendMu.Unlock()
+				waitChatStreamDrained(ni, ps, lastWrite)
+				ps, how = next, "moved stream"
+			}
+		}
+		err := writeDirectMessageFrame(ps.s, channel, data)
+		ps.lastWrite = time.Now()
+		ps.sendMu.Unlock()
+		if err == nil {
+			logger.Infof("[GO] 📤 Instance %d: Sent to %s via Stream %s (%s)\n", ni.instanceIndex, pid, ps.s.ID(), how)
+			return fmt.Sprintf("Direct message sent to %s (%s).", pid, how), nil
+		}
+
+		// Write failed: remove the broken entry, so that the next send opens a new stream.
+		logger.Warnf("[GO] ⚠️ Instance %d: Write failed on Stream %s to %s (%s): %v. Removing.\n", ni.instanceIndex, ps.s.ID(), pid, how, err)
+		ni.streamsMutex.Lock()
+		if cur, ok := ni.persistentChatStreams[pid]; ok && cur == ps {
+			delete(ni.persistentChatStreams, pid)
+		}
+		ni.streamsMutex.Unlock()
+		_ = ps.s.Close()
+		if streamExists {
+			return fmt.Sprintf("Failed to write to stream %s (closed).", pid), err
+		}
+		return fmt.Sprintf("Failed to write to new stream to '%s' (needs reconnect).", pid), err
+	}
+}
+
+// openChatStream opens the chat stream of a peer that has none and makes it the entry of
+// the peer. It returns nil when an entry appeared meanwhile.
+func openChatStream(ni *NodeInstance, pid peer.ID) (*persistentStream, error) {
+	logger.Debugf("[GO]   ↳ Instance %d: Creating NEW stream to %s...\n", ni.instanceIndex, pid)
+	streamCtx, cancel := context.WithTimeout(ni.ctx, StreamCreationTimeout)
+	defer cancel()
+
+	newStream, err := ni.host.NewStream(
+		network.WithAllowLimitedConn(streamCtx, UnaiverseChatProtocol),
+		pid,
+		UnaiverseChatProtocol,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	// Double-check if a stream of the peer arrived, or another sender opened one, while
+	// ours was opening.
+	ni.streamsMutex.Lock()
+	defer ni.streamsMutex.Unlock()
+	if existingPS, existsNow := ni.persistentChatStreams[pid]; existsNow {
+		logger.Warnf("[GO] ⚠️ Instance %d: Race detected. Using existing stream %s, closing our new %s.\n", ni.instanceIndex, existingPS.s.ID(), newStream.ID())
+		_ = newStream.Close()
+		return nil, nil
+	}
+	ps := newPersistentStream(newStream)
+	logger.Debugf("[GO] ✅ Instance %d: Opened and stored new persistent stream %s to %s\n", ni.instanceIndex, newStream.ID(), pid)
+	ni.persistentChatStreams[pid] = ps
+	go readChatStream(ni, ps)
+	return ps, nil
+}
+
+// moveChatStream opens a chat stream on the best connection to the peer when that is a
+// better one than the stream of the entry sits on, makes it the entry and closes the old
+// one for writing. Read is left open: what the peer still writes on the old stream is
+// read to its end by the reader that stream already has. It returns nil when the stream
+// stays where it is.
+//
+// Called with ps.sendMu held. The stream it returns comes with its own sendMu held, taken
+// before the stream can be found: nobody writes on it before the caller has waited for
+// the old one to drain.
+func moveChatStream(ni *NodeInstance, pid peer.ID, ps *persistentStream) *persistentStream {
+	if ps.rank >= connRankDirect || bestConnRank(ni, pid) <= ps.rank {
+		return nil
+	}
+	now := ni.now()
+	if now.Before(ps.nextMoveAt) {
+		return nil
+	}
+
+	ctx, cancel := context.WithTimeout(ni.ctx, ChatStreamMoveTimeout)
+	defer cancel()
+	ctx = network.WithNoDial(ctx, "the chat stream moves to a connection that exists")
+	s, err := ni.host.NewStream(network.WithAllowLimitedConn(ctx, UnaiverseChatProtocol), pid, UnaiverseChatProtocol)
+	if err != nil {
+		ps.nextMoveAt = now.Add(ChatStreamMoveRetry)
+		logger.Warnf("[GO] ⚠️ Instance %d: Chat stream %s to %s stays on its %s connection, a stream on a better one did not open: %v\n", ni.instanceIndex, ps.s.ID(), pid, connRankName(ps.rank), err)
+		return nil
+	}
+
+	next := newPersistentStream(s)
+	next.sendMu.Lock()
+	ni.streamsMutex.Lock()
+	ni.persistentChatStreams[pid] = next
+	ni.streamsMutex.Unlock()
+	go readChatStream(ni, next)
+
+	ps.retired = true
+	_ = ps.s.CloseWrite()
+	logger.Infof("[GO] 🔀 Instance %d: Chat stream to %s moved to a %s connection (stream %s), from a %s one (stream %s)\n", ni.instanceIndex, pid, connRankName(next.rank), s.ID(), connRankName(ps.rank), ps.s.ID())
+	return next
+}
+
+// waitChatStreamDrained waits until the peer has read what was written on a chat stream
+// that was replaced: until the peer closes the stream in turn, which ends its reader
+// here, or until ChatStreamDrainTimeout after the last write on it.
+func waitChatStreamDrained(ni *NodeInstance, ps *persistentStream, lastWrite time.Time) {
+	wait := time.Until(lastWrite.Add(ChatStreamDrainTimeout))
+	if wait <= 0 {
+		return
+	}
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	select {
+	case <-ps.done:
+	case <-timer.C:
+		logger.Debugf("[GO] ⏳ Instance %d: Chat stream %s was not closed by its peer within %v of the last write on it.\n", ni.instanceIndex, ps.s.ID(), ChatStreamDrainTimeout)
+	case <-ni.ctx.Done():
 	}
 }
 

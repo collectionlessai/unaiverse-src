@@ -1312,81 +1312,11 @@ func SendMessageToPeer(
 			logger.Warnf("[GO] ⚠️ Instance %d: WebRTC send to %s failed (%v), falling back to stream\n", ni.instanceIndex, pid, err)
 		}
 
-		ni.streamsMutex.Lock()
-		ps, streamExists := ni.persistentChatStreams[pid]
-		ni.streamsMutex.Unlock()
-
-		// If stream exists, try writing to it.
-		// Lock ps.sendMu BEFORE streamsMutex (see lock-ordering in persistentStream doc).
-		if streamExists {
-			logger.Debugf("[GO]   ↳ Instance %d: Reusing stream %s to %s\n", ni.instanceIndex, ps.s.ID(), pid)
-			ps.sendMu.Lock()
-			err = writeDirectMessageFrame(ps.s, goChannel, goData)
-			ps.sendMu.Unlock()
-			if err == nil {
-				logger.Infof("[GO] 📤 Instance %d: Sent to %s via Stream %s (Reused)\n", ni.instanceIndex, pid, ps.s.ID())
-				return C.CString(jsonSuccessResponse(fmt.Sprintf("Direct message sent to %s (reused stream).", pid)))
-			}
-
-			// Write failed? Lock streamsMutex to remove the broken entry.
-			logger.Warnf("[GO] ⚠️ Instance %d: Write failed on Stream %s to %s: %v. Removing.\n", ni.instanceIndex, ps.s.ID(), pid, err)
-			ni.streamsMutex.Lock()
-			if cur, ok := ni.persistentChatStreams[pid]; ok && cur == ps {
-				delete(ni.persistentChatStreams, pid)
-			}
-			ni.streamsMutex.Unlock()
-			_ = ps.s.Close()
-			return C.CString(jsonErrorResponse(fmt.Sprintf("Failed to write to stream %s (closed).", pid), err))
-		} else {
-			// Stream does not exist, need to create a new one.
-			logger.Debugf("[GO]   ↳ Instance %d: Creating NEW stream to %s...\n", ni.instanceIndex, pid)
-			streamCtx, cancel := context.WithTimeout(ni.ctx, StreamCreationTimeout)
-			defer cancel()
-
-			newStream, err := ni.host.NewStream(
-				network.WithAllowLimitedConn(streamCtx, UnaiverseChatProtocol),
-				pid,
-				UnaiverseChatProtocol,
-			)
-
-			if err != nil {
-				return C.CString(jsonErrorResponse(fmt.Sprintf("Failed to open new stream to %s.", pid), err))
-			}
-
-			// --- RACE CONDITION HANDLING ---
-			// Double-check if another goroutine created a stream while we were opening ours.
-			ni.streamsMutex.Lock()
-			existingPS, existsNow := ni.persistentChatStreams[pid]
-			if existsNow {
-				logger.Warnf("[GO] ⚠️ Instance %d: Race detected. Using existing stream %s, closing our new %s.\n", ni.instanceIndex, existingPS.s.ID(), newStream.ID())
-				_ = newStream.Close()
-				ps = existingPS
-			} else {
-				ps = &persistentStream{s: newStream}
-				logger.Debugf("[GO] ✅ Instance %d: Opened and stored new persistent stream %s to %s\n", ni.instanceIndex, newStream.ID(), pid)
-				ni.persistentChatStreams[pid] = ps
-				go handleStream(ni, newStream)
-			}
-			ni.streamsMutex.Unlock()
-
-			// --- Write message to the determined stream ---
-			ps.sendMu.Lock()
-			err = writeDirectMessageFrame(ps.s, goChannel, goData)
-			ps.sendMu.Unlock()
-			if err != nil {
-				logger.Errorf("[GO] ❌ Instance %d: Write failed on NEW stream %s to %s: %v.\n", ni.instanceIndex, ps.s.ID(), pid, err)
-				_ = ps.s.Close()
-				ni.streamsMutex.Lock()
-				if cur, ok := ni.persistentChatStreams[pid]; ok && cur == ps {
-					delete(ni.persistentChatStreams, pid)
-				}
-				ni.streamsMutex.Unlock()
-				return C.CString(jsonErrorResponse(fmt.Sprintf("Failed to write to new stream to '%s' (needs reconnect).", pid), err))
-			}
-
-			logger.Infof("[GO] 📤 Instance %d: Sent to %s via Stream %s (New)\n", ni.instanceIndex, ps.s.ID(), pid)
-			return C.CString(jsonSuccessResponse(fmt.Sprintf("Direct message sent to %s (new stream).", pid)))
+		message, err := sendOnChatStream(ni, pid, goChannel, goData)
+		if err != nil {
+			return C.CString(jsonErrorResponse(message, err))
 		}
+		return C.CString(jsonSuccessResponse(message))
 	} else {
 		// Invalid channel format
 		return C.CString(jsonErrorResponse(fmt.Sprintf("Invalid channel format '%s'", goChannel), nil))
