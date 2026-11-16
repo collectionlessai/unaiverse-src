@@ -298,9 +298,20 @@ func registerWebRTCDataChannel(ni *NodeInstance, remotePeer peer.ID, dc *pwebrtc
 		switch state {
 		case pwebrtc.PeerConnectionStateFailed,
 			pwebrtc.PeerConnectionStateClosed:
+			// The table has one entry per peer, and a newer DataChannel to the same peer
+			// may have taken it: a connection that ends removes the entry only if it is
+			// its own, and leaves the peer alone otherwise.
 			ni.webrtcMutex.Lock()
-			delete(ni.webrtcConnections, remotePeer)
+			owned := ni.webrtcConnections[remotePeer] == conn
+			if owned {
+				delete(ni.webrtcConnections, remotePeer)
+			}
 			ni.webrtcMutex.Unlock()
+			if !owned {
+				logger.Infof("[GO] 🗑️ Instance %d: A replaced WebRTC connection with %s ended (%s)",
+					ni.instanceIndex, remotePeer, state)
+				return
+			}
 			logger.Infof("[GO] 🗑️ Instance %d: WebRTC connection with %s removed (%s)",
 				ni.instanceIndex, remotePeer, state)
 
