@@ -916,6 +916,16 @@ class Session:
         self._ping_in_flight = False
         if msg.get("ok"):
             self._consecutive_ping_failures = 0
+            # The answer to a probe: the peer still holds the Session, so the responder is
+            # back. The proof is the one an accepted RESUME gives: the peer names our
+            # session id, echoes the nonce of the probe in flight and answers from a usable
+            # state (_on_ping), over a transport that has just worked in both directions.
+            # A restarted peer cannot give it: its manager answers ok=false. This is the
+            # way back when only this side saw the loss, since an initiator that is not
+            # reconnecting sends no RESUME.
+            if self._is_probing() and bytes(msg.get("session_id") or b"") == self.session_id:
+                log.session(f"{self!r} PONG ok=true to the probe (peer holds our session)", sub=self._sub)
+                return self._resume_established()
             return None
         # Peer holds no Session for our session_id (restarted / forgot us): a hard liveness
         # failure. An initiator begins the reconnect + RESUME path immediately. A responder
@@ -970,7 +980,8 @@ class Session:
         return await self._restart_handshake_or_fail(reason_name(msg.get("reason_code", SESSION_UNKNOWN)))
 
     def _resume_established(self) -> SessionEvent:
-        """RECONNECTING → ESTABLISHED after a confirmed RESUME. Resets liveness."""
+        """RECONNECTING → ESTABLISHED after a confirmed RESUME, or after a probe of the
+        responder that the peer answered with ok=true. Resets liveness."""
         self._set_state(SessionState.ESTABLISHED, None)
         self._last_ping_at = time.monotonic()
         self._consecutive_ping_failures = 0
@@ -1113,11 +1124,20 @@ class Session:
         """Transport-diff reconnect signal. Do NOT blindly resume — a reconnect can
         be to a *restarted* peer that holds no Session (the /ipfs/ping false-resume
         bug). Just kick the RESUME handshake; only a valid RESUME_ACK promotes us
-        back to ESTABLISHED (see _on_resume_ack / _resume_established)."""
+        back to ESTABLISHED (see _on_resume_ack / _resume_established). A responder
+        has no RESUME to send: it probes at once on the connection that came back, and
+        the answer decides (_on_pong)."""
         if self.state == SessionState.RECONNECTING:
             self._reconnect_substep = "redial"
             self._next_redial_at = 0.0   # send RESUME on the next tick_dial
-            log.session(f"{self!r} transport reconnect signal → attempting RESUME", sub=self._sub)
+            if self._is_probing():
+                # Due on the next tick_keepalive, not at the next period. One probe in
+                # flight at a time: if one is, this one waits for its answer or for the
+                # end of its RTT window.
+                self._last_ping_at = float("-inf")
+                log.session(f"{self!r} transport reconnect signal → probing", sub=self._sub)
+            else:
+                log.session(f"{self!r} transport reconnect signal → attempting RESUME", sub=self._sub)
         return None
 
     # Session-level keep-alive (PING/PONG over the control protocol)
@@ -1138,6 +1158,10 @@ class Session:
             self._probe_task = None
             if not task.cancelled() and not task.result():   # _run_probe never raises
                 log.session(f"{self!r} probe PING send failed", sub=self._sub)
+                # That PING never left, so no answer can come: the slot is free for the
+                # probe that a transport coming back asks for. The period is untouched.
+                if self._is_probing():
+                    self._ping_in_flight = False
 
         # Apply a TOKEN_UPDATE that arrived before we were ESTABLISHED.
         if self._buffered_token_update is not None and self.state == SessionState.ESTABLISHED:
@@ -1193,10 +1217,10 @@ class Session:
 
     def _is_probing(self) -> bool:
         """True for a responder that is reconnecting after a transport loss. It cannot dial
-        and would learn nothing until its window expires, so it asks: a PING at the
-        keep-alive period, whose send re-opens a connection when it can. A PONG ok=false
-        ends the wait early (_on_pong). A PONG ok=true changes nothing: the way back to
-        ESTABLISHED stays the RESUME of the initiator. An initiator has its own path."""
+        and would learn nothing until its window expires, so it asks: a PING on entering
+        the state, at the keep-alive period and when the transport comes back, whose send
+        re-opens a connection when it can. The answer decides (_on_pong): ok=false ends
+        the wait early, ok=true brings the Session back. An initiator has its own path."""
         return (self.role == SessionRole.RESPONDER and
                 self.state == SessionState.RECONNECTING and not self._peer_lost_session)
 

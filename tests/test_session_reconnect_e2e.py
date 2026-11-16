@@ -264,6 +264,80 @@ def test_probe_of_a_reconnecting_responder_meets_a_peer_without_the_session(
     asyncio.run(_scenario())
 
 
+def test_loss_seen_by_the_responder_alone_is_healed_by_its_probe(
+        bidirectional_fakeconns, alice_peer_id, bob_peer_id):
+    """Only the responder is told of a transport loss; the initiator saw nothing and its
+    Session is ESTABLISHED, so it will send no RESUME. The transport works. The probe of
+    the responder is answered ok=true by the Session of the initiator, and the responder
+    is back at once with RESUMED: the initiator has no event at all, and nobody has a
+    terminal one. The responder used to ride its whole window to LOST, and the initiator
+    then had to make a new handshake."""
+    alice_conn, bob_conn, alice_inbox, bob_inbox = bidirectional_fakeconns
+    alice_conn.connect_returns = (bob_peer_id, False)
+
+    async def _scenario():
+        sm_alice = _make_sm(alice_conn, alice_peer_id, "alice")
+        sm_bob = _make_sm(bob_conn, bob_peer_id, "bob")
+        await establish_pair(sm_alice, sm_bob, alice_inbox, bob_inbox, bob_peer_id)
+        sid = sm_bob.get_session(alice_peer_id).session_id
+
+        ev_b = await sm_bob.on_peer_disconnected(alice_peer_id)
+        assert [e.type for e in ev_b] == [SessionEventType.RECONNECTING]
+
+        assert await sm_bob.tick() == []
+        await asyncio.sleep(0)                               # the probe send is a task
+        assert await apump(alice_inbox, sm_alice) == []      # ESTABLISHED: PONG ok=true, no event
+        bob_events = await apump(bob_inbox, sm_bob)
+        assert [e.type for e in bob_events] == [SessionEventType.RESUMED]
+        assert bob_events[0].data["profile"] == {"node_id": "alice", "ver": "test"}
+
+        a_sess, b_sess = sm_alice.get_session(bob_peer_id), sm_bob.get_session(alice_peer_id)
+        assert a_sess.state == SessionState.ESTABLISHED and b_sess.state == SessionState.ESTABLISHED
+        assert a_sess.session_id == sid == b_sess.session_id
+        # The reconnect window is gone with the state: nothing expires later.
+        assert await sm_bob.tick(time.monotonic() + session_mod._TIMEOUT_RECONNECT_S + 1.0) == []
+        assert sm_bob.get_session(alice_peer_id) is b_sess
+
+    asyncio.run(_scenario())
+
+
+def test_loss_seen_by_both_sides_resumes_each_of_them_once(
+        bidirectional_fakeconns, alice_peer_id, bob_peer_id):
+    """Both sides are told of the loss. The probe of the responder gets there first: the
+    initiator, which is reconnecting, answers ok=true and the responder is back. The
+    RESUME of the initiator then finds it ESTABLISHED and is acked with no event, and the
+    ack brings the initiator back. One RESUMED on each side, same session."""
+    alice_conn, bob_conn, alice_inbox, bob_inbox = bidirectional_fakeconns
+    alice_conn.connect_returns = (bob_peer_id, False)
+
+    async def _scenario():
+        sm_alice = _make_sm(alice_conn, alice_peer_id, "alice")
+        sm_bob = _make_sm(bob_conn, bob_peer_id, "bob")
+        await establish_pair(sm_alice, sm_bob, alice_inbox, bob_inbox, bob_peer_id)
+        sid = sm_bob.get_session(alice_peer_id).session_id
+        await sm_alice.on_peer_disconnected(bob_peer_id)
+        await sm_bob.on_peer_disconnected(alice_peer_id)
+
+        await sm_bob.tick()                                  # the probe leaves
+        await asyncio.sleep(0)
+        assert await apump(alice_inbox, sm_alice) == []      # RECONNECTING: PONG ok=true
+        bob_events = await apump(bob_inbox, sm_bob)
+        assert [e.type for e in bob_events] == [SessionEventType.RESUMED]
+
+        await sm_alice.tick()                                # the re-dial is launched
+        await asyncio.sleep(0.05)
+        await sm_alice.tick()                                # reaped: RESUME sent
+        assert await apump(bob_inbox, sm_bob) == []          # acked, no second RESUMED
+        alice_events = await apump(alice_inbox, sm_alice)
+        assert [e.type for e in alice_events] == [SessionEventType.RESUMED]
+
+        a_sess, b_sess = sm_alice.get_session(bob_peer_id), sm_bob.get_session(alice_peer_id)
+        assert a_sess.state == SessionState.ESTABLISHED and b_sess.state == SessionState.ESTABLISHED
+        assert a_sess.session_id == sid == b_sess.session_id
+
+    asyncio.run(_scenario())
+
+
 def test_terminal_session_is_evicted_and_inbound_rehandshake_works(
         bidirectional_fakeconns, alice_peer_id, bob_peer_id):
     """After an intentional close, the responder side must evict the CLOSED

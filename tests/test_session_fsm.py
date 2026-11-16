@@ -824,18 +824,138 @@ def test_probe_answered_not_ok_starts_the_short_window(bob_conn, bob_peer_id, al
     assert ev.data["reason"] == "peer_lost_session"
 
 
-def test_probe_answered_ok_changes_nothing(bob_conn, bob_peer_id, alice_peer_id):
-    """PONG ok=true to the probe says the peer still holds the Session. The way back to
-    ESTABLISHED stays the RESUME of the initiator: state and window are untouched."""
+def test_probe_answered_ok_resumes_the_responder(bob_conn, bob_peer_id, alice_peer_id):
+    """PONG ok=true to the probe: the peer still holds the Session, names our session id
+    and echoes the nonce of the probe, over a transport that has just worked both ways.
+    That is what an accepted RESUME proves, so the responder is back the same way: RESUMED
+    with the profile it kept, liveness reset. It is the only way back when the initiator
+    never saw the loss, since it then sends no RESUME. The Session that comes back is an
+    ordinary one: its next loss gets the whole window."""
     sess = _reconnecting_responder(bob_conn, bob_peer_id, alice_peer_id)
-    entered, window = sess._state_entered_at, sess._timeout_s
+    sess.remote_profile = {"node_id": "alice"}
     _run(_tick_and_let_the_probe_run(sess, time.monotonic()))
 
-    assert _answer_the_probe(sess, ok=True) == []
+    events = _answer_the_probe(sess, ok=True)
+    assert len(events) == 1 and events[0].type == SessionEventType.RESUMED
+    assert events[0].data == {"profile": {"node_id": "alice"}}
+    assert sess.state == SessionState.ESTABLISHED and sess._timeout_s is None
+    assert sess._ping_in_flight is False and sess._consecutive_ping_failures == 0
+    assert sess.check_timeout(time.monotonic() + session_mod._TIMEOUT_RECONNECT_S + 1.0) is None
+
+    ev = sess.on_transport_disconnected()
+    assert ev is not None and ev.type == SessionEventType.RECONNECTING
+    assert sess._timeout_s == session_mod._TIMEOUT_RECONNECT_S
+
+
+def test_probe_answer_that_does_not_match_the_probe_in_flight_does_not_resume(bob_conn, bob_peer_id,
+                                                                             alice_peer_id):
+    """Only the answer to the probe in flight counts: one with another nonce (the answer
+    to an older ping), one that names another Session, and one that arrives when no probe
+    is in flight leave the responder where it is."""
+    sess = _reconnecting_responder(bob_conn, bob_peer_id, alice_peer_id)
+    _run(_tick_and_let_the_probe_run(sess, time.monotonic()))
+
+    def answer(session_id, nonce):
+        pong = SessMsg(SessMsg.KIND_PONG, {"session_id": session_id, "nonce": nonce, "ok": True})
+        return _run(sess.process_inbound(SESSION_CONTROL_PROTOCOL, pong))
+
+    assert answer(sess.session_id, b"another-nonce") == []
+    assert sess.state == SessionState.RECONNECTING and sess._ping_in_flight is True
+    assert answer(b"\x99" * 16, sess._ping_nonce) == []
     assert sess.state == SessionState.RECONNECTING
-    assert (sess._state_entered_at, sess._timeout_s) == (entered, window)
-    ev = sess.check_timeout(entered + window + 0.1)
-    assert ev is not None and ev.data["reason"] == "grace_period_expired"
+    # That answer used the probe up: the right one, now, answers nothing in flight.
+    assert sess._ping_in_flight is False
+    assert answer(sess.session_id, sess._ping_nonce) == []
+    assert sess.state == SessionState.RECONNECTING
+    assert sess._timeout_s == session_mod._TIMEOUT_RECONNECT_S
+
+
+def test_positive_pong_resumes_only_a_responder_that_is_probing(alice_conn, bob_conn, alice_peer_id,
+                                                               bob_peer_id):
+    """The way back by a PONG belongs to the probe. An initiator that is reconnecting comes
+    back by its RESUME alone, and a responder told that its Session is gone stays in its
+    short window: neither sends a ping in that state, and should one ever be in flight
+    there, its answer must not resume them."""
+    initiator = _mk(bob_peer_id, SessionRole.INITIATOR, alice_conn, alice_peer_id)
+    initiator._set_state(SessionState.ESTABLISHED, None)
+    initiator.on_transport_disconnected()
+    told, _ = _responder_told_its_session_is_gone(bob_conn, bob_peer_id, alice_peer_id)
+    for sess in (initiator, told):
+        window = sess._timeout_s
+        sess._ping_in_flight, sess._ping_nonce = True, b"forced"
+        assert _answer_the_probe(sess, ok=True) == []
+        assert sess.state == SessionState.RECONNECTING and sess._timeout_s == window
+
+
+def test_transport_reported_back_makes_a_probing_responder_ask_at_once(bob_conn, bob_peer_id,
+                                                                      alice_peer_id):
+    """A connection that comes back, made by the initiator or by the dial of an earlier
+    probe, is what a probe needs: the responder asks on its next tick and does not wait
+    for the keep-alive period. One probe at a time: with one in flight the new one waits
+    for its answer or for the end of its RTT window, and one signal asks for one probe."""
+    sess = _reconnecting_responder(bob_conn, bob_peer_id, alice_peer_id)
+    period, rtt = session_mod._KEEPALIVE_PERIOD_S, session_mod._PING_RTT_TIMEOUT_S
+    now = time.monotonic()
+    _run(_tick_and_let_the_probe_run(sess, now))
+    assert len(_pings(bob_conn)) == 1
+
+    # The first probe is in flight: the signal does not send a second one over it.
+    assert sess.on_transport_reconnected() is None
+    _run(_tick_and_let_the_probe_run(sess, now + 1.0))
+    assert len(_pings(bob_conn)) == 1
+    # Its RTT window ends with no answer, well before the period: the probe asked for by
+    # the signal leaves then, and no other follows it.
+    assert rtt + 0.2 < period
+    _run(_tick_and_let_the_probe_run(sess, now + rtt + 0.1))
+    assert len(_pings(bob_conn)) == 2
+    _run(_tick_and_let_the_probe_run(sess, now + rtt + 0.2))
+    assert len(_pings(bob_conn)) == 2
+
+    events = _answer_the_probe(sess, ok=True)
+    assert len(events) == 1 and events[0].type == SessionEventType.RESUMED
+
+
+def test_probe_whose_send_failed_leaves_room_for_the_probe_of_a_transport_that_comes_back(
+        bob_conn, bob_peer_id, alice_peer_id):
+    """The probe sent on entering the state usually fails: there is no transport, and the
+    responder may be unable to dial. That PING never left, so no answer can come and it
+    must not hold the slot for its whole RTT window: when the initiator's dial brings the
+    transport back, the responder asks at once."""
+    accepted = [False]
+
+    async def _send(peer_id, protocol_id, sess_msg):
+        bob_conn.sent.append((peer_id, protocol_id, sess_msg))
+        return accepted[0]
+    bob_conn.send_session = _send
+    sess = _reconnecting_responder(bob_conn, bob_peer_id, alice_peer_id)
+    now = time.monotonic()
+    _run(_tick_and_let_the_probe_run(sess, now))
+    # The failed send is reaped, and nothing else leaves before the period.
+    _run(_tick_and_let_the_probe_run(sess, now + 1.0))
+    assert len(_pings(bob_conn)) == 1
+
+    accepted[0] = True
+    sess.on_transport_reconnected()
+    _run(_tick_and_let_the_probe_run(sess, now + 2.0))
+    assert len(_pings(bob_conn)) == 2
+    events = _answer_the_probe(sess, ok=True)
+    assert len(events) == 1 and events[0].type == SessionEventType.RESUMED
+
+
+def test_resume_after_a_probe_brought_the_session_back_is_acked_with_no_event(bob_conn, bob_peer_id,
+                                                                             alice_peer_id):
+    """An initiator that is reconnecting too answers the probe with ok=true, and its own
+    RESUME follows. By then the responder is ESTABLISHED: the RESUME is acked, and no
+    second RESUMED goes to the layers above."""
+    sess = _reconnecting_responder(bob_conn, bob_peer_id, alice_peer_id)
+    _run(_tick_and_let_the_probe_run(sess, time.monotonic()))
+    assert [e.type for e in _answer_the_probe(sess, ok=True)] == [SessionEventType.RESUMED]
+
+    resume = SessMsg(SessMsg.KIND_RESUME, {"session_id": sess.session_id, "nonce": b"r1"})
+    assert _run(sess.process_inbound(SESSION_CONTROL_PROTOCOL, resume)) == []
+    assert sess.state == SessionState.ESTABLISHED
+    last = _last_sent(bob_conn, SESSION_CONTROL_PROTOCOL)
+    assert last[2].kind == SessMsg.KIND_RESUME_ACK and last[2].fields["accepted"] is True
 
 
 def test_probe_whose_send_fails_changes_nothing(bob_conn, bob_peer_id, alice_peer_id):
@@ -888,6 +1008,7 @@ def test_resume_drops_a_probe_in_flight(bob_conn, bob_peer_id, alice_peer_id):
     assert len(events) == 1 and events[0].type == SessionEventType.RESUMED
 
     assert _answer_the_probe(sess, ok=False) == []
+    assert _answer_the_probe(sess, ok=True) == []
     assert sess.state == SessionState.ESTABLISHED
 
 
@@ -903,6 +1024,8 @@ def test_only_a_responder_that_lost_its_transport_probes(alice_conn, bob_conn, a
     assert _pings(alice_conn) == []
 
     told, _ = _responder_told_its_session_is_gone(bob_conn, bob_peer_id, alice_peer_id)
+    _run(_tick_and_let_the_probe_run(told, time.monotonic()))
+    told.on_transport_reconnected()
     _run(_tick_and_let_the_probe_run(told, time.monotonic()))
     assert _pings(bob_conn) == []
 

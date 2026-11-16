@@ -221,3 +221,38 @@ def test_real_probe_of_a_reconnecting_responder_meets_a_restarted_peer(real_node
     lost = [e for e in captured.get(b_sm, []) if e.type == SessionEventType.LOST]
     assert [e.data["reason"] for e in lost] == ["peer_lost_session"]
     assert a_sm.get_session(b_p2p.peer_id) is None
+
+
+def test_real_probe_heals_a_loss_that_the_responder_alone_saw(real_nodes):
+    """alice dialled bob. bob, the responder, is told that the transport dropped, alice
+    is not (her Session stays ESTABLISHED, so she will send no RESUME), and the real
+    connection is fine. bob probes on it, the Session of alice answers ok=true, and bob
+    is back to ESTABLISHED with RESUMED and the same session id. alice has no event. On a
+    responder that cannot be resumed by a probe, bob waits the reconnect window of 45 s
+    and is LOST."""
+    a_p2p, a_conn, a_sm = real_nodes.node("alice")
+    b_p2p, b_conn, b_sm = real_nodes.node("bob")
+    bob_addr = pick_dialable_addr(b_p2p)
+    targets = [(a_conn, a_sm, NodeConn.P2P_PUBLIC), (b_conn, b_sm, NodeConn.P2P_PUBLIC)]
+
+    async def _scenario():
+        await asyncio.wait_for(a_sm.initiate(b_p2p.peer_id, [bob_addr]), timeout=10.0)
+        await pump_until(targets,
+                         predicate=lambda: a_sm.is_established(b_p2p.peer_id)
+                         and b_sm.is_established(a_p2p.peer_id),
+                         timeout=20.0)
+        sid = b_sm.get_session(a_p2p.peer_id).session_id
+
+        events = await b_sm.on_peer_disconnected(a_p2p.peer_id)
+        assert [e.type for e in events] == [SessionEventType.RECONNECTING]
+        captured = await pump_until(targets,
+                                    predicate=lambda: b_sm.is_established(a_p2p.peer_id),
+                                    timeout=10.0)
+        return sid, captured
+
+    sid, captured = asyncio.run(_scenario())
+
+    assert [e.type for e in captured.get(b_sm, [])] == [SessionEventType.RESUMED]
+    assert captured.get(a_sm, []) == []
+    assert a_sm.is_established(b_p2p.peer_id)
+    assert a_sm.get_session(b_p2p.peer_id).session_id == sid == b_sm.get_session(a_p2p.peer_id).session_id
