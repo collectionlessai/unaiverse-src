@@ -14,6 +14,7 @@ import (
 	"github.com/libp2p/go-libp2p/core/event"
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/network"
+	autorelay "github.com/libp2p/go-libp2p/p2p/host/autorelay"
 	ma "github.com/multiformats/go-multiaddr"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
 	pwebrtc "github.com/pion/webrtc/v4"
@@ -121,6 +122,17 @@ func getListenAddrs(ips []string, tcpPort int, tlsMode string) ([]ma.Multiaddr, 
 	logger.Debugf("[GO] 🔧 Prepared Listen Addresses: %v\n", listenAddrs)
 
 	return listenAddrs, nil
+}
+
+// autoRelayOptions tunes the AutoRelay client for our two static relays: hold one
+// reservation, and choose between the two as soon as both answered.
+func autoRelayOptions() []autorelay.Option {
+	return []autorelay.Option{
+		autorelay.WithBootDelay(time.Second * 10),
+		autorelay.WithMinCandidates(2),
+		autorelay.WithNumRelays(1),
+		autorelay.WithBackoff(AutoRelayBackoff),
+	}
 }
 
 func setupPubSub(ni *NodeInstance, floodSub bool) error {

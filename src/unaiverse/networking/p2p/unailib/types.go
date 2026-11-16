@@ -68,6 +68,13 @@ const ProbeMaintainInterval = 2 * time.Minute
 // RelayReservationTimeout is the timeout for reserving a slot on a relay node.
 const RelayReservationTimeout = 60 * time.Second
 
+// AutoRelayBackoff is how long AutoRelay leaves a relay alone after an attempt to reserve
+// on it. The library counts the successful attempts too, and its default is one hour: with
+// two static relays a node that lost its relay twice within the hour stayed without one
+// until the hour was over. The relays are ours and static, so the backoff only spaces the
+// retries toward the same relay.
+const AutoRelayBackoff = time.Minute
+
 // StreamCreationTimeout is the timeout for opening a new libp2p stream to a
 // peer. It is also reused as the per-stream READ deadline for inbound session
 // streams (see handleSessionStream), i.e. a 20s budget to receive one frame.

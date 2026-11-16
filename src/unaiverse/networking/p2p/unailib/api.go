@@ -38,7 +38,6 @@ import (
 	webrtc "github.com/libp2p/go-libp2p/p2p/transport/webrtc"
 	pwebrtc "github.com/pion/webrtc/v4"
 	p2pforge "github.com/ipshipyard/p2p-forge/client"
-	autorelay "github.com/libp2p/go-libp2p/p2p/host/autorelay"
 	webtransport "github.com/libp2p/go-libp2p/p2p/transport/webtransport"
 )
 
@@ -395,12 +394,7 @@ func CreateNode(
 		// our relays. Offering the relay service (below) is now additive and independent:
 		// libp2p gates both on the real AutoNAT reachability, so a private node keeps a
 		// dead /hop while a public one actually relays.
-		options = append(options, libp2p.EnableAutoRelayWithStaticRelays(
-			defaultRelaysAddrInfo,
-			autorelay.WithBootDelay(time.Second*10),
-			autorelay.WithMinCandidates(2),
-			autorelay.WithNumRelays(1),
-		))
+		options = append(options, libp2p.EnableAutoRelayWithStaticRelays(defaultRelaysAddrInfo, autoRelayOptions()...))
 		logger.Debugf("[GO]   - Instance %d: AutoRelay client ENABLED.\n", instanceIndex)
 		// Configure Relay Service (ability to *be* a relay)
 		if cfg.Relay.EnableService {

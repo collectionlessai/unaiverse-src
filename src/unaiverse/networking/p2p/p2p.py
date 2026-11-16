@@ -138,7 +138,8 @@ class P2P:
                     'webtransport': 'info',
                     'connmgr': 'info',
                     'dht': 'info',
-                    'autorelay': 'info',
+                    # AutoRelay reports its candidates and reservation attempts at debug only
+                    'autorelay': 'debug',
                     'autonat': 'info',
                     'autonatv2': 'info',
                     # 'rcmgr': 'info',
