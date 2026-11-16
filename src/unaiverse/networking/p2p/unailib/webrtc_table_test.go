@@ -84,6 +84,13 @@ func newWebRTCInstance(t *testing.T) *NodeInstance {
 	}
 }
 
+// registerOpenPair wires and registers the local end of a pair as the DataChannel to pid.
+func registerOpenPair(ni *NodeInstance, pid peer.ID, pair *webrtcPair) {
+	conn := &WebRTCConn{pc: pair.localPC, dc: pair.localDC, remotePeer: pid}
+	wireWebRTCDataChannel(ni, conn)
+	registerWebRTCDataChannel(ni, conn)
+}
+
 func tableEntry(ni *NodeInstance, pid peer.ID) *WebRTCConn {
 	ni.webrtcMutex.RLock()
 	defer ni.webrtcMutex.RUnlock()
@@ -102,30 +109,29 @@ func waitUntil(t *testing.T, what string, ok func() bool) {
 	t.Fatalf("timed out waiting for %s", what)
 }
 
-// A peer can close its DataChannel and open a new one while the peer connection of the old
-// one is still up on our side. The new channel takes the entry of the peer; when the old
-// connection ends, later, it must not take the entry of the new one with it.
+// A new DataChannel to a peer takes the entry of the peer, and the connection of the one it
+// replaces is closed. The cleanup of that connection runs when it ends, a moment later: it
+// must not take the entry of the new one with it.
 func TestReplacedWebRTCConnectionLeavesTheEntryOfItsSuccessor(t *testing.T) {
 	ni := newWebRTCInstance(t)
 	pid := test.RandPeerIDFatal(t)
 
 	older := newWebRTCPair(t)
-	registerWebRTCDataChannel(ni, pid, older.localDC, older.localPC)
+	registerOpenPair(ni, pid, older)
 	newer := newWebRTCPair(t)
-	registerWebRTCDataChannel(ni, pid, newer.localDC, newer.localPC)
+	registerOpenPair(ni, pid, newer)
 	current := tableEntry(ni, pid)
 	if current == nil || current.dc != newer.localDC {
 		t.Fatal("the newer DataChannel did not take the entry of the peer")
 	}
 
-	older.remotePC.Close()
-	waitUntil(t, "the end of the older connection", func() bool {
+	waitUntil(t, "the end of the replaced connection", func() bool {
 		return older.localPC.ConnectionState() == pwebrtc.PeerConnectionStateClosed
 	})
 	// The cleanup runs in a goroutine of pion after the state change: give it time.
 	time.Sleep(300 * time.Millisecond)
 	if tableEntry(ni, pid) != current {
-		t.Fatal("the end of the older connection removed the entry of the newer one")
+		t.Fatal("the end of the replaced connection removed the entry of the newer one")
 	}
 
 	newer.remotePC.Close()

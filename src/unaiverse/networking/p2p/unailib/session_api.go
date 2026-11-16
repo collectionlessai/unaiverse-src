@@ -66,10 +66,16 @@ func SendOnProtocol(
 	return C.CString(jsonSuccessResponse(fmt.Sprintf("Sent %d bytes on %s to %s", len(payload), protocolIDStr, pid)))
 }
 
-// sendSessionFrame opens a fresh stream to pid on a Session protocol, writes one frame and
-// closes the stream. The dial (when there is no connection), the opening of the stream and
-// the write share the budget of SessionSendTimeout.
+// sendSessionFrame sends one Session frame to pid. It goes on the WebRTC DataChannel to the
+// peer when there is one that takes it (see takesSessionFrames): where that channel is the
+// only direct path, a stream would run on a relay circuit that is cut every two minutes.
+// In every other case, and when that send fails, it opens a fresh stream on the Session
+// protocol, writes the frame and closes the stream: the dial (when there is no connection),
+// the opening of the stream and the write share the budget of SessionSendTimeout.
 func sendSessionFrame(ni *NodeInstance, pid peer.ID, protocolID string, payload []byte) error {
+	if sendSessionFrameOnDataChannel(ni, pid, protocolID, payload) {
+		return nil
+	}
 	ctx, cancel := context.WithTimeout(ni.ctx, SessionSendTimeout)
 	defer cancel()
 	s, err := ni.host.NewStream(

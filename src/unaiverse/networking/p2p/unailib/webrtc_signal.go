@@ -177,17 +177,69 @@ func parseDirectMessageFrame(data []byte) (channel string, payload []byte, err e
 	return string(data[5 : channelLen + 5]), data[channelLen + 5:], nil
 }
 
-// registerWebRTCDataChannel stores a newly-opened DataChannel connection and
-// wires up message delivery + connection state monitoring on the UnaiverseWebRTCSignalProtocol.
-func registerWebRTCDataChannel(ni *NodeInstance, remotePeer peer.ID, dc *pwebrtc.DataChannel, pc *pwebrtc.PeerConnection) {
-	conn := &WebRTCConn{pc: pc, dc: dc, remotePeer: remotePeer}
+// now is the clock the freshness of a DataChannel is measured with.
+func (ni *NodeInstance) now() time.Time {
+	if ni.clock != nil {
+		return ni.clock()
+	}
+	return time.Now()
+}
 
-	ni.webrtcMutex.Lock()
-	ni.webrtcConnections[remotePeer] = conn
-	ni.webrtcMutex.Unlock()
+// isOpen is the test on the state of the channel alone, the one the chat send, the list
+// handed to Python and the cleanup of a peer with no libp2p connection left go by.
+func (c *WebRTCConn) isOpen() bool {
+	return c.dc != nil && c.dc.ReadyState() == pwebrtc.DataChannelStateOpen
+}
 
-	logger.Infof("[GO] 🔗 Instance %d: WebRTC DataChannel open with %s (label=%s)",
-		ni.instanceIndex, remotePeer, dc.Label())
+// isFresh reports whether the channel gave a sign of life within WebRTCFreshnessWindow:
+// something arrived on it, or it opened.
+func (c *WebRTCConn) isFresh(now time.Time) bool {
+	at, window := now.UnixNano(), int64(WebRTCFreshnessWindow)
+	if at-c.openedAt < window {
+		return true
+	}
+	last := c.lastInbound.Load()
+	return last != 0 && at-last < window
+}
+
+// takesSessionFrames reports whether a Session frame may go on the channel now: the peer
+// declared that it accepts them there, the channel is open, its peer connection is
+// connected, and the channel is fresh.
+func (c *WebRTCConn) takesSessionFrames(now time.Time) bool {
+	return c.peerSessionFrames && c.isOpen() && c.pc != nil &&
+		c.pc.ConnectionState() == pwebrtc.PeerConnectionStateConnected && c.isFresh(now)
+}
+
+// sendSessionFrameOnDataChannel sends a Session frame on the DataChannel to pid when the
+// channel takes it, in the frame the chat uses there: the channel name is the Session
+// protocol, the payload is what a Session stream carries after its length prefix. It
+// reports whether the frame left: when it did not, the caller sends it on a stream.
+func sendSessionFrameOnDataChannel(ni *NodeInstance, pid peer.ID, protocolID string, payload []byte) bool {
+	ni.webrtcMutex.RLock()
+	conn := ni.webrtcConnections[pid]
+	ni.webrtcMutex.RUnlock()
+	if conn == nil || !conn.takesSessionFrames(ni.now()) {
+		return false
+	}
+	if err := writeToWebRTCDataChannel(conn, protocolID, payload); err != nil {
+		logger.Warnf("[GO] ⚠️ Instance %d: Session frame on %s to %s failed on the WebRTC DataChannel (%v), falling back to a stream",
+			ni.instanceIndex, protocolID, pid, err)
+		return false
+	}
+	// As on a stream: the sending side of Session traffic surfaces the peer to the pools.
+	promoteFriendlyPeer(ni, pid, conn.direction, conn.remoteAddr)
+	logger.Infof("[GO] 📤 Instance %d: Sent %d bytes on %s to %s (WebRTC DataChannel)\n", ni.instanceIndex, len(payload), protocolID, pid)
+	return true
+}
+
+// wireWebRTCDataChannel installs the handlers of a DataChannel: delivery of what arrives
+// into the shared message queue, and the log of its end. It is called before the channel
+// can open. A peer may send as soon as its own end is open, and pion drops without a word
+// a message that finds no handler, so the handlers cannot wait for the registration.
+// The caller fills conn with the two pion objects, the peer and the libp2p connection the
+// signalling runs on.
+func wireWebRTCDataChannel(ni *NodeInstance, conn *WebRTCConn) {
+	remotePeer, dc := conn.remotePeer, conn.dc
 
 	// deliverFrame parses and stores a complete reassembled DataChannel frame.
 	deliverFrame := func(frame []byte) {
@@ -195,6 +247,21 @@ func registerWebRTCDataChannel(ni *NodeInstance, remotePeer peer.ID, dc *pwebrtc
 		if err != nil {
 			logger.Warnf("[GO] ⚠️ Instance %d: Bad DataChannel frame from %s: %v",
 				ni.instanceIndex, remotePeer, err)
+			return
+		}
+		if isSessionProtocol(ch) {
+			// A Session frame, treated as one read from a Session stream: the peer is
+			// surfaced to the pools and the frame is queued under its protocol, with the
+			// protocol as its tag. A frame so named never reaches the chat path. Every
+			// offer and answer of this node declares that it accepts them.
+			if len(payload) == 0 {
+				logger.Warnf("[GO] ⚠️ Instance %d: Empty Session frame on %s from %s on the WebRTC DataChannel, ignoring",
+					ni.instanceIndex, ch, remotePeer)
+				return
+			}
+			promoteFriendlyPeer(ni, remotePeer, conn.direction, conn.remoteAddr)
+			logger.Infof("[GO] 📨 Instance %d: Session %s from %s (%d bytes, WebRTC DataChannel)\n", ni.instanceIndex, ch, remotePeer, len(payload))
+			storeReceivedMessage(ni, remotePeer, ch, ch, payload)
 			return
 		}
 		storeReceivedMessage(ni, remotePeer, ch, UnaiverseWebRTCSignalProtocol, payload)
@@ -210,6 +277,8 @@ func registerWebRTCDataChannel(ni *NodeInstance, remotePeer peer.ID, dc *pwebrtc
 				ni.instanceIndex, remotePeer)
 			return
 		}
+		// Whatever arrives, a chunk included, says that the channel is alive.
+		conn.lastInbound.Store(ni.now().UnixNano())
 
 		flags := msg.Data[0]
 		chunkPayload := msg.Data[1:]
@@ -282,14 +351,42 @@ func registerWebRTCDataChannel(ni *NodeInstance, remotePeer peer.ID, dc *pwebrtc
 		}
 	})
 
-	// The readers of the table look at the state of the DataChannel, the cleanup below at
-	// the state of the peer connection: the log has to show both.
+	// The readers of the table look at the state of the DataChannel, the cleanup of the
+	// entry at the state of the peer connection: the log has to show both.
 	dc.OnClose(func() {
 		logger.Infof("[GO] 🔒 Instance %d: WebRTC DataChannel with %s closed", ni.instanceIndex, remotePeer)
 	})
 	dc.OnError(func(err error) {
 		logger.Warnf("[GO] ⚠️ Instance %d: WebRTC DataChannel with %s reported an error: %v", ni.instanceIndex, remotePeer, err)
 	})
+}
+
+// registerWebRTCDataChannel stores a newly-opened DataChannel connection, already wired,
+// and monitors the state of its peer connection. conn also carries what the signalling
+// exchange said. The table has one entry per peer: a DataChannel already there is replaced
+// and its peer connection is closed, since a new exchange was made only because one of
+// the two sides no longer trusted it.
+func registerWebRTCDataChannel(ni *NodeInstance, conn *WebRTCConn) {
+	remotePeer, dc, pc := conn.remotePeer, conn.dc, conn.pc
+	conn.openedAt = ni.now().UnixNano()
+
+	ni.webrtcMutex.Lock()
+	replaced := ni.webrtcConnections[remotePeer]
+	ni.webrtcConnections[remotePeer] = conn
+	ni.webrtcMutex.Unlock()
+
+	logger.Infof("[GO] 🔗 Instance %d: WebRTC DataChannel open with %s (label=%s, session frames: %v)",
+		ni.instanceIndex, remotePeer, dc.Label(), conn.peerSessionFrames)
+	if replaced != nil {
+		logger.Infof("[GO] ♻️ Instance %d: It replaces a WebRTC DataChannel with %s, whose connection is closed",
+			ni.instanceIndex, remotePeer)
+		if replaced.dc != nil {
+			replaced.dc.Close()
+		}
+		if replaced.pc != nil {
+			replaced.pc.Close()
+		}
+	}
 
 	// Clean up when the peer connection dies.
 	pc.OnConnectionStateChange(func(state pwebrtc.PeerConnectionState) {
@@ -299,8 +396,9 @@ func registerWebRTCDataChannel(ni *NodeInstance, remotePeer peer.ID, dc *pwebrtc
 		case pwebrtc.PeerConnectionStateFailed,
 			pwebrtc.PeerConnectionStateClosed:
 			// The table has one entry per peer, and a newer DataChannel to the same peer
-			// may have taken it: a connection that ends removes the entry only if it is
-			// its own, and leaves the peer alone otherwise.
+			// may have taken it, or a disconnect may have removed it already: a
+			// connection that ends removes the entry only if it is its own, and leaves
+			// the peer alone otherwise.
 			ni.webrtcMutex.Lock()
 			owned := ni.webrtcConnections[remotePeer] == conn
 			if owned {
@@ -308,7 +406,7 @@ func registerWebRTCDataChannel(ni *NodeInstance, remotePeer peer.ID, dc *pwebrtc
 			}
 			ni.webrtcMutex.Unlock()
 			if !owned {
-				logger.Infof("[GO] 🗑️ Instance %d: A replaced WebRTC connection with %s ended (%s)",
+				logger.Infof("[GO] 🗑️ Instance %d: A WebRTC connection with %s that no longer held the entry of the peer ended (%s)",
 					ni.instanceIndex, remotePeer, state)
 				return
 			}
@@ -413,18 +511,18 @@ func handleSignalingStream(ni *NodeInstance, s network.Stream) {
 
 	remotePeer := s.Conn().RemotePeer()
 	ni.webrtcMutex.RLock()
-	existing, exists := ni.webrtcConnections[remotePeer]
+	existing := ni.webrtcConnections[remotePeer]
 	ni.webrtcMutex.RUnlock()
 
-	if exists {
-		if existing.dc != nil {
-			if existing.dc.ReadyState() == pwebrtc.DataChannelStateOpen {
-				logger.Warnf("[GO] ⚠️ Instance %d: Rejecting redundant WebRTC signaling from %s (already connected)", ni.instanceIndex, remotePeer)
-				return
-			}
-		}
+	// An offer is never refused because we hold a DataChannel to the peer. A side offers
+	// only when it holds none that it trusts, so the offer says that ours is dead on the
+	// other side, whatever its state says here. The new channel takes the entry when it
+	// opens (registerWebRTCDataChannel); until then the old one stays.
+	if existing != nil && existing.isOpen() {
+		logger.Infof("[GO] 📶 Instance %d: Incoming WebRTC signaling from %s over an open DataChannel, which it will replace", ni.instanceIndex, remotePeer)
+	} else {
+		logger.Infof("[GO] 📶 Instance %d: Incoming WebRTC signaling from %s", ni.instanceIndex, remotePeer)
 	}
-	logger.Infof("[GO] 📶 Instance %d: Incoming WebRTC signaling from %s", ni.instanceIndex, remotePeer)
 
 	ctx, cancel := context.WithTimeout(ni.ctx, WebRTCSignalingTimeout)
 	defer cancel()
@@ -458,15 +556,24 @@ func handleSignalingStream(ni *NodeInstance, s network.Stream) {
 		return
 	}
 
-	// Capture the DataChannel that the offerer will create.
-	dcReady := make(chan *pwebrtc.DataChannel, 1)
+	// Capture the DataChannel that the offerer will create. Its handlers are installed
+	// here: pion waits for this callback before it opens the channel.
+	direction, remoteAddr := connDirection(s), s.Conn().RemoteMultiaddr()
+	dcReady := make(chan *WebRTCConn, 1)
 	pc.OnDataChannel(func(dc *pwebrtc.DataChannel) {
 		logger.Debugf("[GO] 🔌 Instance %d: Remote peer %s created DataChannel '%s'", ni.instanceIndex, remotePeer, dc.Label())
 		if dc.Label() == WebRTCDataChannelLabel {
+			conn := &WebRTCConn{
+				pc: pc, dc: dc, remotePeer: remotePeer,
+				peerSessionFrames: offerMsg.SessionFrames,
+				direction:         direction,
+				remoteAddr:        remoteAddr,
+			}
+			wireWebRTCDataChannel(ni, conn)
 			dc.OnOpen(func() {
 				logger.Debugf("[GO] 🟢 Instance %d: DataChannel '%s' with %s is now OPEN", ni.instanceIndex, dc.Label(), remotePeer)
 				select {
-				case dcReady <- dc:
+				case dcReady <- conn:
 				default:
 				}
 			})
@@ -512,7 +619,8 @@ func handleSignalingStream(ni *NodeInstance, s network.Stream) {
 	}
 
 	// Send complete SDP answer
-	if err := writeSignalMessage(s, SignalMessage{Type: "answer", SDP: pc.LocalDescription().SDP}); err != nil {
+	answerMsg := SignalMessage{Type: "answer", SDP: pc.LocalDescription().SDP, SessionFrames: true}
+	if err := writeSignalMessage(s, answerMsg); err != nil {
 		logger.Errorf("[GO] ❌ Instance %d: Sending answer to %s: %v", ni.instanceIndex, remotePeer, err)
 		pc.Close()
 		return
@@ -521,8 +629,8 @@ func handleSignalingStream(ni *NodeInstance, s network.Stream) {
 
 	// Wait for DataChannel to open
 	select {
-	case dc := <-dcReady:
-		registerWebRTCDataChannel(ni, remotePeer, dc, pc)
+	case conn := <-dcReady:
+		registerWebRTCDataChannel(ni, conn)
 	case <-ctx.Done():
 		logger.Errorf("[GO] ❌ Instance %d: Timeout waiting for DataChannel from %s",
 			ni.instanceIndex, remotePeer)
@@ -544,12 +652,20 @@ func handleSignalingStream(ni *NodeInstance, s network.Stream) {
 func initiateWebRTCConnection(ni *NodeInstance, remotePeer peer.ID) error {
 	logger.Infof("[GO] 🚀 Instance %d: Initiating WebRTC connection to %s", ni.instanceIndex, remotePeer)
 
-	// Skip if a healthy DataChannel already exists.
+	// Skip only over a DataChannel that we trust: open and, for a peer that takes Session
+	// frames on it, fresh. With such a peer a channel that is alive is never silent for
+	// long, so one that is open and not fresh is offered over, and the new channel
+	// replaces it when it opens. For a peer that takes none, nothing is due on an idle
+	// channel and silence says nothing: the state decides, as before.
 	ni.webrtcMutex.RLock()
-	existing, exists := ni.webrtcConnections[remotePeer]
+	existing := ni.webrtcConnections[remotePeer]
 	ni.webrtcMutex.RUnlock()
-	if exists && existing.dc != nil && existing.dc.ReadyState() == pwebrtc.DataChannelStateOpen {
-		return fmt.Errorf("already have an open WebRTC DataChannel with %s", remotePeer)
+	if existing != nil && existing.isOpen() {
+		if !existing.peerSessionFrames || existing.isFresh(ni.now()) {
+			return fmt.Errorf("already have an open WebRTC DataChannel with %s", remotePeer)
+		}
+		logger.Infof("[GO] ♻️ Instance %d: The WebRTC DataChannel with %s is open and gave no sign of life for %v: offering a new one",
+			ni.instanceIndex, remotePeer, WebRTCFreshnessWindow)
 	}
 
 	ctx, cancel := context.WithTimeout(ni.ctx, WebRTCSignalingTimeout)
@@ -579,6 +695,14 @@ func initiateWebRTCConnection(ni *NodeInstance, remotePeer peer.ID) error {
 		pc.Close()
 		return fmt.Errorf("CreateDataChannel: %w", err)
 	}
+
+	// The handlers go in before the channel can open (see wireWebRTCDataChannel).
+	conn := &WebRTCConn{
+		pc: pc, dc: dc, remotePeer: remotePeer,
+		direction:  connDirection(s),
+		remoteAddr: s.Conn().RemoteMultiaddr(),
+	}
+	wireWebRTCDataChannel(ni, conn)
 
 	// Channel closed when DC transitions to open.
 	dcOpen := make(chan struct{}, 1)
@@ -614,7 +738,8 @@ func initiateWebRTCConnection(ni *NodeInstance, remotePeer peer.ID) error {
 	}
 
 	// Send complete SDP offer
-	if err := writeSignalMessage(s, SignalMessage{Type: "offer", SDP: pc.LocalDescription().SDP}); err != nil {
+	offerMsg := SignalMessage{Type: "offer", SDP: pc.LocalDescription().SDP, SessionFrames: true}
+	if err := writeSignalMessage(s, offerMsg); err != nil {
 		pc.Close()
 		return fmt.Errorf("send offer to %s: %w", remotePeer, err)
 	}
@@ -636,6 +761,7 @@ func initiateWebRTCConnection(ni *NodeInstance, remotePeer peer.ID) error {
 	}
 	logger.Debugf("[GO] 📥 Instance %d: Successfully received SDP answer from %s (length: %d bytes)", ni.instanceIndex, remotePeer, len(answerMsg.SDP))
 
+	conn.peerSessionFrames = answerMsg.SessionFrames
 	answer := pwebrtc.SessionDescription{Type: pwebrtc.SDPTypeAnswer, SDP: answerMsg.SDP}
 	if err := pc.SetRemoteDescription(answer); err != nil {
 		pc.Close()
@@ -645,7 +771,7 @@ func initiateWebRTCConnection(ni *NodeInstance, remotePeer peer.ID) error {
 	// Wait for DataChannel to open
 	select {
 	case <-dcOpen:
-		registerWebRTCDataChannel(ni, remotePeer, dc, pc)
+		registerWebRTCDataChannel(ni, conn)
 		logger.Infof("[GO] 🎉 Instance %d: WebRTC DataChannel established with %s",
 			ni.instanceIndex, remotePeer)
 		return nil

@@ -5,6 +5,7 @@ import (
 	"sync"
 	"time"
 	"context"
+	"sync/atomic"
 	"container/list"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/core/host"
@@ -102,6 +103,15 @@ const ChatStreamIdleTimeout = 5 * time.Minute
 // START and then dribbling (or never finishing). Checked lazily on each incoming
 // chunk; a peer that goes fully silent is reclaimed via OnConnectionStateChange.
 const WebRTCReassemblyTimeout = 120 * time.Second
+
+// WebRTCFreshnessWindow is how recent the last sign of life of a DataChannel must be for
+// the channel to be called fresh: something arrived on it within the window, or it opened
+// within the window. The states of the channel and of its peer connection were seen to
+// say open for a minute after the peer had dropped them, and what is sent then is lost
+// with no error. Session frames go on a DataChannel only while it is fresh, and our own
+// offer is skipped only over a fresh one. A live channel stays fresh: each side pings at
+// least every 20 s and answers every ping.
+const WebRTCFreshnessWindow = 30 * time.Second
 
 // WebRTC DataChannel chunking constants.
 // Browser SCTP implementations cap individual DataChannel messages at ~64KB.
@@ -308,6 +318,8 @@ type NodeInstance struct {
 	webrtcConnections map[peer.ID]*WebRTCConn
 	iceConfigMu       sync.RWMutex  // protects iceConfig swaps
 	iceConfig         *ICEConfig // nil → use defaults (Google STUN)
+	// clock is what the freshness of a DataChannel is measured with: nil → time.Now.
+	clock func() time.Time
 
 	// libp2p ping service for Session liveness keep-alive (called from Python).
 	pingService *ping.PingService
@@ -339,6 +351,10 @@ type SignalMessage struct {
 	Type    string `json:"type"`              // "offer" | "answer" | "error"
 	SDP     string `json:"sdp,omitempty"`     // full SDP (offer/answer; includes all ICE candidates)
 	Message string `json:"message,omitempty"` // human-readable error detail
+	// SessionFrames is set, in an offer and in an answer, by a side that accepts Session
+	// frames on the DataChannel the exchange creates. A side that does not know the
+	// field ignores it and never sets it.
+	SessionFrames bool `json:"session_frames,omitempty"`
 }
 
 // persistentStream wraps a libp2p direct-chat stream with a per-stream write
@@ -359,6 +375,25 @@ type WebRTCConn struct {
 	pc         *pwebrtc.PeerConnection
 	dc         *pwebrtc.DataChannel
 	remotePeer peer.ID
+
+	// peerSessionFrames says that the peer declared, in the offer or in the answer that
+	// created this DataChannel, that it accepts Session frames on it. It belongs to the
+	// channel, not to the peer: a later exchange decides again.
+	peerSessionFrames bool
+
+	// The libp2p connection the signalling ran on, as a peer first seen through a Session
+	// frame of this channel is surfaced to the application pools with: its direction, and
+	// its remote address for a peer the peerstore knows nothing of.
+	direction  string
+	remoteAddr ma.Multiaddr
+
+	// openedAt and lastInbound are what the channel is fresh by (WebRTCFreshnessWindow):
+	// when it was registered and when something last arrived on it, in unix nanoseconds
+	// (zero: nothing arrived yet). lastInbound is written by the callback of pion and
+	// read by the senders. Wall clock on purpose: a machine that slept must find its
+	// channels stale, and the monotonic clock of Go does not count the time of a suspend.
+	openedAt    int64
+	lastInbound atomic.Int64
 
 	// sendMu serializes the chunked-send loop so that concurrent callers cannot
 	// interleave their chunks on the wire (which would corrupt reassembly).
