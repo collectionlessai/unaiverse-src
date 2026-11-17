@@ -222,6 +222,9 @@ class NodeFakeConn(FakeConn):
         self.world_roles = {}
         self.world_preadmissions = {}
         self.addresses_set = []
+        # Relay slot on the world host: what reserve() answers, and whom it was asked to.
+        self.reserve_returns = None
+        self.reserve_calls = []
         # Registered by the harness after the SessionManagers are built, so the pump /
         # on_peer / grace / handoff facades delegate to them exactly like the real NodeConn.
         self._session_managers = []
@@ -431,6 +434,10 @@ class NodeFakeConn(FakeConn):
     def set_addresses_in_peer_info(self, peer_id, addresses):
         self.addresses_set.append((peer_id, addresses))
 
+    async def reserve(self, peer_id, p2p_name):
+        self.reserve_calls.append((peer_id, p2p_name))
+        return self.reserve_returns
+
 
 def build_agent_node_shell(node_peer_id: str, node_id: str = "shell-node",
                            hosted: FakeHosted | None = None,
@@ -470,6 +477,8 @@ def build_agent_node_shell(node_peer_id: str, node_id: str = "shell-node",
     node.keep_rejoining = False
     node.rejoining_time = -1.
     node.rejoining_kwargs = {}
+    node.relay_reservation_expiry = None
+    node.relay_reservation_peer_id = None
 
     # Node holds no SM handle (S18): the managers live on the Coordinator. Build them
     # locally and register them on the fake conn, mirroring NodeConn.attach_session_policy.

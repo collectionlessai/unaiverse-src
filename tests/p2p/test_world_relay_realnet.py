@@ -22,6 +22,8 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.x509.oid import NameOID
 
+from unaiverse.networking.p2p.p2p import P2PError
+
 from realnet_helpers import pick_dialable_addr
 
 pytestmark = pytest.mark.p2p
@@ -95,6 +97,63 @@ def test_member_reserves_on_the_world_host_and_is_dialled_through_it(_libp2p_set
         # A peer that knows the circuit address alone reaches the member, through the world
         circuit_tcp = [a for a in through_world if "/tcp/" in a and "/ws/" not in a] or through_world
         winner = other.connect_to([circuit_tcp[0]])
+        assert winner["ID"] == member.peer_id
+        assert any(f"/p2p/{world.peer_id}/p2p-circuit" in a for a in winner["Addrs"]), \
+            f"not a connection relayed by the world host: {winner}"
+    finally:
+        for p2p in created:
+            try:
+                p2p.close()
+            except Exception:
+                pass
+
+
+def test_reservation_is_lost_with_the_connection_to_the_world_and_must_be_asked_again(_libp2p_setup, tmp_path):
+    """A relay drops the reservation of a peer the moment no connection to that peer is
+    left. A member that lost its world host and found it again still shows its circuit
+    address, which leads nowhere until it reserves again: what the node does when its
+    world Session resumes."""
+    P2P = _libp2p_setup
+    created = []
+
+    def _dialler(name):
+        # A new instance at every check: one that reached the member once would dial its
+        # direct addresses, and one that was refused answers from its dial backoff
+        created.append(_instance(P2P, tmp_path / name, relay_service=False))
+        return created[-1]
+
+    def _no_reservation(dialler, address) -> bool:
+        try:
+            dialler.connect_to([address])
+        except P2PError as e:
+            return "NO_RESERVATION" in str(e.__cause__)
+        return False
+
+    try:
+        world = _instance(P2P, tmp_path / "world", relay_service=True)
+        created.append(world)
+        member = _instance(P2P, tmp_path / "member", relay_service=False)
+        created.append(member)
+        world_addr = pick_dialable_addr(world)
+        member_through_world = f"{world_addr}/p2p-circuit/p2p/{member.peer_id}"
+
+        member.connect_to([world_addr])
+        member.reserve_on_relay(world.peer_id)
+        assert _dialler("before").connect_to([member_through_world])["ID"] == member.peer_id
+
+        # The world must see the old connection close before the new one opens
+        member.disconnect_from(world.peer_id)
+        refused = _dialler("while-lost")
+        assert _wait_for(lambda: _no_reservation(refused, member_through_world))
+
+        member.connect_to([world_addr])
+        assert any(f"/p2p/{world.peer_id}/p2p-circuit" in a for a in member.addresses), \
+            f"the member no longer shows its circuit address: {member.addresses}"
+        assert _no_reservation(_dialler("still-lost"), member_through_world), \
+            "the world relays to a member that came back and did not reserve again"
+
+        member.reserve_on_relay(world.peer_id)
+        winner = _dialler("after").connect_to([member_through_world])
         assert winner["ID"] == member.peer_id
         assert any(f"/p2p/{world.peer_id}/p2p-circuit" in a for a in winner["Addrs"]), \
             f"not a connection relayed by the world host: {winner}"

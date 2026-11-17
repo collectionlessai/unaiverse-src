@@ -213,6 +213,7 @@ class Node:
 
         # Automatic address update and relay refresh (if needed)
         self.relay_reservation_expiry: datetime | None = None
+        self.relay_reservation_peer_id: str | None = None  # The world host that granted it
 
         # Interview of newly connected nodes
         self.reconnected = set()
@@ -1089,6 +1090,9 @@ class Node:
 
         log.user("Leaving world...")
 
+        # The relay slot on the host goes with the world
+        self._forget_relay_reservation()
+
         # GOAWAY the world host and drop its connection (so the remote sees Session.Closed,
         # not Lost). remove_all_world_agents below GOAWAY-closes the other world agents the
         # same way, so none of them re-dials us back into a world we are leaving.
@@ -1773,22 +1777,7 @@ class Node:
                     log.error(f"Failed to check for address updates: {e}")
 
                 # Refresh relay reservation if nearing expiration
-                if self.relay_reservation_expiry is not None:
-                    time_to_expiry = self.relay_reservation_expiry - datetime.now(timezone.utc)
-                    if time_to_expiry < timedelta(minutes=15):
-                        log.misc("Relay reservation nearing expiration. Attempting to renew...")
-                        world_private_peer_id = self.conn.get_world_node_peer_id()
-                        assert world_private_peer_id is not None
-                        new_expiry_utc = await self.conn.reserve(world_private_peer_id, NodeConn.P2P_WORLD)
-                        if new_expiry_utc is not None:
-                            self.relay_reservation_expiry = datetime.fromisoformat(
-                                new_expiry_utc.replace('Z', '+00:00'))
-                            assert self.relay_reservation_expiry is not None
-                            log.misc(f"Relay reservation renewed. New expiration: "
-                                     f"{self.relay_reservation_expiry.strftime('%Y-%m-%d %H:%M:%S')} UTC")
-                        else:
-                            log.error("Failed to renew relay reservation. Node may become unreachable.")
-                            self.relay_reservation_expiry = None
+                await self._tick_relay_reservation()
 
                 # Send stats to the world
                 if self.node_type is Node.AGENT:
@@ -2490,12 +2479,7 @@ class Node:
         world_is_relay = bool(profile.get_dynamic_profile().get('is_relay'))
         if not self.conn.world_is_public and self.conn.world_relay_enabled and world_is_relay:
             log.user("Node is not publicly reachable. Attempting to reserve a slot on the world's private network.")
-            expiry_utc = await self.conn.reserve(peer_id, NodeConn.P2P_WORLD)
-
-            if expiry_utc is not None:
-                self.relay_reservation_expiry = \
-                    (datetime.fromisoformat(expiry_utc.replace('Z', '+00:00')))
-                assert self.relay_reservation_expiry is not None
+            if await self._reserve_on_world_host(peer_id):
                 log.user(f"Reserved relay slot. Expires at "
                          f"{self.relay_reservation_expiry.strftime('%Y-%m-%d %H:%M:%S')} UTC")
             else:
@@ -2890,6 +2874,46 @@ class Node:
             except Exception as e:
                 log.error(f"[session] dispatch LOST purge failed for ...{ev.peer_id[-5:]}: {e}")
 
+    async def _reserve_on_world_host(self, peer_id: str) -> bool:
+        """Asks the world host for a relay slot, or refreshes the one we hold. (async)
+
+        The expiry is recorded together with the host that granted it: the slot belongs
+        to that world, and is forgotten when the node is out of it. A refusal leaves what
+        was recorded as it was.
+
+        Returns:
+            True if the host granted the slot.
+        """
+        expiry_utc = await self.conn.reserve(peer_id, NodeConn.P2P_WORLD)
+        if expiry_utc is None:
+            return False
+        self.relay_reservation_expiry = datetime.fromisoformat(expiry_utc.replace('Z', '+00:00'))
+        self.relay_reservation_peer_id = peer_id
+        return True
+
+    def _forget_relay_reservation(self) -> None:
+        self.relay_reservation_expiry = None
+        self.relay_reservation_peer_id = None
+
+    async def _tick_relay_reservation(self) -> None:
+        """One tick of the renewal of the relay slot, run once per main-loop cycle: the slot
+        is asked again when it nears its expiry. (async)"""
+        if self.relay_reservation_expiry is None:
+            return
+        # A slot whose world is not the current one has nothing to renew
+        if self.relay_reservation_peer_id != self.conn.get_world_node_peer_id():
+            self._forget_relay_reservation()
+            return
+        if self.relay_reservation_expiry - datetime.now(timezone.utc) >= timedelta(minutes=15):
+            return
+        log.misc("Relay reservation nearing expiration. Attempting to renew...")
+        if await self._reserve_on_world_host(self.relay_reservation_peer_id):
+            log.misc(f"Relay reservation renewed. New expiration: "
+                     f"{self.relay_reservation_expiry.strftime('%Y-%m-%d %H:%M:%S')} UTC")
+        else:
+            log.error("Failed to renew relay reservation. Node may become unreachable.")
+            self._forget_relay_reservation()
+
     async def _tick_rejoin_watchdog(self) -> None:
         """One tick of the world-rejoin watchdog, run once per main-loop cycle.
 
@@ -3026,7 +3050,19 @@ class Node:
         hosted side only when the peer WAS purged before the resume (e.g. the
         grace was entered late, after a non-grace purge already ran), re-enrolling
         from the profile the Session still holds. Pool membership self-heals on
-        the next conn.update()."""
+        the next conn.update().
+
+        A resumed Session toward the world host we hold a relay slot on asks for the slot
+        again: a relay drops the reservation of a peer the moment no connection to that
+        peer is left, and the circuit address we publish leads nowhere until then."""
+        if self.relay_reservation_expiry is not None and ev.peer_id == self.relay_reservation_peer_id:
+            if await self._reserve_on_world_host(ev.peer_id):
+                log.misc(f"Relay reservation asked again after the world Session resumed. Expires at "
+                         f"{self.relay_reservation_expiry.strftime('%Y-%m-%d %H:%M:%S')} UTC", sub="prv")
+            else:
+                # What is recorded stays, so the renewal tries again at its time
+                log.error("Failed to reserve the relay slot again after the world Session resumed. "
+                          "Node may be unreachable through the world.")
         if ev.peer_id in self.hosted.all_agents:
             return
         is_world = NodeConn.P2P_WORLD == ev.p2p_name or "world" in ev.p2p_name
@@ -3139,6 +3175,8 @@ class Node:
                 except Exception as e:
                     log.error(f"[session] failed-join teardown purge failed for ...{ev.peer_id[-5:]}: {e}")
                 self.conn.set_world(None)
+                # The join body reserves before the steps that can fail
+                self._forget_relay_reservation()
                 self._maybe_rearm_rejoin_on_failed_join(ev)
             return
 
