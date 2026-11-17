@@ -836,8 +836,9 @@ func ReserveOnRelay(
 
 	logger.Infof("[GO] ✅ Instance %d: Reservation successful on relay: %s.\n", ni.instanceIndex, relayInfo.ID)
 
-	// Return the expiration time of the reservation as confirmation.
-	return C.CString(jsonSuccessResponse(reservation.Expiration))
+	// Return the expiration time of the reservation as confirmation, in UTC as documented above
+	// (the reservation carries it in the local zone).
+	return C.CString(jsonSuccessResponse(reservation.Expiration.UTC()))
 }
 
 // DisconnectFrom ABORTIVELY tears down the connections to a specified peer and

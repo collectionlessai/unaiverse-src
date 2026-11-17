@@ -80,7 +80,10 @@ def test_member_reserves_on_the_world_host_and_is_dialled_through_it(_libp2p_set
         member.connect_to([pick_dialable_addr(world)])
         assert not [a for a in member.addresses if "/p2p-circuit" in a]
 
-        expiry = datetime.fromisoformat(member.reserve_on_relay(world.peer_id).replace("Z", "+00:00"))
+        raw_expiry = member.reserve_on_relay(world.peer_id)
+        # The node prints this time as UTC, as it comes
+        assert raw_expiry.endswith("Z"), f"the expiry of the reservation is not given in UTC: {raw_expiry}"
+        expiry = datetime.fromisoformat(raw_expiry.replace("Z", "+00:00"))
         assert expiry - datetime.now(timezone.utc) > timedelta(minutes=30), \
             f"the reservation expires too early for the renewal of the node, which starts 15 minutes ahead: {expiry}"
 
