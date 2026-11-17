@@ -447,6 +447,11 @@ class Node:
         # Get CV
         cv = self.get_cv()
 
+        # A browser reaches a relay through a secure WebSocket address only
+        if self.node_type is Node.WORLD and p2p_w.is_public and not p2p_w.tls_is_enabled:
+            log.user("This world offers its relay with no TLS: a browser cannot use it "
+                     "(NODE_USE_TLS=1 turns TLS on)")
+
         # Creating full node profile putting together static info, dynamic profile, adding P2P node info, CV
         self.profile = NodeProfile(static=profile_static,
                                    dynamic={'peer_id': p2p_u.peer_id,

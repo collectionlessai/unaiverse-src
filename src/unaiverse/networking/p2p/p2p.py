@@ -281,6 +281,7 @@ class P2P:
                 raise ValueError("Custom TLS requires 'domain_name', 'tls_cert_path' and 'tls_key_path'.")
 
         use_auto_tls = enable_tls and not has_custom_tls_args
+        self._enable_tls = use_auto_tls or has_custom_tls_args
         
         # --- Build Configuration JSON ---
         node_config = {
@@ -1016,6 +1017,11 @@ class P2P:
     def relay_is_enabled(self) -> bool:
         """Returns whether the relay client functionality is enabled for this node."""
         return self._enable_relay_client
+
+    @property
+    def tls_is_enabled(self) -> bool:
+        """Returns whether the WebSocket listener of this node is a secure one (its own certificate or AutoTLS)."""
+        return self._enable_tls
 
     def get_node_addresses(self, peer_id: str = "") -> List[str]:
         """
