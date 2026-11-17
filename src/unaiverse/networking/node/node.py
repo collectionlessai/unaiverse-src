@@ -49,7 +49,7 @@ from unaiverse.streams.streams import DataProps, BufferedStream
 from unaiverse.utils.logger import log, ALWAYS_ON_CHANNELS, ALL_CHANNELS
 from unaiverse.utils.misc import (get_key_considering_multiple_sources, save_node_addresses_to_file,
                                   prepare_app_dir, load_agent_in_memory, unpack_py_files, analyze_code,
-                                  world_definition_members, canonical_world_hash, owner_handle)
+                                  world_definition_members, canonical_world_hash, owner_handle, build_unaid)
 
 # Margin added past a quarantine ban when the rejoin watchdog pulls a retry in:
 # just enough to land on the open side of the gate.
