@@ -40,14 +40,23 @@ func reserveRelaySlot(ctx context.Context, ni *NodeInstance, relayInfo peer.Addr
 }
 
 // forgetRelaySlot drops what is remembered of the slot on pid, or of any slot when pid is
-// empty. The relay itself drops the slot when the connection closes.
+// empty, and with it the circuit addresses of the instance through that relay: nobody
+// reaches the instance on them any more. The relay itself drops the slot when the
+// connection closes.
 func forgetRelaySlot(ni *NodeInstance, pid peer.ID) {
 	ni.relaySlotMutex.Lock()
-	if pid == "" || ni.relaySlotPeer == pid {
+	forgotten := ni.relaySlotPeer != "" && (pid == "" || ni.relaySlotPeer == pid)
+	if forgotten {
 		ni.relaySlotPeer = ""
 		ni.relaySlotExpiry = time.Time{}
 	}
 	ni.relaySlotMutex.Unlock()
+	if !forgotten {
+		return
+	}
+	ni.addrMutex.Lock()
+	ni.privateRelayAddrs = nil
+	ni.addrMutex.Unlock()
 }
 
 // wantsRelaySlotAgain reports whether the connection that just opened calls for a new

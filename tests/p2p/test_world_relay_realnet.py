@@ -59,6 +59,10 @@ def _self_signed(folder, domain: str) -> dict:
     return {"domain_name": domain, "tls_cert_path": str(cert_path), "tls_key_path": str(key_path)}
 
 
+def _circuit_addresses(p2p) -> list:
+    return [a for a in p2p.addresses if "/p2p-circuit" in a]
+
+
 def _wait_for(predicate, timeout: float = 10.0) -> bool:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -111,9 +115,9 @@ def test_member_reserves_on_the_world_host_and_is_dialled_through_it(_libp2p_set
 
 def test_reservation_is_lost_with_the_connection_to_the_world_and_must_be_asked_again(_libp2p_setup, tmp_path):
     """A relay drops the reservation of a peer the moment no connection to that peer is
-    left. A member that disconnected from its world host gave the relay up: connecting
-    again does not bring the slot back, and its circuit address leads nowhere until it
-    reserves again."""
+    left. A member that disconnected from its world host gave the relay up: it no longer
+    shows the circuit address through it, and connecting again brings back neither the
+    slot nor the address until it reserves again."""
     P2P = _libp2p_setup
     created = []
 
@@ -147,13 +151,15 @@ def test_reservation_is_lost_with_the_connection_to_the_world_and_must_be_asked_
         refused = _dialler("while-lost")
         assert _wait_for(lambda: _no_reservation(refused, member_through_world))
 
+        assert not _circuit_addresses(member), "the member shows the address of a slot it gave up"
+
         member.connect_to([world_addr])
-        assert any(f"/p2p/{world.peer_id}/p2p-circuit" in a for a in member.addresses), \
-            f"the member no longer shows its circuit address: {member.addresses}"
         assert _no_reservation(_dialler("still-lost"), member_through_world), \
             "the world relays to a member that came back and did not reserve again"
+        assert not _circuit_addresses(member)
 
         member.reserve_on_relay(world.peer_id)
+        assert _circuit_addresses(member)
         winner = _dialler("after").connect_to([member_through_world])
         assert winner["ID"] == member.peer_id
         assert any(f"/p2p/{world.peer_id}/p2p-circuit" in a for a in winner["Addrs"]), \
@@ -195,6 +201,8 @@ def test_member_is_reachable_again_after_a_loss_that_a_frame_healed(_libp2p_setu
 
         world.disconnect_from(member.peer_id)
         assert _wait_for(lambda: not _reached(f"lost-{len(created)}"))
+        # A loss is not a leave: the address of the slot stays
+        assert _circuit_addresses(member)
 
         assert member.send_on_protocol(world.peer_id, SESSION_CONTROL_PROTOCOL, b"\x00")
         assert _wait_for(lambda: _reached(f"after-{len(created)}"), timeout=5.0), \

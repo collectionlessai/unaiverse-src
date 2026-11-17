@@ -818,17 +818,10 @@ func ReserveOnRelay(
 	for _, addr := range constructedAddrs {
 		logger.Debugf("[GO]      -> %s", addr.String())
 	}
-	// Tell the Network to start listening on these addresses.
-    // This activates the circuit transport for this specific relay, updates host.Addrs(),
-    // and triggers the EvtLocalAddressesUpdated event automatically.
-    if err := ni.host.Network().Listen(constructedAddrs...); err != nil {
-		// If listening fails, it's not fatal for the reservation (we still have the slot),
-		// but it implies we might not be reachable via those specific paths.
-		logger.Warnf("[GO] ⚠️ Instance %d: Failed to start listener on some relayed addresses: %v", ni.instanceIndex, err)
-	} else {
-		logger.Debugf("[GO] ✅ Instance %d: Successfully started listening on relayed addresses.", ni.instanceIndex)
-	}
-	// Also add them directly to the istance
+	// Nothing listens on these addresses here: the circuit transport listens since the host
+	// started, for a connection through any relay (client.AddTransport), and a Listen on a
+	// circuit address only puts a second listener over that one.
+	// They are the addresses of the slot, dropped when it is forgotten (forgetRelaySlot).
 	ni.addrMutex.Lock()
     ni.privateRelayAddrs = constructedAddrs 
     ni.addrMutex.Unlock()

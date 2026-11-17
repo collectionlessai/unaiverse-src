@@ -244,3 +244,60 @@ func TestRequestAfterANewConnectionDoesNotBringBackARelayGivenUp(t *testing.T) {
 		t.Errorf("the relay of a slot the node asked for is not remembered")
 	}
 }
+
+// The circuit addresses of the instance are those of its slot: they go when the relay is
+// given up, and stay when the node disconnects from any other peer.
+func TestCircuitAddressesGoWithTheSlot(t *testing.T) {
+	world := newSlotWorld(t)
+	other := newLoopbackHost(t)
+	member := newSlotMember(t)
+	joinAndReserve(t, member, world)
+	// What ReserveOnRelay leaves in the instance after the reservation.
+	circuit := ma.StringCast(fmt.Sprintf("%s/p2p/%s/p2p-circuit", world.Addrs()[0], world.ID()))
+	member.addrMutex.Lock()
+	member.privateRelayAddrs = []ma.Multiaddr{circuit}
+	member.addrMutex.Unlock()
+	circuitAddrs := func() []ma.Multiaddr {
+		member.addrMutex.RLock()
+		defer member.addrMutex.RUnlock()
+		return member.privateRelayAddrs
+	}
+
+	forgetRelaySlot(member, other.ID())
+	if len(circuitAddrs()) != 1 {
+		t.Fatalf("the circuit addresses went with a peer that is not the relay: %v", circuitAddrs())
+	}
+	forgetRelaySlot(member, world.ID())
+	if len(circuitAddrs()) != 0 {
+		t.Errorf("the circuit addresses outlived the slot: %v", circuitAddrs())
+	}
+}
+
+func circuitListeners(h host.Host) int {
+	count := 0
+	for _, addr := range h.Network().ListenAddresses() {
+		if _, err := addr.ValueForProtocol(ma.P_CIRCUIT); err == nil {
+			count++
+		}
+	}
+	return count
+}
+
+// ReserveOnRelay listens on nothing, because the library does: a host with the circuit
+// transport listens for circuits since it started, through whatever relay they come. A
+// version of the library that stopped doing so would leave a member unreachable.
+func TestHostListensForCircuitsWithNoListenOfOurs(t *testing.T) {
+	world := newSlotWorld(t)
+	member := newSlotMember(t)
+	if n := circuitListeners(member.host); n != 1 {
+		t.Fatalf("expected the one circuit listener of the library on a new host, found %d", n)
+	}
+
+	joinAndReserve(t, member, world)
+	if err := dialThroughRelay(t, world, member.host.ID()); err != nil {
+		t.Fatalf("dial through the world: %v", err)
+	}
+	if n := circuitListeners(member.host); n != 1 {
+		t.Errorf("a reservation changed the circuit listeners of the host: %d", n)
+	}
+}
