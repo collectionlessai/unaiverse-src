@@ -23,6 +23,7 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.x509.oid import NameOID
 
 from unaiverse.networking.p2p.p2p import P2PError
+from unaiverse.networking.session.sess_msg import SESSION_CONTROL_PROTOCOL
 
 from realnet_helpers import pick_dialable_addr
 
@@ -110,9 +111,9 @@ def test_member_reserves_on_the_world_host_and_is_dialled_through_it(_libp2p_set
 
 def test_reservation_is_lost_with_the_connection_to_the_world_and_must_be_asked_again(_libp2p_setup, tmp_path):
     """A relay drops the reservation of a peer the moment no connection to that peer is
-    left. A member that lost its world host and found it again still shows its circuit
-    address, which leads nowhere until it reserves again: what the node does when its
-    world Session resumes."""
+    left. A member that disconnected from its world host gave the relay up: connecting
+    again does not bring the slot back, and its circuit address leads nowhere until it
+    reserves again."""
     P2P = _libp2p_setup
     created = []
 
@@ -157,6 +158,47 @@ def test_reservation_is_lost_with_the_connection_to_the_world_and_must_be_asked_
         assert winner["ID"] == member.peer_id
         assert any(f"/p2p/{world.peer_id}/p2p-circuit" in a for a in winner["Addrs"]), \
             f"not a connection relayed by the world host: {winner}"
+    finally:
+        for p2p in created:
+            try:
+                p2p.close()
+            except Exception:
+                pass
+
+
+def test_member_is_reachable_again_after_a_loss_that_a_frame_healed(_libp2p_setup, tmp_path):
+    """The loss nothing above the library sees: the world closes the connection and the
+    next Session frame of the member opens it again by itself. The library asks for the
+    slot again when the connection to its relay opens, with no request from the node."""
+    P2P = _libp2p_setup
+    created = []
+
+    def _reached(name) -> bool:
+        # A new instance at every attempt, as in the test above
+        created.append(_instance(P2P, tmp_path / name, relay_service=False))
+        try:
+            return created[-1].connect_to([member_through_world])["ID"] == member.peer_id
+        except P2PError:
+            return False
+
+    try:
+        world = _instance(P2P, tmp_path / "world", relay_service=True)
+        created.append(world)
+        member = _instance(P2P, tmp_path / "member", relay_service=False)
+        created.append(member)
+        world_addr = pick_dialable_addr(world)
+        member_through_world = f"{world_addr}/p2p-circuit/p2p/{member.peer_id}"
+
+        member.connect_to([world_addr])
+        member.reserve_on_relay(world.peer_id)
+        assert _reached("before")
+
+        world.disconnect_from(member.peer_id)
+        assert _wait_for(lambda: not _reached(f"lost-{len(created)}"))
+
+        assert member.send_on_protocol(world.peer_id, SESSION_CONTROL_PROTOCOL, b"\x00")
+        assert _wait_for(lambda: _reached(f"after-{len(created)}"), timeout=5.0), \
+            "the member came back to the world and is not reachable through it"
     finally:
         for p2p in created:
             try:

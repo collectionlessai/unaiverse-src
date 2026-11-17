@@ -24,7 +24,6 @@ import (
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peerstore"
 	"github.com/libp2p/go-libp2p/p2p/transport/tcp"
-	"github.com/libp2p/go-libp2p/p2p/protocol/circuitv2/client"
 	ma "github.com/multiformats/go-multiaddr"
 	rc "github.com/libp2p/go-libp2p/p2p/protocol/circuitv2/relay"
 	ws "github.com/libp2p/go-libp2p/p2p/transport/websocket"
@@ -769,9 +768,9 @@ func ReserveOnRelay(
 	// Use a separate context with potentially longer timeout for the reservation itself.
 	resCtx, resCancel := context.WithTimeout(ni.ctx, RelayReservationTimeout)
 	defer resCancel()
-	// Call the circuitv2 client function to request a reservation.
-	// This performs the RPC communication with the relay.
-	reservation, err := client.Reserve(resCtx, ni.host, relayInfo)
+	// Ask the relay for the slot (the RPC of the circuitv2 client), and remember the relay:
+	// the slot is asked again when a connection to it opens.
+	reservation, err := reserveRelaySlot(resCtx, ni, relayInfo, false)
 	if err != nil {
 		errMsg := fmt.Sprintf("Instance %d: Failed to reserve slot on relay %s", ni.instanceIndex, relayInfo.ID)
 		// Handle reservation timeout specifically.
@@ -882,6 +881,9 @@ func DisconnectFrom(
 		logger.Debugf("[GO] ℹ️ Instance %d: Attempting to disconnect from self (%s), skipping.\n", ni.instanceIndex, pid)
 		return C.CString(jsonSuccessResponse("Cannot disconnect from self"))
 	}
+
+	// A peer the node disconnects from is given up, as a relay too.
+	forgetRelaySlot(ni, pid)
 
 	// --- Close WebRTC Connection (if exists) ---
 	ni.webrtcMutex.Lock()

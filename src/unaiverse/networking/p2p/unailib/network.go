@@ -171,6 +171,7 @@ func setupNotifiers(ni *NodeInstance) {
                 logger.Debugf("[GO] ♻️ Instance %d: Peer %s reconnected within grace period. Cleanup aborted.\n", ni.instanceIndex, remotePeerID)
             }
             ni.disconnectionMutex.Unlock()
+			askRelaySlotAgain(ni, conn)
 		},
 		DisconnectedF: func(_ network.Network, conn network.Conn) {
 			remotePeerID := conn.RemotePeer()
@@ -855,6 +856,7 @@ func (ni *NodeInstance) Close() error {
 	ni.localAddrs = nil
 	ni.privateRelayAddrs = nil
 	ni.addrMutex.Unlock()
+	forgetRelaySlot(ni, "")
 
 	// Clear the MessageStore for this instance
 	if ni.messageStore != nil {

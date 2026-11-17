@@ -367,6 +367,15 @@ type NodeInstance struct {
 	// Static relay
 	privateRelayAddrs []ma.Multiaddr
 
+	// The relay this instance holds a slot on (see relay_slot.go): empty when it holds none.
+	relaySlotMutex  sync.Mutex
+	relaySlotPeer   peer.ID
+	relaySlotExpiry time.Time
+	// A request after a new connection to the relay is waiting to start.
+	relaySlotAsking bool
+	// One request to the relay at a time.
+	relayAskMutex sync.Mutex
+
 	// Reachability State (AutoNAT). Seeded in CreateNode; for non-ForcePublic nodes it is
 	// then kept live by handleReachabilityEvents, which is the only writer from that point.
 	reachMutex sync.RWMutex
