@@ -23,6 +23,9 @@ import (
 // const UnaiverseChatProtocol = "/unaiverse-chat-protocol/1.0.0"
 const UnaiverseChatProtocol = "/unaiverse/chat/1.0.0"
 const UnaiverseUserAgent = "go-libp2p/example/autotls"
+
+// P2PForgeLoggerName is the logger of the AutoTLS certificate manager, as p2p-forge names it.
+const P2PForgeLoggerName = "p2p-forge/client"
 const DisconnectionGracePeriod = 10 * time.Second
 
 // Session abstraction protocol IDs. Each stage of the Session handshake gets its own
@@ -218,6 +221,10 @@ const popBinaryMagic byte = 0xB1
 
 // --- Create a package-level logger ---
 var logger = golog.Logger("unailib")
+
+// p2p-forge creates its logger when the certificate manager is built, after
+// InitializeLibrary has set the levels: naming it here lets the log configuration reach it.
+var _ = golog.Logger(P2PForgeLoggerName)
 
 // --- Multi-Instance State Management ---
 var (

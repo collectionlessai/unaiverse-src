@@ -125,8 +125,9 @@ class P2P:
                 _log_config = {
                     'net/identify': 'info',
                     'unailib': 'info',
-                    # 'autotls': 'info',
-                    # 'p2p-forge': 'info',
+                    # The AutoTLS certificate manager: the wait for the verdict, the registration
+                    # and the certificate, or why none was asked
+                    'p2p-forge/client': 'info',
                     'nat': 'info',
                     'basichost': 'info',
                     'p2p-circuit': 'info',
