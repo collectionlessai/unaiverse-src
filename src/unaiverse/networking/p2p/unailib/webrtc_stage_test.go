@@ -292,6 +292,86 @@ func TestICEListOfEachStage(t *testing.T) {
 	}
 }
 
+// An offer or an answer does not wait for the end of the gathering. With a server that
+// never answers, the direct stage is ready after the silence that follows its last
+// candidate, with the gathering still running; where the list has TURN, candidates that
+// are not relay ones end nothing and the wait goes to its limit.
+func TestCandidatesAreReadyBeforeTheGatheringEnds(t *testing.T) {
+	prevQuiet, prevDirect, prevTURN := WebRTCGatherQuiet, WebRTCDirectGatherMax, WebRTCTURNGatherMax
+	WebRTCGatherQuiet, WebRTCDirectGatherMax, WebRTCTURNGatherMax = 200*time.Millisecond, 3*time.Second, 700*time.Millisecond
+	t.Cleanup(func() { WebRTCGatherQuiet, WebRTCDirectGatherMax, WebRTCTURNGatherMax = prevQuiet, prevDirect, prevTURN })
+
+	silent, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatalf("udp port: %v", err)
+	}
+	t.Cleanup(func() { silent.Close() })
+	silentSTUN := fmt.Sprintf("stun:127.0.0.1:%d", silent.LocalAddr().(*net.UDPAddr).Port)
+
+	// gather starts the gathering of a new peer connection and waits as an offer does.
+	gather := func(stage string, timeout time.Duration, urls ...string) (*pwebrtc.PeerConnection, string, bool, time.Duration) {
+		t.Helper()
+		var cfg pwebrtc.Configuration
+		if len(urls) > 0 {
+			cfg.ICEServers = []pwebrtc.ICEServer{{URLs: urls}}
+		}
+		pc, err := pwebrtc.NewPeerConnection(cfg)
+		if err != nil {
+			t.Fatalf("peer connection: %v", err)
+		}
+		t.Cleanup(func() { pc.Close() })
+		if _, err := pc.CreateDataChannel(WebRTCDataChannelLabel, nil); err != nil {
+			t.Fatalf("data channel: %v", err)
+		}
+		ready := watchICECandidates(pc, stage)
+		offer, err := pc.CreateOffer(nil)
+		if err != nil {
+			t.Fatalf("offer: %v", err)
+		}
+		if err := pc.SetLocalDescription(offer); err != nil {
+			t.Fatalf("local description: %v", err)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+		start := time.Now()
+		reason, ok := ready(ctx)
+		return pc, reason, ok, time.Since(start)
+	}
+
+	pc, reason, ok, took := gather(WebRTCStageDirect, 10*time.Second, silentSTUN)
+	if !ok || reason != "quiet" || took < WebRTCGatherQuiet || took > 2*time.Second {
+		t.Errorf("direct stage with a server that never answers: %q, %v, after %v", reason, ok, took)
+	}
+	if state := pc.ICEGatheringState(); state == pwebrtc.ICEGatheringStateComplete {
+		t.Errorf("the gathering was over (%v): the wait proved nothing", state)
+	}
+	if sdp := pc.LocalDescription().SDP; !strings.Contains(sdp, "typ host") {
+		t.Errorf("the description that would be sent has no host candidate:\n%s", sdp)
+	}
+
+	if _, reason, ok, took := gather(WebRTCStageDirect, 10*time.Second); !ok || reason != "complete" || took >= WebRTCGatherQuiet {
+		t.Errorf("direct stage with no server: %q, %v, after %v", reason, ok, took)
+	}
+
+	for _, stage := range []string{WebRTCStageTURN, ""} {
+		if _, reason, ok, took := gather(stage, 10*time.Second, silentSTUN); !ok || reason != "limit" ||
+			took < WebRTCTURNGatherMax || took > 2*time.Second {
+			t.Errorf("stage %q with no relay candidate: %q, %v, after %v", stage, reason, ok, took)
+		}
+	}
+
+	if _, reason, ok, took := gather(WebRTCStageTURN, 100*time.Millisecond, silentSTUN); ok || took > 500*time.Millisecond {
+		t.Errorf("a wait whose context ended first: %q, %v, after %v", reason, ok, took)
+	}
+
+	// The direct stage has a limit of its own, reached when the silence never comes.
+	WebRTCGatherQuiet, WebRTCDirectGatherMax = 5*time.Second, 300*time.Millisecond
+	if _, reason, ok, took := gather(WebRTCStageDirect, 10*time.Second, silentSTUN); !ok || reason != "limit" ||
+		took < WebRTCDirectGatherMax || took >= WebRTCTURNGatherMax {
+		t.Errorf("direct stage with a silence longer than its limit: %q, %v, after %v", reason, ok, took)
+	}
+}
+
 // Our offer is made in the direct stage first: it names the stage, neither side has a
 // TURN server in its peer connection although both have one in their config, and when
 // the channel opens no second offer follows.

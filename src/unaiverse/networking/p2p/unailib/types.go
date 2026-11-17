@@ -81,6 +81,18 @@ const WebRTCStageRetryDelay = 3 * time.Second
 // may be gone, and the next stage waits for this write.
 const WebRTCAbortWriteTimeout = time.Second
 
+// An offer or an answer leaves when its local description holds the candidates its stage
+// needs, not when the gathering ends: the SDP is not trickled, and pion gives a server
+// that does not answer 5 s. WebRTCGatherQuiet is the silence after a candidate of the
+// needed kind that ends the wait, the other two bound it in the direct stage and in the
+// stages with the whole list. The browser has the same rule. Variables, so that a test
+// can shorten them.
+var (
+	WebRTCGatherQuiet     = 500 * time.Millisecond
+	WebRTCDirectGatherMax = 3 * time.Second
+	WebRTCTURNGatherMax   = 8 * time.Second
+)
+
 // WebRTCDCUtRWaitGoPeer is how long a Go node waits for native libp2p DCUtR/hole-punching
 // before falling back to our custom WebRTC signaling, when the remote is also a Go peer
 // (advertises only /webrtc-direct). Go↔Go DCUtR can succeed, so we give it time.

@@ -139,6 +139,59 @@ func stunURLs(cfg *ICEConfig) []string {
 	return urls
 }
 
+// watchICECandidates has to be called before SetLocalDescription, which starts the
+// gathering. The function it returns waits until the local description holds the
+// candidates the stage needs, and says what ended the wait: "complete", the gathering is
+// over; "quiet", a candidate of the needed kind was seen (a relay one where the list has
+// TURN, any one in the direct stage) and none followed for WebRTCGatherQuiet; "limit",
+// the bound of the stage passed. What was gathered by then is what the peer gets. It
+// returns false when ctx ends first.
+func watchICECandidates(pc *pwebrtc.PeerConnection, stage string) func(ctx context.Context) (string, bool) {
+	candidates := make(chan pwebrtc.ICECandidateType, 64)
+	complete := make(chan struct{}, 1)
+	pc.OnICECandidate(func(c *pwebrtc.ICECandidate) {
+		// Neither send may hold a goroutine of pion: a candidate that finds no room is
+		// not counted, and the end of the gathering is said once.
+		if c == nil {
+			select {
+			case complete <- struct{}{}:
+			default:
+			}
+			return
+		}
+		select {
+		case candidates <- c.Typ:
+		default:
+		}
+	})
+	return func(ctx context.Context) (string, bool) {
+		limit := WebRTCTURNGatherMax
+		if stage == WebRTCStageDirect {
+			limit = WebRTCDirectGatherMax
+		}
+		limitTimer := time.NewTimer(limit)
+		defer limitTimer.Stop()
+		// Nil until a candidate of the needed kind is seen, then restarted at each candidate.
+		var quiet <-chan time.Time
+		for {
+			select {
+			case <-complete:
+				return "complete", true
+			case typ := <-candidates:
+				if quiet != nil || stage == WebRTCStageDirect || typ == pwebrtc.ICECandidateTypeRelay {
+					quiet = time.After(WebRTCGatherQuiet)
+				}
+			case <-quiet:
+				return "quiet", true
+			case <-limitTimer.C:
+				return "limit", true
+			case <-ctx.Done():
+				return "", false
+			}
+		}
+	}
+}
+
 // writeSignalMessage encodes msg as JSON and writes it length-prefixed to w.
 func writeSignalMessage(w io.Writer, msg SignalMessage) error {
 	data, err := json.Marshal(msg)
@@ -664,8 +717,9 @@ func handleSignalingStream(ni *NodeInstance, s network.Stream) {
 		return
 	}
 
-	// Register gathering-complete promise BEFORE SetLocalDescription.
-	gatherDone := pwebrtc.GatheringCompletePromise(pc)
+	// The candidates are watched from BEFORE SetLocalDescription.
+	gatherStart := time.Now()
+	candidatesReady := watchICECandidates(pc, offerMsg.Stage)
 
 	if err := pc.SetLocalDescription(answer); err != nil {
 		logger.Errorf("[GO] ❌ Instance %d: SetLocalDescription: %v", ni.instanceIndex, err)
@@ -674,18 +728,18 @@ func handleSignalingStream(ni *NodeInstance, s network.Stream) {
 		return
 	}
 
-	logger.Debugf("[GO] ⏳ Instance %d: Waiting for ICE gathering (answerer)...", ni.instanceIndex)
-	select {
-	case <-gatherDone:
-		logger.Debugf("[GO] ✅ Instance %d: ICE gathering complete (answerer).", ni.instanceIndex)
-	case <-ctx.Done():
+	logger.Debugf("[GO] ⏳ Instance %d: Waiting for ICE candidates (answerer)...", ni.instanceIndex)
+	reason, ok := candidatesReady(ctx)
+	if !ok {
 		logger.Errorf("[GO] ❌ Instance %d: Timeout during ICE gathering (answerer)", ni.instanceIndex)
 		writeSignalMessage(s, SignalMessage{Type: "error", Message: "ICE gathering timeout"})
 		pc.Close()
 		return
 	}
+	logger.Infof("[GO] 🧊 Instance %d: ICE candidates of the answer to %s ready after %s (%s)",
+		ni.instanceIndex, remotePeer, time.Since(gatherStart).Round(time.Millisecond), reason)
 
-	// Send complete SDP answer
+	// Send the SDP answer, with the candidates gathered so far
 	answerMsg := SignalMessage{Type: "answer", SDP: pc.LocalDescription().SDP, SessionFrames: true}
 	if err := writeSignalMessage(s, answerMsg); err != nil {
 		logger.Errorf("[GO] ❌ Instance %d: Sending answer to %s: %v", ni.instanceIndex, remotePeer, err)
@@ -862,8 +916,9 @@ func offerWebRTC(ni *NodeInstance, remotePeer peer.ID, stage string, budget time
 		}
 	})
 
-	// Register gathering-complete promise BEFORE SetLocalDescription.
-	gatherDone := pwebrtc.GatheringCompletePromise(pc)
+	// The candidates are watched from BEFORE SetLocalDescription.
+	gatherStart := time.Now()
+	candidatesReady := watchICECandidates(pc, stage)
 
 	offer, err := pc.CreateOffer(nil)
 	if err != nil {
@@ -873,15 +928,15 @@ func offerWebRTC(ni *NodeInstance, remotePeer peer.ID, stage string, budget time
 		return fmt.Errorf("SetLocalDescription: %w", err)
 	}
 
-	logger.Debugf("[GO] ⏳ Instance %d: Waiting for ICE gathering (offerer)...", ni.instanceIndex)
-	select {
-	case <-gatherDone:
-		logger.Debugf("[GO] ✅ Instance %d: ICE gathering complete (offerer).", ni.instanceIndex)
-	case <-ctx.Done():
+	logger.Debugf("[GO] ⏳ Instance %d: Waiting for ICE candidates (offerer)...", ni.instanceIndex)
+	reason, ok := candidatesReady(ctx)
+	if !ok {
 		return fmt.Errorf("ICE gathering timeout for %s", remotePeer)
 	}
+	logger.Infof("[GO] 🧊 Instance %d: ICE candidates of the offer to %s ready after %s (%s)",
+		ni.instanceIndex, remotePeer, time.Since(gatherStart).Round(time.Millisecond), reason)
 
-	// Send complete SDP offer
+	// Send the SDP offer, with the candidates gathered so far
 	offerMsg := SignalMessage{Type: "offer", Stage: stage, SDP: pc.LocalDescription().SDP, SessionFrames: true}
 	if err := writeSignalMessage(s, offerMsg); err != nil {
 		return fmt.Errorf("send offer to %s: %w", remotePeer, signalingStreamError(err))
