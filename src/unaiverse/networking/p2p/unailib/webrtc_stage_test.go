@@ -239,8 +239,9 @@ func rawOffer(t *testing.T, from host.Host, to peer.ID, stage string, connect bo
 }
 
 // The direct stage has STUN alone: the STUN servers of the config, and each TURN server
-// as the STUN server it also is, with no credential. Every other stage, and the offer of
-// a peer that names none, has the list as it was before the stages.
+// as the STUN server it also is, with no credential. A config that names no STUN server
+// gets the public ones next to its TURN server, each once. Every other stage, and the
+// offer of a peer that names none, has the list as it was before the stages.
 func TestICEListOfEachStage(t *testing.T) {
 	prev := defaultSTUNServers
 	defaultSTUNServers = []string{"stun:default.example:3478"}
@@ -266,8 +267,17 @@ func TestICEListOfEachStage(t *testing.T) {
 		t.Errorf("direct stage: %v (credentials: %v)", urls, credentials)
 	}
 	if urls, credentials := urlsOf(turnOnly, WebRTCStageDirect); credentials ||
-		!sameStrings(urls, []string{"stun:turn.example:3478", "stun:turn.example:5349"}) {
+		!sameStrings(urls, []string{"stun:turn.example:3478", "stun:turn.example:5349", "stun:default.example:3478"}) {
 		t.Errorf("direct stage of a config with TURN alone: %v (credentials: %v)", urls, credentials)
+	}
+	// A public server that the config already reaches through its TURN entry is not listed twice.
+	sameServer := &ICEConfig{TURNServers: []TURNServer{{URLs: []string{"turn:default.example:3478"}, Username: "user", Credential: "secret"}}}
+	if urls, _ := urlsOf(sameServer, WebRTCStageDirect); !sameStrings(urls, []string{"stun:default.example:3478"}) {
+		t.Errorf("direct stage of a config whose TURN server is a public STUN one: %v", urls)
+	}
+	// In the stages with the whole list nothing is added.
+	if urls, _ := urlsOf(turnOnly, WebRTCStageTURN); !sameStrings(urls, turn.URLs) {
+		t.Errorf("TURN stage of a config with TURN alone: %v", urls)
 	}
 	for _, stage := range []string{WebRTCStageTURN, ""} {
 		if urls, credentials := urlsOf(both, stage); !credentials ||

@@ -501,12 +501,12 @@ type WebRTCConn struct {
 	reassemblyStart time.Time
 }
 
-// Define the list of default STUN servers to use if none are provided in the config.
+// The public STUN servers of a node whose config names none: all of its servers when it has
+// no config at all, and next to its TURN server in the direct stage of a WebRTC offer.
 var defaultSTUNServers = []string{
 	"stun:stun.l.google.com:19302",
 	"stun:global.stun.twilio.com:3478",
 	"stun:stun.cloudflare.com:3478",
-	"stun:stun.services.mozilla.com:3478",
 }
 
 // Define a list of curated public relay nodes to use as static relays for all nodes in the network.

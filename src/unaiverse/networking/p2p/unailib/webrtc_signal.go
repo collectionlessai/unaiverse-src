@@ -75,15 +75,26 @@ import (
 // }
 
 // getWebRTCConfig builds a pion WebRTC configuration from the node's stored ICE config.
-// Falls back to Google's public STUN servers when no config is present. The direct stage
-// has no TURN server; every other stage, and an offer that names none, has the whole list.
+// Falls back to the public STUN servers when no config is present. The direct stage has
+// no TURN server; every other stage, and an offer that names none, has the whole list.
 func getWebRTCConfig(ni *NodeInstance, stage string) pwebrtc.Configuration {
     ni.iceConfigMu.RLock()
     cfg := ni.iceConfig
     ni.iceConfigMu.RUnlock()
 	if cfg != nil && (len(cfg.STUNServers) > 0 || len(cfg.TURNServers) > 0) {
 		if stage == WebRTCStageDirect {
-			return pwebrtc.Configuration{ICEServers: []pwebrtc.ICEServer{{URLs: stunURLs(cfg)}}}
+			urls := stunURLs(cfg)
+			// The root server gives a node its TURN server and no STUN server. The
+			// reflexive address must not hang on that one server answering, so the
+			// public ones are asked too.
+			if len(cfg.STUNServers) == 0 {
+				for _, url := range defaultSTUNServers {
+					if !slices.Contains(urls, url) {
+						urls = append(urls, url)
+					}
+				}
+			}
+			return pwebrtc.Configuration{ICEServers: []pwebrtc.ICEServer{{URLs: urls}}}
 		}
 		var STUNServers []pwebrtc.ICEServer
 		if len(cfg.STUNServers) > 0 {
