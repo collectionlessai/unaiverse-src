@@ -22,7 +22,10 @@ import (
 // This ensures that both peers understand how to interpret the data on the stream.
 // const UnaiverseChatProtocol = "/unaiverse-chat-protocol/1.0.0"
 const UnaiverseChatProtocol = "/unaiverse/chat/1.0.0"
-const UnaiverseUserAgent = "go-libp2p/example/autotls"
+
+// UnaiverseUserAgent is how a node names itself to its peers (identify) and to the
+// service that issues the AutoTLS certificates.
+const UnaiverseUserAgent = "unaiverse"
 
 // P2PForgeLoggerName is the logger of the AutoTLS certificate manager, as p2p-forge names it.
 const P2PForgeLoggerName = "p2p-forge/client"
