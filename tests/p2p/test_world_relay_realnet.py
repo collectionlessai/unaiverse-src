@@ -63,6 +63,13 @@ def _circuit_addresses(p2p) -> list:
     return [a for a in p2p.addresses if "/p2p-circuit" in a]
 
 
+def _on_loopback(addr: str) -> str:
+    """The same address on the loopback: every instance here listens on every interface."""
+    kind, _, rest = addr.split("/", 3)[1:]
+    assert kind == "ip4", addr
+    return f"/ip4/127.0.0.1/{rest}"
+
+
 def _wait_for(predicate, timeout: float = 10.0) -> bool:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -234,7 +241,11 @@ def test_circuit_address_a_browser_can_use_needs_a_world_with_tls(_libp2p_setup,
         secure_ws = [a for a in world.addresses if a.startswith(f"/dns4/{WORLD_DOMAIN}/") and "/tls/ws/" in a]
         assert bool(secure_ws) is world_has_tls, world.addresses
 
-        member.connect_to([pick_dialable_addr(world)])
+        # Dialled on the loopback, where identify keeps every address the world announces. Over a
+        # connection from a public address it keeps the public ones only, and a name under .test
+        # is none: on a host whose first address is public the member would never learn the
+        # secure WebSocket address of this world.
+        member.connect_to([_on_loopback(pick_dialable_addr(world))])
         # The circuit addresses are built from what the member knows of the world when it asks:
         # the addresses the world announces reach it with identify, shortly after the connection
         assert _wait_for(lambda: len(member.get_node_addresses(world.peer_id)) > 1)
