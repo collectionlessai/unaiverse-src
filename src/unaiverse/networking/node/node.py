@@ -204,6 +204,9 @@ class Node:
         self.allowed_node_ids = set(allowed_node_ids) if allowed_node_ids is not None else None
         self.world_masters_node_ids = set(world_masters_node_ids) if world_masters_node_ids is not None else None
 
+        # World host: the root-attested node-id of every world-side peer-id it admitted
+        self._world_member_node_ids: dict[str, str] = {}
+
         # Profile
         self.profile: NodeProfile
 
@@ -2738,11 +2741,6 @@ class Node:
             is_world_master = (self.world_masters_node_ids is not None and
                                remote_node_id in self.world_masters_node_ids)
             assert self.world is not None
-            role_str = self.world.assign_role(profile=profile, is_world_master=is_world_master)
-            if role_str is None:
-                return ProfileDecisionResult(accepted=False, reason_code=ROLE_INCOMPATIBLE)
-            role = self.world.ROLE_STR_TO_BITS[role_str]
-            role = role | (Agent.ROLE_WORLD_MASTER if is_world_master else Agent.ROLE_WORLD_AGENT)
 
             # Admit the joiner's world-side identity BEFORE it dials the private
             # instance: the world perimeter cut (the world SessionManager's reconcile)
@@ -2768,6 +2766,18 @@ class Node:
                     joiner_private_peer_id not in verified_claims.p2p_peers):
                 log.misc(f"[session] decision: world binding mismatch for ...{peer_id[-5:]} → reject")
                 return ProfileDecisionResult(accepted=False, reason_code=NOT_AUTHORIZED)
+
+            # A node that asks to join while still listed has given its old entry up: it
+            # goes before the role is assigned, so that assign_role sees the world as it is
+            if verified_claims is not None:
+                await self._world_host_remove_old_entries(verified_claims.node_id)
+
+            role_str = self.world.assign_role(profile=profile, is_world_master=is_world_master)
+            if role_str is None:
+                return ProfileDecisionResult(accepted=False, reason_code=ROLE_INCOMPATIBLE)
+            role = self.world.ROLE_STR_TO_BITS[role_str]
+            role = role | (Agent.ROLE_WORLD_MASTER if is_world_master else Agent.ROLE_WORLD_AGENT)
+
             # Provisional: the entry must exist before the joiner dials the world
             # instance (the perimeter would cut an unknown peer mid-handshake), but
             # only the world-side registration confirms it — unredeemed grants are
@@ -2778,6 +2788,8 @@ class Node:
             else:
                 self.conn.add_to_world_agents_list(joiner_private_peer_id, joiner_private_addr, role,
                                                    provisional_ttl_s=Custom.WORLD_PREADMISSION_TTL)
+            if verified_claims is not None:
+                self._world_member_node_ids[joiner_private_peer_id] = verified_claims.node_id
 
             is_human = profile.get_static_profile().get("node_type") == self.hosted.HUMAN
             # World-definition bundle, the single channel for everything the joiner
@@ -3058,6 +3070,27 @@ class Node:
                 self.conn.remove_from_world_lists(ev.peer_id)
             except Exception as e:
                 log.error(f"[session] world unlist failed for ...{ev.peer_id[-5:]}: {e}")
+
+    async def _world_host_remove_old_entries(self, node_id: str) -> None:
+        """World host: a node that asks to join again loses the entries it still has in
+        the world lists, as its LOST would remove them. The old world Session is aborted
+        silently (the purge with no reason): a terminal event of it coming later would
+        unlist the new pre-admission of the same peer-id. The records of peer-ids no
+        longer listed are dropped on the way."""
+        for peer_id, recorded_node_id in list(self._world_member_node_ids.items()):
+            listed = (self.conn.get_role(peer_id) & Agent.ROLE_WORLD_AGENT) == Agent.ROLE_WORLD_AGENT
+            if listed and recorded_node_id != node_id:
+                continue
+            del self._world_member_node_ids[peer_id]
+            if not listed:
+                continue
+            log.misc(f"[session] decision: node {node_id} joins again, its old entry "
+                     f"...{peer_id[-5:]} is removed")
+            self.conn.remove_from_world_lists(peer_id)
+            try:
+                await self.__purge(peer_id)
+            except Exception as e:
+                log.error(f"[session] removal of the old entry ...{peer_id[-5:]} failed: {e}")
 
     async def _on_session_resumed(self, ev) -> None:
         """A Session survived a transport drop (RESUME acked). The removed-diff

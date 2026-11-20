@@ -32,7 +32,7 @@ from unaiverse.networking.session.sess_msg import WORLD_HANDOFF_COMPLETE, WORLD_
 from conftest import apump
 from node_harness import (
     build_node_shell_on_real_conn, wire_remote_peer, mint_node_token, full_profile_dict,
-    FakeWorld,
+    FakeWorld, FakeHosted,
 )
 
 pytestmark = pytest.mark.e2e
@@ -52,8 +52,8 @@ def _offline_node_profile(monkeypatch):
 class _Host:
     """The world host under test, with the accessors the assertions read."""
 
-    def __init__(self, root_public_key):
-        self.world = FakeWorld()
+    def __init__(self, root_public_key, world=None):
+        self.world = world if world is not None else FakeWorld()
         self.node, self.conn, self.p2p_public, self.p2p_world = build_node_shell_on_real_conn(
             HOST_PEER, world=self.world, node_id="world-node", public_key=root_public_key)
         self.node.world_masters_node_ids = {MASTER_NODE_ID}
@@ -83,9 +83,9 @@ class _Joiner:
     presenting a root-minted token that binds its two peer-ids. Each method is one
     step of the join, so a test can interleave two joiners cycle by cycle."""
 
-    def __init__(self, name: str, host: _Host, root_private_key):
+    def __init__(self, name: str, host: _Host, root_private_key, node_id: str | None = None):
         self.host = host
-        self.node_id = f"{name}-node"
+        self.node_id = node_id or f"{name}-node"
         self.public_peer_id = f"12D3KooW{name}0public"
         self.world_peer_id = f"12D3KooW{name}0world"
         self.world_addrs = [f"/ip4/10.0.0.9/tcp/4001/p2p/{self.world_peer_id}"]
@@ -386,5 +386,262 @@ def test_failed_roster_publish_is_retried_at_the_next_cycle(stepped_clock, root_
 
         await host.cycle()
         assert host.rendezvous()[published:] == [(registered_at + 2, [master.world_peer_id])]
+
+    asyncio.run(_scenario())
+
+
+# A node that joins again while its old entry is still listed
+
+class _SingleMasterWorld(FakeHosted):
+    """A world that gives its first role to the first master only, as the chat world
+    does, reading its own members. It is the hosted entity of the host too, as in a real
+    world node: the world-side registration adds to it and the purge removes from it."""
+
+    ROLE_STR_TO_BITS = {"broadcaster": 1 << 2, "user": 2 << 2}
+
+    def __init__(self):
+        super().__init__()
+        self.stats = FakeWorld._Stats()
+        self.packed_agent_files = "packed-files"
+        self.role_to_behav = {}
+        self.role_changed_by_world = False
+        self.received_address_update = False
+
+    def assign_role(self, profile, is_world_master):
+        return "broadcaster" if is_world_master and not self.all_agents else "user"
+
+
+BROADCASTER = _SingleMasterWorld.ROLE_STR_TO_BITS["broadcaster"] | Agent.ROLE_WORLD_MASTER
+USER_MASTER = _SingleMasterWorld.ROLE_STR_TO_BITS["user"] | Agent.ROLE_WORLD_MASTER
+
+
+def _single_master_host(root_public_key) -> _Host:
+    host = _Host(root_public_key, world=_SingleMasterWorld())
+    host.node.hosted = host.world
+    return host
+
+
+def _spy_session_events(host: _Host) -> list:
+    """Every SessionEvent the host dispatches from now on."""
+    seen = []
+    dispatch = host.node._dispatch_session_event
+
+    async def _spy(ev):
+        seen.append(ev)
+        await dispatch(ev)
+
+    host.node._dispatch_session_event = _spy
+    return seen
+
+
+async def _redeem(host: _Host, joiner: _Joiner, grant: dict) -> None:
+    """The world leg of a join, after the grant."""
+    await joiner.dial_world(grant)
+    await host.cycle()                   # HELLO -> HELLO_ACK
+    await joiner.offer_world()
+    await host.cycle()                   # OFFER -> ESTABLISHED, registration
+    await joiner.finish_join()
+
+
+def test_a_master_that_joins_again_while_still_listed_gets_its_role_back(stepped_clock, root_keys):
+    """The rejoin of T6.4-holly: the master lost the world and asks to join again
+    before the host has noticed that its world Session is dead. Its old entry goes
+    before the role is assigned, so the world gives it the role of the first master
+    again, and the old Session ends with no event."""
+    async def _scenario():
+        private_pem, public_pem = root_keys
+        host = _single_master_host(public_pem)
+        master = _Joiner("master", host, private_pem)
+        await _join(host, master)
+        assert host.conn.get_role(master.world_peer_id) == BROADCASTER
+        old = host.conn._sm_world.get_session(master.world_peer_id)
+        assert old.state.value == "established"          # the host has not noticed
+
+        events = _spy_session_events(host)
+        again = _Joiner("master", host, private_pem)     # the same node, the same keys
+        grant = await _get_grant(host, again)
+
+        assert grant["role"] == BROADCASTER
+        assert host.conn._sm_world.get_session(master.world_peer_id) is None
+        assert old.state.value == "failed"
+        assert master.world_peer_id in host.p2p_world.disconnected
+
+        await _redeem(host, again, grant)
+        await host.cycle()
+        assert host.conn.get_role(master.world_peer_id) == BROADCASTER
+        assert master.world_peer_id not in host.conn.world_preadmissions
+        assert master.world_peer_id in host.world.all_agents
+        assert _ids(host.summary["world_masters"]) == [master.world_peer_id]
+        assert not [e for e in events if e.peer_id == master.world_peer_id and
+                    e.type in (SessionEventType.LOST, SessionEventType.CLOSED,
+                               SessionEventType.FAILED)]
+
+    asyncio.run(_scenario())
+
+
+def test_the_same_node_with_new_keys_replaces_its_old_entry(stepped_clock, root_keys):
+    """A browser that reloads makes new keys: the same node id joins with other
+    peer-ids. Its old entry is unlisted, leaves the world object and the roster, and
+    its transport is severed, instead of staying until the host's probe ends it."""
+    async def _scenario():
+        private_pem, public_pem = root_keys
+        host = _single_master_host(public_pem)
+        master = _Joiner("master", host, private_pem)
+        await _join(host, master)
+
+        reloaded = _Joiner("reloaded", host, private_pem, node_id=MASTER_NODE_ID)
+        await _join(host, reloaded)
+        await host.cycle()
+
+        assert host.conn.get_role(reloaded.world_peer_id) == BROADCASTER
+        assert host.conn.get_role(master.world_peer_id) == 0
+        assert master.world_peer_id not in host.world.all_agents
+        assert host.conn._sm_world.get_session(master.world_peer_id) is None
+        assert master.world_peer_id in host.p2p_world.disconnected
+        assert _ids(host.summary["world_masters"]) == [reloaded.world_peer_id]
+
+    asyncio.run(_scenario())
+
+
+def test_the_old_session_running_out_after_the_grant_leaves_the_new_admission_alone(
+        stepped_clock, root_keys):
+    """The race of T6.4-holly, one second away there: the old world Session is
+    reconnecting at the grant, and its window runs out before the new world HELLO. Its
+    LOST would unlist the pre-admission of the same peer-id, and the perimeter would cut
+    the world handshake of the node that is joining again."""
+    async def _scenario():
+        private_pem, public_pem = root_keys
+        host = _single_master_host(public_pem)
+        master = _Joiner("master", host, private_pem)
+        await _join(host, master)
+        host.p2p_world.unlink(master.world_peer_id)
+        await host.cycle()
+        old = host.conn._sm_world.get_session(master.world_peer_id)
+        assert old.state.value == "reconnecting"
+
+        again = _Joiner("master", host, private_pem)
+        grant = await _get_grant(host, again)
+        old._state_entered_at -= 3600.                   # its window runs out now
+        await host.cycle()
+
+        await _redeem(host, again, grant)
+        await host.cycle()
+        assert host.conn.get_role(master.world_peer_id) == BROADCASTER
+        assert master.world_peer_id in host.world.all_agents
+        assert host.conn._sm_world.is_established(master.world_peer_id)
+
+    asyncio.run(_scenario())
+
+
+def test_the_removal_inside_the_decision_leaves_the_public_handshake_untouched(
+        stepped_clock, root_keys):
+    """The decision waits for the drop of the old entry on the world instance while the
+    public handshake of the joiner is half-way. The wait is the drop alone (the abort
+    and the disconnect, no farewell on the world instance), the grant goes out in the
+    same cycle after it, and the joiner's public and world handshakes complete."""
+    async def _scenario():
+        private_pem, public_pem = root_keys
+        host = _single_master_host(public_pem)
+        master = _Joiner("master", host, private_pem)
+        await _join(host, master)
+
+        trace = []
+        world_disconnect = host.p2p_world.disconnect
+        world_send = host.p2p_world.send_session
+        public_send = host.p2p_public.send_session
+
+        async def _world_disconnect(peer_id):
+            trace.append(("world disconnect", peer_id))
+            await asyncio.sleep(0)                       # a drop that takes its time
+            return await world_disconnect(peer_id)
+
+        async def _world_send(peer_id, protocol_id, sess_msg):
+            trace.append(("world send", sess_msg.kind))
+            return await world_send(peer_id, protocol_id, sess_msg)
+
+        async def _public_send(peer_id, protocol_id, sess_msg):
+            trace.append(("public send", sess_msg.kind))
+            return await public_send(peer_id, protocol_id, sess_msg)
+
+        host.p2p_world.disconnect = _world_disconnect
+        host.p2p_world.send_session = _world_send
+        host.p2p_public.send_session = _public_send
+
+        again = _Joiner("master", host, private_pem)
+        await again.dial_public()
+        await host.cycle()                               # HELLO -> HELLO_ACK
+        await again.offer_public()
+        trace.clear()
+        await host.cycle()                               # OFFER -> removal, decision, grant
+
+        assert trace[0] == ("world disconnect", master.world_peer_id)
+        assert ("world send", "goaway") not in trace
+        assert [t for t in trace if t[0] == "public send"][:2] == [
+            ("public send", "profile_decision"), ("public send", "world_grant")]
+        carrier = host.conn._sm_public.get_session(again.public_peer_id)
+        assert carrier.state.value == "awaiting_handoff"
+
+        grant = await again.take_grant()
+        await _redeem(host, again, grant)
+        await host.cycle()
+        assert host.conn._sm_world.is_established(master.world_peer_id)
+        assert host.conn.get_role(master.world_peer_id) == BROADCASTER
+
+    asyncio.run(_scenario())
+
+
+def test_a_second_node_of_the_same_account_leaves_the_first_alone(stepped_clock, root_keys):
+    """Another node id is another node, even of the same account and with the same
+    rights: the first master stays listed with its role and its Session, and the
+    second gets the role a world with a master already gives."""
+    async def _scenario():
+        private_pem, public_pem = root_keys
+        host = _single_master_host(public_pem)
+        host.node.world_masters_node_ids = {MASTER_NODE_ID, "second-node"}
+        master = _Joiner("master", host, private_pem)
+        await _join(host, master)
+
+        second = _Joiner("second", host, private_pem)
+        await _join(host, second)
+        await host.cycle()
+
+        assert host.conn.get_role(master.world_peer_id) == BROADCASTER
+        assert host.conn._sm_world.is_established(master.world_peer_id)
+        assert host.conn.get_role(second.world_peer_id) == USER_MASTER
+        assert master.world_peer_id not in host.p2p_world.disconnected
+
+    asyncio.run(_scenario())
+
+
+def test_a_profile_claiming_the_master_node_id_removes_nothing(stepped_clock, root_keys):
+    """A joiner whose profile says it is the master's node, with a token of its own
+    node: the attested node id decides, so the master is not touched and the joiner is
+    not a master."""
+    async def _scenario():
+        private_pem, public_pem = root_keys
+        host = _single_master_host(public_pem)
+        master = _Joiner("master", host, private_pem)
+        await _join(host, master)
+
+        intruder = _Joiner("intruder", host, private_pem)
+        claimed = json.loads(json.dumps(full_profile_dict(
+            MASTER_NODE_ID, peer_id=intruder.public_peer_id,
+            private_peer_id=intruder.world_peer_id,
+            private_peer_addresses=intruder.world_addrs)))
+        own = json.loads(json.dumps(claimed))
+        own["static"]["node_id"] = intruder.node_id
+        token = mint_node_token(private_pem, own, [intruder.public_peer_id, intruder.world_peer_id])
+        intruder.sm_public, intruder.inbox_public = wire_remote_peer(
+            host.p2p_public, intruder.public_peer_id, claimed, token)
+        await intruder.dial_public()
+        await host.cycle()                               # HELLO -> HELLO_ACK
+        await intruder.offer_public()
+        await host.cycle()                               # OFFER -> decision
+
+        user = _SingleMasterWorld.ROLE_STR_TO_BITS["user"] | Agent.ROLE_WORLD_AGENT
+        assert host.conn.get_role(intruder.world_peer_id) == user
+        assert host.conn.get_role(master.world_peer_id) == BROADCASTER
+        assert host.conn._sm_world.is_established(master.world_peer_id)
+        assert master.world_peer_id not in host.p2p_world.disconnected
 
     asyncio.run(_scenario())

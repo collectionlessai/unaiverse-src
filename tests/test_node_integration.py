@@ -594,6 +594,29 @@ def test_world_host_grants_when_world_peer_bound():
     asyncio.run(_scenario())
 
 
+def test_world_host_with_no_verified_claims_removes_no_listed_entry():
+    """With no verified claims nothing attests who a joiner is: a joiner whose profile
+    names the node of a listed member is admitted beside it, and the member stays."""
+    async def _scenario():
+        node, conn = build_agent_node_shell(NODE_PEER, world=FakeWorld())
+        profile = full_profile_dict("joiner-node")
+        _, (_, real_hash) = NodeProfile.from_dict(profile).verify_cv_hash("")
+        claims = VerifiedTokenClaims(node_id="joiner-node", cv_hash=real_hash,
+                                     p2p_peers=("joiner-node-pub-peer", "joiner-node-world-peer"))
+        assert (await node._session_decision_hook(
+            REMOTE_PEER, "joiner-node", profile, NodeConn.P2P_PUBLIC, claims)).accepted
+
+        other = full_profile_dict("joiner-node", private_peer_id="other-world-peer",
+                                  private_peer_addresses=["/ip4/10.0.0.9/tcp/4001/p2p/other-world-peer"])
+        decision = await node._session_decision_hook(
+            REMOTE_PEER, "joiner-node", other, NodeConn.P2P_PUBLIC, None)
+        assert decision.accepted
+        assert {"joiner-node-world-peer", "other-world-peer"} <= conn.world_agents_set
+        assert "joiner-node-world-peer" not in conn.removed_calls
+
+    asyncio.run(_scenario())
+
+
 def test_world_host_decision_rejects_joiner_without_private_addr():
     """B5: a world-join whose profile carries no private addresses is rejected at the
     public decision (NOT_AUTHORIZED) instead of asserting, and is never pre-admitted to
