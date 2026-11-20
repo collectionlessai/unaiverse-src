@@ -665,6 +665,9 @@ func ConnectTo(
 	// Use PermanentAddrTTL if the address is known to be stable.
 	ni.host.Peerstore().AddAddrs(addrInfo.ID, addrInfo.Addrs, peerstore.ConnectedAddrTTL)
 
+	// With a connection to the peer already there, host.Connect returns it and dials nothing.
+	held := len(ni.host.Network().ConnsToPeer(addrInfo.ID)) > 0
+
 	// Initiate the connection attempt. libp2p will handle dialing and negotiation.
 	logger.Debugf("[GO]   - Instance %d: Attempting host.Connect to %s...\n", ni.instanceIndex, addrInfo.ID)
 	if err := ni.host.Connect(connCtx, *addrInfo); err != nil {
@@ -694,7 +697,11 @@ func ConnectTo(
 	}
 
 	// Success: log the successful connection and return the response.
-	logger.Infof("[GO] ✅ Instance %d: Successfully initiated connection to multiaddress: %s\n", ni.instanceIndex, winningAddr)
+	if held {
+		logger.Infof("[GO] ✅ Instance %d: Already connected to the peer, no dial was made. Its connection is on: %s\n", ni.instanceIndex, winningAddr)
+	} else {
+		logger.Infof("[GO] ✅ Instance %d: Successfully initiated connection to multiaddress: %s\n", ni.instanceIndex, winningAddr)
+	}
 	winningAddrInfo, err := peer.AddrInfoFromString(winningAddr)
 	if err != nil {
 		return C.CString(jsonErrorResponse("Invalid winner multiaddress.", err))
