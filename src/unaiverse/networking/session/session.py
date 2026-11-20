@@ -1144,7 +1144,10 @@ class Session:
         # The window of a peer that lost the Session is not restarted: a transport loss
         # adds nothing to wait for.
         if self.state == SessionState.RECONNECTING and not self._peer_lost_session:
+            ran = time.monotonic() - self._state_entered_at
             self._state_entered_at = time.monotonic()
+            log.session(f"{self!r} transport lost again {ran:.1f}s into the reconnect window, "
+                        f"which starts over ({self._timeout_s}s)", sub=self._sub)
         return None
 
     def _enter_reconnecting(self, window_s: float, peer_lost_session: bool = False) -> SessionEvent:
