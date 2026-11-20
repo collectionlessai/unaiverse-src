@@ -792,7 +792,8 @@ def test_reconnecting_responder_probes_at_once_and_at_the_keepalive_period(bob_c
     assert _run(_tick_and_let_the_probe_run(sess, now + period - 0.1)) is None
     assert len(_pings(bob_conn)) == 1
 
-    assert _run(_tick_and_let_the_probe_run(sess, now + period)) is None
+    # Past the period and not on it: (now + period) - now can come out a hair below period.
+    assert _run(_tick_and_let_the_probe_run(sess, now + period + 0.1)) is None
     assert len(_pings(bob_conn)) == 2
     assert _pings(bob_conn)[1].fields["nonce"] != first_nonce
 
@@ -971,7 +972,7 @@ def test_probe_whose_send_fails_changes_nothing(bob_conn, bob_peer_id, alice_pee
     now = time.monotonic()
 
     assert _run(_tick_and_let_the_probe_run(sess, now)) is None
-    assert _run(_tick_and_let_the_probe_run(sess, now + period)) is None
+    assert _run(_tick_and_let_the_probe_run(sess, now + period + 0.1)) is None
     assert len(_pings(bob_conn)) == 2
     assert sess.state == SessionState.RECONNECTING
     assert (sess._state_entered_at, sess._timeout_s) == (entered, window)
