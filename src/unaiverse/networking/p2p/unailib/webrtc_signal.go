@@ -295,12 +295,18 @@ func (c *WebRTCConn) isFresh(now time.Time) bool {
 	return last != 0 && at-last < window
 }
 
+// isConnected reports whether the peer connection of the channel is connected. A channel
+// stays open while its connection is not: a peer that stopped leaves it disconnected, and
+// open, until pion gives the connection up.
+func (c *WebRTCConn) isConnected() bool {
+	return c.pc != nil && c.pc.ConnectionState() == pwebrtc.PeerConnectionStateConnected
+}
+
 // takesSessionFrames reports whether a Session frame may go on the channel now: the peer
 // declared that it accepts them there, the channel is open, its peer connection is
 // connected, and the channel is fresh.
 func (c *WebRTCConn) takesSessionFrames(now time.Time) bool {
-	return c.peerSessionFrames && c.isOpen() && c.pc != nil &&
-		c.pc.ConnectionState() == pwebrtc.PeerConnectionStateConnected && c.isFresh(now)
+	return c.peerSessionFrames && c.isOpen() && c.isConnected() && c.isFresh(now)
 }
 
 // sendSessionFrameOnDataChannel sends a Session frame on the DataChannel to pid when the
@@ -779,15 +785,23 @@ func handleSignalingStream(ni *NodeInstance, s network.Stream) {
 // answer: what a browser does to an offer that finds its previous exchange still running.
 var errSignalingStreamEnded = errors.New("the answerer closed the signaling stream with no answer")
 
+// errWebRTCOfferNotNeeded says that no offer was made because none is due: we hold a
+// DataChannel to the peer that we trust, or the stages of an offer to it are running.
+var errWebRTCOfferNotNeeded = errors.New("no WebRTC offer is due")
+
 // trustsWebRTCDataChannel reports whether we hold a DataChannel to the peer that makes an
-// offer of ours pointless: open and, for a peer that takes Session frames on it, fresh.
-// With such a peer a channel that is alive is never silent for long. For a peer that takes
-// none, nothing is due on an idle channel and silence says nothing: the state decides.
+// offer of ours pointless: open, on a peer connection that is connected and, for a peer
+// that takes Session frames on it, fresh. With such a peer a channel that is alive is
+// never silent for long. For a peer that takes none, nothing is due on an idle channel and
+// silence says nothing: the state decides. A channel whose connection is disconnected is
+// not trusted although it may come back: the offer is made at the one moment something
+// asks for it, and when that channel is given up later nothing asks again.
 func trustsWebRTCDataChannel(ni *NodeInstance, remotePeer peer.ID) bool {
 	ni.webrtcMutex.RLock()
 	existing := ni.webrtcConnections[remotePeer]
 	ni.webrtcMutex.RUnlock()
-	return existing != nil && existing.isOpen() && (!existing.peerSessionFrames || existing.isFresh(ni.now()))
+	return existing != nil && existing.isOpen() && existing.isConnected() &&
+		(!existing.peerSessionFrames || existing.isFresh(ni.now()))
 }
 
 // initiateWebRTCConnection is the offerer path. Call this when we want to
@@ -801,17 +815,31 @@ func trustsWebRTCDataChannel(ni *NodeInstance, remotePeer peer.ID) bool {
 func initiateWebRTCConnection(ni *NodeInstance, remotePeer peer.ID) error {
 	logger.Infof("[GO] 🚀 Instance %d: Initiating WebRTC connection to %s", ni.instanceIndex, remotePeer)
 
+	// One run of the stages per peer at a time. Each connection to a peer is identified
+	// by itself and asks for an offer: a second run found the answerer busy with the
+	// first, lost its direct stage to that and went on to TURN, where its channel took
+	// the place of the direct one the first run had just opened.
+	if _, running := ni.webrtcOffering.LoadOrStore(remotePeer, struct{}{}); running {
+		return fmt.Errorf("%w: an offer to %s is being made", errWebRTCOfferNotNeeded, remotePeer)
+	}
+	defer ni.webrtcOffering.Delete(remotePeer)
+
 	// Skip only over a DataChannel that we trust. One that is open and not trusted is
 	// offered over, and the new channel replaces it when it opens.
 	if trustsWebRTCDataChannel(ni, remotePeer) {
-		return fmt.Errorf("already have an open WebRTC DataChannel with %s", remotePeer)
+		return fmt.Errorf("%w: already have an open WebRTC DataChannel with %s", errWebRTCOfferNotNeeded, remotePeer)
 	}
 	ni.webrtcMutex.RLock()
 	existing := ni.webrtcConnections[remotePeer]
 	ni.webrtcMutex.RUnlock()
 	if existing != nil && existing.isOpen() {
-		logger.Infof("[GO] ♻️ Instance %d: The WebRTC DataChannel with %s is open and gave no sign of life for %v: offering a new one",
-			ni.instanceIndex, remotePeer, WebRTCFreshnessWindow)
+		if existing.isConnected() {
+			logger.Infof("[GO] ♻️ Instance %d: The WebRTC DataChannel with %s is open and gave no sign of life for %v: offering a new one",
+				ni.instanceIndex, remotePeer, WebRTCFreshnessWindow)
+		} else {
+			logger.Infof("[GO] ♻️ Instance %d: The WebRTC DataChannel with %s is open on a peer connection that is %s: offering a new one",
+				ni.instanceIndex, remotePeer, existing.pc.ConnectionState())
+		}
 	}
 
 	directErr := offerWebRTC(ni, remotePeer, WebRTCStageDirect, WebRTCDirectStageTimeout)

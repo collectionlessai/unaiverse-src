@@ -6,6 +6,7 @@ import (
 	"net"
 	"fmt"
 	"time"
+	"errors"
 	"context"
 	"strings"
 	"crypto/rand"
@@ -460,7 +461,9 @@ func autoUpgradeWebRTC(ni *NodeInstance) {
 
 					logger.Warnf("[GO] ⚠️ Instance %d: Native direct connection to %s failed after 20s. Initiating WebRTC fallback...", ni.instanceIndex, pid)
 					err := initiateWebRTCConnection(ni, pid)
-					if err != nil {
+					if errors.Is(err, errWebRTCOfferNotNeeded) {
+						logger.Infof("[GO] ✅ Instance %d: %v", ni.instanceIndex, err)
+					} else if err != nil {
 						logger.Errorf("[GO] ❌ Instance %d: WebRTC fallback failed for %s: %v", ni.instanceIndex, pid, err)
 					}
 				}(remotePeer, dcutrWait)

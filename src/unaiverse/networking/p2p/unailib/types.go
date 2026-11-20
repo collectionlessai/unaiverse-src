@@ -405,6 +405,9 @@ type NodeInstance struct {
 	// WebRTC DataChannel connections (application-level, keyed by remote peer ID)
 	webrtcMutex       sync.RWMutex
 	webrtcConnections map[peer.ID]*WebRTCConn
+	// The peers an offer of ours is being made to (see initiateWebRTCConnection): one
+	// run of the stages per peer at a time.
+	webrtcOffering 	sync.Map
 	iceConfigMu       sync.RWMutex  // protects iceConfig swaps
 	iceConfig         *ICEConfig // nil → use defaults (Google STUN)
 	// clock is what the freshness of a DataChannel and the retry of a chat stream move

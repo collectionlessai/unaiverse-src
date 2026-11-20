@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"io"
 	"strings"
 	"sync"
@@ -676,5 +677,80 @@ func TestOfferOverAnEntryThatIsNotFreshReplacesItOnBothSides(t *testing.T) {
 	}
 	if answerer.arrivedOnAStream() {
 		t.Fatal("the frame went on a stream with a new DataChannel in place")
+	}
+}
+
+// A DataChannel stays open while its peer connection is not connected: it is what a peer
+// that stopped leaves behind until pion gives the connection up. An offer that is due at
+// that moment is made over it, and its channel takes the entry. It used to be skipped as
+// over a healthy one, and when the old connection was given up, seconds later, nothing
+// asked for an offer again: the link stayed on its relay circuit.
+func TestOfferOverAnEntryWhosePeerConnectionIsNotConnectedReplacesIt(t *testing.T) {
+	useSessionTestSettings(t, 8<<20)
+	offerer, answerer := newSessionNode(t), newSessionNode(t)
+	connectNodes(t, offerer.ni.host, answerer.ni.host)
+	if err := initiateWebRTCConnection(offerer.ni, answerer.id()); err != nil {
+		t.Fatalf("first offer: %v", err)
+	}
+	waitUntil(t, "the entry of the answerer", func() bool { return tableEntry(answerer.ni, offerer.id()) != nil })
+	first := tableEntry(offerer.ni, answerer.id())
+
+	// The entry keeps its open channel and gets a peer connection that never connected,
+	// which stands for one that is disconnected: no test can make pion lose a path on
+	// the loopback and keep the channel open.
+	live := first.pc
+	t.Cleanup(func() { live.Close() })
+	idle, err := pwebrtc.NewPeerConnection(pwebrtc.Configuration{})
+	if err != nil {
+		t.Fatalf("NewPeerConnection: %v", err)
+	}
+	offerer.ni.webrtcMutex.Lock()
+	first.pc = idle
+	offerer.ni.webrtcMutex.Unlock()
+	if !first.isOpen() || first.isConnected() || !first.isFresh(offerer.clock.now()) {
+		t.Fatal("the test needs an entry that is open and fresh on a peer connection that is not connected")
+	}
+
+	if err := initiateWebRTCConnection(offerer.ni, answerer.id()); err != nil {
+		t.Fatalf("offer over an entry whose peer connection is not connected: %v", err)
+	}
+	second := tableEntry(offerer.ni, answerer.id())
+	if second == nil || second == first || !second.isOpen() || !second.isConnected() {
+		t.Fatal("the new DataChannel did not take the entry of the offerer")
+	}
+}
+
+// The stages of an offer run once per peer at a time. Every connection to a peer is
+// identified by itself and asks for an offer, and a second run next to the first found
+// the answerer busy, lost its direct stage to that and went on to its TURN stage.
+func TestOfferIsNotMadeWhileTheStagesOfAnotherRun(t *testing.T) {
+	useSessionTestSettings(t, 8<<20)
+	offerer, answerer := newSessionNode(t), newSessionNode(t)
+	connectNodes(t, offerer.ni.host, answerer.ni.host)
+
+	// As while a first run is in its stages.
+	offerer.ni.webrtcOffering.Store(answerer.id(), struct{}{})
+	err := initiateWebRTCConnection(offerer.ni, answerer.id())
+	if !errors.Is(err, errWebRTCOfferNotNeeded) {
+		t.Fatalf("an offer was made next to a run in progress: %v", err)
+	}
+	time.Sleep(300 * time.Millisecond)
+	if tableEntry(offerer.ni, answerer.id()) != nil || tableEntry(answerer.ni, offerer.id()) != nil {
+		t.Fatal("a DataChannel was opened by the run that should not have started")
+	}
+	if _, running := offerer.ni.webrtcOffering.Load(answerer.id()); !running {
+		t.Fatal("the run that was refused took the mark of the one in progress away")
+	}
+
+	// A run that ends leaves the peer free for the next one.
+	offerer.ni.webrtcOffering.Delete(answerer.id())
+	if err := initiateWebRTCConnection(offerer.ni, answerer.id()); err != nil {
+		t.Fatalf("offer: %v", err)
+	}
+	if _, running := offerer.ni.webrtcOffering.Load(answerer.id()); running {
+		t.Fatal("a run that ended left its mark")
+	}
+	if err := initiateWebRTCConnection(offerer.ni, answerer.id()); !errors.Is(err, errWebRTCOfferNotNeeded) {
+		t.Fatalf("an offer over a channel that is trusted: %v", err)
 	}
 }
