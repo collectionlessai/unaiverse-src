@@ -1355,6 +1355,39 @@ def test_unanswered_resume_on_a_transport_that_came_back_is_followed_by_a_dial(
     assert sess._reconnect_substep == "redial"
 
 
+def test_resume_with_no_answer_counts_as_a_reconnect_attempt(alice_conn, alice_peer_id, bob_peer_id,
+                                                             monkeypatch):
+    """The dial returns at once on the connection to a peer that stopped, still listed, and
+    the RESUME sent on it gets no answer. That is an attempt, said in the log: the next dial
+    is the second one, it still leaves at once, and when it fails its backoff is the one of
+    a second failure."""
+    lines = []
+    monkeypatch.setattr(session_mod.log, "session", lambda msg, *a, **k: lines.append(msg))
+    wait = session_mod._RESUME_ACK_TIMEOUT_S
+
+    async def _runner():
+        sess = _reconnecting_initiator(alice_conn, alice_peer_id, bob_peer_id)
+        alice_conn.connect_returns = (bob_peer_id, False)
+        now = time.monotonic()
+        await sess.tick_dial(now)                    # the dial on the dead connection...
+        await asyncio.sleep(0)
+        await sess.tick_dial(now)                    # ...is "ok", and the RESUME leaves
+        assert len(_resumes(alice_conn)) == 1
+        dials = len(alice_conn.connect_calls)
+
+        alice_conn.connect_returns = (None, False)
+        given_up_at = now + wait + 0.1
+        await sess.tick_dial(given_up_at)
+        await _fail_the_dial_in_flight(sess, given_up_at)
+        return sess, len(alice_conn.connect_calls) - dials, given_up_at
+    sess, launched, given_up_at = asyncio.run(_runner())
+    assert launched == 1
+    assert sess._reconnect_attempts == 2
+    assert sess._next_redial_at == pytest.approx(given_up_at + 2 * session_mod._RETRY_BASE_S)
+    assert any("RESUME got no answer" in line and "attempt 1" in line for line in lines), lines
+    assert any("reconnect dial (attempt 2)" in line for line in lines), lines
+
+
 def test_resume_sent_again_inside_its_wait_keeps_its_nonce(alice_conn, alice_peer_id, bob_peer_id):
     """Two signs that the transport is back, close to each other: the second RESUME is
     the first one again, so that the answer to either copy is taken."""

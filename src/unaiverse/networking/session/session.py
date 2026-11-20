@@ -402,8 +402,13 @@ class Session:
             self._start_dial()
         elif self.state == SessionState.RECONNECTING:
             # A RESUME that wasn't acked within its window → fall back to another re-dial.
+            # It counts as an attempt: the transport it went on delivered nothing, as the
+            # connection to a peer that stopped does while it is still listed.
             if self._reconnect_substep == "resume_sent" and now >= self._resume_deadline:
                 self._reconnect_substep = "redial"
+                self._reconnect_attempts += 1
+                log.session(f"{self!r} RESUME got no answer within {_RESUME_ACK_TIMEOUT_S}s, "
+                            f"counted as reconnect attempt {self._reconnect_attempts}", sub=self._sub)
             if self._reconnect_substep == "redial" and now >= self._next_redial_at:
                 self._start_dial()
         return []
