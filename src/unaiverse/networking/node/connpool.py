@@ -513,7 +513,9 @@ class NodeConn:
             return None
         try:
             return await sm.reserve(peer_id)
-        except P2PError:
+        except P2PError as e:
+            # The browser has no other line that says why: its transport raises this.
+            log.error(f"No relay slot on ...{peer_id[-5:]} ({p2p_name}): {e}")
             return None
 
     def set_turn_credentials(self, ice_turn_servers) -> None:
