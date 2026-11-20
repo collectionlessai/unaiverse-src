@@ -23,9 +23,15 @@ import (
 // const UnaiverseChatProtocol = "/unaiverse-chat-protocol/1.0.0"
 const UnaiverseChatProtocol = "/unaiverse/chat/1.0.0"
 
-// UnaiverseUserAgent is how a node names itself to its peers (identify) and to the
-// service that issues the AutoTLS certificates.
+// UnaiverseUserAgent is how a node names itself to the service that issues the AutoTLS
+// certificates, and the family name of what it tells its peers.
 const UnaiverseUserAgent = "unaiverse"
+
+// UnaiverseIdentifyAgent is how a node names itself to its peers (identify): the family
+// name and the transport stack that runs it, which here is this library. The browser
+// transport of the SDK names itself "unaiverse/js". A peer learns from it what kind of
+// node it is talking to without reading it off the addresses the node publishes.
+const UnaiverseIdentifyAgent = UnaiverseUserAgent + "/go"
 
 // P2PForgeLoggerName is the logger of the AutoTLS certificate manager, as p2p-forge names it.
 const P2PForgeLoggerName = "p2p-forge/client"

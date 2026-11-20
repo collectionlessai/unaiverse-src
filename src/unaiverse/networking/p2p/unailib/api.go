@@ -307,7 +307,7 @@ func CreateNode(
 		libp2p.Transport(webtransport.New),
 		libp2p.Transport(webrtc.New),
 		libp2p.ResourceManager(rm),
-		libp2p.UserAgent(UnaiverseUserAgent),
+		libp2p.UserAgent(UnaiverseIdentifyAgent),
 		libp2p.NATPortMap(),
 		libp2p.EnableHolePunching(),
 		// v1 (always created by the host) is what emits the EvtLocalReachabilityChanged
