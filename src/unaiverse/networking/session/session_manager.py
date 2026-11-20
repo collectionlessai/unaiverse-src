@@ -869,8 +869,11 @@ class SessionManager:
         sess = self._sessions.get(peer_id)
         if sess is None:
             return []
-        if sess.state in (SessionState.CONNECTING,
-                          SessionState.HELLO_SENT,
+        # CONNECTING is not here: it has no handshake on any connection yet, its own dial
+        # decides, and a dial that failed is tried again. A connection that its dial was
+        # handed and that carried no HELLO is such a failed dial, and its drop, reported
+        # a moment later, must not fail and quarantine the attempt that follows.
+        if sess.state in (SessionState.HELLO_SENT,
                           SessionState.HELLO_ACK_SENT,
                           SessionState.PROFILE_SENT,
                           SessionState.AWAITING_WORLD_GRANT):

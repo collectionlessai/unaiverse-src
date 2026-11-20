@@ -1554,9 +1554,169 @@ def test_profile_offer_in_hello_sent_is_ignored(alice_conn, alice_peer_id, bob_p
     assert _last_sent(alice_conn, SESSION_PROFILE_PROTOCOL) is None
 
 
+# A HELLO that cannot be sent is a dial that failed
+
+def _hello_send_fails(conn, times, delivered=False):
+    """The next `times` HELLOs sent through `conn` are reported as not sent. With
+    `delivered` they reach the peer all the same: the frame left before the send failed."""
+    original = conn.send_session
+    left = [times]
+
+    async def _send(peer_id, protocol_id, sess_msg):
+        if (protocol_id == SESSION_HELLO_PROTOCOL and sess_msg.kind == SessMsg.KIND_HELLO_REQ
+                and left[0] > 0):
+            left[0] -= 1
+            if delivered:
+                await original(peer_id, protocol_id, sess_msg)
+            return False
+        return await original(peer_id, protocol_id, sess_msg)
+    conn.send_session = _send
+
+
+def _hellos(conn):
+    return [e[2] for e in conn.sent
+            if e[1] == SESSION_HELLO_PROTOCOL and e[2].kind == SessMsg.KIND_HELLO_REQ]
+
+
+def test_hello_that_cannot_be_sent_is_a_dial_that_failed(alice_conn, alice_peer_id, bob_peer_id,
+                                                         monkeypatch):
+    """The dial resolved on a connection that carried nothing. With attempts left the
+    Session stays in CONNECTING, says so, and dials again after the backoff of a failed
+    dial; the HELLO of that dial leaves."""
+    lines = []
+    monkeypatch.setattr(session_mod.log, "session", lambda msg, *a, **k: lines.append(msg))
+    alice_conn.connect_returns = (bob_peer_id, False)
+    _hello_send_fails(alice_conn, 1)
+    sess = _mk(bob_peer_id, SessionRole.INITIATOR, alice_conn, alice_peer_id,
+               addresses=["/ip4/127.0.0.1/tcp/0/p2p/" + bob_peer_id])
+
+    async def _runner():
+        sess.start()
+        await asyncio.sleep(0)
+        now = time.monotonic()
+        events = await sess.tick_dial(now)
+        state, gate = sess.state, sess._next_dial_at
+        await sess.tick_dial(gate)                   # the second dial...
+        await asyncio.sleep(0)
+        await sess.tick_dial(gate)                   # ...and its HELLO
+        return events, state, now, gate
+    events, state, now, gate = _run(_runner())
+    assert events == [] and state == SessionState.CONNECTING
+    assert now <= gate <= now + session_mod._RETRY_BASE_S
+    assert any("HELLO could not be sent" in line and "retrying in" in line for line in lines), lines
+    assert len(alice_conn.connect_calls) == 2 and sess._dial_attempts == 2
+    assert sess.state == SessionState.HELLO_SENT
+    assert len(_hellos(alice_conn)) == 1
+
+
+def test_hello_that_cannot_be_sent_on_the_last_attempt_fails_the_session(alice_conn, alice_peer_id,
+                                                                         bob_peer_id):
+    alice_conn.connect_returns = (bob_peer_id, False)
+    _hello_send_fails(alice_conn, 1)
+    sess = _mk(bob_peer_id, SessionRole.INITIATOR, alice_conn, alice_peer_id,
+               addresses=["/ip4/127.0.0.1/tcp/0/p2p/" + bob_peer_id], dial_attempts=1)
+    events = _start(sess)
+    assert [e.type for e in events] == [SessionEventType.FAILED]
+    assert events[0].data["reason"] == "hello_send_failed"
+    assert sess.state == SessionState.FAILED
+
+
+def test_repeated_hello_is_answered_over_its_own_nonce(bob_conn, bob_p2p, bob_peer_id, alice_peer_id):
+    """The initiator takes only an answer signed over the nonce_a of its last HELLO."""
+    signed = []
+    bob_p2p._sign_with_host_key_sync = lambda data: signed.append(bytes(data)) or b"sig-bytes"
+    sess = _mk(alice_peer_id, SessionRole.RESPONDER, bob_conn, bob_peer_id)
+    first = SessMsg(SessMsg.KIND_HELLO_REQ, {
+        "session_id": b"\x01" * 16, "nonce_a": b"\xaa" * 32,
+        "protocol_versions": ["1.0"], "capabilities": 0, "client_id": "test/1.0",
+    })
+    again = SessMsg(SessMsg.KIND_HELLO_REQ, dict(first.fields, nonce_a=b"\xbb" * 32))
+    _run(sess.process_inbound(SESSION_HELLO_PROTOCOL, first))
+    _run(sess.process_inbound(SESSION_HELLO_PROTOCOL, again))
+    assert signed == [session_mod._sign_payload(b"\xaa" * 32, b"\x01" * 16),
+                      session_mod._sign_payload(b"\xbb" * 32, b"\x01" * 16)]
+
+
+@pytest.mark.parametrize("first_answer", ["while_connecting", "after_the_second_hello"])
+def test_hello_that_arrived_although_its_send_failed_ends_established(
+        bidirectional_fakeconns, alice_peer_id, bob_peer_id, first_answer):
+    """The send of the first HELLO failed after its frame left: the responder answered it,
+    the initiator dialled again and sent it again, and the responder answers once more.
+    The answer to the first HELLO reaches the initiator in CONNECTING, where it is not
+    taken, or after the second HELLO, where it is stale. Both sides end ESTABLISHED, and
+    nobody was quarantined."""
+    from conftest import apump
+    from unaiverse.networking.session import SessionManager
+    alice_conn, bob_conn, alice_inbox, bob_inbox = bidirectional_fakeconns
+    alice_conn.connect_returns = (bob_peer_id, False)
+    _hello_send_fails(alice_conn, 1, delivered=True)
+
+    def _sm(conn, peer_id, node_id):
+        return SessionManager(p2p=conn, p2p_name=NodeConn.P2P_PUBLIC, local_peer_id=peer_id,
+                              local_node_id=node_id, local_profile_factory=lambda: {"node_id": node_id})
+
+    async def _runner():
+        sm_a, sm_b = _sm(alice_conn, alice_peer_id, "alice"), _sm(bob_conn, bob_peer_id, "bob")
+        await sm_a.initiate(bob_peer_id, ["/ip4/127.0.0.1/tcp/0/p2p/" + bob_peer_id])
+        await asyncio.sleep(0)
+        await sm_a.tick()                            # the dial, and the HELLO that "failed"
+        assert sm_a.get_session(bob_peer_id).state == SessionState.CONNECTING
+        await apump(bob_inbox, sm_b)                 # the responder answers it
+        if first_answer == "while_connecting":
+            await apump(alice_inbox, sm_a)
+        gate = sm_a.get_session(bob_peer_id)._next_dial_at
+        await sm_a.tick(gate)
+        await asyncio.sleep(0)
+        await sm_a.tick(gate)                        # the second dial and HELLO
+        events = []
+        for _ in range(4):
+            events += await apump(bob_inbox, sm_b)
+            events += await apump(alice_inbox, sm_a)
+        return sm_a, sm_b, events
+    sm_a, sm_b, events = _run(_runner())
+    assert sm_a.get_session(bob_peer_id).state == SessionState.ESTABLISHED
+    assert sm_b.get_session(alice_peer_id).state == SessionState.ESTABLISHED
+    assert [e.type for e in events] == [SessionEventType.ESTABLISHED] * 2
+    assert sm_a._quarantine == {} and sm_b._quarantine == {}
+
+
+def test_repeated_hellos_past_the_ceiling_are_not_answered(bob_conn, bob_peer_id, alice_peer_id,
+                                                           monkeypatch):
+    """Each answer to a repeated HELLO is a signature with the host key and a send. Up to
+    the ceiling they are answered, the one past it is ignored, says so, and changes
+    nothing. The ceiling covers the most a legitimate initiator repeats its HELLO: one per
+    dial attempt after the first, and the browser makes up to 6 attempts."""
+    lines = []
+    monkeypatch.setattr(session_mod.log, "session", lambda msg, *a, **k: lines.append(msg))
+    ceiling = session_mod._MAX_REPEATED_HELLOS_ANSWERED
+    assert ceiling >= 6 - 1
+    sess = _mk(alice_peer_id, SessionRole.RESPONDER, bob_conn, bob_peer_id)
+    hello = SessMsg(SessMsg.KIND_HELLO_REQ, {
+        "session_id": b"\x01" * 16, "nonce_a": b"\xaa" * 32,
+        "protocol_versions": ["1.0"], "capabilities": 0, "client_id": "test/1.0",
+    })
+
+    def _answers():
+        return [e for e in bob_conn.sent
+                if e[1] == SESSION_HELLO_PROTOCOL and e[2].kind == SessMsg.KIND_HELLO_RESP]
+    _run(sess.process_inbound(SESSION_HELLO_PROTOCOL, hello))
+    nonce_b, entered_at = sess.nonce_b, sess._state_entered_at
+    for _ in range(ceiling):
+        _run(sess.process_inbound(SESSION_HELLO_PROTOCOL, hello))
+    assert len(_answers()) == 1 + ceiling
+    events = _run(sess.process_inbound(SESSION_HELLO_PROTOCOL, hello))
+    assert events == [] and len(_answers()) == 1 + ceiling
+    assert sess.state == SessionState.HELLO_ACK_SENT and sess.session_id == b"\x01" * 16
+    assert sess.nonce_b == nonce_b and sess._state_entered_at == entered_at
+    assert any("repeated HELLO ignored" in line for line in lines), lines
+
+
 def test_duplicate_hello_req_ignored_after_hello_ack_sent(bob_conn, bob_peer_id, alice_peer_id):
     """A retransmitted HELLO_REQ on a responder already past INIT must not
-    restart the handshake: exactly one HELLO_RESP total, same session_id."""
+    restart the handshake: same state, same session_id, same nonce_b, and the wait
+    for the PROFILE_OFFER is not restarted. It is answered once more (its initiator
+    may have been told that its first send failed), and a HELLO_REQ of another
+    session_id is not answered at all."""
     sess = _mk(alice_peer_id, SessionRole.RESPONDER, bob_conn, bob_peer_id)
     hello = SessMsg(SessMsg.KIND_HELLO_REQ, {
         "session_id": b"\x01" * 16, "nonce_a": b"\xaa" * 32,
@@ -1564,13 +1724,19 @@ def test_duplicate_hello_req_ignored_after_hello_ack_sent(bob_conn, bob_peer_id,
     })
     _run(sess.process_inbound(SESSION_HELLO_PROTOCOL, hello))
     assert sess.state == SessionState.HELLO_ACK_SENT
+    nonce_b, entered_at = sess.nonce_b, sess._state_entered_at
     events = _run(sess.process_inbound(SESSION_HELLO_PROTOCOL, hello))
     assert events == []
     assert sess.state == SessionState.HELLO_ACK_SENT
     assert sess.session_id == b"\x01" * 16
+    assert sess.nonce_b == nonce_b and sess._state_entered_at == entered_at
+    other = SessMsg(SessMsg.KIND_HELLO_REQ, dict(hello.fields, session_id=b"\x02" * 16))
+    assert _run(sess.process_inbound(SESSION_HELLO_PROTOCOL, other)) == []
+    assert sess.session_id == b"\x01" * 16
     hello_resps = [e for e in bob_conn.sent
                    if e[1] == SESSION_HELLO_PROTOCOL and e[2].kind == SessMsg.KIND_HELLO_RESP]
-    assert len(hello_resps) == 1
+    assert len(hello_resps) == 2
+    assert all(e[2].fields["nonce_b"] == nonce_b for e in hello_resps)
 
 
 def test_profile_decision_in_established_is_ignored(alice_conn, alice_peer_id, bob_peer_id):

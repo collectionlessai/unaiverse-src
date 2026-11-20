@@ -74,6 +74,11 @@ _MAX_DIAL_ATTEMPTS = 4
 _RETRY_BASE_S = 1.0
 _RETRY_CAP_S = 30.0
 _RESUME_ACK_TIMEOUT_S = 3.0  # RESUME sent; if un-acked within this, re-dial + re-RESUME
+# How many repeats of its HELLO a responder answers on one Session, each a signature with
+# the host key and a send. An initiator sends one HELLO per dial attempt: _MAX_DIAL_ATTEMPTS
+# here, 6 in the browser (maxDialAttempts of MOBILE_SESSION_TIMEOUTS in the SDK), so a
+# legitimate one repeats it 5 times at most.
+_MAX_REPEATED_HELLOS_ANSWERED = 5
 
 # Session-level keep-alive (PING/PONG over the control protocol)
 # Bound to session_id on purpose: /ipfs/ping is a transport probe that go-libp2p
@@ -248,6 +253,7 @@ class Session:
         self.session_id_hex: str = self.session_id.hex()
         self.nonce_a: bytes = b""
         self.nonce_b: bytes = b""
+        self._repeated_hellos_answered: int = 0   # responder: see _responder_on_repeated_hello
 
         # FSM state, derived from the role: an initiator starts KNOWN (registered, not
         # yet dialed); a responder starts INIT (already engaged, awaiting the inbound
@@ -419,22 +425,27 @@ class Session:
                       f"disallowed (talk_to_relay_based_nodes=False)", sub=self._sub)
             return [self._fail("relay_rejected")]
         if peer_id is None:
-            if self._dial_attempts < self._max_dial_attempts:
-                delay = min(
-                    random.uniform(0, _RETRY_BASE_S * (2 ** (self._dial_attempts - 1))),
-                    _RETRY_CAP_S,
-                )
-                self._next_dial_at = now + delay
-                log.session(f"{self!r} dial failed, retrying in {delay:.1f}s", sub=self._sub)
-                return []
-            log.error(f"{self!r} dial failed after {self._max_dial_attempts} attempts", sub=self._sub)
-            return [self._fail("dial_failed")]
+            return self._dial_attempt_failed(now, "dial failed", "dial_failed")
         # If the dial returned a different peer-id than we expected (e.g. relayed multiaddr
         # without the /p2p hop), update it before the HELLO.
         if peer_id != self.peer_id:
             log.session(f"{self!r} peer_id updated from ...{self.peer_id[-5:]} → ...{peer_id[-5:]}", sub=self._sub)
             self.peer_id = peer_id
-        return await self._send_hello()
+        return await self._send_hello(now)
+
+    def _dial_attempt_failed(self, now: float, what: str, reason: str) -> List[SessionEvent]:
+        """A dial attempt of CONNECTING failed: the next one after a jittered backoff while
+        attempts are left, FAILED with the given reason once they are used up."""
+        if self._dial_attempts < self._max_dial_attempts:
+            delay = min(
+                random.uniform(0, _RETRY_BASE_S * (2 ** (self._dial_attempts - 1))),
+                _RETRY_CAP_S,
+            )
+            self._next_dial_at = now + delay
+            log.session(f"{self!r} {what}, retrying in {delay:.1f}s", sub=self._sub)
+            return []
+        log.error(f"{self!r} {what} after {self._max_dial_attempts} attempts", sub=self._sub)
+        return [self._fail(reason)]
 
     async def _on_dial_done_reconnecting(self, peer_id, through_relay, now) -> List[SessionEvent]:
         if peer_id is not None and through_relay and self._reject_relay:
@@ -472,7 +483,7 @@ class Session:
             "session_id": self.session_id, "nonce": self._resume_nonce,
         }))
 
-    async def _send_hello(self) -> List[SessionEvent]:
+    async def _send_hello(self, now: Optional[float] = None) -> List[SessionEvent]:
         self.nonce_a = secrets.token_bytes(_NONCE_BYTES)
         msg = SessMsg(SessMsg.KIND_HELLO_REQ, {
             "session_id": self.session_id,
@@ -482,6 +493,13 @@ class Session:
             "client_id": "python/1.0",
         })
         if not await self._send_payload(SESSION_HELLO_PROTOCOL, msg):
+            # Right after a dial, the dial resolved on a connection that carries nothing (one
+            # that was closing, or whose peer had just cut it): a dial that failed. Should
+            # the HELLO have arrived all the same, the responder answers it again.
+            if self.state == SessionState.CONNECTING:
+                return self._dial_attempt_failed(time.monotonic() if now is None else now,
+                                                 "HELLO could not be sent on the connection of the dial",
+                                                 "hello_send_failed")
             return [self._fail("hello_send_failed")]
         self._set_state(SessionState.HELLO_SENT, _TIMEOUT_HELLO_S)
         log.session(f"{self!r} HELLO sent", sub=self._sub)
@@ -515,6 +533,11 @@ class Session:
         if (msg.kind == SessMsg.KIND_HELLO_REQ and
                 self.role == SessionRole.RESPONDER and self.state == SessionState.INIT):
             return await self._responder_on_hello(msg)
+
+        if (msg.kind == SessMsg.KIND_HELLO_REQ and
+                self.role == SessionRole.RESPONDER and self.state == SessionState.HELLO_ACK_SENT and
+                bytes(msg.get("session_id") or b"") == self.session_id):
+            return await self._responder_on_repeated_hello(msg)
 
         if (msg.kind == SessMsg.KIND_HELLO_RESP and
                 self.role == SessionRole.INITIATOR and self.state == SessionState.HELLO_SENT):
@@ -553,6 +576,30 @@ class Session:
             return [self._fail("hello_ack_send_failed")]
         self._set_state(SessionState.HELLO_ACK_SENT, _TIMEOUT_PROFILE_S)
         log.session(f"{self!r} HELLO_ACK sent", sub=self._sub)
+        return []
+
+    async def _responder_on_repeated_hello(self, req: SessMsg) -> List[SessionEvent]:
+        """The HELLO of this Session again: its initiator was told that the send of the first
+        one failed, although that frame arrived, and sent it again after a new dial. It is
+        answered over its own nonce_a, the only answer that initiator still takes, with the
+        nonce_b already given, so that the PROFILE_OFFER verifies whichever answer it took.
+        The wait for that offer is not restarted, and past a ceiling a repeat is ignored."""
+        if self._repeated_hellos_answered >= _MAX_REPEATED_HELLOS_ANSWERED:
+            log.session(f"{self!r} repeated HELLO ignored, {self._repeated_hellos_answered} already "
+                        f"answered", sub=self._sub)
+            return []
+        self._repeated_hellos_answered += 1
+        sig_b = await self.p2p.sign_with_host_key(
+            _sign_payload(bytes(req.get("nonce_a") or b""), self.session_id))
+        if sig_b is None:
+            return [self._fail("hello_sign_failed")]
+        resp = SessMsg(SessMsg.KIND_HELLO_RESP, {
+            "chosen_version": "1.0", "capabilities": 0, "nonce_b": self.nonce_b,
+            "sig_b": sig_b, "reason_code": OK,
+        })
+        if not await self._send_payload(SESSION_HELLO_PROTOCOL, resp):
+            return [self._fail("hello_ack_send_failed")]
+        log.session(f"{self!r} HELLO_ACK sent again, to a repeated HELLO", sub=self._sub)
         return []
 
     async def _initiator_on_hello_ack(self, resp: SessMsg) -> List[SessionEvent]:

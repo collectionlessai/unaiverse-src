@@ -809,11 +809,53 @@ def test_terminal_session_leaves_both_views(alice_conn, alice_peer_id, bob_peer_
     both the full registry and the tick-active view, so neither leaks a dead FSM."""
     alice_conn.connect_returns = (bob_peer_id, False)
     sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
-    _run(sm.initiate(bob_peer_id, ["/ip4/127.0.0.1/tcp/0"]))
-    assert bob_peer_id in sm._active_sessions
-    _run(sm.on_peer_disconnected(bob_peer_id))
+
+    async def _hello_sent_then_dropped():
+        await sm.initiate(bob_peer_id, ["/ip4/127.0.0.1/tcp/0"])
+        assert bob_peer_id in sm._active_sessions
+        await asyncio.sleep(0)
+        await sm.tick()                               # the dial is reaped, the HELLO leaves
+        assert sm.get_session(bob_peer_id).state == SessionState.HELLO_SENT
+        return await sm.on_peer_disconnected(bob_peer_id)
+    events = _run(_hello_sent_then_dropped())
+    assert [e.type for e in events] == [SessionEventType.FAILED]
     assert bob_peer_id not in sm._sessions
     assert bob_peer_id not in sm._active_sessions
+
+
+def test_drop_between_two_dial_attempts_does_not_fail_the_session(alice_conn, alice_peer_id, bob_peer_id):
+    """The dial was handed a connection that carried no HELLO, a dial that failed. The drop
+    of that connection is reported before the next attempt: it neither fails nor
+    quarantines the Session, whose next dial decides."""
+    alice_conn.connect_returns = (bob_peer_id, False)
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    original = alice_conn.send_session
+    hellos = []
+
+    async def _first_hello_fails(peer_id, protocol_id, sess_msg):
+        if protocol_id == SESSION_HELLO_PROTOCOL and sess_msg.kind == SessMsg.KIND_HELLO_REQ:
+            hellos.append(sess_msg)
+            if len(hellos) == 1:
+                return False
+        return await original(peer_id, protocol_id, sess_msg)
+    alice_conn.send_session = _first_hello_fails
+
+    async def _runner():
+        await sm.initiate(bob_peer_id, ["/ip4/127.0.0.1/tcp/0"])
+        await asyncio.sleep(0)
+        await sm.tick()
+        assert sm.get_session(bob_peer_id).state == SessionState.CONNECTING
+        dropped = await sm.on_peer_disconnected(bob_peer_id)
+        gate = sm.get_session(bob_peer_id)._next_dial_at
+        await sm.tick(gate)
+        await asyncio.sleep(0)
+        await sm.tick(gate)
+        return dropped
+    dropped = _run(_runner())
+    assert dropped == []
+    assert bob_peer_id not in sm._quarantine
+    assert sm.get_session(bob_peer_id).state == SessionState.HELLO_SENT
+    assert len(hellos) == 2
 
 
 # KNOWN is not an in-flight handshake on inbound
