@@ -10,6 +10,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/libp2p/go-libp2p/core/network"
@@ -22,6 +23,9 @@ import (
 // request made after a new connection (again) only refreshes what is remembered: it does
 // not bring back a relay that was given up while it ran.
 func reserveRelaySlot(ctx context.Context, ni *NodeInstance, relayInfo peer.AddrInfo, again bool) (*client.Reservation, error) {
+	if bestConnRank(ni, relayInfo.ID) != connRankDirect {
+		return nil, errRelayOnlyThroughACircuit
+	}
 	ni.relayAskMutex.Lock()
 	defer ni.relayAskMutex.Unlock()
 
@@ -38,6 +42,12 @@ func reserveRelaySlot(ctx context.Context, ni *NodeInstance, relayInfo peer.Addr
 	ni.relaySlotMutex.Unlock()
 	return reservation, nil
 }
+
+// errRelayOnlyThroughACircuit says that no slot was asked because every connection to the
+// relay goes through another relay. The relay refuses a reservation made that way, and
+// over a limited circuit the library does not even ask: it waits for a direct connection
+// for the whole time of the request.
+var errRelayOnlyThroughACircuit = errors.New("no connection to the relay that is not relayed, and a slot is not reserved through another relay")
 
 // forgetRelaySlot drops what is remembered of the slot on pid, or of any slot when pid is
 // empty, and with it the circuit addresses of the instance through that relay: nobody

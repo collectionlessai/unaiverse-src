@@ -127,8 +127,10 @@ const ProbeDialTimeout = 10 * time.Second
 // probe peer is still connected, so AutoNAT never runs out of dial-back servers.
 const ProbeMaintainInterval = 2 * time.Minute
 
-// RelayReservationTimeout is the timeout for reserving a slot on a relay node.
-const RelayReservationTimeout = 60 * time.Second
+// RelayReservationTimeout is the timeout for reserving a slot on a relay node. The request is
+// one exchange on a connection that is already open, and those of the live round took a
+// quarter of a second; the Python node waits for it in its main loop.
+const RelayReservationTimeout = 10 * time.Second
 
 // AutoRelayBackoff is how long AutoRelay leaves a relay alone after an attempt to reserve
 // on it. The library counts the successful attempts too, and its default is one hour: with

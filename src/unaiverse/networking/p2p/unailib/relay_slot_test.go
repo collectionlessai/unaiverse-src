@@ -4,16 +4,20 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/libp2p/go-libp2p"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
 	libp2pproto "github.com/libp2p/go-libp2p/core/protocol"
+	"github.com/libp2p/go-libp2p/p2p/protocol/circuitv2/client"
+	relayv2 "github.com/libp2p/go-libp2p/p2p/protocol/circuitv2/relay"
 	ma "github.com/multiformats/go-multiaddr"
 )
 
@@ -299,5 +303,84 @@ func TestHostListensForCircuitsWithNoListenOfOurs(t *testing.T) {
 	}
 	if n := circuitListeners(member.host); n != 1 {
 		t.Errorf("a reservation changed the circuit listeners of the host: %d", n)
+	}
+}
+
+// newCircuitOnlyWorld starts a world host that the member reaches only through another
+// relay, on a limited circuit: a member that joined while it had no direct path.
+func newCircuitOnlyWorld(t *testing.T, member *NodeInstance) host.Host {
+	t.Helper()
+	world := newWorldBehind(t, member, true)
+	conns := member.host.Network().ConnsToPeer(world.ID())
+	if len(conns) != 1 || !conns[0].Stat().Limited {
+		t.Fatalf("expected one limited connection to the world, got %v", conns)
+	}
+	return world
+}
+
+// newWorldBehind starts a world host that the member reaches only through another relay,
+// one with the limits of the library or one with none.
+func newWorldBehind(t *testing.T, member *NodeInstance, limited bool) host.Host {
+	t.Helper()
+	world, err := libp2p.New(
+		libp2p.ListenAddrStrings("/ip4/127.0.0.1/tcp/0"),
+		libp2p.ForceReachabilityPublic(),
+		libp2p.EnableRelayService(relayv2.WithInfiniteLimits()),
+	)
+	if err != nil {
+		t.Fatalf("world: %v", err)
+	}
+	t.Cleanup(func() { world.Close() })
+	relayedLink(t, newChatRelay(t, limited), member.host, world)
+	return world
+}
+
+// What the library does with a request for a slot on a relay that is reached only through
+// another relay: it waits for a direct connection to appear, and asks nothing until then.
+// With nothing that makes one (no hole punching, no reversal) it waits for the whole time
+// of the request, which was a minute.
+func TestReservationThroughACircuitWaitsForADirectConnection(t *testing.T) {
+	member := newSlotMember(t)
+	world := newCircuitOnlyWorld(t, member)
+
+	const budget = 2 * time.Second
+	ctx, cancel := context.WithTimeout(context.Background(), budget)
+	defer cancel()
+	start := time.Now()
+	_, err := client.Reserve(ctx, member.host, peer.AddrInfo{ID: world.ID()})
+	took := time.Since(start)
+	if err == nil {
+		t.Fatalf("a slot was granted through a circuit")
+	}
+	if took < budget || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("the request ended after %v with %v: it did not wait for its time", took, err)
+	}
+	if conns := member.host.Network().ConnsToPeer(world.ID()); len(conns) != 1 || !conns[0].Stat().Limited {
+		t.Errorf("the connections to the world changed: %v", conns)
+	}
+}
+
+// A slot is not asked on a relay the member reaches only through another relay: the request
+// is refused at once and says why, and no relay is remembered.
+func TestReservationThroughACircuitIsRefusedAtOnce(t *testing.T) {
+	for name, limited := range map[string]bool{"a limited circuit": true, "a circuit with no limits": false} {
+		t.Run(name, func(t *testing.T) {
+			member := newSlotMember(t)
+			world := newWorldBehind(t, member, limited)
+
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			start := time.Now()
+			_, err := reserveRelaySlot(ctx, member, peer.AddrInfo{ID: world.ID()}, false)
+			if took := time.Since(start); took > 500*time.Millisecond {
+				t.Errorf("the refusal took %v", took)
+			}
+			if !errors.Is(err, errRelayOnlyThroughACircuit) {
+				t.Errorf("a request through a circuit ended with %v", err)
+			}
+			if relay := rememberedRelay(member); relay != "" {
+				t.Errorf("a relay was remembered after a refusal: %s", relay)
+			}
+		})
 	}
 }
