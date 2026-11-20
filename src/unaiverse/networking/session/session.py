@@ -300,6 +300,9 @@ class Session:
         self._reconnect_substep: str = ""   # "" | "redial" | "resume_sent"
         # True while RECONNECTING because the peer said it lost the Session (responder only).
         self._peer_lost_session: bool = False
+        # When RECONNECTING began and its window, which bound the restarts of that window.
+        self._reconnecting_since: Optional[float] = None
+        self._reconnect_window_s: float = _TIMEOUT_RECONNECT_S
         self._reconnect_attempts: int = 0
         self._next_redial_at: float = 0.0   # monotonic gate, set/advanced by tick_dial
         self._resume_nonce: bytes = b""
@@ -1195,17 +1198,30 @@ class Session:
             return self._enter_reconnecting(_TIMEOUT_RECONNECT_S)
         # The window of a peer that lost the Session is not restarted: a transport loss
         # adds nothing to wait for.
+        # The whole time in RECONNECTING never passes twice the window: a link that keeps
+        # coming and going would otherwise keep the Session there with no way back.
         if self.state == SessionState.RECONNECTING and not self._peer_lost_session:
-            ran = time.monotonic() - self._state_entered_at
-            self._state_entered_at = time.monotonic()
-            log.session(f"{self!r} transport lost again {ran:.1f}s into the reconnect window, "
-                        f"which starts over ({self._timeout_s}s)", sub=self._sub)
+            now = time.monotonic()
+            ran = now - self._state_entered_at
+            self._state_entered_at = now
+            window = self._reconnect_window_s if self._reconnecting_since is not None else self._timeout_s
+            if self._reconnecting_since is not None:
+                self._timeout_s = max(0.0, min(window, self._reconnecting_since + 2 * window - now))
+            if self._timeout_s < window:
+                log.session(f"{self!r} transport lost again {ran:.1f}s into the reconnect window, "
+                            f"which starts over cut short to {self._timeout_s:.1f}s: "
+                            f"{2 * window}s in RECONNECTING at most", sub=self._sub)
+            else:
+                log.session(f"{self!r} transport lost again {ran:.1f}s into the reconnect window, "
+                            f"which starts over ({window}s)", sub=self._sub)
         return None
 
     def _enter_reconnecting(self, window_s: float, peer_lost_session: bool = False) -> SessionEvent:
         """ESTABLISHED → RECONNECTING with the given window. The event is the same whatever
         the cause, so the layers above see one RECONNECTING and then its outcome."""
         self._set_state(SessionState.RECONNECTING, window_s)
+        self._reconnecting_since = self._state_entered_at
+        self._reconnect_window_s = window_s
         self._peer_lost_session = peer_lost_session
         self._reconnect_substep = "redial"
         self._reconnect_attempts = 0

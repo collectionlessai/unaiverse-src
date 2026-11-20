@@ -710,6 +710,64 @@ def test_transport_loss_does_not_restart_the_window_of_a_lost_session(bob_conn, 
     assert ev is not None and ev.data["reason"] == "peer_lost_session"
 
 
+def _reconnecting_for(sess, seconds):
+    """Lose the link of an ESTABLISHED Session and move the time it entered RECONNECTING,
+    and the start of its current window, `seconds` into the past."""
+    sess._set_state(SessionState.ESTABLISHED, None)
+    assert sess.on_transport_disconnected().type == SessionEventType.RECONNECTING
+    sess._reconnecting_since -= seconds
+    sess._state_entered_at -= seconds
+
+
+@pytest.mark.parametrize("window", [45.0, 120.0])
+def test_reconnect_window_starts_over_within_twice_the_window(alice_conn, alice_peer_id, bob_peer_id,
+                                                              monkeypatch, window):
+    """A transport lost again starts the window over, but the whole time in RECONNECTING
+    never passes twice the window: 90 s with the window of Python, 240 s with the 120 s
+    the browser sets. The log says when the ceiling cut the window short."""
+    lines = []
+    monkeypatch.setattr(session_mod.log, "session", lambda msg, *a, **k: lines.append(msg))
+    monkeypatch.setattr(session_mod, "_TIMEOUT_RECONNECT_S", window)
+    sess = _mk(bob_peer_id, SessionRole.INITIATOR, alice_conn, alice_peer_id)
+
+    _reconnecting_for(sess, 0.25 * window)
+    assert sess.on_transport_disconnected() is None
+    assert sess._timeout_s == window                 # far from the ceiling: a whole window
+    assert "which starts over" in lines[-1] and "cut short" not in lines[-1]
+
+    _reconnecting_for(sess, 1.75 * window)
+    assert sess.on_transport_disconnected() is None
+    restarted = sess._state_entered_at
+    assert sess._timeout_s == pytest.approx(0.25 * window, abs=0.5)
+    assert "cut short" in lines[-1] and f"{2 * window}s in RECONNECTING at most" in lines[-1]
+    assert sess.check_timeout(restarted + 0.25 * window - 1.0) is None
+    ev = sess.check_timeout(restarted + 0.25 * window + 1.0)
+    assert ev is not None and ev.type == SessionEventType.LOST
+    assert ev.data["reason"] == "grace_period_expired"
+
+
+def test_reconnect_window_past_its_ceiling_does_not_start_over(alice_conn, alice_peer_id, bob_peer_id):
+    """A loss that comes when the ceiling has passed leaves nothing to wait for."""
+    sess = _mk(bob_peer_id, SessionRole.INITIATOR, alice_conn, alice_peer_id)
+    window = session_mod._TIMEOUT_RECONNECT_S
+    _reconnecting_for(sess, 2 * window + 5.0)
+    sess.on_transport_disconnected()
+    assert sess._timeout_s == 0.0
+    ev = sess.check_timeout(sess._state_entered_at + 0.1)
+    assert ev is not None and ev.type == SessionEventType.LOST
+
+
+def test_each_reconnect_has_a_ceiling_of_its_own(alice_conn, alice_peer_id, bob_peer_id):
+    """A Session that came back and lost its link again counts from the new loss."""
+    sess = _mk(bob_peer_id, SessionRole.INITIATOR, alice_conn, alice_peer_id)
+    window = session_mod._TIMEOUT_RECONNECT_S
+    _reconnecting_for(sess, 1.9 * window)
+    sess._resume_established()
+    _reconnecting_for(sess, 0.0)
+    sess.on_transport_disconnected()
+    assert sess._timeout_s == window
+
+
 def test_goaway_inside_the_window_of_a_lost_session_closes(bob_conn, bob_peer_id, alice_peer_id):
     """The negative PONG may have overtaken the GOAWAY of a peer that is closing: the
     GOAWAY that follows must still end the Session as CLOSED, not leave it to LOST."""
