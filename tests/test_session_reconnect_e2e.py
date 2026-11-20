@@ -324,9 +324,7 @@ def test_loss_seen_by_both_sides_resumes_each_of_them_once(
         bob_events = await apump(bob_inbox, sm_bob)
         assert [e.type for e in bob_events] == [SessionEventType.RESUMED]
 
-        await sm_alice.tick()                                # the re-dial is launched
-        await asyncio.sleep(0.05)
-        await sm_alice.tick()                                # reaped: RESUME sent
+        await sm_alice.tick()                                # the probe was the sign: RESUME sent
         assert await apump(bob_inbox, sm_bob) == []          # acked, no second RESUMED
         alice_events = await apump(alice_inbox, sm_alice)
         assert [e.type for e in alice_events] == [SessionEventType.RESUMED]
@@ -334,6 +332,51 @@ def test_loss_seen_by_both_sides_resumes_each_of_them_once(
         a_sess, b_sess = sm_alice.get_session(bob_peer_id), sm_bob.get_session(alice_peer_id)
         assert a_sess.state == SessionState.ESTABLISHED and b_sess.state == SessionState.ESTABLISHED
         assert a_sess.session_id == sid == b_sess.session_id
+
+    asyncio.run(_scenario())
+
+
+def test_initiator_whose_dials_fail_resumes_on_the_connection_the_responder_opened(
+        bidirectional_fakeconns, alice_peer_id, bob_peer_id):
+    """The responder was stopped for a while and noticed nothing: its Session is
+    ESTABLISHED. It moved meanwhile (another relay), so every dial of the initiator, which
+    goes to the addresses it started with, fails. The link comes back from the other side:
+    the keep-alive PING of the responder opens a connection toward the initiator. On that
+    PING the initiator sends RESUME and is back, with no dial that succeeded. It used to
+    answer the PING, go on dialling and lose the Session at the end of its window, with
+    the responder still holding it."""
+    alice_conn, bob_conn, alice_inbox, bob_inbox = bidirectional_fakeconns
+    alice_conn.connect_returns = (bob_peer_id, False)
+
+    async def _scenario():
+        sm_alice = _make_sm(alice_conn, alice_peer_id, "alice")
+        sm_bob = _make_sm(bob_conn, bob_peer_id, "bob")
+        await establish_pair(sm_alice, sm_bob, alice_inbox, bob_inbox, bob_peer_id)
+        a_sess, b_sess = sm_alice.get_session(bob_peer_id), sm_bob.get_session(alice_peer_id)
+        sid = a_sess.session_id
+
+        alice_conn.connect_returns = (None, False)           # the responder moved
+        dials = len(alice_conn.connect_calls)
+        ev_a = await sm_alice.on_peer_disconnected(bob_peer_id)
+        assert [e.type for e in ev_a] == [SessionEventType.RECONNECTING]
+        await sm_alice.tick()
+        await asyncio.sleep(0.05)
+        await sm_alice.tick()                                # a redial, failed
+        assert len(alice_conn.connect_calls) == dials + 1
+        assert a_sess.state == SessionState.RECONNECTING and not bob_inbox
+
+        b_sess._last_ping_at -= session_mod._KEEPALIVE_PERIOD_S + 1.0
+        await sm_bob.tick()                                  # the keep-alive of the responder
+        assert await apump(alice_inbox, sm_alice) == []      # PONG ok=true, and the sign
+        await sm_alice.tick()                                # RESUME on that connection
+        assert len(alice_conn.connect_calls) == dials + 1    # no dial was made for it
+        assert await apump(bob_inbox, sm_bob) == []          # PONG taken, RESUME acked: no event
+        alice_events = await apump(alice_inbox, sm_alice)
+        assert [e.type for e in alice_events] == [SessionEventType.RESUMED]
+
+        assert a_sess.state == SessionState.ESTABLISHED and b_sess.state == SessionState.ESTABLISHED
+        assert a_sess.session_id == sid == b_sess.session_id
+        assert b_sess._consecutive_ping_failures == 0 and b_sess._ping_in_flight is False
 
     asyncio.run(_scenario())
 

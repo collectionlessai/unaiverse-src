@@ -553,7 +553,7 @@ def test_transport_reconnect_does_not_blindly_resume(alice_conn, alice_peer_id, 
     ev = sess.on_transport_reconnected()
     assert ev is None
     assert sess.state == SessionState.RECONNECTING
-    assert sess._reconnect_substep == "redial"
+    assert sess._resume_due is True
 
 
 def test_grace_expiry_emits_lost(alice_conn, alice_peer_id, bob_peer_id):
@@ -1171,6 +1171,333 @@ def test_tick_dial_initiator_redials_and_sends_resume(alice_conn, alice_peer_id,
     assert sess._reconnect_substep == "resume_sent"
     last = _last_sent(alice_conn, SESSION_CONTROL_PROTOCOL)
     assert last is not None and last[2].kind == SessMsg.KIND_RESUME
+
+
+# The way back on a transport that the peer re-opened
+
+_BOB_ADDR = "/ip4/127.0.0.1/tcp/0/p2p/"
+
+
+def _reconnecting_initiator(alice_conn, alice_peer_id, bob_peer_id, reject_relay=False):
+    """An initiator that lost its transport and whose own dial reaches nobody: the
+    addresses it holds are the ones the Session started with."""
+    sess = Session(
+        peer_id=bob_peer_id, role=SessionRole.INITIATOR, p2p=alice_conn,
+        p2p_name=NodeConn.P2P_PUBLIC, local_peer_id=alice_peer_id,
+        local_node_id="local-node", local_profile_factory=lambda: {},
+        addresses=[_BOB_ADDR + bob_peer_id], reject_relay=reject_relay,
+    )
+    sess._set_state(SessionState.ESTABLISHED, None)
+    sess.session_id = b"\x05" * 16
+    alice_conn.connect_returns = (None, False)
+    assert sess.on_transport_disconnected().type == SessionEventType.RECONNECTING
+    return sess
+
+
+def _resumes(conn):
+    return [e[2] for e in conn.sent
+            if e[1] == SESSION_CONTROL_PROTOCOL and e[2].kind == SessMsg.KIND_RESUME]
+
+
+def _resume_ack(sess, nonce):
+    return SessMsg(SessMsg.KIND_RESUME_ACK, {"session_id": sess.session_id, "nonce": nonce,
+                                             "accepted": True, "reason_code": OK})
+
+
+async def _fail_the_dial_in_flight(sess, now):
+    """Run the redial that was launched and reap its failure."""
+    await asyncio.sleep(0)
+    await sess.tick_dial(now)
+
+
+def test_transport_back_sends_resume_with_no_dial_before_it(alice_conn, alice_peer_id, bob_peer_id):
+    """The peer re-opened the connection itself. The initiator sends RESUME on it at
+    the next tick: a dial of its own would go to the addresses it started with."""
+    async def _runner():
+        sess = _reconnecting_initiator(alice_conn, alice_peer_id, bob_peer_id)
+        now = time.monotonic()
+        await sess.tick_dial(now)                    # the redial of the loss
+        await _fail_the_dial_in_flight(sess, now)    # ...which reaches nobody
+        dials = len(alice_conn.connect_calls)
+        assert _resumes(alice_conn) == []
+
+        sess.on_transport_reconnected()
+        await sess.tick_dial(now + 0.1)
+        return sess, dials
+    sess, dials = asyncio.run(_runner())
+    assert len(_resumes(alice_conn)) == 1
+    assert len(alice_conn.connect_calls) == dials    # no dial was made for it
+    assert sess._reconnect_substep == "resume_sent"
+    assert sess.state == SessionState.RECONNECTING   # the answer decides, not the signal
+
+
+def test_resume_on_a_transport_that_came_back_does_not_wait_for_the_dial_in_flight(
+        alice_conn, alice_peer_id, bob_peer_id):
+    """A redial that is still running holds nothing: the RESUME leaves at once, and
+    its answer brings the Session back while the dial is still in flight."""
+    async def _runner():
+        gate = asyncio.Event()
+
+        async def _slow_connect(addresses):
+            alice_conn.connect_calls.append(list(addresses))
+            await gate.wait()
+            return None, False
+        alice_conn.connect = _slow_connect
+
+        sess = _reconnecting_initiator(alice_conn, alice_peer_id, bob_peer_id)
+        now = time.monotonic()
+        await sess.tick_dial(now)
+        await asyncio.sleep(0)
+        assert sess._dial_task is not None and not sess._dial_task.done()
+
+        sess.on_transport_reconnected()
+        await sess.tick_dial(now + 0.1)
+        sent = _resumes(alice_conn)
+        assert len(sent) == 1
+        events = await sess.process_inbound(SESSION_CONTROL_PROTOCOL,
+                                            _resume_ack(sess, sent[0].fields["nonce"]))
+        gate.set()
+        await asyncio.sleep(0)
+        late = await sess.tick_dial(now + 0.2)       # the dial ends after the resume
+        return sess, events, late
+    sess, events, late = asyncio.run(_runner())
+    assert [e.type for e in events] == [SessionEventType.RESUMED]
+    assert late == [] and sess.state == SessionState.ESTABLISHED
+
+
+def test_dial_that_fails_does_not_cancel_a_resume_in_flight(alice_conn, alice_peer_id, bob_peer_id):
+    """The RESUME left on the connection the peer opened, and the redial that was
+    running fails a moment later. The answer to that RESUME must still be taken."""
+    async def _runner():
+        gate = asyncio.Event()
+
+        async def _slow_connect(addresses):
+            alice_conn.connect_calls.append(list(addresses))
+            await gate.wait()
+            return None, False
+        alice_conn.connect = _slow_connect
+
+        sess = _reconnecting_initiator(alice_conn, alice_peer_id, bob_peer_id)
+        now = time.monotonic()
+        await sess.tick_dial(now)
+        await asyncio.sleep(0)
+        sess.on_transport_reconnected()
+        await sess.tick_dial(now + 0.1)
+        nonce = _resumes(alice_conn)[0].fields["nonce"]
+
+        gate.set()
+        await asyncio.sleep(0)
+        await sess.tick_dial(now + 0.2)              # reaps the failure of the dial
+        assert sess._reconnect_substep == "resume_sent"
+        return sess, await sess.process_inbound(SESSION_CONTROL_PROTOCOL, _resume_ack(sess, nonce))
+    sess, events = asyncio.run(_runner())
+    assert [e.type for e in events] == [SessionEventType.RESUMED]
+    assert sess.state == SessionState.ESTABLISHED
+
+
+def test_dial_that_succeeds_while_a_resume_is_in_flight_sends_no_second_one(
+        alice_conn, alice_peer_id, bob_peer_id):
+    async def _runner():
+        gate = asyncio.Event()
+
+        async def _slow_connect(addresses):
+            alice_conn.connect_calls.append(list(addresses))
+            await gate.wait()
+            return bob_peer_id, False
+        alice_conn.connect = _slow_connect
+
+        sess = _reconnecting_initiator(alice_conn, alice_peer_id, bob_peer_id)
+        now = time.monotonic()
+        await sess.tick_dial(now)
+        await asyncio.sleep(0)
+        sess.on_transport_reconnected()
+        await sess.tick_dial(now + 0.1)
+        gate.set()
+        await asyncio.sleep(0)
+        await sess.tick_dial(now + 0.2)
+        return sess
+    sess = asyncio.run(_runner())
+    assert len(_resumes(alice_conn)) == 1
+    assert sess._reconnect_substep == "resume_sent"
+
+
+def test_unanswered_resume_on_a_transport_that_came_back_is_followed_by_a_dial(
+        alice_conn, alice_peer_id, bob_peer_id):
+    """No answer within the wait: the initiator is back to its dials, at once and not
+    at the end of the backoff of the dial that failed before."""
+    wait = session_mod._RESUME_ACK_TIMEOUT_S
+
+    async def _runner():
+        sess = _reconnecting_initiator(alice_conn, alice_peer_id, bob_peer_id)
+        failed_at = time.monotonic()
+        for _ in range(4):                           # failures that push the backoff out
+            failed_at = max(failed_at, sess._next_redial_at)
+            await sess.tick_dial(failed_at)
+            await _fail_the_dial_in_flight(sess, failed_at)
+        gate_of_the_backoff = sess._next_redial_at
+        dials = len(alice_conn.connect_calls)
+
+        back_at = failed_at + 1.0
+        assert back_at + wait + 0.1 < gate_of_the_backoff
+        sess.on_transport_reconnected()
+        await sess.tick_dial(back_at)
+        await asyncio.sleep(0)                       # a dial launched here would run now
+        await sess.tick_dial(back_at + wait - 0.1)
+        await asyncio.sleep(0)
+        inside_the_wait = len(alice_conn.connect_calls)
+        await sess.tick_dial(back_at + wait + 0.1)
+        await asyncio.sleep(0)
+        return sess, dials, inside_the_wait
+    sess, dials, inside_the_wait = asyncio.run(_runner())
+    assert inside_the_wait == dials
+    assert len(alice_conn.connect_calls) == dials + 1
+    assert sess._reconnect_substep == "redial"
+
+
+def test_resume_sent_again_inside_its_wait_keeps_its_nonce(alice_conn, alice_peer_id, bob_peer_id):
+    """Two signs that the transport is back, close to each other: the second RESUME is
+    the first one again, so that the answer to either copy is taken."""
+    async def _runner():
+        sess = _reconnecting_initiator(alice_conn, alice_peer_id, bob_peer_id)
+        now = time.monotonic()
+        sess.on_transport_reconnected()
+        await sess.tick_dial(now)
+        sess.on_transport_reconnected()
+        await sess.tick_dial(now + 0.5)
+        sent = _resumes(alice_conn)
+        events = await sess.process_inbound(SESSION_CONTROL_PROTOCOL,
+                                            _resume_ack(sess, sent[0].fields["nonce"]))
+        return sent, events
+    sent, events = asyncio.run(_runner())
+    assert len(sent) == 2 and sent[0].fields["nonce"] == sent[1].fields["nonce"]
+    assert [e.type for e in events] == [SessionEventType.RESUMED]
+
+
+def test_resume_whose_send_fails_falls_back_to_the_dial(alice_conn, alice_peer_id, bob_peer_id):
+    async def _runner():
+        sess = _reconnecting_initiator(alice_conn, alice_peer_id, bob_peer_id)
+        now = time.monotonic()
+        await sess.tick_dial(now)
+        await _fail_the_dial_in_flight(sess, now)
+        dials = len(alice_conn.connect_calls)
+
+        async def _refused(peer_id, protocol_id, sess_msg):
+            return False
+        alice_conn.send_session = _refused
+        sess.on_transport_reconnected()
+        await sess.tick_dial(now + 0.1)
+        await asyncio.sleep(0)
+        return sess, dials
+    sess, dials = asyncio.run(_runner())
+    assert sess._reconnect_substep == "redial"
+    assert len(alice_conn.connect_calls) == dials + 1
+
+
+def test_ping_of_the_peer_makes_a_reconnecting_initiator_resume(alice_conn, alice_peer_id, bob_peer_id):
+    """The peer still holds the Session and pings on it, over a connection the pools
+    never reported. The PING is answered, and it is also the sign that the transport
+    works: the RESUME follows at the next tick."""
+    async def _runner():
+        sess = _reconnecting_initiator(alice_conn, alice_peer_id, bob_peer_id)
+        now = time.monotonic()
+        await sess.tick_dial(now)
+        await _fail_the_dial_in_flight(sess, now)
+        ping = SessMsg(SessMsg.KIND_PING, {"session_id": sess.session_id, "nonce": b"p1"})
+        events = await sess.process_inbound(SESSION_CONTROL_PROTOCOL, ping)
+        pong = _last_sent(alice_conn, SESSION_CONTROL_PROTOCOL)[2]
+        await sess.tick_dial(now + 0.1)
+        return sess, events, pong
+    sess, events, pong = asyncio.run(_runner())
+    assert events == [] and sess.state == SessionState.RECONNECTING
+    assert pong.kind == SessMsg.KIND_PONG and pong.fields["ok"] is True
+    assert len(_resumes(alice_conn)) == 1
+
+
+def test_ping_for_another_session_starts_no_resume(alice_conn, alice_peer_id, bob_peer_id):
+    async def _runner():
+        sess = _reconnecting_initiator(alice_conn, alice_peer_id, bob_peer_id)
+        now = time.monotonic()
+        await sess.tick_dial(now)
+        await _fail_the_dial_in_flight(sess, now)
+        ping = SessMsg(SessMsg.KIND_PING, {"session_id": b"\x99" * 16, "nonce": b"p1"})
+        await sess.process_inbound(SESSION_CONTROL_PROTOCOL, ping)
+        pong = _last_sent(alice_conn, SESSION_CONTROL_PROTOCOL)[2]
+        await sess.tick_dial(now + 0.1)
+        return pong
+    pong = asyncio.run(_runner())
+    assert pong.fields["ok"] is False
+    assert _resumes(alice_conn) == []
+
+
+def test_ping_of_the_peer_makes_a_reconnecting_responder_probe_at_once(bob_conn, bob_peer_id,
+                                                                       alice_peer_id):
+    """The same sign on the other role: a responder has no RESUME to send, it asks."""
+    rtt = session_mod._PING_RTT_TIMEOUT_S
+
+    async def _runner():
+        sess = _reconnecting_responder(bob_conn, bob_peer_id, alice_peer_id)
+        now = time.monotonic()
+        await _tick_and_let_the_probe_run(sess, now)             # the probe of the loss
+        await _tick_and_let_the_probe_run(sess, now + rtt + 0.1)   # it got no answer
+        asked = len(_pings(bob_conn))
+        await _tick_and_let_the_probe_run(sess, now + rtt + 0.2)
+        assert len(_pings(bob_conn)) == asked        # the next one is not due before its period
+        ping = SessMsg(SessMsg.KIND_PING, {"session_id": sess.session_id, "nonce": b"p1"})
+        await sess.process_inbound(SESSION_CONTROL_PROTOCOL, ping)
+        await _tick_and_let_the_probe_run(sess, now + rtt + 0.3)
+        return asked
+    asked = asyncio.run(_runner())
+    assert len(_pings(bob_conn)) == asked + 1
+
+
+def test_initiator_that_refuses_relays_redials_when_the_transport_comes_back(
+        alice_conn, alice_peer_id, bob_peer_id):
+    """What came back may be a relay circuit, and only a dial says which path it is: a
+    Session that refuses relays keeps to its dial, started at once."""
+    async def _runner():
+        sess = _reconnecting_initiator(alice_conn, alice_peer_id, bob_peer_id, reject_relay=True)
+        now = time.monotonic()
+        for _ in range(3):
+            await sess.tick_dial(now)
+            await _fail_the_dial_in_flight(sess, now)
+            now = sess._next_redial_at
+        dials = len(alice_conn.connect_calls)
+        now -= 1.0                                   # before the gate of the backoff
+        await sess.tick_dial(now)
+        await asyncio.sleep(0)
+        assert len(alice_conn.connect_calls) == dials
+        sess.on_transport_reconnected()
+        await sess.tick_dial(now)
+        await asyncio.sleep(0)
+        return dials
+    dials = asyncio.run(_runner())
+    assert _resumes(alice_conn) == []
+    assert len(alice_conn.connect_calls) == dials + 1
+
+
+def test_sign_that_follows_the_dial_of_an_initiator_that_refuses_relays_costs_no_second_dial(
+        alice_conn, alice_peer_id, bob_peer_id):
+    """Its dial succeeded and its RESUME is in flight when the pools report the peer that
+    dial has just reached. The RESUME is left to its answer: the sign used to send the
+    Session back to its dial, and the answer on its way was then not taken."""
+    async def _runner():
+        sess = _reconnecting_initiator(alice_conn, alice_peer_id, bob_peer_id, reject_relay=True)
+        alice_conn.connect_returns = (bob_peer_id, False)
+        now = time.monotonic()
+        await sess.tick_dial(now)
+        await asyncio.sleep(0)
+        await sess.tick_dial(now)                    # the dial is reaped: RESUME
+        sent = _resumes(alice_conn)
+        dials = len(alice_conn.connect_calls)
+        sess.on_transport_reconnected()
+        await sess.tick_dial(now + 0.1)
+        await asyncio.sleep(0)
+        events = await sess.process_inbound(SESSION_CONTROL_PROTOCOL,
+                                            _resume_ack(sess, sent[0].fields["nonce"]))
+        return sent, dials, events
+    sent, dials, events = asyncio.run(_runner())
+    assert len(sent) == 1 and len(alice_conn.connect_calls) == dials
+    assert [e.type for e in events] == [SessionEventType.RESUMED]
 
 
 # Out-of-order / duplicate messages

@@ -754,24 +754,23 @@ def test_session_lost_while_peer_still_in_pool_purges_and_quarantines():
 
 def test_added_diff_kicks_resume_for_reconnecting_session():
     """A peer that reappears in the pool diff while its session is RECONNECTING
-    must get the on_peer_reconnected signal (re-arming the immediate RESUME)."""
+    must get the on_peer_reconnected signal, which starts the way back at once: the
+    Session here is a responder, so its probe becomes due."""
     async def _scenario():
         node, conn, remote_sm, remote_inbox = _agent_pair()
         await _establish_inbound(node, conn, remote_sm, remote_inbox)
 
         await conn._sm_public.on_peer_disconnected(REMOTE_PEER)
         sess = conn._sm_public.get_session(REMOTE_PEER)
-        assert sess.state == SessionState.RECONNECTING
-        # Dirty the recovery knobs so the reconnect kick is observable.
-        sess._reconnect_substep = ""
-        sess._next_redial_at = time.monotonic() + 999.0
+        assert sess.state == SessionState.RECONNECTING and sess.role == SessionRole.RESPONDER
+        # As after a probe that left a moment ago: the next one is a period away.
+        sess._last_ping_at = time.monotonic()
 
         conn.peer_id_to_pool[REMOTE_PEER] = NodeConn.IN_PUBLIC
         conn.next_added = {NodeConn.IN_PUBLIC: {REMOTE_PEER}}
         await node._Node__handle_network_connections()
 
-        assert sess._reconnect_substep == "redial"
-        assert sess._next_redial_at == 0.0
+        assert sess._last_ping_at == float("-inf")
 
     asyncio.run(_scenario())
 

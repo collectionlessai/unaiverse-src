@@ -297,6 +297,10 @@ class Session:
         self._reconnect_attempts: int = 0
         self._next_redial_at: float = 0.0   # monotonic gate, set/advanced by tick_dial
         self._resume_nonce: bytes = b""
+        # When the RESUME in flight is given up, and whether one is owed on a transport
+        # that came back without a dial of ours (see _transport_is_back).
+        self._resume_deadline: float = 0.0
+        self._resume_due: bool = False
 
         # World-join specifics.
         self.grant_id: bytes = b""
@@ -350,9 +354,25 @@ class Session:
     async def tick_dial(self, now: Optional[float] = None) -> List[SessionEvent]:
         """Reap a finished dial (→ HELLO / RESUME / retry / FAILED) and launch the next one
         when the backoff gate opens. Replaces _dial_then_hello, tick_reconnect and
-        _redial_and_resume: the dial is a task, so no other Session is starved while it runs."""
+        _redial_and_resume: the dial is a task, so no other Session is starved while it runs.
+        While RECONNECTING it first sends the RESUME owed to a transport that came back by
+        itself (see _transport_is_back), which waits for no dial."""
         if now is None:
             now = time.monotonic()
+
+        # The transport came back without a dial of ours: the RESUME goes on it now,
+        # whatever the dial in flight is doing, and that dial is left to end by itself.
+        if self._resume_due:
+            self._resume_due = False
+            if self.state == SessionState.RECONNECTING:
+                if await self._send_resume(now):
+                    # Should no answer come, the dial is tried as soon as the wait is over.
+                    self._next_redial_at = min(self._next_redial_at, self._resume_deadline)
+                    log.session(f"{self!r} RESUME sent on the transport that came back", sub=self._sub)
+                else:
+                    self._reconnect_substep = "redial"
+                    self._next_redial_at = now
+                    log.session(f"{self!r} RESUME send failed, re-dialling", sub=self._sub)
 
         # (a) Reap a completed dial.
         task = self._dial_task
@@ -382,7 +402,7 @@ class Session:
             self._start_dial()
         elif self.state == SessionState.RECONNECTING:
             # A RESUME that wasn't acked within its window → fall back to another re-dial.
-            if self._reconnect_substep == "resume_sent" and now >= self._next_redial_at:
+            if self._reconnect_substep == "resume_sent" and now >= self._resume_deadline:
                 self._reconnect_substep = "redial"
             if self._reconnect_substep == "redial" and now >= self._next_redial_at:
                 self._start_dial()
@@ -415,23 +435,37 @@ class Session:
         if peer_id is not None and through_relay and self._reject_relay:
             peer_id = None   # relay-only reconnect disallowed; treat it as a failed dial
         if peer_id is None:
+            # The substep is left alone: a RESUME may be in flight on a transport that came
+            # back while this dial ran, and its answer is still to be taken.
             self._reconnect_attempts += 1
             delay = min(_RETRY_BASE_S * (2 ** (self._reconnect_attempts - 1)), _RETRY_CAP_S)
             self._next_redial_at = now + delay
-            self._reconnect_substep = "redial"
             log.session(f"{self!r} reconnect dial failed, next try in {delay:.1f}s", sub=self._sub)
             return []
         if peer_id != self.peer_id:
             self.peer_id = peer_id
+        if self._reconnect_substep == "resume_sent" and now < self._resume_deadline:
+            # That RESUME left while this dial ran. Its answer decides, and the dial is
+            # tried again when its wait is over.
+            self._next_redial_at = self._resume_deadline
+            return []
         # Transport back — try to RESUME the existing session before re-handshaking.
-        self._resume_nonce = secrets.token_bytes(8)
-        self._reconnect_substep = "resume_sent"
-        self._next_redial_at = now + _RESUME_ACK_TIMEOUT_S
-        await self._send_payload(SESSION_CONTROL_PROTOCOL, SessMsg(SessMsg.KIND_RESUME, {
-            "session_id": self.session_id, "nonce": self._resume_nonce,
-        }))
+        await self._send_resume(now)
+        self._next_redial_at = self._resume_deadline
         log.session(f"{self!r} reconnect dial ok, RESUME sent", sub=self._sub)
         return []
+
+    async def _send_resume(self, now: float) -> bool:
+        """Send RESUME on whatever transport there is and open the wait for its answer.
+        One is in flight at a time: sent again inside that wait it keeps its nonce, so
+        the answer to either copy is taken. Returns whether the transport accepted it."""
+        if self._reconnect_substep != "resume_sent":
+            self._resume_nonce = secrets.token_bytes(8)
+        self._reconnect_substep = "resume_sent"
+        self._resume_deadline = now + _RESUME_ACK_TIMEOUT_S
+        return await self._send_payload(SESSION_CONTROL_PROTOCOL, SessMsg(SessMsg.KIND_RESUME, {
+            "session_id": self.session_id, "nonce": self._resume_nonce,
+        }))
 
     async def _send_hello(self) -> List[SessionEvent]:
         self.nonce_a = secrets.token_bytes(_NONCE_BYTES)
@@ -907,6 +941,10 @@ class Session:
             "ok": ok,
         })):
             log.session(f"{self!r} PONG send failed", sub=self._sub)
+        # A PING that names this Session, read while reconnecting: the peer still holds
+        # it and the transport has just carried a frame of it.
+        if ok and self.state == SessionState.RECONNECTING:
+            self._transport_is_back("PING of the peer")
         return []
 
     def _on_pong(self, msg: SessMsg) -> Optional[SessionEvent]:
@@ -988,6 +1026,7 @@ class Session:
         self._ping_in_flight = False
         self._reconnect_substep = ""
         self._reconnect_attempts = 0
+        self._resume_due = False
         log.session(f"{self!r} session resumed → ESTABLISHED", sub=self._sub)
         # Carry the stored peer profile on the event so Node can re-enrol from RESUMED
         # without reaching into Session.remote_profile (a fast RESUME keeps it; only a
@@ -1011,6 +1050,7 @@ class Session:
         self.remote_profile = None
         self._reconnect_substep = ""
         self._reconnect_attempts = 0
+        self._resume_due = False
         self._consecutive_ping_failures = 0
         self._ping_in_flight = False
         return await self._send_hello()
@@ -1115,6 +1155,7 @@ class Session:
         self._reconnect_substep = "redial"
         self._reconnect_attempts = 0
         self._next_redial_at = 0.0   # re-dial on the next tick_dial
+        self._resume_due = False
         self._ping_in_flight = False
         self._last_ping_at = float("-inf")   # a responder probes on the next tick_keepalive
         log.session(f"{self!r} link lost, starting {window_s}s reconnect window", sub=self._sub)
@@ -1128,17 +1169,33 @@ class Session:
         has no RESUME to send: it probes at once on the connection that came back, and
         the answer decides (_on_pong)."""
         if self.state == SessionState.RECONNECTING:
-            self._reconnect_substep = "redial"
-            self._next_redial_at = 0.0   # send RESUME on the next tick_dial
-            if self._is_probing():
-                # Due on the next tick_keepalive, not at the next period. One probe in
-                # flight at a time: if one is, this one waits for its answer or for the
-                # end of its RTT window.
-                self._last_ping_at = float("-inf")
-                log.session(f"{self!r} transport reconnect signal → probing", sub=self._sub)
-            else:
-                log.session(f"{self!r} transport reconnect signal → attempting RESUME", sub=self._sub)
+            self._transport_is_back("transport reconnect signal")
         return None
+
+    def _transport_is_back(self, why: str) -> None:
+        """While RECONNECTING, the transport toward the peer was seen working again: the
+        pools saw the peer connect, or a PING of this Session arrived. Whoever opened the
+        connection, the way back starts now and on that transport. A responder probes
+        (see _is_probing). An initiator owes a RESUME, sent by the next tick_dial with no
+        dial before it: the dial goes to the addresses the Session started with, and a
+        peer that moved meanwhile is reached only by the connection it opened itself.
+        Sync, as the transport events are."""
+        if self._is_probing():
+            # Due on the next tick_keepalive, not at the next period. One probe in
+            # flight at a time: if one is, this one waits for its answer or for the
+            # end of its RTT window.
+            self._last_ping_at = float("-inf")
+            log.session(f"{self!r} {why} → probing", sub=self._sub)
+        elif self.role == SessionRole.INITIATOR:
+            if not self._reject_relay:
+                self._resume_due = True
+                log.session(f"{self!r} {why} → attempting RESUME", sub=self._sub)
+            elif self._reconnect_substep != "resume_sent":
+                # What came back may be a relay circuit, which this Session refuses, and
+                # only the dial says which path it is: the dial is made at once. With a
+                # RESUME in flight it has just been made.
+                self._next_redial_at = 0.0
+                log.session(f"{self!r} {why} → re-dialling", sub=self._sub)
 
     # Session-level keep-alive (PING/PONG over the control protocol)
 
