@@ -786,6 +786,14 @@ func handleSignalingStream(ni *NodeInstance, s network.Stream) {
 // answer: what a browser does to an offer that finds its previous exchange still running.
 var errSignalingStreamEnded = errors.New("the answerer closed the signaling stream with no answer")
 
+// directStageBrokeEarly says whether a direct stage that failed after the given time ended
+// because its signalling exchange broke before an answer was read, with time of its own
+// left. Such a stage asked nothing of the network, and the TURN stage is not due after it.
+// One that ran out of its time, or whose ICE failed, found no direct path.
+func directStageBrokeEarly(err error, took time.Duration) bool {
+	return errors.Is(err, errSignalingStreamEnded) && took < WebRTCDirectStageTimeout
+}
+
 // errWebRTCOfferNotNeeded says that no offer was made because none is due: we hold a
 // DataChannel to the peer that we trust, or the stages of an offer to it are running.
 var errWebRTCOfferNotNeeded = errors.New("no WebRTC offer is due")
@@ -843,11 +851,31 @@ func initiateWebRTCConnection(ni *NodeInstance, remotePeer peer.ID) error {
 		}
 	}
 
-	directErr := offerWebRTC(ni, remotePeer, WebRTCStageDirect, WebRTCDirectStageTimeout)
-	if directErr == nil {
-		return nil
+	var directErr error
+	for attempt := 1; ; attempt++ {
+		started := time.Now()
+		directErr = offerWebRTC(ni, remotePeer, WebRTCStageDirect, WebRTCDirectStageTimeout)
+		if directErr == nil {
+			return nil
+		}
+		logger.Infof("[GO] ↪️ Instance %d: The direct stage of the WebRTC offer to %s failed: %v", ni.instanceIndex, remotePeer, directErr)
+		if attempt == 2 || !directStageBrokeEarly(directErr, time.Since(started)) {
+			break
+		}
+		// What the TURN stage waits before its retry, for the same reason: the answerer
+		// may still hold the exchange that broke.
+		select {
+		case <-time.After(WebRTCStageRetryDelay):
+		case <-ni.ctx.Done():
+			return ni.ctx.Err()
+		}
+		if bestConnRank(ni, remotePeer) == connRankDirect || trustsWebRTCDataChannel(ni, remotePeer) {
+			logger.Infof("[GO] ✅ Instance %d: %s has a path that is not relayed after the direct stage: no second direct stage", ni.instanceIndex, remotePeer)
+			return nil
+		}
+		logger.Infof("[GO] ↪️ Instance %d: The direct stage of the WebRTC offer to %s is made again, its signalling broke before an answer: %v",
+			ni.instanceIndex, remotePeer, directErr)
 	}
-	logger.Infof("[GO] ↪️ Instance %d: The direct stage of the WebRTC offer to %s failed: %v", ni.instanceIndex, remotePeer, directErr)
 
 	for attempt, pause := 1, WebRTCStagePause; ; attempt, pause = attempt+1, WebRTCStageRetryDelay {
 		select {

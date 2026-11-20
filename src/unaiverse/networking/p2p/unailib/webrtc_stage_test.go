@@ -98,6 +98,8 @@ const (
 	// stepAnswerOnly reads the offer, answers it from a peer connection that is closed at
 	// once, so that nothing ever connects, and reads what follows.
 	stepAnswerOnly
+	// stepReadAndClose reads the offer and closes the stream with no answer.
+	stepReadAndClose
 )
 
 // scriptedAnswerer stands in front of the signalling handler of a node. The streams that
@@ -133,6 +135,13 @@ func (a *scriptedAnswerer) handle(s network.Stream) {
 	switch step {
 	case stepClose:
 		s.Close()
+	case stepReadAndClose:
+		defer s.Close()
+		if offer, err := readSignalMessage(s); err == nil {
+			a.mu.Lock()
+			a.offers = append(a.offers, offer)
+			a.mu.Unlock()
+		}
 	case stepRefuse, stepSilent, stepAnswerOnly:
 		defer s.Close()
 		offer, err := readSignalMessage(s)
@@ -542,6 +551,108 @@ func TestTURNStageIsRetriedOnceWhenTheAnswererClosesItsStream(t *testing.T) {
 			t.Errorf("%d offers reached the answerer, three were due", streams)
 		}
 	})
+}
+
+// A direct stage whose signalling stream ends with no answer asked nothing of the network:
+// it is made again after the wait the answerer may need to let its exchange go, and the
+// channel is a direct one. A second one that breaks the same way leads to the TURN stage.
+func TestDirectStageIsMadeAgainWhenItsSignallingBreaks(t *testing.T) {
+	t.Run("the second direct stage is answered", func(t *testing.T) {
+		useSessionTestSettings(t, 8<<20)
+		offerer, answerer := relayedNodes(t)
+		script := scriptAnswerer(answerer, stepClose)
+		start := time.Now()
+		if err := initiateWebRTCConnection(offerer.ni, answerer.id()); err != nil {
+			t.Fatalf("offer: %v", err)
+		}
+		if took := time.Since(start); took < WebRTCStageRetryDelay {
+			t.Errorf("the second direct stage came after %v, the wait is %v", took, WebRTCStageRetryDelay)
+		}
+		if streams, _, _ := script.seen(); streams != 2 {
+			t.Errorf("%d offers reached the answerer, two were due", streams)
+		}
+		if entry := tableEntry(offerer.ni, answerer.id()); entry == nil || entry.stage != WebRTCStageDirect {
+			t.Errorf("no channel of the direct stage: %+v", entry)
+		}
+	})
+	t.Run("two broken direct stages lead to the TURN stage", func(t *testing.T) {
+		useSessionTestSettings(t, 8<<20)
+		offerer, answerer := relayedNodes(t)
+		script := scriptAnswerer(answerer, stepReadAndClose, stepReadAndClose)
+		if err := initiateWebRTCConnection(offerer.ni, answerer.id()); err != nil {
+			t.Fatalf("offer: %v", err)
+		}
+		streams, offers, _ := script.seen()
+		if streams != 3 || len(offers) != 2 || offers[0].Stage != WebRTCStageDirect || offers[1].Stage != WebRTCStageDirect {
+			t.Errorf("%d offers reached the answerer, the two broken ones %+v: two direct stages were due", streams, offers)
+		}
+		if entry := tableEntry(offerer.ni, answerer.id()); entry == nil || entry.stage != WebRTCStageTURN {
+			t.Errorf("no channel of the TURN stage: %+v", entry)
+		}
+	})
+	t.Run("no second direct stage toward a path that appeared meanwhile", func(t *testing.T) {
+		useSessionTestSettings(t, 8<<20)
+		offerer, answerer := relayedNodes(t)
+		script := scriptAnswerer(answerer, stepClose)
+		done := make(chan error, 1)
+		go func() { done <- initiateWebRTCConnection(offerer.ni, answerer.id()) }()
+		waitUntil(t, "the first offer to reach the answerer", func() bool {
+			streams, _, _ := script.seen()
+			return streams == 1
+		})
+		directLink(t, offerer.ni.host, answerer.ni.host)
+		if err := <-done; err != nil {
+			t.Fatalf("offer: %v", err)
+		}
+		if streams, _, _ := script.seen(); streams != 1 {
+			t.Errorf("%d offers reached the answerer, the second direct stage was not due", streams)
+		}
+		if tableEntry(offerer.ni, answerer.id()) != nil {
+			t.Errorf("a DataChannel was made")
+		}
+	})
+}
+
+// A direct stage that ran out of its time found no direct path: the TURN stage follows,
+// with no second direct stage.
+func TestTURNStageFollowsADirectStageThatRanOutOfItsTime(t *testing.T) {
+	useSessionTestSettings(t, 8<<20)
+	offerer, answerer := relayedNodes(t)
+	script := scriptAnswerer(answerer, stepSilent)
+	if err := initiateWebRTCConnection(offerer.ni, answerer.id()); err != nil {
+		t.Fatalf("offer: %v", err)
+	}
+	streams, offers, _ := script.seen()
+	if streams != 2 || len(offers) != 1 || offers[0].Stage != WebRTCStageDirect {
+		t.Fatalf("%d offers reached the answerer, the scripted ones %+v", streams, offers)
+	}
+	if entry := tableEntry(offerer.ni, answerer.id()); entry == nil || entry.stage != WebRTCStageTURN {
+		t.Errorf("no channel of the TURN stage: %+v", entry)
+	}
+}
+
+// Only a stage that broke with time of its own left is made again. The stream of an
+// answerer that gives up at the same moment as the stage ends with the same error as one
+// that was closed at once, and says nothing more about the network than a stage that ran
+// out of its time.
+func TestWhichDirectStagesAreMadeAgain(t *testing.T) {
+	broken := fmt.Errorf("read answer from p: %w", signalingStreamError(network.ErrReset))
+	for _, c := range []struct {
+		name  string
+		err   error
+		took  time.Duration
+		again bool
+	}{
+		{"broken at once", broken, 500 * time.Millisecond, true},
+		{"broken at the end of its time", broken, WebRTCDirectStageTimeout, false},
+		{"out of its time", context.DeadlineExceeded, WebRTCDirectStageTimeout, false},
+		{"refused by the answerer", errors.New("remote signaling error from p: refused"), 500 * time.Millisecond, false},
+		{"ICE failed", errors.New("ICE connection failed with p"), 2 * time.Second, false},
+	} {
+		if got := directStageBrokeEarly(c.err, c.took); got != c.again {
+			t.Errorf("%s: made again %v, want %v", c.name, got, c.again)
+		}
+	}
 }
 
 // The TURN stage is an offer like any other: it is not made when the peer gained a path
