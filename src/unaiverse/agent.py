@@ -125,6 +125,10 @@ class Agent(AgentBasics):
         self._valid_cmp_agents = set()  # Agents for which the last evaluation was positive
         self._engaged_agents = set()
         self._eval_results = {}
+        # The agents that disconnected() follows when called with no argument, removed since:
+        # the removal empties the sets above, and these are what is left to check. Its name
+        # keeps it out of the generic clean-up of the status attributes.
+        self.__removed_followed_agents = set()
 
         # Status variables (assumed to start with "_"): Recordings
         self._last_recorded_stream_num = 1
@@ -311,12 +315,15 @@ class Agent(AgentBasics):
         Args:
             peer_id: The peer ID to remove from status tracking structures.
         """
+        if peer_id in (self._engaged_agents if len(self._engaged_agents) > 0 else self._found_agents):
+            self.__removed_followed_agents.add(peer_id)
         super().remove_peer_from_agent_status_attrs(peer_id)
         self._available = len(self._engaged_agents) == 0
 
     def reset_agent_status_attrs(self) -> None:
         """Resets all agent-level status attributes to their initial values (overrides parent)."""
         super().reset_agent_status_attrs()  # this sets status vars to [], {}, 0, 0., False, in function of their type
+        self.__removed_followed_agents = set()
         self._available = True
         self._repeat = 1
         self._last_recorded_stream_num = 1
@@ -807,7 +814,15 @@ class Agent(AgentBasics):
         # - if "agent" is a peer ID, the involved agents will be a list with one element.
         # - if "agent" is a known wildcard, as "<valid_cmp>", then involved agents will be self._valid_cmp_agents
         # - if "agent" is None, then the current agent in self._engaged_agents will be returned
-        involved_agents = self.__involved_agents(agent)
+        # With no argument, once the agents followed were removed (which empties the sets that
+        # say whom we follow), the ones removed are checked.
+        follows_nobody = agent is None and len(self._engaged_agents) == 0 and len(self._found_agents) == 0
+        if follows_nobody and len(self.__removed_followed_agents) > 0:
+            involved_agents = list(self.__removed_followed_agents)
+        else:
+            if agent is None:
+                self.__removed_followed_agents.clear()   # We follow agents again, or nobody
+            involved_agents = self.__involved_agents(agent)
         if len(involved_agents) == 0:
             return False
 

@@ -716,3 +716,87 @@ def test_evaluate_eval_results_keyed_by_buffered_owner():
     agent.last_buffered_peer_id_to_info = {"engagedKey": {"net_hash": "OWNER::ps:gen"}}
     assert _run(agent.evaluate(stream_hash="<playlist>", how="max")) is True
     assert agent._eval_results == {"OWNER": 0.7}
+
+
+# disconnected: the agents it followed, once they were removed
+
+class _ConnectedPeers:
+    """Stand-in for ``node_conn`` for ``connected`` / ``disconnected``: the peers that
+    are connected at the transport level."""
+
+    def __init__(self, *peers):
+        self.peers = set(peers)
+
+    def is_connected(self, peer_id):
+        return peer_id in self.peers
+
+
+def _following(agent, peer_id, engaged):
+    """An agent that follows `peer_id`, as connect_by_role leaves it (found) or as an
+    engagement does (engaged), with the peer known and connected."""
+    agent.node_conn = _ConnectedPeers(peer_id)
+    agent.all_agents[peer_id] = object()
+    agent._found_agents.add(peer_id)
+    if engaged:
+        agent._engaged_agents.add(peer_id)
+
+
+@pytest.mark.parametrize("engaged", [False, True])
+def test_disconnected_answers_true_once_the_agent_it_followed_was_removed(agent, engaged):
+    """The removal of the agent empties the sets that say whom we follow, and the action
+    must still answer for the agent it followed: True once it is gone, so that a role
+    moves on (the `ready` to `init` of the chat world) instead of waiting for ever."""
+    _following(agent, "peer-b", engaged)
+    assert _run(agent.disconnected()) is False
+    assert _run(agent.disconnected(handshake_completed=True)) is False
+
+    agent.node_conn.peers.discard("peer-b")
+    _run(agent.remove_agent("peer-b"))
+    assert agent._found_agents == set() and agent._engaged_agents == set()
+    assert _run(agent.disconnected()) is True
+    assert _run(agent.disconnected(handshake_completed=True)) is True
+
+
+def test_disconnected_after_the_removal_is_false_while_the_peer_is_still_connected(agent):
+    """Removed from the agents, the peer may still have a transport connection: not
+    disconnected yet, unless only completed handshakes count."""
+    _following(agent, "peer-b", engaged=False)
+    _run(agent.remove_agent("peer-b"))
+    assert _run(agent.disconnected()) is False
+    assert _run(agent.disconnected(handshake_completed=True)) is True
+
+
+def test_disconnected_follows_the_new_agents_once_there_are_some(agent):
+    """The memory of a removed agent is for when nobody else is followed: an agent found
+    again replaces it, and so does a leave of the world."""
+    _following(agent, "peer-b", engaged=False)
+    agent.node_conn.peers.clear()
+    _run(agent.remove_agent("peer-b"))
+
+    agent.node_conn.peers.add("peer-c")
+    agent.all_agents["peer-c"] = object()
+    agent._found_agents.add("peer-c")
+    assert _run(agent.disconnected()) is False       # peer-c is connected
+    agent._found_agents.clear()
+    assert _run(agent.disconnected()) is False       # peer-b was forgotten: nobody followed
+
+    _following(agent, "peer-d", engaged=False)
+    agent.node_conn.peers.clear()
+    _run(agent.remove_agent("peer-d"))
+    agent.reset_agent_status_attrs()
+    assert _run(agent.disconnected()) is False
+
+
+def test_removal_of_an_agent_not_followed_changes_nothing(agent):
+    agent.node_conn = _ConnectedPeers()
+    agent.all_agents["peer-x"] = object()
+    _run(agent.remove_agent("peer-x"))
+    assert _run(agent.disconnected()) is False       # nobody was followed
+
+    _following(agent, "peer-b", engaged=True)
+    agent.all_agents["peer-x"] = object()
+    _run(agent.remove_agent("peer-x"))
+    assert _run(agent.disconnected()) is False       # peer-b, followed, is connected
+    agent.node_conn.peers.clear()
+    _run(agent.remove_agent("peer-b"))
+    assert _run(agent.disconnected()) is True
