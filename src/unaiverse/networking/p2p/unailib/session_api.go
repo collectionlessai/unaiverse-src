@@ -13,9 +13,9 @@ import "C"
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"unsafe"
-	"encoding/base64"
 
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"

@@ -7,37 +7,38 @@ package main
 import "C" // Enables CGo features, allowing Go to call C code and vice-versa.
 
 import (
-	"fmt"
-	"log"
-	"time"
-	"unsafe"
 	"bytes"
 	"context"
-	"strings"
 	"crypto/tls"
-	"encoding/json"
-	"path/filepath"
 	"encoding/binary"
+	"encoding/json"
+	"fmt"
+	"log"
+	"path/filepath"
+	"strings"
+	"time"
+	"unsafe"
+
 	"github.com/caddyserver/certmagic"
-	"github.com/libp2p/go-libp2p/core/peer"
-	"github.com/libp2p/go-libp2p/core/event"
-	"github.com/libp2p/go-libp2p/core/network"
-	"github.com/libp2p/go-libp2p/core/peerstore"
-	"github.com/libp2p/go-libp2p/p2p/transport/tcp"
-	ma "github.com/multiformats/go-multiaddr"
-	rc "github.com/libp2p/go-libp2p/p2p/protocol/circuitv2/relay"
-	ws "github.com/libp2p/go-libp2p/p2p/transport/websocket"
-	quic "github.com/libp2p/go-libp2p/p2p/transport/quic"
 	golog "github.com/ipfs/go-log/v2"
-	manet "github.com/multiformats/go-multiaddr/net"
-	rcmgr "github.com/libp2p/go-libp2p/p2p/host/resource-manager"
+	p2pforge "github.com/ipshipyard/p2p-forge/client"
 	libp2p "github.com/libp2p/go-libp2p"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
+	"github.com/libp2p/go-libp2p/core/event"
+	"github.com/libp2p/go-libp2p/core/network"
+	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/libp2p/go-libp2p/core/peerstore"
+	rcmgr "github.com/libp2p/go-libp2p/p2p/host/resource-manager"
+	rc "github.com/libp2p/go-libp2p/p2p/protocol/circuitv2/relay"
 	ping "github.com/libp2p/go-libp2p/p2p/protocol/ping"
+	quic "github.com/libp2p/go-libp2p/p2p/transport/quic"
+	"github.com/libp2p/go-libp2p/p2p/transport/tcp"
 	webrtc "github.com/libp2p/go-libp2p/p2p/transport/webrtc"
-	pwebrtc "github.com/pion/webrtc/v4"
-	p2pforge "github.com/ipshipyard/p2p-forge/client"
+	ws "github.com/libp2p/go-libp2p/p2p/transport/websocket"
 	webtransport "github.com/libp2p/go-libp2p/p2p/transport/webtransport"
+	ma "github.com/multiformats/go-multiaddr"
+	manet "github.com/multiformats/go-multiaddr/net"
+	pwebrtc "github.com/pion/webrtc/v4"
 )
 
 // recoverToCString is a defer helper for the exported FFI functions that return
@@ -81,7 +82,7 @@ func InitializeLibrary(
 			}
 		}
 	}
-	
+
 	maxInstances = int(maxInstancesC)
 	maxUniqueChannels = int(maxUniqueChannelsC)
 	maxChannelQueueLen = int(maxChannelQueueLenC)
@@ -255,46 +256,46 @@ func CreateNode(
 		return C.CString(jsonErrorResponse(fmt.Sprintf("Instance %d: Failed to create multiaddrs", instanceIndex), err))
 	}
 
-    // --- Configure Custom Resource Manager ---
-    scalingLimits := rcmgr.DefaultLimits
-    libp2p.SetDefaultServiceLimits(&scalingLimits)
+	// --- Configure Custom Resource Manager ---
+	scalingLimits := rcmgr.DefaultLimits
+	libp2p.SetDefaultServiceLimits(&scalingLimits)
 
-    // These apply per unique Peer ID.
-    scalingLimits.PeerBaseLimit.Conns = 64
-    scalingLimits.PeerBaseLimit.ConnsInbound = 64
-    scalingLimits.PeerBaseLimit.ConnsOutbound = 64
+	// These apply per unique Peer ID.
+	scalingLimits.PeerBaseLimit.Conns = 64
+	scalingLimits.PeerBaseLimit.ConnsInbound = 64
+	scalingLimits.PeerBaseLimit.ConnsOutbound = 64
 
-    // Tweak System Limits
-    scalingLimits.SystemBaseLimit.Conns = 256
-    scalingLimits.SystemBaseLimit.ConnsInbound = 128
-    scalingLimits.SystemBaseLimit.ConnsOutbound = 128
+	// Tweak System Limits
+	scalingLimits.SystemBaseLimit.Conns = 256
+	scalingLimits.SystemBaseLimit.ConnsInbound = 128
+	scalingLimits.SystemBaseLimit.ConnsOutbound = 128
 
-    // Compute the concrete limits
-    scaledLimits := scalingLimits.AutoScale()
+	// Compute the concrete limits
+	scaledLimits := scalingLimits.AutoScale()
 
 	// Raise the per-IP limits
 	customIP4Limits := []rcmgr.ConnLimitPerSubnet{
-        {
-            PrefixLength: 32,   // /32 means "one specific IP address"
-            ConnCount:    1024, // Allow 1024 conns from the same IP
-        },
-    }
+		{
+			PrefixLength: 32,   // /32 means "one specific IP address"
+			ConnCount:    1024, // Allow 1024 conns from the same IP
+		},
+	}
 	customIP6Limits := []rcmgr.ConnLimitPerSubnet{
-        {
-            PrefixLength: 56,
-            ConnCount:    1024,
-        },
-    }
+		{
+			PrefixLength: 56,
+			ConnCount:    1024,
+		},
+	}
 
-    // Create the limiter and manager
-    limiter := rcmgr.NewFixedLimiter(scaledLimits)
-    rm, err := rcmgr.NewResourceManager(
+	// Create the limiter and manager
+	limiter := rcmgr.NewFixedLimiter(scaledLimits)
+	rm, err := rcmgr.NewResourceManager(
 		limiter,
 		rcmgr.WithLimitPerSubnet(customIP4Limits, customIP6Limits),
 	)
-    if err != nil {
-        return C.CString(jsonErrorResponse(fmt.Sprintf("Instance %d: Failed to create resource manager", instanceIndex), err))
-    }
+	if err != nil {
+		return C.CString(jsonErrorResponse(fmt.Sprintf("Instance %d: Failed to create resource manager", instanceIndex), err))
+	}
 
 	options := []libp2p.Option{
 		libp2p.Identity(privKey),
@@ -375,12 +376,12 @@ func CreateNode(
 		// instead of pushing a nil into the slice (which would then poison
 		// AddrInfosFromP2pAddrs below).
 		for _, s := range defaultRelays {
-				addr, err := ma.NewMultiaddr(s)
-				if err != nil {
-					logger.Warnf("[GO] ⚠️ Instance %d: Skipping malformed default relay '%s': %v\n", instanceIndex, s, err)
-					continue
-				}
-				defaultRelaysMaddrs = append(defaultRelaysMaddrs, addr)
+			addr, err := ma.NewMultiaddr(s)
+			if err != nil {
+				logger.Warnf("[GO] ⚠️ Instance %d: Skipping malformed default relay '%s': %v\n", instanceIndex, s, err)
+				continue
+			}
+			defaultRelaysMaddrs = append(defaultRelaysMaddrs, addr)
 		}
 
 		// Convert to AddrInfo. Never log.Fatal here: this is a c-shared library,
@@ -399,11 +400,11 @@ func CreateNode(
 		if cfg.Relay.EnableService {
 			resources := rc.DefaultResources() // open this to see the default resource limits
 			// resources.ReservationTTL = time.Hour		// default is 1h
-			resources.MaxReservations = 1024			// default is 128
-			resources.MaxCircuits = 32					// default is 16
-			resources.BufferSize = 4096					// default is 2048
-			resources.MaxReservationsPerIP = 1024		// default is 8
-			resources.MaxReservationsPerASN = 1024		// default is 32
+			resources.MaxReservations = 1024       // default is 128
+			resources.MaxCircuits = 32             // default is 16
+			resources.BufferSize = 4096            // default is 2048
+			resources.MaxReservationsPerIP = 1024  // default is 8
+			resources.MaxReservationsPerASN = 1024 // default is 32
 			if cfg.Relay.WithBroadLimits {
 				// Enrich default limits
 				resources.Limit = nil // same as setting rc.WithInfiniteLimits()
@@ -447,9 +448,9 @@ func CreateNode(
 	logger.Debugf("[GO] 🔔 Instance %d: Registered network event notifier.\n", instanceIndex)
 
 	if cfg.Network.Isolated {
-        // Turn on the "Protocol Police"
-        enforceProtocolCompliance(ni)
-    }
+		// Turn on the "Protocol Police"
+		enforceProtocolCompliance(ni)
+	}
 
 	// --- Link Host to Cert Manager ---
 	if cfg.TLS.AutoTLS {
@@ -475,7 +476,7 @@ func CreateNode(
 		ticker := time.NewTicker(100 * time.Millisecond)
 		defer ticker.Stop()
 
-		AddressWaitLoop:
+	AddressWaitLoop:
 		for {
 			select {
 			case <-waitCtx.Done():
@@ -511,7 +512,7 @@ func CreateNode(
 		defer timeoutCancel()
 		logger.Debugf("[GO] ⏳ Instance %d: Waiting for reachability update.", instanceIndex)
 
-		WAIT_LOOP:
+	WAIT_LOOP:
 		for {
 			select {
 			case evt := <-reachSub.Out():
@@ -617,7 +618,7 @@ func ConnectTo(
 	if err != nil {
 		return C.CString(jsonErrorResponse(fmt.Sprintf("Invalid instance index: %d", int(instanceIndexC)), err))
 	}
-	
+
 	goAddrsJSON := C.GoString(addrsJSONC)
 	logger.Debugf("[GO] 📞 Instance %d: Attempting to connect to peer with addresses: %s\n", ni.instanceIndex, goAddrsJSON)
 
@@ -810,7 +811,7 @@ func ReserveOnRelay(
 		if _, idInAddr := peer.SplitAddr(relayAddr); idInAddr == "" {
 			baseRelayAddrStr = fmt.Sprintf("%s/p2p/%s", relayAddr.String(), relayInfo.ID.String())
 		}
-		
+
 		constructedAddr, err := ma.NewMultiaddr(fmt.Sprintf("%s/p2p-circuit", baseRelayAddrStr))
 		if err == nil {
 			constructedAddrs = append(constructedAddrs, constructedAddr)
@@ -830,8 +831,8 @@ func ReserveOnRelay(
 	// circuit address only puts a second listener over that one.
 	// They are the addresses of the slot, dropped when it is forgotten (forgetRelaySlot).
 	ni.addrMutex.Lock()
-    ni.privateRelayAddrs = constructedAddrs 
-    ni.addrMutex.Unlock()
+	ni.privateRelayAddrs = constructedAddrs
+	ni.addrMutex.Unlock()
 
 	logger.Infof("[GO] ✅ Instance %d: Reservation successful on relay: %s.\n", ni.instanceIndex, relayInfo.ID)
 
@@ -983,10 +984,10 @@ func GetConnectedPeers(
 
 	// Create a slice to hold the results directly from the map.
 	peersList := make([]ExtendedPeerInfo, 0, len(ni.friendlyPeers))
-	
+
 	for _, peerInfo := range ni.friendlyPeers {
-			peersList = append(peersList, peerInfo)
-		}
+		peersList = append(peersList, peerInfo)
+	}
 
 	// logger.Debugf("[GO] ℹ️ Instance %d: Reporting %d currently tracked and active peers.\n", ni.instanceIndex, len(peersList))
 
@@ -1105,7 +1106,7 @@ func GetNodeAddresses(
 		return C.CString(jsonErrorResponse(fmt.Sprintf("Invalid instance index: %d", int(instanceIndexC)), err))
 	}
 	peerIDStr := C.GoString(peerIDC) // Raw string from C
-	
+
 	var pidForInternalCall peer.ID // This will be peer.ID("") for local
 
 	if peerIDStr == "" || peerIDStr == ni.host.ID().String() {
@@ -1187,43 +1188,43 @@ func GetWebRTCConnections(instanceIndexC C.int) (ret *C.char) {
 //
 //export UpdateICEConfig
 func UpdateICEConfig(instanceIndexC C.int, configJSONC *C.char) *C.char {
-    instanceIndex := int(instanceIndexC)
-    ni, err := getInstance(instanceIndex)
-    if err != nil {
-        return C.CString(jsonErrorResponse(
-            fmt.Sprintf("Instance %d not found", instanceIndex), err))
-    }
+	instanceIndex := int(instanceIndexC)
+	ni, err := getInstance(instanceIndex)
+	if err != nil {
+		return C.CString(jsonErrorResponse(
+			fmt.Sprintf("Instance %d not found", instanceIndex), err))
+	}
 
-    var patch struct {
-        STUNServers *[]string     `json:"stun_servers,omitempty"`
-        TURNServers *[]TURNServer `json:"turn_servers,omitempty"`
-    }
-    if err := json.Unmarshal([]byte(C.GoString(configJSONC)), &patch); err != nil {
-        return C.CString(jsonErrorResponse(
-            fmt.Sprintf("Instance %d: invalid ICE config JSON", instanceIndex), err))
-    }
+	var patch struct {
+		STUNServers *[]string     `json:"stun_servers,omitempty"`
+		TURNServers *[]TURNServer `json:"turn_servers,omitempty"`
+	}
+	if err := json.Unmarshal([]byte(C.GoString(configJSONC)), &patch); err != nil {
+		return C.CString(jsonErrorResponse(
+			fmt.Sprintf("Instance %d: invalid ICE config JSON", instanceIndex), err))
+	}
 
-    ni.iceConfigMu.Lock()
-    cur := ni.iceConfig
-    if cur == nil {
-        cur = &ICEConfig{}
-    }
-    next := &ICEConfig{
-        STUNServers: cur.STUNServers,
-        TURNServers: cur.TURNServers,
-    }
-    if patch.STUNServers != nil {
-        next.STUNServers = *patch.STUNServers
-    }
-    if patch.TURNServers != nil {
-        next.TURNServers = *patch.TURNServers
-    }
-    ni.iceConfig = next
-    ni.iceConfigMu.Unlock()
+	ni.iceConfigMu.Lock()
+	cur := ni.iceConfig
+	if cur == nil {
+		cur = &ICEConfig{}
+	}
+	next := &ICEConfig{
+		STUNServers: cur.STUNServers,
+		TURNServers: cur.TURNServers,
+	}
+	if patch.STUNServers != nil {
+		next.STUNServers = *patch.STUNServers
+	}
+	if patch.TURNServers != nil {
+		next.TURNServers = *patch.TURNServers
+	}
+	ni.iceConfig = next
+	ni.iceConfigMu.Unlock()
 
-    logger.Debugf("[GO] 🔄 Instance %d: ICE config updated (%d STUN, %d TURN)\n",
-        instanceIndex, len(next.STUNServers), len(next.TURNServers))
-    return C.CString(jsonSuccessResponse(map[string]any{"updated": true}))
+	logger.Debugf("[GO] 🔄 Instance %d: ICE config updated (%d STUN, %d TURN)\n",
+		instanceIndex, len(next.STUNServers), len(next.TURNServers))
+	return C.CString(jsonSuccessResponse(map[string]any{"updated": true}))
 }
 
 // SendMessageToPeer sends a message either directly to a specific peer or broadcasts it via PubSub for a specific instance.
@@ -1254,7 +1255,7 @@ func SendMessageToPeer(
 	// Convert C inputs
 	goChannel := C.GoString(channelC)
 	goData := C.GoBytes(unsafe.Pointer(dataC), C.int(lengthC))
-	
+
 	// --- Branch: Broadcast or Direct Send ---
 	if strings.Contains(goChannel, "::ps:") {
 		// --- Broadcast via specific PubSub Topic ---
@@ -1351,7 +1352,7 @@ func SubscribeToTopic(
 	// Convert C string input to Go string.
 	channel := C.GoString(channelC)
 	logger.Debugf("[GO] <sub> Instance %d: Attempting to subscribe to topic: %s\n", ni.instanceIndex, channel)
-	
+
 	// Get instance-specific state and mutex
 	instancePubsub := ni.pubsub
 	if ni.host == nil || instancePubsub == nil {
@@ -1392,7 +1393,7 @@ func SubscribeToTopic(
 
 				// Remove the subscription if it exists.
 				if sub, exists := ni.subscriptions[existingChannel]; exists {
-					sub.Cancel()                                   // Cancel the subscription
+					sub.Cancel()                              // Cancel the subscription
 					delete(ni.subscriptions, existingChannel) // Remove from map
 				}
 
@@ -1479,7 +1480,7 @@ func UnsubscribeFromTopic(
 	// Convert C string input to Go string.
 	channel := C.GoString(channelC)
 	logger.Debugf("[GO] </sub> Instance %d: Attempting to unsubscribe from topic: %s\n", ni.instanceIndex, channel)
-	
+
 	// Lock the mutex for write access to shared maps for this instance.
 	ni.pubsubMutex.Lock()
 	defer ni.pubsubMutex.Unlock()
@@ -1649,10 +1650,10 @@ func CloseNode(
 		for i, ni := range allInstances {
 			if ni != nil {
 				logger.Debugf("[GO] 🛑 Attempting to close instance %d...\n", i)
-				
-				err := ni.Close() // Call the new method
+
+				err := ni.Close()     // Call the new method
 				allInstances[i] = nil // Remove from slice
-				
+
 				if err != nil {
 					errorCount++
 					errorMessages = append(errorMessages, fmt.Sprintf("Instance %d: %v", i, err))

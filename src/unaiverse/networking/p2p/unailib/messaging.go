@@ -2,24 +2,25 @@
 package main
 
 import (
-	"io"
-	"fmt"
-	"net"
-	"time"
 	"bytes"
-	"errors"
-	"context"
-	"strings"
-	"encoding/json"
 	"container/list"
+	"context"
 	"encoding/binary"
-	"google.golang.org/protobuf/proto"
-	"github.com/libp2p/go-libp2p/core/peer"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"strings"
+	"time"
+	pg "unailib/proto-go"
+
+	pubsub "github.com/libp2p/go-libp2p-pubsub"
 	"github.com/libp2p/go-libp2p/core/network"
+	"github.com/libp2p/go-libp2p/core/peer"
 	libp2pproto "github.com/libp2p/go-libp2p/core/protocol"
 	ma "github.com/multiformats/go-multiaddr"
-	pg "unailib/proto-go"
-	pubsub "github.com/libp2p/go-libp2p-pubsub"
+	"google.golang.org/protobuf/proto"
 )
 
 // isSessionProtocol reports whether protocolID is one of the per-stage Session
@@ -39,11 +40,11 @@ func isSessionProtocol(protocolID string) bool {
 // Python can route by protocol instead of by content_type. Pass an empty string
 // for protocolID if not available.
 func storeReceivedMessage(
-    ni *NodeInstance,
-    from peer.ID,
-    channel string,
-    protocolID string,
-    data []byte,
+	ni *NodeInstance,
+	from peer.ID,
+	channel string,
+	protocolID string,
+	data []byte,
 ) {
 	// Get the message store for this instance
 	store := ni.messageStore
@@ -235,7 +236,7 @@ func readChatStream(ni *NodeInstance, ps *persistentStream) {
 			return
 		}
 
-		if totalLen <= uint32(channelLen) + 1 {
+		if totalLen <= uint32(channelLen)+1 {
 			logger.Errorf("[GO] ❌ Instance %d: Total length %d too short for channel header on Stream %s, preventing underflow. Resetting.\n", ni.instanceIndex, totalLen, streamID)
 			s.Reset()
 			return
@@ -671,7 +672,7 @@ func readFromSubscription(
 		} else {
 			// This is a standard message. Queue it as before.
 			logger.Debugf("[GO] 📝 Instance %d: Storing new pubsub message from topic '%s'.\n", ni.instanceIndex, topic)
-			storeReceivedMessage(ni, msg.GetFrom(), topic, "", msg.Data)  // Empty protocolID for PubSub messages, since they are identified by topic instead.
+			storeReceivedMessage(ni, msg.GetFrom(), topic, "", msg.Data) // Empty protocolID for PubSub messages, since they are identified by topic instead.
 		}
 	}
 }

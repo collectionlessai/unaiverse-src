@@ -9,18 +9,19 @@
 package main
 
 import (
-	"io"
-	"fmt"
-	"time"
 	"bytes"
-	"errors"
-	"slices"
 	"context"
-	"strings"
-	"encoding/json"
 	"encoding/binary"
-	"github.com/libp2p/go-libp2p/core/peer"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"slices"
+	"strings"
+	"time"
+
 	"github.com/libp2p/go-libp2p/core/network"
+	"github.com/libp2p/go-libp2p/core/peer"
 	pwebrtc "github.com/pion/webrtc/v4"
 )
 
@@ -28,7 +29,7 @@ import (
 // // to mimic browser fallback behavior on strict networks.
 // func getWebRTCAPI() *pwebrtc.API {
 // 	sEngine := pwebrtc.SettingEngine{}
-	
+
 // 	sEngine.SetNetworkTypes([]pwebrtc.NetworkType{
 // 		pwebrtc.NetworkTypeUDP4,
 // 		pwebrtc.NetworkTypeTCP4,
@@ -50,7 +51,7 @@ import (
 // 	// 3. Setup single-port UDP Mux
 // 	udpListener, err := net.ListenUDP("udp", &net.UDPAddr{
 // 		IP:   net.IP{0, 0, 0, 0},
-// 		Port: 0, 
+// 		Port: 0,
 // 	})
 // 	if err != nil {
 // 		logger.Warnf("Failed to setup UDP listener for WebRTC: %v", err)
@@ -78,9 +79,9 @@ import (
 // Falls back to the public STUN servers when no config is present. The direct stage has
 // no TURN server; every other stage, and an offer that names none, has the whole list.
 func getWebRTCConfig(ni *NodeInstance, stage string) pwebrtc.Configuration {
-    ni.iceConfigMu.RLock()
-    cfg := ni.iceConfig
-    ni.iceConfigMu.RUnlock()
+	ni.iceConfigMu.RLock()
+	cfg := ni.iceConfig
+	ni.iceConfigMu.RUnlock()
 	if cfg != nil && (len(cfg.STUNServers) > 0 || len(cfg.TURNServers) > 0) {
 		if stage == WebRTCStageDirect {
 			urls := stunURLs(cfg)
@@ -260,14 +261,14 @@ func parseDirectMessageFrame(data []byte) (channel string, payload []byte, err e
 		return "", nil, fmt.Errorf("frame too short (%d bytes)", len(data))
 	}
 	totalLength := binary.BigEndian.Uint32(data[0:4])
-	if uint32(len(data)) != totalLength + 4 {
-		return "", nil, fmt.Errorf("frame length mismatch: header=%d actual=%d", totalLength, uint32(len(data)) - 4)
+	if uint32(len(data)) != totalLength+4 {
+		return "", nil, fmt.Errorf("frame length mismatch: header=%d actual=%d", totalLength, uint32(len(data))-4)
 	}
 	channelLen := int(data[4])
-	if len(data) < channelLen + 5 {
+	if len(data) < channelLen+5 {
 		return "", nil, fmt.Errorf("frame truncated at channel name")
 	}
-	return string(data[5 : channelLen + 5]), data[channelLen + 5:], nil
+	return string(data[5 : channelLen+5]), data[channelLen+5:], nil
 }
 
 // now is the clock the freshness of a DataChannel is measured with.
@@ -937,7 +938,7 @@ func offerWebRTC(ni *NodeInstance, remotePeer peer.ID, stage string, budget time
 	dcOpen := make(chan struct{}, 1)
 	dc.OnOpen(func() {
 		logger.Debugf("[GO] 🟢 Instance %d: Local DataChannel '%s' with %s is now OPEN", ni.instanceIndex, WebRTCDataChannelLabel, remotePeer)
-		
+
 		select {
 		case dcOpen <- struct{}{}:
 		default:

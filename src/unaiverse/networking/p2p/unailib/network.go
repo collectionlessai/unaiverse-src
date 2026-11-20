@@ -2,24 +2,25 @@
 package main
 
 import (
-	"os"
-	"net"
-	"fmt"
-	"time"
-	"errors"
-	"context"
-	"strings"
-	"crypto/rand"
 	"container/list"
-	"github.com/libp2p/go-libp2p/core/peer"
-	"github.com/libp2p/go-libp2p/core/event"
+	"context"
+	"crypto/rand"
+	"errors"
+	"fmt"
+	"net"
+	"os"
+	"strings"
+	"time"
+
+	p2pforge "github.com/ipshipyard/p2p-forge/client"
+	pubsub "github.com/libp2p/go-libp2p-pubsub"
 	"github.com/libp2p/go-libp2p/core/crypto"
+	"github.com/libp2p/go-libp2p/core/event"
 	"github.com/libp2p/go-libp2p/core/network"
+	"github.com/libp2p/go-libp2p/core/peer"
 	autorelay "github.com/libp2p/go-libp2p/p2p/host/autorelay"
 	ma "github.com/multiformats/go-multiaddr"
-	pubsub "github.com/libp2p/go-libp2p-pubsub"
 	pwebrtc "github.com/pion/webrtc/v4"
-	p2pforge "github.com/ipshipyard/p2p-forge/client"
 )
 
 func loadOrCreateIdentity(keyPath string) (crypto.PrivKey, error) {
@@ -65,8 +66,8 @@ func loadOrCreateIdentity(keyPath string) (crypto.PrivKey, error) {
 
 func getListenAddrs(ips []string, tcpPort int, tlsMode string) ([]ma.Multiaddr, error) {
 	if len(ips) == 0 {
-        ips = []string{"0.0.0.0"}
-    }
+		ips = []string{"0.0.0.0"}
+	}
 
 	var listenAddrs []ma.Multiaddr
 	quicPort := 0
@@ -75,7 +76,7 @@ func getListenAddrs(ips []string, tcpPort int, tlsMode string) ([]ma.Multiaddr, 
 	if tcpPort != 0 {
 		quicPort = tcpPort + 1
 		webtransPort = tcpPort + 2
-		webrtcPort = tcpPort +3
+		webrtcPort = tcpPort + 3
 	}
 
 	// --- Create Multiaddrs for each transport from the single IP list ---
@@ -94,10 +95,10 @@ func getListenAddrs(ips []string, tcpPort int, tlsMode string) ([]ma.Multiaddr, 
 		}
 
 		specs := []string{
-			fmt.Sprintf("/%s/%s/tcp/%d", ipProto, ip, tcpPort),                            // TCP
-			fmt.Sprintf("/%s/%s/udp/%d/quic-v1", ipProto, ip, quicPort),                   // QUIC
-			fmt.Sprintf("/%s/%s/udp/%d/quic-v1/webtransport", ipProto, ip, webtransPort),  // WebTransport
-			fmt.Sprintf("/%s/%s/udp/%d/webrtc-direct", ipProto, ip, webrtcPort),           // WebRTC Direct
+			fmt.Sprintf("/%s/%s/tcp/%d", ipProto, ip, tcpPort),                           // TCP
+			fmt.Sprintf("/%s/%s/udp/%d/quic-v1", ipProto, ip, quicPort),                  // QUIC
+			fmt.Sprintf("/%s/%s/udp/%d/quic-v1/webtransport", ipProto, ip, webtransPort), // WebTransport
+			fmt.Sprintf("/%s/%s/udp/%d/webrtc-direct", ipProto, ip, webrtcPort),          // WebRTC Direct
 		}
 		switch tlsMode {
 		case "autotls":
@@ -143,14 +144,14 @@ func setupPubSub(ni *NodeInstance, floodSub bool) error {
 	}
 
 	var ps *pubsub.PubSub
-    var err error
-    if floodSub {
-        // // Strip out the cryptographic overhead for the closed star network
-        // psOptions = append(psOptions, pubsub.WithMessageSignaturePolicy(pubsub.StrictNoSign))
-        ps, err = pubsub.NewFloodSub(ni.ctx, ni.host, psOptions...)
-    } else {
-        ps, err = pubsub.NewGossipSub(ni.ctx, ni.host, psOptions...)
-    }
+	var err error
+	if floodSub {
+		// // Strip out the cryptographic overhead for the closed star network
+		// psOptions = append(psOptions, pubsub.WithMessageSignaturePolicy(pubsub.StrictNoSign))
+		ps, err = pubsub.NewFloodSub(ni.ctx, ni.host, psOptions...)
+	} else {
+		ps, err = pubsub.NewGossipSub(ni.ctx, ni.host, psOptions...)
+	}
 
 	if err != nil {
 		return err
@@ -165,13 +166,13 @@ func setupNotifiers(ni *NodeInstance) {
 			remotePeerID := conn.RemotePeer()
 			logger.Debugf("[GO] 🔔 Instance %d: Event - Connected to %s (Direction: %s)\n", ni.instanceIndex, remotePeerID, conn.Stat().Direction)
 			// --- Abort Graceful Disconnect if active ---
-            ni.disconnectionMutex.Lock()
-            if cancelTimer, exists := ni.disconnectionTimers[remotePeerID]; exists {
-                cancelTimer() // Stop the cleanup timer
-                delete(ni.disconnectionTimers, remotePeerID)
-                logger.Debugf("[GO] ♻️ Instance %d: Peer %s reconnected within grace period. Cleanup aborted.\n", ni.instanceIndex, remotePeerID)
-            }
-            ni.disconnectionMutex.Unlock()
+			ni.disconnectionMutex.Lock()
+			if cancelTimer, exists := ni.disconnectionTimers[remotePeerID]; exists {
+				cancelTimer() // Stop the cleanup timer
+				delete(ni.disconnectionTimers, remotePeerID)
+				logger.Debugf("[GO] ♻️ Instance %d: Peer %s reconnected within grace period. Cleanup aborted.\n", ni.instanceIndex, remotePeerID)
+			}
+			ni.disconnectionMutex.Unlock()
 			askRelaySlotAgain(ni, conn)
 		},
 		DisconnectedF: func(_ network.Network, conn network.Conn) {
@@ -211,7 +212,7 @@ func setupNotifiers(ni *NodeInstance) {
 
 					// We create a context that we can cancel if they reconnect
 					ctx, cancelTimer := context.WithCancel(context.Background())
-					
+
 					ni.disconnectionMutex.Lock()
 					// If a timer already exists (rare race condition), cancel the old one first
 					if oldCancel, exists := ni.disconnectionTimers[remotePeerID]; exists {
@@ -283,7 +284,7 @@ func setupNotifiers(ni *NodeInstance) {
 						delete(ni.persistentChatStreams, remotePeerID)
 					}
 					ni.streamsMutex.Unlock()
-					}
+				}
 			} else {
 				logger.Debugf("[GO] 🛡️ Instance %d: DisconnectedF: Still have %d active connections to %s, not removing.\n", ni.instanceIndex, len(ni.host.Network().ConnsToPeer(remotePeerID)), remotePeerID)
 			}
@@ -477,14 +478,14 @@ func handleAddressUpdateEvents(ni *NodeInstance, sub event.Subscription) {
 			// We only use the event as a trigger but we take the addresses from the Host
 			allAddresses := ni.host.Addrs()
 			ni.addrMutex.Lock()
-        	ni.localAddrs = allAddresses
-            ni.addrMutex.Unlock()
-            
-            // Log addresses to verify
-            addrsStr := make([]string, len(allAddresses))
-            for i, a := range allAddresses {
-                addrsStr[i] = a.String()
-            }
+			ni.localAddrs = allAddresses
+			ni.addrMutex.Unlock()
+
+			// Log addresses to verify
+			addrsStr := make([]string, len(allAddresses))
+			for i, a := range allAddresses {
+				addrsStr[i] = a.String()
+			}
 			logger.Infof("[GO] 🔄 Instance %d: Updated local addresses (updating cache). Addrs: %v", ni.instanceIndex, addrsStr)
 		}
 	}
@@ -677,8 +678,8 @@ func maintainProbePeers(ni *NodeInstance) {
 // it fetches addresses for the local node of the given instance.
 // It returns a slice of fully ma.Multiaddr.
 func goGetNodeAddresses(
-    ni *NodeInstance,
-    targetPID peer.ID,
+	ni *NodeInstance,
+	targetPID peer.ID,
 ) ([]ma.Multiaddr, error) {
 	if ni.host == nil {
 		errMsg := fmt.Sprintf("Instance %d: Host not initialized", ni.instanceIndex)
@@ -734,23 +735,23 @@ func goGetNodeAddresses(
 		}
 
 		// handle cases based on presence and correctness of Peer ID in the address
-        if idInAddr == resolvedPID {
-            finalAddr = addr
-        } else if idInAddr == "" {
-            p2pComponent, _ := ma.NewMultiaddr(fmt.Sprintf("/p2p/%s", resolvedPID.String()))
-            finalAddr = addr.Encapsulate(p2pComponent)
-        } else {
-            logger.Warnf("[GO] ⚠️ Instance %d: Discarding stale address for peer %s: %s\n", ni.instanceIndex, resolvedPID, addr)
-            continue
-        }
+		if idInAddr == resolvedPID {
+			finalAddr = addr
+		} else if idInAddr == "" {
+			p2pComponent, _ := ma.NewMultiaddr(fmt.Sprintf("/p2p/%s", resolvedPID.String()))
+			finalAddr = addr.Encapsulate(p2pComponent)
+		} else {
+			logger.Warnf("[GO] ⚠️ Instance %d: Discarding stale address for peer %s: %s\n", ni.instanceIndex, resolvedPID, addr)
+			continue
+		}
 		addrSet[finalAddr.String()] = finalAddr
 	}
 
 	// --- 4. Convert the final set of unique addresses to a slice for returning. ---
 	result := make([]ma.Multiaddr, 0, len(addrSet))
 	for _, addr := range addrSet {
-        result = append(result, addr)
-    }
+		result = append(result, addr)
+	}
 
 	if len(result) == 0 {
 		logger.Warnf("[GO] ⚠️ goGetNodeAddresses: No suitable addresses found for peer %s.", resolvedPID)

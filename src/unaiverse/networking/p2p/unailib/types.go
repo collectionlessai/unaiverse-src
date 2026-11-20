@@ -2,20 +2,21 @@
 package main
 
 import (
-	"sync"
-	"time"
-	"context"
-	"sync/atomic"
 	"container/list"
-	"github.com/libp2p/go-libp2p/core/peer"
+	"context"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	golog "github.com/ipfs/go-log/v2"
+	p2pforge "github.com/ipshipyard/p2p-forge/client"
+	pubsub "github.com/libp2p/go-libp2p-pubsub"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
-	ma "github.com/multiformats/go-multiaddr"
-	golog "github.com/ipfs/go-log/v2"
-	pubsub "github.com/libp2p/go-libp2p-pubsub"
-	pwebrtc "github.com/pion/webrtc/v4"
-	p2pforge "github.com/ipshipyard/p2p-forge/client"
+	"github.com/libp2p/go-libp2p/core/peer"
 	ping "github.com/libp2p/go-libp2p/p2p/protocol/ping"
+	ma "github.com/multiformats/go-multiaddr"
+	pwebrtc "github.com/pion/webrtc/v4"
 )
 
 // ChatProtocol defines the protocol ID string used for direct peer-to-peer messaging streams.
@@ -53,6 +54,7 @@ const (
 // WebRTC signaling constants
 const UnaiverseWebRTCSignalProtocol = "/unaiverse/webrtc-signal/1.0.0"
 const WebRTCDataChannelLabel = "unaiverse-data"
+
 // Total budget for one signaling handshake (offer → answer → DC open): of the answerer,
 // and of the offerer in the TURN stage.
 const WebRTCSignalingTimeout = 60 * time.Second
@@ -307,31 +309,31 @@ type MessageStore struct {
 
 // NodeConfig contains the parameters to initialize a node
 type NodeConfig struct {
-    IdentityDir     string   `json:"identity_dir"`
-    PredefinedPort  int      `json:"predefined_port"`
-    ListenIPs       []string `json:"listen_ips"`
-    
-    // Group Relay Logic
-    Relay struct {
-        EnableClient  bool `json:"enable_client"`
-        EnableService bool `json:"enable_service"`
+	IdentityDir    string   `json:"identity_dir"`
+	PredefinedPort int      `json:"predefined_port"`
+	ListenIPs      []string `json:"listen_ips"`
+
+	// Group Relay Logic
+	Relay struct {
+		EnableClient    bool `json:"enable_client"`
+		EnableService   bool `json:"enable_service"`
 		WithBroadLimits bool `json:"with_broad_limits"`
-    } `json:"relay"`
+	} `json:"relay"`
 
-    // Group TLS Logic (Mutually exclusive logic becomes clear here)
-    TLS struct {
-        AutoTLS     bool   `json:"auto_tls"`
-        Domain      string `json:"domain"`
-        CertPath    string `json:"cert_path"`
-        KeyPath     string `json:"key_path"`
-    } `json:"tls"`
+	// Group TLS Logic (Mutually exclusive logic becomes clear here)
+	TLS struct {
+		AutoTLS  bool   `json:"auto_tls"`
+		Domain   string `json:"domain"`
+		CertPath string `json:"cert_path"`
+		KeyPath  string `json:"key_path"`
+	} `json:"tls"`
 
-    // explicit configuration for network environment
-    Network struct {
-        Isolated bool `json:"isolated"` // only allows connections with friendly peers
+	// explicit configuration for network environment
+	Network struct {
+		Isolated    bool `json:"isolated"`     // only allows connections with friendly peers
 		ForcePublic bool `json:"force_public"` // Replaces knowsIsPublic
-		FloodSub bool `json:"flood_sub"` // whether to use floodsub instead of gossipsub
-    } `json:"network"`
+		FloodSub    bool `json:"flood_sub"`    // whether to use floodsub instead of gossipsub
+	} `json:"network"`
 
 	// Reachability probing (AutoNAT dial-back servers). ProbePeers is the list of
 	// multiaddrs (with peer IDs) dialed at boot so the AutoNAT client has someone to
@@ -371,8 +373,8 @@ type NodeInstance struct {
 	probePeers []peer.AddrInfo
 
 	// Address Cache
-    addrMutex  sync.RWMutex
-    localAddrs []ma.Multiaddr
+	addrMutex  sync.RWMutex
+	localAddrs []ma.Multiaddr
 
 	// Static relay
 	privateRelayAddrs []ma.Multiaddr
@@ -397,7 +399,7 @@ type NodeInstance struct {
 	subscriptions map[string]*pubsub.Subscription
 
 	// Peer State
-	peersMutex     sync.RWMutex
+	peersMutex    sync.RWMutex
 	friendlyPeers map[peer.ID]ExtendedPeerInfo
 
 	// Stream State
@@ -405,8 +407,8 @@ type NodeInstance struct {
 	persistentChatStreams map[peer.ID]*persistentStream
 
 	// Disconnection Grace Period State
-    disconnectionMutex  sync.Mutex
-    disconnectionTimers map[peer.ID]context.CancelFunc
+	disconnectionMutex  sync.Mutex
+	disconnectionTimers map[peer.ID]context.CancelFunc
 
 	// Rendezvous State
 	rendezvousMutex sync.RWMutex
@@ -418,8 +420,8 @@ type NodeInstance struct {
 	// The peers an offer of ours is being made to (see initiateWebRTCConnection): one
 	// run of the stages per peer at a time.
 	webrtcOffering sync.Map
-	iceConfigMu       sync.RWMutex  // protects iceConfig swaps
-	iceConfig         *ICEConfig // nil → use defaults (Google STUN)
+	iceConfigMu    sync.RWMutex // protects iceConfig swaps
+	iceConfig      *ICEConfig   // nil → use defaults (Google STUN)
 	// clock is what the freshness of a DataChannel and the retry of a chat stream move
 	// are measured with: nil → time.Now.
 	clock func() time.Time
@@ -451,7 +453,7 @@ type TURNServer struct {
 //
 //	[4-byte big-endian uint32: JSON length][JSON payload]
 type SignalMessage struct {
-	Type    string `json:"type"`              // "offer" | "answer" | "error" | "abort"
+	Type string `json:"type"` // "offer" | "answer" | "error" | "abort"
 	// Stage is the stage of an offer (WebRTCStage*), repeated in the abort that gives the
 	// offer up. A side that does not stage its offers leaves it out, and one that does
 	// not know the field ignores it.
@@ -552,9 +554,9 @@ var defaultRelays = []string{
 	"/ip4/159.195.197.171/udp/30062/quic-v1/webtransport/certhash/uEiBnNxE1gxYn1gm0QazN_XFKZyJgXER26XTh5zj8tNeJqw/certhash/uEiDvDT_0OZ0Zxo5gmvbNqXy7Gmg18M4e51cVWSEDKNRJWQ/p2p/12D3KooWEXse6zf6g6rsFckJqXA6SWWrENNB3oN8tG5qPEPWV5do",
 	"/ip4/159.195.197.171/udp/30063/webrtc-direct/certhash/uEiD1gsqDNT0MGDAzjprI3It_WQddXuXJKK9OYjya1VyMHw/p2p/12D3KooWEXse6zf6g6rsFckJqXA6SWWrENNB3oN8tG5qPEPWV5do",
 	// Relay 2
-    "/ip4/159.195.197.171/tcp/30070/p2p/12D3KooWKSQXVsqfSDJ1MrAD3b4FMCbtAaqKusKKsUXY2QNn2yr6",
-    "/dns4/misc.unaiverse.io/tcp/30070/tls/ws/p2p/12D3KooWKSQXVsqfSDJ1MrAD3b4FMCbtAaqKusKKsUXY2QNn2yr6",
-    "/ip4/159.195.197.171/udp/30071/quic-v1/p2p/12D3KooWKSQXVsqfSDJ1MrAD3b4FMCbtAaqKusKKsUXY2QNn2yr6",
-    "/ip4/159.195.197.171/udp/30072/quic-v1/webtransport/certhash/uEiBYOiBfG-AuF7uRx2J1VX1JohOzxW7iOklOvS8Vc80BVw/certhash/uEiDKjXZwOIj-mdibz9s6xmLwrBBULizyZ3CR-LlQtFwJnQ/p2p/12D3KooWKSQXVsqfSDJ1MrAD3b4FMCbtAaqKusKKsUXY2QNn2yr6",
-    "/ip4/159.195.197.171/udp/30073/webrtc-direct/certhash/uEiB-LPy8tHhmDpcs2JWQAXw81QvK6MIWddfo8Qnf9m-R0A/p2p/12D3KooWKSQXVsqfSDJ1MrAD3b4FMCbtAaqKusKKsUXY2QNn2yr6",
+	"/ip4/159.195.197.171/tcp/30070/p2p/12D3KooWKSQXVsqfSDJ1MrAD3b4FMCbtAaqKusKKsUXY2QNn2yr6",
+	"/dns4/misc.unaiverse.io/tcp/30070/tls/ws/p2p/12D3KooWKSQXVsqfSDJ1MrAD3b4FMCbtAaqKusKKsUXY2QNn2yr6",
+	"/ip4/159.195.197.171/udp/30071/quic-v1/p2p/12D3KooWKSQXVsqfSDJ1MrAD3b4FMCbtAaqKusKKsUXY2QNn2yr6",
+	"/ip4/159.195.197.171/udp/30072/quic-v1/webtransport/certhash/uEiBYOiBfG-AuF7uRx2J1VX1JohOzxW7iOklOvS8Vc80BVw/certhash/uEiDKjXZwOIj-mdibz9s6xmLwrBBULizyZ3CR-LlQtFwJnQ/p2p/12D3KooWKSQXVsqfSDJ1MrAD3b4FMCbtAaqKusKKsUXY2QNn2yr6",
+	"/ip4/159.195.197.171/udp/30073/webrtc-direct/certhash/uEiB-LPy8tHhmDpcs2JWQAXw81QvK6MIWddfo8Qnf9m-R0A/p2p/12D3KooWKSQXVsqfSDJ1MrAD3b4FMCbtAaqKusKKsUXY2QNn2yr6",
 }

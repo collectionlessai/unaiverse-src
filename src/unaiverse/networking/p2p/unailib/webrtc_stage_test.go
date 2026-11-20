@@ -299,7 +299,9 @@ func TestICEListOfEachStage(t *testing.T) {
 func TestCandidatesAreReadyBeforeTheGatheringEnds(t *testing.T) {
 	prevQuiet, prevDirect, prevTURN := WebRTCGatherQuiet, WebRTCDirectGatherMax, WebRTCTURNGatherMax
 	WebRTCGatherQuiet, WebRTCDirectGatherMax, WebRTCTURNGatherMax = 200*time.Millisecond, 3*time.Second, 700*time.Millisecond
-	t.Cleanup(func() { WebRTCGatherQuiet, WebRTCDirectGatherMax, WebRTCTURNGatherMax = prevQuiet, prevDirect, prevTURN })
+	t.Cleanup(func() {
+		WebRTCGatherQuiet, WebRTCDirectGatherMax, WebRTCTURNGatherMax = prevQuiet, prevDirect, prevTURN
+	})
 
 	silent, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
 	if err != nil {

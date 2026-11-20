@@ -2,10 +2,10 @@
 package main
 
 import (
-	"fmt"
 	"bytes"
-	"encoding/json"
 	"container/list"
+	"encoding/json"
+	"fmt"
 )
 
 // jsonErrorResponse creates a JSON string representing an error state.
