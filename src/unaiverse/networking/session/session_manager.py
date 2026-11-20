@@ -81,6 +81,7 @@ class SessionManager:
         token_verifier: Optional[Callable] = None,
         token_factory: Optional[Callable[[], str]] = None,
         routing_classifier=None,
+        address_lookup: Optional[Callable] = None,
     ):
         """
         Args:
@@ -95,6 +96,8 @@ class SessionManager:
             decision_hook: responder side — async callback to accept/reject an inbound
                 PROFILE_OFFER and (for a world host) produce the WorldGrant spec.
                 None ⇒ Sessions accept by default (v1 agent happy-path).
+            address_lookup: initiator side — async node_id -> addresses of that node,
+                handed to every initiator Session (see Session); None ⇒ no lookup.
         """
         self.p2p = p2p
         self.p2p_name = p2p_name
@@ -108,6 +111,7 @@ class SessionManager:
         # handshake so periodic refresh shows).
         self._token_verifier = token_verifier
         self._token_factory = token_factory
+        self._address_lookup = address_lookup
         # Last node token broadcast to peers; tick() pushes a TOKEN_UPDATE when
         # token_factory() (i.e. self.node_token) changes. Seed with the current value
         # so the initial token is not re-broadcast.
@@ -413,6 +417,7 @@ class SessionManager:
             token_factory=self._token_factory,
             dial_attempts=dial_attempts,
             dial_budget_s=dial_budget_s,
+            address_lookup=self._address_lookup,
         )
         self._set_known(peer_id, sess)
         return sess

@@ -878,13 +878,18 @@ class NodeConn:
             return False
 
     def attach_session_policy(self, p2p_u: P2P, p2p_w: P2P,
-                              local_profile_factory, decision_hook, token_factory=None) -> None:
+                              local_profile_factory, decision_hook, token_factory=None,
+                              address_lookup=None) -> None:
         """Take the two transport handles and build the two per-instance SessionManagers,
         now that both the transports and the Node policy born late are available (the profile
         factory samples self.profile, the decision hook reads world/agent/allow-list state).
         This is the single point where the Coordinator becomes operational: each manager is
         built around its P2P and owns it. The Coordinator keeps no separate transport handle,
-        it reaches each instance (and its identity) through the owning manager."""
+        it reaches each instance (and its identity) through the owning manager.
+
+        address_lookup (async node_id -> addresses, from the Node layer) goes to the public
+        manager only: the root server holds the addresses of the public instance, and on
+        the world instance the rendezvous keeps them current."""
         # Per-instance perimeter routing injected into each manager: the public one
         # routes by direction (no membership, never cuts); the world one classifies
         # against the snapshot and cuts unclassifiable peers on its P2P instance.
@@ -898,6 +903,7 @@ class NodeConn:
             token_verifier=self.verify_token_claims,
             token_factory=token_factory,
             routing_classifier=NodeConn._route_public,
+            address_lookup=address_lookup,
         )
         self._sm_world = SessionManager(
             p2p=p2p_w,

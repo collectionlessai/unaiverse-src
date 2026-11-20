@@ -437,6 +437,7 @@ class Node:
             local_profile_factory=lambda: (self.profile.get_all_profile() if self.profile is not None else {}),
             decision_hook=lambda *a: self._decision_policy(*a),
             token_factory=lambda: self.node_token,
+            address_lookup=self._lookup_node_addresses,
         )
 
         # The managers exist now, so the TURN credentials that arrived with the token can
@@ -922,6 +923,22 @@ class Node:
             log.critical("Unable to retrieve the world/private peer ID (critical)")
             return ""
         return peer_id
+
+    async def _lookup_node_addresses(self, node_id: str) -> list[str] | None:
+        """The addresses of a node as the root server has them, for a Session that lost its
+        peer and may be dialling addresses that changed (async). The request is blocking,
+        so it runs in a thread: the Session awaits it in a task of its own.
+
+        Returns:
+            The addresses, or None when there are none or the request failed.
+        """
+        try:
+            response = await asyncio.to_thread(self.__root, api="/account/node/get/addresses",
+                                               payload={"account_token": self.unaiverse_key, "node_id": node_id})
+            return list(response.get("addresses") or []) or None
+        except Exception as e:
+            log.error(f"Error while retrieving the addresses of node {node_id} [{e}]")
+            return None
 
     async def ask_to_get_in_touch(self, node_name: str | None = None, addresses: list[str] | None = None,
                                   node_id: str | None = None,

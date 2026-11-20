@@ -1446,6 +1446,177 @@ def test_resume_with_no_answer_counts_as_a_reconnect_attempt(alice_conn, alice_p
     assert any("reconnect dial (attempt 2)" in line for line in lines), lines
 
 
+# Fresh addresses for the redials
+
+_MOVED = "/ip4/10.13.210.250/udp/37102/webrtc-direct/p2p/"
+
+
+def _initiator_with_lookup(alice_conn, alice_peer_id, bob_peer_id, answer):
+    """A reconnecting initiator that knows the node id of its peer and can ask the layer
+    above for its addresses. `answer` is what each lookup returns."""
+    calls = []
+
+    async def _lookup(node_id):
+        calls.append(node_id)
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+    sess = _reconnecting_initiator(alice_conn, alice_peer_id, bob_peer_id)
+    sess._address_lookup = _lookup
+    sess.remote_node_id_hint = "node-b"
+    return sess, calls
+
+
+async def _reap_lookup(sess, now):
+    """Let the lookup that was started run, and take its answer."""
+    await asyncio.sleep(0)
+    await sess.tick_dial(now)
+
+
+def test_addresses_are_looked_up_after_a_failed_dial_and_the_new_ones_dialled_at_once(
+        alice_conn, alice_peer_id, bob_peer_id):
+    """The peer moved: the dial with the addresses the Session started with fails, the
+    lookup brings the new ones, and the next dial leaves at once with them, not at the
+    end of its backoff. Addresses of another peer in the answer are left out."""
+    other = "/ip4/10.0.0.9/tcp/4001/p2p/12D3KooWothereeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    sess, calls = _initiator_with_lookup(alice_conn, alice_peer_id, bob_peer_id,
+                                         [_MOVED + bob_peer_id, other])
+
+    async def _runner():
+        now = time.monotonic()
+        await sess.tick_dial(now)                    # the first redial, with the old addresses
+        assert calls == []                           # nothing failed yet
+        await _fail_the_dial_in_flight(sess, now)
+        backoff_gate = sess._next_redial_at
+        await sess.tick_dial(now + 0.1)              # the lookup starts...
+        await _reap_lookup(sess, now + 0.2)          # ...and its answer is taken
+        await asyncio.sleep(0)
+        return now, backoff_gate
+    now, backoff_gate = asyncio.run(_runner())
+    assert calls == ["node-b"]
+    assert sess.addresses == [_MOVED + bob_peer_id]
+    assert backoff_gate > now + 0.2
+    assert alice_conn.connect_calls[-1] == [_MOVED + bob_peer_id]
+
+
+@pytest.mark.parametrize("failure", ["resume_send_failed", "resume_not_answered"])
+def test_a_resume_that_failed_also_asks_for_addresses(alice_conn, alice_peer_id, bob_peer_id, failure):
+    """A RESUME whose send failed, as in the first seconds of a change of network, and a
+    RESUME that got no answer are failed attempts for the lookup as much as a dial is."""
+    sess, calls = _initiator_with_lookup(alice_conn, alice_peer_id, bob_peer_id, None)
+    if failure == "resume_send_failed":
+        async def _refused(peer_id, protocol_id, sess_msg):
+            return False
+        alice_conn.send_session = _refused
+    else:
+        alice_conn.connect_returns = (bob_peer_id, False)
+
+    async def _runner():
+        now = time.monotonic()
+        if failure == "resume_send_failed":
+            sess.on_transport_reconnected()
+            await sess.tick_dial(now)                # the RESUME cannot be sent
+        else:
+            await sess.tick_dial(now)                # the dial "succeeds"...
+            await asyncio.sleep(0)
+            await sess.tick_dial(now)                # ...and the RESUME leaves
+            now += session_mod._RESUME_ACK_TIMEOUT_S + 0.1
+            await sess.tick_dial(now)                # no answer
+        await sess.tick_dial(now + 0.1)
+        await _reap_lookup(sess, now + 0.2)
+    asyncio.run(_runner())
+    assert calls == ["node-b"]
+
+
+def test_addresses_are_looked_up_at_most_once_every_interval(alice_conn, alice_peer_id, bob_peer_id):
+    sess, calls = _initiator_with_lookup(alice_conn, alice_peer_id, bob_peer_id, None)
+    interval = session_mod._ADDRESS_LOOKUP_INTERVAL_S
+
+    async def _runner():
+        now = time.monotonic()
+        for t in (0.0, 2.0, interval - 1.0, interval + 0.5):
+            at = max(now + t, sess._next_redial_at)
+            await sess.tick_dial(at)
+            await _fail_the_dial_in_flight(sess, at)
+            await sess.tick_dial(at)
+            await _reap_lookup(sess, at)
+            if t == interval - 1.0:
+                assert len(calls) == 1, calls
+    asyncio.run(_runner())
+    assert len(calls) == 2
+
+
+def test_lookup_with_nothing_new_changes_nothing(alice_conn, alice_peer_id, bob_peer_id):
+    """The peer kept its addresses (the common case: we moved, it did not), or the lookup
+    failed: the addresses stay, and the dial keeps its backoff."""
+    for answer in ([_BOB_ADDR + bob_peer_id], None, RuntimeError("root server down")):
+        alice_conn.connect_calls.clear()
+        sess, calls = _initiator_with_lookup(alice_conn, alice_peer_id, bob_peer_id, answer)
+
+        async def _runner():
+            now = time.monotonic()
+            await sess.tick_dial(now)
+            await _fail_the_dial_in_flight(sess, now)
+            gate = sess._next_redial_at
+            await sess.tick_dial(now + 0.1)
+            await _reap_lookup(sess, now + 0.2)
+            return gate
+        gate = asyncio.run(_runner())
+        assert calls == ["node-b"], answer
+        assert sess.addresses == [_BOB_ADDR + bob_peer_id], answer
+        assert sess._next_redial_at == gate and len(alice_conn.connect_calls) == 1, answer
+
+
+def test_no_lookup_without_the_node_id_of_the_peer_or_a_lookup(alice_conn, alice_peer_id, bob_peer_id):
+    sess, calls = _initiator_with_lookup(alice_conn, alice_peer_id, bob_peer_id, [_MOVED + bob_peer_id])
+    sess.remote_node_id_hint = None
+    plain = _reconnecting_initiator(alice_conn, alice_peer_id, bob_peer_id)
+
+    async def _runner():
+        now = time.monotonic()
+        for s_ in (sess, plain):
+            await s_.tick_dial(now)
+            await _fail_the_dial_in_flight(s_, now)
+            await s_.tick_dial(now + 0.1)
+            await _reap_lookup(s_, now + 0.2)
+    asyncio.run(_runner())
+    assert calls == []
+    assert sess.addresses == [_BOB_ADDR + bob_peer_id]
+
+
+def test_the_tick_does_not_wait_for_the_lookup(alice_conn, alice_peer_id, bob_peer_id):
+    """The root server may take its time: the tick that starts the lookup returns, and the
+    redials go on meanwhile."""
+    gate = None
+    calls = []
+
+    async def _runner():
+        nonlocal gate
+        gate = asyncio.Event()
+
+        async def _slow_lookup(node_id):
+            calls.append(node_id)
+            await gate.wait()
+            return [_MOVED + bob_peer_id]
+        sess = _reconnecting_initiator(alice_conn, alice_peer_id, bob_peer_id)
+        sess._address_lookup = _slow_lookup
+        sess.remote_node_id_hint = "node-b"
+        now = time.monotonic()
+        await sess.tick_dial(now)
+        await _fail_the_dial_in_flight(sess, now)
+        await asyncio.wait_for(sess.tick_dial(now + 0.1), timeout=1.0)
+        await asyncio.sleep(0)
+        assert calls == ["node-b"] and sess._lookup_task is not None
+        later = sess._next_redial_at
+        await sess.tick_dial(later)                  # a redial while the lookup runs
+        await asyncio.sleep(0)
+        dials = len(alice_conn.connect_calls)
+        gate.set()
+        return sess, dials
+    sess, dials = asyncio.run(_runner())
+    assert dials == 2
+
+
 def test_resume_sent_again_inside_its_wait_keeps_its_nonce(alice_conn, alice_peer_id, bob_peer_id):
     """Two signs that the transport is back, close to each other: the second RESUME is
     the first one again, so that the answer to either copy is taken."""

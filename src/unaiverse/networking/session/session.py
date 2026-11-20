@@ -79,6 +79,10 @@ _RESUME_ACK_TIMEOUT_S = 3.0  # RESUME sent; if un-acked within this, re-dial + r
 # here, 6 in the browser (maxDialAttempts of MOBILE_SESSION_TIMEOUTS in the SDK), so a
 # legitimate one repeats it 5 times at most.
 _MAX_REPEATED_HELLOS_ANSWERED = 5
+# How often a reconnecting initiator asks the layer above for fresh addresses of its peer.
+# A peer that moved posts its new addresses with its profile within 10 s
+# (SEND_DYNAMIC_PROFILE_EVERY), so the second lookup finds them if the first did not.
+_ADDRESS_LOOKUP_INTERVAL_S = 15.0
 
 # Session-level keep-alive (PING/PONG over the control protocol)
 # Bound to session_id on purpose: /ipfs/ping is a transport probe that go-libp2p
@@ -182,6 +186,7 @@ class Session:
         token_factory: Optional[Callable[[], str]] = None,
         dial_attempts: Optional[int] = None,
         dial_budget_s: Optional[float] = None,
+        address_lookup: Optional[Callable[[str], Awaitable[Optional[List[str]]]]] = None,
     ):
         """
         Args:
@@ -214,6 +219,10 @@ class Session:
             dial_budget_s: initiator only — override of the total CONNECTING budget
                 in seconds (None = module default). The world-join redeemer uses both
                 to ride a single attempt bounded by its grant window.
+            address_lookup: initiator only — async callable, node_id -> the addresses of
+                that node as the root server has them (None when not found or on any
+                error), given by the Node layer, which alone reaches the root server. A
+                reconnecting Session asks it after a failed attempt (see tick_dial).
         """
         self.peer_id = peer_id
         self.role = role
@@ -226,6 +235,10 @@ class Session:
         self.remote_node_id_hint = remote_node_id_hint
         self.addresses = list(addresses or [])
         self.app_role = app_role
+        self._address_lookup = address_lookup
+        self._lookup_task: Optional[asyncio.Task] = None
+        self._lookup_due = False   # a reconnect attempt failed since the last lookup
+        self._next_lookup_at = 0.0
         # Token capabilities (RT), injected by the layer that owns them
         # (Coordinator/Node). token_verifier(token, p2p_peer) -> (node_id, cv_hash,
         # p2p_peers, exp, code_hash) backed by the root TokenVerifier; token_factory() -> our current
@@ -383,6 +396,9 @@ class Session:
                     self._next_redial_at = now
                     log.session(f"{self!r} RESUME send failed, re-dialling", sub=self._sub)
 
+        if self.state == SessionState.RECONNECTING:
+            self._tick_address_lookup(now)
+
         # (a) Reap a completed dial.
         task = self._dial_task
         if task is not None and task.done():
@@ -416,11 +432,57 @@ class Session:
             if self._reconnect_substep == "resume_sent" and now >= self._resume_deadline:
                 self._reconnect_substep = "redial"
                 self._reconnect_attempts += 1
+                self._lookup_due = True
                 log.session(f"{self!r} RESUME got no answer within {_RESUME_ACK_TIMEOUT_S}s, "
                             f"counted as reconnect attempt {self._reconnect_attempts}", sub=self._sub)
             if self._reconnect_substep == "redial" and now >= self._next_redial_at:
                 self._start_dial()
         return []
+
+    def _tick_address_lookup(self, now: float) -> None:
+        """While RECONNECTING: take the addresses a finished lookup brought, and start a
+        lookup when an attempt failed since the last one, at most once every
+        _ADDRESS_LOOKUP_INTERVAL_S. The peer may have moved, and the addresses this Session
+        started with are all it dials. The lookup is a task, as the dial is: the tick that
+        starts it does not wait for it."""
+        task = self._lookup_task
+        if task is not None and task.done():
+            self._lookup_task = None
+            if not task.cancelled():
+                self._take_looked_up_addresses(task.result(), now)
+        if (self._address_lookup is not None and self.role == SessionRole.INITIATOR
+                and self.remote_node_id_hint and self._lookup_due and self._lookup_task is None
+                and now >= self._next_lookup_at):
+            self._lookup_due = False
+            self._next_lookup_at = now + _ADDRESS_LOOKUP_INTERVAL_S
+            self._lookup_task = asyncio.create_task(
+                self._run_lookup(self._address_lookup, self.remote_node_id_hint))
+
+    @staticmethod
+    async def _run_lookup(address_lookup, node_id: str) -> Optional[List[str]]:
+        """The lookup coroutine, run as a background task; reads only its arguments and
+        never raises."""
+        try:
+            found = await address_lookup(node_id)
+            return [str(a) for a in found] if found else None
+        except Exception as e:
+            log.error(f"address lookup of node {node_id} failed: {e}")
+            return None
+
+    def _take_looked_up_addresses(self, found: Optional[List[str]], now: float) -> None:
+        """Keep the addresses of this peer (another peer id is another process, which a
+        RESUME cannot reach); a list that differs from the one held replaces it, and the
+        next dial is made at once unless a dial or a RESUME is in flight."""
+        mine = [a for a in (found or []) if a.rsplit("/p2p/", 1)[-1].split("/")[0] == self.peer_id]
+        if not mine or set(mine) == set(self.addresses):
+            log.session(f"{self!r} address lookup: nothing new for this peer", sub=self._sub)
+            return
+        fresh = [a for a in mine if a not in self.addresses]
+        self.addresses = mine
+        log.session(f"{self!r} addresses of the peer refreshed from the root server: "
+                    f"{len(mine)}, {len(fresh)} new", sub=self._sub)
+        if self._dial_task is None and self._reconnect_substep == "redial":
+            self._next_redial_at = now
 
     async def _on_dial_done_connecting(self, peer_id, through_relay, now) -> List[SessionEvent]:
         if peer_id is not None and through_relay and self._reject_relay:
@@ -457,6 +519,7 @@ class Session:
             # The substep is left alone: a RESUME may be in flight on a transport that came
             # back while this dial ran, and its answer is still to be taken.
             self._reconnect_attempts += 1
+            self._lookup_due = True
             delay = min(_RETRY_BASE_S * (2 ** (self._reconnect_attempts - 1)), _RETRY_CAP_S)
             self._next_redial_at = now + delay
             log.session(f"{self!r} reconnect dial failed, next try in {delay:.1f}s", sub=self._sub)
@@ -482,9 +545,12 @@ class Session:
             self._resume_nonce = secrets.token_bytes(8)
         self._reconnect_substep = "resume_sent"
         self._resume_deadline = now + _RESUME_ACK_TIMEOUT_S
-        return await self._send_payload(SESSION_CONTROL_PROTOCOL, SessMsg(SessMsg.KIND_RESUME, {
+        sent = await self._send_payload(SESSION_CONTROL_PROTOCOL, SessMsg(SessMsg.KIND_RESUME, {
             "session_id": self.session_id, "nonce": self._resume_nonce,
         }))
+        if not sent:
+            self._lookup_due = True
+        return sent
 
     async def _send_hello(self, now: Optional[float] = None) -> List[SessionEvent]:
         self.nonce_a = secrets.token_bytes(_NONCE_BYTES)
@@ -1222,6 +1288,8 @@ class Session:
         self._set_state(SessionState.RECONNECTING, window_s)
         self._reconnecting_since = self._state_entered_at
         self._reconnect_window_s = window_s
+        self._lookup_due = False
+        self._next_lookup_at = 0.0
         self._peer_lost_session = peer_lost_session
         self._reconnect_substep = "redial"
         self._reconnect_attempts = 0
