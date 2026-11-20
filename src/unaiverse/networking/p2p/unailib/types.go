@@ -63,8 +63,12 @@ const (
 )
 
 // WebRTCDirectStageTimeout is the budget of the direct stage, signalling and opening of
-// the DataChannel together: the 15 s the browser gives its own.
-const WebRTCDirectStageTimeout = 15 * time.Second
+// the DataChannel together: what the browser gives its own. A direct stage that finds a
+// path does it fast, and one that finds none says so only by its time running out, with
+// the peer waiting on a relay circuit: in the live round of 2026-11-18 every direct stage
+// that succeeded took at most 3.3 s (40 of them) and every one that failed took the whole
+// budget, 15 s then.
+const WebRTCDirectStageTimeout = 5 * time.Second
 
 // WebRTCStagePause is the pause between the end of a direct stage that failed and the
 // offer of the TURN stage. A browser takes one signalling exchange per peer at a time
@@ -93,15 +97,15 @@ var (
 	WebRTCTURNGatherMax   = 8 * time.Second
 )
 
-// WebRTCDCUtRWaitGoPeer is how long a Go node waits for native libp2p DCUtR/hole-punching
-// before falling back to our custom WebRTC signaling, when the remote is also a Go peer
-// (advertises only /webrtc-direct). Go↔Go DCUtR can succeed, so we give it time.
-const WebRTCDCUtRWaitGoPeer = 20 * time.Second
-
-// WebRTCDCUtRWaitJSPeer is the short wait used when the remote is a JS/browser peer
-// (advertises /webrtc multiaddrs). Go↔JS DCUtR can never succeed (incompatible transports),
-// so we skip straight to our custom signaling after a minimal delay.
-const WebRTCDCUtRWaitJSPeer = 3 * time.Second
+// WebRTCUpgradeWait is how long the node that dialled a relay circuit waits, once the peer
+// is identified, before it offers a WebRTC DataChannel: the head start of the paths that
+// need no offer. Toward a Go peer that is the hole punching of the library (DCUtR), which
+// connects within a second or two when it can. Toward a browser it is the direct legs the
+// browser dials when it identifies us, bounded to 2 s. The wait is the same for both and
+// short on purpose: the direct stage of the offer has no TURN server, so a path that
+// comes after the offer was made is one more path and never a worse one. The 20 s once
+// given to DCUtR between two Go nodes passed in full every time they were measured.
+const WebRTCUpgradeWait = 3 * time.Second
 
 // PeerConnectionTimeout is the timeout for a single outbound connection attempt to a peer.
 const PeerConnectionTimeout = 30 * time.Second
@@ -407,7 +411,7 @@ type NodeInstance struct {
 	webrtcConnections map[peer.ID]*WebRTCConn
 	// The peers an offer of ours is being made to (see initiateWebRTCConnection): one
 	// run of the stages per peer at a time.
-	webrtcOffering 	sync.Map
+	webrtcOffering sync.Map
 	iceConfigMu       sync.RWMutex  // protects iceConfig swaps
 	iceConfig         *ICEConfig // nil → use defaults (Google STUN)
 	// clock is what the freshness of a DataChannel and the retry of a chat stream move

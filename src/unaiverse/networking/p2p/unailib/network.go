@@ -344,9 +344,9 @@ func enforceProtocolCompliance(ni *NodeInstance) {
 	}()
 }
 
-// autoUpgradeWebRTC listens for newly identified peers. If a peer is connected
-// via a relay, it waits 20 seconds for native DCUtR to succeed. If it fails,
-// it initiates a WebRTC fallback.
+// autoUpgradeWebRTC listens for newly identified peers. To one that is reached through a
+// relay alone, on a circuit this node dialled, it offers a WebRTC DataChannel, after the
+// head start of the paths that need no offer (WebRTCUpgradeWait).
 func autoUpgradeWebRTC(ni *NodeInstance) {
 	sub, err := ni.host.EventBus().Subscribe(new(event.EvtPeerIdentificationCompleted))
 	if err != nil {
@@ -414,30 +414,14 @@ func autoUpgradeWebRTC(ni *NodeInstance) {
 					continue
 				}
 
-				// Detect if the remote peer is a JS/browser node by checking whether
-				// any of its advertised listen addresses contain /webrtc (but not /webrtc-direct).
-				// JS peers have native /webrtc addresses; Go peers only have /webrtc-direct.
-				remoteHasNativeWebRTC := false
-				for _, addr := range idEvt.ListenAddrs {
-					addrStr := addr.String()
-					if strings.Contains(addrStr, "/webrtc") && !strings.Contains(addrStr, "/webrtc-direct") {
-						remoteHasNativeWebRTC = true
-						break
-					}
-				}
-
-				// Go↔Go: DCUtR can work, wait the full 20s.
-				// Go↔JS: DCUtR can never work, skip to WebRTC after 3s.
-				dcutrWait := WebRTCDCUtRWaitGoPeer
-				if remoteHasNativeWebRTC {
-					dcutrWait = WebRTCDCUtRWaitJSPeer
-				}
-				logger.Infof("[GO] ⏳ Instance %d: Peer %s is relayed. Waiting %v for native DCUtR (remote is JS peer: %v)...", ni.instanceIndex, remotePeer, dcutrWait, remoteHasNativeWebRTC)
+				// The agent is what the peer calls itself (see UnaiverseIdentifyAgent). It
+				// decides nothing here, the wait is the same for every kind of peer: it is
+				// in the log for whoever reads which paths could have come before the offer.
+				logger.Infof("[GO] ⏳ Instance %d: Peer %s (agent %q) is relayed. Waiting %v for a path that needs no offer...", ni.instanceIndex, remotePeer, idEvt.AgentVersion, WebRTCUpgradeWait)
 
 				// Fire the timeout and upgrade asynchronously so we don't block the event loop
 				go func(pid peer.ID, wait time.Duration) {
 					defer recoverGoroutine("autoUpgradeWebRTC.upgrade")
-					// Wait for native DCUtR holepunching to do its thing
 					select {
 					case <-time.After(wait):
 					case <-ni.ctx.Done():
@@ -455,18 +439,18 @@ func autoUpgradeWebRTC(ni *NodeInstance) {
 					}
 
 					if !stillOnlyRelay || len(connsAfter) == 0 {
-						logger.Debugf("[GO] ✅ Instance %d: Native DCUtR succeeded (or peer disconnected) for %s. No WebRTC fallback needed.", ni.instanceIndex, pid)
+						logger.Debugf("[GO] ✅ Instance %d: %s has a direct connection (or is gone) after %v. No WebRTC offer needed.", ni.instanceIndex, pid, wait)
 						return
 					}
 
-					logger.Warnf("[GO] ⚠️ Instance %d: Native direct connection to %s failed after 20s. Initiating WebRTC fallback...", ni.instanceIndex, pid)
+					logger.Infof("[GO] ↪️ Instance %d: No direct connection to %s after %v. Offering a WebRTC DataChannel...", ni.instanceIndex, pid, wait)
 					err := initiateWebRTCConnection(ni, pid)
 					if errors.Is(err, errWebRTCOfferNotNeeded) {
 						logger.Infof("[GO] ✅ Instance %d: %v", ni.instanceIndex, err)
 					} else if err != nil {
-						logger.Errorf("[GO] ❌ Instance %d: WebRTC fallback failed for %s: %v", ni.instanceIndex, pid, err)
+						logger.Errorf("[GO] ❌ Instance %d: The WebRTC offer to %s failed: %v", ni.instanceIndex, pid, err)
 					}
-				}(remotePeer, dcutrWait)
+				}(remotePeer, WebRTCUpgradeWait)
 			}
 		}
 	}()
