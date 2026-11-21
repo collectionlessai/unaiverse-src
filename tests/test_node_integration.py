@@ -23,8 +23,10 @@ from unaiverse.networking.node.profile import NodeProfile
 from unaiverse.networking.session import (SessionState, SessionEventType, SessionRole,
                                           VerifiedTokenClaims)
 from unaiverse.networking.session.session import SessionEvent
-from unaiverse.networking.session.sess_msg import CV_HASH_MISMATCH, NOT_AUTHORIZED, ProfileDecisionResult
+from unaiverse.networking.session.sess_msg import (CV_HASH_MISMATCH, NOT_AUTHORIZED, GRACEFUL_SHUTDOWN,
+                                                   ProfileDecisionResult)
 from unaiverse.clock import clock
+from unaiverse.custom import Custom
 
 from conftest import apump
 from node_harness import (
@@ -389,6 +391,189 @@ def test_rejoin_watchdog_keeps_sooner_retry_armed_by_attempt():
         await node._tick_rejoin_watchdog()
         remaining = node.rejoining_time - clock.get_time()
         assert 0.0 < remaining <= 5.5      # kept the sooner retry, not re-anchored to +30
+
+    asyncio.run(_scenario())
+
+
+# A lone wolf started with get_in_touch and keep_in_touch
+
+THE_PEER = {"node_name": "the-peer"}
+
+
+async def _lone_wolf_in_touch(keep_in_touch: bool):
+    """A lone wolf whose public Session with REMOTE_PEER is established, with the state
+    run(get_in_touch="the-peer", keep_in_touch=...) leaves; its getting in touch again is
+    recorded instead of dialled."""
+    node, conn = build_agent_node_shell(NODE_PEER)
+    remote_sm, remote_conn, remote_inbox = make_remote_peer(
+        REMOTE_PEER, "remote-node", conn.inbox_by_p2p[NodeConn.P2P_PUBLIC])
+    conn.send_inbox = remote_inbox
+    conn.connect_returns = (REMOTE_PEER, False)
+    assert await node.connect_via_session(peer_id=REMOTE_PEER, addresses=["/ip4/127.0.0.1/tcp/0"],
+                                          p2p_name=NodeConn.P2P_PUBLIC)
+    await _reap_node_dial(node)                   # HELLO
+    await apump(remote_inbox, remote_sm)          # HELLO_ACK
+    await node._Node__handle_network_messages()   # PROFILE_OFFER
+    await apump(remote_inbox, remote_sm)          # DECISION
+    await node._Node__handle_network_messages()   # ESTABLISHED
+    assert conn._sm_public.is_established(REMOTE_PEER)
+
+    node.keep_in_touch = keep_in_touch
+    if keep_in_touch:
+        node.in_touch_kwargs = dict(THE_PEER)
+        node.in_touch_peer_id = REMOTE_PEER
+    dials = []
+
+    async def _get_in_touch(**kwargs):
+        dials.append(kwargs)
+        return REMOTE_PEER
+    node.ask_to_get_in_touch = _get_in_touch
+    return node, conn, remote_sm, remote_inbox, dials
+
+
+@pytest.mark.parametrize("keep_in_touch", [True, False])
+def test_a_lone_wolf_kept_in_touch_dials_its_peer_again_after_a_lost(stepped_clock, keep_in_touch):
+    """T11 part 2 of 2026-11-17: the dialler's Session ran out its reconnect window while
+    its peer was frozen, went LOST, and the node stayed idle with the peer alive again.
+    With keep_in_touch the watchdog of the rejoin gets in touch again once its wait is
+    over; without it the node stays idle, as before."""
+    async def _scenario():
+        node, conn, _, _, dials = await _lone_wolf_in_touch(keep_in_touch)
+        events = []
+        dispatch = node._dispatch_session_event
+
+        async def _spy(ev):
+            events.append(ev.type)
+            await dispatch(ev)
+        node._dispatch_session_event = _spy
+        conn.connect_returns = (None, False)      # the redials find nobody
+        for ev in await conn.on_peer_disconnected(REMOTE_PEER):
+            await node._dispatch_session_event(ev)
+        conn._sm_public.get_session(REMOTE_PEER)._state_entered_at -= 3600.
+        await node._Node__handle_network_messages()   # the window ends
+        assert events == [SessionEventType.RECONNECTING, SessionEventType.LOST]
+
+        await node._tick_rejoin_watchdog()
+        assert dials == []                        # not before its wait
+        stepped_clock.advance(Custom.REJOINING_WAIT)
+        await node._tick_rejoin_watchdog()
+        assert dials == ([THE_PEER] if keep_in_touch else [])
+
+    asyncio.run(_scenario())
+
+
+def test_a_peer_that_says_goodbye_is_not_dialled_again(stepped_clock):
+    """A CLOSED is the peer's goodbye, not a LOST: no getting in touch again."""
+    async def _scenario():
+        node, conn, remote_sm, remote_inbox, dials = await _lone_wolf_in_touch(True)
+        await remote_sm.close_session(NODE_PEER, GRACEFUL_SHUTDOWN)
+        events = []
+        dispatch = node._dispatch_session_event
+
+        async def _spy(ev):
+            events.append(ev.type)
+            await dispatch(ev)
+        node._dispatch_session_event = _spy
+        await node._Node__handle_network_messages()
+        assert SessionEventType.CLOSED in events
+
+        stepped_clock.advance(Custom.REJOINING_WAIT)
+        await node._tick_rejoin_watchdog()
+        assert dials == []
+
+    asyncio.run(_scenario())
+
+
+def test_a_failed_attempt_is_retried_and_a_quarantine_refusal_pulls_the_retry_in(stepped_clock):
+    async def _scenario():
+        node, conn = build_agent_node_shell(NODE_PEER)
+        node.keep_in_touch = True
+        node.in_touch_kwargs = dict(THE_PEER)
+        node.in_touch_peer_id = REMOTE_PEER
+
+        def _failed(peer_id, data):
+            return SessionEvent(type=SessionEventType.FAILED, session_id="", peer_id=peer_id,
+                                role=SessionRole.INITIATOR, p2p_name=NodeConn.P2P_PUBLIC, data=data)
+
+        await node._dispatch_session_event(_failed("12D3KooWsomeoneelse", {"reason": "dial_failed"}))
+        assert node.in_touch_time == -1.          # another peer
+
+        await node._dispatch_session_event(_failed(REMOTE_PEER, {"reason": "profile_rejected:NOT_AUTHORIZED"}))
+        assert node.in_touch_time == clock.get_time() + Custom.REJOINING_WAIT
+
+        await node._dispatch_session_event(_failed(REMOTE_PEER, {"reason": "quarantined:4.0s",
+                                                                 "retry_after_s": 4.0}))
+        assert 0. < node.in_touch_time - clock.get_time() <= 5.5
+
+    asyncio.run(_scenario())
+
+
+def test_the_watchdog_follows_the_peer_and_its_established_link_disarms_it(stepped_clock):
+    """The peer may come back under another peer-id: the attempt follows it, and the
+    ESTABLISHED Session with it disarms the watchdog. Until then each attempt is followed
+    by the next one after the default wait."""
+    async def _scenario():
+        node, conn = build_agent_node_shell(NODE_PEER)
+        node.keep_in_touch = True
+        node.in_touch_kwargs = dict(THE_PEER)
+        node.in_touch_peer_id = REMOTE_PEER
+        node.in_touch_time = clock.get_time()
+        dials = []
+
+        async def _get_in_touch(**kwargs):
+            dials.append(kwargs)
+            return "12D3KooWnewpeer"
+        node.ask_to_get_in_touch = _get_in_touch
+
+        await node._tick_rejoin_watchdog()
+        assert dials == [THE_PEER]
+        assert node.in_touch_peer_id == "12D3KooWnewpeer"
+        assert node.in_touch_time == clock.get_time() + Custom.REJOINING_WAIT
+
+        await node._dispatch_session_event(SessionEvent(
+            type=SessionEventType.ESTABLISHED, session_id="00" * 8, peer_id="12D3KooWnewpeer",
+            role=SessionRole.INITIATOR, p2p_name=NodeConn.P2P_PUBLIC, data={}))
+        assert node.in_touch_time == -1.
+
+    asyncio.run(_scenario())
+
+
+def test_run_turns_keep_in_touch_on_only_for_a_node_started_with_get_in_touch():
+    node, conn = build_agent_node_shell(NODE_PEER)
+
+    async def _nothing(*args, **kwargs):
+        return None
+    node.run_async = _nothing
+    node.aclose = _nothing
+    node.run(get_in_touch="the-peer", keep_in_touch=True)
+    assert node.keep_in_touch is True
+    node.run(keep_in_touch=True)
+    assert node.keep_in_touch is False
+    node.run(get_in_touch="the-peer")
+    assert node.keep_in_touch is False
+
+
+def test_run_async_records_what_to_dial_again_for_a_node_kept_in_touch():
+    """The start of run_async records the target of get_in_touch, with the options it was
+    given, and the peer it reached. A budget of no cycle cuts the loop itself short."""
+    async def _scenario():
+        node, conn = build_agent_node_shell(NODE_PEER)
+
+        async def _nothing(*args, **kwargs):
+            return None
+
+        async def _get_in_touch(**kwargs):
+            return REMOTE_PEER
+        node.hosted.subscribe_to_pubsub_owned_streams = _nothing
+        node.aclose = _nothing
+        node.ask_to_get_in_touch = _get_in_touch
+        node.keep_in_touch = True
+        try:
+            await node.run_async(cycles=0, get_in_touch="the-peer", public=True)
+        except Exception:
+            pass                                  # log.critical on the budget, where it raises
+        assert node.in_touch_kwargs == {"node_name": "the-peer", "public": True}
+        assert node.in_touch_peer_id == REMOTE_PEER
 
     asyncio.run(_scenario())
 

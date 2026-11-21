@@ -204,6 +204,13 @@ class Node:
         self.rejoining_kwargs: dict = {}
         self.rejoining_time = -1.
 
+        # A lone wolf started with get_in_touch and keep_in_touch: what it dials again when
+        # the link with that peer ends involuntarily, the peer, and when (-1 when not armed)
+        self.keep_in_touch = False
+        self.in_touch_kwargs: dict = {}
+        self.in_touch_peer_id: str | None = None
+        self.in_touch_time = -1.
+
         # Expected properties of the nodes that will try to connect to this one
         self.only_certified_agents = only_certified_agents
         self.allowed_node_ids = set(allowed_node_ids) if allowed_node_ids is not None else None
@@ -1265,12 +1272,19 @@ class Node:
                          f"Query: {query_text}, nickname: {nickname} [{e}]")
         return profiles
 
-    def run(self, keep_rejoining: bool = True, *args, **kwargs) -> None:
+    def run(self, keep_rejoining: bool = True, *args, keep_in_touch: bool = False, **kwargs) -> None:
         """Starts the main execution loop for the node, calling method run_async(...) by means of asyncio.run.
-        See documentation of method run_async."""
+        See documentation of method run_async.
+
+        Args:
+            keep_rejoining: With join_world, join the world again when the link with it ends involuntarily.
+            keep_in_touch: With get_in_touch, get in touch with that peer again when the link with it ends
+                involuntarily (a LOST or a FAILED, not a goodbye of the peer). Off by default.
+        """
         if keep_rejoining and 'join_world' not in kwargs:
             keep_rejoining = False
         self.keep_rejoining = keep_rejoining
+        self.keep_in_touch = keep_in_touch and kwargs.get('get_in_touch') is not None
 
         async def _run_then_close():
             try:
@@ -1408,6 +1422,10 @@ class Node:
                 log.critical(f"Unable to get in touch with agent: {get_in_touch}")
             else:
                 got_in_touch_with_this_lone_wolf = ret  # saving peer ID
+                if self.keep_in_touch:
+                    self.in_touch_kwargs = ({'node_name': get_in_touch} if isinstance(get_in_touch, str)
+                                            else {'addresses': get_in_touch}) | kwargs
+                    self.in_touch_peer_id = ret
         else:
             waiting_for_lone_wolves = True
 
@@ -1612,7 +1630,8 @@ class Node:
 
                 log.misc(f"=== Starting clock cycle {clock.get_cycle()} ===")
 
-                # Re-fire a scheduled world rejoin when it comes due (see _tick_rejoin_watchdog).
+                # Re-fire a scheduled world rejoin, or the getting in touch again of a lone wolf,
+                # when it comes due (see _tick_rejoin_watchdog).
                 await self._tick_rejoin_watchdog()
 
                 # Handle new connections or lost connections
@@ -2859,6 +2878,8 @@ class Node:
             pass
 
         if ev.type == SessionEventType.ESTABLISHED:
+            if self.keep_in_touch and ev.peer_id == self.in_touch_peer_id:
+                self.in_touch_time = -1.   # in touch again
             await self._on_session_established(ev)
         elif ev.type == SessionEventType.RESUMED:
             await self._on_session_resumed(ev)
@@ -2869,6 +2890,7 @@ class Node:
             self._world_host_unlist_member(ev)
             await self._maybe_leave_world_on_session_end(ev)
             self._maybe_rearm_rejoin_on_failed_join(ev)
+            self._maybe_rearm_get_in_touch(ev)
             log.error(f"[session] handshake to ...{ev.peer_id[-5:]} failed "
                       f"(p2p={ev.p2p_name}, reason={ev.data.get('reason', 'unknown')})",
                       sub="prv" if "world" in ev.p2p_name else "pub")
@@ -2914,6 +2936,7 @@ class Node:
             # rode its grace to LOST must retry, same as a FAILED one. A clean
             # CLOSED still never re-arms.
             self._maybe_rearm_rejoin_on_failed_join(ev)
+            self._maybe_rearm_get_in_touch(ev)
             try:
                 await self.__purge(ev.peer_id, settled=True)
             except Exception as e:
@@ -2975,7 +2998,9 @@ class Node:
         cancel the rejoin, wedging the node out of the world with no retry — so we let it
         re-fire and recover instead. A duplicate tick while a join is in flight is harmless:
         initiate() no-ops on the matching-intent carrier. Any error from the dial is caught
-        so a transient failure retries rather than unwinding the main loop."""
+        so a transient failure retries rather than unwinding the main loop. The same tick
+        gets a lone wolf in touch again with its peer (_tick_get_in_touch)."""
+        await self._tick_get_in_touch()
         if not (0. < self.rejoining_time <= clock.get_time()):
             return
         if not self.keep_rejoining:
@@ -2992,6 +3017,49 @@ class Node:
         if failed:
             log.user(f"Failed to rejoin, retrying in "
                      f"{self.rejoining_time - clock.get_time():.0f} seconds...")
+
+    async def _tick_get_in_touch(self) -> None:
+        """The part of the rejoin watchdog for a lone wolf started with get_in_touch and
+        keep_in_touch: once the link with that peer ended involuntarily (in_touch_time armed
+        by _maybe_rearm_get_in_touch), get in touch with it again. As for a world, the dial
+        goes on off-task, so the timer is set again for the next attempt, at the earliest of
+        the default wait and a sooner retry armed by the attempt's own refusal, and only the
+        ESTABLISHED Session with the peer disarms it."""
+        if not (0. < self.in_touch_time <= clock.get_time()):
+            return
+        if not self.keep_in_touch:
+            self.in_touch_time = -1.
+            return
+        self.in_touch_time = 0.
+        peer_id = None
+        log.user("Getting in touch again with the peer this node was started with...")
+        try:
+            peer_id = await self.ask_to_get_in_touch(**self.in_touch_kwargs)
+        except Exception as e:
+            log.error(f"[in touch] ask_to_get_in_touch raised, will retry: {e}")
+        if peer_id is not None:
+            self.in_touch_peer_id = peer_id   # the peer may come back under another peer-id
+        if self.in_touch_time <= 0.:
+            self.in_touch_time = clock.get_time() + Custom.REJOINING_WAIT
+        if peer_id is None:
+            log.user(f"Failed to get in touch again, retrying in "
+                     f"{self.in_touch_time - clock.get_time():.0f} seconds...")
+
+    def _maybe_rearm_get_in_touch(self, ev) -> None:
+        """A lone wolf started with get_in_touch and keep_in_touch: an involuntary end (LOST,
+        FAILED) of the Session with that peer arms the getting in touch again, a quarantine
+        refusal just past its ban; a clean CLOSED (the peer said goodbye) never does. A later
+        target never pushes out a sooner one."""
+        if not self.keep_in_touch or ev.peer_id != self.in_touch_peer_id:
+            return
+        retry_after = ev.data.get("retry_after_s")
+        wait_s = (Custom.REJOINING_WAIT if retry_after is None
+                  else min(float(retry_after) + _REJOIN_RETRY_MARGIN_S, Custom.REJOINING_WAIT))
+        target = clock.get_time() + wait_s
+        if self.in_touch_time <= 0. or target < self.in_touch_time:
+            self.in_touch_time = target
+            log.user(f"The link with ...{ev.peer_id[-5:]} ended ({ev.type.value}): getting in touch "
+                     f"again in {wait_s:.0f} seconds")
 
     def _maybe_rearm_rejoin_on_failed_join(self, ev) -> None:
         """Joiner side: an INVOLUNTARY terminal (FAILED, LOST, or a failed join body)
