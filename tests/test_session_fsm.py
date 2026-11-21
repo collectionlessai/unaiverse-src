@@ -1914,11 +1914,12 @@ def test_repeated_hellos_past_the_ceiling_are_not_answered(bob_conn, bob_peer_id
     """Each answer to a repeated HELLO is a signature with the host key and a send. Up to
     the ceiling they are answered, the one past it is ignored, says so, and changes
     nothing. The ceiling covers the most a legitimate initiator repeats its HELLO: one per
-    dial attempt after the first, and the browser makes up to 6 attempts."""
+    dial attempt after the first (the browser makes up to 6 attempts), and the repeats of
+    the last one when its answer does not come."""
     lines = []
     monkeypatch.setattr(session_mod.log, "session", lambda msg, *a, **k: lines.append(msg))
     ceiling = session_mod._MAX_REPEATED_HELLOS_ANSWERED
-    assert ceiling >= 6 - 1
+    assert ceiling >= 6 - 1 + session_mod._MAX_HELLO_REPEATS
     sess = _mk(alice_peer_id, SessionRole.RESPONDER, bob_conn, bob_peer_id)
     hello = SessMsg(SessMsg.KIND_HELLO_REQ, {
         "session_id": b"\x01" * 16, "nonce_a": b"\xaa" * 32,
@@ -1938,6 +1939,149 @@ def test_repeated_hellos_past_the_ceiling_are_not_answered(bob_conn, bob_peer_id
     assert sess.state == SessionState.HELLO_ACK_SENT and sess.session_id == b"\x01" * 16
     assert sess.nonce_b == nonce_b and sess._state_entered_at == entered_at
     assert any("repeated HELLO ignored" in line for line in lines), lines
+
+
+# The HELLO sent again when no HELLO_ACK came
+
+def _lose(conn, kind, times):
+    """The next `times` frames of `kind` sent through `conn` are reported as sent and never
+    reach the peer: a connection closed under them after the write returned."""
+    original = conn.send_session
+    left = [times]
+
+    async def _send(peer_id, protocol_id, sess_msg):
+        if sess_msg.kind == kind and left[0] > 0:
+            left[0] -= 1
+            conn.sent.append((peer_id, protocol_id, sess_msg))
+            return True
+        return await original(peer_id, protocol_id, sess_msg)
+    conn.send_session = _send
+
+
+def _pair(alice_conn, bob_conn, alice_peer_id, bob_peer_id):
+    from unaiverse.networking.session import SessionManager
+
+    def _sm(conn, peer_id, node_id):
+        return SessionManager(p2p=conn, p2p_name=NodeConn.P2P_PUBLIC, local_peer_id=peer_id,
+                              local_node_id=node_id, local_profile_factory=lambda: {"node_id": node_id})
+    alice_conn.connect_returns = (bob_peer_id, False)
+    return _sm(alice_conn, alice_peer_id, "alice"), _sm(bob_conn, bob_peer_id, "bob")
+
+
+@pytest.mark.parametrize("lost", [SessMsg.KIND_HELLO_REQ, SessMsg.KIND_HELLO_RESP])
+def test_a_lost_hello_or_hello_ack_is_made_good_by_the_hello_sent_again(
+        bidirectional_fakeconns, alice_peer_id, bob_peer_id, lost, monkeypatch):
+    """T5a-local of 2026-11-21 and X5 of 2026-11-18: the circuit the HELLO, or its
+    HELLO_ACK, was written on closed before the frame was read, and nobody knew. The
+    initiator waited the whole stage and failed timeout:hello_sent. Three seconds with no
+    answer, and it sends the same HELLO again: the handshake completes."""
+    from conftest import apump
+    lines = []
+    monkeypatch.setattr(session_mod.log, "session", lambda msg, *a, **k: lines.append(msg))
+    alice_conn, bob_conn, alice_inbox, bob_inbox = bidirectional_fakeconns
+    _lose(alice_conn if lost == SessMsg.KIND_HELLO_REQ else bob_conn, lost, 1)
+
+    async def _runner():
+        sm_a, sm_b = _pair(alice_conn, bob_conn, alice_peer_id, bob_peer_id)
+        await sm_a.initiate(bob_peer_id, ["/ip4/127.0.0.1/tcp/0/p2p/" + bob_peer_id])
+        await asyncio.sleep(0)
+        await sm_a.tick()                            # the dial, and the HELLO
+        sess = sm_a.get_session(bob_peer_id)
+        entered_at = sess._state_entered_at
+        events = await apump(bob_inbox, sm_b)
+        events += await apump(alice_inbox, sm_a)
+        assert sess.state == SessionState.HELLO_SENT
+        for at in (2.9, 3.1, 15.1):
+            events += await sm_a.tick(entered_at + at)
+            for _ in range(4):
+                events += await apump(bob_inbox, sm_b)
+                events += await apump(alice_inbox, sm_a)
+        return sm_a, sm_b, events
+    sm_a, sm_b, events = _run(_runner())
+    assert [(e.type, e.data.get("reason")) for e in events] == [(SessionEventType.ESTABLISHED, None)] * 2
+    assert sm_a.get_session(bob_peer_id).state == SessionState.ESTABLISHED
+    assert sm_b.get_session(alice_peer_id).state == SessionState.ESTABLISHED
+    assert sum("HELLO sent again (1/2)" in line for line in lines) == 1
+
+
+def test_an_answer_that_comes_after_the_repeat_breaks_nothing(bidirectional_fakeconns, alice_peer_id,
+                                                              bob_peer_id):
+    """The answer was only slow: it reaches the initiator after its repeat left. The
+    initiator goes on with it, the responder answers the repeat as well, and the second
+    answer is ignored by an initiator already past HELLO_SENT."""
+    from conftest import apump
+    alice_conn, bob_conn, alice_inbox, bob_inbox = bidirectional_fakeconns
+
+    async def _runner():
+        sm_a, sm_b = _pair(alice_conn, bob_conn, alice_peer_id, bob_peer_id)
+        await sm_a.initiate(bob_peer_id, ["/ip4/127.0.0.1/tcp/0/p2p/" + bob_peer_id])
+        await asyncio.sleep(0)
+        await sm_a.tick()
+        entered_at = sm_a.get_session(bob_peer_id)._state_entered_at
+        events = await apump(bob_inbox, sm_b)        # the answer, on its way
+        events += await sm_a.tick(entered_at + 3.1)   # the repeat leaves before it arrives
+        for _ in range(4):
+            events += await apump(alice_inbox, sm_a)
+            events += await apump(bob_inbox, sm_b)
+        return sm_a, sm_b, events
+    sm_a, sm_b, events = _run(_runner())
+    assert [e.type for e in events] == [SessionEventType.ESTABLISHED] * 2
+    assert sm_a.get_session(bob_peer_id).state == SessionState.ESTABLISHED
+    assert sm_b.get_session(alice_peer_id).state == SessionState.ESTABLISHED
+    answers = [e for e in bob_conn.sent if e[2].kind == SessMsg.KIND_HELLO_RESP]
+    offers = [e for e in alice_conn.sent if e[2].kind == SessMsg.KIND_PROFILE_OFFER]
+    assert len(answers) == 2 and len(offers) == 1
+
+
+def test_the_hello_goes_out_again_twice_at_most_within_the_unchanged_stage(alice_conn, alice_peer_id,
+                                                                          bob_peer_id, monkeypatch):
+    """No answer at all: the same HELLO (same session and nonce) again at 3 s and at 6 s
+    from the last one, one line each, then nothing more; the stage still ends at 15 s."""
+    lines = []
+    monkeypatch.setattr(session_mod.log, "session", lambda msg, *a, **k: lines.append(msg))
+    alice_conn.connect_returns = (bob_peer_id, False)
+    sess = _mk(bob_peer_id, SessionRole.INITIATOR, alice_conn, alice_peer_id,
+               addresses=["/ip4/127.0.0.1/tcp/0/p2p/" + bob_peer_id])
+
+    async def _runner():
+        sess.start()
+        await asyncio.sleep(0)
+        await sess.tick_dial()
+        entered_at = sess._state_entered_at
+        counts = []
+        for at in (2.9, 3.1, 4.0, 6.0, 6.2, 9.5, 14.9):
+            await sess.tick_dial(entered_at + at)
+            counts.append(len(_hellos(alice_conn)))
+        assert sess._state_entered_at == entered_at   # the stage was not started again
+        return counts, sess.check_timeout(entered_at + 14.9), sess.check_timeout(entered_at + 15.1)
+    counts, early, late = _run(_runner())
+    assert counts == [1, 2, 2, 2, 3, 3, 3]
+    hellos = _hellos(alice_conn)
+    assert all(h.fields == hellos[0].fields for h in hellos)
+    assert early is None
+    assert late.type == SessionEventType.FAILED and late.data["reason"] == "timeout:hello_sent"
+    assert [line for line in lines if "HELLO sent again" in line] == [
+        line for line in lines if "(1/2)" in line or "(2/2)" in line]
+    assert sum("HELLO sent again" in line for line in lines) == 2
+
+
+def test_a_repeat_that_cannot_be_sent_fails_nothing(alice_conn, alice_peer_id, bob_peer_id, monkeypatch):
+    """The send of a repeat fails: the stage still waits for its answer, and says so."""
+    lines = []
+    monkeypatch.setattr(session_mod.log, "session", lambda msg, *a, **k: lines.append(msg))
+    alice_conn.connect_returns = (bob_peer_id, False)
+    sess = _mk(bob_peer_id, SessionRole.INITIATOR, alice_conn, alice_peer_id,
+               addresses=["/ip4/127.0.0.1/tcp/0/p2p/" + bob_peer_id])
+
+    async def _runner():
+        sess.start()
+        await asyncio.sleep(0)
+        await sess.tick_dial()
+        _hello_send_fails(alice_conn, 1)
+        return await sess.tick_dial(sess._state_entered_at + 3.1)
+    events = _run(_runner())
+    assert events == [] and sess.state == SessionState.HELLO_SENT
+    assert any("HELLO could not be sent again (1/2)" in line for line in lines), lines
 
 
 def test_duplicate_hello_req_ignored_after_hello_ack_sent(bob_conn, bob_peer_id, alice_peer_id):

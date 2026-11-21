@@ -74,11 +74,17 @@ _MAX_DIAL_ATTEMPTS = 4
 _RETRY_BASE_S = 1.0
 _RETRY_CAP_S = 30.0
 _RESUME_ACK_TIMEOUT_S = 3.0  # RESUME sent; if un-acked within this, re-dial + re-RESUME
+# An initiator in HELLO_SENT with no HELLO_ACK sends the same HELLO again after this long, at
+# most this many times, within the timeout of the stage: a HELLO or a HELLO_ACK lost on a
+# connection that closed under it (a relay circuit closed by the native upgrade) is not
+# known to anybody, and only the timeout of the stage would end the wait.
+_HELLO_REPEAT_AFTER_S = 3.0
+_MAX_HELLO_REPEATS = 2
 # How many repeats of its HELLO a responder answers on one Session, each a signature with
 # the host key and a send. An initiator sends one HELLO per dial attempt: _MAX_DIAL_ATTEMPTS
-# here, 6 in the browser (maxDialAttempts of MOBILE_SESSION_TIMEOUTS in the SDK), so a
-# legitimate one repeats it 5 times at most.
-_MAX_REPEATED_HELLOS_ANSWERED = 5
+# here, 6 in the browser (maxDialAttempts of MOBILE_SESSION_TIMEOUTS in the SDK), and the last
+# one again _MAX_HELLO_REPEATS times, so a legitimate one repeats it 7 times at most.
+_MAX_REPEATED_HELLOS_ANSWERED = 7
 # How often a reconnecting initiator asks the layer above for fresh addresses of its peer.
 # A peer that moved posts its new addresses with its profile within 10 s
 # (SEND_DYNAMIC_PROFILE_EVERY), so the second lookup finds them if the first did not.
@@ -267,6 +273,11 @@ class Session:
         self.nonce_a: bytes = b""
         self.nonce_b: bytes = b""
         self._repeated_hellos_answered: int = 0   # responder: see _responder_on_repeated_hello
+        # Initiator in HELLO_SENT: the HELLO sent, when it last went out, and how many times
+        # it went out again (see _repeat_hello_if_due)
+        self._hello_msg: Optional[SessMsg] = None
+        self._hello_sent_at = 0.0
+        self._hello_repeats = 0
 
         # FSM state, derived from the role: an initiator starts KNOWN (registered, not
         # yet dialed); a responder starts INIT (already engaged, awaiting the inbound
@@ -425,6 +436,10 @@ class Session:
         if self._dial_task is not None:
             return []   # a dial is still in flight
 
+        if self.state == SessionState.HELLO_SENT:
+            await self._repeat_hello_if_due(now)
+            return []
+
         # (b) Launch the next dial once its gate opens.
         if self.role != SessionRole.INITIATOR or not self.addresses:
             return []
@@ -576,8 +591,26 @@ class Session:
                                                  "hello_send_failed")
             return [self._fail("hello_send_failed")]
         self._set_state(SessionState.HELLO_SENT, _TIMEOUT_HELLO_S)
+        self._hello_msg = msg
+        self._hello_sent_at = time.monotonic() if now is None else now
+        self._hello_repeats = 0
         log.session(f"{self!r} HELLO sent", sub=self._sub)
         return []
+
+    async def _repeat_hello_if_due(self, now: float) -> None:
+        """In HELLO_SENT with no answer: the same HELLO again, same session_id and nonce_a, so
+        that an answer to either verifies. The responder answers a repeated HELLO (see
+        _responder_on_repeated_hello), and the timeout of the stage is not restarted. A send
+        that fails here fails nothing: the stage still waits for its answer."""
+        if (self._hello_msg is None or self._hello_repeats >= _MAX_HELLO_REPEATS or
+                now < self._hello_sent_at + _HELLO_REPEAT_AFTER_S):
+            return
+        self._hello_repeats += 1
+        self._hello_sent_at = now
+        sent = await self._send_payload(SESSION_HELLO_PROTOCOL, self._hello_msg)
+        log.session(f"{self!r} no HELLO_ACK within {_HELLO_REPEAT_AFTER_S:.0f}s, HELLO "
+                    f"{'sent again' if sent else 'could not be sent again'} "
+                    f"({self._hello_repeats}/{_MAX_HELLO_REPEATS})", sub=self._sub)
 
     # Inbound dispatch
 
