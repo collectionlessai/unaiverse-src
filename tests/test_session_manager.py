@@ -105,6 +105,29 @@ def test_initiate_passes_dial_policy_to_session(alice_conn, alice_peer_id, bob_p
     assert sess._timeout_s == 21.0
 
 
+def test_initiate_with_hold_registers_the_session_and_dials_nothing(alice_conn, alice_peer_id, bob_peer_id):
+    """A held initiate registers the Session with the caller's intent and leaves it
+    KNOWN: nothing is dialled until activate."""
+    alice_conn.connect_returns = (bob_peer_id, False)
+
+    async def _scenario():
+        sm = _make_sm(alice_conn, NodeConn.P2P_WORLD, alice_peer_id)
+        events = await sm.initiate(bob_peer_id, ["/ip4/127.0.0.1/tcp/0"], reject_relay=True, hold=True)
+        await asyncio.sleep(0)
+        sess = sm.get_session(bob_peer_id)
+        assert events == []
+        assert sess.state == SessionState.KNOWN
+        assert sess._reject_relay is True
+        assert alice_conn.connect_calls == []
+
+        await sm.activate(bob_peer_id)
+        await asyncio.sleep(0)
+        assert sess.state == SessionState.CONNECTING
+        assert alice_conn.connect_calls == [["/ip4/127.0.0.1/tcp/0"]]
+
+    _run(_scenario())
+
+
 def test_has_established_world_join_carrier(alice_conn, alice_peer_id, bob_peer_id):
     """The spent-carrier detector is True only for an ESTABLISHED world-join Session: an
     in-flight handshake (not yet ESTABLISHED) and a plain Session are never flagged, so a

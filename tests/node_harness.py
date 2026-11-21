@@ -637,7 +637,7 @@ def mint_node_token(root_private_pem: bytes, profile: dict, peer_ids: list[str])
 
 def build_node_shell_on_real_conn(node_peer_id: str, world: FakeWorld | None = None,
                                   node_id: str = "shell-node", public_key=None,
-                                  max_connections: int = 32):
+                                  max_connections: int = 32, token_factory=None):
     """Node shell over a REAL ``NodeConn`` on two ``WireP2P`` transports, with a real
     ``NodeProfile``: a world host when ``world`` is given, an agent otherwise. Unlike
     ``build_agent_node_shell`` this keeps the real pools, perimeter, pre-admissions and
@@ -655,7 +655,8 @@ def build_node_shell_on_real_conn(node_peer_id: str, world: FakeWorld | None = N
                     public_key=public_key, token="shell-token", local_node_id=node_id)
     conn.attach_session_policy(p2p_u=p2p_public, p2p_w=p2p_world,
                                local_profile_factory=lambda: node.profile.get_all_profile(),
-                               decision_hook=lambda *a: node._decision_policy(*a))
+                               decision_hook=lambda *a: node._decision_policy(*a),
+                               token_factory=token_factory)
     node.conn = conn
     node.profile = NodeProfile.from_dict(full_profile_dict(
         node_id, peer_id=node_peer_id, private_peer_id=node_peer_id + "-w",

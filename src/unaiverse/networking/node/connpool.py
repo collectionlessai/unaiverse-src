@@ -21,6 +21,7 @@ from unaiverse.networking.p2p.messages import Msg
 from unaiverse.networking.p2p.p2p import P2P, P2PError
 from unaiverse.networking.node.tokens import TokenVerifier
 from unaiverse.networking.session.session_manager import SessionManager
+from unaiverse.networking.session.session import SessionState
 
 
 # sess_msg.py (the session layer's leaf module) is the single source of truth for the
@@ -52,6 +53,13 @@ WorldMembership = namedtuple(
 # timeout plus margin, so a wedged dial fails while a watchdog retry is still cheap.
 _WORLD_DIAL_MIN_BUDGET_S = 15.0
 _WORLD_DIAL_MAX_BUDGET_S = 35.0
+
+# A joiner holds its dials toward the other members until it reads a roster of the
+# rendezvous that lists it and is newer than its grant: a member that has not read that
+# roster yet cuts it as an unknown peer. The wait ends anyway this long after the join
+# body, or this long after the handoff began.
+_ROSTER_WAIT_S = 5.0
+_ROSTER_WAIT_MAX_S = 30.0
 
 
 class HandoffCorrelation:
@@ -242,6 +250,13 @@ class NodeConn:
 
         # Rendezvous
         self.rendezvous_tag = -1
+
+        # Joiner: while the dials toward the other members wait for a roster that lists us,
+        # the grant tag that roster must be newer than (None when not waiting), the end of
+        # the wait, and the peers whose dial is held.
+        self._roster_wait_tag: int | None = None
+        self._roster_wait_until = 0.0
+        self._held_world_dials: set[str] = set()
 
         # Pre-admissions still waiting for their world-side redemption: peer_id →
         # monotonic deadline. Written by the grant-time pre-admission
@@ -981,6 +996,28 @@ class NodeConn:
         # Tick pass (same order): timeouts + keep-alive PING/PONG.
         for sm in self._session_managers:
             events.extend(await sm.tick(now))
+        events.extend(await self._release_held_world_dials())
+        return events
+
+    async def _release_held_world_dials(self) -> list:
+        """Joiner: once the wait for a roster that lists us is over, by that roster or by
+        its deadline, start the dials toward the other members that it held. A held
+        Session that is no longer KNOWN (the peer dialled us first, left the roster, or
+        was dropped) is left alone. Returns the events of the dials for Node to dispatch."""
+        if self._roster_wait_tag is not None:
+            if time.monotonic() < self._roster_wait_until:
+                return []
+            self._roster_wait_tag = None
+            log.misc("no roster listing us came in time: dialling the members anyway",
+                     sub=self._sm_world.log_sub)
+        if not self._held_world_dials:
+            return []
+        held, self._held_world_dials = self._held_world_dials, set()
+        events: list = []
+        for peer_id in held:
+            sess = self._sm_world.get_session(peer_id)
+            if sess is not None and sess.state == SessionState.KNOWN:
+                events.extend(await self._sm_world.activate(peer_id))
         return events
 
     async def on_peer_disconnected(self, peer_id: str) -> list:
@@ -1040,10 +1077,18 @@ class NodeConn:
         sm = self._sm_by_name(p2p_name)
         replace_stale = (is_world_join and peer_id not in self._pending_world_handoff
                          and sm.has_established_world_join_carrier(peer_id))
-        return await sm.initiate(
+        hold = (self._roster_wait_tag is not None and sm is self._sm_world and
+                peer_id != self._sm_world.world_node_peer_id)
+        events = await sm.initiate(
             peer_id=peer_id, addresses=addresses, is_world_join=is_world_join,
             remote_node_id_hint=remote_node_id_hint, reject_relay=reject_relay,
-            replace_stale=replace_stale)
+            replace_stale=replace_stale, hold=hold)
+        sess = sm.get_session(peer_id) if hold else None
+        if sess is not None and sess.state == SessionState.KNOWN and peer_id not in self._held_world_dials:
+            self._held_world_dials.add(peer_id)
+            log.misc(f"dial to ...{peer_id[-5:]} held until the world's roster lists us",
+                     sub=self._sm_world.log_sub)
+        return events
 
     async def close_all_sessions(self) -> None:
         """Shutdown path: GOAWAY every Session on every instance so peers see a clean CLOSED
@@ -1112,6 +1157,8 @@ class NodeConn:
             self.set_world(world_peer_id)
         except Exception:
             pass
+        self._roster_wait_tag = int(grant_blob.get("rendezvous_tag", 0))
+        self._roster_wait_until = time.monotonic() + _ROSTER_WAIT_MAX_S
         self._handoff.start(public_peer_id, world_peer_id)
         remaining_s = int(grant_blob.get("expiry_unix_ms", 0)) / 1000.0 - time.time()
         budget_s = max(_WORLD_DIAL_MIN_BUDGET_S, min(remaining_s, _WORLD_DIAL_MAX_BUDGET_S))
@@ -1148,6 +1195,8 @@ class NodeConn:
         public_peer_id = self._handoff.complete(world_peer_id)
         if public_peer_id is None:
             return
+        if self._roster_wait_tag is not None:
+            self._roster_wait_until = min(self._roster_wait_until, time.monotonic() + _ROSTER_WAIT_S)
         await self._sm_public.close_session(public_peer_id, WORLD_HANDOFF_COMPLETE)
         self._evict_from_pools(public_peer_id)
 
@@ -1352,6 +1401,10 @@ class NodeConn:
             world_peer_id: The peer ID of the world node, or None to clear it.
         """
         self._sm_world.world_node_peer_id = world_peer_id
+        if world_peer_id is None:
+            # Out of the world: no roster to wait for, nothing held
+            self._roster_wait_tag = None
+            self._held_world_dials.clear()
 
     def get_world_node_peer_id(self) -> str | None:
         """Returns the PRIVATE peer ID of the world node, i.e. the REMOTE world host we joined,
@@ -1827,6 +1880,14 @@ class NodeConn:
                 # Updating lists
                 self.set_world_agents_list(world_agents_peer_infos)
                 self.set_world_masters_list(world_masters_peer_infos)
+
+                # A roster newer than the grant that lists us ends the joiner's wait: the
+                # members got the same publication, so they know us now
+                if (self._roster_wait_tag is not None and tag > self._roster_wait_tag and
+                        any(c['id'] == self._sm_world.local_peer_id for c in rendezvous_peer_infos)):
+                    self._roster_wait_tag = None
+                    log.misc(f"the world's roster lists us (tag: {tag}): the held dials go out",
+                             sub=self._sm_world.log_sub)
 
     async def remove_all_world_agents(self) -> None:
         """GOAWAY-close and drop every connected world peer (the WORLD pools: agents,

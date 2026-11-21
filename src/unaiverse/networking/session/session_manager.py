@@ -470,9 +470,11 @@ class SessionManager:
         replace_stale: bool = False,
         dial_attempts: Optional[int] = None,
         dial_budget_s: Optional[float] = None,
+        hold: bool = False,
     ) -> List[SessionEvent]:
         """Open a new initiator Session to `peer_id` and start it. A stale FAILED/CLOSED
-        Session is replaced. initiate() = ensure() + activate().
+        Session is replaced. initiate() = ensure() + activate(). With ``hold`` the Session
+        is registered with this intent and left KNOWN, for a later ``activate``.
 
         Idempotent on a matching-intent non-terminal Session (returns []), BUT a Session
         whose intent DIVERGES from the request is replaced rather than silently reused:
@@ -523,6 +525,9 @@ class SessionManager:
         self.ensure(peer_id, addresses, is_world_join=is_world_join,
                     remote_node_id_hint=remote_node_id_hint, grant=grant, reject_relay=reject_relay,
                     app_role=app_role, dial_attempts=dial_attempts, dial_budget_s=dial_budget_s)
+        if hold:
+            log.session(f"Session to ...{peer_id[-5:]} registered, its dial held", sub=self._label)
+            return []
         log.session(f"initiating Session to ...{peer_id[-5:]}", sub=self._label)
         return await self.activate(peer_id)
 
