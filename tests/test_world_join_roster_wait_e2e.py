@@ -4,7 +4,8 @@ that lists it has been published.
 A member cuts, as an unknown peer, whoever connects to it on the world instance before
 the roster that names that peer reached it. A joiner that dials the members right after
 its join, from the members its grant listed, races the publication of the roster that
-names it, and loses it when the member reads the rendezvous first.
+names it, and loses it when the member reads the rendezvous first. The same cut hits a
+member whose link to the host drops for a moment, if the host's roster leaves it out.
 
 The scenarios run a world host on the REAL ``Node`` loop over a real ``NodeConn``, and a
 member and a joiner on real ``NodeConn`` instances driven through the calls ``node.py``
@@ -246,5 +247,42 @@ def test_a_member_that_dials_the_joiner_first_is_answered_and_not_dialled_again(
         assert joiner.conn._sm_world.is_established(member.world_peer_id)
         assert member.conn._sm_world.is_established(joiner.world_peer_id)
         assert joiner.world_peer_id not in member.p2p_world.disconnected
+
+    asyncio.run(_scenario())
+
+
+def test_a_member_whose_link_to_the_host_drops_for_a_moment_is_not_cut_by_the_others(
+        stepped_clock, root_keys):
+    """T6.4 of 2026-11-18: the host lost its transport to a member for a second. Its
+    roster, read off the peers connected at that instant, dropped the member, and the
+    publication that followed made the other member cut its Session with it. The member
+    stays in the roster while its world Session rides its reconnect window."""
+    async def _scenario():
+        private_pem, public_pem = root_keys
+        net = _Net()
+        host = _Host(net, private_pem, public_pem)
+        member = _Peer("member", net, private_pem, public_pem)
+        joiner = _Peer("joiner", net, private_pem, public_pem)
+        await _join(host, member)
+        await host.cycle()
+        await member.cycle()
+        await _join(host, joiner)
+        await joiner.conn.initiate_session(NodeConn.P2P_WORLD, member.world_peer_id,
+                                           joiner.conn.get_addrs(member.world_peer_id))
+        for _ in range(6):
+            await joiner.cycle()
+            await member.cycle()
+            await host.cycle()
+        assert member.conn._sm_world.is_established(joiner.world_peer_id)
+
+        host.p2p_world.unlink(joiner.world_peer_id)       # the blink
+        joiner.p2p_world.unlink(host.p2p_world.peer_id)
+        for _ in range(3):
+            await host.cycle()
+            await member.cycle()
+
+        assert host.conn._sm_world.is_in_grace(joiner.world_peer_id)
+        assert joiner.world_peer_id not in member.p2p_world.disconnected
+        assert member.conn._sm_world.is_established(joiner.world_peer_id)
 
     asyncio.run(_scenario())

@@ -645,3 +645,84 @@ def test_a_profile_claiming_the_master_node_id_removes_nothing(stepped_clock, ro
         assert master.world_peer_id not in host.p2p_world.disconnected
 
     asyncio.run(_scenario())
+
+
+# A member whose transport to the host dropped
+
+def test_a_member_in_its_reconnect_window_stays_in_the_roster_until_its_session_ends(
+        stepped_clock, root_keys):
+    """The roster lists the members whose world Session is alive, the reconnect window
+    included, with the addresses they registered as their address updates left them;
+    the end of the Session unlists the member, and the roster drops it then."""
+    async def _scenario():
+        private_pem, public_pem = root_keys
+        host = _Host(public_pem)
+        master = _Joiner("master", host, private_pem)
+        await _join(host, master)
+        await host.cycle()
+        moved = ["/ip4/10.0.0.77/tcp/4001/p2p/" + master.world_peer_id]
+        registered_profile = host.world.added[-1][1]
+        addrs = registered_profile.get_dynamic_profile()["private_peer_addresses"]
+        addrs.clear()                                     # what an address update does
+        addrs.extend(moved)
+        published = len(host.rendezvous())
+
+        host.p2p_world.unlink(master.world_peer_id)
+        await host.cycle()
+        await host.cycle()
+        assert host.conn._sm_world.is_in_grace(master.world_peer_id)
+        entry = host.summary["world_masters"][0]
+        assert (entry["id"], entry["addrs"]) == (master.world_peer_id, moved)
+        assert entry["misc"] & Agent.ROLE_WORLD_MASTER == Agent.ROLE_WORLD_MASTER
+        assert all(master.world_peer_id in ids for _, ids in host.rendezvous()[published:])
+
+        host.conn._sm_world.get_session(master.world_peer_id)._state_entered_at -= 3600.
+        await host.cycle()                                # the window ends: LOST, unlisted
+        await host.cycle()
+        assert host.summary["world_masters"] == []
+        assert host.rendezvous()[-1][1] == []
+
+    asyncio.run(_scenario())
+
+
+def test_a_provisional_admission_stays_out_of_the_roster_in_the_reconnect_window(
+        stepped_clock, root_keys):
+    """A member admitted again under the same peer-id while its old world Session rides
+    its window (what the decision does when no verified claims let it remove the old
+    entry first) is provisional until the world-side registration: out of the roster."""
+    async def _scenario():
+        private_pem, public_pem = root_keys
+        host = _Host(public_pem)
+        master = _Joiner("master", host, private_pem)
+        await _join(host, master)
+        await host.cycle()
+        role = host.conn.get_role(master.world_peer_id)
+        host.conn.add_to_world_masters_list(master.world_peer_id, master.world_addrs, role,
+                                            provisional_ttl_s=Custom.WORLD_PREADMISSION_TTL)
+        host.p2p_world.unlink(master.world_peer_id)
+        await host.cycle()
+        await host.cycle()
+        assert host.conn._sm_world.is_in_grace(master.world_peer_id)
+        assert host.summary["world_masters"] == []
+
+    asyncio.run(_scenario())
+
+
+def test_a_member_the_host_is_closing_leaves_the_roster_when_its_transport_drops(
+        stepped_clock, root_keys):
+    """Only the reconnect window keeps a member that is not connected: one whose Session
+    the host is closing (its GOAWAY unanswered) is leaving, and goes as it does today."""
+    async def _scenario():
+        private_pem, public_pem = root_keys
+        host = _Host(public_pem)
+        master = _Joiner("master", host, private_pem)
+        await _join(host, master)
+        await host.cycle()
+        await host.conn._sm_world.close_session(master.world_peer_id, WORLD_DISENGAGEMENT)
+        host.p2p_world.unlink(master.world_peer_id)
+        await host.cycle()
+        await host.cycle()
+        assert host.conn._sm_world.get_session(master.world_peer_id).state.value == "closing"
+        assert host.summary["world_masters"] == []
+
+    asyncio.run(_scenario())
