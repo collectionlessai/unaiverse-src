@@ -395,6 +395,47 @@ def test_rejoin_watchdog_keeps_sooner_retry_armed_by_attempt():
     asyncio.run(_scenario())
 
 
+def test_the_join_after_a_failed_world_dial_can_redeem_its_grant():
+    """T6.4-holly of 2026-11-21: the world dial that redeemed a grant failed, the join
+    was retried, and its new grant was refused at once because the failed dial had put
+    the world host's world peer in quarantine: a grant spent for nothing, and one more
+    join. The failed redemption leaves no ban, so the next one dials."""
+    async def _scenario():
+        node, conn = build_agent_node_shell(NODE_PEER)
+        host_public, host_world = "12D3KooWhost0public", "12D3KooWhost0world"
+        node.keep_rejoining = True
+        node.joining_world_info = {"world_public_peer_id": host_public, "options": {"node_name": "w"}}
+        events = []
+        dispatch = node._dispatch_session_event
+
+        async def _spy(ev):
+            events.append(ev)
+            await dispatch(ev)
+        node._dispatch_session_event = _spy
+
+        def _grant():
+            return {"grant_id": "aa", "rendezvous_tag": 1,
+                    "expiry_unix_ms": int(time.time() * 1000) + 30000}
+
+        for ev in await conn.start_world_handoff(host_public, host_world, ["/ip4/10.0.0.1/tcp/4002"],
+                                                 _grant(), False):
+            await node._dispatch_session_event(ev)
+        for _ in range(5):
+            await asyncio.sleep(0)
+            await node._Node__handle_network_messages()
+        assert [e.data.get("reason") for e in events if e.type == SessionEventType.FAILED] == ["dial_failed"]
+        assert node.rejoining_time > 0.                  # the rejoin is armed, as before
+
+        conn.connect_returns = (host_world, False)       # the host takes connections again
+        retry = await conn.start_world_handoff(host_public, host_world, ["/ip4/10.0.0.1/tcp/4002"],
+                                               _grant(), False)
+        await asyncio.sleep(0)
+        assert retry == []
+        assert len(conn.connect_calls) == 2
+
+    asyncio.run(_scenario())
+
+
 # A lone wolf started with get_in_touch and keep_in_touch
 
 THE_PEER = {"node_name": "the-peer"}

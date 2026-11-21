@@ -156,6 +156,35 @@ def test_initiate_during_quarantine_returns_failed(alice_conn, alice_peer_id, bo
     assert alice_conn.connect_calls == []
 
 
+@pytest.mark.parametrize("grant", [{"grant_id": "00"}, None])
+def test_a_failed_redemption_of_a_world_grant_leaves_no_quarantine(alice_conn, alice_peer_id,
+                                                                   bob_peer_id, grant):
+    """The world host's world peer is dialled only to redeem a grant: a redemption whose
+    dial failed must not ban it, or the next join's redemption is refused at once and its
+    grant is spent for nothing. Any other initiator that fails is quarantined as before."""
+    async def _scenario():
+        sm = _make_sm(alice_conn, NodeConn.P2P_WORLD, alice_peer_id)
+        await sm.initiate(bob_peer_id, ["/ip4/127.0.0.1/tcp/0"], grant=grant, dial_attempts=1)
+        failed = []
+        for _ in range(5):
+            await asyncio.sleep(0)
+            failed += [e for e in await sm.tick() if e.type == SessionEventType.FAILED]
+            if failed:
+                break
+        assert failed and failed[0].data["reason"] == "dial_failed"
+
+        events = await sm.initiate(bob_peer_id, ["/ip4/127.0.0.1/tcp/0"], grant=grant, dial_attempts=1)
+        await asyncio.sleep(0)
+        if grant is not None:
+            assert events == []
+            assert len(alice_conn.connect_calls) == 2
+        else:
+            assert events[0].data["reason"].startswith("quarantined")
+            assert len(alice_conn.connect_calls) == 1
+
+    _run(_scenario())
+
+
 # deliver() — basics
 
 def test_deliver_unknown_protocol_drops(alice_conn, alice_peer_id, bob_peer_id):
@@ -1502,3 +1531,21 @@ def test_failed_goaway_write_closes_fast(alice_conn, alice_peer_id, bob_peer_id)
 
     ev = sess.check_timeout(now=time.monotonic() + 1.2)
     assert ev is not None and ev.type == SessionEventType.CLOSED
+
+
+def test_a_world_session_lost_after_its_redemption_is_quarantined_as_before(alice_conn, alice_peer_id,
+                                                                           bob_peer_id):
+    """Only a redemption that fails is spared the quarantine: the world Session that the
+    grant opened, once established, is quarantined when it is LOST, as any other."""
+    async def _scenario():
+        sm = _make_sm(alice_conn, NodeConn.P2P_WORLD, alice_peer_id)
+        sess = _plant(sm, alice_conn, bob_peer_id, alice_peer_id, SessionRole.INITIATOR,
+                      SessionState.ESTABLISHED, b"\x01" * 16)
+        sess._grant = {"grant_id": "00"}
+        await sm.on_peer_disconnected(bob_peer_id)
+        sess._state_entered_at -= 3600.
+        events = await sm.tick()
+        assert [e.type for e in events] == [SessionEventType.LOST]
+        assert sm._quarantine.get(bob_peer_id, 0.) > time.monotonic()
+
+    _run(_scenario())

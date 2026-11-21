@@ -677,7 +677,12 @@ class SessionManager:
             now = time.monotonic()
         for ev in events:
             reason = str(ev.data.get("reason", ""))
-            if ev.type in (SessionEventType.LOST, SessionEventType.FAILED):
+            # A failed redemption of a world grant is not quarantined: the world host's world
+            # peer is dialled only to redeem a grant, the next grant comes with the next join,
+            # which the rejoin paces, and a ban would only refuse its redemption
+            sess = self._sessions.get(ev.peer_id)
+            redemption = ev.type is SessionEventType.FAILED and sess is not None and sess.redeems_grant
+            if ev.type in (SessionEventType.LOST, SessionEventType.FAILED) and not redemption:
                 stall = (ev.type is SessionEventType.FAILED and
                          reason.startswith(("timeout:hello_sent", "timeout:hello_ack_sent")))
                 self._quarantine[ev.peer_id] = now + (_QUARANTINE_STALL_S if stall

@@ -334,6 +334,11 @@ class Session:
         return (f"Session(...{self.peer_id[-5:]} role={self.role.value} "
                 f"state={self.state.value} p2p={self.p2p_name})")
 
+    @property
+    def redeems_grant(self) -> bool:
+        """True for an initiator Session opened to redeem a world grant."""
+        return self.role == SessionRole.INITIATOR and self._grant is not None
+
     # Initiator entry point
 
     def start(self) -> List[SessionEvent]:
