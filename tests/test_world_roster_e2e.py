@@ -227,18 +227,18 @@ def test_member_is_advertised_in_the_cycle_after_its_registration(stepped_clock,
         assert host.conn.get_pool_of(master.world_peer_id) == NodeConn.IN_WORLD_MASTERS
         assert master.world_peer_id in host.conn.world_preadmissions
         assert host.summary["world_masters"] == []
-        assert len(host.rendezvous()) == 1
+        assert host.rendezvous() == [(0, []), (2, [])]   # the start, once more two cycles later
 
         registered_at = await host.cycle()            # master OFFER -> registration
         assert master.world_peer_id not in host.conn.world_preadmissions
-        assert len(host.rendezvous()) == 1            # the registration came after this cycle's publish slot
+        assert len(host.rendezvous()) == 2            # the registration came after this cycle's publish slot
 
         # The agent's offer reaches the host in the very next cycle.
         await agent.offer_public()
         await master.finish_join()
         assert await host.cycle() == registered_at + 1
 
-        assert host.rendezvous()[1:] == [(registered_at + 1, [master.world_peer_id])]
+        assert host.rendezvous()[2:] == [(registered_at + 1, [master.world_peer_id])]
         assert _ids(host.summary["world_masters"]) == [master.world_peer_id]
         assert _ids(_summary_of(await agent.take_grant())["world_masters"]) == [master.world_peer_id]
 
@@ -303,7 +303,7 @@ def test_unredeemed_preadmission_never_reaches_the_roster(stepped_clock, root_ke
         assert ghost.world_peer_id in host.p2p_world.disconnected
         assert host.conn.get_pool_of(ghost.world_peer_id) is None
         assert host.summary["world_agents"] == [] and host.summary["total_agents"] == 0
-        assert host.rendezvous() == [(0, [])]
+        assert host.rendezvous() == [(0, []), (2, [])]
 
     asyncio.run(_scenario())
 
@@ -340,30 +340,31 @@ def test_joiner_the_world_does_not_register_is_never_advertised(stepped_clock, r
             await host.cycle()
         assert host.conn.get_world_roster_peer_infos() == ([], [])
         assert host.summary["world_agents"] == [] and host.summary["total_agents"] == 0
-        assert host.rendezvous() == [(0, [])]
+        assert host.rendezvous() == [(0, []), (2, [])]
 
     asyncio.run(_scenario())
 
 
 def test_idle_world_publishes_on_the_periodic_slot_only(stepped_clock, root_keys):
     """With a steady roster the rendezvous keeps its PUBLISH_RENDEZVOUS_EVERY cadence:
-    no publish per cycle, one when the slot comes due."""
+    past the second publication of the last change, no publish per cycle, one when the
+    slot comes due."""
     async def _scenario():
         private_pem, public_pem = root_keys
         host = _Host(public_pem)
         master = _Joiner("master", host, private_pem)
 
         await _join(host, master)
-        await host.cycle()
+        changed_at = await host.cycle()
         published = len(host.rendezvous())
 
         for _ in range(5):
             await host.cycle()
-        assert len(host.rendezvous()) == published
+        assert host.rendezvous()[published:] == [(changed_at + 2, [master.world_peer_id])]
 
         stepped_clock.advance(Custom.PUBLISH_RENDEZVOUS_EVERY)
         due_at = await host.cycle()
-        assert host.rendezvous()[published:] == [(due_at, [master.world_peer_id])]
+        assert host.rendezvous()[published + 1:] == [(due_at, [master.world_peer_id])]
 
     asyncio.run(_scenario())
 
@@ -724,5 +725,48 @@ def test_a_member_the_host_is_closing_leaves_the_roster_when_its_transport_drops
         await host.cycle()
         assert host.conn._sm_world.get_session(master.world_peer_id).state.value == "closing"
         assert host.summary["world_masters"] == []
+
+    asyncio.run(_scenario())
+
+
+def test_a_changed_roster_goes_out_once_more_and_a_second_change_moves_it(stepped_clock, root_keys):
+    """Two cycles after the publication made on a change the host publishes the roster
+    again. A change inside those two cycles is published at once and moves the second
+    publication two cycles past it: one more publication, not two."""
+    async def _scenario():
+        private_pem, public_pem = root_keys
+        host = _Host(public_pem)
+        master = _Joiner("master", host, private_pem)
+        await _join(host, master)
+        changed_at = await host.cycle()
+        published = len(host.rendezvous())
+
+        host.conn.remove_from_world_lists(master.world_peer_id)     # a second change
+        assert await host.cycle() == changed_at + 1
+        for _ in range(5):
+            await host.cycle()
+
+        assert host.rendezvous()[published - 1:] == [
+            (changed_at, [master.world_peer_id]), (changed_at + 1, []), (changed_at + 3, [])]
+
+    asyncio.run(_scenario())
+
+
+def test_a_periodic_publication_in_between_leaves_the_second_one_in_place(stepped_clock, root_keys):
+    """The periodic slot falling between the publication made on a change and its second
+    one does not stand in for it: the second one still goes out two cycles after."""
+    async def _scenario():
+        private_pem, public_pem = root_keys
+        host = _Host(public_pem)
+        master = _Joiner("master", host, private_pem)
+        await _join(host, master)
+        changed_at = await host.cycle()
+        published = len(host.rendezvous())
+
+        stepped_clock.advance(Custom.PUBLISH_RENDEZVOUS_EVERY)
+        for _ in range(3):
+            await host.cycle()
+
+        assert [tag for tag, _ in host.rendezvous()[published:]] == [changed_at + 1, changed_at + 2]
 
     asyncio.run(_scenario())

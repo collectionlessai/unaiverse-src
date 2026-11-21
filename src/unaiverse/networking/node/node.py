@@ -55,6 +55,11 @@ from unaiverse.utils.misc import (get_key_considering_multiple_sources, save_nod
 # just enough to land on the open side of the gate.
 _REJOIN_RETRY_MARGIN_S = 1.0
 
+# A world host publishes a changed roster once more this many cycles after the publication
+# made on the change: a joiner subscribes to the rendezvous in its join body, often too
+# late for the first one.
+_RENDEZVOUS_REPEAT_CYCLES = 2
+
 
 class Node:
     # Each node can host an agent or a world
@@ -210,9 +215,11 @@ class Node:
         # Profile
         self.profile: NodeProfile
 
-        # Rendezvous (the pending flag asks for a publish ahead of the periodic one)
+        # Rendezvous (the pending flag asks for a publish ahead of the periodic one; the
+        # cycle at which a publication made on a change goes out once more, if any)
         self.last_rendezvous_time = 0.
         self.rendezvous_pending = False
+        self.rendezvous_repeat_at: int | None = None
 
         # Automatic address update and relay refresh (if needed)
         self.relay_reservation_expiry: datetime | None = None
@@ -2085,9 +2092,11 @@ class Node:
             if roster_changed:
                 self.rendezvous_pending = True
             timeout = (clock.get_time() - self.last_rendezvous_time) >= Custom.PUBLISH_RENDEZVOUS_EVERY
+            repeat_due = self.rendezvous_repeat_at is not None and clock.get_cycle() >= self.rendezvous_repeat_at
 
             if (self.rendezvous_pending or timeout or self.world.role_changed_by_world or
-                    self.world.received_address_update):
+                    self.world.received_address_update or repeat_due):
+                on_change = self.rendezvous_pending
 
                 # Publish updated list of (all) world agents (i.e., both agents and masters)
                 world_all_peer_infos = roster_agents + roster_masters
@@ -2100,6 +2109,13 @@ class Node:
                 else:
                     self.last_rendezvous_time = clock.get_time()
                     self.rendezvous_pending = False
+
+                    # One more publication two cycles after the one made on a change: a later
+                    # change moves it, and never adds a second one
+                    if on_change:
+                        self.rendezvous_repeat_at = clock.get_cycle() + _RENDEZVOUS_REPEAT_CYCLES
+                    elif repeat_due:
+                        self.rendezvous_repeat_at = None
                     log.misc(f"Rendezvous messages just published "
                              f"(tag: {clock.get_cycle()}, peers: {len(world_all_peer_infos)})", sub="prv")
                     log.misc(f"Rendezvous message included peer IDs: "

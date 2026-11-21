@@ -664,6 +664,7 @@ def build_node_shell_on_real_conn(node_peer_id: str, world: FakeWorld | None = N
     # Rendezvous state (Node.__init__ sets these; the shell bypasses __init__).
     node.last_rendezvous_time = 0.
     node.rendezvous_pending = False
+    node.rendezvous_repeat_at = None
     return node, conn, p2p_public, p2p_world
 
 

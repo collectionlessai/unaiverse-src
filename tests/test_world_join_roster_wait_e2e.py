@@ -46,11 +46,13 @@ def _offline_node_profile(monkeypatch):
 
 class _Net:
     """The fake network: every transport by peer-id. A dial connects both ends, a
-    disconnect drops both, and each member reads the last roster the host published."""
+    disconnect drops both, and each member reads the last roster the host published
+    since its subscription reached the host."""
 
     def __init__(self):
         self.wires: dict[str, WireP2P] = {}
         self.host_world: WireP2P | None = None
+        self.subscribed_from: dict[str, int] = {}
 
     def add(self, wire: WireP2P) -> None:
         for other in self.wires.values():
@@ -75,12 +77,19 @@ class _Net:
         wire.connect = _connect
         wire.disconnect = _disconnect
         if wire.log_sub == "prv" and wire is not self.host_world:
-            wire.get_rendezvous_peers_info = self.last_roster
+            wire.get_rendezvous_peers_info = lambda: self.last_roster(wire.peer_id)
 
-    def last_roster(self):
-        rosters = [msg.content for _, msg in self.host_world.broadcasts
-                   if msg.content_type == Msg.WORLD_AGENTS_LIST]
+    def _rosters(self) -> list:
+        return [msg.content for _, msg in self.host_world.broadcasts
+                if msg.content_type == Msg.WORLD_AGENTS_LIST]
+
+    def last_roster(self, peer_id: str | None = None):
+        rosters = self._rosters()[self.subscribed_from.get(peer_id, 0):]
         return rosters[-1] if rosters else None
+
+    def subscribe_late(self, wire: WireP2P) -> None:
+        """The subscription of this peer reaches the host only after its next publication."""
+        self.subscribed_from[wire.peer_id] = len(self._rosters()) + 1
 
 
 class _Host:
@@ -96,10 +105,11 @@ class _Host:
         net.add(self.p2p_public)
         net.add(self.p2p_world)
 
-    async def cycle(self) -> None:
+    async def cycle(self) -> int:
         clock.next_cycle()
         await self.node._Node__handle_network_connections()
         await self.node._Node__handle_network_messages()
+        return clock.get_cycle()
 
 
 async def _accept(*args):
@@ -284,5 +294,40 @@ def test_a_member_whose_link_to_the_host_drops_for_a_moment_is_not_cut_by_the_ot
         assert host.conn._sm_world.is_in_grace(joiner.world_peer_id)
         assert joiner.world_peer_id not in member.p2p_world.disconnected
         assert member.conn._sm_world.is_established(joiner.world_peer_id)
+
+    asyncio.run(_scenario())
+
+
+def test_a_joiner_whose_subscription_comes_late_gets_the_roster_two_cycles_later(
+        stepped_clock, root_keys):
+    """The joiner subscribes to the rendezvous in its join body, and the host often does
+    not know of it yet when it publishes the roster that names the joiner (10 joins of
+    15 in the runs of 2026-11-18 and 2026-11-20). The host publishes a changed roster
+    once more two cycles later; without that the joiner waited for the periodic one."""
+    async def _scenario():
+        private_pem, public_pem = root_keys
+        net = _Net()
+        host = _Host(net, private_pem, public_pem)
+        member = _Peer("member", net, private_pem, public_pem)
+        joiner = _Peer("joiner", net, private_pem, public_pem)
+        await _join(host, member)
+        await host.cycle()
+        await member.cycle()
+        await _join(host, joiner)
+        net.subscribe_late(joiner.p2p_world)
+
+        listed_at = None
+        for _ in range(15):
+            stepped_clock.advance(1.0)                   # one cycle a second, as a node runs
+            at = await host.cycle()
+            await joiner.cycle()
+            world = joiner.conn._sm_world
+            if joiner.world_peer_id in (world.world_agents_set | world.world_masters_set):
+                listed_at = at
+                break
+
+        named_at = next(r["update_count"] for r in net._rosters()
+                        if joiner.world_peer_id in [p["id"] for p in r["peers"]])
+        assert listed_at == named_at + 2
 
     asyncio.run(_scenario())
