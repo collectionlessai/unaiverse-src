@@ -2090,8 +2090,9 @@ class Node:
             # lists, and not signalled by the paths that mutate it: a Session-driven join
             # or clean leave never shows up in the pool diff above, and a path that forgot
             # to raise a flag would leave the summary stale without anybody noticing. Both
-            # sides hold the very peer-info objects of the pools, so the comparison is
-            # cheap. The summary of a just-started world lists None, which counts as a change.
+            # sides are lists of the entries the roster builds (addresses, role), compared by
+            # value: a member's transport that drops and comes back is not a change. The
+            # summary of a just-started world lists None, which counts as a change.
             world_summary = self.profile.get_dynamic_profile()['world_summary']
             roster_changed = (world_summary.get('world_agents') != roster_agents or
                               world_summary.get('world_masters') != roster_masters)

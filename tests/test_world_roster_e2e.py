@@ -770,3 +770,62 @@ def test_a_periodic_publication_in_between_leaves_the_second_one_in_place(steppe
         assert [tag for tag, _ in host.rendezvous()[published:]] == [changed_at + 1, changed_at + 2]
 
     asyncio.run(_scenario())
+
+
+def test_a_member_whose_transport_blinks_is_not_a_change_of_the_roster(stepped_clock, root_keys):
+    """T11-member of 2026-11-21: the member's transport to the host dropped and came
+    back, and the host published five times (tags 89 to 94). The member stayed listed
+    with the same addresses and role throughout: nothing to publish."""
+    async def _scenario():
+        private_pem, public_pem = root_keys
+        host = _Host(public_pem)
+        master = _Joiner("master", host, private_pem)
+        await _join(host, master)
+        for _ in range(3):                                # the change and its second publication
+            await host.cycle()
+        published = len(host.rendezvous())
+        entry = dict(host.summary["world_masters"][0])
+
+        host.p2p_world.unlink(master.world_peer_id)       # the drop
+        for _ in range(3):
+            await host.cycle()
+        assert host.conn._sm_world.is_in_grace(master.world_peer_id)
+        host.p2p_world.link(master.world_peer_id)         # the return
+        for _ in range(3):
+            await host.cycle()
+
+        assert host.conn.get_pool_of(master.world_peer_id) == NodeConn.IN_WORLD_MASTERS
+        assert host.rendezvous()[published:] == []
+        assert host.summary["world_masters"] == [entry]
+
+    asyncio.run(_scenario())
+
+
+@pytest.mark.parametrize("what", ["addresses", "role"])
+def test_a_change_of_addresses_or_role_is_still_published(stepped_clock, root_keys, what):
+    async def _scenario():
+        private_pem, public_pem = root_keys
+        host = _Host(public_pem)
+        master = _Joiner("master", host, private_pem)
+        await _join(host, master)
+        for _ in range(3):
+            await host.cycle()
+        published = len(host.rendezvous())
+
+        if what == "addresses":                           # what an address update does
+            addrs = host.world.added[-1][1].get_dynamic_profile()["private_peer_addresses"]
+            addrs.clear()
+            addrs.append("/ip4/10.0.0.77/tcp/4001/p2p/" + master.world_peer_id)
+        else:
+            role = host.conn.get_role(master.world_peer_id)
+            host.conn.set_role(master.world_peer_id, role | (1 << 3))
+        changed_at = await host.cycle()
+
+        assert host.rendezvous()[published:] == [(changed_at, [master.world_peer_id])]
+        entry = host.summary["world_masters"][0]
+        if what == "addresses":
+            assert entry["addrs"] == ["/ip4/10.0.0.77/tcp/4001/p2p/" + master.world_peer_id]
+        else:
+            assert entry["misc"] & (1 << 3)
+
+    asyncio.run(_scenario())

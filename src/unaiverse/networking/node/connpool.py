@@ -1834,21 +1834,24 @@ class NodeConn:
         A member whose transport to us dropped leaves the pools at once, but it stays a
         member while its world Session rides its reconnect window, and the terminal event
         of that Session unlists it. Leaving it out would make every other member cut its
-        Sessions with it at the next publication. Its entry carries the addresses it
-        registered with, which its address updates rewrite in place, and its role.
+        Sessions with it at the next publication.
+
+        Every entry says what the members need of a member, the same whether it is connected
+        or in its window: the addresses it registered with, which its address updates
+        rewrite in place, and its role, in the order of the peer-ids. A transport that drops
+        and comes back changes none of it, so it is not a change of the roster (the entry
+        of the pool, rebuilt at the return, carries the addresses of the transport).
 
         Returns:
             A tuple with the peer infos of the world agents and of the world masters.
         """
         provisional = self.world_preadmissions
-        agents = [c for c in self.get_all_connected_peer_infos(NodeConn.WORLD_AGENTS)
-                  if c['id'] not in provisional]
-        masters = [c for c in self.get_all_connected_peer_infos(NodeConn.WORLD_MASTERS)
-                   if c['id'] not in provisional]
-        listed = {c['id'] for c in agents + masters}
+        connected = {c['id'] for c in
+                     self.get_all_connected_peer_infos(NodeConn.WORLD_AGENTS | NodeConn.WORLD_MASTERS)}
         world_masters = self._sm_world.world_masters_set
+        agents, masters = [], []
         for peer_id in sorted(self._sm_world.world_agents_set | world_masters):
-            if peer_id in listed or peer_id in provisional or not self._sm_world.is_in_grace(peer_id):
+            if peer_id in provisional or not (peer_id in connected or self._sm_world.is_in_grace(peer_id)):
                 continue
             info = {'id': peer_id, 'addrs': list(self.peer_id_to_addrs.get(peer_id) or []),
                     'misc': self.peer_id_to_misc.get(peer_id, 0)}
