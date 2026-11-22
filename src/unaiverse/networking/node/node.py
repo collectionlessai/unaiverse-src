@@ -483,7 +483,7 @@ class Node:
         self.conn.attach_session_policy(
             p2p_u=p2p_u,
             p2p_w=p2p_w,
-            local_profile_factory=lambda: (self.profile.get_all_profile() if self.profile is not None else {}),
+            local_profile_factory=self._offered_profile,
             decision_hook=lambda *a: self._decision_policy(*a),
             token_factory=lambda: self.node_token,
             address_lookup=self._lookup_node_addresses,
@@ -2264,6 +2264,26 @@ class Node:
         self.__keyboard_to_stdin(public, peer_id, file=FileContainer.from_path(path))
         log.user(f"*** Sending the file {os.path.basename(path)} ({os.path.getsize(path)} bytes) ***")
 
+    def _offered_profile(self) -> dict:
+        """The profile this node offers in the handshake of a Session (PROFILE_OFFER). While joining a world, the
+        options of the join (as role_preference in run(join_world=..., role_preference=...)) travel in it as
+        temporary entries of the dynamic profile, "tmp_<option>", which the world reads in assign_role and then drops.
+
+        Returns:
+            The profile (a copy when temporary entries are added).
+        """
+        if self.profile is None:
+            return {}
+        profile = self.profile.get_all_profile()
+        options = (self.joining_world_info or {}).get("options") or {}
+        extra = {k: v for k, v in options.items() if k not in ("node_name", "addresses", "node_id")}
+        if len(extra) == 0:
+            return profile
+        profile = copy.deepcopy(profile)
+        for k, v in extra.items():
+            profile["dynamic"]["tmp_" + str(k)] = v
+        return profile
+
     def _shutdown_reason_for(self, peer_id: str) -> int:
         """The GOAWAY reason for a peer the node says goodbye to while shutting down.
 
@@ -3286,6 +3306,11 @@ class Node:
                 await self._world_host_remove_old_entries(verified_claims.node_id)
 
             role_str = self.world.assign_role(profile=profile, is_world_master=is_world_master)
+
+            # The temporary options of the join (tmp_*, see _offered_profile) served assign_role only
+            dynamic_profile = profile.get_dynamic_profile()
+            for key in [key for key in dynamic_profile if key.startswith('tmp_')]:
+                del dynamic_profile[key]
             if role_str is None:
                 return ProfileDecisionResult(accepted=False, reason_code=ROLE_INCOMPATIBLE)
             role = self.world.ROLE_STR_TO_BITS[role_str]

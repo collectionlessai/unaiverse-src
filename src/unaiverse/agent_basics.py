@@ -1620,6 +1620,7 @@ class AgentBasics:
         # By default, we will try to resolve by looking at owned (first) and other (then) streams
         search_owned_streams = True
         search_other_streams = True
+        owner = None
 
         # If it looks like a user hash but was not found in the code above, then it could be a stream group
         # represented as a user hash, so we clear it, and we keep the group name only. Moreover, since it will also
@@ -1629,6 +1630,7 @@ class AgentBasics:
             ref = DataProps.name_from_user_hash(ref)
             search_owned_streams = peer_id == self.get_peer_id()
             search_other_streams = not search_owned_streams
+            owner = peer_id  # Only the streams of this peer: another peer's stream with the same name is not it
 
         # Search your own streams first (priority)
         if search_owned_streams:
@@ -1650,12 +1652,16 @@ class AgentBasics:
             for user_hash, stream_obj in self.known_streams_by_user_hash.items():
                 if public and not stream_obj.is_public():
                     continue
+                if owner is not None and DataProps.peer_id_from_user_hash(user_hash) != owner:
+                    continue
                 if ref == Stream.name_from_user_hash(user_hash):
                     return user_hash
             for net_hash, stream_dict in self.known_streams.items():
                 if len(stream_dict) == 0:
                     continue
                 if public and not next(iter(stream_dict.values())).is_public():
+                    continue
+                if owner is not None and DataProps.peer_id_from_net_hash(net_hash) != owner:
                     continue
                 if ref == Stream.name_or_group_from_net_hash(net_hash):
                     return net_hash
@@ -1844,6 +1850,18 @@ class AgentBasics:
 
             # Check if it is a new stream or a data stream to add to an already known stream
             already_known_stream = net_hash in self.known_streams
+
+            # A stream already known with the same properties and of the same kind is kept: a new object would detach
+            # the interactions registered on the old one, which would then never see the samples arriving on the new
+            # one (an interaction naming the stream, registered just before a subscribe that adds the stream again);
+            # the delta is not compared, since it is cleared on the streams of the others (see add_stream)
+            known = self.known_streams.get(net_hash, {}).get(props.get_name())
+            if known is not None and isinstance(known, BufferedStream) == buffered:
+                known_props, new_props = known.get_props().to_dict(), props.to_dict()
+                known_props.pop('delta')
+                new_props.pop('delta')
+                if known_props == new_props:
+                    continue
 
             # Creating the stream object
             if not buffered:

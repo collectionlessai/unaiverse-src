@@ -501,10 +501,14 @@ class Agent(AgentBasics):
         try:
 
             # A ModuleWrapper runs the module in its worker thread (the node keeps running meanwhile); any other
-            # callable is called as it is
+            # callable is called as it is. The steps of a multistep interaction run inline instead: its samples come
+            # one per tick, and the ones arriving while the module runs in its worker would move stdin past the
+            # samples not processed yet (skipped steps, lost answers)
             first, last = self.get_action_step() == 0, self.is_last_action_step()
-            if isinstance(self.proc, ModuleWrapper):
+            if isinstance(self.proc, ModuleWrapper) and not self.is_multi_steps_action():
                 output_data = await self.proc.aforward(*input_data, first=first, last=last)
+            elif isinstance(self.proc, ModuleWrapper):
+                output_data = self.proc.forward(*input_data, first=first, last=last)
             else:
                 output_data = self.proc(*input_data, first=first, last=last)
 
@@ -564,10 +568,14 @@ class Agent(AgentBasics):
             # Getting input data from the input stream
             target_data = self.stdtar.get(uuid=uuid, requested_by="learn")  # Use kwargs
 
-            # Learning from the last performed inference and the current targets
+            # Learning from the last performed inference and the current targets (inline in a multistep interaction,
+            # as the inference in process)
             try:
                 assert isinstance(self.proc, ModuleWrapper)
-                loss_values = await self.proc.alearn_backward(target_data)
+                if self.is_multi_steps_action():
+                    loss_values = self.proc.learn_backward(target_data)
+                else:
+                    loss_values = await self.proc.alearn_backward(target_data)
             except Exception as e:
                 log.error(f"Error while learning: {e}")
                 return False
