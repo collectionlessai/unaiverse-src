@@ -362,7 +362,7 @@ def test_discovery_is_skipped_when_not_a_world(world):
 
 # set_role send-failure teardown (BUG 3)
 
-def _set_role_fake_self(send_ok):
+def _set_role_fake_self(send_ok, sends_are_queued=False):
     """The slice of ``World`` that ``set_role`` touches, with a controllable send
     outcome. Roles are kept fake (a single custom bit) so the test does not depend
     on the real role-bit vocabulary."""
@@ -372,6 +372,7 @@ def _set_role_fake_self(send_ok):
             get_role=lambda peer_id: 1,                 # current role: world_agent
             set_role=lambda peer_id, role: None,        # spy no-op
             send=AsyncMock(return_value=send_ok),
+            sends_are_queued=sends_are_queued,
         ),
         ROLE_BITS_TO_STR={4: "custom_role"},
         role_to_behav={"custom_role": "<behav>"},
@@ -391,6 +392,17 @@ def test_set_role_send_failure_purges_with_local_error():
 
     me.node_purge_fcn.assert_awaited_once_with("peerX", reason=LOCAL_ERROR)
     # The success branch (role_changed_by_world=True) never ran.
+    assert me.role_changed_by_world is False
+
+
+def test_set_role_refused_by_a_full_send_queue_does_not_purge():
+    """With the send queues on, a False is the refusal of a full queue: the agent is
+    behind, not gone, so set_role keeps it (the Session decides liveness)."""
+    me = _set_role_fake_self(send_ok=False, sends_are_queued=True)
+
+    asyncio.run(World.set_role(me, "peerX", 5))
+
+    me.node_purge_fcn.assert_not_awaited()
     assert me.role_changed_by_world is False
 
 

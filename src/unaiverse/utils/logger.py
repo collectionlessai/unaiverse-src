@@ -17,6 +17,7 @@ import sys
 import json
 import html
 import threading
+import contextvars
 from enum import Enum
 from pathlib import Path
 from typing import Any, Callable
@@ -199,7 +200,9 @@ class _Logger:
         self._file_mode = "a" if file_append else "w"
         self._cycle_idx: int = -1
         self._ctx: dict[str, Any] = {}
-        self._sub: str = ""  # sticky subdomain tag (set via set_sub)
+        # Sticky subdomain tag (set via set_sub): one per asyncio task, since the network and the behave tasks of a
+        # node each set their own (a task starts with a copy of the context of its creator)
+        self._sub_var: contextvars.ContextVar = contextvars.ContextVar(f"unai_log_sub_{id(self)}", default="")
         self._clock = None
         # Optional non-blocking observers of every emitted record (see add_record_sink)
         self._record_sinks: list[Callable[[str, dict[str, Any]], None]] = []
@@ -343,14 +346,12 @@ class _Logger:
 
             log.clear_sub()                           # back to no sticky tag
         """
-        with self._lock:
-            self._sub = sub
+        self._sub_var.set(sub)
 
     def clear_sub(self) -> None:
         """Clear the sticky subdomain tag.  Subsequent records carry no ``sub`` field
         unless ``sub=`` is passed explicitly at the call site."""
-        with self._lock:
-            self._sub = ""
+        self._sub_var.set("")
 
     def set_ctx(self, **kwargs: Any) -> None:
         """Merge key-value pairs into the sticky context.
@@ -480,7 +481,7 @@ class _Logger:
                 "msg": msg,
             }
             # call-site wins → sticky fallback → default "gen"
-            effective_sub = sub or self._sub or _SUB_DEFAULT
+            effective_sub = sub or self._sub_var.get() or _SUB_DEFAULT
             record["sub"] = effective_sub
             if info:
                 record["info"] = info

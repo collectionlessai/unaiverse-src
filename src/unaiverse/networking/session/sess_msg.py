@@ -12,21 +12,24 @@
                  Code Repositories:  https://github.com/collectionlessai/
                  Main Developers:    Stefano Melacci (Project Leader), Christian Di Maio, Tommaso Guidi
 """
-from __future__ import annotations
-
 import json
+from typing import Any
 from collections import namedtuple
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional
 
 
 # Session protocol IDs (libp2p stream protocols that carry a SessMsg)
 # Single source of truth, imported by session.py, session_manager.py, connpool.py
 # and p2p.py (the inbound/outbound codec). Keep in sync with unailib/types.go.
-SESSION_HELLO_PROTOCOL   = "/unaiverse/session/hello/1.0.0"
+SESSION_HELLO_PROTOCOL = "/unaiverse/session/hello/1.0.0"
 SESSION_PROFILE_PROTOCOL = "/unaiverse/session/profile/1.0.0"
-SESSION_WORLD_PROTOCOL   = "/unaiverse/session/world/1.0.0"
+SESSION_WORLD_PROTOCOL = "/unaiverse/session/world/1.0.0"
 SESSION_CONTROL_PROTOCOL = "/unaiverse/session/control/1.0.0"
+
+# Capability bits of HELLO / HELLO_ACK (session.proto): what the transport of this end can do. A peer that sends 0
+# (any node or browser older than them) gets the legacy behavior: messages up to the legacy size, one frame each
+CAP_CHUNKED_FRAMES = 1 << 0  # Chat messages larger than the chunk size, as chunked frames on the same stream
+CAP_FILE_STREAM = 1 << 1  # FILE data streamed from disk in chunks
 
 SESSION_PROTOCOL_IDS = frozenset({
     SESSION_HELLO_PROTOCOL,
@@ -42,31 +45,30 @@ SESSION_PROTOCOL_IDS = frozenset({
 # FSM only ever sees the decoded SessMsg, never protobuf.
 SessionInbound = namedtuple("SessionInbound", ["peer_id", "protocol_id", "sess_msg"])
 
-
 # ReasonCode (verbatim from session.proto enum ReasonCode)
-OK                     = 0
-VERSION_UNSUPPORTED    = 1
-OVERLOADED             = 2
-NOT_AUTHORIZED         = 3
-NOT_IN_ALLOW_LIST      = 4
-CV_HASH_MISMATCH       = 5
-ROLE_INCOMPATIBLE      = 6
-WORLD_BUSY             = 7
-HOSTED_REJECTED        = 8
-GRACEFUL_SHUTDOWN      = 9
-WORLD_DISENGAGEMENT    = 10
+OK = 0
+VERSION_UNSUPPORTED = 1
+OVERLOADED = 2
+NOT_AUTHORIZED = 3
+NOT_IN_ALLOW_LIST = 4
+CV_HASH_MISMATCH = 5
+ROLE_INCOMPATIBLE = 6
+WORLD_BUSY = 7
+HOSTED_REJECTED = 8
+GRACEFUL_SHUTDOWN = 9
+WORLD_DISENGAGEMENT = 10
 WORLD_HANDOFF_COMPLETE = 11
-ROLE_REVOKED           = 12
-TOKEN_REVOKED          = 13
-KICKED_BY_HOST         = 14
-LOCAL_ERROR            = 15
-GRANT_EXPIRED          = 16
+ROLE_REVOKED = 12
+TOKEN_REVOKED = 13
+KICKED_BY_HOST = 14
+LOCAL_ERROR = 15
+GRANT_EXPIRED = 16
 SIMULTANEOUS_OPEN_LOSS = 17
-SESSION_UNKNOWN        = 18  # liveness: peer holds no Session for this session_id
-TOKEN_EXPIRED          = 19  # peer's root token lapsed past the grace window
-PERIMETER_CUT          = 20  # world perimeter: peer is not (no longer) a member
+SESSION_UNKNOWN = 18  # Liveness: peer holds no Session for this session_id
+TOKEN_EXPIRED = 19  # Peer's root token lapsed past the grace window
+PERIMETER_CUT = 20  # World perimeter: peer is not (no longer) a member
 
-REASON_NAME: Dict[int, str] = {
+REASON_NAME: dict[int, str] = {
     OK: "OK",
     VERSION_UNSUPPORTED: "VERSION_UNSUPPORTED",
     OVERLOADED: "OVERLOADED",
@@ -92,12 +94,18 @@ REASON_NAME: Dict[int, str] = {
 
 
 def reason_name(code: int) -> str:
-    """``spb.ReasonCode.Name`` replacement (returns the int as str if unknown)."""
+    """Gets the name of a reason code (replacement of ``spb.ReasonCode.Name``).
+
+    Args:
+        code: The reason code.
+
+    Returns:
+        The name of the reason code, or the code itself as a string when it is unknown.
+    """
     return REASON_NAME.get(int(code), str(code))
 
 
-# SessMsg
-
+# SessMsg: the value object of a Session message, with its own wire codec
 @dataclass
 class SessMsg:
     """A single Session handshake message as a portable value object.
@@ -108,30 +116,51 @@ class SessMsg:
     wire encoding (protobuf in CPython, protobuf-js in the browser).
     """
     kind: str
-    fields: Dict[str, Any] = field(default_factory=dict)
+    fields: dict[str, Any] = field(default_factory=dict)
 
-    # Message kinds — one per session.proto message type.
-    KIND_HELLO_REQ        = "hello_request"
-    KIND_HELLO_RESP       = "hello_response"
-    KIND_PROFILE_OFFER    = "profile_offer"
+    # Message kinds — one per session.proto message type
+    KIND_HELLO_REQ = "hello_request"
+    KIND_HELLO_RESP = "hello_response"
+    KIND_PROFILE_OFFER = "profile_offer"
     KIND_PROFILE_DECISION = "profile_decision"
-    KIND_WORLD_GRANT      = "world_grant"
-    KIND_WORLD_GRANT_ACK  = "world_grant_ack"
-    KIND_GOAWAY           = "goaway"
-    KIND_GOAWAY_ACK       = "goaway_ack"
+    KIND_WORLD_GRANT = "world_grant"
+    KIND_WORLD_GRANT_ACK = "world_grant_ack"
+    KIND_GOAWAY = "goaway"
+    KIND_GOAWAY_ACK = "goaway_ack"
+
     # Liveness / resume control messages (post-date session.proto; the transport-layer
     # codec encodes these as a small JSON control envelope rather than protobuf,
     # see P2P.send_session. They ride SESSION_CONTROL_PROTOCOL like GOAWAY).
-    KIND_PING             = "ping"          # {session_id: bytes, nonce: bytes}
-    KIND_PONG             = "pong"          # {session_id: bytes, nonce: bytes, ok: bool}
-    KIND_RESUME           = "resume"        # {session_id: bytes, nonce: bytes}
-    KIND_RESUME_ACK       = "resume_ack"    # {session_id, nonce, accepted: bool, reason_code: int}
-    KIND_TOKEN_UPDATE     = "token_update"  # {session_id: bytes, token: str} refreshed root token
+    KIND_PING = "ping"  # {session_id: bytes, nonce: bytes}
+    KIND_PONG = "pong"  # {session_id: bytes, nonce: bytes, ok: bool}
+    KIND_RESUME = "resume"  # {session_id: bytes, nonce: bytes}
+    KIND_RESUME_ACK = "resume_ack"  # {session_id, nonce, accepted: bool, reason_code: int}
+    KIND_TOKEN_UPDATE = "token_update"  # {session_id: bytes, token: str} refreshed root token
 
     def get(self, key: str, default: Any = None) -> Any:
+        """Gets a field of the message, with a default for a missing one.
+
+        Args:
+            key: The field name (as in session.proto).
+            default: The value to return when the field is missing (default: None).
+
+        Returns:
+            The value of the field, or the default.
+        """
         return self.fields.get(key, default)
 
     def __getitem__(self, key: str) -> Any:
+        """Gets a field of the message.
+
+        Args:
+            key: The field name (as in session.proto).
+
+        Returns:
+            The value of the field.
+
+        Raises:
+            KeyError: If the field is missing.
+        """
         return self.fields[key]
 
     # Wire (de)serialization
@@ -140,11 +169,18 @@ class SessMsg:
     # module top) so importing SessMsg stays protobuf-free — the FSM constructs and
     # reads SessMsg but never serializes, so these run only in the CPython conn layer
     # and protobuf never reaches the Pyodide import graph.
-
     def to_bytes(self) -> bytes:
-        """Serialize to ``[1-byte kind tag] || payload`` wire bytes: protobuf for the
-        handshake messages, a small JSON envelope for the liveness/resume control
-        messages (which carry no protobuf at all)."""
+        """Serializes the message to ``[1-byte kind tag] || payload`` wire bytes.
+
+        The payload is protobuf for the handshake messages and a small JSON envelope for the
+        liveness/resume control messages (which carry no protobuf at all).
+
+        Returns:
+            The wire bytes of the message.
+
+        Raises:
+            ValueError: If the kind of the message is unknown.
+        """
         json_tag = _JSON_KIND_TO_TAG.get(self.kind)
         if json_tag is not None:
             spec = _JSON_KIND_FIELDS[self.kind]
@@ -159,7 +195,7 @@ class SessMsg:
         spec = _KIND_SPEC.get(self.kind)
         if spec is None:
             raise ValueError(f"SessMsg.to_bytes: unknown SessMsg kind '{self.kind}'")
-        from . import session_pb2 as _spb  # lazy: CPython conn layer only, never under Pyodide
+        from . import session_pb2 as _spb  # Lazy: CPython conn layer only, never under Pyodide
         tag, cls_name, field_names = spec
         msg = getattr(_spb, cls_name)()
         for fn in field_names:
@@ -173,9 +209,19 @@ class SessMsg:
         return bytes([tag]) + msg.SerializeToString()
 
     @classmethod
-    def from_bytes(cls, payload: bytes, protocol_id: str | None = None) -> "SessMsg":
-        """Decode ``[1-byte kind tag] || payload`` wire bytes into a SessMsg (inverse of
-        :meth:`to_bytes`). ``protocol_id`` is optional and only used in error text."""
+    def from_bytes(cls, payload: bytes, protocol_id: str | None = None) -> 'SessMsg':
+        """Decodes ``[1-byte kind tag] || payload`` wire bytes into a SessMsg (inverse of :meth:`to_bytes`).
+
+        Args:
+            payload: The wire bytes.
+            protocol_id: The protocol the bytes arrived on, only used in error messages (default: None).
+
+        Returns:
+            The decoded message.
+
+        Raises:
+            ValueError: If the payload is empty or its kind tag is unknown.
+        """
         if not payload:
             raise ValueError("SessMsg.from_bytes: empty payload")
         json_kind = _JSON_TAG_TO_KIND.get(payload[0])
@@ -193,7 +239,7 @@ class SessMsg:
         kind = _TAG_TO_KIND.get(payload[0])
         if kind is None:
             raise ValueError(f"SessMsg.from_bytes: unknown kind tag {payload[0]} on {protocol_id}")
-        from . import session_pb2 as _spb  # lazy: CPython conn layer only, never under Pyodide
+        from . import session_pb2 as _spb  # Lazy: CPython conn layer only, never under Pyodide
         _tag, cls_name, field_names = _KIND_SPEC[kind]
         msg = getattr(_spb, cls_name)()
         msg.ParseFromString(payload[1:])
@@ -213,25 +259,25 @@ class SessMsg:
 # entirely by these tables + SessMsg.to_bytes/from_bytes and their JS mirror. The
 # explicit kind tag means no direction/field heuristic is needed to tell which
 # message a stream carries.
-
+#
 # kind -> (tag_byte, pb_class_name, [field names in proto order])
 _KIND_SPEC = {
-    SessMsg.KIND_HELLO_REQ:        (0x01, "HelloRequest",
-                                    ["session_id", "nonce_a", "protocol_versions", "capabilities", "client_id"]),
-    SessMsg.KIND_HELLO_RESP:       (0x02, "HelloResponse",
-                                    ["chosen_version", "capabilities", "nonce_b", "sig_b", "reason_code"]),
-    SessMsg.KIND_PROFILE_OFFER:    (0x03, "ProfileOffer",
-                                    ["profile", "sig_a", "session_id", "token"]),
+    SessMsg.KIND_HELLO_REQ: (0x01, "HelloRequest",
+                             ["session_id", "nonce_a", "protocol_versions", "capabilities", "client_id"]),
+    SessMsg.KIND_HELLO_RESP: (0x02, "HelloResponse",
+                              ["chosen_version", "capabilities", "nonce_b", "sig_b", "reason_code"]),
+    SessMsg.KIND_PROFILE_OFFER: (0x03, "ProfileOffer",
+                                 ["profile", "sig_a", "session_id", "token"]),
     SessMsg.KIND_PROFILE_DECISION: (0x04, "ProfileDecision",
                                     ["accepted", "profile_b", "reason_code", "hint_addrs", "retry_after_ms",
                                      "session_id", "token"]),
-    SessMsg.KIND_WORLD_GRANT:      (0x05, "WorldGrant",
-                                    ["grant_id", "expiry_unix_ms", "world_profile",
-                                     "role", "code_bundle", "initial_stats",
-                                     "rendezvous_tag"]),
-    SessMsg.KIND_WORLD_GRANT_ACK:  (0x06, "WorldGrantAck", ["received"]),
-    SessMsg.KIND_GOAWAY:           (0x09, "Goaway", ["reason", "drain_window_ms", "session_id"]),
-    SessMsg.KIND_GOAWAY_ACK:       (0x0A, "GoawayAck", ["received"]),
+    SessMsg.KIND_WORLD_GRANT: (0x05, "WorldGrant",
+                               ["grant_id", "expiry_unix_ms", "world_profile",
+                                "role", "code_bundle", "initial_stats",
+                                "rendezvous_tag"]),
+    SessMsg.KIND_WORLD_GRANT_ACK: (0x06, "WorldGrantAck", ["received"]),
+    SessMsg.KIND_GOAWAY: (0x09, "Goaway", ["reason", "drain_window_ms", "session_id"]),
+    SessMsg.KIND_GOAWAY_ACK: (0x0A, "GoawayAck", ["received"]),
 }
 _TAG_TO_KIND = {tag: kind for kind, (tag, _cls, _f) in _KIND_SPEC.items()}
 _REPEATED_FIELDS = frozenset({"protocol_versions", "hint_addrs"})
@@ -241,35 +287,36 @@ _REPEATED_FIELDS = frozenset({"protocol_versions", "hint_addrs"})
 # survive JSON; the codec restores them to `bytes` on decode so the FSM sees the same
 # value types as for protobuf messages.
 _JSON_KIND_TO_TAG = {
-    SessMsg.KIND_PING:         0x0B,
-    SessMsg.KIND_PONG:         0x0C,
-    SessMsg.KIND_RESUME:       0x0D,
-    SessMsg.KIND_RESUME_ACK:   0x0E,
+    SessMsg.KIND_PING: 0x0B,
+    SessMsg.KIND_PONG: 0x0C,
+    SessMsg.KIND_RESUME: 0x0D,
+    SessMsg.KIND_RESUME_ACK: 0x0E,
     SessMsg.KIND_TOKEN_UPDATE: 0x0F,
 }
 _JSON_TAG_TO_KIND = {tag: kind for kind, tag in _JSON_KIND_TO_TAG.items()}
-# Field name -> True if it is a `bytes` field (hex-encoded in the JSON envelope).
+
+# Field name -> True if it is a `bytes` field (hex-encoded in the JSON envelope)
 _JSON_KIND_FIELDS = {
-    SessMsg.KIND_PING:         {"session_id": True, "nonce": True},
-    SessMsg.KIND_PONG:         {"session_id": True, "nonce": True, "ok": False},
-    SessMsg.KIND_RESUME:       {"session_id": True, "nonce": True},
-    SessMsg.KIND_RESUME_ACK:   {"session_id": True, "nonce": True,
-                                "accepted": False, "reason_code": False},
+    SessMsg.KIND_PING: {"session_id": True, "nonce": True},
+    SessMsg.KIND_PONG: {"session_id": True, "nonce": True, "ok": False},
+    SessMsg.KIND_RESUME: {"session_id": True, "nonce": True},
+    SessMsg.KIND_RESUME_ACK: {"session_id": True, "nonce": True,
+                              "accepted": False, "reason_code": False},
     SessMsg.KIND_TOKEN_UPDATE: {"session_id": True, "token": False},
 }
-# Decode defaults for missing non-bytes JSON fields (bytes default to b"").
+
+# Decode defaults for missing non-bytes JSON fields (bytes default to b"")
 _JSON_FIELD_DEFAULTS = {"ok": False, "accepted": False, "token": ""}
 
 
 # Application decision types (returned by the responder decision hook)
-
 @dataclass
 class WorldGrantSpec:
-    """What a world host returns from its decision hook when it accepts a joiner
-    on its PUBLIC Session. The Session uses this to build a ``WorldGrant`` message;
-    ``*_bytes`` fields are already serialized payloads. ``code_bundle`` carries the
-    application's agent code + stats code (the host packs them however it likes —
-    e.g. a JSON blob — and the joiner unpacks it); the proto has no separate
+    """What a world host returns from its decision hook when it accepts a joiner on its PUBLIC Session.
+
+    The Session uses this to build a ``WorldGrant`` message; ``*_bytes`` fields are already serialized
+    payloads. ``code_bundle`` carries the application's agent code + stats code (the host packs them
+    however it likes — e.g. a JSON blob — and the joiner unpacks it); the proto has no separate
     agent-stats field, so anything beyond the named fields rides in ``code_bundle``.
     """
     role: int
@@ -291,19 +338,20 @@ class ProfileDecisionResult:
     """
     accepted: bool
     reason_code: int = OK
-    world_grant: Optional[WorldGrantSpec] = None
+    world_grant: WorldGrantSpec | None = None
 
 
 @dataclass(frozen=True)
 class VerifiedTokenClaims:
-    """Root-attested claims from a verified node token (RT). The responder builds
-    this after verifying an inbound token against the transport peer-id, then passes
-    it to the decision hook, which trusts these over the self-asserted profile:
-    ``node_id`` for the allow-list, ``cv_hash`` for the profile-CV integrity check,
-    ``p2p_peers`` (the root-attested [public, world] peer-ids) for the public<->world
-    binding, ``exp`` (JWT expiry, unix seconds) for the in-session refresh, and
-    ``code_hash`` (the root-attested hash of a world's stored code definition, None
-    when the token carries no such claim) for the joiner's code-integrity check."""
+    """Root-attested claims from a verified node token (RT).
+
+    The responder builds this after verifying an inbound token against the transport peer-id, then passes
+    it to the decision hook, which trusts these over the self-asserted profile: ``node_id`` for the
+    allow-list, ``cv_hash`` for the profile-CV integrity check, ``p2p_peers`` (the root-attested [public,
+    world] peer-ids) for the public<->world binding, ``exp`` (JWT expiry, unix seconds) for the in-session
+    refresh, and ``code_hash`` (the root-attested hash of a world's stored code definition, None when the
+    token carries no such claim) for the joiner's code-integrity check.
+    """
     node_id: str
     cv_hash: str
     p2p_peers: tuple = ()

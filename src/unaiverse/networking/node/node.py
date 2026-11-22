@@ -25,6 +25,7 @@ import signal
 import asyncio
 import requests
 import threading
+import mimetypes
 import traceback
 from PIL import Image
 from typing import Any
@@ -32,24 +33,25 @@ from datetime import timedelta
 from unaiverse.clock import clock
 from unaiverse.world import World
 from unaiverse.agent import Agent
+from unaiverse.uai import has_fence
 from collections.abc import Callable
 from datetime import datetime, timezone
 from unaiverse.networking.p2p.messages import Msg
-from unaiverse.uai import has_fence
-from unaiverse.custom import Custom, GenException, RootServerError
 from unaiverse.networking.p2p import P2P, P2PError
+from unaiverse.streams.dataprops import FileContainer
 from unaiverse.networking.node.connpool import NodeConn
 from unaiverse.networking.node.profile import NodeProfile
-from unaiverse.networking.session import (ProfileDecisionResult, WorldGrantSpec, VerifiedTokenClaims,
-                                          SessionEventType, SessionRole)
+from unaiverse.streams.streams import DataProps, BufferedStream
+from unaiverse.custom import Custom, GenException, RootServerError
 from unaiverse.networking.session.sess_msg import (WORLD_DISENGAGEMENT,
                                                    LOCAL_ERROR, NOT_IN_ALLOW_LIST, ROLE_INCOMPATIBLE,
                                                    HOSTED_REJECTED, CV_HASH_MISMATCH, NOT_AUTHORIZED, GRACEFUL_SHUTDOWN)
-from unaiverse.streams.streams import DataProps, BufferedStream
 from unaiverse.utils.logger import log, ALWAYS_ON_CHANNELS, ALL_CHANNELS
 from unaiverse.utils.misc import (get_key_considering_multiple_sources, save_node_addresses_to_file,
                                   prepare_app_dir, load_agent_in_memory, unpack_py_files, analyze_code,
                                   world_definition_members, canonical_world_hash, owner_handle, build_unaid)
+from unaiverse.networking.session import (ProfileDecisionResult, WorldGrantSpec, VerifiedTokenClaims,
+                                          SessionEvent, SessionEventType, SessionRole)
 
 # Margin added past a quarantine ban when the rejoin watchdog pulls a retry in:
 # just enough to land on the open side of the gate.
@@ -62,11 +64,22 @@ _RENDEZVOUS_REPEAT_CYCLES = 2
 
 
 class Node:
+    """A UNaIVERSE node: it hosts an agent or a world, runs its main loop and owns its two P2P instances."""
+
+
     # Each node can host an agent or a world
     AGENT = "agent"  # Artificial agent
     WORLD = "world"  # World agent
 
     _closed = False  # Set by aclose, which must run once (class-level: no __init__ needed)
+
+    # No two tasks until run_async starts them (class-level, as _closed: shells built without __init__ run inline)
+    _tick_task: asyncio.Task | None = None
+    _agent_lock_owner: asyncio.Task | None = None
+    _in_behave = False
+    _deferred_msgs_by_peer: dict[str, int] = {}  # Messages of each sender waiting for the end of a tick
+    _deferred_msg_bytes = 0  # Bytes of the messages waiting for the end of a tick
+    _clock_delta: float | None = None  # The clock delta the node was created with (its HSM cycle)
 
     def __init__(self,
                  hosted: Agent | World,
@@ -86,7 +99,7 @@ class Node:
                  talk_to_relay_based_nodes: bool = True,
                  run_hook: Callable[['Node'], None] | None = None,
                  send_stats_every: float = 30.,
-                 save_checkpoint_every: float = -1.):
+                 save_checkpoint_every: float = -1.) -> None:
         """Initializes a new instance of the Node class.
 
         Args:
@@ -187,6 +200,7 @@ class Node:
         self.agent: Agent | None = hosted if isinstance(hosted, Agent) else None
         self.world: World | None = hosted if isinstance(hosted, World) else None
         self.conn: NodeConn  # Manages the network operations in the P2P network
+
         # The two SessionManagers are owned by the Coordinator (conn.attach_session_policy);
         # Node holds no handle to them and drives every Session verb through conn facades.
         # The world-handoff correlation (public<->world peer-id) now lives in the
@@ -234,6 +248,17 @@ class Node:
 
         # Interview of newly connected nodes
         self.reconnected = set()
+        self._clock_delta = clock_delta
+
+        # The two tasks of a running node (run_async without a cycle budget): the network task (session pump,
+        # messages, connections) never waits for the HSM, the tick task advances the clock and runs behave(). The tick
+        # task holds _agent_lock for its whole tick; what the network side does to the hosted entity while a tick is
+        # running is queued in _deferred_agent_ops and applied, in order, at the tick boundary (see _agent_op)
+        self._tick_task: asyncio.Task | None = None
+        self._agent_lock = asyncio.Lock()
+        self._agent_lock_owner: asyncio.Task | None = None  # The task holding _agent_lock (nested ops run inline)
+        self._deferred_agent_ops: list[Callable[[], Any]] = []
+        self._in_behave = False
 
         # Alive messaging
         self.last_alive_time = 0.
@@ -354,10 +379,12 @@ class Node:
         # 3. Define the worker function for the threads
         def create_p2p_instance(name: str, config: dict):
             try:
+
                 # This is the slow, blocking call
                 instance = P2P(**config)
                 results[name] = instance
             except Exception as _e:
+
                 # Store the exception if creation fails
                 results[name] = _e
             return True
@@ -379,11 +406,13 @@ class Node:
         p2p_w: P2P | Exception | None = results["p2p_w"]
 
         if isinstance(p2p_u, Exception):
+
             # We must re-raise the exception to fail the Node creation
             raise P2PError(f"Failed to initialize public P2P node (p2p_u): {p2p_u}") from p2p_u
         if isinstance(p2p_w, Exception):
             raise P2PError(f"Failed to initialize private P2P node (p2p_w): {p2p_w}") from p2p_w
         if p2p_u is None or p2p_w is None:
+
             # This should not happen if threads ran, but it's a safe check
             raise P2PError("P2P node creation did not complete, but no exception was caught.")
         if p2p_u.peer_id is None or p2p_w.peer_id is None:
@@ -448,6 +477,9 @@ class Node:
         # the hook injected into each Session is a thin lambda that re-reads the current
         # policy on every call, instead of the bound method frozen once at attach time.
         self._decision_policy = self._session_decision_hook
+
+        # A received file goes to Downloads/<handle>/<node name>/ of its sender (Phase 6.5)
+        p2p_u.file_owner_of = p2p_w.file_owner_of = self._file_owner_of
         self.conn.attach_session_policy(
             p2p_u=p2p_u,
             p2p_w=p2p_w,
@@ -477,11 +509,20 @@ class Node:
                                             'peer_addresses': p2p_u.addresses,
                                             'private_peer_id': p2p_w.peer_id,
                                             'private_peer_addresses': p2p_w.addresses,
+
                                             # A world node is a relay for its members only if its world instance is
                                             # publicly reachable (the relay service is enabled iff node_type is WORLD).
                                             # TODO: The live AutoNAT verdict can change later, but the profile field is
                                             # seeded once here from the boot verdict and never refreshed.
                                             'is_relay': (self.node_type is Node.WORLD) and bool(p2p_w.is_public),
+
+                                            # What a peer may send to this node (it refuses more instead of sending
+                                            # what would be reset); legacy when the transport has no chunked frames
+                                            'max_message_size': (Custom.MAX_MESSAGE_SIZE
+                                                                 if getattr(p2p_u, 'supports_chunked_frames', False)
+                                                                 else Custom.LEGACY_MAX_MESSAGE_SIZE),
+                                            'accept_files': Custom.ACCEPT_FILES,
+                                            'max_file_size': Custom.MAX_FILE_SIZE,
                                             'connections': {
                                                 'role': self.hosted.ROLE_BITS_TO_STR[self.hosted.ROLE_PUBLIC]
                                             },
@@ -491,6 +532,7 @@ class Node:
                                                     if self.node_type is Node.WORLD else None
                                             },
                                             "hidden": hidden  # True/False only when explicitly requested
+
                                             #  (None means: do not touch the server-side visibility)
                                             },
                                    cv=cv)  # Adding CV here
@@ -609,76 +651,6 @@ class Node:
         """
         self._apply_node_token(self._request_node_token(peer_ids))
 
-    @staticmethod
-    def _outstanding_legal_documents(data) -> str:
-        """Human-readable list of the legal documents still to accept, read from the
-        acceptance state the root attaches to a legal_acceptance_required refusal."""
-        outstanding = []
-        state = data if isinstance(data, dict) else {}
-        for kind, label in (("tos", "Terms of Service"), ("privacy", "Privacy Policy")):
-            side = state.get(kind)
-            if isinstance(side, dict) and not side.get("up_to_date", False):
-                version = side.get("current_version")
-                outstanding.append(label + (f" {version}" if version else ""))
-        return ", ".join(outstanding) if outstanding else "Terms of Service, Privacy Policy"
-
-    def _request_node_token(self, peer_ids: list[str]) -> dict:
-        """Blocking HTTP to the root to (re)generate the node token. Reads self but does
-        NOT mutate it, so it is safe to run off the event loop via asyncio.to_thread.
-        Raises on failure (fatal at startup, caught at the periodic-refresh call-site)."""
-        response = None
-
-        for i in range(0, 3):  # It will try 3 times before raising the exception...
-            try:
-                response = self.__root("/account/node/token/generate",
-                                       payload={"node_id": self.node_id,
-                                                "account_token": self.unaiverse_key
-                                                if self.node_token is None or len(self.node_token) == 0 else None,
-                                                "node_token": self.node_token, "peer_ids": json.dumps(peer_ids)})
-                break
-            except RootServerError as e:
-                if e.api_rejected:
-                    # The server answered and refused: retrying cannot change the outcome
-                    if e.flags.get('legal_acceptance_required'):
-                        log.error("The root server refuses to mint a node token until the owner accepts "
-                                  f"the current legal documents ({self._outstanding_legal_documents(e.data)}): "
-                                  "log in at https://unaiverse.io, accept them, then restart the node")
-                    elif e.flags.get('blocked_utc') is not None:
-                        log.error("The root server refuses to mint a node token: this node is blocked "
-                                  f"(since {e.flags['blocked_utc']})")
-                    raise
-                if i < 2:
-                    log.error("Error while getting token from server, retrying...")
-                    time.sleep(1)  # Wait a little bit
-                else:
-                    log.error(f"Error while getting token from server [{e}]")
-                    raise
-
-        if not isinstance(response, dict):
-            log.critical(f"Unexpected token payload from the root server: {response}")
-        return response
-
-    def _apply_node_token(self, response: dict) -> None:
-        """Apply a freshly fetched node token. Main-task only: mutates self and pushes the
-        token into the transport via FFI, so it must not run concurrently with the loop.
-
-        Storing the token and injecting the TURN credentials are deliberately two steps.
-        The credentials ride the token, but they can only reach a transport through the
-        SessionManagers, which are built last (attach_session_policy), while the token
-        itself is needed immediately: the static profile is fetched with it, and NodeConn
-        is constructed around it. So this stores what it can and remembers the rest for
-        inject_turn_credentials(), which the boot sequence calls once the managers exist.
-        On the periodic refresh both already exist, and the injection happens right here.
-        """
-        self.node_token = response["token"]
-        self.public_key = response["public_key"]
-        self.turn_info = response.get("turn_info", None)
-
-        # Sharing the token with the connection manager (absent this early at boot)
-        if getattr(self, 'conn', None) is not None:
-            self.conn.set_token(self.node_token)
-            self.inject_turn_credentials()
-
     def inject_turn_credentials(self) -> None:
         """Hand the TURN credentials that came with the node token to both transports.
 
@@ -751,6 +723,7 @@ class Node:
                             payload={"node_id": self.node_id,
                                      "world_roles_fsm": self.world.role_to_behav})
             else:
+
                 # The API refuses an empty world_roles_fsm, and an empty dict does
                 # not mean "no roles" to it: simply skip the post
                 log.debug("No world roles to post (role_to_behav is empty), skipping fsm/post")
@@ -761,6 +734,7 @@ class Node:
         # (maybe it was set by the GUI).
         if self.code_repo is not None or self.code_commit is not None:
             if self.code_repo is None or self.code_commit is None:
+
                 # Exactly one of the two is set: a declaration was clearly requested, and
                 # silently running unpublished would defeat the author's intent
                 missing = "code_commit" if self.code_commit is None else "code_repo"
@@ -787,6 +761,7 @@ class Node:
             ret = None
             for i in range(0, 3):  # Retrying transport failures (and server-side git timeouts) only
                 try:
+
                     # The caller_* pair is what authenticates this call (the node_token that
                     # __root injects is not read by this endpoint's decorator)
                     ret = self.__root(api="/account/node/code/source/set",
@@ -798,6 +773,7 @@ class Node:
                     break
                 except RootServerError as e:
                     if e.api_rejected and e.data_code == "repo_timeout" and i < 2:
+
                         # The one transient refusal: the server's git read timed out
                         log.error("The root server timed out reading the repository, retrying...")
                         time.sleep(1)
@@ -830,12 +806,12 @@ class Node:
             #    log.error(msg)
             #    raise GenException(msg)
             #log.misc(f"World source declared and attested by the root server (hash: {local_hash})")
-
     def send_dynamic_profile(self) -> None:
         """Sends the node's dynamic profile to the root server."""
         try:
             profile = dict(self.profile.get_dynamic_profile())  # Copy: the getter returns the internal dict
             if profile.get('hidden') is None:
+
                 # Visibility never explicitly set this run: omit the key, so the server keeps
                 # whatever the owner chose (the API only touches hidden when the key is present)
                 profile.pop('hidden', None)
@@ -941,22 +917,6 @@ class Node:
             return ""
         return peer_id
 
-    async def _lookup_node_addresses(self, node_id: str) -> list[str] | None:
-        """The addresses of a node as the root server has them, for a Session that lost its
-        peer and may be dialling addresses that changed (async). The request is blocking,
-        so it runs in a thread: the Session awaits it in a task of its own.
-
-        Returns:
-            The addresses, or None when there are none or the request failed.
-        """
-        try:
-            response = await asyncio.to_thread(self.__root, api="/account/node/get/addresses",
-                                               payload={"account_token": self.unaiverse_key, "node_id": node_id})
-            return list(response.get("addresses") or []) or None
-        except Exception as e:
-            log.error(f"Error while retrieving the addresses of node {node_id} [{e}]")
-            return None
-
     async def ask_to_get_in_touch(self, node_name: str | None = None, addresses: list[str] | None = None,
                                   node_id: str | None = None,
                                   public: bool = True, before_updating_pools_fcn: Callable | None = None,
@@ -1049,7 +1009,7 @@ class Node:
         return peer_id
 
     async def ask_to_join_world(self, node_name: str | None = None, addresses: list[str] | None = None,
-                                node_id: str | None = None, **kwargs) -> str | None:
+                                node_id: str | None = None, **kwargs: Any) -> str | None:
         """Initiates a request to join a world. (async)
 
         Args:
@@ -1092,7 +1052,12 @@ class Node:
             self.joining_world_info = None
         return peer_id
 
-    async def leave(self, peer_id: str):
+    async def leave(self, peer_id: str) -> None:
+        """Leaves a peer: purges it with a graceful GOAWAY (async).
+
+        Args:
+            peer_id: The peer to leave.
+        """
         await self.__purge(peer_id, reason=GRACEFUL_SHUTDOWN)
 
     async def leave_world(self) -> None:
@@ -1148,91 +1113,10 @@ class Node:
         dynamic_profile['connections']['world_masters'] = None
         self.profile.mark_change_in_connections()
 
-        # Clearing all joining options + cached world data.
-        assert self.agent is not None
-        await self.agent.clear_world_related_data(host)
+        # Clearing all joining options + cached world data, and swapping the agent back to a public one: the agent part,
+        # at the tick boundary when a tick is running
         self.joining_world_info = None
-
-        if self.agent.__class__.__name__ == "WAgent":
-            new_agent = Agent(proc=None)
-
-            # Clearing memory
-            if self.memory_finder is not None:
-                self.memory_finder.cleanup()
-            self.memory_finder = None
-        else:
-            new_agent = self.agent
-
-        # Cloning attributes of the existing agent
-        skip = {'stats', 'world_profile', 'world_role_fsms', 'behav'}
-        for key, value in self.agent.__dict__.items():
-            if hasattr(new_agent, key):  # This will skip ROLE_BITS_TO_STR, CUSTOM_ROLES, etc...
-                if key in skip:
-                    continue
-                else:
-                    setattr(new_agent, key, value)
-
-        # Fixing internal references to agent (im/proc were cloned from the
-        # in-world instance and still point at it)
-        new_agent.im.agent = new_agent
-        new_agent.proc.agent = new_agent
-
-        # Telling the FSM that actions are related to this new agent
-        new_agent.behav.set_actionable(new_agent)
-        new_agent.behav_lone_wolf.set_actionable(new_agent)
-
-        # Inheriting the pre-defined policy filter (if any)
-        new_agent.set_policy_filter(self.agent.policy_filter, public=False)
-        new_agent.set_policy_filter(self.agent.policy_filter_lone_wolf, public=True)
-
-        # Interaction Manager and processor
-        new_agent.im.agent = new_agent
-        if new_agent.proc is not None and hasattr(new_agent.proc, 'set_agent'):
-            new_agent.proc.set_agent(new_agent)
-
-        # Fixing role in the agent profile. Both world fields must be cleared HERE:
-        # on the non-WAgent branch new_agent IS self.agent, so the skip-set above
-        # cleans nothing, and accept_new_role reads world_role_fsms first — a stale
-        # dict would survive the leave (and get pickled into the saved state).
-        new_agent.world_profile = None
-        new_agent.world_role_fsms = None
-        self.world_role_fsms = None
-        new_agent.accept_new_role(Agent.ROLE_PUBLIC)
-
-        # Updating node-level references
-        self.agent = new_agent
-        self.hosted = new_agent
-
-    @staticmethod
-    def _profile_from_search_element(element: dict) -> NodeProfile:
-        """Maps one element of /discover/search/query into a NodeProfile.
-
-        The element is a flat spread of the API's public node serialisation (plus
-        lat/lon/location): there is no static/dynamic/cv envelope, the owner fields
-        live under 'account', the stored dynamic profile under 'profile' and the
-        badge list under 'cv'.
-        """
-        account = element.get('account') if isinstance(element.get('account'), dict) else {}
-        static = {
-            'node_id': element.get('node_id'),
-            'node_type': element.get('node_type'),
-            'node_name': element.get('node_name'),
-            'node_description': element.get('description'),
-            'created_utc': element.get('created_utc'),
-            'max_nr_connections': element.get('max_connections'),
-            'certified': element.get('certified'),
-            'allowed_node_ids': element.get('allowed_node_ids'),
-            'world_masters_node_ids': element.get('world_masters_node_ids'),
-            'location_method': element.get('location_method'),
-            'nickname': account.get('nickname'),
-            'name': account.get('name'),
-            'surname': account.get('surname'),
-            'title': account.get('title'),
-            'organization': account.get('organization'),
-        }
-        dynamic = element.get('profile') if isinstance(element.get('profile'), dict) else {}
-        cv = element.get('cv') if isinstance(element.get('cv'), list) else []
-        return NodeProfile(static=static, dynamic=dynamic, cv=cv)
+        await self._agent_op(lambda: self.__leave_world_agent_part(host), swap=True)
 
     def search(self, query_text: str, nickname: str | None = None, email: str | None = None) -> list[NodeProfile]:
         """Searches the UNaIVERSE platform for nodes matching the given query.
@@ -1272,7 +1156,7 @@ class Node:
                          f"Query: {query_text}, nickname: {nickname} [{e}]")
         return profiles
 
-    def run(self, keep_rejoining: bool = True, *args, keep_in_touch: bool = False, **kwargs) -> None:
+    def run(self, keep_rejoining: bool = True, *args: Any, keep_in_touch: bool = False, **kwargs: Any) -> None:
         """Starts the main execution loop for the node, calling method run_async(...) by means of asyncio.run.
         See documentation of method run_async.
 
@@ -1305,7 +1189,7 @@ class Node:
                         resume_from_checkpoint: bool = False,
                         join_world: str | list[str] | None = None,
                         get_in_touch: str | list[str] | None = None,
-                        **kwargs) -> None:
+                        **kwargs: Any) -> None:
         """Starts the main execution loop for the node. (async)
 
         Args:
@@ -1338,6 +1222,7 @@ class Node:
         def _request_stop() -> None:
             nonlocal stop_requested_at
             if self.stop_requested:
+
                 # A single physical Ctrl+C can be DELIVERED here more than once: a
                 # terminal signals the whole foreground process group, and a wrapper
                 # like `uv run` additionally forwards the SIGINT to its child — so
@@ -1402,6 +1287,7 @@ class Node:
             else:
                 joined_this_world = ret  # saving peer ID
         elif self.hosted.world_profile is not None:
+
             # We resumed from a state in which we were in this world, so we reconnect
             world_name = self.hosted.world_profile.get_static_profile()['node_name']
             owner = owner_handle(self.hosted.world_profile.get_static_profile())
@@ -1500,6 +1386,7 @@ class Node:
                                 try:
                                     keyboard_msg = prompt("\n👉 ")  # Get from keyboards
                                 except (KeyboardInterrupt, EOFError):
+
                                     # While the prompt owns the terminal, Ctrl+C (and Ctrl+D) is a key it
                                     # reads and raises here, in this thread, not a SIGINT for the main loop:
                                     # hand it over as the stop request it is, and give the terminal back
@@ -1578,19 +1465,16 @@ class Node:
             # Main loop
             must_quit = False
             self.run_start_time = clock.get_time()
-            while not must_quit and not self.stop_requested:
-                log.set_sub("gen")
 
-                # Tuning clock speed. A node with a Session that needs a responsive
-                # pump is never idle: the keep-alive PING RTT window and a handshake
-                # in flight are both sized for a full-speed pump, and a slowed clock
-                # (2s cycles) would starve them into false ping misses / handshake
-                # timeouts. requires_fast_clock() covers every non-terminal, non-KNOWN
-                # Session, so handshakes in flight keep the clock fast too, not just
-                # ESTABLISHED/RECONNECTING.
+            def _tune_clock(network_needs_fast_clock: bool) -> None:
+                """Slows the clock down when the node is idle, and back to speed when it is not.
+
+                Args:
+                    network_needs_fast_clock: True when the Sessions also pace the clock (one loop for everything).
+                """
                 if (self.conn.passed_time_since_last_communication() >= Custom.SLOW_DOWN_CLOCK_AFTER and
                         self.hosted.im.count_interactions() == 0 and
-                        not self.conn.requires_fast_clock()):
+                        not (network_needs_fast_clock and self.conn.requires_fast_clock())):
                     if not clock.is_slowed_down():
                         log.misc("Reducing clock speed (idle)")
                         clock.run_slower()
@@ -1599,10 +1483,12 @@ class Node:
                         log.misc("Restoring original clock speed")
                         clock.run_natural_speed()
 
-                # Sending alive message every "K" seconds
+            async def _send_alive_if_due() -> None:
+                """Tells the root server the node is alive, every SEND_ALIVE_EVERY seconds (async)."""
                 if ((clock.get_time() - self.last_alive_time >= Custom.SEND_ALIVE_EVERY) and
                         len(self.get_public_addresses()) > 0):
                     try:
+
                         # Capped and off the event loop: a hung POST to the root must not
                         # freeze the pump, and a transient failure must not kill the node.
                         was_alive = await asyncio.wait_for(asyncio.to_thread(self.send_alive),
@@ -1617,18 +1503,12 @@ class Node:
                                      "(set env variable NODE_IGNORE_ALIVE=1 to ignore this control)")
                     self.last_alive_time = clock.get_time()
 
-                # Check inspector (the node stays here while the inspector keeps it paused)
-                await self._wait_while_paused_by_inspector()
+            async def _network_inbound(kind: str = "all") -> None:
+                """Rejoin watchdog, connections, then messages, Session pump and send events (async).
 
-                # Move to the next cycle. The wait must be an ASYNC sleep: the
-                # main loop is mostly synchronous (FFI calls), so this is where
-                # asyncio.to_thread completions (conn.send/send_session/connect)
-                # and loop-level callbacks (e.g. signal handlers) get their
-                # chance to run — a blocking sleep here would starve them.
-                while not clock.next_cycle():
-                    await asyncio.sleep(0.001)  # Seconds (lowest possible granularity level)
-
-                log.misc(f"=== Starting clock cycle {clock.get_cycle()} ===")
+                Args:
+                    kind: What to pop: "all" (one loop for everything) or "network" (everything but the streams).
+                """
 
                 # Re-fire a scheduled world rejoin, or the getting in touch again of a lone wolf,
                 # when it comes due (see _tick_rejoin_watchdog).
@@ -1638,7 +1518,11 @@ class Node:
                 await self.__handle_network_connections()
 
                 # Handle (read, execute) received network data/commands
-                await self.__handle_network_messages(interact_mode_opts=interact_mode_opts)
+                await self.__handle_network_messages(interact_mode_opts=interact_mode_opts, kind=kind)
+
+            async def _tick_body() -> None:
+                """One HSM tick: live stream data, the keyboard (interactive mode), behave(), the checkpoint (async)."""
+                nonlocal must_quit, splash_text_shown, cap, last_state_save_time
 
                 # Stream live data (generated and environmental)
                 log.set_sub("gen")
@@ -1680,7 +1564,7 @@ class Node:
                                 log.user("*** Entering interactive mode [type exit() to quit] ***\n")
                                 assert keyboard_listener is not None
                                 keyboard_listener.start()
-                                time.sleep(1)
+                                await asyncio.sleep(1)
 
                             # Getting message from keyboard
                             assert keyboard_queue is not None
@@ -1707,6 +1591,11 @@ class Node:
                             elif msg.lower() == "/agents":
                                 for _, agent_profile in self.agent.all_agents.items():
                                     log.user(f"{build_unaid(agent_profile)}")
+                            elif msg.lower().startswith("/send "):
+
+                                # A file from disk: an image goes as image data, anything else as FILE data (streamed
+                                # from disk to a peer that takes file messages)
+                                self.__send_file_from_keyboard(msg[6:].strip().strip("\"'"), public, target_peer_id)
                             elif msg.lower() == "/debug":
                                 self.agent.behav_lone_wolf.set_debug_messages_active(
                                     not self.agent.behav_lone_wolf.are_debug_messages_active())
@@ -1717,21 +1606,18 @@ class Node:
                                 # Writing message in the agent's default-stdin (that is where the human process will
                                 # pick up data, no matter what is the actual stdin from the point of view of the
                                 # interaction)
-                                uuid, tag = self.agent.prepare_stdin_if_human(public, peer_id=target_peer_id)
-                                if len(self.agent.stdin) > 0:
-                                    if len(self.agent.proc_inputs) == 1:
-                                        self.agent.stdin.set([msg], uuid=uuid, data_tag=tag, force=True)
-                                    else:
-                                        self.agent.stdin.set([msg, image_pil, whatever], uuid=uuid,
-                                                             data_tag=tag, force=True)
-                                else:
-                                    log.error("Empty stdin!")
+                                self.__keyboard_to_stdin(public, target_peer_id, text=msg, img=image_pil,
+                                                         whatever=whatever)
                         except queue.Empty:
                             pass  # If nothing has been typed (+ enter)
 
-                    # Ordinary behavior
+                    # Ordinary behavior (marked, so that a swap of the hosted entity asked meanwhile waits for the end)
                     if not must_quit:
-                        await self.agent.behave()
+                        self._in_behave = True
+                        try:
+                            await self.agent.behave()
+                        finally:
+                            self._in_behave = False
                         if self.hosted.im.count_interactions() > 0:
                             log.inter(str(self.hosted.im))
                         log.streams(self.hosted.streams_to_str())
@@ -1746,6 +1632,10 @@ class Node:
                         except Exception as e:
                             log.error(f"Auto-save failed: {e}")
 
+            async def _network_periodic() -> None:
+                """Profile, token, addresses, relay slot, stats and inspector, each at its own period (async)."""
+                nonlocal last_dynamic_profile_time, last_get_token_time, last_stats_send_time, last_stats_save_time
+
                 # Send dynamic profile every "N" seconds
                 if (clock.get_time() - last_dynamic_profile_time >= Custom.SEND_DYNAMIC_PROFILE_EVERY
                         and self.profile.connections_changed()):
@@ -1753,6 +1643,7 @@ class Node:
                         last_dynamic_profile_time = clock.get_time()
                         self.profile.unmark_change_in_connections()
                         await self.send_badges()  # Sending and clearing badges
+
                         # Capped and off the event loop so a hung POST cannot freeze the pump.
                         await asyncio.wait_for(asyncio.to_thread(self.send_dynamic_profile),
                                                timeout=Custom.DEFAULT_TIMEOUT)  # Sending
@@ -1763,6 +1654,7 @@ class Node:
                 # Getting a new token every "N" seconds
                 if clock.get_time() - last_get_token_time >= Custom.GET_NEW_TOKEN_EVERY:
                     try:
+
                         # Fetch off the event loop (capped), apply on the main task: a hung
                         # or failing refresh must neither freeze the pump nor kill the node.
                         response = await asyncio.wait_for(
@@ -1773,6 +1665,7 @@ class Node:
                         last_get_token_time = clock.get_time()  # success: next refresh in ~23.5h
                     except Exception as e:
                         log.error(f"Error while refreshing the node token (will retry shortly) [{e}]")
+
                         # Asymmetric backoff: retry in ~DEFAULT_TIMEOUT, not every iteration
                         # (busy-loop) nor in ~23.5h (the token would expire first).
                         last_get_token_time = (clock.get_time()
@@ -1854,10 +1747,12 @@ class Node:
                 if self.inspector_activated:
                     await self.__send_to_inspector()
 
-                # Execute User Callback
+            def _run_hook() -> None:
+                """Calls the user callback of the run, once per tick."""
                 if self.run_hook is not None:
                     try:
                         self.run_hook(self)
+
                         # if asyncio.iscoroutinefunction(self.run_hook):
                         #     await self.run_hook(self)
                         # else:
@@ -1865,14 +1760,139 @@ class Node:
                     except Exception as e:
                         log.error(f"Error in step_callback: {e}")
 
-                # Stop conditions. Consuming a bounded budget is NOT the end of the node:
-                # the caller asked for that many cycles and decides what happens next.
+            def _budget_consumed() -> bool:
+                """Tells whether the cycle or time budget of the caller ran out.
+
+                Returns:
+                    True when it did (a pause, not a shutdown: see the finally below).
+                """
+                nonlocal budget_consumed
                 if cycles is not None and ((clock.get_cycle() + 1) >= cycles):
                     budget_consumed = True
-                    break
                 if max_time is not None and (clock.get_time() - self.run_start_time) >= max_time:
                     budget_consumed = True
-                    break
+                return budget_consumed
+
+            if cycles is not None:
+
+                # A run with a cycle budget (NodeSynchronizer and the tests step nodes one cycle at a time) keeps one
+                # sequential loop: network, then HSM, in the order of every cycle so far
+                while not must_quit and not self.stop_requested:
+                    log.set_sub("gen")
+
+                    # Tuning clock speed. A node with a Session that needs a responsive
+                    # pump is never idle: the keep-alive PING RTT window and a handshake
+                    # in flight are both sized for a full-speed pump, and a slowed clock
+                    # (2s cycles) would starve them into false ping misses / handshake
+                    # timeouts. requires_fast_clock() covers every non-terminal, non-KNOWN
+                    # Session, so handshakes in flight keep the clock fast too, not just
+                    # ESTABLISHED/RECONNECTING.
+                    _tune_clock(network_needs_fast_clock=True)
+                    await _send_alive_if_due()
+
+                    # Check inspector (the node stays here while the inspector keeps it paused)
+                    await self._wait_while_paused_by_inspector()
+
+                    # Move to the next cycle. The wait must be an ASYNC sleep: the
+                    # main loop is mostly synchronous (FFI calls), so this is where
+                    # asyncio.to_thread completions (conn.send/send_session/connect)
+                    # and loop-level callbacks (e.g. signal handlers) get their
+                    # chance to run — a blocking sleep here would starve them.
+                    while not clock.next_cycle():
+                        await asyncio.sleep(0.001)  # Seconds (lowest possible granularity level)
+                    log.misc(f"=== Starting clock cycle {clock.get_cycle()} ===")
+                    await _network_inbound()
+                    await _tick_body()
+                    await _network_periodic()
+                    _run_hook()
+
+                    # Stop conditions. Consuming a bounded budget is NOT the end of the node:
+                    # the caller asked for that many cycles and decides what happens next.
+                    if _budget_consumed():
+                        break
+            else:
+
+                # A running node: two tasks. The network task (Session pump, messages, connections, periodic work)
+                # runs at its own pace and never waits for the HSM; the tick task advances the clock (a cycle is an
+                # HSM tick) and runs behave(), holding the agent lock for each tick, so that what the network does to
+                # the hosted entity meanwhile is applied at the tick boundary (_agent_op)
+                stop_network = False
+
+                async def _network_loop() -> None:
+                    """The network task: a pass, then a short sleep, until the node stops (async)."""
+                    while not stop_network and not self.stop_requested:
+                        log.set_sub("gen")
+                        await _send_alive_if_due()
+
+                        # Everything but the streams, all of it (the streams are popped by the ticks)
+                        await _network_inbound(kind="network")
+                        await _network_periodic()
+
+                        # A busy node sleeps at most one cycle of its own clock, so that a message is read as soon as
+                        # the single loop would have read it; an idle one sleeps longer
+                        idle = (self.conn.passed_time_since_last_communication() >= Custom.SLOW_DOWN_CLOCK_AFTER and
+                                self.hosted.im.count_interactions() == 0 and not self.conn.requires_fast_clock())
+                        busy_sleep = Custom.NETWORK_LOOP_INTERVAL
+                        if self._clock_delta is not None and self._clock_delta > 0.:
+                            busy_sleep = min(busy_sleep, self._clock_delta)
+                        await asyncio.sleep(Custom.NETWORK_LOOP_INTERVAL_IDLE if idle else busy_sleep)
+
+                async def _tick_loop() -> None:
+                    """The tick task: one HSM tick per clock cycle, under the agent lock (async)."""
+                    me = asyncio.current_task()
+                    while not must_quit and not self.stop_requested:
+                        log.set_sub("gen")
+                        _tune_clock(network_needs_fast_clock=False)
+
+                        # Check inspector: its pause holds the ticks (the network keeps running)
+                        await self._hold_ticks_while_paused_by_inspector()
+                        while not clock.next_cycle():
+                            await asyncio.sleep(0.001)  # Seconds (lowest possible granularity level)
+                        log.misc(f"=== Starting clock cycle {clock.get_cycle()} ===")
+                        async with self._agent_lock:
+                            self._agent_lock_owner = me
+                            try:
+                                await self._drain_deferred_agent_ops()
+
+                                # One message per stream channel: a stream is consumed at the pace of the ticks, and
+                                # what waits stays in the Go store (which drops its oldest when full)
+                                await self.__handle_network_messages(interact_mode_opts=interact_mode_opts,
+                                                                     kind="streams")
+                                await _tick_body()
+                                _run_hook()
+                                await self._drain_deferred_agent_ops()
+                            finally:
+                                self._agent_lock_owner = None
+                        if _budget_consumed():
+                            break
+                        await asyncio.sleep(0)  # The network task gets its turn after every tick
+
+                self._agent_lock = asyncio.Lock()
+                self._deferred_agent_ops = []
+                self._deferred_msgs_by_peer = {}
+                self._deferred_msg_bytes = 0
+                network_task = asyncio.create_task(_network_loop(), name="unaiverse-network")
+                tick_task = asyncio.create_task(_tick_loop(), name="unaiverse-tick")
+                self._tick_task = tick_task
+                try:
+                    done, _ = await asyncio.wait({network_task, tick_task}, return_when=asyncio.FIRST_COMPLETED)
+                    failed = [t for t in done if not t.cancelled() and t.exception() is not None]
+                    if failed:
+                        raise failed[0].exception()
+
+                    # Normal end (budget, quit, Ctrl+C): the network finishes its pass, the tick its tick
+                    stop_network = True
+                    await asyncio.gather(network_task, tick_task)
+                finally:
+                    stop_network = True
+                    for t in (network_task, tick_task):
+                        if not t.done():
+                            t.cancel()
+                    await asyncio.gather(network_task, tick_task, return_exceptions=True)
+                    self._tick_task = None
+
+                    # What was queued for a tick that never came is applied now (a node kept for a later run)
+                    await self._drain_deferred_agent_ops()
 
         except KeyboardInterrupt:
             log.user("\nDetected Ctrl+C! Exiting gracefully...")
@@ -1896,20 +1916,8 @@ class Node:
             if not budget_consumed:
                 await self.aclose()
 
-    def _shutdown_reason_for(self, peer_id: str) -> int:
-        """The GOAWAY reason for a peer the node says goodbye to while shutting down.
-
-        A link that belongs to a world (the role of the peer carries the world bit: a
-        member of the world we host, or a companion of the one we are in) ends because
-        the world relation ends. Any other link, a lone-wolf one, has nothing to do with
-        a world and is told that the node is just shutting down.
-        """
-        if self.conn.get_role(peer_id) & Agent.ROLE_WORLD_AGENT == Agent.ROLE_WORLD_AGENT:
-            return WORLD_DISENGAGEMENT
-        return GRACEFUL_SHUTDOWN
-
     async def aclose(self) -> None:
-        """Shuts the node down: this is the point of no return, and it runs once.
+        """Shuts the node down: this is the point of no return, and it runs once (async).
 
         Tells the root the node is gone, saves what has to survive, GOAWAYs every peer
         and every Session, drains the farewell round-trips, closes the Go hosts (freeing
@@ -1966,12 +1974,14 @@ class Node:
                 log.error(f"Error purging a peer on shutdown: {e}")
 
         try:
+
             # GOAWAY any Session not covered by the per-peer leave above.
             await self.conn.close_all_sessions()
         except Exception as e:
             log.error(f"Error closing all sessions on shutdown: {e}")
 
         try:
+
             # Drain the farewell round-trips: pump the session traffic until every
             # GOAWAY got its ACK (or aborted) and the settlement cuts executed, so
             # the transports die AFTER the goodbyes, not under them. Without this
@@ -1982,6 +1992,7 @@ class Node:
             log.error(f"Error draining the session teardown on shutdown: {e}")
 
         try:
+
             # Close the Go hosts (frees their slots for processes embedding
             # several Nodes); nothing else runs on the transports after the drain.
             self.conn.close_transports()
@@ -1992,6 +2003,278 @@ class Node:
             log.close()  # Closing logger (asserts on a stdout-only logger)
         except Exception:
             pass
+
+    # NOTE: __interview_enqueue / __interview_check_profile / __interview_clean /
+    # __handle_connected_without_ack have been REMOVED. Profile exchange is Stage-2
+    # of the Session handshake (PROFILE_OFFER/DECISION); acceptance/role decisions
+    # are in _session_decision_hook; timeouts/retry/reconnection are owned by the
+    # Session FSM. The profile-acceptance evaluation that lived in
+    # __interview_check_profile (cv_hash / certified / hosted.evaluate_profile) rides
+    # with the deferred auth model and is intentionally light in the hook for now.
+    def set_decision_policy(self, policy: Callable | None) -> None:
+        """Override the responder decision policy at runtime. The new policy takes effect on
+        the next inbound PROFILE_OFFER for every Session, existing or future (the Sessions
+        hold a lambda that re-reads self._decision_policy on each call, not a frozen hook).
+
+        Args:
+            policy: an async callable with the same signature as _session_decision_hook,
+                ``(peer_id, remote_node_id, remote_profile, p2p_name, verified_claims) ->
+                ProfileDecisionResult``. Pass self._session_decision_hook to restore the
+                built-in policy.
+        """
+        self._decision_policy = policy
+
+    async def connect_via_session(
+        self,
+        peer_id: str,
+        addresses: list[str],
+        p2p_name: str = NodeConn.P2P_PUBLIC,
+        is_world_join: bool = False,
+        remote_node_id_hint: str | None = None,
+        reject_relay: bool = False,
+    ) -> bool:
+        """Start an initiator Session to `peer_id` via SessionManager and return (async).
+
+        Fire-and-forget: Session.start launches the dial off-task and returns, and the whole
+        dial → HELLO → PROFILE handshake completes asynchronously in the main loop's pump
+        (deliver/tick). Returns True once the Session has been started; False only for the one
+        synchronous rejection left, a quarantined peer. Dial failure and relay rejection now
+        surface later as a FAILED event via the pump, not here. The Session owns the dial, so
+        callers must NOT pre-dial.
+        """
+        events = await self.conn.initiate_session(
+            p2p_name,
+            peer_id=peer_id,
+            addresses=addresses,
+            is_world_join=is_world_join,
+            remote_node_id_hint=remote_node_id_hint,
+            reject_relay=reject_relay,
+        )
+
+        # The only synchronous FAILED among the start-up events is a quarantine refusal;
+        # dial failure and relay rejection surface asynchronously via the pump.
+        started = True
+        for ev in events:
+            if ev.type == SessionEventType.FAILED:
+                started = False
+            await self._dispatch_session_event(ev)
+        return started
+
+    @staticmethod
+    def _outstanding_legal_documents(data: Any) -> str:
+        """Human-readable list of the legal documents still to accept, read from the
+        acceptance state the root attaches to a legal_acceptance_required refusal."""
+        outstanding = []
+        state = data if isinstance(data, dict) else {}
+        for kind, label in (("tos", "Terms of Service"), ("privacy", "Privacy Policy")):
+            side = state.get(kind)
+            if isinstance(side, dict) and not side.get("up_to_date", False):
+                version = side.get("current_version")
+                outstanding.append(label + (f" {version}" if version else ""))
+        return ", ".join(outstanding) if outstanding else "Terms of Service, Privacy Policy"
+
+    def _request_node_token(self, peer_ids: list[str]) -> dict:
+        """Blocking HTTP to the root to (re)generate the node token. Reads self but does
+        NOT mutate it, so it is safe to run off the event loop via asyncio.to_thread.
+        Raises on failure (fatal at startup, caught at the periodic-refresh call-site)."""
+        response = None
+
+        for i in range(0, 3):  # It will try 3 times before raising the exception...
+            try:
+                response = self.__root("/account/node/token/generate",
+                                       payload={"node_id": self.node_id,
+                                                "account_token": self.unaiverse_key
+                                                if self.node_token is None or len(self.node_token) == 0 else None,
+                                                "node_token": self.node_token, "peer_ids": json.dumps(peer_ids)})
+                break
+            except RootServerError as e:
+                if e.api_rejected:
+
+                    # The server answered and refused: retrying cannot change the outcome
+                    if e.flags.get('legal_acceptance_required'):
+                        log.error("The root server refuses to mint a node token until the owner accepts "
+                                  f"the current legal documents ({self._outstanding_legal_documents(e.data)}): "
+                                  "log in at https://unaiverse.io, accept them, then restart the node")
+                    elif e.flags.get('blocked_utc') is not None:
+                        log.error("The root server refuses to mint a node token: this node is blocked "
+                                  f"(since {e.flags['blocked_utc']})")
+                    raise
+                if i < 2:
+                    log.error("Error while getting token from server, retrying...")
+                    time.sleep(1)  # Wait a little bit
+                else:
+                    log.error(f"Error while getting token from server [{e}]")
+                    raise
+
+        if not isinstance(response, dict):
+            log.critical(f"Unexpected token payload from the root server: {response}")
+        return response
+
+    def _apply_node_token(self, response: dict) -> None:
+        """Apply a freshly fetched node token. Main-task only: mutates self and pushes the
+        token into the transport via FFI, so it must not run concurrently with the loop.
+
+        Storing the token and injecting the TURN credentials are deliberately two steps.
+        The credentials ride the token, but they can only reach a transport through the
+        SessionManagers, which are built last (attach_session_policy), while the token
+        itself is needed immediately: the static profile is fetched with it, and NodeConn
+        is constructed around it. So this stores what it can and remembers the rest for
+        inject_turn_credentials(), which the boot sequence calls once the managers exist.
+        On the periodic refresh both already exist, and the injection happens right here.
+        """
+        self.node_token = response["token"]
+        self.public_key = response["public_key"]
+        self.turn_info = response.get("turn_info", None)
+
+        # Sharing the token with the connection manager (absent this early at boot)
+        if getattr(self, 'conn', None) is not None:
+            self.conn.set_token(self.node_token)
+            self.inject_turn_credentials()
+
+    async def _lookup_node_addresses(self, node_id: str) -> list[str] | None:
+        """The addresses of a node as the root server has them, for a Session that lost its
+        peer and may be dialling addresses that changed (async). The request is blocking,
+        so it runs in a thread: the Session awaits it in a task of its own.
+
+        Returns:
+            The addresses, or None when there are none or the request failed.
+        """
+        try:
+            response = await asyncio.to_thread(self.__root, api="/account/node/get/addresses",
+                                               payload={"account_token": self.unaiverse_key, "node_id": node_id})
+            return list(response.get("addresses") or []) or None
+        except Exception as e:
+            log.error(f"Error while retrieving the addresses of node {node_id} [{e}]")
+            return None
+
+    @staticmethod
+    def _profile_from_search_element(element: dict) -> NodeProfile:
+        """Maps one element of /discover/search/query into a NodeProfile.
+
+        The element is a flat spread of the API's public node serialisation (plus
+        lat/lon/location): there is no static/dynamic/cv envelope, the owner fields
+        live under 'account', the stored dynamic profile under 'profile' and the
+        badge list under 'cv'.
+        """
+        account = element.get('account') if isinstance(element.get('account'), dict) else {}
+        static = {
+            'node_id': element.get('node_id'),
+            'node_type': element.get('node_type'),
+            'node_name': element.get('node_name'),
+            'node_description': element.get('description'),
+            'created_utc': element.get('created_utc'),
+            'max_nr_connections': element.get('max_connections'),
+            'certified': element.get('certified'),
+            'allowed_node_ids': element.get('allowed_node_ids'),
+            'world_masters_node_ids': element.get('world_masters_node_ids'),
+            'location_method': element.get('location_method'),
+            'nickname': account.get('nickname'),
+            'name': account.get('name'),
+            'surname': account.get('surname'),
+            'title': account.get('title'),
+            'organization': account.get('organization'),
+        }
+        dynamic = element.get('profile') if isinstance(element.get('profile'), dict) else {}
+        cv = element.get('cv') if isinstance(element.get('cv'), list) else []
+        return NodeProfile(static=static, dynamic=dynamic, cv=cv)
+
+    def _file_owner_of(self, peer_id: str) -> tuple[str, str] | None:
+        """Who sent a file: the handle and node name of the profile of a peer, if the hosted agent or world knows it.
+
+        Args:
+            peer_id: The peer.
+
+        Returns:
+            (handle, node name), or None when the peer or its handle is unknown.
+        """
+        hosted = getattr(self, "hosted", None)
+        profile = getattr(hosted, "all_agents", {}).get(peer_id) if hosted is not None else None
+        unaid = build_unaid(profile) if profile is not None else None
+        if not unaid or "/" not in unaid:
+            return None
+        handle, node_name = unaid.split("/", 1)
+        return handle, node_name
+
+    def __keyboard_to_stdin(self, public: bool, peer_id: str, text: str | None = None,
+                            img: Image.Image | None = None, file: FileContainer | None = None,
+                            whatever: object | None = None) -> None:
+        """Writes what the person gave in interactive mode in the default stdin of the agent, each piece in the input of
+        its type (text, img, file, and anything else in the input that takes all), where the human processor picks it
+        up, whatever the stdin of the interaction is.
+
+        Args:
+            public: True when talking to a lone wolf, False inside a world.
+            peer_id: The peer the person talks to.
+            text: The text typed, if any.
+            img: The image (a webcam shot, or a picture sent with /send), if any.
+            file: The file sent with /send, if any.
+            whatever: What goes in an input of any other type.
+        """
+        uuid, tag = self.agent.prepare_stdin_if_human(public, peer_id=peer_id)
+        if len(self.agent.stdin) == 0:
+            log.error("Empty stdin!")
+            return
+        if len(self.agent.proc_inputs) == 1:
+            self.agent.stdin.set([text], uuid=uuid, data_tag=tag, force=True)
+            return
+        inputs = []
+        for proc_input in self.agent.proc_inputs:
+            if proc_input.is_text():
+                inputs.append(text)
+            elif proc_input.is_img():
+                inputs.append(img)
+            elif proc_input.is_file():
+                inputs.append(file)
+            else:
+                inputs.append(whatever)
+        self.agent.stdin.set(inputs, uuid=uuid, data_tag=tag, force=True)
+
+    def __send_file_from_keyboard(self, file_name: str, public: bool, peer_id: str) -> None:
+        """The /send command of interactive mode: sends a file from disk. An image goes as image data (in the img
+        input), anything else as FILE data (in the file input, path-backed, so it is streamed from disk to a peer that
+        takes file messages, and read into the message for any other peer).
+
+        Args:
+            file_name: The file (a path; ~ is expanded).
+            public: True when talking to a lone wolf, False inside a world.
+            peer_id: The peer the person talks to.
+        """
+        path = os.path.abspath(os.path.expanduser(file_name))
+        if not file_name or not os.path.isfile(path):
+            log.error(f"No such file: {file_name}")
+            return
+        has_img = any(p.is_img() for p in self.agent.proc_inputs)
+        has_file = any(p.is_file() for p in self.agent.proc_inputs)
+        mime, _ = mimetypes.guess_type(path)
+        if has_img and mime is not None and mime.startswith("image/"):
+            picture = None
+            try:
+                with Image.open(path) as image:
+                    image.load()
+                    picture = image.copy()
+            except (OSError, ValueError) as e:
+                log.user(f"*** {os.path.basename(path)} is not an image I can read ({e}): sent as a file ***")
+            if picture is not None:
+                self.__keyboard_to_stdin(public, peer_id, img=picture)
+                log.user(f"*** Sending the picture {os.path.basename(path)} ***")
+                return
+        if not has_file:
+            log.error("This agent has no input of type 'file': it cannot send files")
+            return
+        self.__keyboard_to_stdin(public, peer_id, file=FileContainer.from_path(path))
+        log.user(f"*** Sending the file {os.path.basename(path)} ({os.path.getsize(path)} bytes) ***")
+
+    def _shutdown_reason_for(self, peer_id: str) -> int:
+        """The GOAWAY reason for a peer the node says goodbye to while shutting down.
+
+        A link that belongs to a world (the role of the peer carries the world bit: a
+        member of the world we host, or a companion of the one we are in) ends because
+        the world relation ends. Any other link, a lone-wolf one, has nothing to do with
+        a world and is told that the node is just shutting down.
+        """
+        if self.conn.get_role(peer_id) & Agent.ROLE_WORLD_AGENT == Agent.ROLE_WORLD_AGENT:
+            return WORLD_DISENGAGEMENT
+        return GRACEFUL_SHUTDOWN
 
     async def __handle_network_connections(self) -> None:
         """Manages new and lost network connections. (async)"""
@@ -2020,6 +2303,7 @@ class Node:
                 log.misc("Removing a not-connected-anymore peer, "
                          "pool_name: " + pool_name + ", peer_id: " + peer_id + "...",
                          sub="prv" if pool_name in self.conn.WORLD or pool_name in self.conn.WORLD_NODE else "pub")
+
                 # Inform the SessionManagers via the Coordinator — ESTABLISHED →
                 # RECONNECTING (grace), in-handshake states → FAILED immediately.
                 for ev in await self.conn.on_peer_disconnected(peer_id):
@@ -2042,7 +2326,6 @@ class Node:
                 # only its terminal LOST/FAILED event (in _maybe_leave_world_on_session_end)
                 # leaves the world and arms the rejoin. Deciding here, on the transport diff,
                 # would tear the world down on a brief blip and skip the grace entirely.
-
         # Checking if the inspector disconnected
         self._drop_inspector_if_gone()
 
@@ -2053,7 +2336,8 @@ class Node:
         # first-time connections is harmless.
         for new_peer_ids in new_peer_ids_by_pool.values():
             self.reconnected.update(new_peer_ids)
-        for r in self.reconnected:
+        for r in list(self.reconnected):  # A copy: the loop awaits, and the set may grow meanwhile
+
             # Tell the SessionManagers via the Coordinator — RECONNECTING →
             # ESTABLISHED if the grace period hasn't expired yet (else no-op).
             for ev in await self.conn.on_peer_reconnected(r):
@@ -2169,15 +2453,192 @@ class Node:
             connections['world_peer_id'] = world_private_peer_id
             self.profile.mark_change_in_connections()
 
-    async def __handle_network_messages(self, interact_mode_opts: dict | None = None) -> None:
+    async def _agent_op(self, fn: Callable[[], Any], swap: bool = False) -> None:
+        """Runs an operation on the hosted entity now, or at the next tick boundary (async).
+
+        While the tick task runs a tick (it holds the agent lock), an operation asked by the network side is queued and
+        applied, in order, at the boundary, so that the hosted entity never changes under a running behave(); with no
+        tick running it is applied at once (after the queued ones, so the order is kept). One asked by the tick task
+        itself (a purge from inside an action) runs inline, since the action asked for it, except when it swaps the
+        hosted entity (swap=True) during behave(): the old one is still on the stack, so it waits for the boundary too.
+        Without the two tasks (a run with a cycle budget, the tests) everything runs at once, as before.
+
+        Args:
+            fn: A function with no arguments returning the awaitable of the operation.
+            swap: True when the operation may replace the hosted entity (default: False).
+        """
+        current = asyncio.current_task()
+        if self._tick_task is None or (current is self._agent_lock_owner and not (swap and self._in_behave)):
+            await fn()
+        elif current is self._agent_lock_owner or self._agent_lock.locked():
+            self._deferred_agent_ops.append(fn)
+        else:
+            async with self._agent_lock:
+                self._agent_lock_owner = current
+                try:
+                    await self._drain_deferred_agent_ops()
+                    await fn()
+                finally:
+                    self._agent_lock_owner = None
+
+    async def _agent_op_for_message(self, msg: Msg, fn: Callable[[], Any]) -> None:
+        """_agent_op for what a received message does to the hosted entity, with bounds on what waits (async).
+
+        While a tick runs, the operations of the messages wait for its end; their number per sender and their bytes
+        in all are bounded (Custom.DEFERRED_MSGS_MAX_PER_PEER, Custom.DEFERRED_MSGS_MAX_BYTES). Past the bounds an
+        INTERACTION is rejected, its sender being told at once, and any other message is dropped (logged).
+
+        Args:
+            msg: The received message.
+            fn: The operation, as for _agent_op.
+        """
+        current = asyncio.current_task()
+        waits = (self._tick_task is not None and current is not self._agent_lock_owner and
+                 self._agent_lock.locked())
+        if not waits:
+            await self._agent_op(fn)
+            return
+        size = getattr(msg, "wire_size", 0)
+        if (self._deferred_msgs_by_peer.get(msg.sender, 0) >= Custom.DEFERRED_MSGS_MAX_PER_PEER or
+                self._deferred_msg_bytes + size > Custom.DEFERRED_MSGS_MAX_BYTES):
+            if msg.content_type == Msg.INTERACTION and self.agent is not None:
+                log.error(f"Too many messages from {msg.sender} waiting for the end of the action: interaction "
+                          f"rejected")
+                await self.agent.reject_received_interaction(msg.sender, msg.content)
+            else:
+                log.error(f"Too many messages from {msg.sender} waiting for the end of the action: "
+                          f"{msg.content_type} dropped")
+            return
+        self._deferred_msgs_by_peer[msg.sender] = self._deferred_msgs_by_peer.get(msg.sender, 0) + 1
+        self._deferred_msg_bytes += size
+
+        async def _counted() -> None:
+            """Applies the operation, giving its room back (async)."""
+            try:
+                await fn()
+            finally:
+                left = self._deferred_msgs_by_peer.get(msg.sender, 1) - 1
+                if left > 0:
+                    self._deferred_msgs_by_peer[msg.sender] = left
+                else:
+                    self._deferred_msgs_by_peer.pop(msg.sender, None)
+                self._deferred_msg_bytes -= size
+        await self._agent_op(_counted)
+
+    async def _drain_deferred_agent_ops(self) -> None:
+        """Applies the queued operations on the hosted entity, oldest first (async).
+
+        Called by the tick task while it holds the agent lock, at both ends of a tick. An operation that raises is
+        logged and the next one runs: one bad message must not stop the others.
+        """
+        while self._deferred_agent_ops:
+            fn = self._deferred_agent_ops.pop(0)
+            try:
+                await fn()
+            except Exception as e:
+                log.error(f"Deferred operation on the hosted entity failed: {e}")
+
+    def __apply_stream_sample(self, msg: Msg, interact_mode: bool) -> None:
+        """Hands a received stream sample to the hosted agent, and prints it in interactive mode.
+
+        Args:
+            msg: The STREAM_SAMPLE message.
+            interact_mode: True in interactive mode (text is printed, images are saved).
+        """
+        added_data = self.agent.get_stream_sample(net_hash=msg.channel, sample_dict=msg.content)
+
+        # Printing messages to screen, if needed (useful when chatting with lone wolves)
+        if interact_mode:
+            net_hash = DataProps.normalize_net_hash(msg.channel)
+            if net_hash in self.agent.known_streams:
+                peer_id = DataProps.peer_id_from_net_hash(net_hash)
+                group = DataProps.name_or_group_from_net_hash(net_hash)
+                owner_account = owner_handle(self.agent.all_agents[peer_id].get_static_profile())
+                agent_name = self.agent.all_agents[peer_id].get_static_profile()['node_name']
+                for (user_hash, uuid) in added_data:
+                    if user_hash not in self.agent.known_streams_by_user_hash:
+                        continue
+                    stream_obj = self.agent.known_streams_by_user_hash[user_hash]
+                    data = stream_obj.get(requested_by="print", uuid=uuid)
+                    name = stream_obj.props.get_name()
+                    if data is None:
+                        continue
+                    if stream_obj.props.is_text():
+
+                        # Rendering of protocol blocks happens in the logger, per sink: a message
+                        # that carries one must reach it bare, since a gutter glued to the fence
+                        # lines would make them parse as prose
+                        if has_fence(data):
+                            log.user(f"\n💬 [{owner_account}/{agent_name}.{group}.{name}]\n{data}")
+                        else:
+                            msg = "\n   ｜".join([line[i:i + 120] for line in data.splitlines()
+                                                 for i in range(0, len(line), 120)])
+                            log.user(f"\n💬 [{owner_account}/{agent_name}.{group}.{name}]\n   ｜{msg}")
+                    elif stream_obj.props.is_img():
+                        img = data  # Getting image
+                        filename = f"{net_hash.replace(':', '_')}.{name}.png"
+                        img.save(filename)
+                        log.user(f"\n🖼️ [{owner_account}/{agent_name}.{group}.{name}]\n   "
+                                 f"｜Saved image to {filename})")
+                    else:
+                        msg = stream_obj.props.to_text(data)
+                        msg = "\n   ｜".join([line[i:i + 120] for line in msg.splitlines()
+                                             for i in range(0, len(line), 120)])
+                        log.user(f"\n🗂️ [{owner_account}/{agent_name}.{group}.{name}]\n   "
+                                 f"｜Got a sample of type {stream_obj.props.data_type}, "
+                                 f"tag {stream_obj.get_tag()}\n   ｜{msg}")
+
+    async def __handle_send_event(self, ev: dict) -> None:
+        """Reacts to one event of the send queues, then hands it to the hosted entity (async).
+
+        A failed write asks the Session of the peer for an early keep-alive PING, so that a dead peer is confirmed in
+        seconds; the Session (PING/PONG) stays the authority on whether a peer is alive. Written events are frequent and
+        only reach the hosted entity.
+
+        Args:
+            ev: The event, as P2P.pop_send_events gives it (plus "p2p_name").
+        """
+        ev_type, peer_id = ev.get("type"), ev.get("peer_id")
+        if ev_type == "write_failed":
+            log.network(f"⚠️ Send to {peer_id} failed (attempt {ev.get('attempt')}, seq {ev.get('seq')}), message kept "
+                        f"for a retry: {ev.get('error')}")
+            self.conn.request_keepalive_probe(peer_id)
+        elif ev_type == "queue_dropped":
+            log.network(f"⚠️ Send queue to {peer_id} dropped ({ev.get('reason')}): {ev.get('count')} message(s), "
+                        f"seq {ev.get('from_seq')}..{ev.get('to_seq')}, last error: {ev.get('error')}")
+        elif ev_type == "recovered":
+            log.network(f"Send queue to {peer_id} recovered after {ev.get('count')} failed write(s)")
+        elif ev_type == "events_lost":
+            log.network(f"⚠️ {ev.get('count')} send event(s) lost (Go buffer full, popped too rarely)")
+        elif ev_type == "receive_dropped":
+            log.network(f"⚠️ Message {ev.get('seq')} from {peer_id} dropped while it arrived ({ev.get('reason')}, "
+                        f"{ev.get('bytes')} of {ev.get('total')} bytes)")
+        transfer = ev_type in ("progress", "receive_progress", "receive_dropped")
+
+        async def _hosted_part() -> None:
+            """Updates send_status (or transfers) and runs the hook of the hosted entity (async)."""
+            try:
+                if transfer:
+                    await self.hosted._handle_transfer_event(ev)
+                else:
+                    await self.hosted._handle_send_event(ev)
+            except Exception as e:
+                log.error(f"Handling of the send event {ev} failed: {e}")
+        await self._agent_op(_hosted_part)
+
+    async def __handle_network_messages(self, interact_mode_opts: dict | None = None, kind: str = "all") -> None:
         """Handles and processes all incoming network messages. (async)
 
         Args:
             interact_mode_opts: A dictionary of options for interactive mode, or None if not in interactive mode.
+            kind: What to pop: "all" (one loop for everything, the default), "network" (everything but the streams:
+                the network pass of a node with two tasks) or "streams" (one message per stream channel: its tick).
         """
+
         # Fetching all messages — get_messages now returns (chat, session) tuples.
-        public_messages, public_session_inbound = await self.conn.get_messages(p2p_name=NodeConn.P2P_PUBLIC)
-        world_messages, world_session_inbound = await self.conn.get_messages(p2p_name=NodeConn.P2P_WORLD)
+        public_messages, public_session_inbound = await self.conn.get_messages(p2p_name=NodeConn.P2P_PUBLIC,
+                                                                               kind=kind)
+        world_messages, world_session_inbound = await self.conn.get_messages(p2p_name=NodeConn.P2P_WORLD, kind=kind)
         interact_mode = interact_mode_opts is not None
 
         log.misc("Got " + str(len(public_messages)) + " messages from the public net", sub="pub")
@@ -2190,12 +2651,19 @@ class Node:
         # every manager, returning a flat 1:1 SessionEvent list in generation order
         # (all delivers public-then-world, then all ticks); Node stays the single
         # dispatch site.
-        events = await self.conn.pump_sessions(
-            {NodeConn.P2P_PUBLIC: public_session_inbound,
-             NodeConn.P2P_WORLD: world_session_inbound},
-            now=time.monotonic())
-        for ev in events:
-            await self._dispatch_session_event(ev)
+        # (The pop of the streams, done by a tick, carries no Session frame: the network pass pumps them)
+        if kind != "streams":
+            events = await self.conn.pump_sessions(
+                {NodeConn.P2P_PUBLIC: public_session_inbound,
+                 NodeConn.P2P_WORLD: world_session_inbound},
+                now=time.monotonic())
+            for ev in events:
+                await self._dispatch_session_event(ev)
+
+            # Events of the send queues (written, failed, refused, dropped, recovered): the node reacts now, and the
+            # hosted entity updates its send_status and runs its on_send_event hook (at the tick boundary)
+            for ev in self.conn.pop_send_events():
+                await self.__handle_send_event(ev)
 
         # Sorting messages
         public_messages = self.__sort_messages_by_priority(public_messages)
@@ -2250,6 +2718,7 @@ class Node:
                     if msg.sender in self.world.all_agents:
                         all_addresses = msg.content.get('addresses')
                         if all_addresses and isinstance(all_addresses, list):
+
                             # Update the address both in the connection and in the profile
                             self.conn.set_addresses_in_peer_info(msg.sender, all_addresses)
                             self.world.set_addresses_in_profile(msg.sender, all_addresses)
@@ -2261,49 +2730,7 @@ class Node:
 
                 if self.node_type is Node.AGENT:  # Handling the received samples
                     assert self.agent is not None
-                    added_data = self.agent.get_stream_sample(net_hash=msg.channel, sample_dict=msg.content)
-
-                    # Printing messages to screen, if needed (useful when chatting with lone wolves)
-                    if interact_mode:
-                        net_hash = DataProps.normalize_net_hash(msg.channel)
-                        if net_hash in self.agent.known_streams:
-                            peer_id = DataProps.peer_id_from_net_hash(net_hash)
-                            group = DataProps.name_or_group_from_net_hash(net_hash)
-                            owner_account = owner_handle(self.agent.all_agents[peer_id].get_static_profile())
-                            agent_name = self.agent.all_agents[peer_id].get_static_profile()['node_name']
-                            for (user_hash, uuid) in added_data:
-                                if user_hash not in self.agent.known_streams_by_user_hash:
-                                    continue
-                                stream_obj = self.agent.known_streams_by_user_hash[user_hash]
-                                data = stream_obj.get(requested_by="print", uuid=uuid)
-                                name = stream_obj.props.get_name()
-                                if data is None:
-                                    continue
-                                if stream_obj.props.is_text():
-
-                                    # Rendering of protocol blocks happens in the logger, per sink: a message
-                                    # that carries one must reach it bare, since a gutter glued to the fence
-                                    # lines would make them parse as prose
-                                    if has_fence(data):
-                                        log.user(f"\n💬 [{owner_account}/{agent_name}.{group}.{name}]\n{data}")
-                                    else:
-                                        msg = "\n   ｜".join([line[i:i + 120] for line in data.splitlines()
-                                                             for i in range(0, len(line), 120)])
-                                        log.user(f"\n💬 [{owner_account}/{agent_name}.{group}.{name}]\n   ｜{msg}")
-                                elif stream_obj.props.is_img():
-                                    img = data  # Getting image
-                                    filename = f"{net_hash.replace(':', '_')}.{name}.png"
-                                    img.save(filename)
-                                    log.user(f"\n🖼️ [{owner_account}/{agent_name}.{group}.{name}]\n   "
-                                             f"｜Saved image to {filename})")
-                                else:
-                                    msg = stream_obj.props.to_text(data)
-                                    msg = "\n   ｜".join([line[i:i + 120] for line in msg.splitlines()
-                                                         for i in range(0, len(line), 120)])
-                                    log.user(f"\n🗂️ [{owner_account}/{agent_name}.{group}.{name}]\n   "
-                                             f"｜Got a sample of type {stream_obj.props.data_type}, "
-                                             f"tag {stream_obj.get_tag()}\n   ｜{msg}")
-
+                    self.__apply_stream_sample(msg, interact_mode)
                 elif self.node_type is Node.WORLD:
                     log.error("Unexpected stream samples received by this world node, sent by: " + msg.sender)
                     await self.__purge(msg.sender, reason=LOCAL_ERROR)
@@ -2314,15 +2741,25 @@ class Node:
 
                 if self.node_type is Node.AGENT:
                     assert self.agent is not None
-                    if msg.sender not in self.agent.all_agents:
-                        log.error("Unexpected interaction from unknown node: " + msg.sender)
-                    else:
-                        room_for_registration = True
-                        if hasattr(self.agent, 'im'):
-                            room_for_registration = self.agent.im.room_for_registration()
 
-                        if room_for_registration:
-                            self.agent.inject_received_interaction(msg.sender, msg.content)
+                    # Injected at the tick boundary when a tick is running: the HSM state it is checked against is in
+                    # flux during a multi-step action, and the sender may be a peer whose enrolment is queued too
+                    async def _inject(_msg: Msg = msg) -> None:
+                        """Injects the received interaction into the hosted agent (async)."""
+                        if _msg.sender not in self.agent.all_agents:
+                            log.error("Unexpected interaction from unknown node: " + _msg.sender)
+                        else:
+                            room_for_registration = True
+                            if hasattr(self.agent, 'im'):
+                                room_for_registration = self.agent.im.room_for_registration()
+
+                            if room_for_registration:
+                                self.agent.inject_received_interaction(_msg.sender, _msg.content)
+                            else:
+
+                                # The sender is told, instead of waiting for its timeout
+                                await self.agent.reject_received_interaction(_msg.sender, _msg.content)
+                    await self._agent_op_for_message(msg, _inject)
 
                 elif self.node_type is Node.WORLD:
                     log.error("Unexpected interaction received by this world node, sent by: " + msg.sender)
@@ -2333,8 +2770,13 @@ class Node:
                 log.misc("Received an interaction status update...")
 
                 if self.node_type is Node.AGENT:
-                    if hasattr(self.agent, 'im'):
-                        await self.agent.im.update_sent_status(msg.content)
+
+                    # Completing an interaction runs the agent callback and toggles the HSMs: at the tick boundary
+                    async def _update_status(_content: Any = msg.content) -> None:
+                        """Applies the status update to the interactions of the hosted agent (async)."""
+                        if hasattr(self.agent, 'im'):
+                            await self.agent.im.update_sent_status(_content)
+                    await self._agent_op_for_message(msg, _update_status)
 
             # (H) got role suggestion
             elif msg.content_type == Msg.ROLE_SUGGESTION:
@@ -2344,14 +2786,23 @@ class Node:
                     if msg.sender == self.conn.get_world_node_peer_id():
                         new_role_indication = msg.content
                         if new_role_indication['peer_id'] == self.get_world_peer_id():
-                            self.__replace_agent_instance_by_role(role=new_role_indication['role'],
-                                                                  changing_an_existing_role_in_world=True)
+
+                            # A new agent instance for the new role: at the tick boundary
+                            async def _new_role(_role: int = new_role_indication['role']) -> None:
+                                """Replaces the hosted agent with the one of the new role (async)."""
+                                self.__replace_agent_instance_by_role(role=_role,
+                                                                      changing_an_existing_role_in_world=True)
+                            await self._agent_op_for_message(msg, lambda: self._agent_op(_new_role, swap=True))
 
                 elif self.node_type is Node.WORLD:
                     assert self.world is not None
                     if msg.sender in self.world.world_masters:
-                        for role_suggestion in msg.content:
-                            await self.world.set_role(peer_id=role_suggestion['peer_id'], role=role_suggestion['role'])
+                        async def _set_roles(_suggestions: list = msg.content) -> None:
+                            """Applies the role suggestions of a world master (async)."""
+                            for role_suggestion in _suggestions:
+                                await self.world.set_role(peer_id=role_suggestion['peer_id'],
+                                                          role=role_suggestion['role'])
+                        await self._agent_op_for_message(msg, _set_roles)
 
             # (I) got request to alter the HSM
             elif msg.content_type == Msg.HSM:
@@ -2360,10 +2811,15 @@ class Node:
                 if self.node_type is Node.AGENT:
                     assert self.agent is not None
                     if msg.sender in self.agent.world_masters:  # This must be coherent with what we do in set_role
-                        ret = getattr(self.agent.behav, msg.content['method'])(*msg.content['args'])
-                        if not ret:
-                            log.error(f"Cannot run HSM action named {msg.content['method']} with args "
-                                      f"{msg.content['args']}")
+
+                        # The HSM must not change under a running behave(): at the tick boundary
+                        async def _alter_hsm(_content: dict = msg.content) -> None:
+                            """Runs the requested method of the HSM of the hosted agent (async)."""
+                            ret = getattr(self.agent.behav, _content['method'])(*_content['args'])
+                            if not ret:
+                                log.error(f"Cannot run HSM action named {_content['method']} with args "
+                                          f"{_content['args']}")
+                        await self._agent_op_for_message(msg, _alter_hsm)
                     else:
                         log.error(
                             "Only world-master can alter HSMs of other agents: " + msg.sender)  # No need to purge
@@ -2397,6 +2853,7 @@ class Node:
                 if self.node_type is Node.WORLD:
                     assert self.world is not None
                     for badge_dict in msg.content:
+
                         # Right now, we accept all the suggestions
                         self.world.add_badge(**badge_dict)  # Adding to the list of badges
                 elif self.node_type is Node.AGENT:
@@ -2432,6 +2889,7 @@ class Node:
                 if self.node_type is Node.WORLD:
                     assert self.world is not None
                     if msg.sender in self.world.all_agents:
+
                         # This calls the world.add_stats_from_peer method
                         self.world.add_peer_stats(msg.content)
                     else:
@@ -2481,7 +2939,12 @@ class Node:
                     assert self.agent is not None
                     if msg.sender == self.conn.get_world_node_peer_id():
                         if isinstance(msg.content, dict) and ('world' in msg.content or 'peers' in msg.content):
-                            self.agent.update_stats_view(msg.content, self.agent.overwrite_stats)
+
+                            # The stats view of the agent is read by its actions: updated at the tick boundary
+                            async def _update_stats(_content: dict = msg.content) -> None:
+                                """Merges the stats of the world into the view of the hosted agent (async)."""
+                                self.agent.update_stats_view(_content, self.agent.overwrite_stats)
+                            await self._agent_op_for_message(msg, _update_stats)
                         else:
                             log.misc("Ignoring a stats response that is not view-shaped (e.g., HTML)")
                     else:
@@ -2491,7 +2954,6 @@ class Node:
 
         # (interview-queue cleanup + connected-without-ack retry removed — the
         # Session FSM owns handshake timeouts, retry, and reconnection.)
-
     async def __join_world(self, profile: NodeProfile, role: int,
                            packed_agent_files: str, roles_fsm: dict[str, str] | None,
                            rendezvous_tag: int, initial_stats: dict[str, Any] | None,
@@ -2520,6 +2982,25 @@ class Node:
         Returns:
             True if the join operation is successful, otherwise False.
         """
+        if not await self.__join_world_network(profile, role, peer_id):
+            return False
+        return await self.__join_world_agent(profile, role, packed_agent_files, roles_fsm, rendezvous_tag,
+                                             initial_stats, peer_id, attested_code_hash, legacy_stats_code)
+
+    async def __join_world_network(self, profile: NodeProfile, role: int, peer_id: str | None) -> bool:
+        """The network part of joining a world: the relay slot and the rendezvous topic (async).
+
+        It does not touch the hosted entity, so it runs at once even while an action runs: the world host waits for the
+        handoff GOAWAY that follows it for a limited time.
+
+        Args:
+            profile: The profile of the world to join.
+            role: The role assigned to the agent in the world (int).
+            peer_id: The peer-id of the already-established private world Session.
+
+        Returns:
+            True if it succeeded (on failure the world Session is purged).
+        """
         log.user(f"\nActually joining world, role ID will be '{role}'")
 
         # The private world Session already connected during the handoff.
@@ -2547,6 +3028,23 @@ class Node:
         if not (await self.conn.subscribe(peer_id, channel=f"{peer_id}::ps:rv")):  # Special rendezvous (ps:rv)
             await self.__purge(peer_id, reason=WORLD_DISENGAGEMENT)  # If subscribing fails, we quit (safer)
             return False
+        return True
+
+    async def __join_world_agent(self, profile: NodeProfile, role: int,
+                                 packed_agent_files: str, roles_fsm: dict[str, str] | None,
+                                 rendezvous_tag: int, initial_stats: dict[str, Any] | None,
+                                 peer_id: str, attested_code_hash: str | None = None,
+                                 legacy_stats_code: str | None = None) -> bool:
+        """The agent part of joining a world: streams, code checks, stats class, the new agent for the role (async).
+
+        It changes (and replaces) the hosted entity, so with the two tasks it runs at a tick boundary. See __join_world
+        for the arguments.
+
+        Returns:
+            True if the join completed.
+        """
+        assert self.agent is not None
+        dynamic_profile = profile.get_dynamic_profile()
 
         # The public connection to the world node is NOT torn down here: the dispatcher
         # retires the carrier right after this body returns (complete_world_handoff sends
@@ -2554,11 +3052,9 @@ class Node:
         # severs the transport once the CLOSED lands. Purging here used to disconnect the
         # public transport BEFORE that GOAWAY was even queued, so the host never saw the
         # handoff close and failed its parked carrier on every successful join.
-
         # Subscribing to all the other world topics, from which we will get fresh information
         # about the streams
         log.misc("Subscribing to the world-streams topics...")
-        dynamic_profile = profile.get_dynamic_profile()
         list_of_props = []
         list_of_props += dynamic_profile['streams'] if dynamic_profile['streams'] is not None else []
         list_of_props += dynamic_profile['proc_outputs'] if dynamic_profile['proc_outputs'] is not None else []
@@ -2604,7 +3100,6 @@ class Node:
             # supported outcome (it runs unpublished), so there is nothing to compare
             # the grant bundle against and analyze_code below remains the only gate.
         #    log.misc("No world-code hash attested in the world's token, skipping the code-integrity check")
-
         # Checking files (single gate: stats.py, when shipped, is part of the bundle)
         if not analyze_code(agent_files):
             log.error(
@@ -2641,6 +3136,7 @@ class Node:
         log.misc(f"Rendezvous tag received with profile: {rendezvous_tag} "
                  f"(in conn pool: {self.conn.rendezvous_tag})")
         if self.conn.rendezvous_tag < rendezvous_tag:
+
             # Seed the gate one cycle BEHIND the grant tag: the first post-join publish
             # can carry update_count == grant tag (the host's cycle may not have advanced
             # between the grant and its next publish, e.g. on a slowed clock) and the
@@ -2703,31 +3199,10 @@ class Node:
 
         return True
 
-    # NOTE: __interview_enqueue / __interview_check_profile / __interview_clean /
-    # __handle_connected_without_ack have been REMOVED. Profile exchange is Stage-2
-    # of the Session handshake (PROFILE_OFFER/DECISION); acceptance/role decisions
-    # are in _session_decision_hook; timeouts/retry/reconnection are owned by the
-    # Session FSM. The profile-acceptance evaluation that lived in
-    # __interview_check_profile (cv_hash / certified / hosted.evaluate_profile) rides
-    # with the deferred auth model and is intentionally light in the hook for now.
-
-    def set_decision_policy(self, policy) -> None:
-        """Override the responder decision policy at runtime. The new policy takes effect on
-        the next inbound PROFILE_OFFER for every Session, existing or future (the Sessions
-        hold a lambda that re-reads self._decision_policy on each call, not a frozen hook).
-
-        Args:
-            policy: an async callable with the same signature as _session_decision_hook,
-                ``(peer_id, remote_node_id, remote_profile, p2p_name, verified_claims) ->
-                ProfileDecisionResult``. Pass self._session_decision_hook to restore the
-                built-in policy.
-        """
-        self._decision_policy = policy
-
-    async def _session_decision_hook(self, peer_id: str, remote_node_id, remote_profile: dict,
+    async def _session_decision_hook(self, peer_id: str, remote_node_id: str | None, remote_profile: dict,
                                      p2p_name: str,
-                                     verified_claims: VerifiedTokenClaims | None = None):
-        """Responder decision hook called by a Session on an inbound PROFILE_OFFER.
+                                     verified_claims: VerifiedTokenClaims | None = None) -> ProfileDecisionResult:
+        """Responder decision hook called by a Session on an inbound PROFILE_OFFER (async).
 
         Returns a ProfileDecisionResult: accept/reject + (world host, public
         instance) a WorldGrantSpec. This is the Session-era replacement for the
@@ -2767,6 +3242,7 @@ class Node:
 
         # World host
         if self.node_type is Node.WORLD:
+
             # On the private world instance, an inbound offer is a joiner redeeming
             # a grant: accept (no new grant). The Session ESTABLISHes on PROFILE and
             # the agent is registered on that event; PRIVATE_JOIN was dropped.
@@ -2786,6 +3262,7 @@ class Node:
             joiner_dyn = profile.get_dynamic_profile()
             joiner_private_peer_id: str | None = joiner_dyn.get('private_peer_id')
             joiner_private_addr: list[str] | None = joiner_dyn.get('private_peer_addresses')
+
             # RT binding: the joiner's world-side peer-id must be the one the root
             # attested in p2p_peers, so the host preregisters a root-vouched identity
             # instead of a self-claimed one (the public peer-id was already checked
@@ -2828,6 +3305,7 @@ class Node:
                 self._world_member_node_ids[joiner_private_peer_id] = verified_claims.node_id
 
             is_human = profile.get_static_profile().get("node_type") == self.hosted.HUMAN
+
             # World-definition bundle, the single channel for everything the joiner
             # executes: the pruned agent files (stats.py rides inside them, so there
             # is no stats_code field) and the role FSMs (no longer in the profile).
@@ -2844,6 +3322,7 @@ class Node:
                 code_bundle=code_bundle,
                 initial_stats=initial_stats,
             )
+
             # No role stash needed here: the pre-admission (add_to_world_*_list above)
             # records the role under the joiner's PRIVATE peer-id, and the world-side
             # ESTABLISHED reads it back from that record (conn.get_role) — the grant is
@@ -2856,8 +3335,8 @@ class Node:
         # / certified / cv_hash gating returns with the deferred auth model.
         return ProfileDecisionResult(accepted=True)
 
-    async def _dispatch_session_event(self, ev) -> None:
-        """Single dispatch site translating SessionEvents into application action.
+    async def _dispatch_session_event(self, ev: SessionEvent) -> None:
+        """Single dispatch site translating SessionEvents into application action (async).
 
         ESTABLISHED drives the world handoff (joiner side) and the ``add_agent`` /
         ``__join_world`` / world-list side effects that the legacy handshake used to
@@ -2885,6 +3364,7 @@ class Node:
         elif ev.type == SessionEventType.RESUMED:
             await self._on_session_resumed(ev)
         elif ev.type == SessionEventType.FAILED:
+
             # Roll back any in-flight world-handoff correlation (Coordinator-owned;
             # aborts the in-flight world redemption, no-ops if it already established).
             await self.conn.rollback_handoff(ev.peer_id)
@@ -2895,6 +3375,7 @@ class Node:
             log.error(f"[session] handshake to ...{ev.peer_id[-5:]} failed "
                       f"(p2p={ev.p2p_name}, reason={ev.data.get('reason', 'unknown')})",
                       sub="prv" if "world" in ev.p2p_name else "pub")
+
             # Evict the pools right away: a FAILED peer must not linger "connected"
             # (pool-resident, chat-admitted, re-dial suppressed) for the settlement
             # linger. The transport cut is the SM settlement's job; hosted removal is
@@ -2909,11 +3390,13 @@ class Node:
                 except Exception as e:
                     log.error(f"[session] dispatch FAILED purge failed for ...{ev.peer_id[-5:]}: {e}")
         elif ev.type == SessionEventType.CLOSED:
+
             # WORLD_HANDOFF_COMPLETE is the intentional teardown of the public
             # Session after a successful world join — it must NOT purge the node
             # (complete_world_handoff already retired the carrier and its pools).
             if "WORLD_HANDOFF_COMPLETE" in ev.data.get("reason", ""):
                 return
+
             # Deliberately NO rollback_handoff here: a carrier CLOSED mid-handoff (e.g.
             # the host GOAWAYing everything while shutting down) must not abort the
             # in-flight world redemption — the world Session decides the join's fate:
@@ -2933,6 +3416,7 @@ class Node:
             self._world_host_unlist_member(ev)
             if await self._maybe_leave_world_on_session_end(ev):
                 return
+
             # LOST is involuntary: a pending join whose carrier (or world Session)
             # rode its grace to LOST must retry, same as a FAILED one. A clean
             # CLOSED still never re-arms.
@@ -2961,6 +3445,7 @@ class Node:
         return True
 
     def _forget_relay_reservation(self) -> None:
+        """Forgets the relay slot held on the world host (its expiry and its peer)."""
         self.relay_reservation_expiry = None
         self.relay_reservation_peer_id = None
 
@@ -2969,6 +3454,7 @@ class Node:
         is asked again when it nears its expiry. (async)"""
         if self.relay_reservation_expiry is None:
             return
+
         # A slot whose world is not the current one has nothing to renew
         if self.relay_reservation_peer_id != self.conn.get_world_node_peer_id():
             self._forget_relay_reservation()
@@ -2984,7 +3470,7 @@ class Node:
             self._forget_relay_reservation()
 
     async def _tick_rejoin_watchdog(self) -> None:
-        """One tick of the world-rejoin watchdog, run once per main-loop cycle.
+        """One tick of the world-rejoin watchdog, run once per main-loop cycle (async).
 
         A scheduled rejoin (rejoining_time armed by _maybe_leave_world_on_session_end on an
         involuntary world-link end) fires ask_to_join_world, which dials and then hands off
@@ -3025,7 +3511,7 @@ class Node:
         by _maybe_rearm_get_in_touch), get in touch with it again. As for a world, the dial
         goes on off-task, so the timer is set again for the next attempt, at the earliest of
         the default wait and a sooner retry armed by the attempt's own refusal, and only the
-        ESTABLISHED Session with the peer disarms it."""
+        ESTABLISHED Session with the peer disarms it (async)."""
         if not (0. < self.in_touch_time <= clock.get_time()):
             return
         if not self.keep_in_touch:
@@ -3046,7 +3532,7 @@ class Node:
             log.user(f"Failed to get in touch again, retrying in "
                      f"{self.in_touch_time - clock.get_time():.0f} seconds...")
 
-    def _maybe_rearm_get_in_touch(self, ev) -> None:
+    def _maybe_rearm_get_in_touch(self, ev: SessionEvent) -> None:
         """A lone wolf started with get_in_touch and keep_in_touch: an involuntary end (LOST,
         FAILED) of the Session with that peer arms the getting in touch again, a quarantine
         refusal just past its ban; a clean CLOSED (the peer said goodbye) never does. A later
@@ -3062,7 +3548,7 @@ class Node:
             log.user(f"The link with ...{ev.peer_id[-5:]} ended ({ev.type.value}): getting in touch "
                      f"again in {wait_s:.0f} seconds")
 
-    def _maybe_rearm_rejoin_on_failed_join(self, ev) -> None:
+    def _maybe_rearm_rejoin_on_failed_join(self, ev: SessionEvent) -> None:
         """Joiner side: an INVOLUNTARY terminal (FAILED, LOST, or a failed join body)
         on a world we are still trying to join (joining_world_info set, role bit not
         yet on) re-arms the rejoin. Without this a world unreachable at the first join
@@ -3077,6 +3563,7 @@ class Node:
             return
         if self.agent is not None and self.agent.in_world():
             return  # in-world already → this FAILED is some other peer, not our join
+
         # The failure belongs to our in-flight join iff it is on the pending public carrier
         # (case A, world offline: its dial failed) or on a world-instance Session (case B,
         # public reached but the private world dial failed after the grant). Before we are
@@ -3089,6 +3576,7 @@ class Node:
             return
         if not self.rejoining_kwargs:
             self.rejoining_kwargs = copy.deepcopy(self.joining_world_info["options"])
+
         # A quarantine refusal names its own horizon (retry_after_s): schedule just past
         # the ban instead of a blind full wait, and PULL IN an already-armed retry when
         # this target is sooner — never push it out.
@@ -3105,7 +3593,7 @@ class Node:
             log.misc(f"[session] pending world join refused → retry pulled in to {wait_s:.0f}s",
                      sub="prv")
 
-    async def _maybe_leave_world_on_session_end(self, ev) -> bool:
+    async def _maybe_leave_world_on_session_end(self, ev: SessionEvent) -> bool:
         """Joiner side: a terminal event on the Session toward the CURRENT world
         host means we are out of the world — run the full leave_world cleanup
         (world lists, profile connections, role, agent-instance restore, code
@@ -3114,7 +3602,7 @@ class Node:
         stats sender fires against a dead peer forever. The world host is read from
         the Coordinator (the single runtime source of truth). A terminal event caused
         by our own leave_world does not re-enter: leave_world clears the host
-        synchronously (conn.set_world(None)) before its CLOSED surfaces through the pump."""
+        synchronously (conn.set_world(None)) before its CLOSED surfaces through the pump (async)."""
         if self.node_type is not Node.AGENT:
             return False
         if not (NodeConn.P2P_WORLD == ev.p2p_name or "world" in ev.p2p_name):
@@ -3122,6 +3610,7 @@ class Node:
         host = self.conn.get_world_node_peer_id()
         if host is None or ev.peer_id != host:
             return False
+
         # conn holds the host from handoff-initiate onward, i.e. BEFORE the join
         # completes. A terminal event on the host before we are actually in the world
         # (in_world() reads the role bit set by __join_world) is a failed join, not a
@@ -3132,6 +3621,7 @@ class Node:
             return False
         log.misc(f"[session] world link terminated ({ev.type.value}, "
                  f"reason={ev.data.get('reason', 'unknown')}) → leaving world", sub="prv")
+
         # Arm the rejoin BEFORE leaving (leave_world is best-effort and may raise; the rejoin
         # must survive that). Only an INVOLUNTARY end re-arms: a clean CLOSED is a GOAWAY from
         # the host (kick / role-revoke / graceful shutdown / our own token-expiry close), where
@@ -3145,7 +3635,7 @@ class Node:
             log.error(f"[session] leave_world after world-session end failed: {e}")
         return True
 
-    def _world_host_unlist_member(self, ev) -> None:
+    def _world_host_unlist_member(self, ev: SessionEvent) -> None:
         """World host only: a member's world Session terminated — stop advertising
         it (world agents/masters lists feed routing and the rendezvous publish).
         Covers grant-time preregistration too (a joiner that failed mid-handshake)."""
@@ -3161,7 +3651,7 @@ class Node:
         the world lists, as its LOST would remove them. The old world Session is aborted
         silently (the purge with no reason): a terminal event of it coming later would
         unlist the new pre-admission of the same peer-id. The records of peer-ids no
-        longer listed are dropped on the way."""
+        longer listed are dropped on the way (async)."""
         for peer_id, recorded_node_id in list(self._world_member_node_ids.items()):
             listed = (self.conn.get_role(peer_id) & Agent.ROLE_WORLD_AGENT) == Agent.ROLE_WORLD_AGENT
             if listed and recorded_node_id != node_id:
@@ -3177,7 +3667,7 @@ class Node:
             except Exception as e:
                 log.error(f"[session] removal of the old entry ...{peer_id[-5:]} failed: {e}")
 
-    async def _on_session_resumed(self, ev) -> None:
+    async def _on_session_resumed(self, ev: SessionEvent) -> None:
         """A Session survived a transport drop (RESUME acked). The removed-diff
         path deliberately KEEPS the hosted enrolment while the Session rides its
         reconnect grace (the purge there is gated on not-in-grace, see
@@ -3185,7 +3675,7 @@ class Node:
         hosted side only when the peer WAS purged before the resume (e.g. the
         grace was entered late, after a non-grace purge already ran), re-enrolling
         from the profile the Session still holds. Pool membership self-heals on
-        the next conn.update().
+        the next conn.update() (async).
 
         A resumed Session toward the world host we hold a relay slot on asks for the slot
         again: a relay drops the reservation of a peer the moment no connection to that
@@ -3195,12 +3685,14 @@ class Node:
                 log.misc(f"Relay reservation asked again after the world Session resumed. Expires at "
                          f"{self.relay_reservation_expiry.strftime('%Y-%m-%d %H:%M:%S')} UTC", sub="prv")
             else:
+
                 # What is recorded stays, so the renewal tries again at its time
                 log.error("Failed to reserve the relay slot again after the world Session resumed. "
                           "Node may be unreachable through the world.")
         if ev.peer_id in self.hosted.all_agents:
             return
         is_world = NodeConn.P2P_WORLD == ev.p2p_name or "world" in ev.p2p_name
+
         # A world host's public Sessions are grant carriers: they never enrolled
         # an agent, so there is nothing to restore.
         if self.node_type is Node.WORLD and not is_world:
@@ -3213,15 +3705,20 @@ class Node:
         except Exception as e:
             log.error(f"[session] resumed: bad stored profile for ...{ev.peer_id[-5:]}: {e}")
             return
-        try:
-            if not (await self.hosted.add_agent(peer_id=ev.peer_id, profile=profile)):
-                await self.__purge(ev.peer_id, reason=LOCAL_ERROR)
-        except Exception as e:
-            log.error(f"[session] resumed: re-enrol failed for ...{ev.peer_id[-5:]}: {e}")
+        async def _re_enrol() -> None:
+            """Adds the peer to the hosted entity again, purging it if refused (async)."""
+            if ev.peer_id in self.hosted.all_agents:
+                return
+            try:
+                if not (await self.hosted.add_agent(peer_id=ev.peer_id, profile=profile)):
+                    await self.__purge(ev.peer_id, reason=LOCAL_ERROR)
+            except Exception as e:
+                log.error(f"[session] resumed: re-enrol failed for ...{ev.peer_id[-5:]}: {e}")
+        await self._agent_op(_re_enrol)
 
-    async def _on_session_established(self, ev) -> None:
+    async def _on_session_established(self, ev: SessionEvent) -> None:
         """Run the application side effects for an ESTABLISHED Session, branching on
-        (role, p2p instance, grant presence)."""
+        (role, p2p instance, grant presence) (async)."""
         is_world = NodeConn.P2P_WORLD == ev.p2p_name or "world" in ev.p2p_name
         profile_b = ev.data.get("profile_b")
 
@@ -3229,33 +3726,43 @@ class Node:
         if ev.role == SessionRole.INITIATOR and not is_world:
             grant = ev.data.get("world_grant")
             if grant is not None:
+
                 # World join: open the private world Session to redeem the grant.
                 await self._start_world_handoff(ev.peer_id, grant)
             elif profile_b is not None:
-                # Plain agent connection.
-                try:
-                    await self.__join_agent(profile=NodeProfile.from_dict(profile_b), peer_id=ev.peer_id)
-                except Exception as e:
-                    log.error(f"[session] __join_agent failed for ...{ev.peer_id[-5:]}: {e}")
-                # Interactive lone-wolf mode: the targeted peer we dialed is now
-                # connected (mirrors the pre-Session AGENT_APPROVAL handler).
-                opts = self._interact_mode_opts
-                if isinstance(opts, dict) and 'lone_wolf_peer_id' in opts:
-                    opts['ready_to_interact'] = True
+
+                # Plain agent connection (the hosted side at the tick boundary when a tick is running).
+                async def _join() -> None:
+                    """Enrols the peer, then arms interactive mode (async)."""
+                    try:
+                        await self.__join_agent(profile=NodeProfile.from_dict(profile_b), peer_id=ev.peer_id)
+                    except Exception as e:
+                        log.error(f"[session] __join_agent failed for ...{ev.peer_id[-5:]}: {e}")
+
+                    # Interactive lone-wolf mode: the targeted peer we dialed is now
+                    # connected (mirrors the pre-Session AGENT_APPROVAL handler).
+                    opts = self._interact_mode_opts
+                    if isinstance(opts, dict) and 'lone_wolf_peer_id' in opts:
+                        opts['ready_to_interact'] = True
+                await self._agent_op(_join)
             return
 
         # Initiator on the WORLD instance
         if ev.role == SessionRole.INITIATOR and is_world:
             grant = ev.data.get("grant")
             if grant is None and not self.conn.is_pending_handoff(ev.peer_id):
+
                 # In-world agent-to-agent connection (connect_to/connect_by_role):
                 # same enrolment as the public initiator path. Only the handoff
                 # Session to the world host carries a grant.
                 if profile_b is not None:
-                    try:
-                        await self.__join_agent(profile=NodeProfile.from_dict(profile_b), peer_id=ev.peer_id)
-                    except Exception as e:
-                        log.error(f"[session] __join_agent failed for ...{ev.peer_id[-5:]}: {e}")
+                    async def _join_in_world() -> None:
+                        """Enrols the in-world peer (async)."""
+                        try:
+                            await self.__join_agent(profile=NodeProfile.from_dict(profile_b), peer_id=ev.peer_id)
+                        except Exception as e:
+                            log.error(f"[session] __join_agent failed for ...{ev.peer_id[-5:]}: {e}")
+                    await self._agent_op(_join_in_world)
                 return
 
             # The join body runs only for the join in progress. Once a grant is out nothing
@@ -3265,6 +3772,7 @@ class Node:
             if not self._is_join_in_progress(self.conn.handoff_carrier_of(ev.peer_id)):
                 log.misc(f"[session] world Session to ...{ev.peer_id[-5:]} does not belong to the "
                          f"join in progress; closing it", sub="prv")
+
                 # Retire the carrier and drop the correlation, then say goodbye on the world
                 # Session: the host registered us when it established on its side.
                 try:
@@ -3276,43 +3784,42 @@ class Node:
                 except Exception as e:
                     log.error(f"[session] closing the unwanted world Session failed "
                               f"for ...{ev.peer_id[-5:]}: {e}")
+
                 # The routing may already point at the world of the newer join.
                 if self.conn.get_world_node_peer_id() == ev.peer_id:
                     self.conn.set_world(None)
                 return
 
-            # We joined a world: run the join body and retire the public Session.
+            # We joined a world: run the join body and retire the public Session. With the two tasks the agent part
+            # of the body waits for the tick boundary, while the handoff goes out at once
+            if self._tick_task is not None:
+                await self._join_world_split(ev, grant)
+                return
             ok = False
             try:
                 ok = await self._join_world_after_session(ev.peer_id, grant)
             except Exception as e:
                 log.error(f"[session] __join_world failed for ...{ev.peer_id[-5:]}: {e}")
             if ok:
+
                 # Interactive world mode: we are in the world now (mirrors the
                 # pre-Session WORLD_APPROVAL handler). Gated on a successful join
                 # so we never enter the REPL against a world we failed to join.
                 opts = self._interact_mode_opts
                 if isinstance(opts, dict) and 'world_peer_id' in opts:
                     opts['ready_to_interact'] = True
+
             # Whether or not the join body fully succeeded, the public Session has
             # done its job — retire it: GOAWAY(WORLD_HANDOFF_COMPLETE) on the still-live
             # public transport + pool eviction, with the settlement cut severing the
             # transport once the CLOSED lands. The Coordinator owns the correlation.
             await self.conn.complete_world_handoff(ev.peer_id)
             if not ok:
+
                 # The grant was redeemed but the join body failed (bad code bundle,
                 # subscribe failure...): tear the half-join down instead of leaving an
                 # orphaned ESTABLISHED world Session, stale world routing and no retry.
-                # GOAWAY the world Session (the host unlists us on its CLOSED),
-                # un-point routing, and re-arm the rejoin (involuntary end).
-                try:
-                    await self.__purge(ev.peer_id, reason=LOCAL_ERROR)
-                except Exception as e:
-                    log.error(f"[session] failed-join teardown purge failed for ...{ev.peer_id[-5:]}: {e}")
-                self.conn.set_world(None)
-                # The join body reserves before the steps that can fail
-                self._forget_relay_reservation()
-                self._maybe_rearm_rejoin_on_failed_join(ev)
+                await self._failed_join_teardown(ev)
             return
 
         # Responder on an agent node (public or in-world peer connection)
@@ -3320,24 +3827,28 @@ class Node:
         # handled below; everything else lands here.
         if ev.role == SessionRole.RESPONDER and (not is_world or self.node_type is not Node.WORLD):
             if profile_b is not None and self.node_type is Node.AGENT:
-                added = False
-                try:
-                    if await self.hosted.add_agent(peer_id=ev.peer_id,
-                                                   profile=NodeProfile.from_dict(profile_b)):
-                        added = True
-                    else:
-                        await self.__purge(ev.peer_id, reason=LOCAL_ERROR)
-                except Exception as e:
-                    log.error(f"[session] add_agent failed for ...{ev.peer_id[-5:]}: {e}")
-                # Interactive mode waiting for a lone wolf: latch onto the first
-                # inbound peer and arm interactive mode (mirrors the pre-Session
-                # PROFILE handler). Only after a successful enrolment.
-                if added:
-                    opts = self._interact_mode_opts
-                    if (isinstance(opts, dict) and 'lone_wolf_peer_id' in opts and
-                            opts['lone_wolf_peer_id'] is None):
-                        opts['lone_wolf_peer_id'] = ev.peer_id
-                        opts['ready_to_interact'] = True
+                async def _enrol() -> None:
+                    """Adds the peer to the hosted entity (purged if refused), then arms interactive mode (async)."""
+                    added = False
+                    try:
+                        if await self.hosted.add_agent(peer_id=ev.peer_id,
+                                                       profile=NodeProfile.from_dict(profile_b)):
+                            added = True
+                        else:
+                            await self.__purge(ev.peer_id, reason=LOCAL_ERROR)
+                    except Exception as e:
+                        log.error(f"[session] add_agent failed for ...{ev.peer_id[-5:]}: {e}")
+
+                    # Interactive mode waiting for a lone wolf: latch onto the first
+                    # inbound peer and arm interactive mode (mirrors the pre-Session
+                    # PROFILE handler). Only after a successful enrolment.
+                    if added:
+                        opts = self._interact_mode_opts
+                        if (isinstance(opts, dict) and 'lone_wolf_peer_id' in opts and
+                                opts['lone_wolf_peer_id'] is None):
+                            opts['lone_wolf_peer_id'] = ev.peer_id
+                            opts['ready_to_interact'] = True
+                await self._agent_op(_enrol)
             return
 
         # Responder on the WORLD instance: a joiner redeemed a grant
@@ -3357,7 +3868,8 @@ class Node:
     async def _start_world_handoff(self, public_peer_id: str, grant: dict) -> None:
         """Joiner side: the public Session yielded a WorldGrant. Parse the world profile
         (profile domain, stays on Node) and hand the public<->world correlation + the
-        world Session open to the Coordinator, dispatching the events it returns."""
+        world Session open to the Coordinator, dispatching the events it returns (async)."""
+
         # Only the grant of the join in progress is redeemed. One that comes over another
         # carrier belongs to a join that was replaced before its grant arrived: opening
         # its world Session would only get the node registered in a world it then has to
@@ -3386,6 +3898,7 @@ class Node:
             return
 
         blob = dict(grant)
+
         # The Coordinator records the correlation, points pool routing at the world host
         # (set_world) and opens the world Session; we just dispatch its events.
         for ev in await self.conn.start_world_handoff(
@@ -3393,14 +3906,14 @@ class Node:
                 reject_relay=not self.talk_to_relay_based_nodes):
             await self._dispatch_session_event(ev)
 
-    async def _world_host_register_agent(self, ev, profile_b) -> None:
+    async def _world_host_register_agent(self, ev: SessionEvent, profile_b: dict | None) -> None:
         """World host: a joiner's world Session reached ESTABLISHED on the world
         instance — add it to the world agents/masters list (replaces the legacy
         post-approval bookkeeping). The grant is unsigned and there is no PRIVATE_JOIN,
         so the authoritative role is read from the host's own
         pre-admission record (set at the public decision), not from any join echo. A
         peer that was never pre-admitted reads role 0 here and is purged by the
-        world-bit check below."""
+        world-bit check below (async)."""
         if profile_b is None:
             return
         try:
@@ -3419,6 +3932,7 @@ class Node:
         if self.world is None:
             return
         if not private_addr:
+
             # A joiner with no private addresses can't be a routable member: reject here
             # instead of asserting (which would tear down the world host's loop, and under
             # python -O would list a member with a None address). Unlist explicitly because
@@ -3428,13 +3942,30 @@ class Node:
             self._world_host_unlist_member(ev)
             await self.__purge(private_peer_id, reason=HOSTED_REJECTED)
             return
+        await self._agent_op(lambda: self.__world_host_admit(ev, profile, role, private_peer_id, private_addr))
+
+    async def __world_host_admit(self, ev: SessionEvent, profile: NodeProfile, role: int, private_peer_id: str,
+                                 private_addr: list[str]) -> None:
+        """World host: the world object admits a joiner, then the pools list it; rejected otherwise (async).
+
+        Args:
+            ev: The ESTABLISHED event of the joiner's world Session.
+            profile: The joiner's profile.
+            role: The role of its pre-admission.
+            private_peer_id: Its world peer-id.
+            private_addr: Its private addresses.
+        """
+        if self.world is None:
+            return
         registered = False
         try:
+
             # The world object (membership) gives its verdict first. The grant-time
             # pre-admission already carries the role add_agent reads, and it stays
             # provisional until then.
             registered = await self.world.add_agent(peer_id=private_peer_id, profile=profile)
             if registered:
+
                 # conn pools (routing). Re-adding WITHOUT a TTL confirms the pre-admission
                 # (the provisional deadline is dropped: the member is now registered). That
                 # puts it in the confirmed roster, which the next __handle_network_connections
@@ -3448,6 +3979,7 @@ class Node:
             log.error(f"[session] world register failed for ...{private_peer_id[-5:]}: {e}")
             registered = False
         if not registered:
+
             # Turned down by the world, or the registration raised: reject it like the
             # joiner with no private addresses above. A joiner left confirmed here would
             # be advertised as a member the world never took in.
@@ -3457,16 +3989,31 @@ class Node:
 
     async def _join_world_after_session(self, world_peer_id: str, grant: dict | None) -> bool:
         """Joiner side: run the world-join body against an already-connected world
-        Session, decoding the grant blob carried from the public Session."""
+        Session, decoding the grant blob carried from the public Session (async)."""
+        join_kwargs = self._world_join_kwargs(world_peer_id, grant)
+        if join_kwargs is None:
+            return False
+        return await self.__join_world(**join_kwargs)
+
+    def _world_join_kwargs(self, world_peer_id: str, grant: dict | None) -> dict | None:
+        """Decodes the grant blob of a world join into the arguments of __join_world.
+
+        Args:
+            world_peer_id: The peer-id of the world Session.
+            grant: The grant blob carried from the public Session.
+
+        Returns:
+            The keyword arguments, or None when the grant cannot be used (logged).
+        """
         if not grant:
             log.error("join_world: missing grant blob")
-            return False
+            return None
         try:
             raw_world_profile = json.loads(grant["world_profile_bytes"].decode("utf-8"))
             world_profile = NodeProfile.from_dict(raw_world_profile)
         except Exception as e:
             log.error(f"join_world: bad world profile: {e}")
-            return False
+            return None
         role = int(grant.get("role", 0))
         rendezvous_tag = int(grant.get("rendezvous_tag", 0))
 
@@ -3477,12 +4024,14 @@ class Node:
                 bundle = json.loads(code.decode("utf-8"))
                 agent_files: str | None = bundle.get("agent_files")
                 roles_fsm: dict | None = bundle.get("roles_fsm")
+
                 # Legacy worlds shipped stats.py as a dedicated field (and their
                 # single-agent.py repack dropped it from the packed files)
                 legacy_stats_code: str | None = bundle.get("stats_code")
             except Exception as e:
                 log.error(f"[session] join_world: bad code_bundle: {e}")
         if not roles_fsm:
+
             # Legacy worlds shipped the FSMs inside the dynamic profile. The current
             # NodeProfile template drops that key at parse time, so read the raw dict.
             roles_fsm = (raw_world_profile.get('dynamic') or {}).get('world_roles_fsm')
@@ -3501,50 +4050,136 @@ class Node:
 
         if agent_files is None:
             log.error("Missing agent files when joining the world")
-            return False
+            return None
 
-        return await self.__join_world(
-            profile=world_profile, role=role,
-            packed_agent_files=agent_files, roles_fsm=roles_fsm,
-            rendezvous_tag=rendezvous_tag, initial_stats=initial_stats,
-            peer_id=world_peer_id, attested_code_hash=attested_code_hash,
-            legacy_stats_code=legacy_stats_code,
-        )
+        return dict(profile=world_profile, role=role,
+                    packed_agent_files=agent_files, roles_fsm=roles_fsm,
+                    rendezvous_tag=rendezvous_tag, initial_stats=initial_stats,
+                    peer_id=world_peer_id, attested_code_hash=attested_code_hash,
+                    legacy_stats_code=legacy_stats_code)
 
-    async def connect_via_session(
-        self,
-        peer_id: str,
-        addresses: list[str],
-        p2p_name: str = NodeConn.P2P_PUBLIC,
-        is_world_join: bool = False,
-        remote_node_id_hint: str | None = None,
-        reject_relay: bool = False,
-    ) -> bool:
-        """Start an initiator Session to `peer_id` via SessionManager and return.
+    async def _join_world_split(self, ev: SessionEvent, grant: dict | None) -> None:
+        """Joiner side with the two tasks: the network part of the join and the handoff now, the agent part at the next
+        tick boundary (async).
 
-        Fire-and-forget: Session.start launches the dial off-task and returns, and the whole
-        dial → HELLO → PROFILE handshake completes asynchronously in the main loop's pump
-        (deliver/tick). Returns True once the Session has been started; False only for the one
-        synchronous rejection left, a quarantined peer. Dial failure and relay rejection now
-        surface later as a FAILED event via the pump, not here. The Session owns the dial, so
-        callers must NOT pre-dial.
+        The world host waits for the handoff GOAWAY for a limited time, so it cannot wait behind a long action; the
+        agent part (streams, code, the new agent instance) cannot run under a running behave(). Interactions the world
+        sends meanwhile are queued after the agent part, so they reach the new agent.
+
+        Args:
+            ev: The ESTABLISHED event of the world Session.
+            grant: The grant blob carried from the public Session.
         """
-        events = await self.conn.initiate_session(
-            p2p_name,
-            peer_id=peer_id,
-            addresses=addresses,
-            is_world_join=is_world_join,
-            remote_node_id_hint=remote_node_id_hint,
-            reject_relay=reject_relay,
-        )
-        # The only synchronous FAILED among the start-up events is a quarantine refusal;
-        # dial failure and relay rejection surface asynchronously via the pump.
-        started = True
-        for ev in events:
-            if ev.type == SessionEventType.FAILED:
-                started = False
-            await self._dispatch_session_event(ev)
-        return started
+        join_kwargs = self._world_join_kwargs(ev.peer_id, grant)
+        ok = False
+        try:
+            ok = join_kwargs is not None and await self.__join_world_network(join_kwargs["profile"],
+                                                                             join_kwargs["role"], ev.peer_id)
+        except Exception as e:
+            log.error(f"[session] __join_world failed for ...{ev.peer_id[-5:]}: {e}")
+        if ok:
+
+            # The join goes on to its end: the rejoin watchdog must not start another one while the agent part waits
+            self.rejoining_time = -1.
+
+        # The public Session has done its job, whatever happens next (see _on_session_established)
+        await self.conn.complete_world_handoff(ev.peer_id)
+        if not ok:
+            await self._failed_join_teardown(ev)
+            return
+
+        async def _agent_part() -> None:
+            """The agent part of the join, and its teardown when it fails (async)."""
+            done = False
+            try:
+                done = await self.__join_world_agent(**join_kwargs)
+            except Exception as e:
+                log.error(f"[session] __join_world failed for ...{ev.peer_id[-5:]}: {e}")
+            if done:
+                opts = self._interact_mode_opts
+                if isinstance(opts, dict) and 'world_peer_id' in opts:
+                    opts['ready_to_interact'] = True
+            else:
+                await self._failed_join_teardown(ev)
+        await self._agent_op(_agent_part, swap=True)
+
+    async def _failed_join_teardown(self, ev: SessionEvent) -> None:
+        """Tears a half-join down: the grant was redeemed but the join body failed (async).
+
+        GOAWAY the world Session (the host unlists us on its CLOSED), un-point routing, and re-arm the rejoin
+        (involuntary end).
+
+        Args:
+            ev: The ESTABLISHED event of the world Session.
+        """
+        try:
+            await self.__purge(ev.peer_id, reason=LOCAL_ERROR)
+        except Exception as e:
+            log.error(f"[session] failed-join teardown purge failed for ...{ev.peer_id[-5:]}: {e}")
+        self.conn.set_world(None)
+
+        # The join body reserves before the steps that can fail
+        self._forget_relay_reservation()
+        self._maybe_rearm_rejoin_on_failed_join(ev)
+
+    async def __leave_world_agent_part(self, host: str) -> None:
+        """The agent part of leave_world: the cached world data go, and a WAgent is replaced by a plain Agent (async).
+
+        Args:
+            host: The peer-id of the world host that was left.
+        """
+        assert self.agent is not None
+        await self.agent.clear_world_related_data(host)
+
+        if self.agent.__class__.__name__ == "WAgent":
+            new_agent = Agent(proc=None)
+
+            # Clearing memory
+            if self.memory_finder is not None:
+                self.memory_finder.cleanup()
+            self.memory_finder = None
+        else:
+            new_agent = self.agent
+
+        # Cloning attributes of the existing agent
+        skip = {'stats', 'world_profile', 'world_role_fsms', 'behav'}
+        for key, value in self.agent.__dict__.items():
+            if hasattr(new_agent, key):  # This will skip ROLE_BITS_TO_STR, CUSTOM_ROLES, etc...
+                if key in skip:
+                    continue
+                else:
+                    setattr(new_agent, key, value)
+
+        # Fixing internal references to agent (im/proc were cloned from the
+        # in-world instance and still point at it)
+        new_agent.im.agent = new_agent
+        new_agent.proc.agent = new_agent
+
+        # Telling the FSM that actions are related to this new agent
+        new_agent.behav.set_actionable(new_agent)
+        new_agent.behav_lone_wolf.set_actionable(new_agent)
+
+        # Inheriting the pre-defined policy filter (if any)
+        new_agent.set_policy_filter(self.agent.policy_filter, public=False)
+        new_agent.set_policy_filter(self.agent.policy_filter_lone_wolf, public=True)
+
+        # Interaction Manager and processor
+        new_agent.im.agent = new_agent
+        if new_agent.proc is not None and hasattr(new_agent.proc, 'set_agent'):
+            new_agent.proc.set_agent(new_agent)
+
+        # Fixing role in the agent profile. Both world fields must be cleared HERE:
+        # on the non-WAgent branch new_agent IS self.agent, so the skip-set above
+        # cleans nothing, and accept_new_role reads world_role_fsms first — a stale
+        # dict would survive the leave (and get pickled into the saved state).
+        new_agent.world_profile = None
+        new_agent.world_role_fsms = None
+        self.world_role_fsms = None
+        new_agent.accept_new_role(Agent.ROLE_PUBLIC)
+
+        # Updating node-level references
+        self.agent = new_agent
+        self.hosted = new_agent
 
     async def __purge(self, peer_id: str, reason: int | None = None,
                       settled: bool = False) -> None:
@@ -3575,7 +4210,8 @@ class Node:
         for ev in await self.conn.drop_peer(peer_id, reason, settled=settled):
             await self._dispatch_session_event(ev)
 
-        await self.hosted.remove_agent(peer_id)
+        # The hosted side at the tick boundary when a tick is running (inline from inside an action, see _agent_op)
+        await self._agent_op(lambda: self.hosted.remove_agent(peer_id))
 
     @staticmethod
     def __sort_messages_by_priority(messages: list) -> list:
@@ -3662,9 +4298,9 @@ class Node:
     def __replace_agent_instance_by_role(self, role: int,
                                          world_peer_id: str | None = None,
                                          world_profile: NodeProfile | None = None,
-                                         stats_class=None,
-                                         initial_stats=None,
-                                         changing_an_existing_role_in_world: bool = False):
+                                         stats_class: type | None = None,
+                                         initial_stats: dict | None = None,
+                                         changing_an_existing_role_in_world: bool = False) -> None:
         """Generating a new instance of the Agent class accordingly to the given role (when in-world only)."""
         assert self.agent is not None
 
@@ -3776,6 +4412,24 @@ class Node:
         self.__inspector_cache = {"behav": None, "known_streams_count": 0, "all_agents_count": 0}
         log.misc("Inspector disconnected")
 
+    async def _hold_ticks_while_paused_by_inspector(self) -> None:
+        """Holds the tick task while the inspector keeps the node paused (async).
+
+        The two-task version of _wait_while_paused_by_inspector: the network task keeps serving the inspector commands,
+        the Sessions and the messages, so only the ticks wait here. What the network does to the hosted entity meanwhile
+        is applied at once (no tick holds the agent lock), as between two ticks.
+        """
+        if not (self.inspector_activated and self.__inspector_told_to_pause):
+            return
+        log.misc("Paused by the inspector, waiting...")
+        while self.__inspector_told_to_pause:
+            self._drop_inspector_if_gone()
+            if not self.inspector_activated:  # Disconnected
+                self.__inspector_told_to_pause = False
+                log.misc("Inspector is not active/connected anymore, resuming...")
+                break
+            await asyncio.sleep(0.1)
+
     async def _wait_while_paused_by_inspector(self) -> None:
         """Holds the main loop while the inspector keeps the node paused. (async)
 
@@ -3815,6 +4469,7 @@ class Node:
                             "Inspector command was not sent by the expected inspector node ID "
                             "or no inspector connected")
                         await self.__purge(msg.sender)
+
             # get_messages pops the session frames off the transport, so we must
             # still pump them or peers get no PONG/keepalive and mark us LOST while
             # paused. Dispatch normally (the pause freezes the agent's behave, not
@@ -3940,7 +4595,7 @@ class Node:
 
         # Sending stream data (not pubsub) to the inspector
         my_peer_ids = (self.get_public_peer_id(), self.get_world_peer_id())
-        for net_hash, streams_dict in self.hosted.known_streams.items():
+        for net_hash, streams_dict in list(self.hosted.known_streams.items()):  # A copy: the loop awaits
             peer_id = DataProps.peer_id_from_net_hash(net_hash)
 
             # Preparing sample dict
@@ -3970,8 +4625,9 @@ class Node:
 
 
 class NodeSynchronizer:
+    """Runs several nodes in one process, one cycle at a time each (mainly for tests and demos)."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         """Initializes a new instance of the NodeSynchronizer class."""
         self.nodes = []
         self.agent_nodes = {}

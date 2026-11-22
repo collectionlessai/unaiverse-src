@@ -96,6 +96,69 @@ class GoLibP2P:
         """
         ...
 
+    def PopNetworkMessages(self, instance: int) -> int:
+        """
+        PopNetworkMessages(instance: int) -> bytes
+
+        Like PopMessages, for the network pass: every queued message of every channel that is not a stream channel
+        (the Session protocols included).
+        """
+        ...
+
+    def PopStreamMessages(self, instance: int) -> int:
+        """
+        PopStreamMessages(instance: int) -> bytes
+
+        Like PopMessages, for the tick: the oldest message of every stream channel (stream_sample DMs, PubSub topics).
+        """
+        ...
+
+    def SetPeerCapabilities(self, instance: int, peer_id: bytes, caps: int, max_message_size: int,
+                            max_file_size: int) -> int:
+        """
+        SetPeerCapabilities(instance: int, peer_id: bytes, caps: int, max_message_size: int, max_file_size: int)
+            -> bytes
+
+        Records what a peer can receive (its CAP_* bits, its largest message: 0 no limit, -1 unknown, its largest file
+        in a file message: 0 no limit).
+        """
+        ...
+
+    def SendFileMessageToPeer(self, instance: int, channel: bytes, data: bytes, data_len: int,
+                              files_json: bytes) -> int:
+        """
+        SendFileMessageToPeer(instance: int, channel: bytes, data: bytes, data_len: int, files_json: bytes) -> bytes
+
+        Queues a file message: the message, and the files of its FILE samples ([{"key", "path"}]) read from disk while
+        they are sent. Error code no_file_stream when the peer does not take file messages.
+        """
+        ...
+
+    def ConfigureSendQueues(self, config_json: bytes) -> int:
+        """
+        ConfigureSendQueues(config_json: bytes) -> bytes
+
+        Turns on the per-peer send queues of the direct messages with the given limits (JSON). Call it after
+        InitializeLibrary and before CreateNode. Without it, direct messages are sent synchronously.
+        """
+        ...
+
+    def DropSendQueue(self, instance: int, peer_id: bytes) -> int:
+        """
+        DropSendQueue(instance: int, peer_id: bytes) -> bytes
+
+        Empties the send queue of a peer (a queue_dropped event, reason "explicit"); the message is the count.
+        """
+        ...
+
+    def PopSendEvents(self, instance: int) -> int:
+        """
+        PopSendEvents(instance: int) -> bytes
+
+        Returns the send events recorded since the last call (JSON list), or {"state": "Empty"}.
+        """
+        ...
+
     def SubscribeToTopic(self, instance: int, topic_composite_key: bytes) -> int:
         """
         SubscribeToTopic(instance: int, topic_composite_key: bytes) -> bytes

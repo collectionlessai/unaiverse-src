@@ -141,20 +141,22 @@ class TypeInterface:
         """
         return val == 1
 
-    def to_go_bytes(self, b: bytes) -> ctypes.c_char_p:
+    def to_go_bytes(self, b: bytes) -> bytes:
         """
-        Converts a Python bytes object to a Go-compatible C char pointer.
+        Converts a Python bytes object to a Go-compatible C char pointer argument.
+
+        The bytes are passed as they are (ctypes hands Go a pointer to their buffer, which Go copies during the call
+        with the length it is given): no copy into a ctypes buffer first.
 
         Args:
-            b: The Python bytes.
+            b: The Python bytes (a bytearray or memoryview is turned into bytes).
 
         Returns:
-            A ctypes.c_char_p pointing to the byte data.
+            The bytes, for an argument of type c_char_p.
         """
         if b is None:
-            b = b""
-        buf = ctypes.create_string_buffer(b, len(b))
-        return ctypes.cast(buf, ctypes.c_char_p)
+            return b""
+        return b if type(b) is bytes else bytes(b)
 
     def from_go_bytes(self, cptr: ctypes.c_char_p, length: int) -> bytes:
         """
@@ -267,9 +269,12 @@ class TypeInterface:
         """Parse the PopMessages binary buffer into a list of message dicts.
 
         Layout: ``[1B magic][uint32 total][uint32 count]`` then, per message,
-        ``[uint32 fromLen][from][uint32 protoLen][proto][uint32 dataLen][data]``.
+        ``[uint32 fromLen][from][uint32 protoLen][proto][uint32 dataLen][data][uint32 filesLen][files]`` (data is a
+        memoryview of the buffer, which protobuf parses without a copy), where files
+        is the JSON list of the files on disk of a file message ({key, path, size}), empty otherwise (Phase 6.5).
         All integers big-endian. Mirrors the writer in unailib/api.go::PopMessages.
         """
+        view = memoryview(blob)
         off = 5  # skip magic (1) + totalBytes (4)
         (count,) = struct.unpack_from(">I", blob, off)
         off += 4
@@ -285,9 +290,15 @@ class TypeInterface:
             off += proto_len
             (data_len,) = struct.unpack_from(">I", blob, off)
             off += 4
-            data = blob[off:off + data_len]
+            data = view[off:off + data_len]  # A view, not a copy: protobuf parses it as it is
             off += data_len
-            messages.append({"from": frm, "data": data, "protocol": proto})
+            (files_len,) = struct.unpack_from(">I", blob, off)
+            off += 4
+            message = {"from": frm, "data": data, "protocol": proto}
+            if files_len > 0:
+                message["files"] = json.loads(blob[off:off + files_len])
+            off += files_len
+            messages.append(message)
         return messages
 
     def to_go_json(self, data: Any) -> bytes:

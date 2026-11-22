@@ -426,3 +426,31 @@ def test_buffered_get_all_uuids(fake_clock):
     assert sample == "a"
     assert tag == 0
     assert ts == 0.0
+
+
+# Stream: the delta gate, for local sets and for samples received from the owner
+
+class _TimeClock(FakeClock):
+    """A FakeClock whose cycle time and wall time are the same number, moved by hand."""
+
+    def get_cycle_time(self) -> float:
+        return self._time
+
+
+def test_delta_refuses_early_local_sets_but_not_received_ones() -> None:
+    """A set less than delta after the previous one is refused, unless the delta check is off (a received sample)."""
+    saved = getattr(clock, "_Clock__instance", None)
+    tc = _TimeClock()
+    clock.set(tc)
+    try:
+        s = Stream(props=DataProps(name="txt", data_type="text", delta=0.04))
+        assert s.set("a", data_tag=1) is not None
+        tc._time += 0.035  # A little early, as network jitter makes it
+        assert s.set("b", data_tag=2) is None
+        assert s.get() == "a"
+        assert s.set("b", data_tag=2, check_delta=False) is not None
+        assert s.get() == "b"
+        tc._time += 0.05
+        assert s.set("c", data_tag=3) is not None
+    finally:
+        setattr(clock, "_Clock__instance", saved)

@@ -357,10 +357,14 @@ def stepped_clock():
 
 
 @pytest.fixture(scope="session")
-def _libp2p_setup():
-    """Initialize the Go shared library exactly once for the whole session."""
+def _libp2p_setup(tmp_path_factory):
+    """Initialize the Go shared library exactly once for the whole session, with the received files of the file
+    messages in a temporary folder (not in the Downloads of the app folder)."""
+    from unaiverse.custom import Custom
     from unaiverse.networking.p2p.p2p import P2P
     if not getattr(P2P, "_library_initialized", False):
+        if not Custom.DOWNLOADS_DIR:
+            Custom.DOWNLOADS_DIR = str(tmp_path_factory.mktemp("downloads"))
         P2P.setup_library()
     return P2P
 

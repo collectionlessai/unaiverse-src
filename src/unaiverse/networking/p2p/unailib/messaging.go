@@ -2,7 +2,6 @@
 package main
 
 import (
-	"bytes"
 	"container/list"
 	"context"
 	"encoding/binary"
@@ -35,6 +34,29 @@ func isSessionProtocol(protocolID string) bool {
 	}
 }
 
+// isStreamChannel reports whether a chat/pubsub channel carries stream samples: a
+// PubSub topic ("<owner>::ps:<group>"; the rendezvous topic never reaches the store),
+// or a direct-message channel of content type stream_sample
+// ("<sender>::dm:<receiver>-stream_sample~<group>"). The node pops these once per tick
+// of its behavior (PopStreamMessages) and every other channel at every network pass
+// (PopNetworkMessages), so that an agent consumes a stream at its own pace while
+// everything else is read at once.
+func isStreamChannel(channel string) bool {
+	if strings.Contains(channel, "::ps:") {
+		return true
+	}
+	_, rest, isDM := strings.Cut(channel, "::dm:")
+	if !isDM {
+		return false
+	}
+	_, contentType, hasType := strings.Cut(rest, "-")
+	if !hasType {
+		return false
+	}
+	contentType, _, _ = strings.Cut(contentType, "~")
+	return contentType == "stream_sample"
+}
+
 // storeReceivedMessage processes a raw message received either from a direct stream
 // or a PubSub topic. The libp2p protocol ID is preserved on the queued message so
 // Python can route by protocol instead of by content_type. Pass an empty string
@@ -46,10 +68,24 @@ func storeReceivedMessage(
 	protocolID string,
 	data []byte,
 ) {
+	storeReceivedMessageWithFiles(ni, from, channel, protocolID, data, nil)
+}
+
+// storeReceivedMessageWithFiles is storeReceivedMessage for a message that may have files on
+// disk (file.go): a message the store does not keep has its files removed.
+func storeReceivedMessageWithFiles(
+	ni *NodeInstance,
+	from peer.ID,
+	channel string,
+	protocolID string,
+	data []byte,
+	files []ReceivedFile,
+) {
 	// Get the message store for this instance
 	store := ni.messageStore
 	if store == nil {
 		logger.Errorf("[GO] ❌ storeReceivedMessage: Message store not initialized for instance %d\n", ni.instanceIndex)
+		removeFiles(receivedFilePaths(files))
 		return // Cannot process message if store is nil
 	}
 
@@ -58,6 +94,7 @@ func storeReceivedMessage(
 		From:     from,
 		Data:     data,
 		Protocol: protocolID,
+		Files:    files,
 	}
 
 	// Lock the store mutex before accessing the shared maps.
@@ -74,6 +111,7 @@ func storeReceivedMessage(
 		// able to evict (by exhausting maxUniqueChannels) an incoming handshake.
 		if !isSessionProtocol(protocolID) && len(store.messagesByChannel) >= maxUniqueChannels {
 			logger.Warnf("[GO] 🗑️ Instance %d: Message store full. Discarding message for new channel '%s'.\n", ni.instanceIndex, channel)
+			removeFiles(receivedFilePaths(files))
 			return
 		}
 		messageList = list.New()
@@ -81,10 +119,20 @@ func storeReceivedMessage(
 		logger.Debugf("[GO] ✨ Instance %d: Created new channel queue '%s'. Total channels: %d\n", ni.instanceIndex, channel, len(store.messagesByChannel))
 	}
 
-	// If the channel already has a message list, check its length.
+	// If the channel already has a message list, check its length. A full chat/pubsub
+	// queue drops its oldest message, so that what is kept is the most recent (a stream
+	// that waited while an action ran resumes from fresh samples). A Session queue is
+	// shared by all the peers and drained in full at every pop, so it keeps refusing the
+	// newest frame instead: dropping the oldest could drop another peer's handshake.
 	if messageList.Len() >= maxChannelQueueLen {
-		logger.Warnf("[GO] 🗑️ Instance %d: Queue for channel '%s' full. Discarding message.\n", ni.instanceIndex, channel)
-		return
+		if isSessionProtocol(channel) {
+			logger.Warnf("[GO] 🗑️ Instance %d: Queue for channel '%s' full. Discarding message.\n", ni.instanceIndex, channel)
+			return
+		}
+		if oldest := messageList.Remove(messageList.Front()).(*QueuedMessage); len(oldest.Files) > 0 {
+			removeFiles(receivedFilePaths(oldest.Files))
+		}
+		logger.Warnf("[GO] 🗑️ Instance %d: Queue for channel '%s' full. Discarding its oldest message.\n", ni.instanceIndex, channel)
 	}
 
 	messageList.PushBack(newMessage)
@@ -102,10 +150,15 @@ func storeReceivedMessage(
 // and a node with enough peers could not keep up with their keep-alives at all.
 func (store *MessageStore) popBatch() []*QueuedMessage {
 	var popped []*QueuedMessage
+	var bytesOut int
 	for channel, messageList := range store.messagesByChannel {
 		drain := isSessionProtocol(channel)
 		for messageList.Len() > 0 {
 			element := messageList.Front()
+			if len(popped) > 0 && bytesOut+len(element.Value.(*QueuedMessage).Data) > popBatchMaxBytes {
+				return popped // The rest comes with the next pop (the reply has 32-bit lengths)
+			}
+			bytesOut += len(element.Value.(*QueuedMessage).Data)
 			popped = append(popped, element.Value.(*QueuedMessage))
 			messageList.Remove(element)
 			if !drain {
@@ -113,6 +166,55 @@ func (store *MessageStore) popBatch() []*QueuedMessage {
 			}
 		}
 		// if the queue is now empty, we can delete it from the map to save space
+		if messageList.Len() == 0 {
+			delete(store.messagesByChannel, channel)
+		}
+	}
+	return popped
+}
+
+// popNetworkBatch removes and returns what one PopNetworkMessages call hands to the
+// caller: every queued message of every channel that is not a stream channel (the
+// Session protocols included), oldest first within each channel. The caller must
+// hold store.mu.
+func (store *MessageStore) popNetworkBatch() []*QueuedMessage {
+	var popped []*QueuedMessage
+	var bytesOut int
+	for channel, messageList := range store.messagesByChannel {
+		if isStreamChannel(channel) {
+			continue
+		}
+		for messageList.Len() > 0 {
+			element := messageList.Front()
+			if len(popped) > 0 && bytesOut+len(element.Value.(*QueuedMessage).Data) > popBatchMaxBytes {
+				return popped // The rest comes with the next pop (the reply has 32-bit lengths)
+			}
+			bytesOut += len(element.Value.(*QueuedMessage).Data)
+			popped = append(popped, element.Value.(*QueuedMessage))
+			messageList.Remove(element)
+		}
+		delete(store.messagesByChannel, channel)
+	}
+	return popped
+}
+
+// popStreamBatch removes and returns what one PopStreamMessages call hands to the
+// caller: the oldest message of every stream channel. The caller must hold store.mu.
+func (store *MessageStore) popStreamBatch() []*QueuedMessage {
+	var popped []*QueuedMessage
+	var bytesOut int
+	for channel, messageList := range store.messagesByChannel {
+		if !isStreamChannel(channel) {
+			continue
+		}
+		if element := messageList.Front(); element != nil {
+			if len(popped) > 0 && bytesOut+len(element.Value.(*QueuedMessage).Data) > popBatchMaxBytes {
+				return popped // The rest comes with the next pop (the reply has 32-bit lengths)
+			}
+			bytesOut += len(element.Value.(*QueuedMessage).Data)
+			popped = append(popped, element.Value.(*QueuedMessage))
+			messageList.Remove(element)
+		}
 		if messageList.Len() == 0 {
 			delete(store.messagesByChannel, channel)
 		}
@@ -223,6 +325,15 @@ func readChatStream(ni *NodeInstance, ps *persistentStream) {
 			return
 		}
 
+		// A chunk frame of a message larger than a chunk (chunked.go)
+		if totalLen&chunkFrameFlag != 0 {
+			if !readChunkFrame(ni, s, senderPeerID, totalLen&^chunkFrameFlag) {
+				s.Reset()
+				return
+			}
+			continue
+		}
+
 		if totalLen > MaxMessageSize {
 			logger.Errorf("[GO] ❌ Instance %d: Message len %d exceeds limit on Stream %s. Resetting.\n", ni.instanceIndex, totalLen, streamID)
 			s.Reset()
@@ -317,6 +428,16 @@ func bestConnRank(ni *NodeInstance, pid peer.ID) int {
 // the one it sits on has appeared. The text it returns is the one of the reply to the
 // caller, for both outcomes.
 func sendOnChatStream(ni *NodeInstance, pid peer.ID, channel string, data []byte) (string, error) {
+	frame, err := buildDirectMessageFrame(channel, data)
+	if err != nil {
+		return fmt.Sprintf("Failed to build the frame for %s.", pid), err
+	}
+	return sendFrameOnChatStream(ni, pid, frame)
+}
+
+// sendFrameOnChatStream is sendOnChatStream for a frame that is already built (see
+// buildDirectMessageFrame): what the writer of a send queue writes.
+func sendFrameOnChatStream(ni *NodeInstance, pid peer.ID, frame []byte) (string, error) {
 	for {
 		ni.streamsMutex.Lock()
 		ps, streamExists := ni.persistentChatStreams[pid]
@@ -349,7 +470,7 @@ func sendOnChatStream(ni *NodeInstance, pid peer.ID, channel string, data []byte
 				ps, how = next, "moved stream"
 			}
 		}
-		err := writeDirectMessageFrame(ps.s, channel, data)
+		err := writeChatFrame(ni, ps.s, frame)
 		ps.lastWrite = time.Now()
 		ps.sendMu.Unlock()
 		if err == nil {
@@ -358,6 +479,9 @@ func sendOnChatStream(ni *NodeInstance, pid peer.ID, channel string, data []byte
 		}
 
 		// Write failed: remove the broken entry, so that the next send opens a new stream.
+		// The stream must not be written again: a deadline can fire in the middle of a
+		// frame, and the next frame would then desync the length-prefixed framing of the
+		// receiver.
 		logger.Warnf("[GO] ⚠️ Instance %d: Write failed on Stream %s to %s (%s): %v. Removing.\n", ni.instanceIndex, ps.s.ID(), pid, how, err)
 		ni.streamsMutex.Lock()
 		if cur, ok := ni.persistentChatStreams[pid]; ok && cur == ps {
@@ -700,44 +824,52 @@ func writeSessionFrame(w io.Writer, payload []byte) error {
 // - 1-byte channel name length
 // - channel name (as a UTF-8 string)
 // - payload (Protobuf-encoded data).
+// A writer with a write deadline (a stream) gets the one of writeChatFrame.
 func writeDirectMessageFrame(w io.Writer, channel string, payload []byte) error {
-	channelBytes := []byte(channel)
-	channelLen := uint8(len(channelBytes))
-
-	// Check if channel name is too long for our 1-byte length prefix.
-	if len(channelBytes) > 255 {
-		return fmt.Errorf("channel name exceeds 255 bytes limit: %s", channel)
+	frame, err := buildDirectMessageFrame(channel, payload)
+	if err != nil {
+		return err
 	}
+	return writeChatFrame(nil, w, frame)
+}
 
-	// Total length = 1 (for channel len) + len(channel) + len(payload)
-	totalLength := uint32(1 + len(channelBytes) + len(payload))
+// chatWriteTimeout is the write deadline of a chat frame of the given size: the base, plus
+// the time the frame takes at the slowest rate we accept. A small control message gets
+// about the base, a large tensor or file the time it needs on a slow link (the same
+// reasoning as ChatStreamIdleTimeout on the read side). Zero when ConfigureSendQueues did
+// not set the two values: no deadline.
+func chatWriteTimeout(frameLen int) time.Duration {
+	if chatWriteBaseTimeout <= 0 || chatWriteMinBytesPerSec <= 0 {
+		return 0
+	}
+	return chatWriteBaseTimeout + time.Duration(float64(frameLen)/float64(chatWriteMinBytesPerSec)*float64(time.Second))
+}
 
-	// --- Add size check before writing ---
-	if totalLength > MaxMessageSize {
-		return fmt.Errorf("outgoing message size (%d) exceeds limit (%d)", totalLength, MaxMessageSize)
-	}
-
-	buf := new(bytes.Buffer)
-
-	// Write total length (4 bytes)
-	if err := binary.Write(buf, binary.BigEndian, totalLength); err != nil {
-		return fmt.Errorf("failed to write total length: %w", err)
-	}
-	// Write channel length (1 byte)
-	if err := binary.Write(buf, binary.BigEndian, channelLen); err != nil {
-		return fmt.Errorf("failed to write channel length: %w", err)
-	}
-	// Write channel name
-	if _, err := buf.Write(channelBytes); err != nil {
-		return fmt.Errorf("failed to write channel name: %w", err)
-	}
-	// Write payload
-	if _, err := buf.Write(payload); err != nil {
-		return fmt.Errorf("failed to write payload: %w", err)
+// writeChatFrame writes one built frame on a chat stream, under the write deadline of its
+// size when the writer has one: a peer whose link stopped draining (a stopped process, a
+// stalled relay) holds the write no longer than that. Without it the write waits on the
+// stream window of the muxer with no end. A deadline that cannot be set is logged and the
+// frame is written all the same: sending with no limit beats refusing to send. The caller
+// must close the stream on an error, since the deadline can fire in the middle of a frame.
+// ni is only for the logs, and may be nil.
+func writeChatFrame(ni *NodeInstance, w io.Writer, frame []byte) error {
+	if timeout := chatWriteTimeout(len(frame)); timeout > 0 {
+		if d, ok := w.(interface{ SetWriteDeadline(time.Time) error }); ok {
+			if err := d.SetWriteDeadline(time.Now().Add(timeout)); err != nil {
+				instanceIndex := -1
+				if ni != nil {
+					instanceIndex = ni.instanceIndex
+				}
+				logger.Warnf("[GO] ⚠️ Instance %d: SetWriteDeadline failed on a chat stream: %v\n", instanceIndex, err)
+			} else {
+				// A stream that stays open must not keep the deadline of this frame.
+				defer d.SetWriteDeadline(time.Time{})
+			}
+		}
 	}
 
 	// Write the entire frame to the stream.
-	if _, err := w.Write(buf.Bytes()); err != nil {
+	if _, err := w.Write(frame); err != nil {
 		return fmt.Errorf("failed to write framed message to stream: %w", err)
 	}
 	return nil

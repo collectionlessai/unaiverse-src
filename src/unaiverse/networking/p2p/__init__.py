@@ -118,6 +118,31 @@ _shared_lib.SendMessageToPeer.restype = ctypes.c_void_p  # Returns status code, 
 _shared_lib.PopMessages.argtypes = [ctypes.c_int]
 _shared_lib.PopMessages.restype = ctypes.c_void_p  # Treat returned *C.char as opaque pointer
 
+# Split pops: the network pass takes everything but the streams, the tick one message per stream channel (absent in a
+# library older than them: PopMessages serves both, as before)
+if hasattr(_shared_lib, 'SetPeerCapabilities'):
+    _shared_lib.SetPeerCapabilities.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_uint, ctypes.c_longlong,
+                                                 ctypes.c_longlong]
+    _shared_lib.SetPeerCapabilities.restype = ctypes.c_void_p
+if hasattr(_shared_lib, 'SendFileMessageToPeer'):
+    _shared_lib.SendFileMessageToPeer.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_int,
+                                                   ctypes.c_char_p]
+    _shared_lib.SendFileMessageToPeer.restype = ctypes.c_void_p
+if hasattr(_shared_lib, 'PopNetworkMessages'):
+    _shared_lib.PopNetworkMessages.argtypes = [ctypes.c_int]
+    _shared_lib.PopNetworkMessages.restype = ctypes.c_void_p
+    _shared_lib.PopStreamMessages.argtypes = [ctypes.c_int]
+    _shared_lib.PopStreamMessages.restype = ctypes.c_void_p
+
+# Send queues of the direct messages (absent in a library older than them: sends are then synchronous, as before)
+if hasattr(_shared_lib, 'ConfigureSendQueues'):
+    _shared_lib.ConfigureSendQueues.argtypes = [ctypes.c_char_p]
+    _shared_lib.ConfigureSendQueues.restype = ctypes.c_void_p
+    _shared_lib.DropSendQueue.argtypes = [ctypes.c_int, ctypes.c_char_p]
+    _shared_lib.DropSendQueue.restype = ctypes.c_void_p
+    _shared_lib.PopSendEvents.argtypes = [ctypes.c_int]
+    _shared_lib.PopSendEvents.restype = ctypes.c_void_p
+
 # PubSub
 _shared_lib.SubscribeToTopic.argtypes = [ctypes.c_int, ctypes.c_char_p]
 _shared_lib.SubscribeToTopic.restype = ctypes.c_void_p  # Treat returned *C.char as opaque pointer

@@ -12,6 +12,7 @@
                  Code Repositories:  https://github.com/collectionlessai/
                  Main Developers:    Stefano Melacci (Project Leader), Christian Di Maio, Tommaso Guidi
 """
+
 # Msg — self-contained value object + wire codec for the Node-bound chat path.
 #
 # Like p2p/session/sess_msg.py's SessMsg, Msg is a plain value object: the scalar
@@ -27,12 +28,14 @@
 # the JS twin (Messages.js) reads the value object over the proxy and does the codec. So
 # do NOT hoist the lazy imports below to module top, and do not import anything that pulls
 # protobuf/torch at module level.
+import os
 import json
 from typing import Any
 from datetime import datetime, timezone
 
 
 class Msg:
+    """A message of the chat path (not Session): a plain value object with its own wire codec."""
 
     # Message content types
     PROFILE = "profile"
@@ -68,11 +71,20 @@ class Msg:
                  timestamp_net: str | None = None,
                  channel: str | None = None,
                  content_type: str = MISC,
-                 piggyback: str | None = None):
-        """Create a new message from native Python fields. The content is kept as-is
-        (a dict for json types, a dict of samples for stream_sample, a list for
-        stats_update); it is encoded to protobuf only in to_bytes. Use from_bytes to
-        rebuild a Msg off the wire."""
+                 piggyback: str | None = None) -> None:
+        """Creates a new message from native Python fields.
+
+        The content is kept as-is (a dict for json types, a dict of samples for stream_sample, a list for
+        stats_update); it is encoded to protobuf only in to_bytes. Use from_bytes to rebuild a Msg off the wire.
+
+        Args:
+            sender: The peer id of the sender (required).
+            content: The content of the message (default: None, meaning no content).
+            timestamp_net: The network timestamp (default: None, meaning now, in UTC).
+            channel: The channel of the message (default: None, meaning "<unknown>").
+            content_type: One of the content types of this class (default: MISC).
+            piggyback: The piggyback string (default: None, meaning empty).
+        """
 
         # Sanity checks
         assert sender is not None, "Sender must be specified for a new message."
@@ -87,10 +99,17 @@ class Msg:
         self._content_type = content_type if content_type is not None else self.MISC
         self._channel = channel if channel is not None else "<unknown>"
         self._piggyback = piggyback if piggyback is not None else ""
+
         # None or the sentinel mean "no content" (unset oneof on the wire).
         self._content = self._EMPTY if (content is None or content == self._EMPTY) else content
 
-    def __str__(self):
+    def __str__(self) -> str:
+        """Returns a short description of the message (sender, content type, channel), used in logs.
+
+        Returns:
+            The description string.
+        """
+
         # Deliberately does NOT serialize (no to_bytes): __str__ runs on log paths and
         # rebuilding the protobuf just to report a byte length would be wasteful.
         return (f"Msg(sender={self.sender[:12]}..., content_type={self.content_type}, "
@@ -98,55 +117,118 @@ class Msg:
 
     # --- Properties (plain field access; no protobuf, no decoding) ---
     @property
-    def sender(self):
+    def sender(self) -> str:
+        """Gets the sender of the message.
+
+        Returns:
+            The sender.
+        """
         return self._sender
 
     @sender.setter
-    def sender(self, value: str):
+    def sender(self, value: str) -> None:
+        """Sets the sender of the message.
+
+        Args:
+            value: The new value (None resets it to the default).
+        """
         self._sender = value if value is not None else ""
 
     @property
-    def content_type(self):
+    def content_type(self) -> str:
+        """Gets the content type of the message.
+
+        Returns:
+            The content type.
+        """
         return self._content_type
 
     @content_type.setter
-    def content_type(self, value: str):
+    def content_type(self, value: str) -> None:
+        """Sets the content type of the message.
+
+        Args:
+            value: The new value (None resets it to the default).
+        """
         self._content_type = value if value is not None else self.MISC
 
     @property
-    def channel(self):
+    def channel(self) -> str:
+        """Gets the channel of the message.
+
+        Returns:
+            The channel.
+        """
         return self._channel
 
     @channel.setter
-    def channel(self, value: str):
+    def channel(self, value: str) -> None:
+        """Sets the channel of the message.
+
+        Args:
+            value: The new value (None resets it to the default).
+        """
         self._channel = value if value is not None else "<unknown>"
 
     @property
-    def piggyback(self):
+    def piggyback(self) -> str:
+        """Gets the piggyback string of the message.
+
+        Returns:
+            The piggyback string.
+        """
         return self._piggyback
 
     @piggyback.setter
-    def piggyback(self, value: str):
+    def piggyback(self, value: str) -> None:
+        """Sets the piggyback string of the message.
+
+        Args:
+            value: The new value (None resets it to the default).
+        """
         self._piggyback = value if value is not None else ""
 
     @property
-    def timestamp_net(self):
+    def timestamp_net(self) -> str:
+        """Gets the network timestamp of the message.
+
+        Returns:
+            The network timestamp.
+        """
         return self._timestamp_net
 
     @timestamp_net.setter
-    def timestamp_net(self, value: str):
+    def timestamp_net(self, value: str) -> None:
+        """Sets the network timestamp of the message.
+
+        Args:
+            value: The new value (None resets it to the default).
+        """
         self._timestamp_net = value if value is not None else ""
 
     @property
     def content(self) -> Any:
-        """The message content as a native Python object (dict / list / sentinel)."""
+        """Gets the message content as a native Python object (dict / list / sentinel).
+
+        Returns:
+            The content of the message.
+        """
         return self._content
 
     # --- Serialization / Deserialization (the ONLY place protobuf is touched) ---
-    def to_bytes(self) -> bytes:
-        """Encode the value object into the protobuf wire format. protobuf (and the
-        heavy stream_sample deps) are imported lazily here so the module top stays
-        stdlib-only and importable under Pyodide."""
+    def to_bytes(self, streamed_keys: set[str] | None = None) -> bytes:
+        """Encodes the value object into the protobuf wire format.
+
+        protobuf (and the heavy stream_sample deps) are imported lazily here so the module top stays stdlib-only and
+        importable under Pyodide.
+
+        Args:
+            streamed_keys: The FILE samples whose file travels next to the message (a file message, Phase 6.5): they
+                get their name and MIME type, not their content.
+
+        Returns:
+            The wire bytes of the message.
+        """
         from . import message_pb2 as pb  # lazy: CPython conn layer only, never under Pyodide
 
         proto = pb.Message()
@@ -158,22 +240,47 @@ class Msg:
 
         content = self._content
         if content is not None and content != self._EMPTY:
+
             # Route the content to the correct encoder.
             if self._content_type == Msg.STREAM_SAMPLE:
-                self._encode_stream_sample(proto, content)
+                self._encode_stream_sample(proto, content, streamed_keys or set())
             elif self._content_type == Msg.STATS_UPDATE:
                 self._encode_stats_update(proto, content)
             else:
+
                 # All other structured types use the generic json_content field
                 proto.json_content = json.dumps(content)
 
         return proto.SerializeToString()
 
+    def attach_received_files(self, files: dict[str, str]) -> None:
+        """Gives the FILE samples of a received file message their files, which arrived next to it (Phase 6.5).
+
+        Args:
+            files: Sample name -> path of its file, in its place.
+        """
+        from unaiverse.streams.dataprops import FileContainer
+        if self._content_type != Msg.STREAM_SAMPLE or not isinstance(self._content, dict):
+            return
+        for name, path in files.items():
+            sample = self._content.get(name)
+            data = sample.get('data') if isinstance(sample, dict) else None
+            if isinstance(data, FileContainer):
+                sample['data'] = FileContainer(filename=data.filename, mime_type=data.mime_type, path=path)
+
     @classmethod
     def from_bytes(cls, msg_bytes: bytes) -> 'Msg':
-        """Decode a byte array into a new Msg. Builds the value object directly via
-        __new__ (no field validation): a frame off the wire is taken as-is, exactly
-        like the previous protobuf-backed path. protobuf is imported lazily."""
+        """Decodes a byte array into a new Msg.
+
+        It builds the value object directly via __new__ (no field validation): a frame off the wire is taken as-is,
+        exactly like the previous protobuf-backed path. protobuf is imported lazily.
+
+        Args:
+            msg_bytes: The wire bytes.
+
+        Returns:
+            The decoded message.
+        """
         from . import message_pb2 as pb  # lazy: CPython conn layer only, never under Pyodide
 
         proto = pb.Message()
@@ -199,8 +306,14 @@ class Msg:
 
     # --- Internal codec helpers (run only inside to_bytes / from_bytes) ---
     @staticmethod
-    def _encode_stream_sample(proto, samples_dict: dict) -> None:
-        """Builds the complex StreamSampleContent message from a dict of samples."""
+    def _encode_stream_sample(proto: Any, samples_dict: dict, streamed_keys: set[str]) -> None:
+        """Builds the StreamSampleContent protobuf message from a dict of samples.
+
+        Args:
+            proto: The protobuf Message to fill.
+            samples_dict: The samples, stream name -> {data, data_tag, data_uuid}.
+            streamed_keys: The FILE samples whose content is not put in the message (it travels next to it).
+        """
         import io
         import gzip
         import torch
@@ -222,11 +335,12 @@ class Msg:
                 stream_sample_pb.data_uuid = uuid
 
             if isinstance(data, torch.Tensor):
-                raw_bytes = data.detach().cpu().numpy().tobytes()
-                with io.BytesIO() as buffer:
-                    with gzip.GzipFile(fileobj=buffer, mode='wb') as f:
-                        f.write(raw_bytes)
-                    stream_sample_pb.data.tensor_data.data = buffer.getvalue()
+
+                # gzip reads the memory of the tensor through a byte view (no copy for a contiguous CPU tensor), at
+                # level 1: much faster than the default 9, and any gzip decoder reads it (the level is not on the wire).
+                # The view is taken in torch, not numpy, which has no bfloat16 nor float8
+                raw = data.detach().cpu().contiguous().reshape(-1).view(torch.uint8).numpy()
+                stream_sample_pb.data.tensor_data.data = gzip.compress(memoryview(raw), compresslevel=1)
                 stream_sample_pb.data.tensor_data.dtype = str(data.dtype).split('.')[-1]
                 stream_sample_pb.data.tensor_data.shape.extend(list(data.shape))
 
@@ -239,16 +353,24 @@ class Msg:
                 stream_sample_pb.data.text_data.data = data
 
             elif isinstance(data, FileContainer):
-                # Auto-convert string content to bytes if needed
-                raw_bytes = data.content.encode('utf-8') if isinstance(data.content, str) else data.content
-                stream_sample_pb.data.file_data.content = raw_bytes
+
+                # Auto-convert string content to bytes if needed (a streamed file has none in the message)
+                if name not in streamed_keys:
+                    raw_bytes = data.content.encode('utf-8') if isinstance(data.content, str) else data.content
+                    stream_sample_pb.data.file_data.content = raw_bytes
                 stream_sample_pb.data.file_data.filename = data.filename
                 stream_sample_pb.data.file_data.mime_type = data.mime_type
 
     @staticmethod
-    def _decode_stream_sample(proto) -> dict:
-        """Parses the StreamSampleContent message back into a Python dict of tensors,
-        images, strings and file containers."""
+    def _decode_stream_sample(proto: Any) -> dict:
+        """Parses the StreamSampleContent protobuf message back into a dict of tensors, images, strings and files.
+
+        Args:
+            proto: The protobuf Message.
+
+        Returns:
+            The samples, stream name -> {data, data_tag, data_uuid}.
+        """
         import io
         import gzip
         import torch
@@ -268,13 +390,24 @@ class Msg:
             if payload_type == "tensor_data":
                 tensor_data = data_payload.tensor_data
 
-                # Decompress and reconstruct the tensor
+                # Decompress straight into the writable buffer the tensor is built on (its size is known from shape
+                # and dtype), instead of into bytes copied once more
+                dtype, shape = getattr(torch, tensor_data.dtype), list(tensor_data.shape)
+                count = 1
+                for dim in shape:
+                    count *= dim
+                buffer = bytearray(count * torch.empty((), dtype=dtype).element_size())
+                view, filled = memoryview(buffer), 0
                 with gzip.GzipFile(fileobj=io.BytesIO(tensor_data.data), mode='rb') as f:
-                    raw_bytes = f.read()
-                data = torch.frombuffer(
-                    bytearray(raw_bytes),
-                    dtype=getattr(torch, tensor_data.dtype)
-                ).reshape(list(tensor_data.shape))
+                    while filled < len(buffer):
+                        n = f.readinto(view[filled:])
+                        if not n:
+                            break
+                        filled += n
+                    if filled != len(buffer) or f.read(1):
+                        raise ValueError(f"tensor data of {filled} bytes, expected {len(buffer)}")
+                data = torch.frombuffer(buffer, dtype=dtype).reshape(shape) if buffer else torch.empty(shape,
+                                                                                                         dtype=dtype)
 
             elif payload_type == "image_data":
                 data = Image.open(io.BytesIO(data_payload.image_data.data))
@@ -299,8 +432,15 @@ class Msg:
         return py_dict
 
     @staticmethod
-    def _py_value_to_proto_value(py_val: Any):
-        """Helper to convert a Python type into a google.protobuf.Value."""
+    def _py_value_to_proto_value(py_val: Any) -> Any:
+        """Converts a Python value into a google.protobuf.Value.
+
+        Args:
+            py_val: The Python value.
+
+        Returns:
+            The protobuf Value.
+        """
         from google.protobuf.struct_pb2 import Value, ListValue, NULL_VALUE
         from google.protobuf.json_format import ParseDict
 
@@ -318,6 +458,7 @@ class Msg:
                 lv.values.append(Msg._py_value_to_proto_value(item))
             return Value(list_value=lv)
         if isinstance(py_val, dict):
+
             # This is recursive for dicts/structs
             s = Value(struct_value={})
             ParseDict(py_val, s.struct_value)
@@ -327,8 +468,13 @@ class Msg:
         return Value(string_value=str(py_val))
 
     @staticmethod
-    def _encode_stats_update(proto, payload_list: list) -> None:
-        """Builds the StatBatch message from a List[Dict]."""
+    def _encode_stats_update(proto: Any, payload_list: list) -> None:
+        """Builds the StatBatch protobuf message from a list of dicts.
+
+        Args:
+            proto: The protobuf Message to fill.
+            payload_list: The list of the stat updates.
+        """
         batch_pb = proto.stats_update
 
         for update_dict in payload_list:
@@ -342,8 +488,15 @@ class Msg:
             update_pb.value.CopyFrom(Msg._py_value_to_proto_value(py_value))
 
     @staticmethod
-    def _proto_value_to_py_value(proto_val) -> Any:
-        """Helper to convert a google.protobuf.Value into a Python type."""
+    def _proto_value_to_py_value(proto_val: Any) -> Any:
+        """Converts a google.protobuf.Value into a Python value.
+
+        Args:
+            proto_val: The protobuf Value.
+
+        Returns:
+            The Python value.
+        """
         from google.protobuf.json_format import MessageToDict
 
         kind = proto_val.WhichOneof("kind")
@@ -358,13 +511,21 @@ class Msg:
         if kind == "list_value":
             return [Msg._proto_value_to_py_value(v) for v in proto_val.list_value.values]
         if kind == "struct_value":
+
             # Use the helper to convert a Struct to a dict
             return MessageToDict(proto_val.struct_value)
         return None
 
     @staticmethod
-    def _decode_stats_update(proto) -> list:
-        """Parses the StatBatch message back into a List[Dict]."""
+    def _decode_stats_update(proto: Any) -> list:
+        """Parses the StatBatch protobuf message back into a list of dicts.
+
+        Args:
+            proto: The protobuf Message.
+
+        Returns:
+            The list of the stat updates.
+        """
         py_list = []
         batch_pb = proto.stats_update
 

@@ -7,7 +7,6 @@ package main
 import "C" // Enables CGo features, allowing Go to call C code and vice-versa.
 
 import (
-	"bytes"
 	"context"
 	"crypto/tls"
 	"encoding/binary"
@@ -58,6 +57,9 @@ func recoverToCString(ret **C.char, fname string) {
 
 // This function MUST be called once from Python before any other library function.
 //
+// The send queues of the direct messages are configured apart, by ConfigureSendQueues,
+// so that this signature stays the one every caller (Python, the Tauri plugin) uses.
+//
 //export InitializeLibrary
 func InitializeLibrary(
 	maxInstancesC C.int,
@@ -91,6 +93,104 @@ func InitializeLibrary(
 	// Initialize the *single* global slice.
 	allInstances = make([]*NodeInstance, maxInstances)
 	logger.Infof("[GO] ✅ Go library initialized with MaxInstances=%d, MaxUniqueChannels=%d and MaxChannelQueueLen=%d\n", maxInstances, maxUniqueChannels, maxChannelQueueLen)
+}
+
+// sendQueueConfigJSON is the JSON that ConfigureSendQueues receives (all sizes in bytes,
+// all times in milliseconds).
+type sendQueueConfigJSON struct {
+	MaxBytesPerPeer     int64   `json:"max_bytes_per_peer"`
+	MaxMsgsPerPeer      int     `json:"max_msgs_per_peer"`
+	MaxBytesTotal       int64   `json:"max_bytes_total"`
+	LowWater            float64 `json:"low_water"`
+	MaxWaitAgeMs        int64   `json:"max_wait_age_ms"`
+	MaxDialAttempts     int     `json:"max_dial_attempts"`
+	RetryBackoffMs      []int64 `json:"retry_backoff_ms"`
+	WriteBaseTimeoutMs  int64   `json:"write_base_timeout_ms"`
+	WriteMinBytesPerSec int64   `json:"write_min_bytes_per_sec"`
+	MaxEvents           int     `json:"max_events"`
+
+	// Chunked frames (chunked.go); chunk_size 0 leaves them off
+	ChunkSize                 int   `json:"chunk_size"`
+	MaxMessageSize            int64 `json:"max_message_size"`
+	ReassemblyMaxBytesPerPeer int64 `json:"reassembly_max_bytes_per_peer"`
+	ReassemblyMaxBytesTotal   int64 `json:"reassembly_max_bytes_total"`
+	ReassemblyTimeoutMs       int64 `json:"reassembly_timeout_ms"`
+
+	// File messages (file.go); file_incoming_dir empty leaves them off
+	FileIncomingDir string `json:"file_incoming_dir"`
+	AcceptFiles     bool   `json:"accept_files"`
+	MaxFileSize     int64  `json:"max_file_size"`
+}
+
+// ConfigureSendQueues turns on the send queues of the direct messages (see sendqueue.go)
+// and the write deadline of the chat frames, with the given limits. All of them come from
+// the caller (custom.py on the Python side): Go has no defaults for them. Call it after
+// InitializeLibrary and before CreateNode: an instance gets its queues when it is created.
+// A library never configured sends the direct messages as before the queues, waiting for
+// the write (what an older caller, such as the Tauri plugin today, expects).
+// Parameters:
+//   - configJSONC (*C.char): {"max_bytes_per_peer", "max_msgs_per_peer", "max_bytes_total",
+//     "low_water" in [0, 1), "max_wait_age_ms", "max_dial_attempts", "retry_backoff_ms" (array,
+//     the last value repeats), "write_base_timeout_ms", "write_min_bytes_per_sec", "max_events"}.
+//
+// Returns:
+//   - *C.char: `{"state":"Success","message":"..."}` or `{"state":"Error","message":"..."}`
+//     (invalid limits: nothing changes).
+//   - IMPORTANT: The caller MUST free the returned C string using `FreeString`.
+//
+//export ConfigureSendQueues
+func ConfigureSendQueues(
+	configJSONC *C.char,
+) (ret *C.char) {
+	defer recoverToCString(&ret, "ConfigureSendQueues")
+
+	var in sendQueueConfigJSON
+	if err := json.Unmarshal([]byte(C.GoString(configJSONC)), &in); err != nil {
+		return C.CString(jsonErrorResponse("Invalid send queue configuration JSON", err))
+	}
+	cfg := SendQueueConfig{
+		MaxBytesPerPeer: in.MaxBytesPerPeer,
+		MaxMsgsPerPeer:  in.MaxMsgsPerPeer,
+		MaxBytesTotal:   in.MaxBytesTotal,
+		LowWater:        in.LowWater,
+		MaxWaitAge:      time.Duration(in.MaxWaitAgeMs) * time.Millisecond,
+		MaxDialAttempts: in.MaxDialAttempts,
+		MaxEvents:       in.MaxEvents,
+	}
+	for _, ms := range in.RetryBackoffMs {
+		cfg.RetryBackoff = append(cfg.RetryBackoff, time.Duration(ms)*time.Millisecond)
+	}
+	err := cfg.validate()
+	if err == nil && (in.WriteBaseTimeoutMs <= 0 || in.WriteMinBytesPerSec <= 0) {
+		err = fmt.Errorf("the write deadline needs a positive base and rate, got %d ms and %d B/s", in.WriteBaseTimeoutMs, in.WriteMinBytesPerSec)
+	}
+	if err != nil {
+		logger.Errorf("[GO] ❌ Invalid send queue settings, not applied: %v\n", err)
+		return C.CString(jsonErrorResponse("Invalid send queue settings", err))
+	}
+	sendQueueSettings = &cfg
+	chatWriteBaseTimeout = time.Duration(in.WriteBaseTimeoutMs) * time.Millisecond
+	chatWriteMinBytesPerSec = in.WriteMinBytesPerSec
+	if in.ChunkSize > 0 && in.ChunkSize < 1024 {
+		in.ChunkSize = 1024 // Below this a chunk is mostly header
+	}
+	chunkSize = in.ChunkSize
+	chunkedMaxMessageSize = in.MaxMessageSize
+	reassemblyMaxBytesPerPeer = in.ReassemblyMaxBytesPerPeer
+	reassemblyMaxBytesTotal = in.ReassemblyMaxBytesTotal
+	reassemblyTimeout = time.Duration(in.ReassemblyTimeoutMs) * time.Millisecond
+	fileIncomingDir, acceptFiles, maxFileSize = "", in.AcceptFiles, in.MaxFileSize
+	if chunkSize > 0 {
+		fileIncomingDir = in.FileIncomingDir
+	}
+	if fileIncomingDir != "" {
+		logger.Infof("[GO] ✅ File messages: incoming folder %s, accepted %v, %d B per file at most (0: no limit)\n", fileIncomingDir, acceptFiles, maxFileSize)
+	}
+	if chunkSize > 0 {
+		logger.Infof("[GO] ✅ Chunked frames: %d B per chunk, %d B per message at most (0: no limit), reassembly %d B per peer, %d B in all, timeout %v\n", chunkSize, chunkedMaxMessageSize, reassemblyMaxBytesPerPeer, reassemblyMaxBytesTotal, reassemblyTimeout)
+	}
+	logger.Infof("[GO] ✅ Send queues: %d B and %d messages per peer, %d B in all, low water %.2f, max age %v, %d attempts, backoff %v, write deadline %v + 1 s per %d B\n", cfg.MaxBytesPerPeer, cfg.MaxMsgsPerPeer, cfg.MaxBytesTotal, cfg.LowWater, cfg.MaxWaitAge, cfg.MaxDialAttempts, cfg.RetryBackoff, chatWriteBaseTimeout, chatWriteMinBytesPerSec)
+	return C.CString(jsonSuccessResponse("Send queues configured."))
 }
 
 // CreateNode initializes and starts a new libp2p host (node) for a specific instance.
@@ -140,6 +240,9 @@ func CreateNode(
 		webrtcConnections:     make(map[peer.ID]*WebRTCConn),
 	}
 	ni.ctx, ni.cancel = context.WithCancel(context.Background())
+	ni.sendStore = newInstanceSendStore(ni)
+	ni.reassembly = newReassemblyStore()
+	go ni.reassembly.sweep(ni.ctx, ni)
 	isPublic := false
 
 	// Store it in the global slice
@@ -1252,12 +1355,14 @@ func SendMessageToPeer(
 		return C.CString(jsonErrorResponse(fmt.Sprintf("Invalid instance index: %d", int(instanceIndexC)), err))
 	}
 
-	// Convert C inputs
+	// Convert C inputs. The data is read in place (borrowed, valid during this call only): a
+	// direct message copies it once into what it queues; a broadcast takes its own copy.
 	goChannel := C.GoString(channelC)
-	goData := C.GoBytes(unsafe.Pointer(dataC), C.int(lengthC))
+	borrowed := unsafe.Slice((*byte)(unsafe.Pointer(dataC)), int(lengthC))
 
 	// --- Branch: Broadcast or Direct Send ---
 	if strings.Contains(goChannel, "::ps:") {
+		goData := C.GoBytes(unsafe.Pointer(dataC), C.int(lengthC))
 		// --- Broadcast via specific PubSub Topic ---
 		instancePubsub := ni.pubsub
 		if instancePubsub == nil {
@@ -1296,35 +1401,76 @@ func SendMessageToPeer(
 		pid, err := peer.Decode(peerIDStr)
 		if err != nil {
 			// Invalid peer ID format
-			return C.CString(jsonErrorResponse("Invalid peer ID format in channel string", err))
+			return C.CString(jsonErrorResponseWithCode("Invalid peer ID format in channel string", SendCodeInvalidPeer, err))
 		}
 
-		if pid == ni.host.ID() {
-			// Attempt to send direct message to self
-			return C.CString(jsonErrorResponse("Attempt to send direct message to self is invalid", nil))
+		// A library that ConfigureSendQueues never configured sends as before the queues,
+		// waiting for the write.
+		if ni.sendStore == nil {
+			return C.CString(sendDirectMessageNow(ni, pid, goChannel, borrowed))
 		}
 
-		// --- WebRTC DataChannel path (preferred: direct, NAT-traversed) ---
-		ni.webrtcMutex.RLock()
-		wconn, hasWebRTC := ni.webrtcConnections[pid]
-		ni.webrtcMutex.RUnlock()
-		if hasWebRTC && wconn.dc != nil && wconn.dc.ReadyState() == pwebrtc.DataChannelStateOpen {
-			if err = writeToWebRTCDataChannel(wconn, goChannel, goData); err == nil {
-				logger.Infof("[GO] 📤 Instance %d: Sent to %s via WebRTC DataChannel\n", ni.instanceIndex, pid)
-				return C.CString(jsonSuccessResponse(fmt.Sprintf("Direct message sent to %s (WebRTC).", pid)))
-			}
-			logger.Warnf("[GO] ⚠️ Instance %d: WebRTC send to %s failed (%v), falling back to stream\n", ni.instanceIndex, pid, err)
+		// Only queued here: the writer of the queue of the peer does the rest (the choice
+		// between the WebRTC DataChannel and the chat stream, the dial, the write), so the
+		// call returns at once whatever the state of the peer. Success means "queued", with
+		// the sequence number of the message; a full queue refuses with code queue_full.
+		seq, code, message, err := queueDirectMessage(ni, pid, goChannel, borrowed)
+		if code != "" {
+			return C.CString(jsonErrorResponseWithCode(message, code, err))
 		}
-
-		message, err := sendOnChatStream(ni, pid, goChannel, goData)
-		if err != nil {
-			return C.CString(jsonErrorResponse(message, err))
-		}
-		return C.CString(jsonSuccessResponse(message))
+		return C.CString(jsonSuccessResponseWithSeq(message, seq))
 	} else {
 		// Invalid channel format
 		return C.CString(jsonErrorResponse(fmt.Sprintf("Invalid channel format '%s'", goChannel), nil))
 	}
+}
+
+// SendFileMessageToPeer queues a file message for a peer (see file.go): a message whose FILE
+// samples travel next to it, read from disk while they are written.
+// Parameters:
+//   - instanceIndexC (C.int): The index of the node instance.
+//   - channelC (*C.char): The direct-message channel ("...::dm:<peer id>-...").
+//   - dataC (*C.char), lengthC (C.int): The message (its FILE samples with no content).
+//   - filesJSONC (*C.char): JSON [{"key": sample name, "path": file}, ...].
+//
+// Returns:
+//   - *C.char: as SendMessageToPeer (the sequence number when queued); the error code
+//     no_file_stream when the peer does not take file messages (the caller then sends the
+//     files in memory), too_large above a limit, queue_full.
+//   - IMPORTANT: The caller MUST free the returned C string using `FreeString`.
+//
+//export SendFileMessageToPeer
+func SendFileMessageToPeer(
+	instanceIndexC C.int,
+	channelC *C.char,
+	dataC *C.char,
+	lengthC C.int,
+	filesJSONC *C.char,
+) (ret *C.char) {
+	defer recoverToCString(&ret, "SendFileMessageToPeer")
+
+	ni, err := getInstance(int(instanceIndexC))
+	if err != nil {
+		return C.CString(jsonErrorResponse(fmt.Sprintf("Invalid instance index: %d", int(instanceIndexC)), err))
+	}
+	channel := C.GoString(channelC)
+	if !strings.Contains(channel, "::dm:") {
+		return C.CString(jsonErrorResponse(fmt.Sprintf("Invalid direct-message channel '%s'", channel), nil))
+	}
+	pid, err := peer.Decode(strings.Split(strings.Split(channel, "::dm:")[1], "-")[0])
+	if err != nil {
+		return C.CString(jsonErrorResponseWithCode("Invalid peer ID format in channel string", SendCodeInvalidPeer, err))
+	}
+	var files []fileRef
+	if err := json.Unmarshal([]byte(C.GoString(filesJSONC)), &files); err != nil {
+		return C.CString(jsonErrorResponse("Invalid files JSON", err))
+	}
+	data := C.GoBytes(unsafe.Pointer(dataC), C.int(lengthC))
+	seq, code, message, err := queueFileMessage(ni, pid, channel, data, files)
+	if code != "" {
+		return C.CString(jsonErrorResponseWithCode(message, code, err))
+	}
+	return C.CString(jsonSuccessResponseWithSeq(message, seq))
 }
 
 // SubscribeToTopic joins a PubSub topic and starts listening for messages for a specific instance.
@@ -1560,7 +1706,36 @@ func PopMessages(
 	instanceIndexC C.int,
 ) (ret *C.char) {
 	defer recoverToCString(&ret, "PopMessages")
+	return popMessagesWith(instanceIndexC, "PopMessages", (*MessageStore).popBatch)
+}
 
+// PopNetworkMessages is PopMessages for the network pass of a node: every queued
+// message of every channel that is not a stream channel (see isStreamChannel), the
+// Session protocols included. Same reply as PopMessages.
+//
+//export PopNetworkMessages
+func PopNetworkMessages(
+	instanceIndexC C.int,
+) (ret *C.char) {
+	defer recoverToCString(&ret, "PopNetworkMessages")
+	return popMessagesWith(instanceIndexC, "PopNetworkMessages", (*MessageStore).popNetworkBatch)
+}
+
+// PopStreamMessages is PopMessages for the tick of a node: the oldest message of every
+// stream channel, so that each stream is consumed at the pace of the node's behavior
+// (what waits stays in the store). Same reply as PopMessages.
+//
+//export PopStreamMessages
+func PopStreamMessages(
+	instanceIndexC C.int,
+) (ret *C.char) {
+	defer recoverToCString(&ret, "PopStreamMessages")
+	return popMessagesWith(instanceIndexC, "PopStreamMessages", (*MessageStore).popStreamBatch)
+}
+
+// popMessagesWith pops a batch with the given function and serializes it as the
+// binary buffer of PopMessages, or answers with the JSON Empty/Error states.
+func popMessagesWith(instanceIndexC C.int, name string, pop func(*MessageStore) []*QueuedMessage) *C.char {
 	ni, err := getInstance(int(instanceIndexC))
 	if err != nil {
 		return C.CString(jsonErrorResponse(fmt.Sprintf("Invalid instance index: %d", int(instanceIndexC)), err))
@@ -1569,7 +1744,7 @@ func PopMessages(
 	// Get the message store for this instance
 	store := ni.messageStore
 	if store == nil {
-		logger.Errorf("[GO] ❌ Instance %d: PopMessages: Message store not initialized.\n", ni.instanceIndex)
+		logger.Errorf("[GO] ❌ Instance %d: %s: Message store not initialized.\n", ni.instanceIndex, name)
 		return C.CString(jsonErrorResponse(fmt.Sprintf("Instance %d: Message store not initialized", ni.instanceIndex), nil))
 	}
 
@@ -1579,9 +1754,7 @@ func PopMessages(
 	if len(store.messagesByChannel) == 0 {
 		return C.CString(`{"state":"Empty"}`)
 	}
-
-	// One message per chat/pubsub channel, every queued frame of the Session protocols.
-	poppedMessages := store.popBatch()
+	poppedMessages := pop(store)
 
 	// After iterating, check if we actually popped anything
 	if len(poppedMessages) == 0 {
@@ -1592,30 +1765,148 @@ func PopMessages(
 	// base64. This avoids the +33% base64 blow-up and the extra string copies that
 	// hurt large image/tensor payloads; the queues already hold raw []byte. Layout
 	// (see popBinaryMagic in types.go): [1B magic][uint32 totalBytes][uint32 count]
-	// then per message [uint32 fromLen][from][uint32 protoLen][proto][uint32 dataLen][data].
+	// then per message [uint32 fromLen][from][uint32 protoLen][proto][uint32 dataLen][data]
+	// [uint32 filesLen][files: JSON [{"key", "path", "size"}] of a file message, else empty].
 	// `from` is the textual peer-id (msg.From.String()), matching what the JSON path
 	// used to emit and what Python compares against the in-payload sender.
-	buf := new(bytes.Buffer)
-	buf.WriteByte(popBinaryMagic)
-	buf.Write([]byte{0, 0, 0, 0}) // totalBytes placeholder, patched below
-	_ = binary.Write(buf, binary.BigEndian, uint32(len(poppedMessages)))
-	for _, msg := range poppedMessages {
-		fromBytes := []byte(msg.From.String())
-		protoBytes := []byte(msg.Protocol)
-		_ = binary.Write(buf, binary.BigEndian, uint32(len(fromBytes)))
-		buf.Write(fromBytes)
-		_ = binary.Write(buf, binary.BigEndian, uint32(len(protoBytes)))
-		buf.Write(protoBytes)
-		_ = binary.Write(buf, binary.BigEndian, uint32(len(msg.Data)))
-		buf.Write(msg.Data)
+	//
+	// The buffer is allocated once with malloc at its exact size and filled in place, so
+	// each payload is copied once, into the C heap (a Go buffer then copied with C.CBytes
+	// copied it twice, more as the buffer grew). FreeString (C.free) frees it like a
+	// C.CString. The leading magic byte distinguishes this from the JSON Empty/Error
+	// responses on the Python side.
+	froms, files := make([][]byte, len(poppedMessages)), make([][]byte, len(poppedMessages))
+	total := 1 + 4 + 4
+	for i, msg := range poppedMessages {
+		froms[i] = []byte(msg.From.String())
+		if len(msg.Files) > 0 {
+			files[i], _ = json.Marshal(msg.Files)
+		}
+		total += 4 + len(froms[i]) + 4 + len(msg.Protocol) + 4 + len(msg.Data) + 4 + len(files[i])
 	}
-	out := buf.Bytes()
-	binary.BigEndian.PutUint32(out[1:5], uint32(len(out))) // patch totalBytes
+	ptr := C.malloc(C.size_t(total))
+	if ptr == nil {
+		return C.CString(jsonErrorResponse(fmt.Sprintf("Instance %d: cannot allocate %d bytes for the popped messages", ni.instanceIndex, total), nil))
+	}
+	out := unsafe.Slice((*byte)(ptr), total)
+	out[0] = popBinaryMagic
+	binary.BigEndian.PutUint32(out[1:5], uint32(total))
+	binary.BigEndian.PutUint32(out[5:9], uint32(len(poppedMessages)))
+	off := 9
+	put := func(field []byte) {
+		binary.BigEndian.PutUint32(out[off:off+4], uint32(len(field)))
+		off += 4 + copy(out[off+4:], field)
+	}
+	for i, msg := range poppedMessages {
+		put(froms[i])
+		put([]byte(msg.Protocol))
+		put(msg.Data)
+		put(files[i])
+	}
+	return (*C.char)(ptr)
+}
 
-	// C.CBytes copies into the C heap with malloc, so FreeString (C.free) frees it
-	// just like a C.CString. The leading magic byte distinguishes this from the
-	// JSON Empty/Error responses on the Python side.
-	return (*C.char)(C.CBytes(out))
+// DropSendQueue empties the send queue of a peer at once and records it as a
+// queue_dropped event with reason "explicit": for Python to call when the peer is purged.
+// The writer of the queue stops after the write it may be in (bounded by its deadline).
+// Parameters:
+//   - instanceIndexC (C.int): The index of the node instance.
+//   - peerIDC (*C.char): The peer ID.
+//
+// Returns:
+//   - *C.char: `{"state":"Success","message":<number of messages dropped>}` or `{"state":"Error","message":"..."}`.
+//   - IMPORTANT: The caller MUST free the returned C string using `FreeString`.
+//
+//export DropSendQueue
+func DropSendQueue(
+	instanceIndexC C.int,
+	peerIDC *C.char,
+) (ret *C.char) {
+	defer recoverToCString(&ret, "DropSendQueue")
+
+	ni, err := getInstance(int(instanceIndexC))
+	if err != nil {
+		return C.CString(jsonErrorResponse(fmt.Sprintf("Invalid instance index: %d", int(instanceIndexC)), err))
+	}
+	pid, err := peer.Decode(C.GoString(peerIDC))
+	if err != nil {
+		return C.CString(jsonErrorResponseWithCode("Invalid peer ID", SendCodeInvalidPeer, err))
+	}
+	// The message under reassembly from that peer goes too
+	if ni.reassembly != nil {
+		ni.reassembly.Drop(pid)
+	}
+	if ni.sendStore == nil {
+		return C.CString(jsonSuccessResponse(0))
+	}
+	return C.CString(jsonSuccessResponse(ni.sendStore.Drop(pid)))
+}
+
+// SetPeerCapabilities records what a peer can receive, as its Session told Python: the
+// capability bits of its HELLO / HELLO_ACK and the largest message its profile accepts.
+// The writer of its queue then sends a message larger than a chunk as chunk frames if
+// the peer has CAP_CHUNKED_FRAMES (chunked.go), and refuses one above its maximum.
+// Parameters:
+//   - instanceIndexC (C.int): The index of the node instance.
+//   - peerIDC (*C.char): The peer ID.
+//   - capsC (C.uint): The capability bits.
+//   - maxMessageSizeC (C.longlong): The largest message it accepts (0: no limit, -1: unknown).
+//   - maxFileSizeC (C.longlong): The largest file it accepts in a file message (0: no limit).
+//
+// Returns:
+//   - *C.char: `{"state":"Success",...}` or `{"state":"Error","message":"..."}`.
+//   - IMPORTANT: The caller MUST free the returned C string using `FreeString`.
+//
+//export SetPeerCapabilities
+func SetPeerCapabilities(
+	instanceIndexC C.int,
+	peerIDC *C.char,
+	capsC C.uint,
+	maxMessageSizeC C.longlong,
+	maxFileSizeC C.longlong,
+) (ret *C.char) {
+	defer recoverToCString(&ret, "SetPeerCapabilities")
+
+	ni, err := getInstance(int(instanceIndexC))
+	if err != nil {
+		return C.CString(jsonErrorResponse(fmt.Sprintf("Invalid instance index: %d", int(instanceIndexC)), err))
+	}
+	pid, err := peer.Decode(C.GoString(peerIDC))
+	if err != nil {
+		return C.CString(jsonErrorResponseWithCode("Invalid peer ID", SendCodeInvalidPeer, err))
+	}
+	ni.setPeerLimits(pid, uint32(capsC), int64(maxMessageSizeC), int64(maxFileSizeC))
+	return C.CString(jsonSuccessResponse("Peer capabilities recorded."))
+}
+
+// PopSendEvents returns the events of the send queues recorded since the last call,
+// oldest first (see SendEvent in sendqueue.go for the fields of each type).
+// Parameters:
+//   - instanceIndexC (C.int): The index of the node instance.
+//
+// Returns:
+//   - *C.char: `{"state":"Success","message":[{"type":"written","peer_id":"...","seq":7,"time":...}, ...]}`,
+//     `{"state":"Empty"}` when there is none, or `{"state":"Error","message":"..."}`.
+//   - IMPORTANT: The caller MUST free the returned C string using `FreeString`.
+//
+//export PopSendEvents
+func PopSendEvents(
+	instanceIndexC C.int,
+) (ret *C.char) {
+	defer recoverToCString(&ret, "PopSendEvents")
+
+	ni, err := getInstance(int(instanceIndexC))
+	if err != nil {
+		return C.CString(jsonErrorResponse(fmt.Sprintf("Invalid instance index: %d", int(instanceIndexC)), err))
+	}
+	if ni.sendStore == nil {
+		return C.CString(`{"state":"Empty"}`)
+	}
+	events := ni.sendStore.PopEvents()
+	if len(events) == 0 {
+		return C.CString(`{"state":"Empty"}`)
+	}
+	return C.CString(jsonSuccessResponse(events))
 }
 
 // CloseNode gracefully shuts down the libp2p host, cancels subscriptions, closes connections,

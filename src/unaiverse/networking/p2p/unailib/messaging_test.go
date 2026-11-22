@@ -110,3 +110,79 @@ func TestPopBatchKeepsOneMessagePerChatChannel(t *testing.T) {
 		t.Errorf("every queue should be gone, %d left", len(ni.messageStore.messagesByChannel))
 	}
 }
+
+// Stream channels are the PubSub topics and the direct-message channels of content type
+// stream_sample; every other channel (other content types, the Session protocols) is not.
+func TestIsStreamChannel(t *testing.T) {
+	cases := map[string]bool{
+		"12D3A::ps:smoHfHa":                         true,
+		"12D3A::dm:12D3B-stream_sample~lecture1":    true,
+		"12D3A::dm:12D3B-stream_sample":             true,
+		"12D3A::dm:12D3B-interaction":               false,
+		"12D3A::dm:12D3B-interaction_status~x":      false,
+		"12D3A::dm:12D3B-role_suggestion":           false,
+		SessionControlProtocol:                      false,
+		"12D3A::dm:12D3B-stream_samples_are_not_it": false,
+	}
+	for channel, want := range cases {
+		if got := isStreamChannel(channel); got != want {
+			t.Errorf("isStreamChannel(%q) = %v, want %v", channel, got, want)
+		}
+	}
+}
+
+// The network pass takes everything but the streams, all of it; the tick takes one
+// message per stream channel and leaves the rest of the stream in the store.
+func TestNetworkAndStreamPopsSplitTheChannels(t *testing.T) {
+	ni := newTestInstance(t)
+	alice := peer.ID("alice")
+	stream, inter := "A::ps:sig", "A::dm:B-interaction"
+	for _, d := range []string{"s1", "s2", "s3"} {
+		storeReceivedMessage(ni, alice, stream, "", []byte(d))
+	}
+	storeReceivedMessage(ni, alice, inter, "", []byte("i1"))
+	storeReceivedMessage(ni, alice, inter, "", []byte("i2"))
+	storeReceivedMessage(ni, alice, SessionControlProtocol, SessionControlProtocol, []byte("ping"))
+
+	net := ni.messageStore.popNetworkBatch()
+	if got := payloadsOn(net, ""); !sameStrings(got, []string{"i1", "i2"}) {
+		t.Fatalf("network pass took %v from the chat channels, want [i1 i2]", got)
+	}
+	if got := payloadsOn(net, SessionControlProtocol); !sameStrings(got, []string{"ping"}) {
+		t.Fatalf("network pass took %v from the Session queue, want [ping]", got)
+	}
+	for _, want := range []string{"s1", "s2", "s3"} {
+		got := payloadsOn(ni.messageStore.popStreamBatch(), "")
+		if !sameStrings(got, []string{want}) {
+			t.Fatalf("tick took %v, want [%s]", got, want)
+		}
+	}
+	if again := ni.messageStore.popStreamBatch(); len(again) != 0 {
+		t.Fatalf("an empty stream gave %d messages", len(again))
+	}
+}
+
+// A full chat/pubsub queue drops its oldest message; a full Session queue still refuses
+// the newest frame (it is shared by all the peers).
+func TestFullQueueDropsTheOldestExceptForSessions(t *testing.T) {
+	ni := newTestInstance(t)
+	maxChannelQueueLen = 3
+	alice := peer.ID("alice")
+	for _, d := range []string{"s1", "s2", "s3", "s4", "s5"} {
+		storeReceivedMessage(ni, alice, "A::ps:sig", "", []byte(d))
+		storeReceivedMessage(ni, alice, SessionControlProtocol, SessionControlProtocol, []byte("p"+d))
+	}
+	var kept []string
+	for _, msg := range ni.messageStore.popStreamBatch() {
+		kept = append(kept, string(msg.Data))
+	}
+	for b := ni.messageStore.popStreamBatch(); len(b) > 0; b = ni.messageStore.popStreamBatch() {
+		kept = append(kept, string(b[0].Data))
+	}
+	if !sameStrings(kept, []string{"s3", "s4", "s5"}) {
+		t.Fatalf("a full stream kept %v, want the newest [s3 s4 s5]", kept)
+	}
+	if got := payloadsOn(ni.messageStore.popNetworkBatch(), SessionControlProtocol); !sameStrings(got, []string{"ps1", "ps2", "ps3"}) {
+		t.Fatalf("a full Session queue kept %v, want the oldest [ps1 ps2 ps3]", got)
+	}
+}

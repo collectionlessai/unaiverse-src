@@ -214,6 +214,7 @@ def _fake_node():
         conn=SimpleNamespace(drop_peer=AsyncMock(return_value=[])),
         hosted=SimpleNamespace(remove_agent=AsyncMock()),
         _dispatch_session_event=AsyncMock(),
+        _agent_op=lambda fn, swap=False: fn(),  # No tick running: the hosted part at once
     )
 
 

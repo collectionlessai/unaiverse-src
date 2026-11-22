@@ -1,0 +1,67 @@
+[
+  {
+    "name": "single chunk (first and last)",
+    "seq": 1,
+    "index": 0,
+    "attempt": 0,
+    "file": false,
+    "first": true,
+    "last": true,
+    "total": 5,
+    "channel": "ch",
+    "data": "hello",
+    "frame": "8000001d00000000000000010000000003000000000000000502636868656c6c6f"
+  },
+  {
+    "name": "first of three, attempt 3",
+    "seq": 4538991236898928,
+    "index": 0,
+    "attempt": 3,
+    "file": false,
+    "first": true,
+    "last": false,
+    "total": 10,
+    "channel": "12D3KooWPeer::dm:12D3KooWOther-interaction",
+    "data": "abcde",
+    "frame": "800000450010203040506070000000000d000000000000000a2a313244334b6f6f57506565723a3a646d3a313244334b6f6f574f746865722d696e746572616374696f6e6162636465"
+  },
+  {
+    "name": "middle",
+    "seq": 4538991236898928,
+    "index": 1,
+    "attempt": 3,
+    "file": false,
+    "first": false,
+    "last": false,
+    "total": 10,
+    "channel": "",
+    "data": "fgh",
+    "frame": "800000100010203040506070000000010c666768"
+  },
+  {
+    "name": "last, attempt 31",
+    "seq": 4538991236898928,
+    "index": 2,
+    "attempt": 31,
+    "file": false,
+    "first": false,
+    "last": true,
+    "total": 10,
+    "channel": "",
+    "data": "ij",
+    "frame": "8000000f0010203040506070000000027e696a"
+  },
+  {
+    "name": "first of a file message",
+    "seq": 7,
+    "index": 0,
+    "attempt": 1,
+    "file": true,
+    "first": true,
+    "last": false,
+    "total": 3,
+    "channel": "f",
+    "data": "xyz",
+    "frame": "8000001a000000000000000700000000850000000000000003016678797a"
+  }
+]

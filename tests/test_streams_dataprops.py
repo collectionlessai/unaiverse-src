@@ -306,3 +306,52 @@ def test_tilde_in_name_rejected():
     """A '~' in the stream name is rejected (it is a hash separator char)."""
     with pytest.raises(AssertionError):
         DataProps(data_type="text", name="bad~name")
+
+
+# StreamType: pickle and copies (rebuilt without __init__, so no lookup may reach the missing props)
+
+def test_streamtype_survives_pickle_and_copies():
+    """pickle, copy and deepcopy rebuild a StreamType (private and public props alike) that works as the original."""
+    import copy
+    import pickle
+    st = StreamType(data_type="tensor", tensor_shape=(None, 3), tensor_dtype=torch.float32, private_only=False)
+    for clone in (pickle.loads(pickle.dumps(st)), copy.deepcopy(st), copy.copy(st)):
+        assert clone.data_type == "tensor" and tuple(clone.tensor_shape) == (None, 3)
+        assert len(clone.props) == len(st.props) == 2
+    deep = copy.deepcopy(st)
+    deep.set_name("renamed")
+    assert all(p.get_name() == "renamed" for p in deep.props)
+    assert all(p.get_name() != "renamed" for p in st.props)
+    with pytest.raises(AttributeError):
+        _ = st.no_such_attribute
+
+
+class _JsArrayLike:
+    """A sequence that is not a list (as a JS array proxied by Pyodide is, in the browser)."""
+
+    def __init__(self, items: list) -> None:
+        """Initializes it.
+
+        Args:
+            items: Its items.
+        """
+        self._items = items
+
+    def __iter__(self) -> object:
+        """Iterates over the items.
+
+        Returns:
+            The iterator.
+        """
+        return iter(self._items)
+
+
+def test_shape_and_labels_given_as_another_kind_of_sequence():
+    """A tensor stream whose shape and labels come as a non-list sequence (a peer's profile in the browser) is
+    accepted, with the same shape and labels as from lists; a string shape is still refused."""
+    props = DataProps(data_type="tensor", tensor_shape=_JsArrayLike([None, 3]), tensor_dtype="torch.float32",
+                      tensor_labels=_JsArrayLike(["a", "b", "c"]))
+    assert props.tensor_shape == (None, 3)
+    assert props.tensor_labels.labels == ["a", "b", "c"]
+    with pytest.raises(AssertionError):
+        DataProps(data_type="tensor", tensor_shape="2,3", tensor_dtype="torch.float32")

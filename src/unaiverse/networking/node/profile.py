@@ -88,6 +88,9 @@ class NodeProfile:
                     'private_peer_id': None,
                     'private_peer_addresses': None,
                     'is_relay': None,  # True when this node is a world offering a reachable relay to its members
+                    'max_message_size': None,  # The largest message this node takes (0: no limit; None: legacy)
+                    'accept_files': None,  # True when this node accepts files
+                    'max_file_size': None,  # The largest file it takes (0: no limit)
                     'proc_inputs': None,
                     'proc_outputs': None,
                     'streams': None,

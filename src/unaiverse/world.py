@@ -118,11 +118,17 @@ class World(AgentBasics):
                                                            self.role_to_behav[
                                                                self.ROLE_BITS_TO_STR[new_role_without_base_int]]},
                                               content_type=Msg.ROLE_SUGGESTION)):
-                log.error("Failed to send role change, removing (disconnecting) " + peer_id)
-                # Send-failure teardown via the purge: GOAWAY(LOCAL_ERROR) if the Session
-                # is still closable; if the link is already down the Session ends through
-                # its own grace/timeout machinery and the purge only evicts bookkeeping.
-                await self.node_purge_fcn(peer_id, reason=LOCAL_ERROR)
+                if self.node_conn.sends_are_queued:
+
+                    # A full send queue refused it: the agent is behind, not gone (the Session tells that)
+                    log.error(f"Role change to {peer_id} refused (send queue full), the agent keeps its old role")
+                else:
+                    log.error("Failed to send role change, removing (disconnecting) " + peer_id)
+
+                    # Send-failure teardown via the purge: GOAWAY(LOCAL_ERROR) if the Session
+                    # is still closable; if the link is already down the Session ends through
+                    # its own grace/timeout machinery and the purge only evicts bookkeeping.
+                    await self.node_purge_fcn(peer_id, reason=LOCAL_ERROR)
             else:
                 self.role_changed_by_world = True
 

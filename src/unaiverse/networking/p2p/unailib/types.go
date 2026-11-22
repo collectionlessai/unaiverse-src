@@ -263,6 +263,16 @@ var (
 	maxUniqueChannels  int
 	MaxMessageSize     uint32
 
+	// The write deadline of a chat frame (see chatWriteTimeout): a base, plus the time
+	// the frame takes at the slowest rate we accept. Set by ConfigureSendQueues.
+	chatWriteBaseTimeout    time.Duration
+	chatWriteMinBytesPerSec int64
+
+	// The limits of the send queues (see sendqueue.go), set by ConfigureSendQueues: nil
+	// until ConfigureSendQueues was given valid ones; without them a direct message is sent
+	// at once, as before the queues.
+	sendQueueSettings *SendQueueConfig
+
 	// A single slice to hold all our instances.
 	allInstances []*NodeInstance
 	// A SINGLE mutex to protect the allInstances slice itself (during create/close).
@@ -297,9 +307,10 @@ type RendezvousState struct {
 // Python's connpool decoder decides whether to feed a message through Msg.from_bytes
 // (chat) or hand it raw to SessionManager.deliver (session).
 type QueuedMessage struct {
-	From     peer.ID `json:"from"`     // The VERIFIED peer ID of the sender from the network layer.
-	Data     []byte  `json:"-"`        // The raw data payload (Protobuf encoded).
-	Protocol string  `json:"protocol"` // libp2p protocol ID or "" for chat/pubsub.
+	From     peer.ID        `json:"from"`     // The VERIFIED peer ID of the sender from the network layer.
+	Data     []byte         `json:"-"`        // The raw data payload (Protobuf encoded).
+	Protocol string         `json:"protocol"` // libp2p protocol ID or "" for chat/pubsub.
+	Files    []ReceivedFile `json:"-"`        // The files of a file message (file.go), on disk.
 }
 
 // MessageStore holds the QueuedMessages for each channel in separate FIFO queues.
@@ -370,6 +381,14 @@ type NodeInstance struct {
 	cancel       context.CancelFunc
 	certManager  *p2pforge.P2PForgeCertMgr
 	messageStore *MessageStore
+	// The per-peer queues of the direct messages to send, with their writers: nil when
+	// ConfigureSendQueues was not called (synchronous sends).
+	sendStore *SendStore
+	// What each peer can receive (capabilities, largest message), set from Python after
+	// its Session started (SetPeerCapabilities), and the messages under reassembly.
+	peerLimitsMu sync.RWMutex
+	peerLimits   map[peer.ID]peerLimits
+	reassembly   *reassemblyStore
 
 	// Reachability probe peers (self-filtered), the AutoNAT dial-back supply.
 	probePeers []peer.AddrInfo

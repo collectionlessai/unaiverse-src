@@ -1,11 +1,13 @@
 // webrtc_signal.go
-// Application-level WebRTC signaling protocol for Go-to-browser NAT traversal.
+// Application-level WebRTC signaling protocol for NAT traversal between relayed peers
+// (a Go node and a browser, or two Go nodes).
 //
 // Both peers must already share a relayed libp2p connection. Over that relay
 // they open a "/unaiverse/webrtc-signal/1.0.0" stream to exchange SDP
 // offer/answer (using vanilla/batch ICE – full gathering before send).
 // Once the DataChannel opens, messages use the same framing as the chat
-// protocol and feed into the normal message queue (PopMessages).
+// protocol, chunk frames included (chunked.go), and feed into the normal
+// message queue (PopMessages).
 package main
 
 import (
@@ -247,12 +249,13 @@ func buildDirectMessageFrame(channel string, payload []byte) ([]byte, error) {
 	if totalLength > MaxMessageSize {
 		return nil, fmt.Errorf("outgoing message size (%d) exceeds limit (%d)", totalLength, MaxMessageSize)
 	}
-	buf := new(bytes.Buffer)
-	binary.Write(buf, binary.BigEndian, totalLength)
-	binary.Write(buf, binary.BigEndian, channelLen)
-	buf.Write(channelBytes)
-	buf.Write(payload)
-	return buf.Bytes(), nil
+	// One allocation of the exact size and one copy of the payload (a growing buffer copied it again as it grew)
+	frame := make([]byte, 5+len(channelBytes)+len(payload))
+	binary.BigEndian.PutUint32(frame[0:4], totalLength)
+	frame[4] = channelLen
+	copy(frame[5:], channelBytes)
+	copy(frame[5+len(channelBytes):], payload)
+	return frame, nil
 }
 
 // parseDirectMessageFrame extracts the channel name and payload from a DataChannel frame.
@@ -343,6 +346,11 @@ func wireWebRTCDataChannel(ni *NodeInstance, conn *WebRTCConn) {
 
 	// deliverFrame parses and stores a complete reassembled DataChannel frame.
 	deliverFrame := func(frame []byte) {
+		if isChunkFrame(frame) {
+			// A chunk of a large message (chunked.go): one frame of the DataChannel each.
+			receiveDataChannelChunk(ni, remotePeer, frame)
+			return
+		}
 		ch, payload, err := parseDirectMessageFrame(frame)
 		if err != nil {
 			logger.Warnf("[GO] ⚠️ Instance %d: Bad DataChannel frame from %s: %v",
@@ -570,7 +578,12 @@ func writeToWebRTCDataChannel(conn *WebRTCConn, channel string, payload []byte) 
 	if err != nil {
 		return err
 	}
+	return writeFrameToWebRTCDataChannel(conn, frame)
+}
 
+// writeFrameToWebRTCDataChannel sends a frame that is already built (see
+// buildDirectMessageFrame) over an open DataChannel, in chunks when it is large.
+func writeFrameToWebRTCDataChannel(conn *WebRTCConn, frame []byte) error {
 	conn.sendMu.Lock()
 	defer conn.sendMu.Unlock()
 

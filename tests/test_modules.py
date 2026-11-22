@@ -45,34 +45,35 @@ class FakeAgent:
 # HumanModule.forward
 
 
-def test_human_module_echoes_text_and_image_dropping_whatever():
-    """forward(text, img, whatever) returns just (text, img), ignoring whatever."""
+def test_human_module_echoes_text_image_and_file_dropping_whatever():
+    """forward(text, img, file, whatever) returns just (text, img, file), ignoring whatever."""
     hm = HumanModule()
     img = Image.new("RGB", (2, 2))
-    out = hm.forward("hello", img, "ignored-extra")
-    assert out == ("hello", img)
-    assert out[1] is img  # The image is echoed unchanged (same object).
+    file = object()
+    out = hm.forward("hello", img, file, "ignored-extra")
+    assert out == ("hello", img, file)
+    assert out[1] is img and out[2] is file  # Echoed unchanged (same objects).
 
 
 def test_human_module_echoes_none_inputs():
-    """forward() with all defaults returns the (None, None) pair unchanged."""
+    """forward() with all defaults returns the (None, None, None) triple unchanged."""
     hm = HumanModule()
-    assert hm.forward() == (None, None)
-    assert hm.forward(text="only-text") == ("only-text", None)
+    assert hm.forward() == (None, None, None)
+    assert hm.forward(text="only-text") == ("only-text", None, None)
 
 
-def test_human_module_always_returns_two_tuple():
-    """forward always returns a length-2 tuple regardless of inputs."""
+def test_human_module_always_returns_three_tuple():
+    """forward always returns a length-3 tuple (text, img, file) regardless of inputs."""
     hm = HumanModule()
-    out = hm.forward("t", None, None)
-    assert isinstance(out, tuple) and len(out) == 2
+    out = hm.forward("t", None, None, None)
+    assert isinstance(out, tuple) and len(out) == 3
 
 
 def test_human_module_is_callable_nn_module():
     """HumanModule is a torch.nn.Module and callable via __call__."""
     hm = HumanModule()
     assert isinstance(hm, torch.nn.Module)
-    assert hm("x") == ("x", None)
+    assert hm("x") == ("x", None, None)
 
 
 # ModuleWrapper: wrapping behaviors
@@ -113,10 +114,10 @@ def test_wrapper_trivial_callable_forward_returns_shaped_tuple():
 
 
 def test_wrapper_records_last_raw_outputs_before_postprocess():
-    """_last_raw_outputs holds the module's raw tuple, here (text, None)."""
+    """_last_raw_outputs holds the module's raw tuple, here (text, None, None)."""
     mw = _text_wrapper(HumanModule())
     mw.forward("hello")
-    assert mw._last_raw_outputs == ("hello", None)
+    assert mw._last_raw_outputs == ("hello", None, None)
 
 
 def test_wrapper_strips_first_and_last_kwargs_when_module_lacks_them():
@@ -144,9 +145,10 @@ def test_wrapper_multi_output_shape_matches_proc_outputs():
 
 
 def test_wrapper_sig_defaults_cached_from_human_forward():
-    """_sig_defaults captures one entry per data arg (text, img, whatever), all defaulted."""
+    """_sig_defaults captures one entry per data arg (text, img, file, whatever), all defaulted."""
     mw = _text_wrapper(HumanModule())
     assert mw._sig_defaults == [
+        {"has_default": True, "default_value": None},
         {"has_default": True, "default_value": None},
         {"has_default": True, "default_value": None},
         {"has_default": True, "default_value": None},
@@ -379,7 +381,7 @@ def test_wrapper_set_proc_inputs_refreshes_optional_inputs_length():
 
 
 def test_wrapper_signature_introspection_matches_human_forward():
-    """Sanity: HumanModule.forward exposes text/img/whatever, none framework-handled."""
+    """Sanity: HumanModule.forward exposes text/img/file/whatever, none framework-handled."""
     params = list(inspect.signature(HumanModule().forward).parameters)
-    assert params == ["text", "img", "whatever"]
+    assert params == ["text", "img", "file", "whatever"]
     assert "first" not in params and "last" not in params

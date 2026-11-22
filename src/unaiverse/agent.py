@@ -16,8 +16,8 @@ import copy
 import json
 import torch
 import functools
-from typing import Callable
 from PIL.Image import Image
+from typing import Any, Callable
 from unaiverse.hsm import Action
 from unaiverse.stats import Stats
 from unaiverse.clock import clock
@@ -27,11 +27,11 @@ from unaiverse.utils.misc import owner_handle
 from unaiverse.interaction import Interaction
 from unaiverse.agent_basics import AgentBasics
 from unaiverse.networking.p2p.messages import Msg
-from unaiverse.networking.session.sess_msg import WORLD_DISENGAGEMENT, GRACEFUL_SHUTDOWN
 from unaiverse.custom import Custom, GenException
 from unaiverse.streams.dataprops import DataProps
 from unaiverse.modules.utils import ModuleWrapper
 from unaiverse.streams.streams import BufferedStream, Stream
+from unaiverse.networking.session.sess_msg import WORLD_DISENGAGEMENT, GRACEFUL_SHUTDOWN
 
 
 def action(func: Callable) -> Callable:
@@ -116,7 +116,13 @@ def action(func: Callable) -> Callable:
 class Agent(AgentBasics):
     """This class contains those basic actions that can be performed by every agent."""
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        """Initializes the agent and the status variables of its basic actions.
+
+        Args:
+            *args: Positional arguments forwarded to AgentBasics.
+            **kwargs: Keyword arguments forwarded to AgentBasics.
+        """
         super().__init__(*args, **kwargs)
 
         # Status variables (assumed to start with "_"): Agent exchanges
@@ -125,6 +131,7 @@ class Agent(AgentBasics):
         self._valid_cmp_agents = set()  # Agents for which the last evaluation was positive
         self._engaged_agents = set()
         self._eval_results = {}
+
         # The agents that disconnected() follows when called with no argument, removed since:
         # the removal empties the sets above, and these are what is left to check. Its name
         # keeps it out of the generic clean-up of the status attributes.
@@ -153,6 +160,7 @@ class Agent(AgentBasics):
         t = clock.get_time_ms()
         info = self.node_conn.get_world_connected_peers_info()
         if info is None:
+
             # The FFI call failed (transport state unknown): skip this sample rather than
             # record a false "zero peers", which would poison the world connectivity graph
             # with a phantom drop of every peer on a transient error.
@@ -215,7 +223,7 @@ class Agent(AgentBasics):
     async def ask_world_stats(self, filters: dict | None = None) -> bool:
         """Ask the world for stats: 'filters' is interpreted by the World subclass (method answer_stats_request);
         the answer arrives asynchronously as a STATS_RESPONSE and is merged into the agent's local stats view
-        (see update_stats_view)."""
+        (see update_stats_view) (async)."""
         world_peer_id = self.node_conn.get_world_node_peer_id()
         if world_peer_id is None:
             log.error("Not in a world: cannot ask stats")
@@ -439,7 +447,7 @@ class Agent(AgentBasics):
     async def all_sent_completed(self, action_name: str | None = None) -> bool:
         """True iff every sent interaction with the given `action_name` (or any, if None) has been
         completed by the IM. Negation of "are there any still-pending sends out there?". Useful as an
-        HSM exit predicate after `send(action_name="...", ...)` was dispatched without `wait_completion`."""
+        HSM exit predicate after `send(action_name="...", ...)` was dispatched without `wait_completion` (async)."""
         for inter in self.im.sent.values():
             if action_name is None or inter.action_name == action_name:
                 if not inter.is_completed():
@@ -453,6 +461,7 @@ class Agent(AgentBasics):
         Returns:
             True if the step ran successfully, False otherwise.
         """
+
         # Getting UUID of the interaction (used for tags and stdout)
         if interaction is not None:
             uuid = interaction.uuid
@@ -490,7 +499,14 @@ class Agent(AgentBasics):
 
         # Processing data
         try:
-            output_data = self.proc(*input_data, first=self.get_action_step() == 0, last=self.is_last_action_step())
+
+            # A ModuleWrapper runs the module in its worker thread (the node keeps running meanwhile); any other
+            # callable is called as it is
+            first, last = self.get_action_step() == 0, self.is_last_action_step()
+            if isinstance(self.proc, ModuleWrapper):
+                output_data = await self.proc.aforward(*input_data, first=first, last=last)
+            else:
+                output_data = self.proc(*input_data, first=first, last=last)
 
             if not isinstance(output_data, tuple):
                 output_data = (output_data,)
@@ -551,7 +567,7 @@ class Agent(AgentBasics):
             # Learning from the last performed inference and the current targets
             try:
                 assert isinstance(self.proc, ModuleWrapper)
-                loss_values = self.proc.learn_backward(target_data)
+                loss_values = await self.proc.alearn_backward(target_data)
             except Exception as e:
                 log.error(f"Error while learning: {e}")
                 return False
@@ -565,7 +581,7 @@ class Agent(AgentBasics):
             return False
 
     @action
-    async def show(self, interaction: Interaction | None = None):
+    async def show(self, interaction: Interaction | None = None) -> bool:
         """A generic action that exploit the information in the interaction object for printing purposes, commonly used
         (by overriding it) to handle interaction-completion callbacks (async).
 
@@ -730,6 +746,7 @@ class Agent(AgentBasics):
         self._engaged_agents.discard(_requester)  # Remove if present
 
         if disconnect_too:
+
             # Graceful disengage: carry WORLD_DISENGAGEMENT so __purge GOAWAYs the Session
             # and the remote sees Session.Closed instead of timing out via liveness (the
             # transport falls with the deferred settlement cut, after the farewell).
@@ -764,6 +781,7 @@ class Agent(AgentBasics):
             Always True.
         """
         log.misc(f"Disconnecting agent: {agent}")
+
         # Deliberate local teardown: GRACEFUL_SHUTDOWN so the remote sees a clean close.
         await self.node_purge_fcn(agent, reason=GRACEFUL_SHUTDOWN)  # also calls remove_agent -> remove_streams
         return True
@@ -783,6 +801,7 @@ class Agent(AgentBasics):
         log.misc(f"Disconnecting agents with role: {role}")
         if disengage_too:
             await self.send_disengage(send_disconnection_too=True)
+
         # Target only enrolled peers (handshake done), not every role match in the
         # rendezvous roster: disconnecting is meaningful only towards agents we are
         # actually connected to. Without this, in the template engage-by-role loop
@@ -792,6 +811,7 @@ class Agent(AgentBasics):
         if await self.find_agents(role, handshake_completed=True):
             found_agents = copy.deepcopy(self._found_agents)
             for agent in found_agents:
+
                 # Role-based disconnect happens only in a world (roles exist only there), so
                 # carry WORLD_DISENGAGEMENT, consistent with disengage.
                 await self.node_purge_fcn(agent, reason=WORLD_DISENGAGEMENT)  # Also calls remove_agent->remove_streams
@@ -905,7 +925,7 @@ class Agent(AgentBasics):
 
     @action
     async def connected(self, agent: str | list[str] | None = None, handshake_completed: bool = False) -> bool:
-        """Checks if an agent is connected to us or not.
+        """Checks if an agent is connected to us or not (async).
 
         Args:
             agent: The agent to check (or None if there are other already set engaged agents).
@@ -952,6 +972,7 @@ class Agent(AgentBasics):
         Returns:
             True if there are waiting agents, False otherwise.
         """
+
         # Session-era replacement for the old `_node_agents_waiting` dict: a found
         # agent is "waiting" while its per-peer Session exists but has not yet
         # reached ESTABLISHED (handshake in flight). The hosted entity only holds
@@ -1076,7 +1097,7 @@ class Agent(AgentBasics):
         """Records `interaction.num_steps` samples from the interaction's stdin stream group into a
         new owned `BufferedStream` group and exposes it via pubsub. Multistep by virtue of the
         interaction's `num_steps`; the framework's readiness gate already pauses execution on
-        no-fresh-data cycles.
+        no-fresh-data cycles (async).
 
         Args:
             interaction: The driving interaction (auto-injected by the dispatch layer).
@@ -1141,7 +1162,15 @@ class Agent(AgentBasics):
         return True
 
     @action
-    async def connect_to(self, peer_id: str):
+    async def connect_to(self, peer_id: str) -> bool:
+        """Gets in touch with a peer of the world, unless already connected to it (async).
+
+        Args:
+            peer_id: The peer to connect to.
+
+        Returns:
+            True if already connected or if getting in touch started, False otherwise.
+        """
         addresses = self.node_conn.get_addrs(peer_id)
         if not self.node_conn.is_connected(peer_id):
             log.misc(f"Asking to get in touch with {peer_id}...")
@@ -1201,6 +1230,7 @@ class Agent(AgentBasics):
 
             log.misc(f"Found addresses ({len(found_addresses)}) with role: {role}")
             for f_addr, f_peer_id in zip(found_addresses, found_peer_ids):
+
                 # is_connected reads pool residency, which a Session riding its reconnect
                 # grace (up to 45s) still holds: the re-dial is deliberately skipped there,
                 # RESUME on the surviving Session is the preferred recovery. Only the
@@ -1824,7 +1854,19 @@ class Agent(AgentBasics):
                 net_hashes_copy.append(self.user_stream_hash_to_net_hash(net_hashes[i]))
         return net_hashes_copy
 
-    def __rebind_stdin_if_human(self, interaction):
+    def __rebind_stdin_if_human(self, interaction: Interaction | None) -> bool:
+        """Prepares the stdin of a human agent for the interaction that triggered processing.
+
+        It clears the stored requests of completed interactions, blocks a system interaction while a request of the
+        partner is pending, stores a non-system interaction as the pending request of its peer (the world, when in a
+        world), and forces the default stdin binding.
+
+        Args:
+            interaction: The interaction that triggered processing, or None.
+
+        Returns:
+            False when the system interaction must be blocked, True otherwise (always True for non-humans).
+        """
 
         # If not human or no interaction provided, return the original UUID
         if not self.is_human() or interaction is None:
@@ -1875,7 +1917,12 @@ class Agent(AgentBasics):
         self.set_default_stdin_binding()
         return True
 
-    def __rebind_stdin_if_human_finalizer(self, interaction: Interaction | None):
+    def __rebind_stdin_if_human_finalizer(self, interaction: Interaction | None) -> None:
+        """Clears the pending request of a human agent once processing ended, and the stdin residuals.
+
+        Args:
+            interaction: The interaction that triggered processing, or None.
+        """
 
         # If not human or no interaction provided, stop here
         if not self.is_human() or interaction is None:

@@ -203,8 +203,20 @@ class NodeFakeConn(FakeConn):
     IN_PUBLIC = NodeConn.IN_PUBLIC
     OUT_PUBLIC = NodeConn.OUT_PUBLIC
 
+    # Send queues: off unless a test turns them on; send_events is what the next pop_send_events returns
+    sends_are_queued = False
+
+    def pop_send_events(self) -> list[dict]:
+        events, self.send_events = self.send_events, []
+        return events
+
+    def request_keepalive_probe(self, peer_id: str) -> None:
+        self.probe_requests.append(peer_id)
+
     def __init__(self, p2p_public: FakeP2P, p2p_world: FakeP2P):
         super().__init__(p2p_public=p2p_public, p2p_world=p2p_world)
+        self.send_events: list[dict] = []
+        self.probe_requests: list[str] = []
         # Inbound session messages per p2p instance, as (sender, protocol, SessMsg)
         # tuples — the same shape the bidirectional FakeConn wiring produces.
         self.inbox_by_p2p = {self.P2P_PUBLIC: deque(), self.P2P_WORLD: deque()}
@@ -357,7 +369,9 @@ class NodeFakeConn(FakeConn):
         await self._sm_public.close_session(public_peer_id, WORLD_HANDOFF_COMPLETE)
         self.peer_id_to_pool.pop(public_peer_id, None)
 
-    async def get_messages(self, p2p_name: str, allowed_not_connected_peers=None):
+    async def get_messages(self, p2p_name: str, allowed_not_connected_peers=None, kind: str = "all"):
+        if kind == "streams":
+            return [], []  # No split pops in this fake: everything comes with the network pass
         inbox = self.inbox_by_p2p[p2p_name]
         session_inbound = []
         while inbox:

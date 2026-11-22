@@ -352,7 +352,7 @@ class Stream:
 
     def set(self,
             data: torch.Tensor | Image | str | None, data_tag: int = -1, keep_existing_tag: bool = False,
-            uuid: str | None = None, force: bool = False) -> Data | None:
+            uuid: str | None = None, force: bool = False, check_delta: bool = True) -> Data | None:
         """Set a new data sample into the stream, that will be provided when calling "get()".
 
         Args:
@@ -361,6 +361,9 @@ class Stream:
             keep_existing_tag: Keep the data tag that is already in the stream, if the provided data_tag arg is -1.
             uuid: UUID of the interaction storing this data (can be None, meaning "generic UUID", default None).
             force: Boolean flag to force the set operation also if the stream is disabled.
+            check_delta: Refuse a sample that comes less than props.delta after the previous one (default True).
+                False for a sample received from its owner, who already paced the stream: the arrival times jitter
+                around the delta, and the check would drop the samples that arrive a little early.
 
         Returns:
             The updated Data struct if data was accepted based on time constraints, else None.
@@ -377,7 +380,8 @@ class Stream:
         # This is the data sample (with tag and so on)
         data_struct = self.data_by_uuid[uuid]
 
-        if first or self.props.delta <= 0. or self.props.delta <= (clock.get_time() - data_struct.data_timestamp):
+        if (first or not check_delta or self.props.delta <= 0. or
+                self.props.delta <= (clock.get_time() - data_struct.data_timestamp)):
             data_struct.data = self.props.adapt_tensor_to_tensor_labels(data) if data is not None else None
             data_struct.data_timestamp = clock.get_cycle_time()
             data_struct.data_tag = data_tag if data_tag >= 0 else (
@@ -890,8 +894,8 @@ class BufferedStream(Stream):
         return super().get(requested_by, uuid)
 
     def set(self, data: torch.Tensor | Image | str,
-            data_tag: int = -1, keep_existing_tag: bool = False, uuid: str | None = None, force: bool = False) \
-            -> Data | None:
+            data_tag: int = -1, keep_existing_tag: bool = False, uuid: str | None = None, force: bool = False,
+            check_delta: bool = True) -> Data | None:
         """Store a new data sample into the buffer.
 
         Args:
@@ -900,6 +904,7 @@ class BufferedStream(Stream):
             keep_existing_tag: Keep the data tag that is already in the stream, if the provided data_tag arg is -1.
             uuid: UUID of the data.
             force: Boolean flag to force the set operation also if the stream is disabled.
+            check_delta: See Stream.set (default True).
 
         Returns:
             The updated Data struct if the data was buffered, else None.
@@ -916,7 +921,7 @@ class BufferedStream(Stream):
         if self.is_queue and data is None:
             return None
 
-        data_struct = super().set(data, data_tag, keep_existing_tag, uuid, force)
+        data_struct = super().set(data, data_tag, keep_existing_tag, uuid, force, check_delta)
 
         if data_struct:
             if uuid not in self.data_buffer_by_uuid:

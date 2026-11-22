@@ -896,7 +896,7 @@ def test_probe_answered_ok_resumes_the_responder(bob_conn, bob_peer_id, alice_pe
 
     events = _answer_the_probe(sess, ok=True)
     assert len(events) == 1 and events[0].type == SessionEventType.RESUMED
-    assert events[0].data == {"profile": {"node_id": "alice"}}
+    assert events[0].data == {"profile": {"node_id": "alice"}, "peer_capabilities": 0}
     assert sess.state == SessionState.ESTABLISHED and sess._timeout_s is None
     assert sess._ping_in_flight is False and sess._consecutive_ping_failures == 0
     assert sess.check_timeout(time.monotonic() + session_mod._TIMEOUT_RECONNECT_S + 1.0) is None

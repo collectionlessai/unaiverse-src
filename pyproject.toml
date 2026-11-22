@@ -146,11 +146,12 @@ environment = { MACOSX_DEPLOYMENT_TARGET = "11.0" }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-# p2p tests are opt-in: excluded by default so the fast suite needs no libp2p
-# node / NIC. Run them with `pytest -m p2p` (the CLI -m overrides this default).
-addopts = "-m 'not p2p'"
+# p2p and long tests are opt-in: excluded by default so the fast suite needs no libp2p
+# node / NIC and runs in seconds. Run them with `pytest -m p2p` / `-m long` (the CLI -m overrides this default).
+addopts = "-m 'not p2p and not long'"
 markers = [
     "p2p: integration tests that start real libp2p nodes (slow, opt-in with -m p2p)",
+    "long: acceptance tests that run for minutes in real time (opt-in with -m long)",
     "unit: isolated-component / pure-function tests with light mocks",
     "e2e: end-to-end tests exercising several components in concert (mocked transport)",
 ]

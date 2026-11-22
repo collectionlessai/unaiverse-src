@@ -16,41 +16,95 @@ import os
 import torch
 import mimetypes
 from PIL import Image
-from dataclasses import dataclass
 from typing import Callable, Any, cast
 from transformers import AutoTokenizer, PreTrainedTokenizerBase
 
 
-@dataclass
 class FileContainer:
-    """Helper class to distinguish a "File" from a generic byte string or text."""
-    content: bytes | str
-    filename: str
-    mime_type: str
-    
-    @classmethod
-    def from_path(cls, file_path: str) -> 'FileContainer':
-        """Create a FileContainer by reading a file from the given path.
+    """Helper class to distinguish a "File" from a generic byte string or text.
+
+    A container is backed by its bytes (content) or by a file on disk (path). A path-backed one reads the file only
+    when its content is asked for, and it is sent to a peer that can take file messages straight from disk (Phase
+    6.5), so a file of any size never needs to be in memory; a received file arrives as a path-backed container.
+    """
+
+    def __init__(self, content: bytes | str | None = None, filename: str = "file",
+                 mime_type: str = "application/octet-stream", path: str | None = None) -> None:
+        """Initializes the container.
 
         Args:
-            file_path: Absolute or relative path to the file to read.
+            content: The bytes (or text) of the file, or None for a path-backed container.
+            filename: The name of the file.
+            mime_type: Its MIME type.
+            path: The file on disk of a path-backed container.
+
+        Raises:
+            ValueError: If neither content nor path is given.
+        """
+        if content is None and path is None:
+            raise ValueError("A FileContainer needs its content or its path")
+        self._content = content
+        self.filename = filename
+        self.mime_type = mime_type
+        self.path = path
+
+    @classmethod
+    def from_path(cls, file_path: str) -> 'FileContainer':
+        """Create a path-backed FileContainer for the given file, which is not read here.
+
+        Args:
+            file_path: Absolute or relative path to the file.
 
         Returns:
-            A FileContainer instance with the file's content, name, and guessed MIME type.
+            A FileContainer for the file, with its name and guessed MIME type.
+
+        Raises:
+            FileNotFoundError: If there is no such file.
         """
-        # 1. Guess MIME type based on extension
+        if not os.path.isfile(file_path):
+            raise FileNotFoundError(file_path)
+
+        # Guess MIME type based on extension
         mime_type, _ = mimetypes.guess_type(file_path)
         if mime_type is None:
             mime_type = "application/octet-stream"  # Safe fallback for binary
+        return cls(filename=os.path.basename(file_path), mime_type=mime_type, path=os.path.abspath(file_path))
 
-        # 2. Extract clean filename
-        filename = os.path.basename(file_path)
+    @property
+    def content(self) -> bytes | str:
+        """The bytes of the file: those of a path-backed container are read from disk when first asked for."""
+        if self._content is None:
+            with open(cast(str, self.path), "rb") as f:
+                self._content = f.read()
+        return self._content
 
-        # 3. Read file safely as BYTES (crucial for Protobuf)
-        with open(file_path, "rb") as f:
-            file_bytes = f.read()
+    @content.setter
+    def content(self, value: bytes | str) -> None:
+        """Sets the bytes of the file (the container keeps its path, if any)."""
+        self._content = value
 
-        return cls(content=file_bytes, filename=filename, mime_type=mime_type)
+    @property
+    def has_content(self) -> bool:
+        """Whether the bytes are in memory (always, for a container that is not path-backed)."""
+        return self._content is not None
+
+    @property
+    def size(self) -> int:
+        """The size of the file in bytes, without reading it."""
+        if self._content is None:
+            return os.path.getsize(cast(str, self.path))
+        return len(self._content.encode("utf-8") if isinstance(self._content, str) else self._content)
+
+    def __eq__(self, other: object) -> bool:
+        """Two containers are equal when they hold the same file (name, type and bytes)."""
+        if not isinstance(other, FileContainer):
+            return NotImplemented
+        return (self.filename, self.mime_type, self.content) == (other.filename, other.mime_type, other.content)
+
+    def __repr__(self) -> str:
+        """The container, without its bytes."""
+        where = f"path={self.path!r}" if self.path is not None else f"{self.size} bytes"
+        return f"FileContainer(filename={self.filename!r}, mime_type={self.mime_type!r}, {where})"
 
 
 class StreamType:
@@ -155,6 +209,12 @@ class StreamType:
         Returns:
             Either a callable function or the requested attribute from the first `DataProps` object.
         """
+        # Only called for names that are not found: "props" itself (not set yet, while pickle or copy rebuild the
+        # object without __init__) and the special names Python looks up (__setstate__, __deepcopy__, ...) must not
+        # be asked to props, or the lookup would call itself forever
+        if method_or_attribute_name == 'props' or (method_or_attribute_name.startswith('__') and
+                                                    method_or_attribute_name.endswith('__')):
+            raise AttributeError(method_or_attribute_name)
         if method_or_attribute_name.startswith('set_'):
             def apply_set_method_to_all_props(*args, **kwargs):
                 for prop in self.props:
@@ -273,6 +333,11 @@ class DataProps:
 
         # Checking data in function of its type
         if self.is_tensor():
+
+            # A shape or labels that came as another kind of sequence (in the browser, a JS array that Pyodide
+            # proxies, e.g. from the profile of a peer) are taken as a list
+            tensor_shape = DataProps._as_list(tensor_shape)
+            tensor_labels = DataProps._as_list(tensor_labels)
 
             # Checking shape
             assert (tensor_shape is not None and
@@ -1220,6 +1285,21 @@ class DataProps:
             str: The string representation of the instance.
         """
         return f"{self.to_dict()}"
+
+    @staticmethod
+    def _as_list(value: object) -> object:
+        """A sequence that is neither a list, a tuple nor a string (in the browser, a proxied JS array) as a list;
+        any other value as it is.
+
+        Args:
+            value: The value.
+
+        Returns:
+            A list of its items, or the value itself.
+        """
+        if value is None or isinstance(value, (list, tuple, str, bytes, dict)) or not hasattr(value, "__iter__"):
+            return value
+        return list(value)
 
 
 class TensorLabels:

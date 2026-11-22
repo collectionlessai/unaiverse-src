@@ -173,6 +173,16 @@ class InProcNodeConn:
 
         switchboard.register(self)
 
+    # The in-process sends are synchronous (a False is a failed delivery), like a real conn without send queues
+    sends_are_queued = False
+
+    def pop_send_events(self) -> list[dict]:
+        """No send queues in process: no send events."""
+        return []
+
+    def request_keepalive_probe(self, peer_id: str) -> None:
+        """No keep-alive in process: nothing to probe."""
+
     # Egress (async)
 
     async def send(self, peer_id: str, channel_trail: str | None,
@@ -233,12 +243,14 @@ class InProcNodeConn:
 
     # Ingress (async)
 
-    async def get_messages(self, p2p_name: str, allowed_not_connected_peers=None):
-        """Drain one network's chat inbox. Reproduces connpool.py:518-560: assert
+    async def get_messages(self, p2p_name: str, allowed_not_connected_peers=None, kind: str = "all"):
+        """Drain one network's chat inbox (kind "streams" gets nothing: no split pops in process). Reproduces connpool.py:518-560: assert
         the caller passed None, gate the sender against pools | cycle membership,
         and REWRITE each kept Msg's piggyback to ``node_id + inspector_bit`` (real
         JWT verify is skipped; the node-id is looked up from the trusted table).
         Returns ``(processed_messages, session_messages=[])``."""
+        if kind == "streams":
+            return [], []
         assert allowed_not_connected_peers is None, \
             "allowed_not_connected_peers is set by the Coordinator, not by the caller"
         allowed = self.cycle_membership_peers

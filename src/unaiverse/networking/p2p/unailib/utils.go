@@ -44,6 +44,41 @@ func jsonSuccessResponse(
 	return jsonSuccess
 }
 
+// jsonErrorResponseWithCode is jsonErrorResponse with an error code that the caller can
+// tell apart from the others (e.g. "queue_full"): {"state":"Error","code":"...","message":"..."}.
+func jsonErrorResponseWithCode(
+	message string,
+	code string,
+	err error,
+) string {
+
+	errMsg := message
+	if err != nil {
+		errMsg = fmt.Sprintf("%s: %s", message, err.Error())
+	}
+	if code == SendCodeQueueFull {
+		// A full queue is the expected answer to a sender that goes too fast, not a fault.
+		logger.Debugf("[GO] 🚦 Refused (%s): %s", code, errMsg)
+	} else {
+		logger.Errorf("[GO] ❌ Error (%s): %s", code, errMsg)
+	}
+	return fmt.Sprintf(`{"state":"Error","code":"%s","message":"%s"}`, escapeStringForJSON(code), escapeStringForJSON(errMsg))
+}
+
+// jsonSuccessResponseWithSeq is jsonSuccessResponse with the sequence number of a queued
+// message: {"state":"Success","message":...,"seq":N}.
+func jsonSuccessResponseWithSeq(
+	message interface{},
+	seq uint64,
+) string {
+
+	jsonData, err := json.Marshal(message)
+	if err != nil {
+		return jsonErrorResponse("Failed to marshal success response", err)
+	}
+	return fmt.Sprintf(`{"state":"Success","message":%s,"seq":%d}`, string(jsonData), seq)
+}
+
 // escapeStringForJSON performs basic escaping of characters (like double quotes and backslashes)
 // within a string to ensure it's safe to embed within a JSON string value.
 // It uses Go's standard JSON encoder for robust escaping.

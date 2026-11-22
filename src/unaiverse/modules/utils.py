@@ -13,25 +13,32 @@
                  Main Developers:    Stefano Melacci (Project Leader), Christian Di Maio, Tommaso Guidi
 """
 import os
+import sys
+import copy
 import json
 import time
 import torch
 import random
+import typing
 import asyncio
+import weakref
 import inspect
 import logging
 import tempfile
 import functools
+import contextvars
 import numpy as np
 from PIL import Image
-from typing import Callable
+from typing import Any, Callable
 from unaiverse.utils.logger import log
 from torch.utils.data import DataLoader
 from datetime import datetime, timezone
-from unaiverse.custom import GenException
-from unaiverse.uai import has_fence, AnswerWithheld
 from torchvision import datasets, transforms
+from collections.abc import Generator, Awaitable
+from unaiverse.custom import Custom, GenException
+from concurrent.futures import ThreadPoolExecutor
 from unaiverse.streams.dataprops import StreamType
+from unaiverse.uai import has_fence, AnswerWithheld
 
 
 def has_human_processor(agent: object) -> bool:
@@ -223,7 +230,7 @@ def hard_tanh(x: torch.Tensor) -> torch.Tensor:
 
 
 def target_shape_fixed_cross_entropy(output: torch.Tensor, target: torch.Tensor,
-                                     *args, **kwargs) -> torch.Tensor:
+                                     *args: Any, **kwargs: Any) -> torch.Tensor:
     """Computes cross-entropy loss, squeezing a leading batch dimension from the target if present.
 
     Args:
@@ -281,7 +288,7 @@ def get_proc_inputs_and_proc_outputs_for_rnn(u_shape: torch.Size | tuple, du_dim
     return proc_inputs, proc_outputs
 
 
-def get_proc_inputs_and_proc_outputs_for_image_classification(y_dim: int = -1, trans_forms=None) \
+def get_proc_inputs_and_proc_outputs_for_image_classification(y_dim: int = -1, trans_forms: Callable | None = None) \
         -> tuple[list[StreamType], list[StreamType]]:
     """Creates Stream descriptors for the inputs and output of an image-classification processor.
 
@@ -333,7 +340,8 @@ def error_rate_mnist_test_set(network: torch.nn.Module, mnist_data_save_path: st
             return stop.value
 
 
-def error_rate_mnist_test_set_steps(network: torch.nn.Module, mnist_data_save_path: str):
+def error_rate_mnist_test_set_steps(network: torch.nn.Module, mnist_data_save_path: str) \
+        -> Generator[None, None, float]:
     """Generator variant of error_rate_mnist_test_set, one chunk of work per yield: the
     dataset setup is a chunk of its own (it may touch the disk), then one test batch per
     chunk. Built for AgentBasics.stepwise, so the node loop keeps pumping during the
@@ -389,11 +397,12 @@ class MultiIdentity(torch.nn.Module):
     UAI_ECHOES_INPUT = True
 
     def __init__(self) -> None:
+        """Initializes the identity module."""
         super().__init__()
 
     # noinspection PyMethodMayBeStatic
     # noinspection PyUnusedLocal
-    def forward(self, *args: object, **kwargs: object):
+    def forward(self, *args: object, **kwargs: object) -> object:
         """Returns the single input unchanged, or all positional inputs as a tuple.
 
         Args:
@@ -410,29 +419,34 @@ class MultiIdentity(torch.nn.Module):
 
 
 class HumanModule(torch.nn.Module):
-    """Dummy human-in-the-loop module that echoes text and image inputs unchanged."""
+    """Dummy human-in-the-loop module that echoes the text, image and file inputs unchanged."""
 
     # A person's processor gives back what the person wrote: that text is already wire text
     UAI_ECHOES_INPUT = True
 
     def __init__(self) -> None:
+        """Initializes the human module."""
         super().__init__()
 
     # noinspection PyMethodMayBeStatic
     # noinspection PyUnusedLocal
-    def forward(self, text: str | None = None, img: Image.Image | None = None,
-                whatever: object | None = None) -> tuple[str | None, Image.Image | None]:
-        """Returns the text and image inputs as-is (placeholder for human interaction).
+    def forward(self, text: str | None = None, img: Image.Image | None = None, file: object | None = None,
+                whatever: object | None = None) -> tuple[str | None, Image.Image | None, object | None]:
+        """Returns the text, image and file inputs as-is (placeholder for human interaction).
+
+        The person's inputs are text, img, file and all; the outputs that a node declares take these in order (a node
+        with outputs text and img gives back the text and the image only).
 
         Args:
             text: Optional text input.
             img: Optional PIL image input.
+            file: Optional file input (a FileContainer).
             whatever: Optional additional input (ignored).
 
         Returns:
-            A tuple ``(text, img)`` with the unchanged inputs.
+            A tuple ``(text, img, file)`` with the unchanged inputs.
         """
-        return text, img
+        return text, img, file
 
 
 class LoggerModule(torch.nn.Module):
@@ -458,17 +472,6 @@ class LoggerModule(torch.nn.Module):
                          "turkey", "italy", "france", "germany", "spain", "madrid", "barcelona", "portugal",
                          "norway", "sweden", "belgium", "romania", "sunny", "snowy", "rainy"]
         random.shuffle(self._objects)
-
-    def __setup_logger(self) -> None:
-        """Creates the output directory and Initializes the file-based logger handler."""
-
-        if self.log_file is not None:
-            os.makedirs(os.path.abspath(os.path.dirname(self.log_file)), exist_ok=True)
-            self.__handler = logging.FileHandler(self.log_file, mode='w')  # 'w' mode overwrites the file
-            formatter = logging.Formatter('%(message)s')
-            self.__handler.setFormatter(formatter)
-            self._logger.addHandler(self.__handler)
-        self._initialized = True
 
     def forward(self, text: str, img: Image.Image | None = None) -> tuple[str | None, Image.Image | None]:
         """Logs the received inputs and returns a cycling dummy text response with no image output.
@@ -503,9 +506,53 @@ class LoggerModule(torch.nn.Module):
             log.user(f"[OUTPUT] text={text}, img={None}")
         return text, img
 
+    def __setup_logger(self) -> None:
+        """Creates the output directory and Initializes the file-based logger handler."""
+
+        if self.log_file is not None:
+            os.makedirs(os.path.abspath(os.path.dirname(self.log_file)), exist_ok=True)
+            self.__handler = logging.FileHandler(self.log_file, mode='w')  # 'w' mode overwrites the file
+            formatter = logging.Formatter('%(message)s')
+            self.__handler.setFormatter(formatter)
+            self._logger.addHandler(self.__handler)
+        self._initialized = True
+
+
+# The worker thread of each ModuleWrapper (see ModuleWrapper.aforward), kept apart from the wrapper so that a checkpoint
+# (which pickles the agent and its processor) or a copy of the wrapper never meets it
+_PROC_EXECUTORS: "weakref.WeakKeyDictionary[ModuleWrapper, ThreadPoolExecutor]" = weakref.WeakKeyDictionary()
+
+
+def _run_to_end(coro: Any) -> Any:
+    """Runs a coroutine that never suspends to its end, with no event loop, and returns its result.
+
+    The sync methods of ModuleWrapper share their code with the async ones this way: without offload nothing awaited
+    inside them ever suspends.
+
+    Args:
+        coro: The coroutine.
+
+    Returns:
+        What the coroutine returned.
+
+    Raises:
+        RuntimeError: If the coroutine suspended (it was waiting for something).
+    """
+    try:
+        coro.send(None)
+    except StopIteration as e:
+        return e.value
+    coro.close()
+    raise RuntimeError("A coroutine run without an event loop suspended")
+
 
 class ModuleWrapper(torch.nn.Module):
-    """Wraps a torch.nn.Module with Stream-based input/output preprocessing and optional learning support."""
+    """Wraps a torch.nn.Module with Stream-based input/output preprocessing and optional learning support.
+
+    The framework calls it through aforward / alearn_backward, which run the module (and its pre/postprocessing) in a
+    worker thread of the wrapper, so that the node keeps running during a long forward or backward pass; forward /
+    learn_backward keep their synchronous behavior for direct callers.
+    """
 
     # Backstop on how many times the module can be called again in one turn by the answer gate, whatever the
     # agent's policy says: a runaway override must not turn one step into an endless loop
@@ -518,7 +565,7 @@ class ModuleWrapper(torch.nn.Module):
                  proc_opts: dict | None = None,
                  seed: int = -1,
                  agent: object = None,
-                 device=None) -> None:
+                 device: str | torch.device | None = None) -> None:
         """Initializes the ModuleWrapper.
 
         Args:
@@ -551,8 +598,26 @@ class ModuleWrapper(torch.nn.Module):
         self.set_proc_inputs_and_outputs(proc_inputs, proc_outputs)
         self.set_proc_opts(proc_opts)
         self.set_agent(agent)
-    
-    def guess_device(self, device):
+
+    def __getstate__(self) -> dict:
+        """The state that pickle and copies take: everything but the raw outputs of the last forward pass.
+
+        Those belong to the step in progress (learn_backward reads them right after process) and hold the autograd
+        graph, which torch cannot copy: a copy or a pickle starts with no step in progress.
+
+        Returns:
+            The state.
+        """
+        state = dict(super().__getstate__())
+        state['_last_raw_outputs'] = None
+        return state
+
+    def guess_device(self, device: str | torch.device | None) -> None:
+        """Sets the device of the processor: the given one, else the PROC_DEVICE environment variable, else CPU.
+
+        Args:
+            device: The device to use, or None to guess it.
+        """
         device_env = os.getenv("PROC_DEVICE", None)
         self.device = torch.device("cpu") if device_env is None else torch.device(device_env)
 
@@ -560,21 +625,46 @@ class ModuleWrapper(torch.nn.Module):
         if device is not None:
             self.device = torch.device(device) if isinstance(device, str) else device
 
-    def set_agent(self, agent):
+    def set_agent(self, agent: object) -> None:
+        """Sets the agent that owns this processor.
+
+        Args:
+            agent: The owning agent (or None).
+        """
         self.agent = agent
 
-    def set_proc_inputs_and_outputs(self, proc_inputs, proc_outputs):
+    def set_proc_inputs_and_outputs(self, proc_inputs: list[StreamType] | None,
+                                    proc_outputs: list[StreamType] | None) -> None:
+        """Sets the descriptors of the inputs and of the outputs of the processor (None leaves them unchanged).
+
+        Args:
+            proc_inputs: The list of the input stream descriptors, or None.
+            proc_outputs: The list of the output stream descriptors, or None.
+        """
         if proc_inputs is not None:
             self.proc_inputs = proc_inputs
             self.__refresh_proc_optional_inputs()  # rebuilds, truncating or padding as needed
         if proc_outputs is not None:
             self.proc_outputs = proc_outputs
 
-    def set_proc_opts(self, proc_opts):
+    def set_proc_opts(self, proc_opts: dict | None) -> None:
+        """Sets the learning options of the processor (None leaves them unchanged).
+
+        Args:
+            proc_opts: Dictionary with keys ``"optimizer"`` and ``"losses"``, or None.
+        """
         if proc_opts is not None:
             self.proc_opts = proc_opts
 
-    def set_module(self, mod: Callable | torch.nn.Module):
+    def set_module(self, mod: Callable | torch.nn.Module) -> None:
+        """Sets the wrapped module, caching what its signature tells (first/last flags, defaults of the inputs).
+
+        Args:
+            mod: The torch.nn.Module or callable object to wrap.
+
+        Raises:
+            GenException: If the signature of the module cannot be guessed.
+        """
 
         # Case 1: torch.nn.Module / object with .forward
         if hasattr(mod, "forward") and callable(getattr(mod, "forward")):
@@ -605,21 +695,7 @@ class ModuleWrapper(torch.nn.Module):
         # Align proc_optional_inputs to current proc_inputs (if already known)
         self.__refresh_proc_optional_inputs()
 
-    def __refresh_proc_optional_inputs(self) -> None:
-        """Rebuild `proc_optional_inputs` to be exactly parallel to `proc_inputs` (same length, same ordering).
-        Slices the cached signature defaults; pads with no-default if `proc_inputs` is longer than the
-        signature has data args."""
-        if self.proc_inputs is None:
-            # Until proc_inputs is set, expose the full signature defaults so __guess_proc_inputs/_outputs
-            # can still inspect them.
-            self.proc_optional_inputs = list(self._sig_defaults)
-            return
-        n = len(self.proc_inputs)
-        self.proc_optional_inputs = list(self._sig_defaults[:n])
-        while len(self.proc_optional_inputs) < n:
-            self.proc_optional_inputs.append({"has_default": False, "default_value": None})
-
-    def forward(self, *args, **kwargs) -> tuple:
+    def forward(self, *args: Any, **kwargs: Any) -> tuple:
         """Preprocesses inputs, runs the wrapped module, and post-processes the outputs.
 
         Args:
@@ -630,143 +706,7 @@ class ModuleWrapper(torch.nn.Module):
         Returns:
             A tuple of post-processed outputs, one per entry in ``proc_outputs``.
         """
-        assert self.module is not None
-        assert self.proc_inputs is not None
-        assert self.proc_outputs is not None
-
-        # The forward signature expected by who calls this method is:
-        # forward(self, *args, first: bool, last: bool, **kwargs)
-        # so we have to discard 'first' and 'last' that are not used by an external module not designed for this library
-        if 'first' in kwargs and not self._has_first:
-            del kwargs['first']
-        if 'last' in kwargs and not self._has_last:
-            del kwargs['last']
-        self._last_raw_outputs = None
-
-        # A model reads the alternative text of a protocol block, never its JSON (INTERACT-PROTOCOL.md,
-        # section 4). A module that echoes its input is not a model: what it gives back is wire text and
-        # must leave exactly as it is, or a person's own answer would be rewritten on its way out. The
-        # stream is untouched either way: what is replaced here is only what the module is handed.
-        uai_spec, uai_arg = None, None
-        if self.agent is not None and not getattr(self.module, 'UAI_ECHOES_INPUT', False):
-            args = list(args)
-            for i in range(0, min(len(args), len(self.proc_inputs))):
-                if not (isinstance(args[i], str) and has_fence(args[i])):
-                    continue
-                try:
-                    args[i], spec = self.agent.uai_preprocess(args[i])
-                    if spec is not None:
-                        uai_spec, uai_arg = spec, i
-                except Exception as e:
-                    log.error(f"Error rendering an interactive message for the module, keeping it as it is: {e}")
-        rendered = list(args)
-
-        outputs = self.__run_module(args, kwargs)
-
-        # A block is a message with a contract on its format, and an answer that does not honour it does not
-        # leave as it is: the agent decides, and may ask the module again with a corrective prompt (a model
-        # that was handed the form in this very call, or that was shown it earlier), or withhold the answer
-        # altogether (a person, who is told to write again). The form may come from this call or from an
-        # earlier message, which is why this runs for echoing modules too: there it is a no-op on an answer
-        # that is already canonical. A failure of the gate itself never costs the answer.
-        if self.agent is not None:
-            outputs = self.__uai_answer(outputs, rendered, kwargs, uai_spec, uai_arg)
-
-        return tuple(outputs)
-
-    def __run_module(self, args: list, kwargs: dict) -> list:
-        """Preprocesses the inputs, calls the module once, and post-processes what it returned."""
-
-        # Preprocessing data
-        args = [self.proc_inputs[i].check_and_preprocess(args[i], device=self.device)
-                for i in range(0, len(self.proc_inputs))]  # Don't try to build a tuple here, keep a list!
-
-        # Calling the module
-        outputs = self.module(*args, **kwargs)  # Forward
-
-        if not isinstance(outputs, tuple):
-            outputs = (outputs,)
-        self._last_raw_outputs = outputs
-
-        # Postprocessing data (this does not affect the raw outputs, that might be used while learning)
-        return [self.proc_outputs[i].check_and_postprocess(outputs[i])
-                for i in range(0, len(self.proc_outputs))]  # Don't try to build a tuple here, keep a list!
-
-    def __uai_answer(self, outputs: list, rendered: list, kwargs: dict,
-                          spec: dict | None, arg_index: int | None) -> list:
-        """Runs the agent's policy on the answer to a form, asking the module again as long as it says so.
-
-        Args:
-            outputs: The post-processed outputs of the first call.
-            rendered: The inputs as the module read them (blocks already replaced by their alternative text).
-            kwargs: The keyword arguments of the module call.
-            spec: The form handed to the module in this call, if any.
-            arg_index: Which input carried it.
-
-        Returns:
-            The outputs that should travel.
-
-        Raises:
-            AnswerWithheld: When the agent decided that nothing should travel.
-        """
-        out_index = next((i for i, item in enumerate(outputs) if isinstance(item, str)), None)
-        if out_index is None:
-            return outputs
-        asked_now = spec is not None
-        model_view = rendered[arg_index] if arg_index is not None else None
-        outcome = None
-        try:
-            if spec is None:
-                spec = self.agent.uai_pending_form()
-                if spec is not None:
-                    # The form came in an earlier message: the rendering of THAT message, when still
-                    # known, is what a corrective prompt should restate, not the current input
-                    model_view = self.agent.uai_pending_view()
-            if spec is None:
-                return outputs
-            attempt = 0
-            first_text = outputs[out_index]
-            attempts = [first_text] if isinstance(first_text, str) and first_text.strip() else []
-            while True:
-                outcome = self.agent.uai_postprocess(outputs[out_index], spec, attempt=attempt,
-                                                          asked_now=asked_now, model_view=model_view,
-                                                          attempts=list(attempts))
-                if outcome.retry is None or attempt >= self.UAI_HARD_CAP:
-                    break
-
-                # The corrective prompt takes the place of the message that carried the form (or of the first
-                # text input, for a form remembered from an earlier message) and goes through the very same
-                # path the first input took
-                if arg_index is None:
-                    arg_index = next((i for i, inp in enumerate(self.proc_inputs[:len(rendered)])
-                                      if inp.is_text()), None)
-                    if arg_index is None:
-                        break
-                rendered[arg_index] = outcome.retry
-                new_outputs = self.__run_module(list(rendered), kwargs)
-
-                # A blank regeneration never replaces the words of an earlier attempt: the module just
-                # gave up, and the policy keeps judging (and eventually ships) the best answer it has seen.
-                # Every adopted, distinct text joins the turn's attempts: the policy reads them together,
-                # so an answer can be completed across the corrective rounds
-                if not (isinstance(new_outputs[out_index], str) and not new_outputs[out_index].strip()
-                        and isinstance(outputs[out_index], str) and outputs[out_index].strip()):
-                    outputs = new_outputs
-                    new_text = outputs[out_index]
-                    if isinstance(new_text, str) and new_text.strip() and (
-                            not attempts or attempts[-1] != new_text):
-                        attempts.append(new_text)
-                attempt += 1
-        except Exception as e:
-            log.error(f"Error deciding about the answer to an interactive message, keeping it: {e}")
-            return outputs
-        if outcome is None:
-            return outputs
-        if outcome.withhold:
-            raise AnswerWithheld(f"The answer to form '{spec.get('id')}' was withheld")
-        if outcome.text is not None:
-            outputs[out_index] = outcome.text
-        return outputs
+        return _run_to_end(self.__forward(list(args), kwargs, offload=False))
 
     def learn_backward(self, targets: list | None = None) -> list:
         """Runs a supervised or unsupervised backward pass and optimizer step.
@@ -814,6 +754,297 @@ class ModuleWrapper(torch.nn.Module):
             self.module.y = targets[0]
 
         return loss_values
+
+    async def aforward(self, *args: Any, **kwargs: Any) -> tuple:
+        """forward(), with the module and its pre/postprocessing in the worker thread of this wrapper (async).
+
+        What concerns the agent (the rendering of interactive blocks before the call, the answer gate after it) stays
+        on the event loop; the module calls (the first one and every re-ask of the gate) run in the worker, one at a
+        time. Inline instead, as forward(), in the browser, with Custom.OFFLOAD_ENABLED off, for modules that echo
+        their input or say UAI_OFFLOAD = False, and when a subclass overrides forward().
+
+        Args:
+            *args: As for forward().
+            **kwargs: As for forward().
+
+        Returns:
+            As forward().
+        """
+        if type(self).forward is not ModuleWrapper.forward:
+            return self.forward(*args, **kwargs)
+        return await self.__forward(list(args), kwargs, offload=self.__offloads())
+
+    async def alearn_backward(self, targets: list | None = None) -> list:
+        """learn_backward(), in the worker thread of this wrapper, after the forward pass it learns from (async).
+
+        Inline in the same cases as aforward().
+
+        Args:
+            targets: As for learn_backward().
+
+        Returns:
+            As learn_backward().
+        """
+        if type(self).learn_backward is not ModuleWrapper.learn_backward or not self.__offloads():
+            return self.learn_backward(targets)
+        return await self.__in_worker(self.learn_backward, targets)
+
+    def __refresh_proc_optional_inputs(self) -> None:
+        """Rebuild `proc_optional_inputs` to be exactly parallel to `proc_inputs` (same length, same ordering).
+        Slices the cached signature defaults; pads with no-default if `proc_inputs` is longer than the
+        signature has data args."""
+        if self.proc_inputs is None:
+
+            # Until proc_inputs is set, expose the full signature defaults so __guess_proc_inputs/_outputs
+            # can still inspect them.
+            self.proc_optional_inputs = list(self._sig_defaults)
+            return
+        n = len(self.proc_inputs)
+        self.proc_optional_inputs = list(self._sig_defaults[:n])
+        while len(self.proc_optional_inputs) < n:
+            self.proc_optional_inputs.append({"has_default": False, "default_value": None})
+
+    async def __forward(self, args: list, kwargs: dict, offload: bool) -> tuple:
+        """The body of forward() and aforward(): module calls offloaded or not (async).
+
+        Args:
+            args: The positional inputs.
+            kwargs: The keyword arguments.
+            offload: True to run the module calls in the worker thread.
+
+        Returns:
+            A tuple of post-processed outputs, one per entry in ``proc_outputs``.
+        """
+        assert self.module is not None
+        assert self.proc_inputs is not None
+        assert self.proc_outputs is not None
+
+        # The forward signature expected by who calls this method is:
+        # forward(self, *args, first: bool, last: bool, **kwargs)
+        # so we have to discard 'first' and 'last' that are not used by an external module not designed for this library
+        if 'first' in kwargs and not self._has_first:
+            del kwargs['first']
+        if 'last' in kwargs and not self._has_last:
+            del kwargs['last']
+        self._last_raw_outputs = None
+
+        # A model reads the alternative text of a protocol block, never its JSON (INTERACT-PROTOCOL.md,
+        # section 4). A module that echoes its input is not a model: what it gives back is wire text and
+        # must leave exactly as it is, or a person's own answer would be rewritten on its way out. The
+        # stream is untouched either way: what is replaced here is only what the module is handed.
+        uai_spec, uai_arg = None, None
+        if self.agent is not None and not getattr(self.module, 'UAI_ECHOES_INPUT', False):
+            args = list(args)
+            for i in range(0, min(len(args), len(self.proc_inputs))):
+                if not (isinstance(args[i], str) and has_fence(args[i])):
+                    continue
+                try:
+                    args[i], spec = self.agent.uai_preprocess(args[i])
+                    if spec is not None:
+                        uai_spec, uai_arg = spec, i
+                except Exception as e:
+                    log.error(f"Error rendering an interactive message for the module, keeping it as it is: {e}")
+        rendered = list(args)
+
+        outputs = await self.__call_module(args, kwargs, offload)
+
+        # A block is a message with a contract on its format, and an answer that does not honour it does not
+        # leave as it is: the agent decides, and may ask the module again with a corrective prompt (a model
+        # that was handed the form in this very call, or that was shown it earlier), or withhold the answer
+        # altogether (a person, who is told to write again). The form may come from this call or from an
+        # earlier message, which is why this runs for echoing modules too: there it is a no-op on an answer
+        # that is already canonical. A failure of the gate itself never costs the answer.
+        if self.agent is not None:
+            outputs = await self.__uai_answer(outputs, rendered, kwargs, uai_spec, uai_arg, offload)
+
+        return tuple(outputs)
+
+
+    def __offloads(self) -> bool:
+        """Tells whether the module calls of this wrapper run in its worker thread.
+
+        Returns:
+            False in the browser (no threads), with Custom.OFFLOAD_ENABLED off, and for modules that echo their input
+            (a person, an identity) or that set UAI_OFFLOAD = False (as the wrapper itself may).
+        """
+        return (Custom.OFFLOAD_ENABLED and sys.platform != "emscripten" and
+                not getattr(self.module, 'UAI_ECHOES_INPUT', False) and
+                getattr(self.module, 'UAI_OFFLOAD', True) and getattr(self, 'UAI_OFFLOAD', True))
+
+    async def __call_module(self, args: list, kwargs: dict, offload: bool) -> list:
+        """Runs __run_module, in the worker thread or inline, then waits for an async module (async).
+
+        Args:
+            args: The inputs, as the module reads them.
+            kwargs: The keyword arguments.
+            offload: True to run it in the worker thread.
+
+        Returns:
+            The post-processed outputs.
+        """
+        if offload:
+            outputs = await self.__in_worker(self.__run_module, args, kwargs)
+        else:
+            outputs = self.__run_module(args, kwargs)
+
+        # An async module (a coroutine, or a JavaScript promise in the browser) is awaited here, on the event loop:
+        # whatever it waits for, the node keeps running meanwhile
+        if inspect.isawaitable(outputs):
+            outputs = await outputs
+        return outputs
+
+    async def __in_worker(self, fn: Callable, *args: Any) -> Any:
+        """Runs a function in the worker thread of this wrapper, with the grad mode and the context of the caller
+        (async).
+
+        One thread per wrapper: calls to the same module are serialized (no forward next to a backward, one request
+        at a time to an API client), while different agents do not wait for each other; apart from the default
+        executor of asyncio, so that model work never delays the sends. Grad and inference mode are per thread in
+        torch, hence copied from the caller.
+
+        Args:
+            fn: The function.
+            *args: Its arguments.
+
+        Returns:
+            What it returned (its exceptions are raised here).
+        """
+        executor = _PROC_EXECUTORS.get(self)
+        if executor is None:
+            executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="unaiverse-proc")
+            _PROC_EXECUTORS[self] = executor
+        grad, inference = torch.is_grad_enabled(), torch.is_inference_mode_enabled()
+
+        def job() -> Any:
+            """Runs the function under the grad mode of the caller."""
+            with torch.inference_mode(inference), torch.set_grad_enabled(grad):
+                return fn(*args)
+        return await asyncio.get_running_loop().run_in_executor(executor, contextvars.copy_context().run, job)
+
+    def __run_module(self, args: list, kwargs: dict) -> list | Awaitable[list]:
+        """Preprocesses the inputs, calls the module once, and post-processes what it returned.
+
+        An async module gives back an awaitable: then so does this method, and the postprocessing waits for it (the
+        caller awaits it, see __call_module).
+        """
+
+        # Preprocessing data
+        args = [self.proc_inputs[i].check_and_preprocess(args[i], device=self.device)
+                for i in range(0, len(self.proc_inputs))]  # Don't try to build a tuple here, keep a list!
+
+        # Calling the module
+        outputs = self.module(*args, **kwargs)  # Forward
+        if inspect.isawaitable(outputs):
+            return self.__postprocess_when_done(outputs)
+        return self.__postprocess(outputs)
+
+    async def __postprocess_when_done(self, awaitable: Awaitable) -> list:
+        """Waits for what an async module gives back, then post-processes it (async).
+
+        Args:
+            awaitable: What the module returned (a coroutine, or a JavaScript promise in the browser).
+
+        Returns:
+            The post-processed outputs.
+        """
+        return self.__postprocess(await awaitable)
+
+    def __postprocess(self, outputs: Any) -> list:
+        """Post-processes what the module returned, one output per entry in proc_outputs.
+
+        Args:
+            outputs: What the module returned (a tuple, or a single output).
+
+        Returns:
+            The post-processed outputs.
+        """
+        if not isinstance(outputs, tuple):
+            outputs = (outputs,)
+        self._last_raw_outputs = outputs
+
+        # Postprocessing data (this does not affect the raw outputs, that might be used while learning)
+        return [self.proc_outputs[i].check_and_postprocess(outputs[i])
+                for i in range(0, len(self.proc_outputs))]  # Don't try to build a tuple here, keep a list!
+
+    async def __uai_answer(self, outputs: list, rendered: list, kwargs: dict,
+                           spec: dict | None, arg_index: int | None, offload: bool) -> list:
+        """Runs the agent's policy on the answer to a form, asking the module again as long as it says so (async).
+
+        The policy runs on the caller's thread (the event loop); the re-asks of the module go where the first call went.
+
+        Args:
+            outputs: The post-processed outputs of the first call.
+            rendered: The inputs as the module read them (blocks already replaced by their alternative text).
+            kwargs: The keyword arguments of the module call.
+            spec: The form handed to the module in this call, if any.
+            arg_index: Which input carried it.
+            offload: True to run the re-asks in the worker thread.
+
+        Returns:
+            The outputs that should travel.
+
+        Raises:
+            AnswerWithheld: When the agent decided that nothing should travel.
+        """
+        out_index = next((i for i, item in enumerate(outputs) if isinstance(item, str)), None)
+        if out_index is None:
+            return outputs
+        asked_now = spec is not None
+        model_view = rendered[arg_index] if arg_index is not None else None
+        outcome = None
+        try:
+            if spec is None:
+                spec = self.agent.uai_pending_form()
+                if spec is not None:
+
+                    # The form came in an earlier message: the rendering of THAT message, when still
+                    # known, is what a corrective prompt should restate, not the current input
+                    model_view = self.agent.uai_pending_view()
+            if spec is None:
+                return outputs
+            attempt = 0
+            first_text = outputs[out_index]
+            attempts = [first_text] if isinstance(first_text, str) and first_text.strip() else []
+            while True:
+                outcome = self.agent.uai_postprocess(outputs[out_index], spec, attempt=attempt,
+                                                          asked_now=asked_now, model_view=model_view,
+                                                          attempts=list(attempts))
+                if outcome.retry is None or attempt >= self.UAI_HARD_CAP:
+                    break
+
+                # The corrective prompt takes the place of the message that carried the form (or of the first
+                # text input, for a form remembered from an earlier message) and goes through the very same
+                # path the first input took
+                if arg_index is None:
+                    arg_index = next((i for i, inp in enumerate(self.proc_inputs[:len(rendered)])
+                                      if inp.is_text()), None)
+                    if arg_index is None:
+                        break
+                rendered[arg_index] = outcome.retry
+                new_outputs = await self.__call_module(list(rendered), kwargs, offload)
+
+                # A blank regeneration never replaces the words of an earlier attempt: the module just
+                # gave up, and the policy keeps judging (and eventually ships) the best answer it has seen.
+                # Every adopted, distinct text joins the turn's attempts: the policy reads them together,
+                # so an answer can be completed across the corrective rounds
+                if not (isinstance(new_outputs[out_index], str) and not new_outputs[out_index].strip()
+                        and isinstance(outputs[out_index], str) and outputs[out_index].strip()):
+                    outputs = new_outputs
+                    new_text = outputs[out_index]
+                    if isinstance(new_text, str) and new_text.strip() and (
+                            not attempts or attempts[-1] != new_text):
+                        attempts.append(new_text)
+                attempt += 1
+        except Exception as e:
+            log.error(f"Error deciding about the answer to an interactive message, keeping it: {e}")
+            return outputs
+        if outcome is None:
+            return outputs
+        if outcome.withhold:
+            raise AnswerWithheld(f"The answer to form '{spec.get('id')}' was withheld")
+        if outcome.text is not None:
+            outputs[out_index] = outcome.text
+        return outputs
 
 
 class AgentProcessorChecker:
@@ -977,27 +1208,34 @@ class AgentProcessorChecker:
         agent.proc_optional_inputs = proc.proc_optional_inputs
 
     @staticmethod
-    def __guess_proc_inputs(proc: ModuleWrapper):
+    def __guess_proc_inputs(proc: ModuleWrapper) -> None:
         """Heuristically infers ``proc_inputs`` from the first layer of the wrapped module."""
         assert proc is not None
         assert proc.module is not None
         if proc.proc_inputs is not None:
             return
 
-        if not isinstance(proc.module, torch.nn.Module):
-            return
-
-        first_layer = None
-
         # Traverse modules to find the first real layer (skip containers like Sequential)
-        for layer in proc.module.modules():
-            if isinstance(layer, (torch.nn.Conv2d, torch.nn.Linear, torch.nn.Conv1d, torch.nn.Embedding)):
-                first_layer = layer
-                break
+        first_layer = None
+        if isinstance(proc.module, torch.nn.Module):
+            for layer in proc.module.modules():
+                if isinstance(layer, (torch.nn.Conv2d, torch.nn.Linear, torch.nn.Conv1d, torch.nn.Embedding)):
+                    first_layer = layer
+                    break
 
+        # No layer to read (a module of text or images, a plain function): what the first data argument of its
+        # forward is declared to be, without calling it (it could be a model behind a paid API)
         if first_layer is None:
-            raise ValueError("Cannot automatically guess the shape of the input data, "
-                             "please explicitly provide it (proc_input)")
+            data_type = AgentProcessorChecker.__guess_from_annotations(proc)
+            if data_type is None:
+                if not isinstance(proc.module, torch.nn.Module):
+                    return
+                raise ValueError("Cannot automatically guess the shape of the input data, "
+                                 "please explicitly provide it (proc_input)")
+            proc.set_proc_inputs_and_outputs([StreamType(name="proc_input_0", data_type=data_type,
+                                                         data_desc="automatically guessed", pubsub=False,
+                                                         private_only=False)], None)
+            return
 
         # Infer input properties
         data_desc = "automatically guessed"
@@ -1007,30 +1245,15 @@ class AgentProcessorChecker:
         stream_to_proc_transforms = None
         proc_to_stream_transforms = None
 
-        import copy as _copy
-
         def probe(_proc: ModuleWrapper, call: Callable[[], object]) -> bool:
             """Run `call()` against the wrapped module and return True iff it didn't raise.
             Snapshots the module's state_dict around the call so probes don't corrupt stateful modules
             (RNN/CTE/CTB hidden state, etc.)."""
-            snap = None
-            if isinstance(_proc.module, torch.nn.Module):
-                try:
-                    snap = _copy.deepcopy(_proc.module.state_dict())
-                except Exception:
-                    snap = None
             try:
-                call()
+                AgentProcessorChecker.__call_restoring(_proc, call)
                 return True
             except Exception:
                 return False
-            finally:
-                if snap is not None:
-                    try:
-                        assert isinstance(_proc.module, torch.nn.Module)
-                        _proc.module.load_state_dict(snap)
-                    except Exception:
-                        pass
 
         if isinstance(first_layer, torch.nn.Conv2d):
 
@@ -1064,25 +1287,27 @@ class AgentProcessorChecker:
                 elif can_handle_gray_img:
                     stream_to_proc_transforms = transforms.Grayscale()
                 else:
+
+                    # A float tensor, normalized, as the catalog CNNs take it (the no_norm transforms give uint8)
                     if first_layer.in_channels == 1:
-                        stream_to_proc_transforms = transforms_factory("gray-no_norm")
+                        stream_to_proc_transforms = transforms_factory("gray")
                     else:
-                        stream_to_proc_transforms = transforms_factory("rgb-no_norm")
+                        stream_to_proc_transforms = transforms_factory("rgb")
             else:
 
                 # If the number of input channels is not 1 and not 3...
                 data_type = "tensor"
-                tensor_shape = (first_layer.in_channels, None, None)
+                tensor_shape = (None, first_layer.in_channels, None, None)  # The batch dimension first
                 tensor_dtype = torch.float32
 
         elif isinstance(first_layer, torch.nn.Conv1d):
             data_type = "tensor"
-            tensor_shape = (first_layer.in_channels, None)
+            tensor_shape = (None, first_layer.in_channels, None)  # The batch dimension first
             tensor_dtype = torch.float32
         elif isinstance(first_layer, torch.nn.Linear):
             data_type = "tensor"
             tensor_dtype = torch.float32
-            tensor_shape = (first_layer.in_features,)
+            tensor_shape = (None, first_layer.in_features)  # The batch dimension first
         elif isinstance(first_layer, torch.nn.Embedding):
 
             can_handle_text = probe(proc,
@@ -1105,10 +1330,12 @@ class AgentProcessorChecker:
                 stream_to_proc_transforms = None
             else:
                 data_type = "tensor"
+
+                # Token ids batch first (as the probe above sent them): labels go with 2d shapes only
                 if can_handle_more_than_one_token:
-                    tensor_shape = (None,)
+                    tensor_shape = (None, None)
                 else:
-                    tensor_shape = (1,)
+                    tensor_shape = (None, 1)
                 tensor_dtype = torch.long
                 tensor_labels = ["token" + str(i) for i in range(0, first_layer.num_embeddings)]
         else:
@@ -1128,14 +1355,20 @@ class AgentProcessorChecker:
                                                      private_only=False)], None)
 
     @staticmethod
-    def __fix_proc_inputs(proc: ModuleWrapper):
+    def __fix_proc_inputs(proc: ModuleWrapper) -> None:
+        """Gives a name to the unnamed input descriptors of a processor ("proc_input_<j>").
+
+        Args:
+            proc: The processor.
+        """
+
         # Fixing naming conventions
         for j in range(len(proc.proc_inputs)):
             if proc.proc_inputs[j].get_name() == "unk":
                 proc.proc_inputs[j].set_name("proc_input_" + str(j))
 
     @staticmethod
-    def __guess_proc_outputs(proc: ModuleWrapper):
+    def __guess_proc_outputs(proc: ModuleWrapper) -> None:
         """Heuristically infers ``proc_outputs`` by running a dummy forward pass."""
         if proc.proc_outputs is not None:
             return
@@ -1147,8 +1380,7 @@ class AgentProcessorChecker:
         for i, proc_input in enumerate(proc.proc_inputs):
             if proc_input.is_tensor():
                 inputs.append(proc_input.check_and_preprocess(
-                    torch.randn([1] + list(proc_input.tensor_shape),  # Adding batch size here
-                                dtype=proc_input.tensor_dtype).to(device)))
+                    AgentProcessorChecker.__dummy_tensor(proc_input).to(device)))
             elif proc_input.is_img():
                 rgb_input_img = Image.new('RGB', (224, 224))
                 pixels = rgb_input_img.load()
@@ -1162,9 +1394,10 @@ class AgentProcessorChecker:
             elif proc_input.is_text():
                 inputs.append(proc_input.check_and_preprocess("test text as input"))
 
-        # Forward
+        # Forward: the module itself, since the inputs are already preprocessed (the wrapper would preprocess them
+        # again, and it needs the outputs that are being guessed), its state restored afterwards
         with torch.no_grad():
-            outputs = proc(*inputs)
+            outputs = AgentProcessorChecker.__call_restoring(proc, lambda: proc.module(*inputs))
         if not isinstance(outputs, tuple | list):
             outputs = [outputs]
         if isinstance(outputs, tuple):
@@ -1197,7 +1430,9 @@ class AgentProcessorChecker:
                 else:
                     data_type = "tensor"
                     tensor_dtype = str(output.dtype)
-                    tensor_shape = output_shape
+
+                    # The batch dimension is part of the shape (any size), as the stream checks it
+                    tensor_shape = tuple([None] + output_shape) if output.ndim > 0 else ()
                     tensor_labels = None
             elif isinstance(output, str):
                 data_type = "text"
@@ -1218,7 +1453,90 @@ class AgentProcessorChecker:
         proc.set_proc_inputs_and_outputs(None, proc_outputs)
 
     @staticmethod
-    def __fix_proc_outputs(proc: ModuleWrapper):
+    def __call_restoring(proc: ModuleWrapper, call: Callable[[], object]) -> object:
+        """Calls something on the wrapped module, then puts its state back (the probes must not change a stateful
+        module, such as the hidden state of an RNN).
+
+        Args:
+            proc: The processor.
+            call: What to call.
+
+        Returns:
+            What the call returned (its exceptions are raised).
+        """
+        snap = None
+        if isinstance(proc.module, torch.nn.Module):
+            try:
+                snap = copy.deepcopy(proc.module.state_dict())
+            except Exception:
+                snap = None
+        try:
+            return call()
+        finally:
+            if snap is not None:
+                try:
+                    proc.module.load_state_dict(snap)
+                except Exception:
+                    pass
+
+    @staticmethod
+    def __guess_from_annotations(proc: ModuleWrapper) -> str | None:
+        """Reads the type of the first data argument of the module, as its forward (or itself) declares it.
+
+        Args:
+            proc: The processor.
+
+        Returns:
+            "text" for str, "img" for a PIL image, None when it does not say (or says something else).
+        """
+        target = proc.module.forward if hasattr(proc.module, "forward") else proc.module
+        try:
+            sig = inspect.signature(target)
+        except (TypeError, ValueError):
+            return None
+        for name, param in sig.parameters.items():
+            if name in ("first", "last") or param.kind in (inspect.Parameter.VAR_POSITIONAL,
+                                                            inspect.Parameter.VAR_KEYWORD):
+                continue
+            ann = param.annotation
+            kinds = set(typing.get_args(ann)) | {ann}
+            if str in kinds or ann in ("str", "str | None"):
+                return "text"
+            if Image.Image in kinds or ann in ("Image.Image", "Image.Image | None", "Image"):
+                return "img"
+            return None
+        return None
+
+    @staticmethod
+    def __dummy_tensor(proc_input: StreamType) -> torch.Tensor:
+        """A random tensor that a tensor stream accepts, for a probe forward pass.
+
+        The batch dimension is the first one of tensor_shape: an unknown batch is 1, any other unknown size is 8.
+
+        Args:
+            proc_input: The descriptor of the stream.
+
+        Returns:
+            The tensor.
+        """
+        shape = list(proc_input.tensor_shape or (None,))
+        shape = [s if s is not None else (1 if i == 0 and len(shape) > 1 else 8) for i, s in enumerate(shape)]
+        dtype = proc_input.tensor_dtype
+        if isinstance(dtype, str):
+            dtype = getattr(torch, dtype.removeprefix("torch."), None)
+        if dtype is not None and not torch.is_floating_point(torch.empty(0, dtype=dtype)):
+            high = len(proc_input.tensor_labels) if proc_input.tensor_labels else 2
+            return torch.randint(0, high, shape, dtype=dtype)
+        return torch.randn(shape, dtype=dtype)
+
+    @staticmethod
+    def __fix_proc_outputs(proc: ModuleWrapper) -> None:
+        """Gives a name to the unnamed output descriptors of a processor ("proc_output_<j>").
+
+        Args:
+            proc: The processor.
+        """
+
         # Fixing naming conventions
         for j in range(len(proc.proc_outputs)):
             if proc.proc_outputs[j].get_name() == "unk":
@@ -1311,7 +1629,7 @@ class AgentProcessorChecker:
 _featherless_clients: dict = {}
 
 
-def _get_featherless_client(api_key: str | None = None):
+def _get_featherless_client(api_key: str | None = None) -> Any:
     """Return the shared Featherless ``AsyncOpenAI`` client for the given API key, creating it lazily on first use.
 
     It must be created inside the running event loop (the server's), so it binds to the right loop. Idle keep-alive
@@ -1344,7 +1662,7 @@ OPENAI_NATIVE_SAMPLER_PARAMS: frozenset[str] = frozenset({
 
 async def featherless_call(sys_prompt: str, prompt: str, sampler: dict | None = None,
                            model: str | None = None, api_key: str | None = None) -> str | None:
-    """Perform the actual call to the Featherless API and return the generated text.
+    """Perform the actual call to the Featherless API and return the generated text (async).
 
     Args:
         sys_prompt: The system prompt, if any (can be empty).
@@ -1387,6 +1705,7 @@ async def featherless_call(sys_prompt: str, prompt: str, sampler: dict | None = 
         current_time = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
         t0 = time.perf_counter()
         try:
+
             # Always use chat completions; include the system message only when a system prompt is given
             msgs = [{"role": "system", "content": sys_prompt}] if sys_prompt else []
             msgs.append({"role": "user", "content": prompt})
@@ -1456,7 +1775,7 @@ class APIGatewayServer:
     VALID_COSTS = tuple(int(x) for x in os.environ.get("GW_VALID_COSTS", "1,2,4").split(","))
     LOCKFILE: str = os.environ.get("GW_LOCKFILE", os.path.join(tempfile.gettempdir(), "llm_api_gateway.lock"))
 
-    def __init__(self, call: Callable = featherless_call):
+    def __init__(self, call: Callable = featherless_call) -> None:
         """Create a Server.
 
         Args:
@@ -1467,34 +1786,8 @@ class APIGatewayServer:
         self.live: set = set()  # Set of registration writers (one per live client)
         self.shutdown: asyncio.Event = asyncio.Event()
 
-    def _sched_for(self, api_key: str, key_units: int) -> 'APIGatewayScheduler':
-        """Return the scheduler for the given API key, creating it (and its dispatcher task) on first use.
-
-        Each API key is a distinct Featherless account with its own unit budget, so each key gets its own scheduler
-        (own queues, own budget, own dispatcher coroutine): a saturated account never stalls the others. The budget
-        is sized by the FIRST request that mentions the key; later requests declaring a different total are served
-        under the original budget (a mismatch is logged and ignored).
-
-        Args:
-            api_key: The Featherless API key identifying the account.
-            key_units: The total unit budget supported by that key.
-
-        Returns:
-            The ``APIGatewayScheduler`` associated to the key.
-        """
-        if api_key not in self.scheds:
-            sched = APIGatewayScheduler(total_units=key_units)
-            self.scheds[api_key] = sched
-            asyncio.create_task(sched.dispatcher(functools.partial(self.call, api_key=api_key)))
-        else:
-            sched = self.scheds[api_key]
-            if sched.total_units != key_units:
-                log.error(f"Key ...{api_key[-4:]} was registered with {sched.total_units} total units, "
-                          f"ignoring the new value {key_units}")
-        return self.scheds[api_key]
-
     async def handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-        """Serve a single client connection until it closes.
+        """Serve a single client connection until it closes (async).
 
         A connection that sends ``{"op": "hello"}`` is treated as that client's liveness registration; a connection
         that sends ``{"op": "generate", ...}`` has its query scheduled and the result written back.
@@ -1556,7 +1849,7 @@ class APIGatewayServer:
                 pass
 
     async def run(self) -> None:
-        """Bind the listening socket, start the dispatcher, and run until shutdown is requested.
+        """Bind the listening socket, start the dispatcher, and run until shutdown is requested (async).
 
         Binding also arbitrates the startup race: if the port is already taken, ``start_server`` raises and this process
         is not the server. A grace period guards against an orphan server whose starter died before registering.
@@ -1579,6 +1872,32 @@ class APIGatewayServer:
         async with server:
             await self.shutdown.wait()
 
+    def _sched_for(self, api_key: str, key_units: int) -> 'APIGatewayScheduler':
+        """Return the scheduler for the given API key, creating it (and its dispatcher task) on first use.
+
+        Each API key is a distinct Featherless account with its own unit budget, so each key gets its own scheduler
+        (own queues, own budget, own dispatcher coroutine): a saturated account never stalls the others. The budget
+        is sized by the FIRST request that mentions the key; later requests declaring a different total are served
+        under the original budget (a mismatch is logged and ignored).
+
+        Args:
+            api_key: The Featherless API key identifying the account.
+            key_units: The total unit budget supported by that key.
+
+        Returns:
+            The ``APIGatewayScheduler`` associated to the key.
+        """
+        if api_key not in self.scheds:
+            sched = APIGatewayScheduler(total_units=key_units)
+            self.scheds[api_key] = sched
+            asyncio.create_task(sched.dispatcher(functools.partial(self.call, api_key=api_key)))
+        else:
+            sched = self.scheds[api_key]
+            if sched.total_units != key_units:
+                log.error(f"Key ...{api_key[-4:]} was registered with {sched.total_units} total units, "
+                          f"ignoring the new value {key_units}")
+        return self.scheds[api_key]
+
 
 class APIGatewayScheduler:
     """Strict round-robin scheduler with a shared unit-budget admission, used by the gateway server.
@@ -1596,7 +1915,7 @@ class APIGatewayScheduler:
     A single ``asyncio.Condition`` drives every wakeup (new work submitted, or units freed by a finished job).
     """
 
-    def __init__(self, total_units: int = -1):
+    def __init__(self, total_units: int = -1) -> None:
         """Create a Scheduler.
 
         Args:
@@ -1608,22 +1927,9 @@ class APIGatewayScheduler:
         self.queues: dict[str, asyncio.Queue] = {}  # Process ID -> queue of (prompt, cost, model, fut) - ORDERED
         self.rr: int = 0  # Round-robin cursor into the (insertion-ordered) list of process IDs
 
-    def _queue(self, pid: str) -> asyncio.Queue:
-        """Return the per-process queue for the given process ID, creating it on first use.
-
-        Args:
-            pid: The process ID whose queue is requested.
-
-        Returns:
-            The ``asyncio.Queue`` associated to the process ID.
-        """
-        if pid not in self.queues:
-            self.queues[pid] = asyncio.Queue()
-        return self.queues[pid]
-
     async def submit(self, pid: str, sys_prompt: str, prompt: str, cost: int, model: str | None,
                      sampler: dict | None = None) -> str:
-        """Enqueue a query for a process and wait until the dispatcher runs it.
+        """Enqueue a query for a process and wait until the dispatcher runs it (async).
 
         Args:
             pid: The process ID the query belongs to (round-robin fairness is per process).
@@ -1642,32 +1948,8 @@ class APIGatewayScheduler:
             self.cond.notify_all()  # Wake the dispatcher: there is new work
         return await fut
 
-    async def _run_job(self, sys_prompt: str, prompt: str,
-                       cost: int, model: str | None, sampler: dict | None,
-                       fut: asyncio.Future, call: Callable) -> None:
-        """Run a single query to completion, then return its units to the budget.
-
-        Args:
-            sys_prompt: The system prompt to send to the model (can be empty, "").
-            prompt: The prompt string to send to the model.
-            cost: The query's unit cost, returned to the budget once the job finishes.
-            model: The model identifier to use.
-            sampler: Sampling parameters to forward to the model call (None means use API defaults).
-            fut: The future awaited by the submitter, resolved with the result or the exception.
-            call: The asynchronous function performing the actual model call.
-        """
-        try:
-            result = await call(sys_prompt, prompt, sampler, model)
-            fut.set_result(result)
-        except Exception as e:
-            fut.set_exception(e)
-        finally:
-            async with self.cond:
-                self.available += cost  # Give the units back and wake the dispatcher
-                self.cond.notify_all()
-
     async def dispatcher(self, call: Callable) -> None:
-        """Forever serve queued queries in strict round-robin order under the unit budget.
+        """Forever serve queued queries in strict round-robin order under the unit budget (async).
 
         Args:
             call: The asynchronous function performing the actual model call (passed on to each job).
@@ -1715,8 +1997,45 @@ class APIGatewayScheduler:
                     await self._wait_locked()
                     continue
 
+    def _queue(self, pid: str) -> asyncio.Queue:
+        """Return the per-process queue for the given process ID, creating it on first use.
+
+        Args:
+            pid: The process ID whose queue is requested.
+
+        Returns:
+            The ``asyncio.Queue`` associated to the process ID.
+        """
+        if pid not in self.queues:
+            self.queues[pid] = asyncio.Queue()
+        return self.queues[pid]
+
+    async def _run_job(self, sys_prompt: str, prompt: str,
+                       cost: int, model: str | None, sampler: dict | None,
+                       fut: asyncio.Future, call: Callable) -> None:
+        """Run a single query to completion, then return its units to the budget (async).
+
+        Args:
+            sys_prompt: The system prompt to send to the model (can be empty, "").
+            prompt: The prompt string to send to the model.
+            cost: The query's unit cost, returned to the budget once the job finishes.
+            model: The model identifier to use.
+            sampler: Sampling parameters to forward to the model call (None means use API defaults).
+            fut: The future awaited by the submitter, resolved with the result or the exception.
+            call: The asynchronous function performing the actual model call.
+        """
+        try:
+            result = await call(sys_prompt, prompt, sampler, model)
+            fut.set_result(result)
+        except Exception as e:
+            fut.set_exception(e)
+        finally:
+            async with self.cond:
+                self.available += cost  # Give the units back and wake the dispatcher
+                self.cond.notify_all()
+
     async def _wait_locked(self) -> None:
-        """Release the condition lock and block until notified (new work or freed units), then reacquire it.
+        """Release the condition lock and block until notified (new work or freed units), then reacquire it (async).
 
         Must be called while holding ``self.cond``.
         """

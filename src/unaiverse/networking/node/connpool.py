@@ -15,25 +15,22 @@
 import time
 import math
 import asyncio
+from typing import Any, Callable
 from collections import namedtuple
+from unaiverse.custom import Custom
 from unaiverse.utils.logger import log
 from unaiverse.networking.p2p.messages import Msg
 from unaiverse.networking.p2p.p2p import P2P, P2PError
 from unaiverse.networking.node.tokens import TokenVerifier
 from unaiverse.networking.session.session_manager import SessionManager
-from unaiverse.networking.session.session import SessionState
-
+from unaiverse.networking.session.session import SessionState, SessionEventType
+from unaiverse.networking.session.sess_msg import SessionInbound, WORLD_HANDOFF_COMPLETE, WORLD_DISENGAGEMENT
 
 # sess_msg.py (the session layer's leaf module) is the single source of truth for the
 # session-protocol value objects. The inbound codec itself (pop + decode) now lives in
 # P2P.get_messages, so connpool only needs the SessionInbound value object it carries
 # through and the WORLD_HANDOFF_COMPLETE reason code for the handoff close. The wire codec
 # (SessMsg) and its protocol IDs (SESSION_PROTOCOL_IDS) are no longer referenced here.
-from unaiverse.networking.session.sess_msg import (
-    SessionInbound, WORLD_HANDOFF_COMPLETE, WORLD_DISENGAGEMENT,
-)
-
-
 # Immutable per-cycle view of the world membership that the perimeter routing
 # classifies against. Built once per update cycle so each per-instance reconcile reads a
 # single consistent snapshot instead of the Coordinator's mutable sets, the same frozen
@@ -81,7 +78,16 @@ class HandoffCorrelation:
         pointer that ``start_world_handoff`` set optimistically.
     """
 
-    def __init__(self, is_world_established, abort_world, current_world, clear_world):
+    def __init__(self, is_world_established: Callable[[str], bool], abort_world: Callable,
+                 current_world: Callable[[], str | None], clear_world: Callable[[], None]) -> None:
+        """Initializes an empty correlation, with the hooks it uses to read and change the world state.
+
+        Args:
+            is_world_established: Tells whether the world Session to a peer is ESTABLISHED.
+            abort_world: Aborts the world Session of a failed handoff.
+            current_world: Reads the pool-routing world pointer.
+            clear_world: Un-points the pool-routing world pointer.
+        """
         self.pending_world_handoff: dict[str, str] = {}
         self.world_to_public: dict[str, str] = {}
         self._is_world_established = is_world_established
@@ -104,7 +110,7 @@ class HandoffCorrelation:
         return self.world_to_public.get(world_peer_id)
 
     async def rollback(self, peer_id: str) -> None:
-        """Roll back the correlation for a terminal Session, whichever side died.
+        """Roll back the correlation for a terminal Session, whichever side died (async).
 
         When the PUBLIC carrier dies mid-handoff, the fate of the correlated world
         Session decides everything: already ESTABLISHED -> NO-OP (the join is
@@ -137,6 +143,61 @@ class HandoffCorrelation:
         if public_peer_id is not None:
             self.pending_world_handoff.pop(public_peer_id, None)
         return public_peer_id
+
+
+class SendTicket:
+    """What happened to one direct message sent with NodeConn.send_tracked.
+
+    status is "queued" until the send queue of the peer reports it, then "written" (the whole message left on its
+    stream: not a proof that the peer processed it, which an interaction status tells) or "dropped" (with the reason:
+    max_attempts, max_age, explicit, or the error of a send that failed). Wait for it with ``await ticket.wait()``
+    from an action: the network task resolves it meanwhile (with the two tasks of a running node only: in a loop with
+    a cycle budget the wait can only time out). Never poll status in a loop without an await.
+    """
+
+    def __init__(self, peer_id: str, seq: int | None, status: str = "queued", reason: str | None = None) -> None:
+        """Initializes the ticket.
+
+        Args:
+            peer_id: The peer the message was sent to.
+            seq: Its sequence number in the send queue of that peer (None when the transport has no queue).
+            status: The initial status (default: "queued").
+            reason: Why it was dropped, for an initial "dropped" (default: None).
+        """
+        self.peer_id = peer_id
+        self.seq = seq
+        self.status = status
+        self.reason = reason
+        self.progress: tuple[int, int] | None = None  # (bytes written, total) of a message larger than a chunk
+        self._done = asyncio.Event()
+        if status != "queued":
+            self._done.set()
+
+    async def wait(self, timeout: float | None = None) -> bool:
+        """Waits until the message is written or dropped, for at most timeout seconds (async).
+
+        Args:
+            timeout: Seconds to wait (default: Custom.SEND_TICKET_TIMEOUT).
+
+        Returns:
+            True if the message was written; False if it was dropped or the time ran out (status says which).
+        """
+        try:
+            await asyncio.wait_for(self._done.wait(), Custom.SEND_TICKET_TIMEOUT if timeout is None else timeout)
+        except asyncio.TimeoutError:
+            return False
+        return self.status == "written"
+
+    def resolve(self, status: str, reason: str | None = None) -> None:
+        """Sets the final status of the ticket (once: later calls change nothing).
+
+        Args:
+            status: "written" or "dropped".
+            reason: Why it was dropped (default: None).
+        """
+        if self.status == "queued":
+            self.status, self.reason = status, reason
+            self._done.set()
 
 
 class NodeConn:
@@ -225,6 +286,7 @@ class NodeConn:
         # membership_snapshot(). inspector_peer_id stays here: it is not pure world
         # membership but an orthogonal, currently-inert chat exception.
         self.inspector_peer_id = None
+
         # role_to_peer_ids and peer_id_to_addrs stay Coordinator-owned and do NOT descend
         # into sm_world with the world membership. role_to_peer_ids is the inverse
         # index of peer_id_to_misc (the global cross-pool taxonomy, kept here) and set_role
@@ -277,6 +339,15 @@ class NodeConn:
         self._sm_world = None
         self._session_managers = []
 
+        # Refusals of a full send queue, per peer: logged as a warning at most once per interval, with their count
+        self._refused_sends: dict[str, list] = {}  # Peer ID -> [refusals not logged yet, time of the last log]
+
+        # Tracked sends (send_tracked), per (instance, peer): the tickets still queued, and what the send events said
+        # so far, for a ticket whose events were popped while its send was still returning its sequence number
+        self._tickets: dict[tuple[str, str], dict[int, SendTicket]] = {}
+        self._written_upto: dict[tuple[str, str], int] = {}
+        self._recent_drops: dict[tuple[str, str], list[tuple[int, int, str]]] = {}
+
         # World-handoff correlation, owned here so it sits next to the two SessionManagers
         # it spans. The ledger itself (the twin maps + start/rollback/complete) lives in
         # HandoffCorrelation, shared with the test-harness mirror; the effect callables
@@ -289,129 +360,6 @@ class NodeConn:
             current_world=self.get_world_node_peer_id,
             clear_world=lambda: self.set_world(None),
         )
-
-    @property
-    def _pending_world_handoff(self) -> dict:
-        """The forward handoff index (public -> world); lives in the shared ledger."""
-        return self._handoff.pending_world_handoff
-
-    @property
-    def _world_to_public(self) -> dict:
-        """The reverse handoff index (world -> public); lives in the shared ledger."""
-        return self._handoff.world_to_public
-
-    async def _abort_world_redemption(self, world_peer_id: str) -> None:
-        """Effect injected into the handoff ledger: abort the in-flight grant
-        redemption (drop dispatches on its state: mid-handshake -> silent abort)."""
-        if self._sm_world is not None:
-            await self._sm_world.drop(world_peer_id)
-
-    def _init_pools(self, max_connections: int, pool_name_to_p2p_name_and_ratio: dict[str, list[str | float]],
-                    valid_p2p_names: set[str],
-                    public_key: str | None = None, token: str | None = None) -> None:
-        """Set up the pool triples and the per-peer / per-p2p indices for this Coordinator.
-
-        Args:
-            max_connections: The maximum total number of connections allowed across all pools.
-            pool_name_to_p2p_name_and_ratio: A dictionary mapping pool names to a list containing the associated P2P
-                network name and its connection ratio.
-            valid_p2p_names: The set of known P2P network names, used only to validate that every
-                pool references an existing network. The P2P objects themselves are not needed
-                here, they arrive in attach_session_policy.
-            public_key: An optional public key for token verification.
-            token: An optional initial token for authentication.
-
-        Returns:
-            None.
-
-        """
-        # Common terms: a "pool triple" is [pool_contents, max_connections_in_such_a_pool, p2p_object_of_the_pool
-        self.max_con = max_connections
-        self.pool_count = len(pool_name_to_p2p_name_and_ratio)
-        self.pool_names = list(pool_name_to_p2p_name_and_ratio.keys())
-        self.pool_ratios: list[float] = []
-        for p2p_name_and_ratio in pool_name_to_p2p_name_and_ratio.values():
-            ratio = p2p_name_and_ratio[1]
-            assert isinstance(ratio, float)
-            self.pool_ratios.append(ratio)
-
-        # The SM is the instance: the per-instance index maps a p2p_name to its
-        # SessionManager, not to the raw P2P handle. It is empty until
-        # set_session_managers runs (the SMs are built late in attach_session_policy),
-        # so it is seeded here and populated there. The pool->p2p_name mapping captured
-        # at init lets set_session_managers wire each pool triple's instance slot to the
-        # right SM. The Coordinator keeps no separate transport handle: each P2P lives inside
-        # its owning SM, and the Coordinator reaches it (and the instance identity) through
-        # the SM, never as a raw channel.
-        self._p2p_name_to_sm = {}
-        self._pool_name_to_p2p_name = {}
-
-        # Indices rooted around the pool name
-        self.pool_name_to_pool_triple = {}
-        self.pool_name_to_added_in_last_update = {}
-        self.pool_name_to_removed_in_last_update = {}
-        self.pool_name_to_peer_infos = {p: {} for p in self.pool_names}
-
-        # Indices rooted around the peer ID. peer_id_to_pool_name is the connection
-        # index (which pool a connected peer lives in): it backs is_connected,
-        # get_pool_of, in_connection_queues, get_all_connected_peer_ids and the chat
-        # admission gate in get_messages. It is no longer the primary source of the
-        # peer -> instance routing: that is Session-anchored now (_sm_of asks the
-        # SessionManagers first and only falls back to this map for a peer connected
-        # without a Session yet). So it stays load-bearing and must not be dropped when
-        # the world roster and the pool state later move down into the SessionManagers.
-        self.peer_id_to_pool_name = {}
-        self.peer_id_to_misc = {}
-        self.peer_id_to_token = {}
-
-        # Token-related stuff, super private
-        self.__token = token if token is not None else ""
-        self.__token_verifier = TokenVerifier(public_key) if public_key is not None else None
-
-        # Checking
-        for p2p_name_and_ratio in pool_name_to_p2p_name_and_ratio.values():
-            assert p2p_name_and_ratio[0] in valid_p2p_names, f"Cannot find p2p named {p2p_name_and_ratio[0]} "
-        assert self.max_con >= len(self.pool_names), "Too small number of max connections"
-        assert sum([x for x in self.pool_ratios if x > 0]) == 1.0, "Pool ratios must sum to 1.0"
-
-        # Preparing the pool triples. The instance slot (triple[2]) holds the
-        # SessionManager that owns the pool, but the SMs do not exist yet at __init__
-        # (they are built in attach_session_policy): seed it with None and remember which
-        # p2p_name each pool belongs to, so set_session_managers can wire the right SM in.
-        self.pool_name_to_pool_triple = {}
-        for k in self.pool_names:
-            p2p_name = pool_name_to_p2p_name_and_ratio[k][0]
-            assert isinstance(p2p_name, str)
-            self._pool_name_to_p2p_name[k] = p2p_name
-            self.pool_name_to_pool_triple[k] = [set(), 0, None]
-        num_zero_ratio_pools = len([x for x in self.pool_ratios if x == 0])
-        assert num_zero_ratio_pools <= self.max_con, "Cannot create pools given the provided max connection count"
-
-        # Edit: to solve the teacher not engaging with more than two students.
-        pools_max_sizes = {k: max(math.floor(self.pool_ratios[i] * (self.max_con - num_zero_ratio_pools)),
-                                  1 if self.pool_ratios[i] >= 0. else 0)
-                           for i, k in enumerate(self.pool_names)}
-
-        # Pools_max_sizes = {k: self.max_con for k in self.pool_names}
-
-        # Fixing sizes
-        tot = 0
-        for i, (k, v) in enumerate(pools_max_sizes.items()):
-            assert v > 0 or self.pool_ratios[i] < 0, "Cannot create pools given the provided max connection count"
-
-            # Edit: to solve the teacher not engaging with more than two students.
-            tot += v
-        assert tot <= self.max_con, \
-            "Cannot create pools given the provided max connection count"
-        pools_max_sizes[self.pool_names[-1]] += (self.max_con - tot)
-
-        # Storing the fixed cap in each pool triple (triple = [peer_id set, cap, SM]).
-        for pool_name, pool_contents_max_con_and_sm in self.pool_name_to_pool_triple.items():
-            pool_contents_max_con_and_sm[1] = pools_max_sizes[pool_name]  # Fixing the second element of the triple
-
-        # Time markers
-        self.__last_sent_time = 0.
-        self.__last_recv_time = 0.
 
     def __str__(self) -> str:
         """Returns a human-readable string representation of the connection pools' status.
@@ -446,26 +394,56 @@ class NodeConn:
     # the None guard stays on Node (get_public_peer_id / get_world_peer_id), so these return raw.
     @property
     def public_peer_id(self) -> str | None:
+        """Gets our peer id on the public instance.
+
+        Returns:
+            Our peer id on the public instance.
+        """
         return self._sm_public.local_peer_id
 
     @property
     def world_peer_id(self) -> str | None:
+        """Gets our peer id on the world instance.
+
+        Returns:
+            Our peer id on the world instance.
+        """
         return self._sm_world.local_peer_id
 
     @property
     def public_addresses(self) -> list[str]:
+        """Gets the live multiaddresses of the public instance.
+
+        Returns:
+            The live multiaddresses of the public instance.
+        """
         return self._sm_public.addresses
 
     @property
     def world_addresses(self) -> list[str]:
+        """Gets the live multiaddresses of the world instance.
+
+        Returns:
+            The live multiaddresses of the world instance.
+        """
         return self._sm_world.addresses
 
     @property
     def world_is_public(self) -> bool | None:
+        """Gets whether the world instance is publicly reachable.
+
+        Returns:
+            Whether the world instance is publicly reachable.
+        """
         return self._sm_world.is_public
 
     @property
     def world_relay_enabled(self) -> bool:
+        """Gets whether the relay client is enabled on the world instance.
+
+        Returns:
+            Whether the relay client is enabled on the world instance.
+        """
         return self._sm_world.relay_enabled
 
     def get_world_connected_peers_info(self) -> list | None:
@@ -503,7 +481,7 @@ class NodeConn:
     async def verify_token_claims(self, token: str, peer_id: str) -> tuple:
         """Verify a token and return the full claims, including the root-attested
         `p2p_peers` binding, for the Session handshake (RT). The `p2p_peer` check is
-        always against `peer_id` (the transport-verified peer-id of the speaker).
+        always against `peer_id` (the transport-verified peer-id of the speaker) (async).
 
         Returns:
             ``(node_id, cv_hash, p2p_peers, exp, code_hash)`` on success,
@@ -529,11 +507,12 @@ class NodeConn:
         try:
             return await sm.reserve(peer_id)
         except P2PError as e:
+
             # The browser has no other line that says why: its transport raises this.
             log.error(f"No relay slot on ...{peer_id[-5:]} ({p2p_name}): {e}")
             return None
 
-    def set_turn_credentials(self, ice_turn_servers) -> None:
+    def set_turn_credentials(self, ice_turn_servers: list) -> None:
         """Push TURN credentials to BOTH instances, fanning out through the SMs
         (Node -> NodeConn -> SM -> P2P). The raw transport handles stay custody-only
         behind the managers, so Node sets credentials once and both instances update."""
@@ -580,7 +559,7 @@ class NodeConn:
         settlement cut once the CLOSED lands — never a disconnect in the same stack
         as the farewell write, which would destroy the GOAWAY on the wire; the
         coercive branches (mid-handshake, reasonless on a live Session, KNOWN,
-        sessionless) abort/forget and sever the transport inline.
+        sessionless) abort/forget and sever the transport inline (async).
 
         Returns the SessionEvents for Node to dispatch (always ``[]`` today: the
         CLOSED arrives later via GOAWAY-ACK / the CLOSING timeout). The grace case
@@ -608,30 +587,22 @@ class NodeConn:
         Returns:
             The list of SessionEvents to dispatch.
         """
+        sm = self._sm_of(peer_id)
         if not settled:
-            sm = self._sm_of(peer_id)
             events = await sm.drop(peer_id, reason) if sm is not None else []
         else:
             events = []
+
+        # What is still queued for the peer goes too, so that its writer never dials it again. Not while a GOAWAY is
+        # in flight: the messages sent just before the purge still leave on the live link, and the settled purge that
+        # follows the CLOSED drops whatever is left
+        if sm is not None and (settled or not sm.is_tearing_down(peer_id)):
+            dropped = sm.drop_send_queue(peer_id)
+            if dropped > 0:
+                log.network(f"Dropped {dropped} queued messages to purged peer {peer_id}", sub=sm.log_sub)
+        self._refused_sends.pop(peer_id, None)
         self._evict_from_pools(peer_id)
         return events
-
-    def _evict_from_pools(self, peer_id: str) -> bool:
-        """Internal: drop the peer from the pool indices only (the pool set, the per-pool
-        peer infos, the pool-name index and the last-token cache), WITHOUT touching the
-        transport or the Session. This is the pure pool-sync shared by the voluntary drop
-        (``drop_peer``) and the involuntary transport-drop reaction (``on_peer_disconnected``).
-
-        Remember to NOT del peer_id_to_misc[peer_id]! (the role taxonomy survives a drop)."""
-        pool_name = self.peer_id_to_pool_name.get(peer_id)
-        if pool_name is None:
-            return False
-        pool, _, _ = self.pool_name_to_pool_triple[pool_name]
-        pool.discard(peer_id)
-        self.pool_name_to_peer_infos[pool_name].pop(peer_id, None)
-        del self.peer_id_to_pool_name[peer_id]
-        self.peer_id_to_token.pop(peer_id, None)
-        return True
 
     def get_pool_status(self) -> dict[str, set]:
         """Returns a dictionary showing the set of peer IDs in each pool.
@@ -659,6 +630,7 @@ class NodeConn:
         self,
         p2p_name: str,
         allowed_not_connected_peers: set | None = None,
+        kind: str = "all",
     ) -> tuple[list[Msg], list[SessionInbound]]:
         """Retrieves and verifies all messages from a specified P2P network (async).
 
@@ -684,6 +656,8 @@ class NodeConn:
                 live mutable set), so a mid-cycle pre-admission only enables chat at the
                 next update(). Session messages are never gated on pool membership, the
                 handshake itself is what enrols a peer.
+            kind: "all" (default), "network" (everything but the streams, for the network
+                pass) or "streams" (one message per stream channel, for the tick).
         """
         assert allowed_not_connected_peers is None, \
             "allowed_not_connected_peers is set by the Coordinator, not by the caller"
@@ -695,7 +669,7 @@ class NodeConn:
         # decoded, sender-verified Msg, session frames are SessionInbound passed straight
         # through. Here we only gate membership and verify the piggyback token.
         sm = self._sm_by_name(p2p_name)
-        chat_messages, session_messages = sm.get_messages()
+        chat_messages, session_messages = sm.get_messages(kind)
         processed_messages: list[Msg] = []
 
         if chat_messages or session_messages:
@@ -715,6 +689,7 @@ class NodeConn:
                     inspector_mode = token_with_inspector_final_bit[-1]
                     node_id, _ = await self.verify_token(token, msg_obj.sender)
                     if node_id is not None:
+
                         # Replacing piggyback with the node ID and the flag telling if it is inspector
                         msg_obj.piggyback = node_id + inspector_mode
                         processed_messages.append(msg_obj)
@@ -729,7 +704,12 @@ class NodeConn:
 
         return processed_messages, session_messages
 
-    def passed_time_since_last_communication(self):
+    def passed_time_since_last_communication(self) -> float:
+        """Gets the time passed since the last message sent or received on any instance.
+
+        Returns:
+            The seconds since the last communication (never negative).
+        """
         passed = time.time() - max(self.__last_sent_time, self.__last_recv_time)
         return 0. if passed < 0. else passed
 
@@ -771,37 +751,83 @@ class NodeConn:
         Returns:
             True if the message is sent successfully, otherwise False.
         """
-        if content_type not in [Msg.STATS_UPDATE, Msg.STATS_REQUEST, Msg.STATS_RESPONSE]:
-            self.__last_sent_time = time.time()
+        sm, outcome, _ = await self._deliver(peer_id, channel_trail, content_type, content)
+        return outcome in ("queued", "written")
 
-        # Resolve the owning instance's manager and send through it (NodeConn -> SM -> P2P).
-        sm = self._sm_of(peer_id)
-        if sm is None:
-            log.error("P2P non found for peer id: " + str(peer_id))
-            return False
+    async def send_tracked(self, peer_id: str, channel_trail: str | None,
+                           content_type: str, content: bytes | dict | str | None = None) -> SendTicket | None:
+        """Sends a direct message as send() does, and returns a ticket that tells when it was written (async).
 
-        # Defining channel (the instance's local peer-id, read from the SM, not the P2P handle)
-        if channel_trail is not None and len(channel_trail) > 0:
-            channel = f"{sm.local_peer_id}::dm:{peer_id}-{content_type}~{channel_trail}"
+        Args:
+            peer_id: The peer ID to send the message to.
+            channel_trail: An optional string to append to the channel name.
+            content_type: The type of content in the message.
+            content: The message content.
+
+        Returns:
+            None when the send queue of the peer refused it (full); otherwise a SendTicket: queued until the send queue
+            reports it, already written when the transport has no queue (the browser: its send returns once written),
+            already dropped when the send failed.
+        """
+        sm, outcome, detail = await self._deliver(peer_id, channel_trail, content_type, content)
+        if outcome == "refused":
+            return None
+        if outcome == "failed":
+            return SendTicket(peer_id, None, status="dropped", reason=detail)
+        if outcome == "written":
+            return SendTicket(peer_id, None, status="written")
+        key, seq = (sm.p2p_name, peer_id), detail
+        ticket = SendTicket(peer_id, seq)
+
+        # Its events may have been popped already, while the send was returning (written up to, or dropped)
+        if seq <= self._written_upto.get(key, 0):
+            ticket.resolve("written")
         else:
-            channel = f"{sm.local_peer_id}::dm:{peer_id}-{content_type}"
+            for first, last, reason in self._recent_drops.get(key, []):
+                if first <= seq <= last:
+                    ticket.resolve("dropped", reason)
+        if ticket.status == "queued":
+            self._tickets.setdefault(key, {})[seq] = ticket
+        return ticket
 
-        log.network(f">>> SENDING {content_type} to {peer_id}", sub=sm.log_sub)
+    @property
+    def sends_are_queued(self) -> bool:
+        """Tells whether the direct sends only queue (the Go send queues are on).
 
-        # Adding sender info here
-        msg = Msg(sender=sm.local_peer_id,
-                  content_type=content_type,
-                  content=content,
-                  channel=channel,
-                  piggyback=self.__token + "0")  # Adding inspector-mode bit (dummy bit here)
+        Then a False from send is the refusal of a full queue, which says nothing about whether the peer is alive (the
+        Session keep-alive does); otherwise (an older library, the browser) it is a failed write, as it always was.
 
-        # Hand the Msg object to the SM; the codec and the thread offload live in P2P.
-        try:
-            await sm.send(channel, msg)
-            return True
-        except P2PError as e:
-            log.error("Sending error is: " + str(e), sub=sm.log_sub)
-            return False
+        Returns:
+            True when the sends are queued.
+        """
+        return any(getattr(sm.p2p, "_send_queues_enabled", False) for sm in self._session_managers)
+
+    def pop_send_events(self) -> list[dict]:
+        """Pops the events of the send queues of every instance, each tagged with the name of its instance.
+
+        See P2P.pop_send_events for the fields; an instance whose transport has no send queues (the browser, a
+        library older than them) gives none.
+
+        Returns:
+            The list of the events, public instance first, oldest first within each.
+        """
+        events = []
+        for sm in self._session_managers:
+            for ev in sm.pop_send_events():
+                ev["p2p_name"] = sm.p2p_name
+                self._resolve_tickets(ev)
+                events.append(ev)
+        return events
+
+    def request_keepalive_probe(self, peer_id: str) -> None:
+        """Asks the Session of a peer for an early keep-alive PING (after a failed send).
+
+        Args:
+            peer_id: The peer.
+        """
+        sm = self._sm_of(peer_id)
+        if sm is not None:
+            sm.request_keepalive_probe(peer_id)
 
     async def subscribe(self, peer_id: str, channel: str, default_p2p_name: str | None = None) -> bool:
         """Subscribes to a topic/channel on a P2P network (async).
@@ -893,8 +919,9 @@ class NodeConn:
             return False
 
     def attach_session_policy(self, p2p_u: P2P, p2p_w: P2P,
-                              local_profile_factory, decision_hook, token_factory=None,
-                              address_lookup=None) -> None:
+                              local_profile_factory: Callable[[], dict], decision_hook: Callable | None,
+                              token_factory: Callable[[], str] | None = None,
+                              address_lookup: Callable | None = None) -> None:
         """Take the two transport handles and build the two per-instance SessionManagers,
         now that both the transports and the Node policy born late are available (the profile
         factory samples self.profile, the decision hook reads world/agent/allow-list state).
@@ -905,6 +932,7 @@ class NodeConn:
         address_lookup (async node_id -> addresses, from the Node layer) goes to the public
         manager only: the root server holds the addresses of the public instance, and on
         the world instance the rendezvous keeps them current."""
+
         # Per-instance perimeter routing injected into each manager: the public one
         # routes by direction (no membership, never cuts); the world one classifies
         # against the snapshot and cuts unclassifiable peers on its P2P instance.
@@ -933,7 +961,7 @@ class NodeConn:
         )
         self.set_session_managers(self._sm_public, self._sm_world)
 
-    def set_session_managers(self, *session_managers) -> None:
+    def set_session_managers(self, *session_managers: SessionManager) -> None:
         """Register the per-instance SessionManagers so conn can answer per-peer
         Session-state queries on behalf of the hosted entity. Called by
         attach_session_policy (and directly by unit tests with stub managers).
@@ -983,48 +1011,31 @@ class NodeConn:
         Session message to its instance's manager, then tick every manager, returning a
         FLAT list of SessionEvent in generation order (all delivers, public before world,
         then all ticks, same order). Node keeps the single dispatch site
-        (_dispatch_session_event), so this only moves the per-instance iteration off Node.
+        (_dispatch_session_event), so this only moves the per-instance iteration off Node (async).
 
         Mirrors the legacy order exactly: every deliver fires before any tick, and the
         managers are swept in registration order (public then world). The SessionInbound
         items are keyed by p2p_name; a manager with no inbound this cycle still ticks."""
         events: list = []
+
         # Deliver pass (public then world), every inbound of each instance in order.
         for sm in self._session_managers:
             for inb in inbound_by_p2p_name.get(sm.p2p_name, []):
                 events.extend(await sm.deliver(inb.peer_id, inb.protocol_id, inb.sess_msg))
+
         # Tick pass (same order): timeouts + keep-alive PING/PONG.
         for sm in self._session_managers:
             events.extend(await sm.tick(now))
         events.extend(await self._release_held_world_dials())
-        return events
 
-    async def _release_held_world_dials(self) -> list:
-        """Joiner: once the wait for a roster that lists us is over, by that roster or by
-        its deadline, start the dials toward the other members that it held. A held
-        Session that is no longer KNOWN (the peer dialled us first, left the roster, or
-        was dropped) is left alone. Returns the events of the dials for Node to dispatch."""
-        if self._roster_wait_tag is not None:
-            if time.monotonic() < self._roster_wait_until:
-                return []
-            self._roster_wait_tag = None
-            log.misc("no roster listing us came in time: dialling the members anyway",
-                     sub=self._sm_world.log_sub)
-        if not self._held_world_dials:
-            return []
-        held, self._held_world_dials = self._held_world_dials, set()
-        events: list = []
-        for peer_id in held:
-            sess = self._sm_world.get_session(peer_id)
-            if sess is not None and sess.state == SessionState.KNOWN:
-                events.extend(await self._sm_world.activate(peer_id))
+        self._tell_transports_about_peers(events)
         return events
 
     async def on_peer_disconnected(self, peer_id: str) -> list:
         """React to a transport disconnect: fan it to every instance's manager
         (ESTABLISHED -> RECONNECTING grace, in-handshake states -> FAILED) and sync the
         pool bookkeeping (``_evict_from_pools``), returning the flat list of resulting
-        SessionEvent (public before world) for Node to dispatch.
+        SessionEvent (public before world) for Node to dispatch (async).
 
         The link is already gone, so this evicts the pool WITHOUT a transport disconnect
         (unlike the voluntary ``drop_peer``). This is the involuntary pool-sync: it runs in
@@ -1040,7 +1051,7 @@ class NodeConn:
     async def on_peer_reconnected(self, peer_id: str) -> list:
         """Fan a transport reconnect to every instance's manager and return the flat list
         of resulting SessionEvent (public before world). A no-op unless a Session for the
-        peer is RECONNECTING (mid-grace), so feeding fresh first-time connections is safe."""
+        peer is RECONNECTING (mid-grace), so feeding fresh first-time connections is safe (async)."""
         events: list = []
         for sm in self._session_managers:
             events.extend(await sm.on_peer_reconnected(peer_id))
@@ -1060,13 +1071,12 @@ class NodeConn:
     # directly. Events come back as the return
     # value for Node's single dispatch site; the lifecycle POLICY (when to connect / leave /
     # purge / close) stays on Node, only the SM resolution and the call move here.
-
     async def initiate_session(self, p2p_name: str, peer_id: str, addresses: list,
                                is_world_join: bool = False, remote_node_id_hint: str | None = None,
                                reject_relay: bool = False) -> list:
         """Open an initiator Session to `peer_id` on the named instance and return the
         start-up events for Node to dispatch (and to read a terminal FAILED from). The
-        grant-carrying world initiate stays on the handoff path (start_world_handoff).
+        grant-carrying world initiate stays on the handoff path (start_world_handoff) (async).
 
         A world-join dial to a peer that already holds an ESTABLISHED world-join carrier
         with NO pending handoff is a SPENT carrier (a previous join's handoff failed and was
@@ -1094,7 +1104,7 @@ class NodeConn:
         """Shutdown path: GOAWAY every Session on every instance so peers see a clean CLOSED
         instead of a liveness timeout. Events are intentionally dropped (the node is going
         down); close_all skips Sessions already CLOSING/terminal and silently aborts the
-        in-flight handshakes (no farewell owed there, and the drain must be able to end)."""
+        in-flight handshakes (no farewell owed there, and the drain must be able to end) (async)."""
         for sm in self._session_managers:
             await sm.close_all()
 
@@ -1104,7 +1114,7 @@ class NodeConn:
         finalized it) and no settlement cut still pending (the transports of ended
         Sessions actually severed) — or the budget expires. Events are discarded: the
         node is going down, there is no application state left worth dispatching to.
-        World instance first: a host's hosted GOAWAYs ride the world instance.
+        World instance first: a host's hosted GOAWAYs ride the world instance (async).
 
         This is what makes the shutdown GOAWAYs real on a network with latency: the
         send returning only means 'queued in the local muxer', and exiting (or closing
@@ -1145,14 +1155,13 @@ class NodeConn:
     # correlation so Node drives the handoff without holding the maps. The world-profile
     # parse stays on Node (profile domain); only the correlation + transport open/close
     # live here.
-
     async def start_world_handoff(self, public_peer_id: str, world_peer_id: str,
                                   world_addrs: list, grant_blob: dict, reject_relay: bool) -> list:
         """Joiner side: record the public<->world correlation, point pool routing at the
         world host (set_world), and open the world Session to redeem the grant. Returns
         the initiate events for Node to dispatch. The redeemer's dial is a single
         attempt bounded by the grant window (see _WORLD_DIAL_*_BUDGET_S): time.time()
-        matches the wall-clock the host minted expiry_unix_ms with."""
+        matches the wall-clock the host minted expiry_unix_ms with (async)."""
         try:
             self.set_world(world_peer_id)
         except Exception:
@@ -1170,7 +1179,7 @@ class NodeConn:
         """Roll back any in-flight handoff correlation for a terminal Session,
         whichever side died. The mechanics (established-skip, abort of the in-flight
         redemption, routing un-point) live in HandoffCorrelation.rollback, shared
-        with the test harness."""
+        with the test harness (async)."""
         await self._handoff.rollback(peer_id)
 
     def is_pending_handoff(self, world_peer_id: str) -> bool:
@@ -1191,7 +1200,7 @@ class NodeConn:
         and drop the correlation. No-op if this world peer-id was not part of a handoff.
         The transport itself falls with the settlement cut once the CLOSED lands (ACK or
         the CLOSING timeout); the dispatch early-returns on WORLD_HANDOFF_COMPLETE, so
-        the pool eviction must happen here, not in a purge."""
+        the pool eviction must happen here, not in a purge (async)."""
         public_peer_id = self._handoff.complete(world_peer_id)
         if public_peer_id is None:
             return
@@ -1199,40 +1208,6 @@ class NodeConn:
             self._roster_wait_until = min(self._roster_wait_until, time.monotonic() + _ROSTER_WAIT_S)
         await self._sm_public.close_session(public_peer_id, WORLD_HANDOFF_COMPLETE)
         self._evict_from_pools(public_peer_id)
-
-    def _sm_of(self, peer_id: str) -> "SessionManager | None":
-        """Resolve the SessionManager that owns the instance this peer lives on (the SM
-        IS the instance): the manager holding a Session for the peer-id first (public
-        before world, matching the cross-pool first-network-wins), falling back to the
-        manager whose P2P backs the peer's pool for a peer connected without a Session yet
-        (an in-flight or just-evicted handshake), and None when nothing knows the peer.
-        This is the SM-keyed resolver the transport facades (drop/send/...) delegate
-        to so the chain stays Node -> NodeConn -> SM -> P2P."""
-        for sm in (self._sm_public, self._sm_world):
-            if sm is not None and sm.get_session(peer_id) is not None:
-                return sm
-        pool_name = self.peer_id_to_pool_name.get(peer_id)
-        if pool_name is None:
-            return None
-        # The pool triple's instance slot already holds the owning SM (None pre-attach).
-        return self.pool_name_to_pool_triple[pool_name][2]
-
-    def _sm_by_name(self, p2p_name: str) -> "SessionManager | None":
-        """The SessionManager (the instance) for a named network, via the per-instance
-        index populated at attach time. None before the managers are registered."""
-        return self._p2p_name_to_sm.get(p2p_name)
-
-    def _sm_for_topic(self, peer_id: str, default_p2p_name: "str | None" = None) -> "SessionManager | None":
-        """The SessionManager to use for a topic/dm keyed by peer_id: the instance whose
-        OWN peer-id is peer_id (our own topics), else the peer's owning instance (_sm_of),
-        else the named default. None if nothing resolves."""
-        for sm in (self._sm_public, self._sm_world):
-            if sm is not None and sm.p2p.peer_id == peer_id:
-                return sm
-        sm = self._sm_of(peer_id)
-        if sm is not None:
-            return sm
-        return self._sm_by_name(default_p2p_name) if default_p2p_name is not None else None
 
     def reset_rendezvous_tag(self) -> None:
         """Resets the rendezvous tag to its initial state."""
@@ -1260,40 +1235,6 @@ class NodeConn:
             inspector_peer_id=self.inspector_peer_id,
         )
 
-    @staticmethod
-    def _route_public(peer_info: dict, membership) -> "str | None":
-        """Per-instance routing for the public network: by direction only, no
-        membership and no perimeter cut. Returns the pool name, or None for an
-        undefined direction (the caller skips it without disconnecting)."""
-        direction = peer_info['direction']
-        if direction == "inbound":
-            return NodeConn.IN_PUBLIC
-        if direction == "outbound":
-            return NodeConn.OUT_PUBLIC
-        return None
-
-    @staticmethod
-    def _route_world(peer_info: dict, membership: WorldMembership) -> "str | None":
-        """Per-instance routing for the world network: classify the peer against the
-        membership snapshot (precedence agent > node > master) and return its pool
-        name, or None when the peer is not a known world member (the caller cuts it
-        from the perimeter) or has an undefined direction."""
-        peer_id = peer_info['id']
-        is_agent = peer_id in membership.world_agents
-        is_master = peer_id in membership.world_masters
-        is_node = membership.world_node_peer_id is not None and peer_id == membership.world_node_peer_id
-        is_inspector = membership.inspector_peer_id is not None and peer_id == membership.inspector_peer_id
-        if not (is_node or is_master or is_agent or is_inspector):
-            return None
-        direction = peer_info['direction']
-        if direction == "inbound":
-            return NodeConn.IN_WORLD_AGENTS if is_agent else (
-                NodeConn.IN_WORLD_NODE if is_node else NodeConn.IN_WORLD_MASTERS)
-        if direction == "outbound":
-            return NodeConn.OUT_WORLD_AGENTS if is_agent else (
-                NodeConn.OUT_WORLD_NODE if is_node else NodeConn.OUT_WORLD_MASTERS)
-        return None
-
     async def update(self) -> tuple[dict, dict]:
         """Coordinator per-cycle update. First refresh the world SessionManager's KNOWN
         roster (and the role/addrs it carries) from the rendezvous, so the perimeter and
@@ -1302,7 +1243,7 @@ class NodeConn:
         reconcile: one immutable membership snapshot for the whole cycle, fanned out to
         each SessionManager in registration order (public then world), merging the
         per-instance diffs. The pool_name keys are disjoint across the two instances (IN/OUT_PUBLIC vs
-        IN/OUT_WORLD_*), so the merge is a plain dict.update, asserted to be sure."""
+        IN/OUT_WORLD_*), so the merge is a plain dict.update, asserted to be sure (async)."""
         self._sync_known_world_peers()
 
         self.pool_name_to_added_in_last_update = {}
@@ -1324,66 +1265,6 @@ class NodeConn:
 
         return self.pool_name_to_added_in_last_update, self.pool_name_to_removed_in_last_update
 
-    def _sync_known_world_peers(self) -> None:
-        """Feed the world SessionManager the peers currently advertised by the rendezvous
-        (``peer_id -> (addresses, app_role)``, minus ourselves) so it registers a KNOWN
-        Session per known peer, refreshes role/addrs on the Sessions that exist, and
-        prunes the vanished ones. World-only: the public instance carries no rendezvous
-        membership."""
-        if self._sm_world is None:
-            return
-        self_peer_id = self._sm_world.local_peer_id
-        known = {peer_id: (addrs, self.peer_id_to_misc.get(peer_id, 0))
-                 for peer_id, addrs in self.peer_id_to_addrs.items()
-                 if peer_id != self_peer_id}
-        self._sm_world.sync_known_peers(known)
-
-    async def _reconcile_instance(self, sm, membership) -> tuple[dict, dict]:
-        """Reconcile ONE instance (its SessionManager) and report its per-pool
-        added/removed diff.
-
-        Asks the manager to classify its connected peers (sm.reconcile, which also
-        applies the world perimeter cut), then for each of this instance's pools computes
-        the new/lost set-difference and admits the new peers via add() — which keeps the
-        cross-pool guard and the shared peer_id_to_* indices here in the Coordinator.
-        Returns two dicts keyed by pool_name with only the pools that changed (empty pools
-        omitted), like the legacy update().
-        """
-        added_local: dict = {}
-        removed_local: dict = {}
-
-        connected_peer_infos = sm.connected_peers_info()
-        if connected_peer_infos is None:
-            return added_local, removed_local
-
-        # The world manager classifies against the snapshot (and cuts the perimeter);
-        # the public manager has no membership.
-        sm_membership = membership if sm.p2p_name == NodeConn.P2P_WORLD else None
-        classified = await sm.reconcile(connected_peer_infos, sm_membership)
-
-        # This instance's own pools are the ones whose triple is bound to this manager
-        # (the SM is the instance). Treat a pool absent from `classified` as empty so
-        # removals are still detected.
-        for pool_name, (pool, _, pool_sm) in self.pool_name_to_pool_triple.items():
-            if pool_sm is not sm:
-                continue
-            connected_peer_ids = classified.get(pool_name, {}).keys()
-            new_peer_ids = connected_peer_ids - pool
-            lost_peer_ids = pool - connected_peer_ids
-
-            # Clearing disconnected agents
-            for lost_peer_id in lost_peer_ids:
-                removed_local.setdefault(pool_name, set()).add(lost_peer_id)
-
-            # Adding new agents
-            for new_peer_id in new_peer_ids:
-                peer_info = classified[pool_name][new_peer_id]
-                if not self.add(peer_info, pool_name=pool_name):
-                    continue
-                added_local.setdefault(pool_name, set()).add(new_peer_id)
-
-        return added_local, removed_local
-
     # World-roster writers: every world-membership mutation lands here
     #
     # set_world / set_world_agents_list / set_world_masters_list / add_to_world_agents_list /
@@ -1393,7 +1274,6 @@ class NodeConn:
     # membership single-sourced in sm_world. The rendezvous READ stays on the Coordinator
     # (set_world_agents_and_world_masters_lists_from_rendezvous); only the write lands here.
     # If a new roster mutation is ever needed, add it as a method here, never as a direct set.
-
     def set_world(self, world_peer_id: str | None) -> None:
         """Sets the peer ID of the world node.
 
@@ -1402,6 +1282,7 @@ class NodeConn:
         """
         self._sm_world.world_node_peer_id = world_peer_id
         if world_peer_id is None:
+
             # Out of the world: no roster to wait for, nothing held
             self._roster_wait_tag = None
             self._held_world_dials.clear()
@@ -1881,6 +1762,7 @@ class NodeConn:
                     if c['addrs'] is None:
                         log.cpool(f"Skipping a peer with None addrs (unexpected)", sub=self._sm_world.log_sub)
                         continue
+
                     # if len(c['addrs']) == 0:
                     #    log.cpool(f"Skipping a peer with zero-length addrs-list (unexpected)")
                     #    continue
@@ -1889,6 +1771,7 @@ class NodeConn:
                     elif (c['misc'] & 1) == 1 and (c['misc'] & 2) == 2:
                         world_masters_peer_infos.append(c)
                     else:
+
                         # An unexpected 'misc' from the rendezvous must not be fatal (this runs
                         # every cycle from the main loop): log and skip the entry.
                         log.error("Unexpected value of the 'misc' field, skipping: " + str(c),
@@ -1925,3 +1808,411 @@ class NodeConn:
                     continue
                 if role & 1 == 1:
                     peer_ids.remove(peer_id)
+
+    @property
+    def _pending_world_handoff(self) -> dict:
+        """The forward handoff index (public -> world); lives in the shared ledger."""
+        return self._handoff.pending_world_handoff
+
+    @property
+    def _world_to_public(self) -> dict:
+        """The reverse handoff index (world -> public); lives in the shared ledger."""
+        return self._handoff.world_to_public
+
+    async def _abort_world_redemption(self, world_peer_id: str) -> None:
+        """Effect injected into the handoff ledger: abort the in-flight grant
+        redemption (drop dispatches on its state: mid-handshake -> silent abort) (async)."""
+        if self._sm_world is not None:
+            await self._sm_world.drop(world_peer_id)
+
+    def _init_pools(self, max_connections: int, pool_name_to_p2p_name_and_ratio: dict[str, list[str | float]],
+                    valid_p2p_names: set[str],
+                    public_key: str | None = None, token: str | None = None) -> None:
+        """Set up the pool triples and the per-peer / per-p2p indices for this Coordinator.
+
+        Args:
+            max_connections: The maximum total number of connections allowed across all pools.
+            pool_name_to_p2p_name_and_ratio: A dictionary mapping pool names to a list containing the associated P2P
+                network name and its connection ratio.
+            valid_p2p_names: The set of known P2P network names, used only to validate that every
+                pool references an existing network. The P2P objects themselves are not needed
+                here, they arrive in attach_session_policy.
+            public_key: An optional public key for token verification.
+            token: An optional initial token for authentication.
+
+        Returns:
+            None.
+
+        """
+
+        # Common terms: a "pool triple" is [pool_contents, max_connections_in_such_a_pool, p2p_object_of_the_pool
+        self.max_con = max_connections
+        self.pool_count = len(pool_name_to_p2p_name_and_ratio)
+        self.pool_names = list(pool_name_to_p2p_name_and_ratio.keys())
+        self.pool_ratios: list[float] = []
+        for p2p_name_and_ratio in pool_name_to_p2p_name_and_ratio.values():
+            ratio = p2p_name_and_ratio[1]
+            assert isinstance(ratio, float)
+            self.pool_ratios.append(ratio)
+
+        # The SM is the instance: the per-instance index maps a p2p_name to its
+        # SessionManager, not to the raw P2P handle. It is empty until
+        # set_session_managers runs (the SMs are built late in attach_session_policy),
+        # so it is seeded here and populated there. The pool->p2p_name mapping captured
+        # at init lets set_session_managers wire each pool triple's instance slot to the
+        # right SM. The Coordinator keeps no separate transport handle: each P2P lives inside
+        # its owning SM, and the Coordinator reaches it (and the instance identity) through
+        # the SM, never as a raw channel.
+        self._p2p_name_to_sm = {}
+        self._pool_name_to_p2p_name = {}
+
+        # Indices rooted around the pool name
+        self.pool_name_to_pool_triple = {}
+        self.pool_name_to_added_in_last_update = {}
+        self.pool_name_to_removed_in_last_update = {}
+        self.pool_name_to_peer_infos = {p: {} for p in self.pool_names}
+
+        # Indices rooted around the peer ID. peer_id_to_pool_name is the connection
+        # index (which pool a connected peer lives in): it backs is_connected,
+        # get_pool_of, in_connection_queues, get_all_connected_peer_ids and the chat
+        # admission gate in get_messages. It is no longer the primary source of the
+        # peer -> instance routing: that is Session-anchored now (_sm_of asks the
+        # SessionManagers first and only falls back to this map for a peer connected
+        # without a Session yet). So it stays load-bearing and must not be dropped when
+        # the world roster and the pool state later move down into the SessionManagers.
+        self.peer_id_to_pool_name = {}
+        self.peer_id_to_misc = {}
+        self.peer_id_to_token = {}
+
+        # Token-related stuff, super private
+        self.__token = token if token is not None else ""
+        self.__token_verifier = TokenVerifier(public_key) if public_key is not None else None
+
+        # Checking
+        for p2p_name_and_ratio in pool_name_to_p2p_name_and_ratio.values():
+            assert p2p_name_and_ratio[0] in valid_p2p_names, f"Cannot find p2p named {p2p_name_and_ratio[0]} "
+        assert self.max_con >= len(self.pool_names), "Too small number of max connections"
+        assert sum([x for x in self.pool_ratios if x > 0]) == 1.0, "Pool ratios must sum to 1.0"
+
+        # Preparing the pool triples. The instance slot (triple[2]) holds the
+        # SessionManager that owns the pool, but the SMs do not exist yet at __init__
+        # (they are built in attach_session_policy): seed it with None and remember which
+        # p2p_name each pool belongs to, so set_session_managers can wire the right SM in.
+        self.pool_name_to_pool_triple = {}
+        for k in self.pool_names:
+            p2p_name = pool_name_to_p2p_name_and_ratio[k][0]
+            assert isinstance(p2p_name, str)
+            self._pool_name_to_p2p_name[k] = p2p_name
+            self.pool_name_to_pool_triple[k] = [set(), 0, None]
+        num_zero_ratio_pools = len([x for x in self.pool_ratios if x == 0])
+        assert num_zero_ratio_pools <= self.max_con, "Cannot create pools given the provided max connection count"
+
+        # Edit: to solve the teacher not engaging with more than two students.
+        pools_max_sizes = {k: max(math.floor(self.pool_ratios[i] * (self.max_con - num_zero_ratio_pools)),
+                                  1 if self.pool_ratios[i] >= 0. else 0)
+                           for i, k in enumerate(self.pool_names)}
+
+        # Pools_max_sizes = {k: self.max_con for k in self.pool_names}
+        # Fixing sizes
+        tot = 0
+        for i, (k, v) in enumerate(pools_max_sizes.items()):
+            assert v > 0 or self.pool_ratios[i] < 0, "Cannot create pools given the provided max connection count"
+
+            # Edit: to solve the teacher not engaging with more than two students.
+            tot += v
+        assert tot <= self.max_con, \
+            "Cannot create pools given the provided max connection count"
+        pools_max_sizes[self.pool_names[-1]] += (self.max_con - tot)
+
+        # Storing the fixed cap in each pool triple (triple = [peer_id set, cap, SM]).
+        for pool_name, pool_contents_max_con_and_sm in self.pool_name_to_pool_triple.items():
+            pool_contents_max_con_and_sm[1] = pools_max_sizes[pool_name]  # Fixing the second element of the triple
+
+        # Time markers
+        self.__last_sent_time = 0.
+        self.__last_recv_time = 0.
+
+    def _evict_from_pools(self, peer_id: str) -> bool:
+        """Internal: drop the peer from the pool indices only (the pool set, the per-pool
+        peer infos, the pool-name index and the last-token cache), WITHOUT touching the
+        transport or the Session. This is the pure pool-sync shared by the voluntary drop
+        (``drop_peer``) and the involuntary transport-drop reaction (``on_peer_disconnected``).
+
+        Remember to NOT del peer_id_to_misc[peer_id]! (the role taxonomy survives a drop)."""
+        pool_name = self.peer_id_to_pool_name.get(peer_id)
+        if pool_name is None:
+            return False
+        pool, _, _ = self.pool_name_to_pool_triple[pool_name]
+        pool.discard(peer_id)
+        self.pool_name_to_peer_infos[pool_name].pop(peer_id, None)
+        del self.peer_id_to_pool_name[peer_id]
+        self.peer_id_to_token.pop(peer_id, None)
+        return True
+
+    async def _release_held_world_dials(self) -> list:
+        """Joiner: once the wait for a roster that lists us is over, by that roster or by
+        its deadline, start the dials toward the other members that it held. A held
+        Session that is no longer KNOWN (the peer dialled us first, left the roster, or
+        was dropped) is left alone. Returns the events of the dials for Node to dispatch (async)."""
+        if self._roster_wait_tag is not None:
+            if time.monotonic() < self._roster_wait_until:
+                return []
+            self._roster_wait_tag = None
+            log.misc("no roster listing us came in time: dialling the members anyway",
+                     sub=self._sm_world.log_sub)
+        if not self._held_world_dials:
+            return []
+        held, self._held_world_dials = self._held_world_dials, set()
+        events: list = []
+        for peer_id in held:
+            sess = self._sm_world.get_session(peer_id)
+            if sess is not None and sess.state == SessionState.KNOWN:
+                events.extend(await self._sm_world.activate(peer_id))
+        return events
+
+    async def _deliver(self, peer_id: str, channel_trail: str | None, content_type: str,
+                       content: bytes | dict | str | None) -> tuple:
+        """The body of send and send_tracked: builds the message and hands it to the instance of the peer (async).
+
+        Args:
+            peer_id: The peer ID to send the message to.
+            channel_trail: An optional string to append to the channel name.
+            content_type: The type of content in the message.
+            content: The message content.
+
+        Returns:
+            (manager, outcome, detail): outcome "queued" (detail: the sequence number), "written" (a transport without
+            queues), "refused" (a full queue) or "failed" (detail: the error); manager None when the peer is unknown.
+        """
+        if content_type not in [Msg.STATS_UPDATE, Msg.STATS_REQUEST, Msg.STATS_RESPONSE]:
+            self.__last_sent_time = time.time()
+
+        # Resolve the owning instance's manager and send through it (NodeConn -> SM -> P2P).
+        sm = self._sm_of(peer_id)
+        if sm is None:
+            log.error("P2P non found for peer id: " + str(peer_id))
+            return None, "failed", "unknown peer"
+
+        # Defining channel (the instance's local peer-id, read from the SM, not the P2P handle)
+        if channel_trail is not None and len(channel_trail) > 0:
+            channel = f"{sm.local_peer_id}::dm:{peer_id}-{content_type}~{channel_trail}"
+        else:
+            channel = f"{sm.local_peer_id}::dm:{peer_id}-{content_type}"
+
+        log.network(f">>> SENDING {content_type} to {peer_id}", sub=sm.log_sub)
+
+        # Adding sender info here
+        msg = Msg(sender=sm.local_peer_id,
+                  content_type=content_type,
+                  content=content,
+                  channel=channel,
+                  piggyback=self.__token + "0")  # Adding inspector-mode bit (dummy bit here)
+
+        # Hand the Msg object to the SM; the codec and the thread offload live in P2P. With the send queues on, True
+        # means queued (in order, after what was queued before), and a full queue refuses at once
+        try:
+            seq = await sm.send(channel, msg)
+        except P2PError as e:
+            if getattr(e, "queue_full", False):
+                self._log_refused_send(peer_id, str(e), sm.log_sub)
+                return sm, "refused", str(e)
+            log.error("Sending error is: " + str(e), sub=sm.log_sub)
+            return sm, "failed", str(e)
+        if isinstance(seq, int) and not isinstance(seq, bool):
+            return sm, "queued", seq
+        return sm, "written", None
+
+    def _tell_transports_about_peers(self, events: list) -> None:
+        """Tells the transport of each Session that (re)starts what its peer can receive: the capability bits of its
+        HELLO / HELLO_ACK and the largest message and file its profile says it takes.
+
+        Args:
+            events: The Session events of a pump.
+        """
+        for ev in events:
+            if ev.type in (SessionEventType.ESTABLISHED, SessionEventType.RESUMED):
+                sm = self._sm_by_name(ev.p2p_name)
+                if sm is not None:
+                    profile = ev.data.get("profile_b") or ev.data.get("profile") or {}
+                    dynamic = profile.get("dynamic", {}) if isinstance(profile, dict) else {}
+                    sm.set_peer_capabilities(ev.peer_id, int(ev.data.get("peer_capabilities") or 0),
+                                             dynamic.get("max_message_size"), dynamic.get("max_file_size"))
+
+    def _resolve_tickets(self, ev: dict) -> None:
+        """Resolves the tickets of tracked sends that a send event is about: written up to a sequence number, or a
+        dropped range.
+
+        Called as the events are popped (by the network task), so that an action awaiting a ticket wakes up at once.
+
+        Args:
+            ev: The event, tagged with p2p_name.
+        """
+        peer_id, ev_type = ev.get("peer_id"), ev.get("type")
+        if peer_id is None or ev_type not in ("written", "queue_dropped", "progress"):
+            return
+        key = (ev.get("p2p_name"), peer_id)
+        pending = self._tickets.get(key, {})
+        if ev_type == "progress":
+            ticket = pending.get(int(ev.get("seq", 0)))
+            if ticket is not None:
+                ticket.progress = (int(ev.get("bytes", 0)), int(ev.get("total", 0)))
+            return
+        if ev_type == "written":
+            upto = int(ev.get("seq", 0))
+            self._written_upto[key] = max(self._written_upto.get(key, 0), upto)
+            for seq in [s for s in pending if s <= upto]:
+                pending.pop(seq).resolve("written")
+        else:
+            first, last, reason = int(ev.get("from_seq", 0)), int(ev.get("to_seq", 0)), ev.get("reason")
+            drops = self._recent_drops.setdefault(key, [])
+            drops.append((first, last, reason))
+            del drops[:-8]  # Only the latest few matter: they cover a send that was returning while they came
+            for seq in [s for s in pending if first <= s <= last]:
+                pending.pop(seq).resolve("dropped", reason)
+        if not pending:
+            self._tickets.pop(key, None)
+
+    def _log_refused_send(self, peer_id: str, message: str, log_sub: str | None) -> None:
+        """Logs the refusal of a full send queue as a warning, at most once every few seconds per peer.
+
+        Args:
+            peer_id: The peer whose queue is full.
+            message: The text of the refusal.
+            log_sub: The log sub-channel of the instance.
+        """
+        now = time.monotonic()
+        entry = self._refused_sends.setdefault(peer_id, [0, float("-inf")])
+        entry[0] += 1
+        if now - entry[1] >= Custom.SEND_REFUSED_LOG_EVERY:
+            log.network(f"⚠️ Send queue to {peer_id} full, {entry[0]} message(s) refused: {message}", sub=log_sub)
+            entry[0], entry[1] = 0, now
+
+    def _sm_of(self, peer_id: str) -> "SessionManager | None":
+        """Resolve the SessionManager that owns the instance this peer lives on (the SM
+        IS the instance): the manager holding a Session for the peer-id first (public
+        before world, matching the cross-pool first-network-wins), falling back to the
+        manager whose P2P backs the peer's pool for a peer connected without a Session yet
+        (an in-flight or just-evicted handshake), and None when nothing knows the peer.
+        This is the SM-keyed resolver the transport facades (drop/send/...) delegate
+        to so the chain stays Node -> NodeConn -> SM -> P2P."""
+        for sm in (self._sm_public, self._sm_world):
+            if sm is not None and sm.get_session(peer_id) is not None:
+                return sm
+        pool_name = self.peer_id_to_pool_name.get(peer_id)
+        if pool_name is None:
+            return None
+
+        # The pool triple's instance slot already holds the owning SM (None pre-attach).
+        return self.pool_name_to_pool_triple[pool_name][2]
+
+    def _sm_by_name(self, p2p_name: str) -> "SessionManager | None":
+        """The SessionManager (the instance) for a named network, via the per-instance
+        index populated at attach time. None before the managers are registered."""
+        return self._p2p_name_to_sm.get(p2p_name)
+
+    def _sm_for_topic(self, peer_id: str, default_p2p_name: "str | None" = None) -> "SessionManager | None":
+        """The SessionManager to use for a topic/dm keyed by peer_id: the instance whose
+        OWN peer-id is peer_id (our own topics), else the peer's owning instance (_sm_of),
+        else the named default. None if nothing resolves."""
+        for sm in (self._sm_public, self._sm_world):
+            if sm is not None and sm.p2p.peer_id == peer_id:
+                return sm
+        sm = self._sm_of(peer_id)
+        if sm is not None:
+            return sm
+        return self._sm_by_name(default_p2p_name) if default_p2p_name is not None else None
+
+    @staticmethod
+    def _route_public(peer_info: dict, membership: 'WorldMembership | None') -> str | None:
+        """Per-instance routing for the public network: by direction only, no
+        membership and no perimeter cut. Returns the pool name, or None for an
+        undefined direction (the caller skips it without disconnecting)."""
+        direction = peer_info['direction']
+        if direction == "inbound":
+            return NodeConn.IN_PUBLIC
+        if direction == "outbound":
+            return NodeConn.OUT_PUBLIC
+        return None
+
+    @staticmethod
+    def _route_world(peer_info: dict, membership: WorldMembership) -> "str | None":
+        """Per-instance routing for the world network: classify the peer against the
+        membership snapshot (precedence agent > node > master) and return its pool
+        name, or None when the peer is not a known world member (the caller cuts it
+        from the perimeter) or has an undefined direction."""
+        peer_id = peer_info['id']
+        is_agent = peer_id in membership.world_agents
+        is_master = peer_id in membership.world_masters
+        is_node = membership.world_node_peer_id is not None and peer_id == membership.world_node_peer_id
+        is_inspector = membership.inspector_peer_id is not None and peer_id == membership.inspector_peer_id
+        if not (is_node or is_master or is_agent or is_inspector):
+            return None
+        direction = peer_info['direction']
+        if direction == "inbound":
+            return NodeConn.IN_WORLD_AGENTS if is_agent else (
+                NodeConn.IN_WORLD_NODE if is_node else NodeConn.IN_WORLD_MASTERS)
+        if direction == "outbound":
+            return NodeConn.OUT_WORLD_AGENTS if is_agent else (
+                NodeConn.OUT_WORLD_NODE if is_node else NodeConn.OUT_WORLD_MASTERS)
+        return None
+
+    def _sync_known_world_peers(self) -> None:
+        """Feed the world SessionManager the peers currently advertised by the rendezvous
+        (``peer_id -> (addresses, app_role)``, minus ourselves) so it registers a KNOWN
+        Session per known peer, refreshes role/addrs on the Sessions that exist, and
+        prunes the vanished ones. World-only: the public instance carries no rendezvous
+        membership."""
+        if self._sm_world is None:
+            return
+        self_peer_id = self._sm_world.local_peer_id
+        known = {peer_id: (addrs, self.peer_id_to_misc.get(peer_id, 0))
+                 for peer_id, addrs in self.peer_id_to_addrs.items()
+                 if peer_id != self_peer_id}
+        self._sm_world.sync_known_peers(known)
+
+    async def _reconcile_instance(self, sm: SessionManager, membership: 'WorldMembership | None') \
+            -> tuple[dict, dict]:
+        """Reconcile ONE instance (its SessionManager) and report its per-pool
+        added/removed diff (async).
+
+        Asks the manager to classify its connected peers (sm.reconcile, which also
+        applies the world perimeter cut), then for each of this instance's pools computes
+        the new/lost set-difference and admits the new peers via add() — which keeps the
+        cross-pool guard and the shared peer_id_to_* indices here in the Coordinator.
+        Returns two dicts keyed by pool_name with only the pools that changed (empty pools
+        omitted), like the legacy update().
+        """
+        added_local: dict = {}
+        removed_local: dict = {}
+
+        connected_peer_infos = sm.connected_peers_info()
+        if connected_peer_infos is None:
+            return added_local, removed_local
+
+        # The world manager classifies against the snapshot (and cuts the perimeter);
+        # the public manager has no membership.
+        sm_membership = membership if sm.p2p_name == NodeConn.P2P_WORLD else None
+        classified = await sm.reconcile(connected_peer_infos, sm_membership)
+
+        # This instance's own pools are the ones whose triple is bound to this manager
+        # (the SM is the instance). Treat a pool absent from `classified` as empty so
+        # removals are still detected.
+        for pool_name, (pool, _, pool_sm) in self.pool_name_to_pool_triple.items():
+            if pool_sm is not sm:
+                continue
+            connected_peer_ids = classified.get(pool_name, {}).keys()
+            new_peer_ids = connected_peer_ids - pool
+            lost_peer_ids = pool - connected_peer_ids
+
+            # Clearing disconnected agents
+            for lost_peer_id in lost_peer_ids:
+                removed_local.setdefault(pool_name, set()).add(lost_peer_id)
+
+            # Adding new agents
+            for new_peer_id in new_peer_ids:
+                peer_info = classified[pool_name][new_peer_id]
+                if not self.add(peer_info, pool_name=pool_name):
+                    continue
+                added_local.setdefault(pool_name, set()).add(new_peer_id)
+
+        return added_local, removed_local

@@ -20,12 +20,14 @@ import torch
 import pickle
 import asyncio
 import uuid as _uuid
+from typing import Any
 import importlib.resources
 from PIL.Image import Image
 from unaiverse.clock import clock
 from unaiverse.stats import Stats
 from unaiverse.custom import Custom
 from collections.abc import Callable
+from collections.abc import Generator
 from unaiverse.utils.logger import log
 from unaiverse.hsm.action import Action
 from unaiverse.hsm.hsm import HybridStateMachine
@@ -33,14 +35,14 @@ from unaiverse.networking.p2p.messages import Msg
 from unaiverse.streams.streamproxy import StreamProxy
 from unaiverse.networking.node.connpool import NodeConn
 from unaiverse.networking.node.profile import NodeProfile
-from unaiverse.networking.session.sess_msg import LOCAL_ERROR
 from unaiverse.streams.streams import Stream, BufferedStream
-from unaiverse.interaction import Interaction, InteractionManager
+from unaiverse.networking.session.sess_msg import LOCAL_ERROR
 from unaiverse.streams.dataprops import DataProps, StreamType, TensorLabels
 from unaiverse.uai import (MAX_INBOX_PEERS, MAX_OUTPUT_BYTES, VIA_BLOCK, VIA_FREETEXT, AnswerOutcome,
                                 ReplyEvent, describe_answer, encode_partial, encode_reply, has_fence,
                                 interactive_fields, newest_form, parse_message, parts_to_model_text,
                                 read_answer, reprompt_person, retry_prompt)
+from unaiverse.interaction import Interaction, InteractionManager, InteractionStatus, CompletionReason
 from unaiverse.modules.utils import AgentProcessorChecker, ModuleWrapper, HumanModule, has_human_processor
 from unaiverse.utils.misc import (GenException, FileTracker, collect_py_files, load_agent_in_memory, pack_py_files,
                                   unpack_py_files, prune_to_import_closure, build_unaid)
@@ -54,7 +56,14 @@ class _StepwiseRun:
 
     __slots__ = ("gen", "deadline", "started_at", "chunks")
 
-    def __init__(self, gen, deadline: float, started_at: float):
+    def __init__(self, gen: Generator, deadline: float, started_at: float) -> None:
+        """Initializes the bookkeeping of a stepwise computation.
+
+        Args:
+            gen: The generator that runs the computation, one chunk per step.
+            deadline: The monotonic time after which the computation is abandoned.
+            started_at: The monotonic time the computation started.
+        """
         self.gen = gen
         self.deadline = deadline
         self.started_at = started_at
@@ -107,7 +116,7 @@ class AgentBasics:
                  buffer_generated_by_others: str = "none",
                  world_folder: str | None = None,
                  policy_filter: Callable | None = None,
-                 policy_filter_lone_wolf: Callable | None = None):
+                 policy_filter_lone_wolf: Callable | None = None) -> None:
         """Create a new agent.
 
         Args:
@@ -231,6 +240,14 @@ class AgentBasics:
         # Interaction Manager, stdin/stdout
         assert isinstance(self.proc_optional_inputs, list)
         self.im = InteractionManager(self, max_interactions=Custom.MAX_INTERACTIONS)
+
+        # What the send queues report about each peer we send to (see on_send_event): peer ID -> {"state": "ok" |
+        # "failing" | "dropped", "refused", "dropped", "last_written_seq", "last_error", "last_change"}
+        self.send_status: dict[str, dict] = {}
+
+        # The messages larger than a chunk on their way, both directions (see on_transfer_progress): (peer ID, "send" |
+        # "receive", seq) -> {"done", "total", "kind", "files", "attempt", "time"}; a message leaves at 100% or dropped
+        self.transfers: dict[tuple[str, str, int], dict] = {}
         self.stdin = StreamProxy(replace_none_samples_with=[item["default_value"] if item["has_default"] else None
                                                             for item in self.proc_optional_inputs])
         self.stdtar = StreamProxy()
@@ -259,8 +276,8 @@ class AgentBasics:
             if self.world_folder is None:
                 raise GenException("No world folder was indicated (world_folder argument)")
 
-    def stepwise(self, interaction: Interaction | None, make_gen, /, *args,
-                 retry_timeout: float = _STEPWISE_RETRY_TIMEOUT_S, **kwargs):
+    def stepwise(self, interaction: Interaction | None, make_gen: Callable[..., Generator], /, *args: Any,
+                 retry_timeout: float = _STEPWISE_RETRY_TIMEOUT_S, **kwargs: Any) -> tuple[bool, Any]:
         """Run a generator-based computation one chunk per tick across HSM retries.
 
         Usage inside an @action body:
@@ -316,6 +333,7 @@ class AgentBasics:
         assert isinstance(run, _StepwiseRun)
 
         if time.perf_counter() >= run.deadline:
+
             # Budget exhausted: give up in a single discard. The abandoned generator is
             # collected once the mark is gone, running its finally cleanup.
             self._finish_stepwise(interaction, healthy=False)
@@ -336,19 +354,6 @@ class AgentBasics:
 
         run.chunks += 1
         return False, None
-
-    def _finish_stepwise(self, interaction: Interaction, healthy: bool) -> None:
-        """Terminal cleanup of a stepwise run: clear the mark and hand back the pedantic
-        grant (same restore dance as send(wait_completion=True)). On a healthy completion
-        inside a multi-step interaction the framework-forced default is kept, so the
-        remaining steps retain their retry semantics; on errors and give-ups the strip is
-        unconditional, so the failure is a single discard and cannot loop."""
-        interaction.clear_mark()
-        action_ref = interaction.action_ref
-        assert isinstance(action_ref, Action)
-        if not action_ref.is_pedantic_by_default():
-            if not healthy or not interaction.is_multi_steps():
-                action_ref.set_timeout(-1.)
 
     def set_node_info(self, conn: NodeConn, profile: NodeProfile,
                       ask_to_get_in_touch_fcn: Callable, purge_fcn: Callable,
@@ -479,6 +484,11 @@ class AgentBasics:
         return True
 
     def get_connection_pool_manager(self) -> NodeConn:
+        """Gets the connection pool manager (the NodeConn coordinator) of the node.
+
+        Returns:
+            The NodeConn of the node.
+        """
         return self.node_conn
 
     def set_default_stdin_binding(self, public: bool | None = None) -> None:
@@ -547,7 +557,16 @@ class AgentBasics:
         """
         return self.proc_in_net_hash['public'] if public else self.proc_in_net_hash['private']
 
-    def prepare_stdin_if_human(self, public: bool, peer_id: str):
+    def prepare_stdin_if_human(self, public: bool, peer_id: str) -> tuple[str, int]:
+        """Prepares the stdin of a human agent to receive what the person writes to a peer.
+
+        Args:
+            public: True when writing on the public network, False in the world.
+            peer_id: The peer the person is writing to.
+
+        Returns:
+            The pair (uuid, data_tag) to use when setting the data into the stdin.
+        """
         self.set_default_stdin_binding(public)
 
         # Who this person is writing to, taken before the world swap below: it is what tells an answer to a
@@ -592,7 +611,13 @@ class AgentBasics:
         """
         return _uuid.uuid4().hex[0:8]
 
-    def inject_received_interaction(self, sender: str, interaction_dict: dict):
+    def inject_received_interaction(self, sender: str, interaction_dict: dict) -> None:
+        """Registers an interaction received from a peer, linking it to its action in the behavior.
+
+        Args:
+            sender: The peer that sent the interaction.
+            interaction_dict: The interaction, as received (a dictionary).
+        """
 
         # Creating the interaction object
         interaction = Interaction.from_dict(interaction_dict)
@@ -608,10 +633,62 @@ class AgentBasics:
                 not behav.request_action(interaction)):  # Here the interaction links to action (IM does not do this!)
             log.error(f"Cannot enqueue a received interaction!")
         else:
+
             # Register with the InteractionManager
             log.misc(f"Registering received interaction for action "
                      f"{interaction.action_name}")
-            self.im.register_received(interaction, public)
+
+            # The partner follows the conversation: the turns this agent takes on its own go to the public peer whose
+            # request it accepted last
+            if self.im.register_received(interaction, public) and public:
+                self.set_lone_wolf_partner(sender)
+
+    async def reject_received_interaction(self, sender: str, interaction_dict: dict) -> None:
+        """Tells the sender of an interaction that it was not accepted, instead of dropping it silently (async).
+
+        The sender's interaction completes at once with reason REJECTED, so the action waiting for it goes on instead
+        of waiting for its timeout. Used when there is no room for it (in the interaction manager, or among the
+        messages waiting for the end of a running action).
+
+        Args:
+            sender: The peer that sent the interaction.
+            interaction_dict: The interaction, as received (a dictionary).
+        """
+        my_public_peer_id, my_private_peer_id = self.get_peer_ids()
+        status = {'status_generated_by': my_public_peer_id if sender in self.public_agents else my_private_peer_id,
+                  'uuid': interaction_dict.get('uuid') if isinstance(interaction_dict, dict) else None,
+                  'status': InteractionStatus.COMPLETED.value,
+                  'completion_reason': CompletionReason.REJECTED.value,
+                  'destination_state': None,
+                  'data_tags': None}
+        if not (await self.node_conn.send(sender, channel_trail=None, content=status,
+                                          content_type=Msg.INTERACTION_STATUS)):
+            log.error(f"Could not tell {sender} that its interaction was rejected")
+
+    def set_lone_wolf_partner(self, peer_id: str | None) -> None:
+        """Points the <partner> wildcard of the lone-wolf behavior at a public peer (agents that are not a person).
+
+        The partner is where the turns this agent takes on its own are sent (the default public behavior sends them to
+        <partner>); the answers to requests go to whoever asked, whatever the partner. It is the public peer that got
+        in touch last (dialing or dialed), then the one whose request was accepted last; when it leaves, the public
+        peer that got in touch last among the others.
+
+        A person decides whom they write to, so the partner of a person's agent is left to whoever drives it: the
+        browser sets it to the peer the person writes to at every message (the Forward command of Node.js), with many
+        chats open; the interactive mode of node.py sets it to the peer of the console. Nothing is changed here then.
+
+        Args:
+            peer_id: A public peer, or None to put the placeholder back (a send to it then fails cleanly).
+        """
+        behav = getattr(self, "behav_lone_wolf", None)
+        if behav is None or self.is_human():
+            return
+        value = peer_id if peer_id is not None else Custom.PARTNER_WILDCARD
+        wildcards = behav.get_wildcards()
+        if Custom.PARTNER_WILDCARD not in wildcards or wildcards[Custom.PARTNER_WILDCARD] == value:
+            return
+        behav.update_wildcard(Custom.PARTNER_WILDCARD, value)
+        behav.apply_wildcards()
 
     @staticmethod
     def build_augmented_roles_dictionaries(custom_roles: list[str] | set[str]) -> tuple[dict[int, str], dict[str, int]]:
@@ -649,7 +726,7 @@ class AgentBasics:
 
     def augment_roles(self,
                       role_bits_to_str: dict[int, str] | None = None,
-                      role_str_to_bits: dict[str, int] | None = None):
+                      role_str_to_bits: dict[str, int] | None = None) -> None:
         """Augment the custom roles (role1, role2, etc.) with the default ones (public, world_master, etc.), generating
         all the mixed roles (world_master~role1, world_master~role2, ...)"""
 
@@ -663,7 +740,7 @@ class AgentBasics:
         for k, v in role_str_to_bits.items():
             self.ROLE_STR_TO_BITS[k] = v
 
-    async def clear_world_related_data(self, world_peer_id: str):
+    async def clear_world_related_data(self, world_peer_id: str) -> None:
         """Destroy all the cached information that is about a world (useful when leaving a world) (async)."""
 
         # Clearing status variables
@@ -677,7 +754,7 @@ class AgentBasics:
         self.node_conn.reset_rendezvous_tag()
         await self.node_conn.unsubscribe(world_peer_id, channel=f"{world_peer_id}::ps:rv")  # Special rendezvous (ps:rv)
 
-    def load_and_refactor_action_file_and_behav_files(self, force_save: bool = False):
+    def load_and_refactor_action_file_and_behav_files(self, force_save: bool = False) -> None:
         """This method is called when building a world object. It loads the behavior files and refactors them.
         It loads the action file agent.py. It checks consistency between the agent action files agent.py and the roles
         in the behavior files.
@@ -749,7 +826,8 @@ class AgentBasics:
                         loaded_roles = dummy_agent.CUSTOM_ROLES
                         dummy_agent.CUSTOM_ROLES = self.CUSTOM_ROLES
                     except Exception as e:
-                        raise GenException(f'Unable to create a valid dummy agent object for agent with role {role} [{e}]')
+                        raise GenException(f'Unable to create a valid dummy agent object for agent with role {role} '
+                                           f'[{e}]')
 
                     # Checking if the roles you wrote in agent.py are coherent with the JSON files in this folder;
                     # most agents declare no roles at all (they inherit the world's ones by the injection above),
@@ -770,11 +848,13 @@ class AgentBasics:
                     # Refactoring and saving PDF
                     try:
                         if (force_save or
-                                behav.save(os.path.join(self.world_folder, f'{role}.json'), only_if_changed=dummy_agent)):
+                                behav.save(os.path.join(self.world_folder, f'{role}.json'),
+                                           only_if_changed=dummy_agent)):
                             os.makedirs(os.path.join(self.world_folder, 'pdf'), exist_ok=True)
                             behav.save_pdf(os.path.join(self.world_folder, 'pdf', f'{role}.pdf'))
                     except Exception as e:
-                        raise GenException(f'Error while saving the behav file {default_behav_file} for role {role} [{e}]')
+                        raise GenException(f'Error while saving the behav file {default_behav_file} for role {role} '
+                                           f'[{e}]')
 
                 finally:
 
@@ -793,7 +873,7 @@ class AgentBasics:
             log.misc(f"World code bundle: shipping {sorted(pruned_files)}" +
                      (f", keeping private {kept_private}" if kept_private else ""))
 
-    def create_behav_files(self):
+    def create_behav_files(self) -> None:
         """This method is called when building a world object. In your custom world-class, you can overload this method
         and create the JSON files with the role-related behaviors, if you like. Recall that acting like this is not
         mandatory at all: you can just manually create the JSON  files, and this method will simply do nothing."""
@@ -819,11 +899,28 @@ class AgentBasics:
         return self.node_profile
 
     def get_role(self, agent: str) -> str | None:
+        """Gets the base role (no world-master/agent bits) of a connected agent.
+
+        Args:
+            agent: The peer id of the agent.
+
+        Returns:
+            The name of the role, or None when unknown.
+        """
         role_int = self.node_conn.get_role(agent)
         base_role_int = (role_int >> 2) << 2
         return self.ROLE_BITS_TO_STR[base_role_int] if base_role_int in self.ROLE_BITS_TO_STR else None
 
-    def get_agents_by_role(self, role: str | list[str], handshake_completed: bool = True):
+    def get_agents_by_role(self, role: str | list[str], handshake_completed: bool = True) -> list[str]:
+        """Finds the connected agents that have the given role(s).
+
+        Args:
+            role: A role or a list of roles (an augmented role, e.g. "world_master~role1", matches exactly).
+            handshake_completed: Whether to consider only agents whose handshake completed (default: True).
+
+        Returns:
+            The list of the peer ids found.
+        """
         role_list = role if isinstance(role, list) else [role]
         searched_roles_int = set()
 
@@ -921,9 +1018,11 @@ class AgentBasics:
                 must_remove_agent_before_adding_again = True
 
             if must_remove_agent_before_adding_again:
+
                 # If the agent was already there, we remove it and add will add it again (in case of changes)
                 await self.remove_agent(peer_id)  # It has no effects if the agent is not existing
             else:
+
                 # If nothing structural changed, do not try to deal with streams
                 if add_env_streams:
                     add_env_streams = False
@@ -983,9 +1082,13 @@ class AgentBasics:
 
         log.misc(f"Successfully added agent {profile.get_static_profile()['node_name']} "
                  f"with peer ID {peer_id} (public: {public})")
+
+        # A public peer that got in touch (this agent dialed it, or was dialed) is the partner of its own turns
+        if public:
+            self.set_lone_wolf_partner(peer_id)
         return True
 
-    async def remove_agent(self, peer_id: str):
+    async def remove_agent(self, peer_id: str) -> None:
         """Remove an agent (async).
 
         Args:
@@ -1001,6 +1104,13 @@ class AgentBasics:
                 del self.world_masters[peer_id]
             elif peer_id in self.public_agents:
                 del self.public_agents[peer_id]
+
+                # The partner leaving: the public peer that got in touch last among the others, or the placeholder
+                # (not for a person, see set_lone_wolf_partner)
+                behav = getattr(self, "behav_lone_wolf", None)
+                if (behav is not None and not self.is_human() and
+                        behav.get_wildcards().get(Custom.PARTNER_WILDCARD) == peer_id):
+                    self.set_lone_wolf_partner(next(reversed(self.public_agents), None))
 
             if peer_id in self.artificial_agents:
                 del self.artificial_agents[peer_id]
@@ -1049,7 +1159,7 @@ class AgentBasics:
 
             log.misc(f"Successfully removed agent with peer ID {peer_id}")
 
-    def remove_all_agents(self):
+    def remove_all_agents(self) -> None:
         """Remove all known agents."""
 
         # Clearing all agents
@@ -1070,7 +1180,7 @@ class AgentBasics:
         self.remove_all_streams(owned_too=False)
         log.misc(f"Successfully removed all agents")
 
-    def add_behav_wildcard(self, wildcard_from: str, wildcard_to: object):
+    def add_behav_wildcard(self, wildcard_from: str, wildcard_to: object) -> None:
         """Adds a wildcard mapping for the agent's behavior state machine, use when joining worlds.
 
         Args:
@@ -1181,6 +1291,7 @@ class AgentBasics:
                 else:
                     self.__env_streams_by_user_hash_prv[user_hash] = stream
         else:
+
             # If a stream is not owned (i.e., it is from somebody else), the delta property >= 0 must be cleared,
             # since it is expected to limit the speed to the "set" operation on the owner-side. If we keep it here too
             # then it will also limit the speed of our "set" operation, that in principle is fine (we are getting
@@ -1218,7 +1329,7 @@ class AgentBasics:
             ret.append(stream_dict)
         return ret
 
-    async def remove_streams(self, peer_id: str, name: str | None = None, owned_too: bool = False):
+    async def remove_streams(self, peer_id: str, name: str | None = None, owned_too: bool = False) -> None:
         """Remove a known stream (async).
 
         Args:
@@ -1254,6 +1365,7 @@ class AgentBasics:
             if DataProps.is_pubsub_from_net_hash(net_hash):
                 if peer_id != "<private_peer_id>" and peer_id != "<public_peer_id>":
                     if not (await self.node_conn.unsubscribe(peer_id, channel=net_hash)):
+
                         # log.error(f"Failed in unsubscribing from pubsub, peer_id: {peer_id}, channel: {net_hash}")
                         pass
                     else:
@@ -1283,7 +1395,7 @@ class AgentBasics:
                 del self.proc_streams_by_user_hash[user_hash]
             log.misc(f"Successfully removed known stream with network hash {net_hash}, stream name: {name}")
 
-    def remove_all_streams(self, owned_too: bool = False):
+    def remove_all_streams(self, owned_too: bool = False) -> None:
         """Remove all not-owned streams.
 
         Args:
@@ -1306,6 +1418,16 @@ class AgentBasics:
         log.misc(f"Successfully removed all streams!")
 
     def get_stream(self, name_or_group: str, peer_id: str | None = None, data_type: str | None = None) -> Stream | None:
+        """Gets a known stream of a peer by name (or group).
+
+        Args:
+            name_or_group: The name or the group of the stream.
+            peer_id: The owner of the stream (default: None, meaning this agent).
+            data_type: The data type to look for, when a group has streams of several types (default: None).
+
+        Returns:
+            The stream, or None when not found.
+        """
         if peer_id is None:
             peer_id = self.get_peer_id()
         user_hash = DataProps.build_user_hash(peer_id, name_or_group)
@@ -1328,6 +1450,15 @@ class AgentBasics:
                 return None
 
     def get_streams(self, group_name: str, peer_id: str | None = None) -> list[Stream] | None:
+        """Gets the known streams of a group of a peer.
+
+        Args:
+            group_name: The name of the group.
+            peer_id: The owner of the streams (default: None, meaning this agent).
+
+        Returns:
+            The list of the streams, or None when not found.
+        """
         if peer_id is None:
             peer_id = self.get_peer_id()
         net_hash_ps = DataProps.build_net_hash(peer_id, pubsub=True, name_or_group=group_name)
@@ -1370,7 +1501,7 @@ class AgentBasics:
                             ret[net_hash][name_or_group] = _stream
         return ret
 
-    def get_last_streamed_data(self, agent_name: str):
+    def get_last_streamed_data(self, agent_name: str) -> list:
         """Get the last data samples from the processor streams of a given agent.
 
         Args:
@@ -1388,7 +1519,7 @@ class AgentBasics:
                         data_list.append(stream_obj.get())
         return data_list
 
-    def merge_flat_data_stream_props(self):
+    def merge_flat_data_stream_props(self) -> None:
         """Merge the labels of the descriptor components, across all streams, sharing them."""
 
         # Set of pivot labels
@@ -1558,7 +1689,7 @@ class AgentBasics:
                     return net_hash
         return None
 
-    def create_proc_input_streams(self, buffered: bool = False):
+    def create_proc_input_streams(self, buffered: bool = False) -> None:
         """Creates the processor input streams based on the `proc_inputs` defined for the agent.
 
         Args:
@@ -1591,7 +1722,7 @@ class AgentBasics:
                     # forcing the input stream to be compatible with proc inputs
                     self.compat_in_streams[i].add((net_hash, props.get_name()))
 
-    def create_proc_output_streams(self, buffered: bool = False):
+    def create_proc_output_streams(self, buffered: bool = False) -> None:
         """Creates the processor output streams based on the `proc_outputs` defined for the agent.
 
         Args:
@@ -1745,7 +1876,7 @@ class AgentBasics:
         """
 
         # Opening channels for all the (groups of) owned streams (generated and not)
-        for net_hash in self.owned_streams.keys():
+        for net_hash in list(self.owned_streams.keys()):  # A copy: the loop awaits
             is_pubsub = Stream.is_pubsub_from_net_hash(net_hash)
 
             if is_pubsub:
@@ -1757,7 +1888,7 @@ class AgentBasics:
                     return False
         return True
 
-    def update_streams_in_profile(self):
+    def update_streams_in_profile(self) -> None:
         """Updates the agent's profile with information about its owned (environmental and processor) streams."""
 
         # Filling the information about the streams that can be generated and handled
@@ -1783,7 +1914,7 @@ class AgentBasics:
         if len(list_of_props) > 0:
             dynamic_profile['streams'] = list_of_props
 
-    async def send_profile_to_all(self):
+    async def send_profile_to_all(self) -> None:
         """Sends the agent's profile to all known agents (async)."""
 
         agents = list(self.all_agents.keys())
@@ -1792,10 +1923,15 @@ class AgentBasics:
             if not (await self.node_conn.send(peer_id, channel_trail=None,
                                               content=self.node_profile.get_all_profile(),
                                               content_type=Msg.PROFILE)):
-                log.error("Failed to send profile, removing (disconnecting) " + peer_id)
-                await self.remove_agent(peer_id)
+                if self.node_conn.sends_are_queued:
 
-    async def behave(self):
+                    # A full send queue refused it: the peer is behind, not gone (the Session tells that)
+                    log.error(f"Profile to {peer_id} refused (send queue full), sent again at the next round")
+                else:
+                    log.error("Failed to send profile, removing (disconnecting) " + peer_id)
+                    await self.remove_agent(peer_id)
+
+    async def behave(self) -> None:
         """Behave in the current environment, calling the state-machines of the public and private networks (async)."""
 
         assert isinstance(self.behav_lone_wolf, HybridStateMachine)
@@ -1854,15 +1990,21 @@ class AgentBasics:
                 ret = await self.node_conn.send(interaction.requester, channel_trail=None,
                                                 content=interaction.to_status_dict(status_generated_by=my_peer_id),
                                                 content_type=Msg.INTERACTION_STATUS)
-                if not ret:
+                if not ret and self.node_conn.sends_are_queued:
+
+                    # A full send queue refused it: the requester is behind, not gone (the Session tells that); its
+                    # interaction will end by its own timeout
+                    log.error(f"Interaction status to {interaction.requester} refused (send queue full)")
+                elif not ret:
                     log.error(
                         f"Failed to send interaction status to peer {interaction.requester}, disconnecting it")
 
                     assert self.node_purge_fcn is not None
+
                     # Send-failure teardown: LOCAL_ERROR (best-effort GOAWAY on a possibly dead link).
                     await self.node_purge_fcn(interaction.requester, reason=LOCAL_ERROR)
 
-    def learn_behave(self, state: int, last_action: int, prev_state: int):
+    def learn_behave(self, state: int, last_action: int, prev_state: int) -> None:
         """A placeholder method for behavioral learning, intended to be implemented by child classes.
         It receives state and action information to update a behavioral model.
 
@@ -1876,7 +2018,8 @@ class AgentBasics:
         """
         pass
 
-    async def on_tick(self):
+    async def on_tick(self) -> None:
+        """Hook called once per tick, before the world behavior acts; override it in agents (async)."""
         pass
 
     def get_peer_id(self) -> str:
@@ -1937,7 +2080,7 @@ class AgentBasics:
         else:
             return True
 
-    def accept_new_role(self, role: int):
+    def accept_new_role(self, role: int) -> None:
         """Set the agent's role and optionally load a default behavior (private/world behavior).
 
         Args:
@@ -1963,7 +2106,7 @@ class AgentBasics:
             self.behav.set_role(base_role_str)
             self.set_policy_filter(self.policy_filter, public=False)
 
-    def is_human(self):
+    def is_human(self) -> bool:
         """Check if the agent is marked as human in its node.
 
         Returns:
@@ -1974,7 +2117,7 @@ class AgentBasics:
         else:
             return False
 
-    def in_world(self):
+    def in_world(self) -> bool:
         """Check if the agent is currently operating within a 'world'.
 
         Returns:
@@ -1985,7 +2128,7 @@ class AgentBasics:
         else:
             return False
 
-    def behaving_in_world(self):
+    def behaving_in_world(self) -> bool:
         """Checks if the agent's world-specific behavior state machine is currently active.
 
         Returns:
@@ -2066,8 +2209,8 @@ class AgentBasics:
                     log.misc(f"Accepted sample named {name}: tag={data_tag}, uuid={data_uuid}" +
                              (": it is a new UUID" if not has_data else ""))
 
-                    # Saving the data sample on the known stream objects
-                    self.known_streams[net_hash][name].set(data, data_tag, uuid=data_uuid)
+                    # Saving the data sample on the known stream objects (its owner already paced it: no delta check)
+                    self.known_streams[net_hash][name].set(data, data_tag, uuid=data_uuid, check_delta=False)
 
                     # Data to return
                     added_data.append((DataProps.user_hash_from_net_hash(net_hash, name), data_uuid))
@@ -2118,6 +2261,7 @@ class AgentBasics:
                             log.debug(f"[get_stream_sample] Adding a new buffered stream to the list of known "
                                       f"streams, hash: {_net_hash}")
                             for stream_obj in _processor_stream_dict.values():
+
                                 # Same properties of the stream of the processor of the source agent
                                 props = stream_obj.get_props().clone()
                                 props.set_group("buffered" + str(_buffered_id))
@@ -2165,11 +2309,11 @@ class AgentBasics:
             log.misc(f"Skipping sample from {net_hash} (data stream is unknown)")  # Misc
             return added_data
 
-    async def send_stream_samples(self):
+    async def send_stream_samples(self) -> None:
         """Collect and send stream samples from all owned streams to appropriate recipients (async)."""
 
         # For each owned net hash...
-        for net_hash, streams_dict in self.owned_streams.items():
+        for net_hash, streams_dict in list(self.owned_streams.items()):  # A copy: the loop awaits
 
             # Skipping our processor input
             if DataProps.name_or_group_from_net_hash(net_hash) == "processor_in":
@@ -2336,7 +2480,7 @@ class AgentBasics:
                     if interaction is not None and result:
                         interaction.inc_streamed_samples()
 
-    def disable_proc_input(self, public: bool):
+    def disable_proc_input(self, public: bool) -> None:
         """Disable the processor input stream of this agent.
 
         Args:
@@ -2347,7 +2491,7 @@ class AgentBasics:
             if stream_obj.is_public() == public:
                 stream_obj.disable()
 
-    def enable_proc_input(self, public: bool):
+    def enable_proc_input(self, public: bool) -> None:
         """Enable the processor input stream of this agent.
 
         Args:
@@ -2411,7 +2555,7 @@ class AgentBasics:
             return data_tag
         return -1
 
-    def set_tag(self, net_hash: str, data_tag: int, uuid: str | None = None):
+    def set_tag(self, net_hash: str, data_tag: int, uuid: str | None = None) -> None:
         """Set the data tag on all streams associated with the given network hash.
 
         Args:
@@ -2424,10 +2568,15 @@ class AgentBasics:
             for stream_obj in stream_dict.values():
                 stream_obj.set_tag(data_tag, uuid=uuid)
 
-    def get_current_interaction(self):
+    def get_current_interaction(self) -> Interaction | None:
+        """Gets the interaction currently being executed.
+
+        Returns:
+            The current interaction, or None.
+        """
         return self.im.get_current()
 
-    def force_action_step(self, step: int):
+    def force_action_step(self, step: int) -> None:
         """Override the current action step index used in the active behavior.
 
         Args:
@@ -2435,7 +2584,7 @@ class AgentBasics:
         """
         self.overridden_action_step = step if step >= 0 else None
 
-    def get_action_step(self):
+    def get_action_step(self) -> int | None:
         """Retrieve the current action step from the agent's private/world behavior.
 
         Returns:
@@ -2446,7 +2595,7 @@ class AgentBasics:
         behav = self.behav if self.behav.is_enabled() else self.behav_lone_wolf
         return behav.get_action_step_idx() if self.overridden_action_step is None else self.overridden_action_step
 
-    def is_last_action_step(self):
+    def is_last_action_step(self) -> bool | None:
         """Check if the agent's current action (private/world behavior) is on its last step.
 
         Returns:
@@ -2457,7 +2606,7 @@ class AgentBasics:
         else:
             return None
 
-    def is_multi_steps_action(self):
+    def is_multi_steps_action(self) -> bool:
         """Determines if the current action is a multistep action.
 
         Returns:
@@ -2591,7 +2740,7 @@ class AgentBasics:
         _selected_interaction = None
         return _selected_action_idx, _selected_interaction
 
-    def hook_proc_tweak_inputs(self, inputs):
+    def hook_proc_tweak_inputs(self, inputs: Any) -> Any:
         """A callback method that saves the inputs to the processor right before execution.
 
         Args:
@@ -2603,7 +2752,7 @@ class AgentBasics:
         self.proc_last_inputs = inputs
         return inputs
 
-    def hook_proc_tweak_outputs(self, outputs):
+    def hook_proc_tweak_outputs(self, outputs: Any) -> Any:
         """A callback method that saves the outputs from the processor right after execution.
 
         Args:
@@ -2747,7 +2896,7 @@ class AgentBasics:
             return AnswerOutcome()
         return self.uai_answer_fell_short(text, spec, event, attempt, model_view, attempts=raw_texts)
 
-    def uai_answer_fell_short(self, text: str, spec: dict, event, attempt: int,
+    def uai_answer_fell_short(self, text: str, spec: dict, event: Any, attempt: int,
                                    model_view: str | None = None, attempts: list | None = None) -> AnswerOutcome:
         """A callback method for an answer that was meant for a form and does not satisfy it.
 
@@ -2764,6 +2913,7 @@ class AgentBasics:
         Returns:
             The outcome, see uai_postprocess.
         """
+
         # A person at a terminal is told what is wrong, through the same sink every message to them goes
         # through, and asked to write again: nothing travels, the form stays pending, their next line is read
         # against it. A person in the web application cannot be told (what this node prints never reaches
@@ -2920,8 +3070,8 @@ class AgentBasics:
 
     # noinspection PyUnusedLocal
     # noinspection PyMethodMayBeStatic
-    def hook_before_sending_sample(self, data, data_tag: int,
-                                   net_hash: str, stream_name: str, recipient: str | None):
+    def hook_before_sending_sample(self, data: Any, data_tag: int,
+                                   net_hash: str, stream_name: str, recipient: str | None) -> Any:
         """A callback method that handles the steam data right before sending it through the network.
 
         Args:
@@ -2936,7 +3086,7 @@ class AgentBasics:
         """
         return data
 
-    def remove_peer_from_agent_status_attrs(self, peer_id: str):
+    def remove_peer_from_agent_status_attrs(self, peer_id: str) -> None:
         """Remove a peer ID from the status of the agent, assuming it to be the represented by attributes that start
         with '_'."""
         for attr_name in dir(self):
@@ -2954,7 +3104,7 @@ class AgentBasics:
                 except AttributeError:
                     continue  # Skip read-only attributes
 
-    def reset_agent_status_attrs(self):
+    def reset_agent_status_attrs(self) -> None:
         """Resets attributes that represent the status of the agent, assuming to be the ones that start with '_'."""
         for attr_name in dir(self):
             if (attr_name.startswith("_") and not attr_name.startswith("__") and not attr_name.startswith("_Agent")
@@ -3121,6 +3271,154 @@ class AgentBasics:
 
         return True
 
+    def get_last_sent_interaction(self) -> Interaction:
+        """Gets the last interaction this agent sent.
+
+        Returns:
+            The last sent interaction.
+        """
+        return self.last_sent_interaction
+
+    def __str__(self) -> str:
+        """String representation of an agent.
+
+        Returns:
+            A formatted string describing the agent's current state and relationships.
+        """
+        s = ("[" + ("Agent" if not self.is_world else "World") + "]"
+             + f" {self.node_name} (role: {self.node_profile.get_dynamic_profile()['connections']['role']})")
+        if len(self.world_masters) > 0:
+            s += "\n\t- known world masters:"
+            for _s in self.world_masters.keys():
+                s += "\n\t\t" + str(_s)
+        if len(self.world_agents) > 0:
+            s += "\n\t- known agents living in the same world (non-world-masters):"
+            for _s in self.world_agents.keys():
+                s += "\n\t\t" + str(_s)
+        if len(self.public_agents) > 0:
+            s += "\n\t- known lone wolves:"
+            for _s in self.public_agents.keys():
+                s += "\n\t\t" + str(_s)
+        if len(self.known_streams) > 0:
+            s += "\n\t- known_streams:"
+            for _s in self.known_streams:
+                s += "\n\t\t" + str(_s)
+        s += "\n\t- behaviour (public):"
+        s += "\n\t\t" + (str(self.behav_lone_wolf).replace("\n", "\n\t\t")
+                         if self.behav_lone_wolf is not None else "none")
+        s += "\n\t- behaviour (private):"
+        s += "\n\t\t" + (str(self.behav).replace("\n", "\n\t\t") if self.behav is not None else "none")
+        s += "\n\t- processor:"
+        s += "\n\t\t" + (str(self.proc).replace("\n", "\n\t\t") if self.proc is not None else "none")
+        return s
+
+    async def on_send_event(self, peer_id: str, event: dict) -> None:
+        """Reacts to an event of the send queue of a peer: override it in an agent or world (async).
+
+        Called at the tick boundary (never inside behave()), after send_status was updated. Event types: "written"
+        (messages up to event["seq"] left on the stream), "write_failed" (kept for a retry), "recovered", "refused"
+        (a full queue refused event["count"] messages), "queue_dropped" (event["count"] messages lost, with
+        event["reason"]: max_attempts, max_age or explicit). The default does nothing. Never fires in the browser.
+
+        Args:
+            peer_id: The peer.
+            event: The event (see P2P.pop_send_events for its fields).
+        """
+        pass
+
+    async def on_transfer_progress(self, peer_id: str, direction: str, seq: int, done: int, total: int,
+                                   files: list[str], reason: str | None) -> None:
+        """Reacts to the progress of a message larger than a chunk (a chunked message, or a file message): override
+        it in an agent or world, e.g. to show a percentage (async).
+
+        Called at the tick boundary, throttled (at the first and last chunk, and in between at most every half second
+        and every 1%), after transfers was updated. A restart from the first chunk (a broken stream) reports a smaller
+        done again. A dropped received message reports its reason. Never fires in the browser.
+
+        Args:
+            peer_id: The peer.
+            direction: "send" (bytes written to the transport, at most a chunk ahead of the peer) or "receive" (bytes
+                received).
+            seq: The sequence number of the message in the queue of the sender (for "send", the one of its ticket).
+            done: Bytes so far.
+            total: Bytes of the whole message (for a file message, the files and the message together).
+            files: The names of the files of a file message (empty for a chunked message).
+            reason: None, or why a received message was dropped (e.g. "timeout", "hash_mismatch", "too_large").
+        """
+        pass
+
+    async def _handle_transfer_event(self, ev: dict) -> None:
+        """Keeps transfers current for one progress or receive-drop event, then runs on_transfer_progress (async).
+
+        Framework-internal, called by the node at the tick boundary. A raising hook is logged.
+
+        Args:
+            ev: The event (type "progress", "receive_progress" or "receive_dropped"; see P2P.pop_send_events).
+        """
+        peer_id, ev_type = ev.get("peer_id"), ev.get("type")
+        if peer_id is None:
+            return
+        direction = "send" if ev_type == "progress" else "receive"
+        key = (peer_id, direction, int(ev.get("seq", 0)))
+        done, total = int(ev.get("bytes", 0)), int(ev.get("total", 0))
+        reason = ev.get("reason") if ev_type == "receive_dropped" else None
+        if reason is not None or done >= total:
+            self.transfers.pop(key, None)
+        else:
+            self.transfers[key] = {"done": done, "total": total, "kind": ev.get("kind"), "files": ev.get("files") or [],
+                                   "attempt": ev.get("attempt", 0), "time": ev.get("time")}
+        try:
+            await self.on_transfer_progress(peer_id, direction, key[2], done, total, ev.get("files") or [], reason)
+        except Exception as e:
+            log.error(f"on_transfer_progress raised for {peer_id} ({ev_type}): {e}")
+
+    async def _handle_send_event(self, ev: dict) -> None:
+        """Keeps send_status current for one event of the send queues, then runs the on_send_event hook (async).
+
+        Framework-internal, called by the node at the tick boundary. A raising hook is logged and does not break the
+        bookkeeping or the tick.
+
+        Args:
+            ev: The event (see P2P.pop_send_events for its fields).
+        """
+        peer_id = ev.get("peer_id")
+        if peer_id is None:
+            return  # events_lost: nothing per peer
+        st = self.send_status.setdefault(peer_id, {"state": "ok", "refused": 0, "dropped": 0, "last_written_seq": 0,
+                                                   "last_error": None, "last_change": None})
+        ev_type = ev.get("type")
+        if ev_type == "written":
+            st["last_written_seq"] = ev.get("seq", st["last_written_seq"])
+            st["state"] = "ok"  # After a drop the failures start from zero: a write is the recovery
+        elif ev_type == "write_failed":
+            st["state"], st["last_error"] = "failing", ev.get("error")
+        elif ev_type == "recovered":
+            st["state"] = "ok"
+        elif ev_type == "refused":
+            st["refused"] += ev.get("count", 1)
+        elif ev_type == "queue_dropped":
+            st["state"] = "dropped"
+            st["dropped"] += ev.get("count", 0)
+            st["last_error"] = ev.get("error") or st["last_error"]
+        st["last_change"] = ev.get("time")
+        try:
+            await self.on_send_event(peer_id, ev)
+        except Exception as e:
+            log.error(f"on_send_event raised for {peer_id} ({ev_type}): {e}")
+
+    def _finish_stepwise(self, interaction: Interaction, healthy: bool) -> None:
+        """Terminal cleanup of a stepwise run: clear the mark and hand back the pedantic
+        grant (same restore dance as send(wait_completion=True)). On a healthy completion
+        inside a multi-step interaction the framework-forced default is kept, so the
+        remaining steps retain their retry semantics; on errors and give-ups the strip is
+        unconditional, so the failure is a single discard and cannot loop."""
+        interaction.clear_mark()
+        action_ref = interaction.action_ref
+        assert isinstance(action_ref, Action)
+        if not action_ref.is_pedantic_by_default():
+            if not healthy or not interaction.is_multi_steps():
+                action_ref.set_timeout(-1.)
+
     async def _send(self, interaction: Interaction | None = None,
                     action_name: str | None = None,
                     target: str | list[str] | None = None,
@@ -3177,6 +3475,7 @@ class AgentBasics:
         Returns:
             The Interaction on success, ``None`` on failure.
         """
+
         # Build Interaction from raw args if needed
         self.last_sent_interaction = None
         if interaction is None:
@@ -3232,43 +3531,7 @@ class AgentBasics:
             self.im.unregister(interaction)
             return None
 
-    def get_last_sent_interaction(self) -> Interaction:
-        return self.last_sent_interaction
-
-    def __str__(self):
-        """String representation of an agent.
-
-        Returns:
-            A formatted string describing the agent's current state and relationships.
-        """
-        s = ("[" + ("Agent" if not self.is_world else "World") + "]"
-             + f" {self.node_name} (role: {self.node_profile.get_dynamic_profile()['connections']['role']})")
-        if len(self.world_masters) > 0:
-            s += "\n\t- known world masters:"
-            for _s in self.world_masters.keys():
-                s += "\n\t\t" + str(_s)
-        if len(self.world_agents) > 0:
-            s += "\n\t- known agents living in the same world (non-world-masters):"
-            for _s in self.world_agents.keys():
-                s += "\n\t\t" + str(_s)
-        if len(self.public_agents) > 0:
-            s += "\n\t- known lone wolves:"
-            for _s in self.public_agents.keys():
-                s += "\n\t\t" + str(_s)
-        if len(self.known_streams) > 0:
-            s += "\n\t- known_streams:"
-            for _s in self.known_streams:
-                s += "\n\t\t" + str(_s)
-        s += "\n\t- behaviour (public):"
-        s += "\n\t\t" + (str(self.behav_lone_wolf).replace("\n", "\n\t\t")
-                         if self.behav_lone_wolf is not None else "none")
-        s += "\n\t- behaviour (private):"
-        s += "\n\t\t" + (str(self.behav).replace("\n", "\n\t\t") if self.behav is not None else "none")
-        s += "\n\t- processor:"
-        s += "\n\t\t" + (str(self.proc).replace("\n", "\n\t\t") if self.proc is not None else "none")
-        return s
-
-    async def __remove_all_world_related_agents(self):
+    async def __remove_all_world_related_agents(self) -> None:
         """Remove all world-related agents (masters and regular agents) from the agent's known lists (async)."""
 
         to_remove = list(self.world_masters.keys())
@@ -3279,7 +3542,7 @@ class AgentBasics:
         for peer_id in to_remove:
             await self.remove_agent(peer_id)
 
-    async def __remove_all_world_private_streams(self):
+    async def __remove_all_world_private_streams(self) -> None:
         """Remove all known streams that are flagged as not-public and are not owned by this agent (async)."""
 
         # Find what to remove

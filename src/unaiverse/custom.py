@@ -2,6 +2,7 @@ import os
 
 
 class Custom:
+    """Default options and constants of UNaIVERSE, collected in one place (class attributes, no instances)."""
 
     # ==================
     # NODE CONFIGURATION
@@ -17,9 +18,52 @@ class Custom:
     SLOW_DOWN_CLOCK_AFTER = 10.0  # Seconds without networks exchanges and 0 interaction (stats are not considered)
     SLOW_CLOCK_DELTA = 2.0  # Clock delta when running in slow-mode
     REJOINING_WAIT = 30.0  # Time to wait before trying to rejoin a world from which we were disconnected
-    WORLD_PREADMISSION_TTL = 90.0  # Seconds a grant-time pre-admission may sit unredeemed before the
-    # world host unlists it (ghost bound; must exceed the worst-case redemption: grant-bounded dial
-    # ~35s + HELLO/PROFILE stages 15s each, plus margin)
+
+    # Seconds a grant-time pre-admission may sit unredeemed before the world host unlists it (ghost bound; must
+    # exceed the worst-case redemption: grant-bounded dial ~35s + HELLO/PROFILE stages 15s each, plus margin)
+    WORLD_PREADMISSION_TTL = 90.0
+
+    # Pace of the network task of a running node (session pump, messages, connections), independent of the HSM clock:
+    # both well under the 10 s PING RTT window of the Session keep-alive
+    NETWORK_LOOP_INTERVAL = 0.01  # Seconds between two network passes (at most one clock cycle) when not idle
+    NETWORK_LOOP_INTERVAL_IDLE = 0.1  # Seconds between two network passes when the node is idle
+
+    # Messages for the hosted entity (interactions, statuses, roles, ...) read while a tick runs wait for its end; when
+    # these bounds are reached a new interaction is rejected (its sender is told), any other message is dropped
+    DEFERRED_MSGS_MAX_PER_PEER = 64  # Messages waiting for the end of the tick, per sender
+    DEFERRED_MSGS_MAX_BYTES = 256 * 1024 * 1024  # Bytes waiting for the end of the tick, over all the senders
+
+    # ===========================================================
+    # SEND QUEUES (direct messages, passed to Go at library setup)
+    # ===========================================================
+    # A send only queues the message; a writer per peer writes it. A full queue refuses the new message (send returns
+    # False) and keeps refusing until it drained to the low-water mark; what is queued is never dropped one by one.
+    SEND_QUEUE_MAX_MSGS_PER_PEER = 64  # Messages
+    SEND_QUEUE_MAX_BYTES_PER_PEER = (1024 + 64) * 1024 * 1024  # Bytes (MAX_MESSAGE_SIZE, 1 GB, plus 64 MB)
+    SEND_QUEUE_MAX_BYTES_TOTAL = 4 * 1024 * 1024 * 1024  # Bytes, over the queues of all the peers
+    SEND_QUEUE_LOW_WATER = 0.5  # Fraction of the caps a queue that refused must drain to before accepting again
+    SEND_MAX_WAIT_AGE = 60.  # Seconds the oldest unsent message may wait with no progress, then the queue is dropped
+    SEND_MAX_DIAL_ATTEMPTS = 3  # Failed writes in a row (each with a new stream) before the queue is dropped
+    SEND_RETRY_BACKOFF = (1., 2., 4.)  # Seconds before the n-th retry (the last one repeats)
+    SEND_WRITE_BASE_TIMEOUT = 10.  # Seconds, the write deadline of a frame is this plus its size at the rate below
+    SEND_WRITE_MIN_BYTES_PER_SEC = 1024 * 1024  # Bytes per second, the slowest link a write is allowed to wait for
+    SEND_MAX_EVENTS = 1024  # Send events kept in Go until Python pops them (the oldest go first)
+    SEND_REFUSED_LOG_EVERY = 5.  # Seconds, the refusals of a full queue are logged at most this often per peer
+
+    # =========================================
+    # LARGE MESSAGES (chunked frames) AND FILES
+    # =========================================
+    # A direct message larger than CHUNK_SIZE goes as chunked frames to a peer that can take them (CAP_CHUNKED_FRAMES);
+    # to any other peer (older nodes, browsers) the legacy limit holds, as for pubsub and Session payloads
+    CHUNK_SIZE = 5 * 1024 * 1024  # Bytes of message per chunk frame on the wire
+    MAX_MESSAGE_SIZE = 1024 * 1024 * 1024  # Bytes of one in-memory message, sent or received (0: no limit)
+    LEGACY_MAX_MESSAGE_SIZE = 50 * 1024 * 1024  # Bytes of one message as a single frame (peers without chunks)
+    REASSEMBLY_MAX_BYTES_PER_PEER = MAX_MESSAGE_SIZE  # Bytes under reassembly from one peer (0: MAX_MESSAGE_SIZE)
+    REASSEMBLY_MAX_BYTES_TOTAL = 4 * 1024 * 1024 * 1024  # Bytes under reassembly from all the peers
+    REASSEMBLY_TIMEOUT = 120.  # Seconds a message under reassembly may wait for its next chunk
+    ACCEPT_FILES = True  # File messages (FILE data streamed from disk) are accepted, saved under DOWNLOADS_DIR
+    MAX_FILE_SIZE = 0  # Bytes of one file, sent or received (0: no limit)
+    DOWNLOADS_DIR = None  # Folder of the received files (None: <app folder>/Downloads, next to the key)
 
     # =====================
     # ENVIRONMENT VARIABLES
@@ -42,6 +86,10 @@ class Custom:
     ENV_KEY_PATH = os.getenv("TLS_KEY_PATH", None)
     PATH_TO_APPEND_ADDRESSES = os.getenv("NODE_SAVE_RUNNING_ADDRESSES")
 
+    # The processor (a ModuleWrapper) runs in a worker thread of its own during process/learn, so that the node keeps
+    # running during a long forward or backward pass (0 to run it inline, as before)
+    OFFLOAD_ENABLED = os.getenv("NODE_OFFLOAD", "1") == "1"
+
     # =============
     # STATE MACHINE
     # =============
@@ -62,7 +110,6 @@ class Custom:
     # =======
     # ACTIONS
     # =======
-
     # Special action arguments, that will be considered when using the @action decorator
     STREAM_ARG_NAMES = {'stream', 'streams'}  # Last one => INTERACTION_FIELD_NAMES too
     AGENT_ARG_NAMES = {'agent', 'agents', 'partner', 'partners',
@@ -80,19 +127,19 @@ class Custom:
     --------------------------------------------------------------------------------------------------------------------
     Role	            Names	                                Semantics
     --------------------------------------------------------------------------------------------------------------------
-    INTERACTION_INJECT  {'interaction'}	                        Framework injects the Interaction object at call time. 
-                                                                Must be declarable in body sig (that's how injection 
-                                                                opts in). Forbidden in action.args and in wire 
+    INTERACTION_INJECT  {'interaction'}	                        Framework injects the Interaction object at call time.
+                                                                Must be declarable in body sig (that's how injection
+                                                                opts in). Forbidden in action.args and in wire
                                                                 action_kwargs.
     INTERACTION_FIELD   {streams, num_steps, target, timeout,   Promoted from Action.args to a field of the Interaction
                         copy_sys, forced_uuid, id, volatile,    object by __build_system_interaction. Allowed in body
-                        data_samples, callback}                 sig (then stays in action_kwargs). 
-                                                                Allowed in wire action_kwargs iff value equals the 
+                        data_samples, callback}                 sig (then stays in action_kwargs).
+                                                                Allowed in wire action_kwargs iff value equals the
                                                                 matching Interaction field.
-    HSM_TRANSIT_META	{max_duration, retry_timeout, delay}    Per-transit scalars consumed by __guess_* then stripped 
-                                                                from Action.args. Forbidden in body sig and in wire 
+    HSM_TRANSIT_META	{max_duration, retry_timeout, delay}    Per-transit scalars consumed by __guess_* then stripped
+                                                                from Action.args. Forbidden in body sig and in wire
                                                                 action_kwargs.
-    WIRE_SENTINEL       {'action_kwargs'}	                    Framework-private container name. Forbidden everywhere              
+    WIRE_SENTINEL       {'action_kwargs'}	                    Framework-private container name. Forbidden everywhere
                                                                 except send's body sig.
     REGULAR	            everything else	                        Validated only against the body sig.
     --------------------------------------------------------------------------------------------------------------------
@@ -110,6 +157,7 @@ class Custom:
 
     # Others
     DEFAULT_TIMEOUT = 10.0
+    SEND_TICKET_TIMEOUT = DEFAULT_TIMEOUT  # Seconds a ticket.wait() of a tracked send waits by default
     ALL_STATES_NAME = 'all'
     NOT_ALLOWED_STATE_NAMES = {ALL_STATES_NAME}
 
@@ -144,6 +192,19 @@ class RootServerError(GenException):
                  state_code: str | None = None, state_message: str | None = None,
                  data_code: str | None = None, data: dict | list | None = None,
                  flags: dict | None = None, status: int | None = None) -> None:
+        """Initializes the error with the details of the failed root-server call.
+
+        Args:
+            message: The error message.
+            api: The root-server API that was called.
+            api_rejected: True if the server answered with a refusal, False for a transport failure (default: False).
+            state_code: The state code of the response envelope (default: None).
+            state_message: The state message of the response envelope (default: None).
+            data_code: The data.code discriminator of the response (default: None).
+            data: The data payload of the refusal (default: None).
+            flags: The flags of the response (default: None, meaning no flags).
+            status: The HTTP status code (default: None).
+        """
         super().__init__(message)
         self.api = api
         self.api_rejected = api_rejected
