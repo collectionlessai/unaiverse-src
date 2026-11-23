@@ -537,6 +537,7 @@ class HybridStateMachine:
         for act in self.__id_to_action:
             act.clear_interactions()
             act.system_interaction.reset_state()
+            act.reset_msg_printing()
         for s in self.__id_to_state:
             s.reset()
             if s.action is not None:
@@ -563,6 +564,8 @@ class HybridStateMachine:
             self.limbo_state = None
             self.prev_state = self.state
             self.state = state
+            if self.prev_state != state:
+                self.__reset_msg_printing(self.prev_state)
             if self.__action is not None:
                 assert isinstance(self.__cur_feasible_actions_status, dict)
                 self.__cur_feasible_actions_status['selected_interaction'].reset_state()
@@ -1133,6 +1136,12 @@ class HybridStateMachine:
                     #        act.clear_requests()
 
                 self.states[self.prev_state].reset(self.__state_changed)  # Reset starting time
+
+                # The message of an action is printed once per series of attempts: a new series starts once it is done,
+                # and, for every action of the state that was left, when the machine comes back to that state
+                action.reset_msg_printing()
+                if self.__state_changed:
+                    self.__reset_msg_printing(self.prev_state)
                 interaction.reset_state()
                 self.__action = None  # Clearing
                 self.__cur_feasible_actions_status = None
@@ -1744,6 +1753,16 @@ class HybridStateMachine:
                     log.user(f"{state} --> {to_state} {action}")
 
     # noinspection PyMethodMayBeStatic
+    def __reset_msg_printing(self, state: str | None) -> None:
+        """Lets the messages of the actions that start from a state be printed again (the machine left the state).
+
+        Args:
+            state: The name of the state (nothing is done for None or an unknown state).
+        """
+        for action_list in self.transitions.get(state, {}).values() if state is not None else []:
+            for act in action_list:
+                act.reset_msg_printing()
+
     def __policy_first_requested_or_first_ready(self, actions_list: list[Action]) -> tuple[int, Interaction | None]:
         """This is the default policy for selecting which action to execute from a list of feasible actions.
         It prioritizes actions that have been explicitly requested (i.e., have pending requests) on a first-come,

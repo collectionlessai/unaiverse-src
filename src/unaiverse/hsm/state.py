@@ -182,6 +182,8 @@ class State:
         self.starting_time = 0.
         if reset_message_printing:
             self.msg_printed = False
+            if self.action is not None:
+                self.action.reset_msg_printing()
         if self.action is not None:
             self.action.system_interaction.reset_state()
 

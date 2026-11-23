@@ -78,6 +78,9 @@ class Action:
         self.high_priority = high_priority
         self.__mark = None
 
+        # Who the message was last printed for (None: nobody), so that the retries of a failing action print it once
+        self.__msg_printed_for: str | None = None
+
         # Fix UNICODE chars
         if self.msg is not None:
             self.msg = html.unescape(self.msg)
@@ -177,6 +180,11 @@ class Action:
         """Clear the arbitrary marker object on the action."""
         self.__mark = None
 
+    def reset_msg_printing(self) -> None:
+        """Lets the message of the action be printed again at its next attempt (the action completed, or the state
+        machine left the state the action starts from)."""
+        self.__msg_printed_for = None
+
     async def __call__(self, interaction: Interaction | None = None) -> int:
         """Executes the action's associated method. This is the main entry point for running an Action. It handles
         multistep logic by updating the step counter and checking for completion based on steps, time, or retry_timeout.
@@ -215,13 +223,17 @@ class Action:
         actual_args = self.get_actual_params(additional_args=interaction_args)
         assert actual_args is not None
 
-        if self.msg is not None and interaction.get_step_idx() < 0:
+        # The message is printed at the first attempt only, not again at each retry of a failing action: the system
+        # interaction is rebuilt after a discarded attempt, so it is told apart by identity, not by its uuid
+        msg_for = Custom.SYSTEM_INTERACTION_UUID if interaction is self.system_interaction else interaction.uuid
+        if self.msg is not None and interaction.get_step_idx() < 0 and self.__msg_printed_for != msg_for:
             if self.state_machine.show_action_request_info and interaction is not None:
                 msg = self.msg + (f" (requester: {interaction.requester}, interaction uuid: {interaction.uuid}, "
                                   f"#interactions: {len(self.get_list_of_interactions())})")
             else:
                 msg = self.msg
             log.user(msg)
+            self.__msg_printed_for = msg_for
 
         # Storing the starting time of this action (only at the very first run attempt)
         assert interaction is not None
