@@ -1842,6 +1842,41 @@ func DropSendQueue(
 	return C.CString(jsonSuccessResponse(ni.sendStore.Drop(pid)))
 }
 
+// CancelSend stops one message of the send queue of a peer, because its receiver asked so
+// (its Session's STOP_SENDING): a message still waiting is taken out at once, the one being
+// written stops before its next chunk. Either way a queue_dropped event of that seq says
+// "receiver_stopped" (see SendStore.StopMessage).
+// Parameters:
+//   - instanceIndexC (C.int): The index of the node instance.
+//   - peerIDC (*C.char): The peer ID (the receiver).
+//   - seqC (C.ulonglong): The sequence number of the message in the queue of that peer.
+//
+// Returns:
+//   - *C.char: `{"state":"Success","message":<true when the message was in the queue>}` or `{"state":"Error","message":"..."}`.
+//   - IMPORTANT: The caller MUST free the returned C string using `FreeString`.
+//
+//export CancelSend
+func CancelSend(
+	instanceIndexC C.int,
+	peerIDC *C.char,
+	seqC C.ulonglong,
+) (ret *C.char) {
+	defer recoverToCString(&ret, "CancelSend")
+
+	ni, err := getInstance(int(instanceIndexC))
+	if err != nil {
+		return C.CString(jsonErrorResponse(fmt.Sprintf("Invalid instance index: %d", int(instanceIndexC)), err))
+	}
+	pid, err := peer.Decode(C.GoString(peerIDC))
+	if err != nil {
+		return C.CString(jsonErrorResponseWithCode("Invalid peer ID", SendCodeInvalidPeer, err))
+	}
+	if ni.sendStore == nil {
+		return C.CString(jsonSuccessResponse(false))
+	}
+	return C.CString(jsonSuccessResponse(ni.sendStore.StopMessage(pid, uint64(seqC))))
+}
+
 // SetPeerCapabilities records what a peer can receive, as its Session told Python: the
 // capability bits of its HELLO / HELLO_ACK and the largest message its profile accepts.
 // The writer of its queue then sends a message larger than a chunk as chunk frames if

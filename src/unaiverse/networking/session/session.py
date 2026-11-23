@@ -21,9 +21,9 @@ from enum import Enum
 from unaiverse.utils.logger import log
 from dataclasses import dataclass, field
 from typing import Any, Callable, Awaitable, TYPE_CHECKING
-from unaiverse.networking.session.sess_msg import CAP_CHUNKED_FRAMES, CAP_FILE_STREAM
 from unaiverse.networking.session.sess_msg import GRACEFUL_SHUTDOWN, SESSION_UNKNOWN, TOKEN_EXPIRED
 from unaiverse.networking.session.sess_msg import OK, VERSION_UNSUPPORTED, NOT_AUTHORIZED, LOCAL_ERROR
+from unaiverse.networking.session.sess_msg import CAP_CHUNKED_FRAMES, CAP_FILE_STREAM, CAP_STOP_SENDING
 from unaiverse.networking.session.sess_msg import SessMsg, reason_name, ProfileDecisionResult, WorldGrantSpec
 from unaiverse.networking.session.sess_msg import VerifiedTokenClaims, SESSION_HELLO_PROTOCOL, SESSION_PROFILE_PROTOCOL
 from unaiverse.networking.session.sess_msg import SESSION_WORLD_PROTOCOL, SESSION_CONTROL_PROTOCOL, SESSION_PROTOCOL_IDS
@@ -526,6 +526,25 @@ class Session:
             return
         await self._send_payload(SESSION_CONTROL_PROTOCOL, SessMsg(SessMsg.KIND_TOKEN_UPDATE, {
             "session_id": self.session_id, "token": token or "",
+        }))
+
+    async def send_stop_sending(self, seq: int) -> bool:
+        """Asks this peer to stop sending a large message that this end no longer wants (async).
+
+        The person stopped it while it arrived: what came was already thrown away here, and the rest would only waste
+        the network. Only to a peer whose HELLO said CAP_STOP_SENDING (an older one cannot read the message), and only
+        while ESTABLISHED.
+
+        Args:
+            seq: The sequence number of the message, as its chunk frames gave it (the one of the sender's queue).
+
+        Returns:
+            True when the request was sent.
+        """
+        if self.state != SessionState.ESTABLISHED or not self.peer_capabilities & CAP_STOP_SENDING or int(seq) <= 0:
+            return False
+        return await self._send_payload(SESSION_CONTROL_PROTOCOL, SessMsg(SessMsg.KIND_STOP_SENDING, {
+            "session_id": self.session_id, "seq": int(seq),
         }))
 
     async def close(self, reason_code: int = GRACEFUL_SHUTDOWN) -> None:
@@ -1490,7 +1509,7 @@ class Session:
         })]
 
     async def _on_control_protocol(self, msg: SessMsg) -> list[SessionEvent]:
-        """Dispatches a message of the CONTROL protocol (GOAWAY, PING/PONG, RESUME, TOKEN_UPDATE) (async).
+        """Dispatches a message of the CONTROL protocol (GOAWAY, PING/PONG, RESUME, TOKEN_UPDATE, STOP_SENDING) (async).
 
         Args:
             msg: The message.
@@ -1516,8 +1535,32 @@ class Session:
             return await self._on_resume_ack(msg)
         if msg.kind == SessMsg.KIND_TOKEN_UPDATE:
             return await self._on_token_update(msg)
+        if msg.kind == SessMsg.KIND_STOP_SENDING:
+            self._on_stop_sending(msg)
+            return []
         log.session(f"{self!r} unrecognised CONTROL {msg.kind} in state {self.state.value}", sub=self._sub)
         return []
+
+    def _on_stop_sending(self, msg: SessMsg) -> None:
+        """Handles a STOP_SENDING of the peer: the transport stops the message it names, if it is still sending it.
+
+        Only for this Session (its session_id), while ESTABLISHED, and only when the transport can stop one message (a
+        transport that cannot just goes on sending, as before).
+
+        Args:
+            msg: The STOP_SENDING message.
+        """
+        if self.state != SessionState.ESTABLISHED or msg.get("session_id") != self.session_id:
+            log.session(f"{self!r} STOP_SENDING for another session or in state {self.state.value}: ignored",
+                        sub=self._sub)
+            return
+        seq = int(msg.get("seq") or 0)
+        cancel = getattr(self.p2p, "cancel_send", None)
+        if seq <= 0 or cancel is None:
+            return
+        stopped = cancel(self.peer_id, seq)
+        log.session(f"{self!r} STOP_SENDING of message {seq}: {'stopped' if stopped else 'not being sent'}",
+                    sub=self._sub)
 
     async def _on_token_update(self, msg: SessMsg) -> list[SessionEvent]:
         """Handles an inbound refreshed peer token: buffered until ESTABLISHED, otherwise applied now (async).
@@ -1960,11 +2003,14 @@ class Session:
         The browser runs this same code on a transport without chunked frames or file streaming: it advertises 0.
         CAP_FILE_STREAM says that this end takes file messages (it can, and Custom.ACCEPT_FILES says it does).
 
+        CAP_STOP_SENDING says that this end stops sending a message when its receiver asks (STOP_SENDING).
+
         Returns:
             The CAP_* bits.
         """
         caps = CAP_CHUNKED_FRAMES if getattr(self.p2p, "supports_chunked_frames", False) else 0
-        return caps | (CAP_FILE_STREAM if getattr(self.p2p, "accepts_file_stream", False) else 0)
+        caps |= CAP_FILE_STREAM if getattr(self.p2p, "accepts_file_stream", False) else 0
+        return caps | (CAP_STOP_SENDING if getattr(self.p2p, "supports_stop_sending", False) else 0)
 
     async def _send_payload(self, protocol_id: str, msg: SessMsg) -> bool:
         """Sends a Session message to the peer on the given protocol (async).

@@ -143,6 +143,14 @@ class GoLibP2P:
         """
         ...
 
+    def CancelSend(self, instance: int, peer_id: bytes, seq: int) -> int:
+        """
+        CancelSend(instance: int, peer_id: bytes, seq: int) -> bytes
+        Stops one message of the send queue of a peer (its receiver asked so). Returns a JSON pointer:
+        {"state":"Success","message":<true when the message was in the queue>}.
+        """
+        ...
+
     def DropSendQueue(self, instance: int, peer_id: bytes) -> int:
         """
         DropSendQueue(instance: int, peer_id: bytes) -> bytes

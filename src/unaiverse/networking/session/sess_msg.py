@@ -30,6 +30,7 @@ SESSION_CONTROL_PROTOCOL = "/unaiverse/session/control/1.0.0"
 # (any node or browser older than them) gets the legacy behavior: messages up to the legacy size, one frame each
 CAP_CHUNKED_FRAMES = 1 << 0  # Chat messages larger than the chunk size, as chunked frames on the same stream
 CAP_FILE_STREAM = 1 << 1  # FILE data streamed from disk in chunks
+CAP_STOP_SENDING = 1 << 2  # Takes STOP_SENDING: stops sending a large message that its receiver no longer wants
 
 SESSION_PROTOCOL_IDS = frozenset({
     SESSION_HELLO_PROTOCOL,
@@ -136,6 +137,7 @@ class SessMsg:
     KIND_RESUME = "resume"  # {session_id: bytes, nonce: bytes}
     KIND_RESUME_ACK = "resume_ack"  # {session_id, nonce, accepted: bool, reason_code: int}
     KIND_TOKEN_UPDATE = "token_update"  # {session_id: bytes, token: str} refreshed root token
+    KIND_STOP_SENDING = "stop_sending"  # {session_id: bytes, seq: int} the receiver no longer wants message seq
 
     def get(self, key: str, default: Any = None) -> Any:
         """Gets a field of the message, with a default for a missing one.
@@ -292,6 +294,7 @@ _JSON_KIND_TO_TAG = {
     SessMsg.KIND_RESUME: 0x0D,
     SessMsg.KIND_RESUME_ACK: 0x0E,
     SessMsg.KIND_TOKEN_UPDATE: 0x0F,
+    SessMsg.KIND_STOP_SENDING: 0x10,
 }
 _JSON_TAG_TO_KIND = {tag: kind for kind, tag in _JSON_KIND_TO_TAG.items()}
 
@@ -303,10 +306,11 @@ _JSON_KIND_FIELDS = {
     SessMsg.KIND_RESUME_ACK: {"session_id": True, "nonce": True,
                               "accepted": False, "reason_code": False},
     SessMsg.KIND_TOKEN_UPDATE: {"session_id": True, "token": False},
+    SessMsg.KIND_STOP_SENDING: {"session_id": True, "seq": False},
 }
 
 # Decode defaults for missing non-bytes JSON fields (bytes default to b"")
-_JSON_FIELD_DEFAULTS = {"ok": False, "accepted": False, "token": ""}
+_JSON_FIELD_DEFAULTS = {"ok": False, "accepted": False, "token": "", "seq": 0}
 
 
 # Application decision types (returned by the responder decision hook)

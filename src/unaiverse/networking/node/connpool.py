@@ -829,6 +829,26 @@ class NodeConn:
         if sm is not None:
             sm.request_keepalive_probe(peer_id)
 
+    async def stop_sending(self, peer_id: str, seq: int) -> bool:
+        """Asks a peer to stop sending a large message that this node no longer wants (async).
+
+        For the receiver's Stop (the browser chat): its transport already threw away what came; this tells the sender,
+        through the Session of the peer (STOP_SENDING), so that the rest of the message does not travel at all. A peer
+        whose HELLO did not say CAP_STOP_SENDING is not asked (it would not understand): it goes on sending, as before.
+
+        Args:
+            peer_id: The peer that sends the message.
+            seq: The sequence number of the message, as its chunk frames gave it.
+
+        Returns:
+            True when the request was sent.
+        """
+        sm = self._sm_of(peer_id)
+        sess = sm.get_session(peer_id) if sm is not None else None
+        if sess is None:
+            return False
+        return await sess.send_stop_sending(seq)
+
     async def subscribe(self, peer_id: str, channel: str, default_p2p_name: str | None = None) -> bool:
         """Subscribes to a topic/channel on a P2P network (async).
 

@@ -109,6 +109,7 @@ class P2P:
     supports_chunked_frames = False  # True when Go sends/receives messages larger than a chunk (CAP_CHUNKED_FRAMES)
     supports_file_stream = False  # True when Go streams FILE data from disk (file messages; Phase 6.5)
     accepts_file_stream = False  # True when this node also takes them (Custom.ACCEPT_FILES): CAP_FILE_STREAM
+    supports_stop_sending = False  # True when Go stops one message its receiver no longer wants: CAP_STOP_SENDING
     _initialize_lock = threading.Lock()
     _instance_ids = [False, ] * _MAX_INSTANCES
     _instance_lock = threading.Lock()
@@ -259,6 +260,7 @@ class P2P:
                     cls.supports_file_stream = (cls.supports_chunked_frames and
                                                 hasattr(cls.libp2p, 'SendFileMessageToPeer'))
                     cls.accepts_file_stream = cls.supports_file_stream and bool(Custom.ACCEPT_FILES)
+                    cls.supports_stop_sending = cls.supports_chunked_frames and hasattr(cls.libp2p, 'CancelSend')
                     logger.info(f"✅ Send queues configured: {send_queue_config}")
                 else:
                     logger.error(f"❌ Send queues not configured, sends stay synchronous: {result}")
@@ -829,6 +831,32 @@ class P2P:
             logger.error(f"[Instance {self._instance}] DropSendQueue({peer_id}) failed: {result}")
             return 0
         return int(result.get('message') or 0)
+
+    def cancel_send(self, peer_id: str, seq: int) -> bool:
+        """Stops one message of the send queue of a peer, because the peer (its receiver) asked so (STOP_SENDING).
+
+        A message still waiting leaves the queue at once; the one being written stops before its next chunk. Go then
+        records a queue_dropped event of that seq, reason "receiver_stopped". A no-op when the send queues are off.
+
+        Args:
+            peer_id: The peer (the receiver).
+            seq: The sequence number of the message in its queue.
+
+        Returns:
+            True when the message was in the queue (and is now stopped).
+        """
+        if not P2P._send_queues_enabled or not P2P.supports_stop_sending:
+            return False
+        try:
+            result = P2P._type_interface.from_go_ptr_to_json(P2P.libp2p.CancelSend(
+                P2P._type_interface.to_go_int(self._instance), P2P._type_interface.to_go_string(peer_id), int(seq)))
+        except Exception as e:
+            logger.error(f"[Instance {self._instance}] CancelSend({peer_id}, {seq}) failed: {e}")
+            return False
+        if result is None or result.get('state') != "Success":
+            logger.error(f"[Instance {self._instance}] CancelSend({peer_id}, {seq}) failed: {result}")
+            return False
+        return bool(result.get('message'))
 
     def pop_send_events(self) -> list[dict]:
         """Pops the events of the send queues recorded since the last call, oldest first.

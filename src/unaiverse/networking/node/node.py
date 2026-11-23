@@ -836,10 +836,13 @@ class Node:
                         badges = [badge for _badges in peer_id_to_badges.values() for badge in _badges]
                         peer_ids = [peer_id for peer_id, _badges in peer_id_to_badges.items() for _ in _badges]
 
-                        response = self.__root(api="/account/node/cv/badge/assign",
-                                               payload={"badges": badges,
-                                                        "world_node_id": self.node_id,
-                                                        "world_badge_token": self.badge_token})
+
+                        # Off the event loop, so that a root server that does not answer cannot stop the network loop
+                        # (the HTTP call is bounded by ROOT_REQUEST_TIMEOUT, so the thread always ends)
+                        response = await asyncio.to_thread(self.__root, api="/account/node/cv/badge/assign",
+                                                           payload={"badges": badges,
+                                                                    "world_node_id": self.node_id,
+                                                                    "world_badge_token": self.badge_token})
 
                         # Getting the next badge token
                         self.badge_token = response["badge_token"]
@@ -877,7 +880,7 @@ class Node:
                         log.error(f"Error while sending badges to server or when notifying peers [{e}]")
                         if i < 2:
                             log.misc("Retrying...")
-                            time.sleep(1)  # Wait a little bit
+                            await asyncio.sleep(1)  # Wait a little bit
                         else:
                             log.error("Couldn't complete badge sending or notification procedure (stop trying)")
 
@@ -1575,7 +1578,7 @@ class Node:
                             msg, image_pil, whatever = keyboard_queue.get_nowait()
                             msg = msg.strip()
 
-                            if msg.lower() == "exit()" or msg.lower() == "quit()":
+                            if msg.lower() == "exit()" or msg.lower() == "quit()" or msg.lower() == "/exit":
 
                                 # Quit?
                                 must_quit = True

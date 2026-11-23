@@ -65,7 +65,12 @@ const (
 	SendDroppedMaxAttempts = "max_attempts"
 	SendDroppedMaxAge      = "max_age"
 	SendDroppedExplicit    = "explicit"
+	// The receiver stopped the message while it arrived (its STOP_SENDING): dropped alone.
+	SendDroppedReceiverStopped = "receiver_stopped"
 )
+
+// errReceiverStopped is the error of a message whose receiver asked to stop it.
+var errReceiverStopped = errors.New("the receiver stopped the message")
 
 // The error codes of the replies of SendMessageToPeer, for Python to tell them apart.
 const (
@@ -201,6 +206,10 @@ type peerQueue struct {
 
 	failures int    // failed writes in a row
 	lastErr  string // of the last failed write
+
+	// stopSeq is the message being written that its receiver asked to stop (0: none): the
+	// writer stops it before its next chunk (see stoppable).
+	stopSeq uint64
 	// headSince is when the head started to wait with no progress: when it was queued,
 	// or when the frame before it was written if that came later. A write that fails
 	// does not move it, so an outage is bounded by MaxWaitAge as a whole.
@@ -255,13 +264,13 @@ func newInstanceSendStore(ni *NodeInstance) *SendStore {
 	store.writeChunked = func(pid peer.ID, seq uint64, cp *chunkedPayload) error {
 		progress := store.progressOf(pid, seq, transferChunked, nil)
 		return writeLargeMessage(ni, pid, seq, transferChunked, int64(len(cp.payload)), func(write func([]byte) error) error {
-			return writeChunks(seq, cp, write, progress)
+			return writeChunks(seq, cp, store.stoppable(pid, seq, write), progress)
 		})
 	}
 	store.writeFile = func(pid peer.ID, seq uint64, fp *filePayload) error {
 		progress := store.progressOf(pid, seq, transferFile, fp.names())
 		return writeLargeMessage(ni, pid, seq, transferFile, fp.fileBytes(), func(write func([]byte) error) error {
-			return writeFileMessage(seq, fp, write, progress)
+			return writeFileMessage(seq, fp, store.stoppable(pid, seq, write), progress)
 		})
 	}
 	return store
@@ -324,6 +333,55 @@ func (store *SendStore) Drop(pid peer.ID) int {
 		return 0
 	}
 	return store.dropLocked(pid, q, SendDroppedExplicit)
+}
+
+// StopMessage stops one message of the queue of a peer, because its receiver asked so
+// (STOP_SENDING): a message still waiting is taken out of the queue at once; the one being
+// written stops before its next chunk, and the writer drops it alone. Both are recorded as a
+// queue_dropped event of that seq, with reason "receiver_stopped". It returns false when the
+// message is not in the queue (any more): already written, or never queued.
+func (store *SendStore) StopMessage(pid peer.ID, seq uint64) bool {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	q := store.queues[pid]
+	if q == nil || seq == 0 {
+		return false
+	}
+	for element := q.frames.Front(); element != nil; element = element.Next() {
+		item := element.Value.(*queuedFrame)
+		if item.seq != seq {
+			continue
+		}
+
+		// The head of a queue with a writer is being written (or about to be): the writer stops it
+		if element == q.frames.Front() && q.running {
+			q.stopSeq = seq
+			return true
+		}
+		q.frames.Remove(element)
+		size := item.size()
+		q.bytes -= size
+		store.totalBytes -= size
+		logger.Infof("[GO] 🛑 Send queue to %s: seq %d stopped by the receiver before it was sent.\n", pid, seq)
+		store.recordLocked(&SendEvent{Type: SendEventQueueDropped, PeerID: pid.String(), Reason: SendDroppedReceiverStopped, FromSeq: seq, ToSeq: seq, Count: 1, Bytes: size, Error: errReceiverStopped.Error()})
+		return true
+	}
+	return false
+}
+
+// stoppable wraps the write of the frames of one message so that it ends, with a permanent
+// error, before the first frame written after its receiver asked to stop it (StopMessage).
+func (store *SendStore) stoppable(pid peer.ID, seq uint64, write func(frame []byte) error) func(frame []byte) error {
+	return func(frame []byte) error {
+		store.mu.Lock()
+		q := store.queues[pid]
+		stopped := q != nil && q.stopSeq == seq
+		store.mu.Unlock()
+		if stopped {
+			return &permanentSendError{reason: SendDroppedReceiverStopped, err: errReceiverStopped}
+		}
+		return write(frame)
+	}
 }
 
 // PopEvents returns the events recorded since the last call, oldest first, and forgets them.
@@ -422,6 +480,9 @@ func (store *SendStore) runWriter(pid peer.ID, q *peerQueue) {
 			continue
 		}
 		if err == nil {
+			if q.stopSeq == head.seq {
+				q.stopSeq = 0 // Written before the stop could take it: nothing to stop any more
+			}
 			q.frames.Remove(element)
 			size := head.size()
 			q.bytes -= size
@@ -441,6 +502,9 @@ func (store *SendStore) runWriter(pid peer.ID, q *peerQueue) {
 		if errors.As(err, &permanent) {
 			// Written again it would fail the same way (a file changed): dropped alone.
 			logger.Warnf("[GO] 🗑️ Send queue to %s: seq %d dropped (%s): %v\n", pid, head.seq, permanent.reason, err)
+			if q.stopSeq == head.seq {
+				q.stopSeq = 0
+			}
 			q.frames.Remove(element)
 			size := head.size()
 			q.bytes -= size
@@ -508,6 +572,7 @@ func (store *SendStore) dropLocked(pid peer.ID, q *peerQueue, reason string) int
 	q.bytes = 0
 	q.refusing = false
 	q.failures, q.lastErr = 0, ""
+	q.stopSeq = 0
 	q.gen++
 	select {
 	case q.wake <- struct{}{}:

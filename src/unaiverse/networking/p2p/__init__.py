@@ -143,6 +143,11 @@ if hasattr(_shared_lib, 'ConfigureSendQueues'):
     _shared_lib.PopSendEvents.argtypes = [ctypes.c_int]
     _shared_lib.PopSendEvents.restype = ctypes.c_void_p
 
+# Stopping one message that its receiver no longer wants (STOP_SENDING; absent in an older library: it is sent whole)
+if hasattr(_shared_lib, 'CancelSend'):
+    _shared_lib.CancelSend.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_ulonglong]
+    _shared_lib.CancelSend.restype = ctypes.c_void_p
+
 # PubSub
 _shared_lib.SubscribeToTopic.argtypes = [ctypes.c_int, ctypes.c_char_p]
 _shared_lib.SubscribeToTopic.restype = ctypes.c_void_p  # Treat returned *C.char as opaque pointer
