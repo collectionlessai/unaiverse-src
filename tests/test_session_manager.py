@@ -185,6 +185,21 @@ def test_a_failed_redemption_of_a_world_grant_leaves_no_quarantine(alice_conn, a
     _run(_scenario())
 
 
+def test_a_dial_refused_by_the_quarantine_is_a_session_line_not_a_user_one(alice_conn, alice_peer_id, bob_peer_id,
+                                                                         monkeypatch):
+    """The browser puts every user line in the chat of its world: the person saw three refusals in a run. The refusal
+    is said in the Session log, and the node layer, which knows what it dialled, logs the FAILED with its reason."""
+    user_lines, session_lines = [], []
+    monkeypatch.setattr(session_manager_mod.log, "user", lambda msg, *a, **k: user_lines.append(msg))
+    monkeypatch.setattr(session_manager_mod.log, "session", lambda msg, *a, **k: session_lines.append(msg))
+    sm = _make_sm(alice_conn, NodeConn.P2P_PUBLIC, alice_peer_id)
+    sm._quarantine[bob_peer_id] = time.monotonic() + 30.0
+    events = _run(sm.initiate(bob_peer_id, ["/ip4/127.0.0.1/tcp/0"]))
+    assert events[0].data["reason"].startswith("quarantined")
+    assert user_lines == []
+    assert any("refused: peer quarantined" in line for line in session_lines), session_lines
+
+
 # deliver() — basics
 
 def test_deliver_unknown_protocol_drops(alice_conn, alice_peer_id, bob_peer_id):

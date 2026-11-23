@@ -552,15 +552,14 @@ class SessionManager:
         ban_until = self._quarantine.get(peer_id, 0.0)
         if ban_until > now:
 
-            # Surface the refusal to the operator: a silent wall of instant failures
-            # reads as "it never connects". The USER line names the wait; the reason
-            # keeps its "quarantined" prefix (substring/startswith stays robust) but
-            # is human-oriented — the machine-readable remainder rides
-            # data["retry_after_s"], so a scheduler (the rejoin watchdog) can retry
-            # right past the ban instead of bouncing on a blind cadence.
+            # The refusal names the wait in the Session log, not to the person (the browser puts every user line in the
+            # chat of its world): the node layer, which knows what it was dialling, logs the FAILED with its reason.
+            # The reason keeps its "quarantined" prefix (substring/startswith stays robust), and the machine-readable
+            # remainder rides data["retry_after_s"], so a scheduler (the rejoin watchdog) can retry right past the
+            # ban instead of bouncing on a blind cadence.
             remaining = ban_until - now
-            log.user(f"dial to ...{peer_id[-5:]} refused: peer quarantined for {remaining:.1f}s more",
-                     sub=self._label)
+            log.session(f"dial to ...{peer_id[-5:]} refused: peer quarantined for {remaining:.1f}s more",
+                        sub=self._label)
             return [SessionEvent(
                 type=SessionEventType.FAILED, session_id="",
                 peer_id=peer_id, role=SessionRole.INITIATOR,
