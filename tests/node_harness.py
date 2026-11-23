@@ -294,9 +294,6 @@ class NodeFakeConn(FakeConn):
             events.extend(await sm.on_peer_reconnected(peer_id))
         return events
 
-    def world_quarantine_left(self, peer_id: str) -> float:
-        return self._sm_world.quarantine_left(peer_id)
-
     def is_in_grace(self, peer_id: str) -> bool:
         return any(sm.is_in_grace(peer_id) for sm in self._session_managers)
 
@@ -347,6 +344,8 @@ class NodeFakeConn(FakeConn):
         # Mirror of NodeConn.start_world_handoff, world-join dial policy included.
         self.set_world(world_peer_id)
         self._handoff.start(public_peer_id, world_peer_id)
+        if world_peer_id in self._sm_public.attested_peers(public_peer_id):
+            self._sm_world.lift_quarantine(world_peer_id)
         remaining_s = int(grant_blob.get("expiry_unix_ms", 0)) / 1000.0 - time.time()
         budget_s = max(_WORLD_DIAL_MIN_BUDGET_S, min(remaining_s, _WORLD_DIAL_MAX_BUDGET_S))
         return await self._sm_world.initiate(
@@ -494,7 +493,6 @@ def build_agent_node_shell(node_peer_id: str, node_id: str = "shell-node",
     node.keep_rejoining = False
     node.rejoining_time = -1.
     node.rejoining_kwargs = {}
-    node.rejoining_world_peer_id = None
     node.keep_in_touch = False
     node.in_touch_kwargs = {}
     node.in_touch_peer_id = None

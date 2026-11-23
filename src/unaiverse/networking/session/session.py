@@ -277,6 +277,7 @@ class Session:
         self.remote_token_exp: int = 0
         self.remote_cv_hash: str | None = None
         self.remote_code_hash: str | None = None
+        self.remote_p2p_peers: tuple = ()   # the peer-ids the token attests (public and world)
 
         # A TOKEN_UPDATE that arrived before ESTABLISHED is buffered and applied on tick.
         self._buffered_token_update: SessMsg | None = None
@@ -1210,7 +1211,7 @@ class Session:
         this peer, a mismatch is rejected (we reached the right peer-id but the wrong node). On success the peer's
         attested token expiry / cv_hash are captured on the Session (``remote_token_exp`` / ``remote_cv_hash``) for the
         in-session refresh, together with the attested world-code hash (``remote_code_hash``, None when the token
-        carries no such claim).
+        carries no such claim) and the attested peer-ids (``remote_p2p_peers``).
 
         Args:
             token: The token carried by the message.
@@ -1230,6 +1231,7 @@ class Session:
         self.remote_token_exp = exp
         self.remote_cv_hash = cv_hash
         self.remote_code_hash = code_hash
+        self.remote_p2p_peers = tuple(p2p_peers)
         return VerifiedTokenClaims(node_id=node_id, cv_hash=cv_hash,
                                    p2p_peers=p2p_peers, exp=exp, code_hash=code_hash), None
 

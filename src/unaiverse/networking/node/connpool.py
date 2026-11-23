@@ -1083,10 +1083,6 @@ class NodeConn:
         blip (pool-remove) instead of a full purge, without reaching into Session state."""
         return any(sm.is_in_grace(peer_id) for sm in self._session_managers)
 
-    def world_quarantine_left(self, peer_id: str) -> float:
-        """Seconds left of the quarantine of a peer of the world instance, 0 when it has none."""
-        return self._sm_world.quarantine_left(peer_id)
-
     # Session lifecycle
     #
     # The Session lifecycle verbs, kept separate from the pump and the world-handoff:
@@ -1193,6 +1189,16 @@ class NodeConn:
         self._roster_wait_tag = int(grant_blob.get("rendezvous_tag", 0))
         self._roster_wait_until = time.monotonic() + _ROSTER_WAIT_MAX_S
         self._handoff.start(public_peer_id, world_peer_id)
+
+        # The grant proves that the host is up and admits us: the world peer it names, when the host's verified token
+        # attests it, is let through the ban its last relation or a cut of our perimeter left, and only that peer
+        if world_peer_id in self._sm_public.attested_peers(public_peer_id):
+            if self._sm_world.lift_quarantine(world_peer_id):
+                log.misc(f"quarantine of ...{world_peer_id[-5:]} lifted by the grant of its host",
+                         sub=self._sm_world.log_sub)
+        else:
+            log.misc(f"the grant names ...{world_peer_id[-5:]}, which the host's token does not attest: "
+                     f"its quarantine, if any, stays", sub=self._sm_world.log_sub)
         remaining_s = int(grant_blob.get("expiry_unix_ms", 0)) / 1000.0 - time.time()
         budget_s = max(_WORLD_DIAL_MIN_BUDGET_S, min(remaining_s, _WORLD_DIAL_MAX_BUDGET_S))
         return await self._sm_world.initiate(

@@ -373,59 +373,6 @@ def test_quarantine_refusal_pulls_rejoin_retry_in():
     asyncio.run(_scenario())
 
 
-def test_the_rejoin_asks_for_no_grant_while_the_host_world_peer_is_quarantined(stepped_clock):
-    """T6.4-holly of 2026-11-22: when the watchdog came due, the host's world peer was
-    quarantined by three cuts of the member's own perimeter, so the grant it asked for was
-    refused at its redemption and spent for nothing. The watchdog now waits past the ban,
-    whatever started it, and asks then."""
-    async def _scenario():
-        node, conn = build_agent_node_shell(NODE_PEER)
-        host_world = "12D3KooWhost0world"
-        node.keep_rejoining = True
-        node.rejoining_kwargs = {"node_name": "w"}
-        node.rejoining_world_peer_id = host_world
-        calls = []
-
-        async def _join(**kwargs):
-            calls.append(kwargs)
-            return "12D3KooWhost0public"
-        node.ask_to_join_world = _join
-
-        await conn._sm_world._coercive_cut(host_world)    # a cut of the perimeter bans the peer
-        node.rejoining_time = clock.get_time()
-        await node._tick_rejoin_watchdog()
-        assert calls == []
-        wait = node.rejoining_time - clock.get_time()
-        assert 25.0 < wait <= 26.5                        # past the ban, with the margin
-
-        stepped_clock.advance(wait)
-        conn._sm_world._quarantine[host_world] = time.monotonic() - 1.   # the ban is over
-        await node._tick_rejoin_watchdog()
-        assert calls == [{"node_name": "w"}]
-
-    asyncio.run(_scenario())
-
-
-def test_the_grant_records_the_world_peer_the_rejoin_checks_after_the_leave():
-    """The Coordinator forgets the world host when the node leaves; the world peer named
-    by the last grant stays with the node, for the rejoin to check."""
-    async def _scenario():
-        node, conn = build_agent_node_shell(NODE_PEER)
-        host_public, host_world = "12D3KooWhost0public", "12D3KooWhost0world"
-        node.joining_world_info = {"world_public_peer_id": host_public, "options": {"node_name": "w"}}
-        world_profile = full_profile_dict("world-node", private_peer_id=host_world,
-                                          private_peer_addresses=["/ip4/10.0.0.1/tcp/4002/p2p/" + host_world])
-        grant = {"grant_id": "aa", "rendezvous_tag": 1,
-                 "expiry_unix_ms": int(time.time() * 1000) + 30000,
-                 "world_profile_bytes": json.dumps(world_profile).encode("utf-8")}
-        await node._start_world_handoff(host_public, grant)
-        assert node.rejoining_world_peer_id == host_world
-        conn.set_world(None)                              # the node leaves the world
-        assert node.rejoining_world_peer_id == host_world
-
-    asyncio.run(_scenario())
-
-
 def test_rejoin_watchdog_keeps_sooner_retry_armed_by_attempt():
     """The watchdog disarms across the attempt and re-anchors at the default wait ONLY if
     the attempt's own failure dispatch did not arm a sooner retry (the quarantine refusal

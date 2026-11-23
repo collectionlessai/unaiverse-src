@@ -418,9 +418,10 @@ def test_responder_valid_token_overrides_profile_node_id(bob_conn, bob_p2p, bob_
     events = _run(sess.process_inbound(SESSION_PROFILE_PROTOCOL, offer))
     assert seen == {"token": "good-tok", "peer_id": alice_peer_id}
     assert sess.remote_node_id_hint == "root-attested-node"
-    # The peer's attested token expiry / cv_hash are captured on the Session.
+    # The peer's attested token expiry / cv_hash / peers are captured on the Session.
     assert sess.remote_token_exp == 9999999999
     assert sess.remote_cv_hash == "cv-hash"
+    assert sess.remote_p2p_peers == (alice_peer_id,)
     assert len(events) == 1 and events[0].type == SessionEventType.ESTABLISHED
 
 

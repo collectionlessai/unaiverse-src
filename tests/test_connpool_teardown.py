@@ -597,3 +597,43 @@ def test_a_peer_dialled_again_before_the_cut_keeps_its_queue():
         assert world.queued == {host: ["stats update"]}
 
     _run(_scenario())
+
+
+# A grant and the quarantine of the world peer it names
+
+HOST_PUBLIC, HOST_WORLD, OTHER_WORLD = "12D3KooWhost0public", "12D3KooWhost0world", "12D3KooWother0world"
+
+
+@pytest.mark.parametrize("attested", [True, False])
+def test_a_grant_lifts_the_quarantine_of_the_world_peer_its_host_attests(attested, monkeypatch):
+    """T6.4-holly of 2026-11-22: cuts of the member's perimeter had banned the host's world peer, and the redemption
+    of the grant was refused at once. The grant comes over a Session whose verified token attests the host's peers: the
+    world peer it names, when attested, is let through its ban at once. One that is not attested keeps its ban, and the
+    ban of any other peer is untouched."""
+    from unaiverse.networking.node import connpool as connpool_mod
+    lines = []
+    monkeypatch.setattr(connpool_mod.log, "misc", lambda msg, *a, **k: lines.append(msg))
+
+    async def _scenario():
+        pub, world = _QueuingP2P("pub"), _QueuingP2P("world")
+        conn = NodeConn(max_connections=16, is_world_node=False, public_key=None, token=None, local_node_id="n")
+        conn.attach_session_policy(p2p_u=pub, p2p_w=world, local_profile_factory=lambda: {}, decision_hook=None)
+        carrier = _real_established(conn, "_sm_public", pub, HOST_PUBLIC)
+        carrier.remote_p2p_peers = (HOST_PUBLIC, HOST_WORLD) if attested else (HOST_PUBLIC,)
+        await conn._sm_world._coercive_cut(HOST_WORLD)
+        await conn._sm_world._coercive_cut(OTHER_WORLD)
+
+        grant = {"grant_id": "aa", "rendezvous_tag": 1, "expiry_unix_ms": int(time.time() * 1000) + 30000}
+        events = await conn.start_world_handoff(HOST_PUBLIC, HOST_WORLD, ["/ip4/10.0.0.1/tcp/4002/p2p/" + HOST_WORLD],
+                                                grant, False)
+        return conn, events
+    conn, events = _run(_scenario())
+    if attested:
+        assert events == []
+        assert conn._sm_world.get_session(HOST_WORLD).state == SessionState.CONNECTING
+        assert HOST_WORLD not in conn._sm_world._quarantine
+    else:
+        assert [e.data["reason"].split(":")[0] for e in events] == ["quarantined"]
+        assert HOST_WORLD in conn._sm_world._quarantine
+        assert any("does not attest" in line for line in lines), lines
+    assert OTHER_WORLD in conn._sm_world._quarantine

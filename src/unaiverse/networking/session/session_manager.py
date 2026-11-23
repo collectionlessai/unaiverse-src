@@ -1126,12 +1126,28 @@ class SessionManager:
         return (peer_id in self._pending_cuts or
                 (sess is not None and sess.state == SessionState.CLOSING))
 
-    def quarantine_left(self, peer_id: str, now: float | None = None) -> float:
-        """Seconds left of this peer's quarantine, 0 when it has none: the time before a dial
-        toward it is let through."""
-        if now is None:
-            now = time.monotonic()
-        return max(0.0, self._quarantine.get(peer_id, 0.0) - now)
+    def attested_peers(self, peer_id: str) -> tuple:
+        """The peer-ids that the verified token of this peer's Session attests (empty with no Session or no verifier).
+
+        Args:
+            peer_id: The peer.
+
+        Returns:
+            The attested peer-ids.
+        """
+        sess = self._sessions.get(peer_id)
+        return sess.remote_p2p_peers if sess is not None else ()
+
+    def lift_quarantine(self, peer_id: str) -> bool:
+        """Lets the next dial toward this peer through its quarantine.
+
+        Args:
+            peer_id: The peer.
+
+        Returns:
+            True if the peer was quarantined.
+        """
+        return self._quarantine.pop(peer_id, None) is not None
 
     def is_in_grace(self, peer_id: str) -> bool:
         """Tells whether this peer's Session is riding its reconnect grace window (RECONNECTING).

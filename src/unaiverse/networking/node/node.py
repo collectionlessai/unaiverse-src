@@ -218,10 +218,6 @@ class Node:
         self.rejoining_kwargs: dict = {}
         self.rejoining_time = -1.
 
-        # The world peer of the host the last grant came from: the Coordinator's copy goes
-        # when the node leaves, and the rejoin must know whether that peer is quarantined
-        self.rejoining_world_peer_id: str | None = None
-
         # A lone wolf started with get_in_touch and keep_in_touch: what it dials again when
         # the link with that peer ends involuntarily, the peer, and when (-1 when not armed)
         self.keep_in_touch = False
@@ -3525,16 +3521,6 @@ class Node:
         if not self.keep_rejoining:
             self.rejoining_time = -1.
             return
-
-        # A grant asked now could not be redeemed while the host's world peer is quarantined,
-        # whatever banned it (a LOST, a failed dial, a cut of the perimeter): wait past it
-        if self.rejoining_world_peer_id is not None:
-            ban_s = self.conn.world_quarantine_left(self.rejoining_world_peer_id)
-            if ban_s > 0.:
-                self.rejoining_time = clock.get_time() + ban_s + _REJOIN_RETRY_MARGIN_S
-                log.user(f"Rejoining in {ban_s + _REJOIN_RETRY_MARGIN_S:.0f} seconds, past the quarantine "
-                         f"of the world host ...{self.rejoining_world_peer_id[-5:]}")
-                return
         self.rejoining_time = 0.
         failed = False
         try:
@@ -3938,7 +3924,6 @@ class Node:
         if not world_world_peer_id:
             log.error("World handoff, world profile lacks private_peer_id")
             return
-        self.rejoining_world_peer_id = world_world_peer_id
 
         blob = dict(grant)
 
