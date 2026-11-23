@@ -1120,6 +1120,13 @@ class SessionManager:
         return (peer_id in self._pending_cuts or
                 (sess is not None and sess.state == SessionState.CLOSING))
 
+    def quarantine_left(self, peer_id: str, now: float | None = None) -> float:
+        """Seconds left of this peer's quarantine, 0 when it has none: the time before a dial
+        toward it is let through."""
+        if now is None:
+            now = time.monotonic()
+        return max(0.0, self._quarantine.get(peer_id, 0.0) - now)
+
     def is_in_grace(self, peer_id: str) -> bool:
         """Tells whether this peer's Session is riding its reconnect grace window (RECONNECTING).
 

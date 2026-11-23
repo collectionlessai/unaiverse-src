@@ -1063,6 +1063,10 @@ class NodeConn:
         blip (pool-remove) instead of a full purge, without reaching into Session state."""
         return any(sm.is_in_grace(peer_id) for sm in self._session_managers)
 
+    def world_quarantine_left(self, peer_id: str) -> float:
+        """Seconds left of the quarantine of a peer of the world instance, 0 when it has none."""
+        return self._sm_world.quarantine_left(peer_id)
+
     # Session lifecycle
     #
     # The Session lifecycle verbs, kept separate from the pump and the world-handoff:

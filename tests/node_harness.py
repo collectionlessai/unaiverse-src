@@ -294,6 +294,9 @@ class NodeFakeConn(FakeConn):
             events.extend(await sm.on_peer_reconnected(peer_id))
         return events
 
+    def world_quarantine_left(self, peer_id: str) -> float:
+        return self._sm_world.quarantine_left(peer_id)
+
     def is_in_grace(self, peer_id: str) -> bool:
         return any(sm.is_in_grace(peer_id) for sm in self._session_managers)
 
@@ -491,6 +494,7 @@ def build_agent_node_shell(node_peer_id: str, node_id: str = "shell-node",
     node.keep_rejoining = False
     node.rejoining_time = -1.
     node.rejoining_kwargs = {}
+    node.rejoining_world_peer_id = None
     node.keep_in_touch = False
     node.in_touch_kwargs = {}
     node.in_touch_peer_id = None
