@@ -501,14 +501,15 @@ class Agent(AgentBasics):
         try:
 
             # A ModuleWrapper runs the module in its worker thread (the node keeps running meanwhile); any other
-            # callable is called as it is. The steps of a multistep interaction run inline instead: its samples come
-            # one per tick, and the ones arriving while the module runs in its worker would move stdin past the
-            # samples not processed yet (skipped steps, lost answers)
+            # callable is called as it is. The steps of a multistep interaction run on the event loop instead (still
+            # awaited: an async module, as the JS one of the AI mode in the browser, waits for its answer): its samples
+            # come one per tick, and the ones arriving while the module runs in its worker would move stdin past the
+            # samples not processed yet (skipped steps, lost answers). A long module goes to the worker all the same
+            # (runs_long): a step of seconds would stop the node, Sessions included, and its samples come late anyway
             first, last = self.get_action_step() == 0, self.is_last_action_step()
-            if isinstance(self.proc, ModuleWrapper) and not self.is_multi_steps_action():
-                output_data = await self.proc.aforward(*input_data, first=first, last=last)
-            elif isinstance(self.proc, ModuleWrapper):
-                output_data = self.proc.forward(*input_data, first=first, last=last)
+            if isinstance(self.proc, ModuleWrapper):
+                output_data = await self.proc.aforward(*input_data, first=first, last=last,
+                                                       offload=self.__offload_step())
             else:
                 output_data = self.proc(*input_data, first=first, last=last)
 
@@ -572,10 +573,7 @@ class Agent(AgentBasics):
             # as the inference in process)
             try:
                 assert isinstance(self.proc, ModuleWrapper)
-                if self.is_multi_steps_action():
-                    loss_values = self.proc.learn_backward(target_data)
-                else:
-                    loss_values = await self.proc.alearn_backward(target_data)
+                loss_values = await self.proc.alearn_backward(target_data, offload=self.__offload_step())
             except Exception as e:
                 log.error(f"Error while learning: {e}")
                 return False
@@ -1565,6 +1563,17 @@ class Agent(AgentBasics):
                 if len(self._preferred_streams) > self._cur_preferred_stream >= 0 else None
         else:
             return super().resolve_stream_ref(ref, public)
+
+    def __offload_step(self) -> bool:
+        """Tells whether this step of process/learn runs the processor in its worker thread: yes in a single-step
+        interaction; in a multistep one only when the processor is long (ModuleWrapper.runs_long), else inline, so
+        that each step takes the sample of its own tick.
+
+        Returns:
+            True to offload the step.
+        """
+        assert isinstance(self.proc, ModuleWrapper)
+        return not self.is_multi_steps_action() or self.proc.runs_long()
 
     def __compare_streams(self, net_hash_a: str, net_hash_b: str,
                           how: str = "mse", steps: int = 100, re_offset: bool = False) -> tuple[float, bool]:

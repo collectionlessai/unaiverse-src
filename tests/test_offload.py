@@ -344,6 +344,29 @@ def test_an_async_module_is_awaited_and_postprocessed_offloaded_or_not() -> None
         assert mw._last_raw_outputs == ("a?",)
 
 
+def test_offload_false_awaits_an_async_module_on_the_event_loop() -> None:
+    """aforward(offload=False), as the steps of a multistep interaction use it: the module runs on the caller's thread,
+    and an async one that waits (the JS model of the AI mode in the browser) is still awaited and answers."""
+    mod = _AsyncTextModule(delay=0.01)
+    mw = _text_wrapper(mod)
+    assert asyncio.run(mw.aforward("a", offload=False)) == ("a?",)
+    assert mod.calls == 1
+
+
+def test_runs_long_says_whether_the_last_call_blocked_its_thread_long(monkeypatch: object) -> None:
+    """runs_long: unknown before the first call, then True only for a call that worked on its thread at least
+    Custom.OFFLOAD_SLOW_S seconds; the wait of an async module blocks nothing and does not count."""
+    monkeypatch.setattr(Custom, "OFFLOAD_SLOW_S", 0.05)
+    fast, slow = _text_wrapper(_Recorder()), _text_wrapper(_Recorder(delay=0.1))
+    assert not fast.runs_long() and not slow.runs_long()
+    asyncio.run(fast.aforward("a", offload=False))
+    asyncio.run(slow.aforward("a"))
+    assert not fast.runs_long() and slow.runs_long()
+    waiting = _text_wrapper(_AsyncTextModule(delay=0.1))
+    asyncio.run(waiting.aforward("a", offload=False))
+    assert not waiting.runs_long()
+
+
 def test_the_event_loop_keeps_running_while_an_async_module_waits() -> None:
     """While an async module waits 0.5 s (no thread involved), another coroutine keeps ticking."""
     mw = _text_wrapper(_AsyncTextModule(delay=0.5))

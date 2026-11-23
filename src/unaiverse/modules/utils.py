@@ -589,6 +589,7 @@ class ModuleWrapper(torch.nn.Module):
         self._has_last = False
         self._sig_defaults = []
         self._last_raw_outputs = None
+        self._last_module_s = None  # Seconds the last module call blocked its thread (see runs_long)
 
         # Working
         set_seed(seed)
@@ -755,7 +756,7 @@ class ModuleWrapper(torch.nn.Module):
 
         return loss_values
 
-    async def aforward(self, *args: Any, **kwargs: Any) -> tuple:
+    async def aforward(self, *args: Any, offload: bool = True, **kwargs: Any) -> tuple:
         """forward(), with the module and its pre/postprocessing in the worker thread of this wrapper (async).
 
         What concerns the agent (the rendering of interactive blocks before the call, the answer gate after it) stays
@@ -765,6 +766,8 @@ class ModuleWrapper(torch.nn.Module):
 
         Args:
             *args: As for forward().
+            offload: False to run on the event loop even where the worker would be used (the steps of a multistep
+                interaction, which must take their samples one per tick). An async module is awaited either way.
             **kwargs: As for forward().
 
         Returns:
@@ -772,20 +775,30 @@ class ModuleWrapper(torch.nn.Module):
         """
         if type(self).forward is not ModuleWrapper.forward:
             return self.forward(*args, **kwargs)
-        return await self.__forward(list(args), kwargs, offload=self.__offloads())
+        return await self.__forward(list(args), kwargs, offload=offload and self.__offloads())
 
-    async def alearn_backward(self, targets: list | None = None) -> list:
+    def runs_long(self) -> bool:
+        """Tells whether the last call of the module was long, at least Custom.OFFLOAD_SLOW_S seconds of work on its
+        thread (the wait of an async module is not counted: it blocks nothing).
+
+        Returns:
+            True when it was long; False when it was short, or before the first call.
+        """
+        return self._last_module_s is not None and self._last_module_s >= Custom.OFFLOAD_SLOW_S
+
+    async def alearn_backward(self, targets: list | None = None, offload: bool = True) -> list:
         """learn_backward(), in the worker thread of this wrapper, after the forward pass it learns from (async).
 
         Inline in the same cases as aforward().
 
         Args:
             targets: As for learn_backward().
+            offload: False to run on the event loop even where the worker would be used (as for aforward()).
 
         Returns:
             As learn_backward().
         """
-        if type(self).learn_backward is not ModuleWrapper.learn_backward or not self.__offloads():
+        if type(self).learn_backward is not ModuleWrapper.learn_backward or not (offload and self.__offloads()):
             return self.learn_backward(targets)
         return await self.__in_worker(self.learn_backward, targets)
 
@@ -883,15 +896,31 @@ class ModuleWrapper(torch.nn.Module):
             The post-processed outputs.
         """
         if offload:
-            outputs = await self.__in_worker(self.__run_module, args, kwargs)
+            outputs = await self.__in_worker(self.__timed_run_module, args, kwargs)
         else:
-            outputs = self.__run_module(args, kwargs)
+            outputs = self.__timed_run_module(args, kwargs)
 
         # An async module (a coroutine, or a JavaScript promise in the browser) is awaited here, on the event loop:
         # whatever it waits for, the node keeps running meanwhile
         if inspect.isawaitable(outputs):
             outputs = await outputs
         return outputs
+
+    def __timed_run_module(self, args: list, kwargs: dict) -> Any:
+        """Runs __run_module and keeps how long it took (see runs_long).
+
+        Args:
+            args: The inputs, as the module reads them.
+            kwargs: The keyword arguments.
+
+        Returns:
+            What __run_module returned.
+        """
+        start = time.perf_counter()
+        try:
+            return self.__run_module(args, kwargs)
+        finally:
+            self._last_module_s = time.perf_counter() - start
 
     async def __in_worker(self, fn: Callable, *args: Any) -> Any:
         """Runs a function in the worker thread of this wrapper, with the grad mode and the context of the caller

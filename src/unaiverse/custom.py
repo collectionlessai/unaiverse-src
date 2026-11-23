@@ -90,6 +90,11 @@ class Custom:
     # running during a long forward or backward pass (0 to run it inline, as before)
     OFFLOAD_ENABLED = os.getenv("NODE_OFFLOAD", "1") == "1"
 
+    # In a multistep interaction (samples one per tick) the processor runs inline, so that each step takes its own
+    # sample, unless its last call took at least this many seconds: then it is offloaded too, so that the node keeps
+    # running (its Sessions answer) during each long step
+    OFFLOAD_SLOW_S = float(os.getenv("NODE_OFFLOAD_SLOW", "0.5"))
+
     # =============
     # STATE MACHINE
     # =============
