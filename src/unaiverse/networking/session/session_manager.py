@@ -878,8 +878,14 @@ class SessionManager:
                     log.session(f"settlement cut for ...{pid[-5:]} cancelled: live Session "
                                 f"({sess.state.value})", sub=self._label)
                     continue
+
+                # The relation is over: what is still queued for the peer goes with its transport, or its writer would
+                # dial the peer again and deliver frames nobody waits for (a purge inside the settlement window keeps
+                # them, and after a LOST no settled purge may follow)
+                dropped = self.drop_send_queue(pid)
                 await self.p2p.disconnect(pid)
-                log.session(f"settlement cut executed for ...{pid[-5:]}", sub=self._label)
+                log.session(f"settlement cut executed for ...{pid[-5:]}"
+                            + (f", {dropped} queued messages dropped" if dropped > 0 else ""), sub=self._label)
         return events
 
     async def on_peer_disconnected(self, peer_id: str) -> list[SessionEvent]:

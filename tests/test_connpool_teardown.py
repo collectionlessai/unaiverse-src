@@ -501,3 +501,99 @@ def test_settled_drop_peer_never_touches_the_session():
     assert conn._sm_world.get_session(peer) is successor   # ...and still registered
     assert peer not in world.disconnected            # transport untouched
     assert peer not in conn.peer_id_to_pool_name     # pools evicted (the reckoning's job)
+
+
+# The send queue of a peer whose relation ended
+
+class _QueuingP2P(_FakeP2P):
+    """A transport with a send queue per peer, as unailib keeps one: what is queued stays until it is dropped."""
+
+    def __init__(self, log_sub):
+        super().__init__(log_sub)
+        self.queued = {}
+
+    async def connect(self, addresses):
+        return None, False
+
+    async def send_session(self, peer_id, protocol_id, sess_msg):
+        return False
+
+    def drop_send_queue(self, peer_id):
+        return len(self.queued.pop(peer_id, []))
+
+
+def _queuing_conn():
+    pub, world = _QueuingP2P("pub"), _QueuingP2P("world")
+    conn = NodeConn(max_connections=16, is_world_node=False, public_key=None, token=None,
+                    local_node_id="n")
+    conn.attach_session_policy(p2p_u=pub, p2p_w=world,
+                               local_profile_factory=lambda: {}, decision_hook=None)
+    return conn, world
+
+
+def test_the_queue_of_a_world_host_left_after_its_lost_goes_with_the_settlement_cut():
+    """T6.4-holly of 2026-11-22: a stats update queued for the world host while the world Session was reconnecting,
+    the Session LOST, the world left. The purge of the leave fell inside the settlement window and kept the queue,
+    no settled purge followed the LOST, and the cut only disconnected: the writer dialled the host again and delivered
+    the frame 23 s after the leave. The cut takes the queue with the transport."""
+    async def _scenario():
+        conn, world = _queuing_conn()
+        host = "12D3KooWhost0world"
+        sess = _real_established(conn, "_sm_world", world, host)
+        sess.addresses = ["/ip4/10.0.0.1/tcp/4002/p2p/" + host]
+        world.queued[host] = ["stats update"]
+
+        await conn.on_peer_disconnected(host)            # the world Session reconnects
+        sess._state_entered_at -= 3600.                  # and its window runs out
+        events = await conn.pump_sessions({}, now=time.monotonic())
+        assert [e.type.value for e in events] == ["lost"]
+        await conn.drop_peer(host, reason=WORLD_DISENGAGEMENT)   # the purge of leave_world
+        assert world.queued == {host: ["stats update"]}          # inside the settlement window
+
+        await conn.pump_sessions({}, now=time.monotonic() + 5.)  # the settlement cut
+        assert host in world.disconnected
+        assert world.queued == {}
+
+    _run(_scenario())
+
+
+def test_a_goaway_in_flight_on_a_live_link_keeps_the_queue():
+    """What was sent just before the GOAWAY still leaves on the live link: neither the purge nor the cycles of the
+    CLOSING drop it, and no settlement cut is pending while the Session is CLOSING."""
+    async def _scenario():
+        conn, world = _queuing_conn()
+        peer = "12D3KooWmember0world"
+        _real_established(conn, "_sm_world", world, peer)
+        world.queued[peer] = ["chat message"]
+
+        async def _sent(peer_id, protocol_id, sess_msg):
+            return True                                  # the link is live, the GOAWAY leaves
+        world.send_session = _sent
+
+        await conn.drop_peer(peer, reason=WORLD_DISENGAGEMENT)
+        await conn.pump_sessions({}, now=time.monotonic() + 5.)
+        assert conn._sm_world.get_session(peer).state == SessionState.CLOSING
+        assert world.queued == {peer: ["chat message"]}
+        assert world.disconnected == []
+
+    _run(_scenario())
+
+
+def test_a_peer_dialled_again_before_the_cut_keeps_its_queue():
+    """A new Session for the peer cancels the pending cut: the relation is back, and its queue stays for it."""
+    async def _scenario():
+        conn, world = _queuing_conn()
+        host = "12D3KooWhost0world"
+        sess = _real_established(conn, "_sm_world", world, host)
+        sess.addresses = ["/ip4/10.0.0.1/tcp/4002/p2p/" + host]
+        world.queued[host] = ["stats update"]
+
+        await conn.on_peer_disconnected(host)
+        sess._state_entered_at -= 3600.
+        await conn.pump_sessions({}, now=time.monotonic())                       # LOST, a cut pending
+        conn._sm_world._quarantine.pop(host, None)
+        await conn.initiate_session(NodeConn.P2P_WORLD, host, ["/ip4/10.0.0.1/tcp/4002/p2p/" + host])
+        await conn.pump_sessions({}, now=time.monotonic() + 5.)
+        assert world.queued == {host: ["stats update"]}
+
+    _run(_scenario())
