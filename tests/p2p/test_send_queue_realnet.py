@@ -279,8 +279,11 @@ def test_go_keeps_delivering_while_the_sender_holds_the_gil(sender: P2P, receive
     t1 = time.time()
     assert receiver.wait_for(n, 30.0)
     assert receiver.got == list(range(n))
-    during = [t for t in receiver.times if t0 <= t <= t1]
-    assert len(during) >= n * 0.9, f"{len(during)} of {n} arrived during the busy loop"
+
+    # By the end of the loop, not within it: on a fast machine some arrive while the sends are still being queued,
+    # before the loop starts, and those were not waiting for Python either
+    by_end = [t for t in receiver.times if t <= t1]
+    assert len(by_end) >= n * 0.9, f"{len(by_end)} of {n} arrived by the end of the busy loop"
 
 
 def test_tickets_over_real_libp2p(real_nodes: object) -> None:

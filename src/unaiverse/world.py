@@ -210,6 +210,25 @@ class World(AgentBasics):
         """
         self.agent_badges = {}
 
+    def take_badges(self) -> dict[str, list[dict[str, Any]]]:
+        """Takes all the badge records out of the world's memory, to send them: the badges added while they are on the
+        way are kept apart, and the taken ones go back with give_back_badges if they could not be sent.
+
+        Returns:
+            A dictionary where keys are agent peer IDs and values are lists of badge dictionaries.
+        """
+        taken, self.agent_badges = self.agent_badges, {}
+        return taken
+
+    def give_back_badges(self, peer_id_to_badges: dict[str, list[dict[str, Any]]]) -> None:
+        """Puts back badges taken with take_badges that could not be sent, before the ones added since.
+
+        Args:
+            peer_id_to_badges: The badges, as take_badges gave them.
+        """
+        for peer_id, badges in peer_id_to_badges.items():
+            self.agent_badges[peer_id] = list(badges) + self.agent_badges.get(peer_id, [])
+
     async def add_agent(self, peer_id: str, profile: NodeProfile,
                         add_proc_streams: bool = True,
                         add_env_streams: bool = True,

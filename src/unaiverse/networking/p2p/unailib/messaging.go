@@ -488,7 +488,10 @@ func sendFrameOnChatStream(ni *NodeInstance, pid peer.ID, frame []byte) (string,
 			delete(ni.persistentChatStreams, pid)
 		}
 		ni.streamsMutex.Unlock()
-		_ = ps.s.Close()
+
+		// Reset, not Close: the frame is cut in the middle, and a Close would wait (with no deadline any more) for the
+		// unsent bytes to drain to a peer that does not read, doubling the time the failure takes to surface
+		_ = ps.s.Reset()
 		if streamExists {
 			return fmt.Sprintf("Failed to write to stream %s (closed).", pid), err
 		}

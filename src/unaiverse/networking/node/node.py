@@ -263,6 +263,9 @@ class Node:
         # Alive messaging
         self.last_alive_time = 0.
 
+        # The calls to the root server that run in the background, one per kind at a time (see __root_job)
+        self.__root_jobs: dict[str, asyncio.Task] = {}
+
         # stats reporting agent -> world
         Custom.SEND_STATS_EVERY = send_stats_every
 
@@ -618,16 +621,21 @@ class Node:
                     log.critical(f"Error while registering node named {node_name} in server! [{e}]")
         return node_ids, were_alive
 
-    def send_alive(self, alive: bool = True) -> bool:
+    def send_alive(self, alive: bool = True, wait: bool = True) -> bool | asyncio.Task:
         """Send an alive message to the root server.
 
         Args:
             alive (bool): Whether to communicate that the node is alive (i.e., if this is False, it means the
                 node is simpy not alive anymore (dead)).
+            wait: True to wait for the answer; False to send it in the background, on the event loop of the caller
+                (one call at a time: while one is on its way, its task is given back).
 
         Returns:
-            A boolean flag indicating whether the node was already live before sending this.
+            A boolean flag indicating whether the node was already live before sending this (wait=True), or the task
+            that gives it (wait=False).
         """
+        if not wait:
+            return self.__root_job("alive", lambda: asyncio.to_thread(self.send_alive, alive))
         try:
             response = self.__root("/account/node/alive",
                                    payload={"node_id": self.node_id,
@@ -638,18 +646,41 @@ class Node:
             log.error(f"Error while sending alive message to server! [{e}]")
             return False
 
-    def get_node_token(self, peer_ids: list[str]) -> None:
+    def get_node_token(self, peer_ids: list[str], wait: bool = True) -> asyncio.Task | None:
         """Generates and retrieves a node token from the root server, then applies it.
 
-        Fatal on failure (the fetch raises): a node with no token cannot run, which is the
-        wanted behaviour at startup. In the main loop the fetch and then apply are split so
-        the fetch can run off the event loop under a timeout (see the periodic-refresh
-        call-site), without a late thread mutating the token/transport concurrently.
+        Fatal on failure when waited for (the fetch raises): a node with no token cannot run, which is the wanted
+        behaviour at startup. In the background (the periodic refresh of the main loop) the fetch runs in a thread and
+        the token is applied on the event loop, so that no late thread mutates the token or the transport.
 
         Args:
             peer_ids: A list of public and private peer IDs.
+            wait: True to wait for the token; False to get it in the background, on the event loop of the caller (one
+                call at a time: while one is on its way, its task is given back).
+
+        Returns:
+            None (wait=True), or the task of the call (wait=False): it gives True when the token was refreshed, False
+            when it was not (the error is logged).
         """
-        self._apply_node_token(self._request_node_token(peer_ids))
+        if wait:
+            self._apply_node_token(self._request_node_token(peer_ids))
+            return None
+
+        async def refresh() -> bool:
+            """Fetches the token in a thread, then applies it on the event loop (async).
+
+            Returns:
+                True when the token was refreshed.
+            """
+            try:
+                response = await asyncio.to_thread(self._request_node_token, peer_ids)
+            except Exception as e:
+                log.error(f"Error while refreshing the node token (will retry shortly) [{e}]")
+                return False
+            self._apply_node_token(response)
+            return True
+
+        return self.__root_job("token", refresh)
 
     def inject_turn_credentials(self) -> None:
         """Hand the TURN credentials that came with the node token to both transports.
@@ -806,79 +837,38 @@ class Node:
             #    log.error(msg)
             #    raise GenException(msg)
             #log.misc(f"World source declared and attested by the root server (hash: {local_hash})")
-    def send_dynamic_profile(self) -> None:
-        """Sends the node's dynamic profile to the root server."""
-        try:
-            profile = dict(self.profile.get_dynamic_profile())  # Copy: the getter returns the internal dict
-            if profile.get('hidden') is None:
+    def send_dynamic_profile(self, wait: bool = True) -> asyncio.Task | None:
+        """Sends the node's dynamic profile to the root server.
 
-                # Visibility never explicitly set this run: omit the key, so the server keeps
-                # whatever the owner chose (the API only touches hidden when the key is present)
-                profile.pop('hidden', None)
-            self.__root(api="/account/node/profile/dynamic/post", payload={"node_id": self.node_id,
-                                                                           "profile": profile})
-        except Exception as e:
-            log.error(f"Error while sending dynamic profile to root server [{e}]")
+        Args:
+            wait: True to wait for the answer; False to send it in the background, on the event loop of the caller
+                (one call at a time: while one is on its way, its task is given back, and this profile is not sent).
 
-    async def send_badges(self) -> None:
-        """Sends new badges assigned by a world node to the root server and notifies the agents. (async)"""
-        if self.node_type is Node.WORLD:
-            assert self.world is not None
-            peer_id_to_badges = self.world.get_all_badges()
-            if len(peer_id_to_badges) > 0:
-                log.misc(f"Sending {len(peer_id_to_badges)} badges to root server")
-                for i in range(0, 3):  # It will try 3 times before raising the exception...
-                    try:
-                        badges = [badge for _badges in peer_id_to_badges.values() for badge in _badges]
-                        peer_ids = [peer_id for peer_id, _badges in peer_id_to_badges.items() for _ in _badges]
+        Returns:
+            None (wait=True), or the task of the call (wait=False).
+        """
 
+        # A copy taken now: the node keeps changing its profile while the call is on its way
+        profile = copy.deepcopy(self.profile.get_dynamic_profile())
+        if profile.get('hidden') is None:
 
-                        # Off the event loop, so that a root server that does not answer cannot stop the network loop
-                        # (the HTTP call is bounded by ROOT_REQUEST_TIMEOUT, so the thread always ends)
-                        response = await asyncio.to_thread(self.__root, api="/account/node/cv/badge/assign",
-                                                           payload={"badges": badges,
-                                                                    "world_node_id": self.node_id,
-                                                                    "world_badge_token": self.badge_token})
+            # Visibility never explicitly set this run: omit the key, so the server keeps
+            # whatever the owner chose (the API only touches hidden when the key is present)
+            profile.pop('hidden', None)
+        payload = {"node_id": self.node_id, "profile": profile}
+        if not wait:
+            return self.__root_job("profile", lambda: asyncio.to_thread(self.__post_dynamic_profile, payload))
+        self.__post_dynamic_profile(payload)
+        return None
 
-                        # Getting the next badge token
-                        self.badge_token = response["badge_token"]
-                        badges_states = response["badges_states"]  # List of booleans
+    def send_badges(self) -> asyncio.Task:
+        """Sends the new badges assigned by a world node to the root server and notifies the agents, in the background,
+        on the event loop of the caller (one call at a time: while one is on its way, its task is given back).
 
-                        # Check if posting went well and saving the set of peer IDs to contact
-                        peer_ids_to_notify = set()
-                        for z in range(0, len(badges_states)):
-                            ret = badges_states[z]
-                            if 'state' not in ret or 'code' not in ret['state'] or 'message' not in ret['state']:
-                                log.error(f"Error while posting a badge assigned to {peer_ids[z]}. "
-                                          f"Badge: {badges[z]}. "
-                                          f"Error message: invalid response format")
-                            else:
-                                if ret['state']['code'] != "ok":
-                                    log.error(f"Error while posting a badge assigned to {peer_ids[z]}. "
-                                              f"Badge: {badges[z]}. "
-                                              f"Error message: {ret['state']['message']}")
-                                else:
-                                    peer_ids_to_notify.add(peer_ids[z])
-
-                        # Notify agents
-                        for peer_id in peer_ids_to_notify:
-                            if not (await self.conn.send(peer_id, channel_trail=None, content=None,
-                                                         content_type=Msg.GET_CV_FROM_ROOT)):
-                                log.error(f"Error while sending the request to re-download CV to peer {peer_id}")
-
-                        # Clearing
-                        self.world.clear_badges()
-                        break
-                    except Exception as e:
-                        if isinstance(e, RootServerError) and e.api_rejected:
-                            log.error(f"Badge assignment refused by the root server [{e}] (stop trying)")
-                            break
-                        log.error(f"Error while sending badges to server or when notifying peers [{e}]")
-                        if i < 2:
-                            log.misc("Retrying...")
-                            await asyncio.sleep(1)  # Wait a little bit
-                        else:
-                            log.error("Couldn't complete badge sending or notification procedure (stop trying)")
+        Returns:
+            The task of the call (await it to wait for it).
+        """
+        return self.__root_job("badges", self.__send_badges)
 
     def get_public_addresses(self) -> list[str]:
         """Returns the public addresses of the P2P node
@@ -1325,6 +1315,7 @@ class Node:
         try:
             last_dynamic_profile_time = clock.get_time()
             last_get_token_time = clock.get_time()
+            token_job: asyncio.Task | None = None  # The refresh of the token on its way (see _network_periodic)
             last_stats_send_time = clock.get_time()
             last_stats_save_time = clock.get_time()
             last_state_save_time = clock.get_time()
@@ -1490,6 +1481,13 @@ class Node:
                 """Tells the root server the node is alive, every SEND_ALIVE_EVERY seconds (async)."""
                 if ((clock.get_time() - self.last_alive_time >= Custom.SEND_ALIVE_EVERY) and
                         len(self.get_public_addresses()) > 0):
+
+                    # After the first one, in the background: a root server that does not answer must not stop the
+                    # network loop (the first one is waited for, since it tells whether the node runs elsewhere)
+                    if self.last_alive_time > 0:
+                        self.send_alive(wait=False)
+                        self.last_alive_time = clock.get_time()
+                        return
                     try:
 
                         # Capped and off the event loop: a hung POST to the root must not
@@ -1638,41 +1636,33 @@ class Node:
             async def _network_periodic() -> None:
                 """Profile, token, addresses, relay slot, stats and inspector, each at its own period (async)."""
                 nonlocal last_dynamic_profile_time, last_get_token_time, last_stats_send_time, last_stats_save_time
+                nonlocal token_job
 
-                # Send dynamic profile every "N" seconds
+                # Send dynamic profile every "N" seconds, in the background (badges first): a root server that does
+                # not answer must not stop the network loop. Not while the previous ones are still on their way: the
+                # change stays marked, and goes with the next call
                 if (clock.get_time() - last_dynamic_profile_time >= Custom.SEND_DYNAMIC_PROFILE_EVERY
-                        and self.profile.connections_changed()):
-                    try:
-                        last_dynamic_profile_time = clock.get_time()
-                        self.profile.unmark_change_in_connections()
-                        await self.send_badges()  # Sending and clearing badges
+                        and self.profile.connections_changed()
+                        and not self.__root_job_running("profile") and not self.__root_job_running("badges")):
+                    last_dynamic_profile_time = clock.get_time()
+                    self.profile.unmark_change_in_connections()
+                    self.send_badges()
+                    self.send_dynamic_profile(wait=False)
 
-                        # Capped and off the event loop so a hung POST cannot freeze the pump.
-                        await asyncio.wait_for(asyncio.to_thread(self.send_dynamic_profile),
-                                               timeout=Custom.DEFAULT_TIMEOUT)  # Sending
-                    except Exception as e:
-                        log.error(f"Error while sending the updated dynamic profile (or badges) to the server "
-                                  f"(trying to go ahead...) [{e}]")
-
-                # Getting a new token every "N" seconds
-                if clock.get_time() - last_get_token_time >= Custom.GET_NEW_TOKEN_EVERY:
-                    try:
-
-                        # Fetch off the event loop (capped), apply on the main task: a hung
-                        # or failing refresh must neither freeze the pump nor kill the node.
-                        response = await asyncio.wait_for(
-                            asyncio.to_thread(self._request_node_token,
-                                              [self.get_public_peer_id(), self.get_world_peer_id()]),
-                            timeout=Custom.DEFAULT_TIMEOUT)
-                        self._apply_node_token(response)
+                # Getting a new token every "N" seconds, in the background (applied on the event loop when it comes)
+                if token_job is not None and token_job.done():
+                    if not token_job.cancelled() and token_job.result():
                         last_get_token_time = clock.get_time()  # success: next refresh in ~23.5h
-                    except Exception as e:
-                        log.error(f"Error while refreshing the node token (will retry shortly) [{e}]")
+                    else:
 
                         # Asymmetric backoff: retry in ~DEFAULT_TIMEOUT, not every iteration
                         # (busy-loop) nor in ~23.5h (the token would expire first).
                         last_get_token_time = (clock.get_time()
                                                - Custom.GET_NEW_TOKEN_EVERY + Custom.DEFAULT_TIMEOUT)
+                    token_job = None
+                if token_job is None and clock.get_time() - last_get_token_time >= Custom.GET_NEW_TOKEN_EVERY:
+                    token_job = self.get_node_token([self.get_public_peer_id(), self.get_world_peer_id()],
+                                                    wait=False)
 
                 # Continuously check the addresses of the node for changes
                 try:
@@ -4262,6 +4252,129 @@ class Node:
             else:
                 _other_messages.append(_msg)
         return _action_messages + _other_messages
+
+    def __root_job(self, kind: str, call: Callable[[], Any]) -> asyncio.Task:
+        """Runs a call to the root server in a task of its own, so that whoever starts it does not wait for it: one call
+        per kind at a time, and while one is running (until its request really ends, not until a timeout) its task is
+        given back instead of starting another.
+
+        Args:
+            kind: The kind of call ("alive", "profile", "badges", "token").
+            call: The coroutine function of the call.
+
+        Returns:
+            The task of the call: it gives what the call gives, or None when the call raised (the error is logged).
+        """
+        task = self.__root_jobs.get(kind)
+        if task is not None and not task.done():
+            return task
+
+        async def guarded() -> Any:
+            """Runs the call, logging its error instead of leaving it to a task nobody awaits (async).
+
+            Returns:
+                What the call gives, or None when it raised.
+            """
+            try:
+                return await call()
+            except Exception as e:
+                log.error(f"The {kind} call to the root server failed [{e}]")
+                return None
+
+        task = asyncio.create_task(guarded(), name=f"unaiverse-root-{kind}")
+        self.__root_jobs[kind] = task
+        return task
+
+    def __root_job_running(self, kind: str) -> bool:
+        """Checks whether a call of a kind to the root server is still on its way (see __root_job).
+
+        Args:
+            kind: The kind of call.
+
+        Returns:
+            True while it is.
+        """
+        task = self.__root_jobs.get(kind)
+        return task is not None and not task.done()
+
+    def __post_dynamic_profile(self, payload: dict) -> None:
+        """Posts a dynamic profile to the root server (blocking: it runs in a thread when in the background).
+
+        Args:
+            payload: What send_dynamic_profile prepared.
+        """
+        try:
+            self.__root(api="/account/node/profile/dynamic/post", payload=payload)
+        except Exception as e:
+            log.error(f"Error while sending dynamic profile to root server [{e}]")
+
+    async def __send_badges(self) -> None:
+        """Sends the new badges assigned by a world node to the root server and notifies the agents (async).
+
+        The badges are taken out of the world while they are on their way, so that the ones assigned meanwhile are
+        kept; they go back to the world if they could not be sent.
+        """
+        if self.node_type is Node.WORLD:
+            assert self.world is not None
+            peer_id_to_badges = self.world.take_badges()
+            if len(peer_id_to_badges) == 0:
+                return
+            assigned = False
+            try:
+                log.misc(f"Sending {len(peer_id_to_badges)} badges to root server")
+                for i in range(0, 3):  # It will try 3 times before raising the exception...
+                    try:
+                        badges = [badge for _badges in peer_id_to_badges.values() for badge in _badges]
+                        peer_ids = [peer_id for peer_id, _badges in peer_id_to_badges.items() for _ in _badges]
+
+                        # Off the event loop, so that a root server that does not answer cannot stop the network loop
+                        # (the HTTP call is bounded by ROOT_REQUEST_TIMEOUT, so the thread always ends)
+                        response = await asyncio.to_thread(self.__root, api="/account/node/cv/badge/assign",
+                                                           payload={"badges": badges,
+                                                                    "world_node_id": self.node_id,
+                                                                    "world_badge_token": self.badge_token})
+
+                        # Getting the next badge token (the badges are assigned: they never go back to the world)
+                        self.badge_token = response["badge_token"]
+                        assigned = True
+                        badges_states = response["badges_states"]  # List of booleans
+
+                        # Check if posting went well and saving the set of peer IDs to contact
+                        peer_ids_to_notify = set()
+                        for z in range(0, len(badges_states)):
+                            ret = badges_states[z]
+                            if 'state' not in ret or 'code' not in ret['state'] or 'message' not in ret['state']:
+                                log.error(f"Error while posting a badge assigned to {peer_ids[z]}. "
+                                          f"Badge: {badges[z]}. "
+                                          f"Error message: invalid response format")
+                            else:
+                                if ret['state']['code'] != "ok":
+                                    log.error(f"Error while posting a badge assigned to {peer_ids[z]}. "
+                                              f"Badge: {badges[z]}. "
+                                              f"Error message: {ret['state']['message']}")
+                                else:
+                                    peer_ids_to_notify.add(peer_ids[z])
+
+                        # Notify agents
+                        for peer_id in peer_ids_to_notify:
+                            if not (await self.conn.send(peer_id, channel_trail=None, content=None,
+                                                         content_type=Msg.GET_CV_FROM_ROOT)):
+                                log.error(f"Error while sending the request to re-download CV to peer {peer_id}")
+
+                        break
+                    except Exception as e:
+                        if isinstance(e, RootServerError) and e.api_rejected:
+                            log.error(f"Badge assignment refused by the root server [{e}] (stop trying)")
+                            break
+                        log.error(f"Error while sending badges to server or when notifying peers [{e}]")
+                        if i < 2:
+                            log.misc("Retrying...")
+                            await asyncio.sleep(1)  # Wait a little bit
+                        else:
+                            log.error("Couldn't complete badge sending or notification procedure (stop trying)")
+            finally:
+                if not assigned:
+                    self.world.give_back_badges(peer_id_to_badges)
 
     def __root(self, api: str, payload: dict) -> dict | list:
         """Sends a POST request to the root server's API endpoint.
