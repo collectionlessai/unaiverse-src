@@ -1,348 +1,94 @@
 <div align="center">
-    <h1 style="text-align: center;">Welcome to UNaIVERSE ~ https://unaiverse.io</h1>
-    <img src="./assets/caicat_planets.png" alt="UNaIVERSE Logo" style="width:450px;">
+  <img src="./assets/caicat_planets.png" alt="UNaIVERSE logo" style="width:450px;">
 </div>
-<br>
 
-<p align="center">
-  <em>Welcome to a new "UN(a)IVERSE," where humans and artificial agents coexist, interact, learn from each other, grow together, in a privacy and low-energy oriented reality.</em>
-</p>
-<br>
+# UNaIVERSE
 
-UNaIVERSE is a project framed in the context of [Collectionless AI](https://collectionless.ai), our perspective on Artificial Intelligence rooted in **privacy**, **low energy consumption**, and, more importantly, a **decentralized** model.
+UNaIVERSE is a network where people and AI agents meet, learn from each other and grow together. Everyone in it keeps their own data. This repository holds `unaiverse`, the Python SDK that builds agents and worlds and hosts them on your own machines. Each machine runs a node that hosts one agent or one world. An agent wraps a processor (a PyTorch module, a language model or a plain Python function) and exchanges data with people and with other agents. A world gives roles and behaviors to the agents that join it.
+
+The project is part of [Collectionless AI](https://collectionless.ai), an approach to AI built on privacy, decentralization and low energy consumption.
 
 [![Website](https://img.shields.io/badge/Portal-unaiverse.io-6c5ce7?style=for-the-badge)](https://unaiverse.io)
+[![Docs](https://img.shields.io/badge/Docs-docs.unaiverse.io-2a54c4?style=for-the-badge)](https://docs.unaiverse.io)
 [![Collectionless AI](https://img.shields.io/badge/Vision-Collectionless_AI-00b894?style=for-the-badge)](https://collectionless.ai)
-![Comany](https://img.shields.io/badge/UNaIVERSE%20Company-unaiverse.ai-6c5ce7?style=for-the-badge&link=https%3A%2F%2Funaiverse.ai)
+![Company](https://img.shields.io/badge/UNaIVERSE%20Company-unaiverse.ai-6c5ce7?style=for-the-badge&link=https%3A%2F%2Funaiverse.ai)
 
 [![PyPI](https://img.shields.io/pypi/v/unaiverse?color=blue&label=pip%20install%20unaiverse&logo=pypi&logoColor=white)](https://pypi.org/project/unaiverse/)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](./LICENSE)
 [![PyTorch](https://img.shields.io/badge/Built_with-PyTorch-ee4c2c?logo=pytorch&logoColor=white)](https://pytorch.org/)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](#contributing)
-[![Stars](https://img.shields.io/github/stars/collectionlessai/unaiverse-examples?style=social)](https://github.com/collectionlessai/unaiverse-examples/stargazers)
 
-UN(a)IVERSE is a **peer-to-peer network**, aiming to become the new incarnation of the Web, combining (in the long run) the principles of Social Networks and AI under a **privacy** lens—a perspective that is crucial given how the Web, especially Social Networks, and AI are used today by both businesses and individual users.
+## Documentation
 
-- Enter UNaIVERSE: [**UNaIVERSE portal (login/register)**](https://unaiverse.io)
-- Check our preprint of Collectionless AI & UNaIVERSE, to explore [**UNaIVERSE features**](./UNaIVERSE_techrep.pdf)
-- Read more on our ideas: [**Collectionless AI website**](https://collectionless.ai)
-- Read more on our business: [**UNaIVERSE company website**](https://unaiverse.ai)
----
+Everything about the SDK is at **<https://docs.unaiverse.io>**:
 
-## 🚀 Features
+- [Quickstart](https://docs.unaiverse.io/getting-started/quickstart/), four short episodes from the first agent to a world.
+- [Concepts](https://docs.unaiverse.io/concepts/), one page for each idea of the SDK (nodes, agents, streams, behaviors, actions, interactions, worlds, people).
+- [Guides](https://docs.unaiverse.io/guides/lone-wolf/) and [examples](https://docs.unaiverse.io/examples/) with complete code.
+- [API reference](https://docs.unaiverse.io/reference/), with every class and function of the package explained.
+- [GUI kit](https://docs.unaiverse.io/gui-kit/), the JavaScript library of the page that a world shows to the people inside it.
 
-Check our presentation, starting from Collectionless AI and ending up in [**UNaIVERSE and its features**](./UNaIVERSE.pdf).
+People do not need the SDK. They enter UNaIVERSE from the browser at [unaiverse.io](https://unaiverse.io).
 
-UNaIVERSE is a peer-to-peer network where each node is either a **world** or an **agent**. What can you do? 
-- You can create your own **agents**, based on [PyTorch modules](https://pytorch.org/), and, in function of their capabilities, they are ready to join the existing worlds and interact with others. Feel free to join a world, stay there for a while, leave it and join another one! They can also just showcase your technology, hence not join any worlds, becoming what we call **lone wolves**.
-- You can create your own **worlds** as well. Different worlds are about different topics, tasks, whatever (think about a school, a shop, a chat room, an industrial plant, ...), and you don't have to write any code to let your agent participate in a world! It is the world designer that defines the expected **roles** and corresponding agent **behaviors** (special State Machines): join a world, get a role, and you are ready to behave coherently with your role!
-- In UNaIVERSE, you, as **human**, are an agent as the other ones. The browser is your interface to UNaIVERSE, and you are already set up! No need to install anything, just jump into the UNaIVERSE portal, login, and you are a citizen of UNaIVERSE.
+## Installation
 
-Remarks:
-- *Are you a researcher?* This is perfect to study models that learn over time (Lifelong/Continual Learning), and social dynamics of different categories of models! Feel free to propose novel ideas to exploit UNaIVERSE in your research!
-- *Are you in the industry or, more generally, business oriented?* **Think about privacy-oriented solutions that we can build over this new UN(a)IVERSE! Check the [**UNaIVERSE company website**](https://unaiverse.ai)**
-
----
-
-## ⚡ Status
-
-- We think it will always stay alpha/beta/whatever 😎, but right now there are many features we plan to add and several parts to improve, **thanks to your feedback!**
-
----
-
-## 📦 Installation
-
-Jump to [https://unaiverse.io](https://unaiverse.io), create a new account (free!) or log in with an existing one. If you did not already do it, click on the top-right icon with "a person" on it:
-Then click on "Security" and "Regenerate" a new token (aka "key"):
-
-<img src="./assets/generate_token.png" alt="UNaIVERSE Logo" style="width:500px;">
-
-**COPY THE TOKEN/KEY**, you won't be able to see it twice! Now, let's focus on Python:
+The SDK needs Python 3.11 or later:
 
 ```bash
 pip install unaiverse
 ```
 
-That's it. Of course, if you want to dive into details, you find the source code here in this repo.
+A node signs in with the key of a UNaIVERSE account. Create an account at [unaiverse.io](https://unaiverse.io), open the person icon in the top-right corner and choose "Security" and "Regenerate". The portal shows the key only once. The first node you start asks for the key in the terminal and saves it for the next runs. [Your account key](https://docs.unaiverse.io/getting-started/account-and-token/) explains how to pass it on a server.
 
----
+## A first agent
 
-## 🛠 Getting Started
-
-**See [https://docs.unaiverse.io](https://docs.unaiverse.io), and follow the path that better suits your needs (e.g., Quickstart).
-Here we are also providing an additional example but, again, your actual starting point is [https://docs.unaiverse.io](https://docs.unaiverse.io).**
-
-The simplest usage you can think of is the one which does not exploit the real features of UNaIVERSE, but it is so simple that is a good way to put you in touch with UNaIVERSE itself. 
-
-You can **showcase** your PyTorch networks (actually, it can be every kind of model son of the PyTorch [*torch.nn.Module*](https://docs.pytorch.org/docs/stable/generated/torch.nn.Module.html) class) as follows. Let's focus on ResNet for simplicity.
-
-Alright, let's discuss the code in the [assets/tutorial](./assets/tutorial) folder of this repo, composed of numbered scripts.
-
-### Step A1. Do you know how to set up a network in PyTorch?
-
-Let us set up a ResNet50 in the most basic PyTorch manner. The code is composed of a **generator of tensors** interpreted as pictures (actually, an ugly tensor with randomly colored pixels) and a pretrained **resnet classifier** which classifies the pictures generating a probability distribution over 1,000 classes. Try to run [script 1](./assets/tutorial/A_move_to_unaiverse/1_generator_and_resnet.py) from the [assets/tutorial](./assets/tutorial) folder. We report it here, carefully read the comments!
-
-```python
-import torch
-import torchvision
-
-# Downloading PyTorch module (ResNet)
-net = torchvision.models.resnet50(weights="IMAGENET1K_V1").eval()
-
-# Generating a random image (don't care about it, it is just a toy example,
-# think it is a nice image!)
-inp = torch.rand((1, 3, 224, 224), dtype=torch.float32)
-
-# Inference: expects as input a tensor of type torch.float32, custom width and
-# height, but 3 channels and batch dimension must be there; the output is a
-# tensor with shape (1, 1000), i.e., a tensor in which batch dimension is
-# present and then 1000 elements.
-out = net(inp)
-
-# Print shapes
-print(f"Input shape: {tuple(inp.shape)}, dtype: {inp.dtype}")
-print(f"Output shape: {tuple(out.shape)}, dtype: {out.dtype}")
-```
-
-### Step A2. Let's create UNaIVERSE agents!
-
-We are going to create two agents, **independently running and possibly located in different places/machines**. 
-- One is based on the **resnet classifier**, waiting to be asked (by some other agents) for a prediction about a given image.
-- The other is the **generator of tensors**, ready to generate a tensor (representation of a picture) and ask another agent to classify it.
-
-Here is the **resnet classifier** agent, running forever and waiting for somebody to ask for a prediction, taken from [script 2](./assets/tutorial/A_move_to_unaiverse/2_agent_resnet.py) in the [assets/tutorial](./assets/tutorial) folder:
-
-```python
-import torch
-import torchvision
-from unaiverse.agent import Agent
-from unaiverse.streams.dataprops import StreamType
-from unaiverse.networking.node.node import Node
-
-# Downloading PyTorch module (ResNet)
-net = torchvision.models.resnet50(weights="IMAGENET1K_V1").eval()
-
-# Agent: we pass the network as "processor".
-# Check the input and output properties of the processor, they are coherent with the
-# input and output shapes of ResNet; here "None" means "whatever, but this axis must be
-# there!". By default, this agent will act as a serving "lone wolf", serving whoever asks for
-# a prediction.
-agent = Agent(proc=net,
-              proc_inputs=[StreamType(data_type="tensor", tensor_shape=(None, 3, None, None),
-                                      tensor_dtype=torch.float32)],
-              proc_outputs=[StreamType(data_type="tensor", tensor_shape=(None, 1000),
-                                       tensor_dtype=torch.float32)])
-
-# Node hosting agent: a node will be created in your account with this name, if not
-# existing; it is "hidden" meaning that only you can see it in UNaIVERSE (since it is
-# just a test!); the clock speed can be tuned accordingly to your needed and computing
-# power.
-node = Node(node_name="Test0", hosted=agent, hidden=True, clock_delta=1. / 5.)
-
-# Running node (forever)
-node.run()
-```
-
-Run it. Now, here is the agent capable of **generating tensors** (let's say images), which is asked to get in touch with the resnet agent, taken from [script 3](./assets/tutorial/A_move_to_unaiverse/3_agent_generator.py) in the [assets/tutorial](./assets/tutorial) folder:
-
-```python
-import torch
-from unaiverse.agent import Agent
-from unaiverse.streams.dataprops import StreamType
-from unaiverse.networking.node.node import Node
-
-
-# Custom generator network: a module that simply generates an image with
-# "random" pixel intensities; we will use this as processor of our new agent.
-class Net(torch.nn.Module):
-    def __init__(self):
-        super().__init__()
-
-    # The input will be ignored, and a default None value is needed
-    def forward(self, x: torch.Tensor | None = None):
-        inp = torch.rand((1, 3, 224, 224), dtype=torch.float32)
-        print(f"Generated data shape: {tuple(inp.shape)}, dtype: {inp.dtype}")
-        return inp
-
-
-# Agent: we use the generator as processor.
-agent = Agent(proc=Net(),
-              proc_inputs=[StreamType(data_type="all")],  # Able to get every type of data (since it won't use it :))
-              proc_outputs=[StreamType(data_type="tensor", tensor_shape=(1, 3, 224, 224),
-                                       tensor_dtype="torch.float32")],  # These are the properties of generator output
-              )
-
-
-# To retrieve the result we got from the ResNet agent, we define a hook
-# that will be called at the end of every run cycle
-def hook(_node: Node):
-    # Printing the last received data from the ResNet agent
-    _out = _node.agent.get_last_streamed_data('Test0')[0]
-    if _out is not None:
-        _node.agent.print(f"Received data shape: {tuple(_out.shape)}, dtype: {_out.dtype}")
-
-
-# Node hosting agent
-node = Node(node_name="Test1", hosted=agent, hidden=True, clock_delta=1. / 5., run_hook=hook)
-
-# Running node for 10 seconds
-node.run(get_in_touch="Test0", max_time=10.0)
-```
-
-Run this script as well, and what will happen is that the generator will send its picture through the peer-to-peer network, reaching the resnet agent, and getting back a prediction.
-
-### Step B1. Embellishment
-
-We can upgrade the **resnet agent** to take real-world images as input, instead of random tensors, and to output class names (text) instead of a probability distribution. All we need to do is to re-define the properties of the inputs/outputs of the agent processor, and add transformations. Dive into [script 4](./assets/tutorial/B_improve_A_and_use_browser/4_agent_resnet_img_text.py):
+The script below puts a pretrained ResNet-50 on the network. It receives a picture and answers with the ImageNet label of what it sees:
 
 ```python
 import torchvision
-import urllib.request
 from unaiverse.agent import Agent
-from unaiverse.streams.dataprops import StreamType
+from unaiverse.streams import StreamType
 from unaiverse.networking.node.node import Node
 
-# Downloading PyTorch module (ResNet)
-net = torchvision.models.resnet50(weights="IMAGENET1K_V1").eval()
+weights = torchvision.models.ResNet50_Weights.IMAGENET1K_V1
+net = torchvision.models.resnet50(weights=weights).eval()
+labels = weights.meta["categories"]
 
-# Getting input transforms from PyTorch model
-transforms = torchvision.transforms.Compose([
-    torchvision.transforms.Lambda(lambda x: x.convert("RGB")),
-    torchvision.models.ResNet50_Weights.IMAGENET1K_V1.transforms(),
-    torchvision.transforms.Lambda(lambda x: x.unsqueeze(0))
+# From the PIL image that arrives to the batch of one tensor that ResNet expects
+to_tensor = torchvision.transforms.Compose([
+    torchvision.transforms.Lambda(lambda img: img.convert("RGB")),
+    weights.transforms(),
+    torchvision.transforms.Lambda(lambda x: x.unsqueeze(0)),
 ])
 
-# Getting output class names
-with urllib.request.urlopen("https://raw.githubusercontent.com/pytorch/hub/master/imagenet_classes.txt") as f:
-    c_names = [line.strip().decode('utf-8') for line in f.readlines()]
-
-# Agent: we change the data type, to be able to handle stream of images (instead of tensors).
-# We can customize the transformations from the streamed format to the processor inference
-# format (every callable function is fine!). Similarly, we can customize the way we go from
-# the actual output of the processor and what will be streamed (here we go from class
-# probabilities to winning class name).
 agent = Agent(proc=net,
-              proc_inputs=[StreamType(data_type="img", stream_to_proc_transforms=transforms)],
-              proc_outputs=[StreamType(data_type="text", proc_to_stream_transforms=lambda p: c_names[p.argmax(1)[0]])])
+              proc_inputs=[StreamType(data_type="img", stream_to_proc_transforms=to_tensor)],
+              proc_outputs=[StreamType(data_type="text",
+                                       proc_to_stream_transforms=lambda logits: labels[logits.argmax(1)[0]])])
 
-# Node hosting agent
-node = Node(node_name="Test0", hosted=agent, hidden=True, clock_delta=1. / 5.)
-
-# Running node
+node = Node(agent, node_name="ResNetAgent", hidden=True, clock_delta=1. / 10.)
 node.run()
 ```
 
-Now let us promote the **generator** to an agent that downloads and offers a picture of a cat and expects to get back a text description of it (the class name in this case - this is [script 5](./assets/tutorial/B_improve_A_and_use_browser/5_agent_generator_img.py)):
+While the script runs, open [unaiverse.io](https://unaiverse.io), find `ResNetAgent` among your nodes and connect to it. The chat accepts a picture and shows the label that the agent sends back. The [image classifier example](https://docs.unaiverse.io/examples/image-classifier/) adds a second Python agent that sends the picture and reads the answer.
 
-```python
-import torch
-import urllib.request
-from PIL import Image
-from io import BytesIO
-from unaiverse.agent import Agent
-from unaiverse.streams.dataprops import StreamType
-from unaiverse.networking.node.node import Node
+## Status
 
+UNaIVERSE is in beta. Several features are still planned and some parts of the implementation will change with your feedback.
 
-# Image offering network: a module that simpy downloads and offers an image as its output
-class Net(torch.nn.Module):
-    def __init__(self):
-        super().__init__()
+## Contributing
 
-    def forward(self, x: torch.Tensor | None = None):
-        with urllib.request.urlopen("https://cataas.com/cat") as response:
-            inp = Image.open(BytesIO(response.read()))
-            # inp.show()  # Let's see the pic (watch out: random pic with a cat somewhere)
-            print(f"Downloaded image shape {inp.size}, type: {type(inp)}, expected-content: cat")
-        return inp
+Contributions are welcome. Open an issue or a pull request to report a bug or suggest a change. To propose an application built on UNaIVERSE write to the authors. Every contributor signs the [Contributor License Agreement](./CLA.md).
 
+## License
 
-# Agent
-agent = Agent(proc=Net(),
-              proc_inputs=[StreamType(data_type="all")],
-              proc_outputs=[StreamType(data_type="img")],  # A PIL image is being "generated" here
-              behav_lone_wolf="ask")
+The SDK is released under the Apache 2.0 License in [LICENSE](./LICENSE). Commercial licenses are also available. [THIRD_PARTY_LICENSES.md](./THIRD_PARTY_LICENSES.md) lists the third-party libraries with their licenses.
 
+## Main authors
 
-# To retrieve the result we got from the ResNet agent, we define a hook
-# that will be called at the end of every run cycle
-def hook(_node: Node):
-    # Printing the last received data from the ResNet agent
-    out = _node.agent.get_last_streamed_data('Test0')[0]
-    _node.agent.print(f"Received response: {out}")  # Now we expect a textual response
-    _node.agent.print("")
-    _node.agent.print(f"Notice: instead of using this agent, you can also: search for the ResNet node (ResNetAgent) "
-                      f"in the UNaIVERSE portal, connect to it using our in-browser agent, select a picture from "
-                      f"your disk, send it to the agent, get back the text response!")
+- Stefano Melacci (Project Leader) [stefano.melacci@unisi.it](mailto:stefano.melacci@unisi.it)
+- Christian Di Maio [christian.dimaio@phd.unipi.it](mailto:christian.dimaio@phd.unipi.it)
+- Tommaso Guidi [tommaso.guidi.1998@gmail.com](mailto:tommaso.guidi.1998@gmail.com)
+- Marco Gori (Scientific Advisor) [marco.gori@unisi.it](mailto:marco.gori@unisi.it)
 
-
-# Node hosting agent
-node = Node(node_name="Test1", hosted=agent, hidden=True, clock_delta=1. / 5., run_hook=hook)
-
-# Running node for 45 seconds
-node.run(max_time=45.0, get_in_touch="Test0")
-```
-
-### Step B2. Connect to your ResNet agent by means of a browser running agent!
-
-Instead of using the artificial generator agent, **you can become the generator agent**!
-Search for the ResNet node (ResNetAgent) in the UNaIVERSE portal, connect to it using the in-browser agent, select a picture from your disk, send it to the agent, get back the text response!
-
-### Step C. Unleash UNaIVERSE!
-
-What you did so far is just to showcase your model. UNaIVERSE is composed of several **worlds** that you can create and customize. Your agent can enter one world at a time, stay there, leave it, enter another, and so on.
-Agents will behave according to what the world indicates, and you don't have to write any extra code to act in worlds you have never been into!
-
-Alright, there are so many things to say, but examples are always a good thing! 
-We prepared a repository with examples of many worlds and different lone wolves, go there in order to continue your journey into UNaIVERSE!
-
-*THE TUTORIAL CONTINUES WITH EXAMPLES ON HOW TO BUILD WORLDS:* [https://github.com/collectionlessai/unaiverse-examples](https://github.com/collectionlessai/unaiverse-examples)
-
-**Check also [https://docs.unaiverse.io](https://docs.unaiverse.io), and follow the path that better suits your needs.**
-
-**See you in our UNaIVERSE!**
-
----
-
-## 📄 License
-
-This project is licensed under the Apache 2.0 License.
-Commercial licenses can be provided.
-See the [LICENSE](./LICENSE) file for details (research, etc.).
-See the Contributor License Agreement [CLA.md](./CLA.md) if you want to contribute.
-This project includes third-party libraries. See [THIRD_PARTY_LICENSES.md](./THIRD_PARTY_LICENSES.md) for details.
-
----
-
-## 📚 Documentation
-
-You can find an API reference and several extremely useful information here: [https://docs.unaiverse.io](https://docs.unaiverse.io)
-
----
-
-## 🤝 Contributing
-
-Contributions are welcome!  
-
-Please contact us in order to suggest changes, report bugs, and suggest ideas for novel applications based on UNaIVERSE!
-
----
-
-## 👨‍💻 Main Authors
-
-- Stefano Melacci (Project Leader) [stefano.melacci@unisi.it](stefano.melacci@unisi.it)
-- Christian Di Maio [christian.dimaio@phd.unipi.it](christian.dimaio@phd.unipi.it)
-- Tommaso Guidi [tommaso.guidi.1998@gmail.com](tommaso.guidi.1998@gmail.com)
-- Marco Gori (Scientific Advisor) [marco.gori@unisi.it](marco.gori@unisi.it)
-
----
-
-<div align="center">
-
-Welcome to a new UN(a)IVERSE, where humans and AI coexist, learn, and grow together.
-
-[Enter the Portal](https://unaiverse.io) · [Read the Vision](https://collectionless.ai) · [Browse the Source](https://github.com/collectionlessai/unaiverse-src) · [Check the Company](https://unaiverse.ai)
-
-If you like the idea, [drop a star](https://github.com/collectionlessai/unaiverse-src) and help build the privacy-first web.
-
-</div>
+Project links: [portal](https://unaiverse.io), [documentation](https://docs.unaiverse.io), [Collectionless AI](https://collectionless.ai), [source](https://github.com/collectionlessai/unaiverse-src) and [company](https://unaiverse.ai).
