@@ -1179,6 +1179,12 @@ class Agent(AgentBasics):
         """
         addresses = self.node_conn.get_addrs(peer_id)
         if not self.node_conn.is_connected(peer_id):
+
+            # A member with no address yet (a browser before its relay reservations) cannot be dialled, and asking
+            # would log an error at every retry: the roster brings its addresses
+            if not addresses:
+                log.misc(f"Not asking to get in touch with {peer_id}: no address yet")
+                return False
             log.misc(f"Asking to get in touch with {peer_id}...")
             peer_id = await self.node_ask_to_get_in_touch_fcn(addresses=addresses, public=False)
             if peer_id is not None:
@@ -1242,6 +1248,11 @@ class Agent(AgentBasics):
                 # RESUME on the surviving Session is the preferred recovery. Only the
                 # terminal LOST evicts the pool and re-opens this dial path.
                 if not self.node_conn.is_connected(f_peer_id):
+
+                    # A member with no address yet cannot be dialled: the roster brings its addresses
+                    if not f_addr:
+                        log.misc(f"Not asking to get in touch with {f_peer_id}: no address yet")
+                        continue
                     log.misc(f"Asking to get in touch with {f_peer_id}...")
                     peer_id = await self.node_ask_to_get_in_touch_fcn(addresses=f_addr, public=False)
                     if peer_id is not None:

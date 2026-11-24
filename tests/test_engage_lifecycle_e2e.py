@@ -372,3 +372,38 @@ def test_disconnect_by_role_targets_only_enrolled_agents(roles):
     ok = asyncio.run(a.disconnect_by_role("student"))
     assert ok is True
     assert purged == [enrolled]                    # the roster-only peer is NOT purged
+
+
+def test_members_with_no_address_yet_are_not_asked_to_get_in_touch(roles):
+    """A member whose roster entry has no address yet (a browser before its relay reservations) cannot be dialled:
+    asking for it logged an error at every retry of the role. The member with addresses is still asked."""
+    no_address, with_address = "PIDnoaddress", "PIDaddressed"
+    addrs = {no_address: [], with_address: ["/ip4/1.2.3.4/tcp/1/p2p/PIDaddressed"]}
+
+    class _Conn:
+        def find_addrs_by_role(self, role_int, return_peer_ids_too=False, discard_yourself=False):
+            if role_int & Agent.ROLE_WORLD_MASTER == Agent.ROLE_WORLD_MASTER:
+                return [], []                       # no world master has the role
+            return [addrs[no_address], addrs[with_address]], [no_address, with_address]
+
+        def get_addrs(self, peer_id):
+            return addrs.get(peer_id)
+
+        def is_connected(self, peer_id):
+            return False
+
+    a = Agent.__new__(Agent)
+    a.node_conn = _Conn()
+    a._found_agents = set()
+    asked = []
+
+    async def _ask(addresses=None, public=True):
+        asked.append(addresses)
+        return addresses[0].rsplit("/p2p/", 1)[-1] if addresses else None
+
+    a.node_ask_to_get_in_touch_fcn = _ask
+
+    assert asyncio.run(a.connect_by_role("student")) is True
+    assert asked == [addrs[with_address]] and a._found_agents == {with_address}
+    assert asyncio.run(a.connect_to(no_address)) is False
+    assert asked == [addrs[with_address]]

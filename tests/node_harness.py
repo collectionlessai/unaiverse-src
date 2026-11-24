@@ -500,6 +500,7 @@ def build_agent_node_shell(node_peer_id: str, node_id: str = "shell-node",
     node.relay_reservation_expiry = None
     node.relay_reservation_peer_id = None
     node._world_member_node_ids = {}
+    node._dial_refusals = {}
 
     # Node holds no SM handle (S18): the managers live on the Coordinator. Build them
     # locally and register them on the fake conn, mirroring NodeConn.attach_session_policy.

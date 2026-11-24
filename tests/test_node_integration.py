@@ -373,6 +373,82 @@ def test_quarantine_refusal_pulls_rejoin_retry_in():
     asyncio.run(_scenario())
 
 
+def _refusal(peer_id: str, reason: str, p2p_name: str = NodeConn.P2P_WORLD) -> SessionEvent:
+    """The FAILED the dial door answers with when it refuses a dial: no Session ended, so it has no session_id."""
+    return SessionEvent(type=SessionEventType.FAILED, session_id="", peer_id=peer_id, role=SessionRole.INITIATOR,
+                        p2p_name=p2p_name, data={"reason": reason})
+
+
+def test_a_refused_dial_leaves_the_member_listed_on_its_host():
+    """A host whose dial toward a member is refused (its ban, no address yet) ended no relation of the member, which
+    may have joined again meanwhile: the member stays in the world lists. A FAILED Session still unlists it."""
+    async def _scenario():
+        node, conn = build_agent_node_shell(NODE_PEER, world=FakeWorld())
+        conn.add_to_world_agents_list(REMOTE_PEER, ["/ip4/1.2.3.4/tcp/1"], role=3)
+
+        await node._dispatch_session_event(_refusal(REMOTE_PEER, "quarantined:20.0s"))
+        await node._dispatch_session_event(_refusal(REMOTE_PEER, "no_addresses"))
+        assert REMOTE_PEER in conn.world_agents_set
+
+        failed = SessionEvent(type=SessionEventType.FAILED, session_id="00" * 8, peer_id=REMOTE_PEER,
+                              role=SessionRole.INITIATOR, p2p_name=NodeConn.P2P_WORLD,
+                              data={"reason": "timeout:hello"})
+        await node._dispatch_session_event(failed)
+        assert REMOTE_PEER not in conn.world_agents_set
+
+    asyncio.run(_scenario())
+
+
+def test_a_refused_dial_toward_the_world_host_does_not_leave_the_world():
+    async def _scenario():
+        node, conn = build_agent_node_shell(NODE_PEER)
+        conn.set_world(REMOTE_PEER)
+        node.hosted._in_world = True
+
+        await node._dispatch_session_event(_refusal(REMOTE_PEER, "quarantined:20.0s"))
+        assert node.hosted.world_data_clears == 0 and node.hosted.in_world()
+
+        failed = SessionEvent(type=SessionEventType.FAILED, session_id="00" * 8, peer_id=REMOTE_PEER,
+                              role=SessionRole.INITIATOR, p2p_name=NodeConn.P2P_WORLD,
+                              data={"reason": "dispatch_error"})
+        await node._dispatch_session_event(failed)
+        assert node.hosted.world_data_clears == 1
+
+    asyncio.run(_scenario())
+
+
+def test_refusals_at_the_dial_door_are_one_error_per_peer_and_kind_until_a_session_event(monkeypatch):
+    """A role retrying at every tick toward a peer the door refuses logged an error at every retry. The error now says
+    the first refusal of each kind, and again after a Session event of the peer."""
+    errors = []
+    monkeypatch.setattr("unaiverse.networking.node.node.log.error",
+                        lambda msg, *a, **k: errors.append(msg) if "handshake to" in msg else None)
+
+    async def _scenario():
+        node, _ = build_agent_node_shell(NODE_PEER)
+        for _ in range(10):
+            await node._dispatch_session_event(_refusal(REMOTE_PEER, "quarantined:20.0s"))
+        assert len(errors) == 1 and "reason=quarantined:20.0s" in errors[0]
+
+        await node._dispatch_session_event(_refusal(REMOTE_PEER, "no_addresses"))
+        await node._dispatch_session_event(_refusal(REMOTE_PEER, "no_addresses"))
+        assert len(errors) == 2 and "reason=no_addresses" in errors[1]
+
+        await node._dispatch_session_event(_refusal(REMOTE_PEER[:-1] + "x", "no_addresses"))
+        assert len(errors) == 3                         # another peer has its own line
+
+        failed = SessionEvent(type=SessionEventType.FAILED, session_id="00" * 8, peer_id=REMOTE_PEER,
+                              role=SessionRole.INITIATOR, p2p_name=NodeConn.P2P_WORLD,
+                              data={"reason": "timeout:hello"})
+        await node._dispatch_session_event(failed)
+        await node._dispatch_session_event(failed)
+        assert len(errors) == 5                         # a FAILED Session is always an error
+        await node._dispatch_session_event(_refusal(REMOTE_PEER, "no_addresses"))
+        assert len(errors) == 6                         # told again after the Session event
+
+    asyncio.run(_scenario())
+
+
 def test_rejoin_watchdog_keeps_sooner_retry_armed_by_attempt():
     """The watchdog disarms across the attempt and re-anchors at the default wait ONLY if
     the attempt's own failure dispatch did not arm a sooner retry (the quarantine refusal

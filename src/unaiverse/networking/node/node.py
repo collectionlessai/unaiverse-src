@@ -233,6 +233,9 @@ class Node:
         # World host: the root-attested node-id of every world-side peer-id it admitted
         self._world_member_node_ids: dict[str, str] = {}
 
+        # The kind of the refusal at the dial door last logged as an error, per peer, until a Session event of it
+        self._dial_refusals: dict[str, str] = {}
+
         # Profile
         self.profile: NodeProfile
 
@@ -1010,7 +1013,9 @@ class Node:
                                             is_world_join=is_world_join,
                                             reject_relay=not self.talk_to_relay_based_nodes)
         if not ok:
-            log.error("Connection / Session handshake failed!")
+
+            # Only a refusal at the dial door, which the dispatch of its FAILED has logged with peer and reason
+            log.misc("Connection / Session handshake failed!")
             return None
         return peer_id
 
@@ -3384,6 +3389,8 @@ class Node:
                      sub="prv" if "world" in ev.p2p_name else "pub")
         except Exception:
             pass
+        if ev.session_id:
+            self._dial_refusals.pop(ev.peer_id, None)
 
         if ev.type == SessionEventType.ESTABLISHED:
             if self.keep_in_touch and ev.peer_id == self.in_touch_peer_id:
@@ -3396,13 +3403,25 @@ class Node:
             # Roll back any in-flight world-handoff correlation (Coordinator-owned;
             # aborts the in-flight world redemption, no-ops if it already established).
             await self.conn.rollback_handoff(ev.peer_id)
-            self._world_host_unlist_member(ev)
-            await self._maybe_leave_world_on_session_end(ev)
+
+            # A refusal at the dial door (no session_id: the quarantine, no address) ended no Session, so nothing of
+            # the peer's relation is undone for it: neither the member's entry on a host nor our stay in a world
+            if ev.session_id:
+                self._world_host_unlist_member(ev)
+                await self._maybe_leave_world_on_session_end(ev)
             self._maybe_rearm_rejoin_on_failed_join(ev)
             self._maybe_rearm_get_in_touch(ev)
-            log.error(f"[session] handshake to ...{ev.peer_id[-5:]} failed "
-                      f"(p2p={ev.p2p_name}, reason={ev.data.get('reason', 'unknown')})",
-                      sub="prv" if "world" in ev.p2p_name else "pub")
+
+            # A role may retry at every tick toward a peer the door refuses: the error says the first refusal of each
+            # kind, and every one of them is in the misc line above, until a Session event of the peer
+            reason = ev.data.get('reason', 'unknown')
+            refusal = reason.split(":")[0] if not ev.session_id else None
+            if refusal is None or self._dial_refusals.get(ev.peer_id) != refusal:
+                if refusal is not None:
+                    self._dial_refusals[ev.peer_id] = refusal
+                log.error(f"[session] handshake to ...{ev.peer_id[-5:]} failed "
+                          f"(p2p={ev.p2p_name}, reason={reason})",
+                          sub="prv" if "world" in ev.p2p_name else "pub")
 
             # Evict the pools right away: a FAILED peer must not linger "connected"
             # (pool-resident, chat-admitted, re-dial suppressed) for the settlement
