@@ -532,17 +532,27 @@ class SessionManager:
         """Starts the initiator Session for `peer_id`: enters CONNECTING and launches the dial off-task (async).
 
         The outcome of the dial — HELLO / retry / FAILED — is reaped by tick_dial. A quarantined peer is refused
-        without dialing. No-op if there is no Session for the peer.
+        without dialing, and so is a Session with no address to dial. No-op if there is no Session for the peer.
 
         Args:
             peer_id: The peer.
 
         Returns:
-            The events from start (always [] today), or a synthetic FAILED event for a quarantined peer.
+            The events from start (always [] today), or a synthetic FAILED event for a quarantined peer or a Session
+            with no address.
         """
         sess = self._sessions.get(peer_id)
         if sess is None:
             return []
+
+        # A Session with no address would dial nothing once and then wait in CONNECTING for the whole stage. It is
+        # refused now, and stays KNOWN with no ban on the peer: nothing was dialled, and once the layer above gives it
+        # addresses (the roster refreshes them) a later activate dials
+        if not sess.addresses:
+            log.session(f"dial to ...{peer_id[-5:]} refused: no address to dial", sub=self._label)
+            return [SessionEvent(type=SessionEventType.FAILED, session_id="", peer_id=peer_id,
+                                 role=SessionRole.INITIATOR, p2p_name=self.p2p_name,
+                                 data={"reason": "no_addresses"})]
 
         # Quarantine gate (single dial door): a peer that recently went LOST/FAILED is
         # refused immediately, without dialing, until its window expires. Non-blocking:

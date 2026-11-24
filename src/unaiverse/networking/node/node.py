@@ -2044,8 +2044,8 @@ class Node:
             reject_relay=reject_relay,
         )
 
-        # The only synchronous FAILED among the start-up events is a quarantine refusal;
-        # dial failure and relay rejection surface asynchronously via the pump.
+        # The only synchronous FAILED among the start-up events is a refusal, by the quarantine or
+        # for no address to dial; dial failure and relay rejection surface asynchronously via the pump.
         started = True
         for ev in events:
             if ev.type == SessionEventType.FAILED:

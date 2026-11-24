@@ -200,6 +200,28 @@ def test_a_dial_refused_by_the_quarantine_is_a_session_line_not_a_user_one(alice
     assert any("refused: peer quarantined" in line for line in session_lines), session_lines
 
 
+def test_an_initiator_with_no_address_is_refused_at_once_with_no_ban(alice_conn, alice_peer_id, bob_peer_id):
+    """With no address an initiator dialled nothing once and then waited in CONNECTING for the whole stage, to end in
+    timeout:connecting. It is refused at once, says why, bans nobody, and stays KNOWN: once it has addresses, a later
+    activate dials."""
+    async def _scenario():
+        sm = _make_sm(alice_conn, NodeConn.P2P_WORLD, alice_peer_id)
+        events = await sm.initiate(bob_peer_id, [])
+        await asyncio.sleep(0)
+        assert [(e.type, e.data["reason"]) for e in events] == [(SessionEventType.FAILED, "no_addresses")]
+        assert alice_conn.connect_calls == []
+        assert bob_peer_id not in sm._quarantine
+        sess = sm.get_session(bob_peer_id)
+        assert sess.state == SessionState.KNOWN
+
+        sess.addresses = ["/ip4/127.0.0.1/tcp/0"]       # what the roster refreshes
+        assert await sm.activate(bob_peer_id) == []
+        await asyncio.sleep(0)
+        assert alice_conn.connect_calls == [["/ip4/127.0.0.1/tcp/0"]]
+
+    _run(_scenario())
+
+
 # deliver() — basics
 
 def test_deliver_unknown_protocol_drops(alice_conn, alice_peer_id, bob_peer_id):
