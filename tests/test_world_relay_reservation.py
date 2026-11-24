@@ -244,6 +244,26 @@ def test_resumed_world_session_asks_for_the_slot_again():
     asyncio.run(_scenario())
 
 
+def test_a_resumed_world_session_does_not_enrol_the_world_host_as_an_agent():
+    """The host of the world the node is in is the world, not an agent of it, and a real join never enrols it. A
+    resume of the world Session used to enrol it, as a peer purged meanwhile: in the browser, what the person sent to
+    the world then went to that agent. The resume still asks the relay slot again."""
+    async def _scenario():
+        node, conn, host_sm, host_inbox = await _member_in_world()
+        node.hosted.all_agents.pop(WORLD_HOST, None)     # as a real join leaves it
+        node.hosted.added.clear()
+        await _hold_slot(node, conn, minutes=50)
+        conn.reserve_returns = _expiry_in(60)
+
+        await _lose_and_resume_the_world_session(node, conn, host_sm, host_inbox)
+
+        assert WORLD_HOST not in node.hosted.all_agents and node.hosted.added == []
+        assert conn.reserve_calls == [(WORLD_HOST, NodeConn.P2P_WORLD)]
+        assert node.hosted.in_world()
+
+    asyncio.run(_scenario())
+
+
 def test_resumed_world_session_of_a_member_with_no_slot_asks_for_nothing():
     """A member that is publicly reachable, or whose world is no relay, holds no slot."""
     async def _scenario():

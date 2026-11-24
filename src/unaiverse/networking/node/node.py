@@ -3765,6 +3765,12 @@ class Node:
         # an agent, so there is nothing to restore.
         if self.node_type is Node.WORLD and not is_world:
             return
+
+        # Nor did the host of the world this node is in: it is the world, not an
+        # agent of it, and enrolled here it became an agent of its own after every
+        # resume of the world Session (the browser does the same, see Node.js)
+        if self.node_type is Node.AGENT and ev.peer_id == self.conn.get_world_node_peer_id():
+            return
         profile_dict = ev.data.get("profile")
         if not profile_dict:
             return
