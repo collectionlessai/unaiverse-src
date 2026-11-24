@@ -265,6 +265,7 @@ class Node:
 
         # The calls to the root server that run in the background, one per kind at a time (see __root_job)
         self.__root_jobs: dict[str, asyncio.Task] = {}
+        self.__cv_stale = False  # A change of the CV was announced and not downloaded yet (see refresh_cv)
 
         # stats reporting agent -> world
         Custom.SEND_STATS_EVERY = send_stats_every
@@ -706,6 +707,18 @@ class Node:
             "credential": self.turn_info["credential"],
         }])
 
+    def refresh_cv(self) -> asyncio.Task:
+        """Downloads the CV again in the background, then refreshes the token, which carries its hash.
+
+        A notification that comes while a download is on its way is not lost: the download runs once more when it
+        ends, since the one on its way may have been asked before the change the notification announces.
+
+        Returns:
+            The task of the download (one at a time, see __root_job).
+        """
+        self.__cv_stale = True
+        return self.__root_job("cv", self.__download_cv)
+
     def get_cv(self) -> list[dict]:
         """Retrieves the node's CV (Curriculum Vitae) from the root server.
 
@@ -948,8 +961,8 @@ class Node:
                     payload["node_name"] = node_name
                 if node_id is not None:
                     payload["node_id"] = node_id
-                addresses = self.__root(api="/account/node/get/addresses",
-                                        payload=payload)["addresses"]
+                addresses = (await asyncio.to_thread(self.__root, api="/account/node/get/addresses",
+                                                     payload=payload))["addresses"]
             except Exception as e:
                 log.error(f"Error while retrieving addresses of node named {node_name} [{e}]")
                 return None
@@ -2853,11 +2866,8 @@ class Node:
             elif msg.content_type == Msg.GET_CV_FROM_ROOT:
                 log.misc("Received a notification to re-download the CV...")
 
-                # Downloading CV
-                self.profile.update_cv(self.get_cv())
-
-                # Re-downloading token (it will include the new CV hash)
-                self.get_node_token(peer_ids=[self.get_public_peer_id(), self.get_world_peer_id()])
+                # In the background: the CV, then the token that includes its new hash
+                self.refresh_cv()
 
             # (L) got one or more badge suggestions
             elif msg.content_type == Msg.BADGE_SUGGESTIONS:
@@ -4296,6 +4306,19 @@ class Node:
         """
         task = self.__root_jobs.get(kind)
         return task is not None and not task.done()
+
+    async def __download_cv(self) -> None:
+        """Downloads the CV in a thread and applies it on the event loop, then gets a token asked after it (async)."""
+        while self.__cv_stale:
+            self.__cv_stale = False
+            cv = await asyncio.to_thread(self.get_cv)
+            self.profile.update_cv(cv)
+
+            # A refresh of the token on its way was asked before this CV: it is let end, and a new one follows
+            stale_token = self.__root_jobs.get("token")
+            if stale_token is not None and not stale_token.done():
+                await stale_token
+            await self.get_node_token([self.get_public_peer_id(), self.get_world_peer_id()], wait=False)
 
     def __post_dynamic_profile(self, payload: dict) -> None:
         """Posts a dynamic profile to the root server (blocking: it runs in a thread when in the background).

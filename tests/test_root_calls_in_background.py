@@ -2,12 +2,15 @@
 must not stop the loop (no Session pings, no frames). One call per kind at a time; the badges assigned while a call
 is on its way are kept, and the ones sent go back to the world when the call fails.
 """
+import time
 import asyncio
 import threading
 import pytest
 
 from unaiverse.world import World
 from unaiverse.networking.node.node import Node
+from unaiverse.networking.p2p.messages import Msg
+from node_harness import build_agent_node_shell
 
 pytestmark = pytest.mark.unit
 
@@ -161,5 +164,143 @@ def test_a_token_refresh_in_the_background_tells_whether_it_worked(monkeypatch):
         monkeypatch.setattr(node, "_request_node_token", fails, raising=False)
         assert await node.get_node_token(["a", "b"], wait=False) is False
         assert applied == [{"token": "t"}]
+
+    asyncio.run(scenario())
+
+
+class _OrderedRoot:
+    """A root server that holds each call until the test releases it, by its position among the calls."""
+
+    def __init__(self):
+        self.calls = []
+
+    def __call__(self, api: str, payload: dict):
+        released = threading.Event()
+        self.calls.append((api, released))
+        number = len(self.calls)
+        released.wait(3.0)
+        if api.endswith("/cv/get"):
+            return [{"badge": number}]
+        if api.endswith("/get/addresses"):
+            return {"addresses": []}
+        return {"token": number}
+
+    def apis(self) -> list[str]:
+        return [api for api, _ in self.calls]
+
+    def release(self, i: int) -> None:
+        self.calls[i][1].set()
+
+
+async def _until(condition, seconds: float = 2.0) -> None:
+    """Waits, on the event loop, until the condition holds (async)."""
+    end = time.monotonic() + seconds
+    while not condition():
+        assert time.monotonic() < end, "the condition never held"
+        await asyncio.sleep(0.01)
+
+
+def _agent(root: _OrderedRoot):
+    """An agent shell whose CV and token go to the given root server, with the CVs and tokens it applied."""
+    node, conn = build_agent_node_shell("agent-pub")
+    node._Node__root_jobs = {}
+    node._Node__root = root
+    node.unaiverse_key = "key"
+    node.get_public_peer_id = lambda: "agent-pub"
+    node.get_world_peer_id = lambda: "agent-pub-w"
+    node._request_node_token = lambda peer_ids: root("/account/node/token/get", {})
+    cvs, tokens = [], []
+    node.profile.update_cv = cvs.append
+    node._apply_node_token = tokens.append
+    return node, conn, cvs, tokens
+
+
+def test_a_cv_notification_does_not_stop_the_loop_and_the_token_follows_the_cv():
+    """The world host tells an agent to download its CV again after a badge: the handler leaves both calls to the
+    background, and the token, which carries the hash of the CV, is asked only once the CV is in."""
+    async def scenario() -> None:
+        root = _OrderedRoot()
+        node, conn, cvs, tokens = _agent(root)
+        notification = Msg(sender="world-pub", content_type=Msg.GET_CV_FROM_ROOT, piggyback="world-node0")
+        delivered = []
+
+        async def get_messages(p2p_name, allowed_not_connected_peers=None, kind="all"):
+            if kind == "streams" or delivered or p2p_name != conn.P2P_PUBLIC:
+                return [], []
+            delivered.append(notification)
+            return [notification], []
+        conn.get_messages = get_messages
+
+        started = time.monotonic()
+        await node._Node__handle_network_messages()
+        assert time.monotonic() - started < 1.0
+        assert await _stays_responsive(0.2) > 5
+        assert root.apis() == ["/account/node/cv/get"]
+
+        root.release(0)
+        await _until(lambda: len(root.calls) == 2)
+        assert cvs == [[{"badge": 1}]]
+        assert root.apis()[1] == "/account/node/token/get"
+        root.release(1)
+        await _until(lambda: tokens)
+        assert tokens == [{"token": 2}]
+
+    asyncio.run(scenario())
+
+
+def test_a_token_refresh_on_its_way_when_the_cv_comes_is_followed_by_a_new_one():
+    """A refresh of the token asked before the CV came carries the old hash: it is let end, then a new one is asked."""
+    async def scenario() -> None:
+        root = _OrderedRoot()
+        node, _, cvs, tokens = _agent(root)
+        old_refresh = node.get_node_token(["agent-pub", "agent-pub-w"], wait=False)
+        await _until(lambda: len(root.calls) == 1)
+        job = node.refresh_cv()
+        await _until(lambda: len(root.calls) == 2)
+
+        root.release(1)
+        await _until(lambda: cvs)
+        assert await _stays_responsive(0.1) and len(root.calls) == 2   # nothing asked before the old one ends
+
+        root.release(0)
+        await old_refresh
+        await _until(lambda: len(root.calls) == 3)
+        assert root.apis() == ["/account/node/token/get", "/account/node/cv/get", "/account/node/token/get"]
+        root.release(2)
+        await job
+        assert tokens == [{"token": 1}, {"token": 3}]
+
+    asyncio.run(scenario())
+
+
+def test_a_notification_during_a_download_downloads_the_cv_again():
+    """The download on its way may have been asked before the change a second notification announces."""
+    async def scenario() -> None:
+        root = _OrderedRoot()
+        node, _, cvs, tokens = _agent(root)
+        job = node.refresh_cv()
+        await _until(lambda: len(root.calls) == 1)
+        assert node.refresh_cv() is job
+
+        for i in range(4):
+            await _until(lambda: len(root.calls) == i + 1)
+            root.release(i)
+        await job
+        assert root.apis() == ["/account/node/cv/get", "/account/node/token/get"] * 2
+        assert len(cvs) == 2 and len(tokens) == 2
+
+    asyncio.run(scenario())
+
+
+def test_looking_up_the_addresses_of_a_node_by_name_does_not_stop_the_loop():
+    async def scenario() -> None:
+        root = _OrderedRoot()
+        node, _, _, _ = _agent(root)
+        lookup = asyncio.create_task(node.ask_to_get_in_touch(node_name="someone/agent"))
+        await _until(lambda: root.calls)
+        assert await _stays_responsive(0.2) > 5 and not lookup.done()   # The loop runs while the root is silent
+        root.release(0)
+        assert await lookup is None   # The root server knows no addresses for it
+        assert root.apis() == ["/account/node/get/addresses"]
 
     asyncio.run(scenario())
