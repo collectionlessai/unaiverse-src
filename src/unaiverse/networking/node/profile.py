@@ -49,7 +49,7 @@ class NodeProfile:
             raise ValueError("Missing static profile data")
 
         # Forcing key order (important! otherwise the hash operation will not be consistent with the one on the server)
-        cv = [{k: _cv[k] for k in sorted(_cv)} for _cv in sorted(cv, key=lambda x: x['last_edit_utc'])]
+        cv = self.canonical_cv(cv)
 
         self._profile_data: dict = \
             {
@@ -163,12 +163,36 @@ class NodeProfile:
         self._connections_updated = False
 
     def update_cv(self, new_cv: list[dict]) -> None:
-        """Replaces the stored CV data with a new list of CV entries.
+        """Replaces the stored CV data with a new list of CV entries, in the order the constructor stores them.
 
         Args:
             new_cv: The new CV data as a list of dictionaries.
         """
-        self._profile_data['cv'] = new_cv
+        self._profile_data['cv'] = self.canonical_cv(new_cv)
+
+    @staticmethod
+    def canonical_cv(cv: list[dict]) -> list[dict]:
+        """Orders a CV as the root server does when it hashes it: entries by last edit, keys sorted in each.
+
+        Args:
+            cv: The CV entries.
+
+        Returns:
+            The same entries, in that order.
+        """
+        return [{k: _cv[k] for k in sorted(_cv)} for _cv in sorted(cv, key=lambda x: x['last_edit_utc'])]
+
+    @staticmethod
+    def cv_hash_of(cv: list[dict]) -> str:
+        """Computes the hash of a CV that the root server attests in the node token (the cv_hash claim).
+
+        Args:
+            cv: The CV entries, in any order.
+
+        Returns:
+            The hash.
+        """
+        return hashlib.blake2b(json.dumps(NodeProfile.canonical_cv(cv)).encode("utf-8"), digest_size=16).hexdigest()
 
     @classmethod
     def from_dict(cls, combined_data: dict) -> 'NodeProfile':
@@ -561,7 +585,5 @@ class NodeProfile:
             the hashes are equal, and the second element contains both hash strings for
             diagnostic purposes.
         """
-        cv = self._profile_data['cv']  # Should we sort keys?
-        computed_hash = hashlib.blake2b(json.dumps(cv).encode("utf-8"),
-                                        digest_size=16).hexdigest()
+        computed_hash = self.cv_hash_of(self._profile_data['cv'])
         return cv_hash == computed_hash, (cv_hash, computed_hash)

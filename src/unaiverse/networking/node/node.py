@@ -41,6 +41,7 @@ from unaiverse.networking.p2p import P2P, P2PError
 from unaiverse.streams.dataprops import FileContainer
 from unaiverse.networking.node.connpool import NodeConn
 from unaiverse.networking.node.profile import NodeProfile
+from unaiverse.networking.node.tokens import TokenVerifier
 from unaiverse.streams.streams import DataProps, BufferedStream
 from unaiverse.custom import Custom, GenException, RootServerError
 from unaiverse.networking.session.sess_msg import (WORLD_DISENGAGEMENT,
@@ -269,6 +270,8 @@ class Node:
         # The calls to the root server that run in the background, one per kind at a time (see __root_job)
         self.__root_jobs: dict[str, asyncio.Task] = {}
         self.__cv_stale = False  # A change of the CV was announced and not downloaded yet (see refresh_cv)
+        self.__pending_cv: list | None = None  # A downloaded CV that waits for a token attesting it (see __download_cv)
+        self.__cv_mismatch_logged = False  # The root gave a CV and a token that do not match, and it was said once
 
         # stats reporting agent -> world
         Custom.SEND_STATS_EVERY = send_stats_every
@@ -558,6 +561,10 @@ class Node:
             self.declare_world_source()
             self.get_node_token(peer_ids=[self.get_public_peer_id(), self.get_world_peer_id()])
 
+        # The CV in the profile and the token held must attest the same hash, or every Python node rejects our
+        # handshakes: the first token was asked before the CV, and a badge assigned in between parts them
+        self.__match_token_and_cv_at_boot()
+
         # Finally, sending dynamic profile to the root server
         # (send AFTER set_node_info, not before, since set_node_info updates the
         # profile with the processor/stream info)
@@ -682,6 +689,7 @@ class Node:
                 log.error(f"Error while refreshing the node token (will retry shortly) [{e}]")
                 return False
             self._apply_node_token(response)
+            self.__match_cv_and_token()
             return True
 
         return self.__root_job("token", refresh)
@@ -711,7 +719,7 @@ class Node:
         }])
 
     def refresh_cv(self) -> asyncio.Task:
-        """Downloads the CV again in the background, then refreshes the token, which carries its hash.
+        """Downloads the CV again in the background, and applies it together with a token that attests it.
 
         A notification that comes while a download is on its way is not lost: the download runs once more when it
         ends, since the one on its way may have been asked before the change the notification announces.
@@ -4327,17 +4335,85 @@ class Node:
         return task is not None and not task.done()
 
     async def __download_cv(self) -> None:
-        """Downloads the CV in a thread and applies it on the event loop, then gets a token asked after it (async)."""
+        """Downloads the CV in a thread and applies it on the event loop together with a token that attests it (async).
+
+        The token held attests it already when a refresh came first. Otherwise the CV waits for the first token that
+        attests it (__match_cv_and_token): a refresh already on its way, asked before the CV, is let end, then a new
+        token is asked. When that one fails, or attests another CV, the profile keeps the CV that its token attests.
+        """
         while self.__cv_stale:
             self.__cv_stale = False
-            cv = await asyncio.to_thread(self.get_cv)
-            self.profile.update_cv(cv)
-
-            # A refresh of the token on its way was asked before this CV: it is let end, and a new one follows
+            cv = NodeProfile.canonical_cv(await asyncio.to_thread(self.get_cv))
+            token_hash = self.__token_cv_hash()
+            if token_hash is None or token_hash == NodeProfile.cv_hash_of(cv):
+                self.profile.update_cv(cv)
+                self.__cv_mismatch_logged = False
+                continue
+            self.__pending_cv = cv
             stale_token = self.__root_jobs.get("token")
             if stale_token is not None and not stale_token.done():
                 await stale_token
-            await self.get_node_token([self.get_public_peer_id(), self.get_world_peer_id()], wait=False)
+            if self.__pending_cv is not None:
+                refreshed = await self.get_node_token([self.get_public_peer_id(), self.get_world_peer_id()],
+                                                      wait=False)
+
+                # The root gave a token that attests neither the CV it gave nor the one we hold: unless a newer
+                # notification asks another round, the next refresh of the token tries again
+                token_hash = self.__token_cv_hash()
+                if (refreshed and self.__pending_cv is not None and not self.__cv_stale
+                        and not self.__cv_mismatch_logged
+                        and token_hash != NodeProfile.cv_hash_of(self.profile.get_cv())):
+                    self.__cv_mismatch_logged = True
+                    log.error("The root server gave a CV and a token that do not match: the profile keeps its CV "
+                              "until the next refresh of the token")
+            self.__pending_cv = None
+
+    def __token_cv_hash(self) -> str | None:
+        """Reads the hash of the CV that the token held attests.
+
+        Returns:
+            The cv_hash claim, or None when the token cannot be read (no token yet, expired) or has no such claim.
+        """
+        if not self.node_token or self.public_key is None:
+            return None
+        return TokenVerifier(self.public_key).verify_token(self.node_token)[1]
+
+    def __match_cv_and_token(self) -> None:
+        """Keeps the CV in the profile and the token just applied attesting the same hash.
+
+        A downloaded CV that waited for this token goes in with it, in the same step. A token that attests another CV
+        than the profile's makes the node download the CV, unless a download is running, which settles the pair itself.
+        """
+        token_hash = self.__token_cv_hash()
+        if token_hash is None:
+            return
+        if self.__pending_cv is not None and token_hash == NodeProfile.cv_hash_of(self.__pending_cv):
+            self.profile.update_cv(self.__pending_cv)
+            self.__pending_cv = None
+        if token_hash == NodeProfile.cv_hash_of(self.profile.get_cv()):
+            self.__cv_mismatch_logged = False
+        elif not self.__root_job_running("cv"):
+            log.misc("The node token attests another CV than the profile's: downloading the CV")
+            self.refresh_cv()
+
+    def __match_token_and_cv_at_boot(self) -> None:
+        """At boot, makes the token held and the CV in the profile attest the same hash, with one more call of each
+        at most: a token asked after the CV, then the CV that a still newer token attests."""
+        token_hash = self.__token_cv_hash()
+        if token_hash is None or token_hash == NodeProfile.cv_hash_of(self.profile.get_cv()):
+            return
+        log.misc("The node token attests another CV than the profile's: asking a token again")
+        self.get_node_token(peer_ids=[self.get_public_peer_id(), self.get_world_peer_id()])
+        token_hash = self.__token_cv_hash()
+        if token_hash is None or token_hash == NodeProfile.cv_hash_of(self.profile.get_cv()):
+            return
+        cv = NodeProfile.canonical_cv(self.get_cv())
+        if token_hash == NodeProfile.cv_hash_of(cv):
+            self.profile.update_cv(cv)
+        else:
+            self.__cv_mismatch_logged = True
+            log.error("The root server gave a CV and a token that do not match: the profile keeps its CV until the "
+                      "next refresh of the token")
 
     def __post_dynamic_profile(self, payload: dict) -> None:
         """Posts a dynamic profile to the root server (blocking: it runs in a thread when in the background).

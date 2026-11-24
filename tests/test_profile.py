@@ -274,12 +274,15 @@ def test_empty_cv_round_trips():
     assert make_profile(cv=[]).get_cv() == []
 
 
-def test_update_cv_replaces_without_resorting():
-    """update_cv overwrites the stored CV verbatim (no re-sort)."""
-    profile = make_profile(cv=[{"last_edit_utc": 1, "role": "x"}])
-    new_cv = [{"last_edit_utc": 9}, {"last_edit_utc": 3}]
-    profile.update_cv(new_cv)
-    assert profile.get_cv() == new_cv
+def test_update_cv_stores_the_cv_as_the_constructor_does():
+    """update_cv orders the entries and their keys as the constructor does, so the same CV, however it comes, hashes
+    to the same value, the one the root attests in the node token."""
+    cv = [{"zeta": "z", "alpha": "a", "last_edit_utc": 9}, {"role": "x", "last_edit_utc": 3}]
+    built = make_profile(cv=cv)
+    profile = make_profile(cv=[{"last_edit_utc": 1, "role": "y"}])
+    profile.update_cv(cv)
+    assert [list(entry) for entry in profile.get_cv()] == [list(entry) for entry in built.get_cv()]
+    assert profile.verify_cv_hash(NodeProfile.cv_hash_of(cv))[0] and built.verify_cv_hash(NodeProfile.cv_hash_of(cv))[0]
 
 
 # --------------------------------------------------------------------------- #
