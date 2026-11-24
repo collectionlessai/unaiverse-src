@@ -31,7 +31,7 @@ from unaiverse.networking.session.sess_msg import WORLD_HANDOFF_COMPLETE, WORLD_
 
 from conftest import apump
 from node_harness import (
-    build_node_shell_on_real_conn, wire_remote_peer, mint_node_token, full_profile_dict,
+    build_node_shell_on_real_conn, build_agent_node_shell, wire_remote_peer, mint_node_token, full_profile_dict,
     FakeWorld, FakeHosted,
 )
 
@@ -827,5 +827,59 @@ def test_a_change_of_addresses_or_role_is_still_published(stepped_clock, root_ke
             assert entry["addrs"] == ["/ip4/10.0.0.77/tcp/4001/p2p/" + master.world_peer_id]
         else:
             assert entry["misc"] & (1 << 3)
+
+    asyncio.run(_scenario())
+
+
+async def _member_takes(host: _Host, joiner: _Joiner, goodbye) -> tuple[str, bool]:
+    """A member joins, then its host says goodbye to it as goodbye does. The CLOSED that the member's world Session
+    ends with goes to the node of a member that keeps rejoining. Returns the reason of that CLOSED and whether the
+    member's rejoin was armed."""
+    await _join(host, joiner)
+    await goodbye(joiner.world_peer_id)
+    events = await apump(joiner.inbox_world, joiner.sm_world)
+    closed = [e for e in events if e.type == SessionEventType.CLOSED]
+    assert closed, f"no CLOSED on the member's world Session: {[e.type.value for e in events]}"
+
+    member, member_conn = build_agent_node_shell("12D3KooWmember0public")
+    member.keep_rejoining = True
+    member.rejoining_time = -1.
+    member_conn.set_world(host.world_peer_id)
+    member.hosted._in_world = True
+    await member._dispatch_session_event(closed[0])
+    assert not member.hosted.in_world()
+    return closed[0].data["reason"], member.rejoining_time > 0.
+
+
+def test_a_member_comes_back_to_a_host_that_shut_down(stepped_clock, root_keys):
+    """A host that shuts down cleanly (Ctrl+C, a deploy) says goodbye to its members as it shuts down: a member that
+    keeps rejoining comes back once the host is up again, as after a LOST."""
+    async def _scenario():
+        private_pem, public_pem = root_keys
+        host = _Host(public_pem)
+
+        async def shut_down(peer_id):
+            await host.node._Node__purge(peer_id, reason=host.node._shutdown_reason_for(peer_id))
+        reason, armed = await _member_takes(host, _Joiner("agent", host, private_pem), shut_down)
+        assert (reason, armed) == ("remote_goaway:GRACEFUL_SHUTDOWN", True)
+
+    asyncio.run(_scenario())
+
+
+@pytest.mark.parametrize("goodbye", ["kick", "leave"])
+def test_a_member_sent_away_by_a_running_host_stays_out(stepped_clock, root_keys, goodbye):
+    """A host that keeps running and sends a member away, by a kick or by leaving it, means it: the member does not
+    come back on its own."""
+    async def _scenario():
+        private_pem, public_pem = root_keys
+        host = _Host(public_pem)
+
+        async def send_away(peer_id):
+            if goodbye == "kick":
+                await host.node._Node__purge(peer_id, reason=WORLD_DISENGAGEMENT)
+            else:
+                await host.node.leave(peer_id)
+        reason, armed = await _member_takes(host, _Joiner("agent", host, private_pem), send_away)
+        assert (reason, armed) == ("remote_goaway:WORLD_DISENGAGEMENT", False)
 
     asyncio.run(_scenario())

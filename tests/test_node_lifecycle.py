@@ -119,19 +119,24 @@ def test_aclose_swallows_a_failing_transport_close():
     assert node.conn.closes == 1
 
 
-def test_aclose_tells_each_peer_why_its_link_ends():
-    """A link that belongs to a world ends with WORLD_DISENGAGEMENT, a lone-wolf one with
-    GRACEFUL_SHUTDOWN: it has nothing to do with a world, and the peer shows the reason."""
+@pytest.mark.parametrize("node_type", [Node.WORLD, Node.AGENT])
+def test_aclose_tells_each_peer_why_its_link_ends(node_type):
+    """A world host that shuts down tells every peer so with GRACEFUL_SHUTDOWN, its members
+    included: it is not sending them away, and they come back once it is up again. On a
+    member, a link that belongs to the world (a companion) ends with WORLD_DISENGAGEMENT, a
+    lone-wolf one with GRACEFUL_SHUTDOWN: it has nothing to do with a world."""
     node = _node_shell()
+    node.node_type = node_type
     node.hosted = _Hosted({"lone-wolf": object(), "world-agent": object(), "world-master": object()})
     node.conn.roles = {"world-agent": Agent.ROLE_WORLD_AGENT | (1 << 2),
                        "world-master": Agent.ROLE_WORLD_MASTER | (1 << 2)}
 
     asyncio.run(node.aclose())
 
+    in_world = GRACEFUL_SHUTDOWN if node_type == Node.WORLD else WORLD_DISENGAGEMENT
     assert node.conn.goodbyes == {"lone-wolf": GRACEFUL_SHUTDOWN,
-                                  "world-agent": WORLD_DISENGAGEMENT,
-                                  "world-master": WORLD_DISENGAGEMENT}
+                                  "world-agent": in_world,
+                                  "world-master": in_world}
     assert node.hosted.all_agents == {}
 
 

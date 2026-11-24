@@ -262,8 +262,9 @@ def test_involuntary_world_link_end_arms_rejoin_but_clean_close_does_not():
     """keep_rejoining: an INVOLUNTARY end of the Session toward the current world host
     re-arms the rejoin timer, and does so BEFORE leave_world runs. LOST (host vanished)
     and FAILED (e.g. an inbound-dispatch error on the live world Session) re-arm; a clean
-    CLOSED (a GOAWAY from the host: kick, role-revoke, graceful shutdown, or our own
-    token-expiry close) does NOT — re-joining would just be bounced by whatever closed us."""
+    CLOSED (a GOAWAY from the host: kick, role-revoke, or our own token-expiry close) does
+    NOT — re-joining would just be bounced by whatever closed us. The goodbye of a host that
+    shuts down is the one clean CLOSED that re-arms (see the roster e2e tests)."""
     async def _scenario():
         for ev_type, should_arm in [
             (SessionEventType.LOST, True),

@@ -46,7 +46,8 @@ from unaiverse.streams.streams import DataProps, BufferedStream
 from unaiverse.custom import Custom, GenException, RootServerError
 from unaiverse.networking.session.sess_msg import (WORLD_DISENGAGEMENT,
                                                    LOCAL_ERROR, NOT_IN_ALLOW_LIST, ROLE_INCOMPATIBLE,
-                                                   HOSTED_REJECTED, CV_HASH_MISMATCH, NOT_AUTHORIZED, GRACEFUL_SHUTDOWN)
+                                                   HOSTED_REJECTED, CV_HASH_MISMATCH, NOT_AUTHORIZED, GRACEFUL_SHUTDOWN,
+                                                   reason_name)
 from unaiverse.utils.logger import log, ALWAYS_ON_CHANNELS, ALL_CHANNELS
 from unaiverse.utils.misc import (get_key_considering_multiple_sources, save_node_addresses_to_file,
                                   prepare_app_dir, load_agent_in_memory, unpack_py_files, analyze_code,
@@ -1074,10 +1075,17 @@ class Node:
     async def leave(self, peer_id: str) -> None:
         """Leaves a peer: purges it with a graceful GOAWAY (async).
 
+        A world host that leaves one of its members while it keeps running sends it away (WORLD_DISENGAGEMENT): from
+        a world host, GRACEFUL_SHUTDOWN tells a member that the host is shutting down, and the member comes back.
+
         Args:
             peer_id: The peer to leave.
         """
-        await self.__purge(peer_id, reason=GRACEFUL_SHUTDOWN)
+        reason = GRACEFUL_SHUTDOWN
+        if (self.node_type is Node.WORLD and
+                self.conn.get_role(peer_id) & Agent.ROLE_WORLD_AGENT == Agent.ROLE_WORLD_AGENT):
+            reason = WORLD_DISENGAGEMENT
+        await self.__purge(peer_id, reason=reason)
 
     async def leave_world(self) -> None:
         """Leave the world we are currently in, if any. (async)
@@ -2306,11 +2314,14 @@ class Node:
     def _shutdown_reason_for(self, peer_id: str) -> int:
         """The GOAWAY reason for a peer the node says goodbye to while shutting down.
 
-        A link that belongs to a world (the role of the peer carries the world bit: a
-        member of the world we host, or a companion of the one we are in) ends because
-        the world relation ends. Any other link, a lone-wolf one, has nothing to do with
-        a world and is told that the node is just shutting down.
+        A world host tells every peer, its members included, that it is just shutting down: the
+        world is not sending its members away, and they come back once it is up again (see
+        _maybe_leave_world_on_session_end). On a member, a link that belongs to the world (a
+        companion: the role of the peer carries the world bit) ends because the world relation
+        ends. Any other link, a lone-wolf one, is told that the node is just shutting down.
         """
+        if self.node_type is Node.WORLD:
+            return GRACEFUL_SHUTDOWN
         if self.conn.get_role(peer_id) & Agent.ROLE_WORLD_AGENT == Agent.ROLE_WORLD_AGENT:
             return WORLD_DISENGAGEMENT
         return GRACEFUL_SHUTDOWN
@@ -3678,11 +3689,13 @@ class Node:
                  f"reason={ev.data.get('reason', 'unknown')}) → leaving world", sub="prv")
 
         # Arm the rejoin BEFORE leaving (leave_world is best-effort and may raise; the rejoin
-        # must survive that). Only an INVOLUNTARY end re-arms: a clean CLOSED is a GOAWAY from
-        # the host (kick / role-revoke / graceful shutdown / our own token-expiry close), where
-        # re-joining would just be bounced again. LOST (host vanished) and FAILED (e.g. an
-        # inbound-dispatch error on the live world Session) do re-arm.
-        if self.keep_rejoining and ev.type != SessionEventType.CLOSED:
+        # must survive that). An INVOLUNTARY end re-arms: LOST (host vanished) and FAILED (e.g.
+        # an inbound-dispatch error on the live world Session). So does the goodbye of a host
+        # that shuts down (GRACEFUL_SHUTDOWN, see _shutdown_reason_for): it comes back. Any
+        # other clean CLOSED is a GOAWAY of a host that keeps running (kick / role-revoke /
+        # our own token-expiry close), where re-joining would just be bounced again.
+        host_shut_down = ev.data.get("reason") == f"remote_goaway:{reason_name(GRACEFUL_SHUTDOWN)}"
+        if self.keep_rejoining and (ev.type != SessionEventType.CLOSED or host_shut_down):
             self.rejoining_time = clock.get_time() + Custom.REJOINING_WAIT
         try:
             await self.leave_world()
