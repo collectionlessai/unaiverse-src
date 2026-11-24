@@ -4829,14 +4829,14 @@ class NodeSynchronizer:
                     if node.node_type == Node.AGENT:
                         await node.run_async(cycles=1, join_world=addresses if self.synch_cycle == 0 else None)
                         if self.gap > 0.:
-                            time.sleep(self.gap)
+                            await asyncio.sleep(self.gap)
                         state_changed = state_changed or node.agent.behav.get_state_changed()
                     else:
                         world_node = node
                 if world_node is not None:
                     await world_node.run_async(cycles=1)
                     if self.gap > 0.:
-                        time.sleep(self.gap)
+                        await asyncio.sleep(self.gap)
 
                 self.synch_cycle += 1
 

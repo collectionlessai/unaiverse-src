@@ -13,6 +13,7 @@ So the teardown lives in ``Node.aclose()``, runs once, and is called by the two 
 whole node lifetime: ``Node.run()`` and the synchronizer at the end of its loop.
 """
 
+import time
 import asyncio
 
 import pytest
@@ -200,6 +201,28 @@ def test_synchronizer_closes_the_nodes_on_interrupt():
 
     assert agent.calls.count("close") == 1
     assert world.calls.count("close") == 1
+
+
+def test_the_synchronizer_lets_the_loop_run_during_its_gap():
+    """The wait between two steps is an asyncio sleep: the other tasks of the process, the network task among them,
+    run during it instead of stopping for the whole gap."""
+    async def _scenario():
+        s = _synchronizer([_FakeNode(Node.WORLD, "w"), _FakeNode(Node.AGENT, "a")])
+        s.gap = 0.1
+        ticks = []
+
+        async def _ticker():
+            while True:
+                ticks.append(time.monotonic())
+                await asyncio.sleep(0.01)
+        ticker = asyncio.create_task(_ticker())
+        await asyncio.sleep(0)
+        started = len(ticks)
+        await s.run(addresses=None, synch_cycles=2)     # four gaps of 0.1 s
+        ticker.cancel()
+        return len(ticks) - started
+
+    assert asyncio.run(_scenario()) >= 20
 
 
 def test_synchronizer_closes_the_world_after_the_agents():
