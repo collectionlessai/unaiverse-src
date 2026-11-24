@@ -157,3 +157,65 @@ func TestSessionSendBoundsTheWrite(t *testing.T) {
 		t.Fatalf("the send returned after %v, the limit is %v", elapsed, SessionSendTimeout)
 	}
 }
+
+// A peer that took the connection and the stream, and then stops answering (a process frozen after its last frame)
+// never answers the multistream proposal of the stream. The send must not wait for that answer: the caller gets the
+// send back within its budget, and the stream is still given back to the resource manager once the answer is given
+// up. The peer's protocols are known here, as they always are after identify, so the stream is negotiated lazily.
+func TestSessionSendDoesNotWaitForAPeerThatNeverAnswersTheStream(t *testing.T) {
+	for _, listen := range []string{"/ip4/127.0.0.1/udp/0/quic-v1", "/ip4/127.0.0.1/tcp/0"} {
+		t.Run(listen, func(t *testing.T) {
+			ni := newSendingInstance(t)
+			sender, err := libp2p.New(libp2p.ListenAddrStrings(listen))
+			if err != nil {
+				t.Fatalf("host: %v", err)
+			}
+			t.Cleanup(func() { sender.Close() })
+			ni.host = sender
+			receiver, err := libp2p.New(libp2p.ListenAddrStrings(listen))
+			if err != nil {
+				t.Fatalf("host: %v", err)
+			}
+			t.Cleanup(func() { receiver.Close() })
+			receiver.SetStreamHandler(SessionControlProtocol, func(s network.Stream) { s.Close() })
+			if err := sender.Connect(context.Background(), peer.AddrInfo{ID: receiver.ID(), Addrs: receiver.Addrs()}); err != nil {
+				t.Fatalf("connect: %v", err)
+			}
+			deadline := time.Now().Add(5 * time.Second)
+			for {
+				supported, _ := sender.Peerstore().SupportsProtocols(receiver.ID(), SessionControlProtocol)
+				if len(supported) > 0 {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatal("identify did not tell the sender the receiver's protocols")
+				}
+				time.Sleep(20 * time.Millisecond)
+			}
+
+			// From now on the receiver takes every stream and says nothing on it.
+			release := make(chan struct{})
+			t.Cleanup(func() { close(release) })
+			receiver.Network().SetStreamHandler(func(s network.Stream) {
+				<-release
+				s.Reset()
+			})
+
+			elapsed, err := timedSend(t, ni, receiver.ID(), []byte("ping"))
+			if err != nil {
+				t.Fatalf("send: %v", err)
+			}
+			if elapsed > sessionSendSlack {
+				t.Fatalf("the send returned after %v: it waited for the peer's answer", elapsed)
+			}
+			_, out := openStreamsTo(t, sender, receiver.ID())
+			for end := time.Now().Add(SessionSendTimeout + sessionSendSlack); out > 0 && time.Now().Before(end); {
+				time.Sleep(50 * time.Millisecond)
+				_, out = openStreamsTo(t, sender, receiver.ID())
+			}
+			if out > 0 {
+				t.Fatalf("%d outbound streams still counted after the budget of the send", out)
+			}
+		})
+	}
+}

@@ -15,6 +15,7 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"time"
 	"unsafe"
 
 	"github.com/libp2p/go-libp2p/core/network"
@@ -108,15 +109,24 @@ func sendSessionFrame(ni *NodeInstance, pid peer.ID, protocolID string, payload 
 		go s.Reset()
 		return fmt.Errorf("write to %s failed: %w", pid, err)
 	}
-	if err := s.CloseWrite(); err != nil {
-		logger.Warnf("[GO] ⚠️ Instance %d: SendOnProtocol CloseWrite to %s on %s failed: %v\n", ni.instanceIndex, pid, protocolID, err)
-	}
-	// Close, not only CloseRead: CloseWrite and CloseRead do not give the stream back to the
-	// resource manager, only Close or Reset do. A stream that stays counted adds up, frame
-	// after frame, until the limit of streams per protocol and peer (128 or so): no Session
-	// frame can then be sent to that peer, and its Session is lost (about 20 minutes of
-	// keep-alives). Close after CloseWrite does not reset: the frame still goes through.
-	_ = s.Close()
+	// The closing runs on its own: the caller does not wait for it. The frame needs neither
+	// the FIN nor the close to be read on the other side, and both can wait on the peer. On
+	// yamux the FIN queues like a frame, with no deadline. The stream was negotiated lazily,
+	// and its Close first reads the peer's answer to the protocol proposal (go-multistream's
+	// lazyClientConn), which a peer that stopped answering never gives: the read deadline
+	// lets that read end, and the stream be given back, even then.
+	go func() {
+		if err := s.CloseWrite(); err != nil {
+			logger.Warnf("[GO] ⚠️ Instance %d: SendOnProtocol CloseWrite to %s on %s failed: %v\n", ni.instanceIndex, pid, protocolID, err)
+		}
+		// Close, not only CloseRead: CloseWrite and CloseRead do not give the stream back to the
+		// resource manager, only Close or Reset do. A stream that stays counted adds up, frame
+		// after frame, until the limit of streams per protocol and peer (128 or so): no Session
+		// frame can then be sent to that peer, and its Session is lost (about 20 minutes of
+		// keep-alives). Close after CloseWrite does not reset: the frame still goes through.
+		_ = s.SetReadDeadline(time.Now().Add(SessionSendTimeout))
+		_ = s.Close()
+	}()
 
 	logger.Infof("[GO] 📤 Instance %d: Sent %d bytes on %s to %s\n", ni.instanceIndex, len(payload), protocolID, pid)
 	return nil
