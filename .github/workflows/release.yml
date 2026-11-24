@@ -91,8 +91,23 @@ jobs:
           name: wheel-pure
           path: dist
 
+      # The notes given to release.sh (-m, -F) are the message of an annotated tag: they open the release,
+      # and GitHub's own notes follow them. A lightweight tag has none, and the release has GitHub's only.
+      # Read through the API: a checkout may turn an annotated tag into a lightweight one.
+      - name: Release notes from the tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          : > release-notes.md
+          object=$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${GITHUB_REF_NAME}" --jq '.object.type + " " + .object.sha')
+          if [ "${object%% *}" = "tag" ]; then
+            gh api "repos/${GITHUB_REPOSITORY}/git/tags/${object#* }" --jq '.message' > release-notes.md
+          fi
+          echo "Notes from the tag: $(wc -l < release-notes.md) lines"
+
       - uses: softprops/action-gh-release@v3
         with:
+          body_path: release-notes.md
           generate_release_notes: true
           prerelease: ${{ needs.verify.outputs.prerelease == 'true' }}
           files: dist/*
