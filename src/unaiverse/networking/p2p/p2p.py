@@ -1213,7 +1213,6 @@ class P2P:
 
         except Exception as e:
             logger.error(f"❌ Reservation on {relay_peer_id} failed: {e}")
-            print(e)
             raise P2PError(f"Reservation on {relay_peer_id} failed") from e
 
     async def reserve(self, relay_peer_id: str) -> str:
