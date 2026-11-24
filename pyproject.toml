@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "unaiverse"
-version = "0.1.31"
+version = "0.2.0rc1"
 requires-python = ">=3.11"
 dependencies = [
     "opencv-python",
