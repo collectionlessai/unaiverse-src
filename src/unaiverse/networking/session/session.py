@@ -1586,21 +1586,23 @@ class Session:
 
         It re-verifies the pushed token against the same transport peer-id, requires the attested node-id to be
         unchanged (a divergent one rejects the update, not the Session), and advances the cached expiry MONOTONICALLY
-        so a replayed older token cannot shrink the validity window.
+        so a replayed older token cannot shrink the validity window. The attested peers follow the token whose expiry
+        the Session holds.
 
         Args:
             msg: The TOKEN_UPDATE message.
         """
-        node_id, cv_hash, _p2p_peers, exp, code_hash = await self.token_verifier(msg.get("token") or "",
-                                                                                 self.peer_id)
+        node_id, cv_hash, p2p_peers, exp, code_hash = await self.token_verifier(msg.get("token") or "",
+                                                                                self.peer_id)
         if not node_id:
             log.session(f"{self!r} TOKEN_UPDATE failed verification — ignored", sub=self._sub)
             return
         if self.remote_node_id_hint and node_id != self.remote_node_id_hint:
             log.session(f"{self!r} TOKEN_UPDATE node_id mismatch — ignored", sub=self._sub)
             return
-        if int(exp) > self.remote_token_exp:
+        if int(exp) >= self.remote_token_exp:
             self.remote_token_exp = int(exp)
+            self.remote_p2p_peers = tuple(p2p_peers)
         if cv_hash:
             self.remote_cv_hash = cv_hash
         if code_hash:

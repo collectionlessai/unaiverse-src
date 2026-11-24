@@ -2287,6 +2287,24 @@ def test_token_update_advances_expiry_monotonically(bob_conn, bob_p2p, bob_peer_
     assert sess.remote_token_exp == 2000   # not moved backwards
 
 
+def test_token_update_refreshes_the_attested_peers_with_the_token_held(bob_conn, bob_p2p, bob_peer_id,
+                                                                      alice_peer_id):
+    """The peers that the token attests follow the token whose expiry the Session holds: a newer token brings its
+    peers, a replayed older one changes nothing."""
+    async def _verifier(token, peer_id):
+        exp, peers = token.split(":")
+        return ("node-X", "cv", tuple(peers.split(",")), int(exp), None)
+    sess = _established_responder(bob_conn, bob_peer_id, alice_peer_id, _verifier)
+    sess.remote_token_exp = 1000
+    sess.remote_p2p_peers = ("old-public", "old-world")
+    _run(sess.process_inbound(SESSION_CONTROL_PROTOCOL, SessMsg(SessMsg.KIND_TOKEN_UPDATE, {
+        "session_id": sess.session_id, "token": "2000:new-public,new-world"})))
+    assert sess.remote_p2p_peers == ("new-public", "new-world")
+    _run(sess.process_inbound(SESSION_CONTROL_PROTOCOL, SessMsg(SessMsg.KIND_TOKEN_UPDATE, {
+        "session_id": sess.session_id, "token": "1500:replayed-public,replayed-world"})))
+    assert sess.remote_p2p_peers == ("new-public", "new-world")
+
+
 def test_token_update_rejects_node_id_mismatch(bob_conn, bob_p2p, bob_peer_id, alice_peer_id):
     """A TOKEN_UPDATE whose token attests a different node-id is ignored — the update
     is dropped, the session is not."""
