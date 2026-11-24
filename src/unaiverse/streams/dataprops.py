@@ -107,6 +107,23 @@ class FileContainer:
         return f"FileContainer(filename={self.filename!r}, mime_type={self.mime_type!r}, {where})"
 
 
+def _looks_like_a_file(data: object) -> bool:
+    """Whether an object that is not a FileContainer looks like one (duck typing): a filename, a MIME type, and its
+    bytes or the file that holds them.
+
+    The file is looked for before the bytes: in the browser the FileContainer of the JS SDK can keep its bytes in a
+    Blob, and asking for its content would read the whole file into memory (so it could not travel as a file message).
+
+    Args:
+        data: The object.
+
+    Returns:
+        True if it looks like a file.
+    """
+    return (hasattr(data, 'filename') and hasattr(data, 'mime_type') and
+            (getattr(data, 'file', None) is not None or hasattr(data, 'content')))
+
+
 class StreamType:
     def __init__(self, *args: object, private_only: bool = False, **kwargs: object) -> None:
         """Initializes a `Stream` object, which is a container for one or two `DataProps` instances. It creates a
@@ -1132,7 +1149,7 @@ class DataProps:
                 return FileContainer(content=data, filename="raw_bytes", mime_type="application/octet-stream")
             
             # Fallback if FileContainer is not imported but the object looks like one (duck typing)
-            elif hasattr(data, 'content') and hasattr(data, 'filename') and hasattr(data, 'mime_type'):
+            elif _looks_like_a_file(data):
                 return data
                 
             else:
@@ -1233,8 +1250,7 @@ class DataProps:
             else:
                 raise ValueError(f"Expecting image (PIL.Image) data or torch.Tensor, got {type(data).__name__}")
         elif self.is_file():
-            if isinstance(data, FileContainer) or \
-               (hasattr(data, 'content') and hasattr(data, 'filename') and hasattr(data, 'mime_type')):
+            if isinstance(data, FileContainer) or _looks_like_a_file(data):
                 return data
             else:
                 raise ValueError(f"Expecting FileContainer for file stream output, got {type(data)}")

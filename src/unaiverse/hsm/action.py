@@ -256,7 +256,7 @@ class Action:
                     return 2
 
         if interaction.is_multi_steps() and interaction.was_at_least_one_step_done():
-            if interaction.get_new_stream_data_tags(all_fresh_or_fail=True) is None:
+            if not interaction.has_enough_fresh_data():
                 return 1
 
         for p in self.param_list:

@@ -231,6 +231,12 @@ class AgentBasics:
         # and allocating a dummy processor if it was not specified (if None)
         AgentProcessorChecker(self)
 
+        # Whether the inputs of the processor that have a default value may go without fresh data when a request runs
+        # an action that needs stdin (see Agent.process): True for a person, whose message fills only some of them
+        # (text, image, file). Set here, from the processor given at construction, and kept when the processor is
+        # changed later (e.g. the AI mode of the browser, which also marks the node as an agent): it can be set by hand
+        self.proc_defaults_have_priority = self.proc is not None and isinstance(self.proc.module, HumanModule)
+
         # The stream_hash of compatible streams for each data_props are stored in a set
         self.compat_in_streams = [set() for _ in range(len(self.proc_inputs))] \
             if self.proc_inputs is not None else []
@@ -2123,6 +2129,39 @@ class AgentBasics:
             self.behav.include(default_behav_hsm, make_a_copy=True)
             self.behav.set_role(base_role_str)
             self.set_policy_filter(self.policy_filter, public=False)
+
+    def action_freshness_rule(self, action_name: str | None) -> tuple[tuple[str, ...] | None, bool]:
+        """What an action needs from a request before it runs on it: the groups of streams that must have fresh data,
+        and whether the processor inputs with a default value may go without (see the @action decorator).
+
+        An override that says nothing (a plain @action) keeps what the action it overrides said: the classes of the
+        agent are searched from the most specific one, and the first method of that name that says something wins.
+
+        Args:
+            action_name: The name of the action (the method).
+
+        Returns:
+            The pair (needs, defaults_have_priority): needs is None for "all the streams of the request".
+        """
+        needs = None
+        defaults_have_priority = None
+        if action_name:
+            for cls in type(self).__mro__:
+                fcn = cls.__dict__.get(action_name)
+                if fcn is None or not getattr(fcn, "_is_action", False):
+                    continue
+                if needs is None:
+                    needs = getattr(fcn, "_action_needs", None)
+                if defaults_have_priority is None:
+                    defaults_have_priority = getattr(fcn, "_action_defaults_have_priority", None)
+                if needs is not None and defaults_have_priority is not None:
+                    break
+
+        # The agent can give priority to the defaults of its processor inputs, for the actions that read stdin
+        priority = bool(defaults_have_priority)
+        if needs is not None and "stdin" in needs and getattr(self, "proc_defaults_have_priority", False):
+            priority = True
+        return needs, priority
 
     def is_human(self) -> bool:
         """Check if the agent is marked as human in its node.

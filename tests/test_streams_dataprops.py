@@ -355,3 +355,49 @@ def test_shape_and_labels_given_as_another_kind_of_sequence():
     assert props.tensor_labels.labels == ["a", "b", "c"]
     with pytest.raises(AssertionError):
         DataProps(data_type="tensor", tensor_shape="2,3", tensor_dtype="torch.float32")
+
+
+class _BlobBackedFile:
+    """A file like the FileContainer of the JS SDK whose bytes stay in a Blob: asking for its content reads it."""
+
+    filename = "video.mp4"
+    mime_type = "video/mp4"
+    file = object()
+
+    @property
+    def content(self) -> bytes:
+        """The bytes: they must not be asked for.
+
+        Returns:
+            Never.
+        """
+        raise AssertionError("the content of a file kept in a Blob was read")
+
+
+def test_file_kept_in_a_blob_is_accepted_without_reading_its_bytes():
+    """A file stream takes a file-like object whose bytes are in a Blob, in and out, without asking for its content
+    (in the browser that would read the whole file into memory, and it could not travel as a file message)."""
+    props = DataProps(data_type="file")
+    data = _BlobBackedFile()
+    assert props.check_and_preprocess(data) is data
+    assert props.check_and_postprocess(data) is data
+
+
+def test_file_like_object_with_its_bytes_is_still_accepted():
+    """A file-like object without a Blob, with its bytes, is accepted as before; one without a MIME type is not."""
+
+    class _InMemory:
+        filename = "a.txt"
+        mime_type = "text/plain"
+        content = b"hello"
+
+    class _NoMime:
+        filename = "a.txt"
+        content = b"hello"
+
+    props = DataProps(data_type="file")
+    data = _InMemory()
+    assert props.check_and_preprocess(data) is data
+    assert props.check_and_postprocess(data) is data
+    with pytest.raises(ValueError):
+        props.check_and_postprocess(_NoMime())

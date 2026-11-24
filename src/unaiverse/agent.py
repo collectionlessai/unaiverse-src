@@ -34,20 +34,40 @@ from unaiverse.streams.streams import BufferedStream, Stream
 from unaiverse.networking.session.sess_msg import WORLD_DISENGAGEMENT, GRACEFUL_SHUTDOWN
 
 
-def action(func: Callable) -> Callable:
+ACTION_STREAM_GROUPS = ("stdin", "stdtar", "stdext")  # The groups of streams an action can say it needs
+
+
+def action(func: Callable | None = None, *, needs: tuple[str, ...] | list[str] | None = None,
+           defaults_have_priority: bool | None = None) -> Callable:
     """Decorator (@action) that standardizes action method arguments.
 
     Applied to action methods to:
     - Resolve agent references from name to peer_id.
     - Mark the function as an action (sets ``_is_action = True``).
     - Handle unexpected exceptions.
+    - Say which streams of a request must bring fresh data before the action runs on it (see below).
+
+    Used as ``@action`` or as ``@action(needs=("stdin",), defaults_have_priority=True)``:
+    - ``needs``: the groups of streams of the request ("stdin", "stdtar", "stdext") that must have fresh data. None
+      (the default) means every stream of the request, the rule of all the actions that say nothing.
+    - ``defaults_have_priority``: when True, a stdin stream matched to a processor input with a default value does not
+      have to be fresh (the default value is used); at least one stream of the request must still be fresh.
+    An override that says nothing (a plain ``@action``) keeps what the overridden action said.
 
     Args:
-        func: The action method to decorate.
+        func: The action method to decorate (None when the decorator is called with options).
+        needs: The groups of streams that must have fresh data (None: all the streams of the request).
+        defaults_have_priority: Whether inputs with a default value may go without fresh data (None: False).
 
     Returns:
-        The wrapped function.
+        The wrapped function (or, called with options, the decorator that wraps it).
     """
+    if func is None:
+        return lambda f: action(f, needs=needs, defaults_have_priority=defaults_have_priority)
+    if needs is not None:
+        needs = tuple(needs)
+        if len(needs) == 0 or any(group not in ACTION_STREAM_GROUPS for group in needs):
+            raise ValueError(f"Invalid needs {needs} of action '{func.__name__}': use some of {ACTION_STREAM_GROUPS}")
 
     @functools.wraps(func)
     async def wrapper(self, *args, **kwargs):
@@ -110,6 +130,11 @@ def action(func: Callable) -> Callable:
         return ret
 
     wrapper._is_action = True
+
+    # What the action needs from a request: None means "not said here" (an override then keeps what the action it
+    # overrides said, see Agent.action_freshness_rule)
+    wrapper._action_needs = needs
+    wrapper._action_defaults_have_priority = defaults_have_priority
     return wrapper
 
 
@@ -454,9 +479,14 @@ class Agent(AgentBasics):
                     return False
         return True
 
-    @action
+    @action(needs=("stdin",))
     async def process(self, interaction: Interaction | None = None) -> bool:
         """Runs one inference step: reads from stdin, calls the processor, and writes to stdout (async).
+
+        It reads only stdin, so a request can run as soon as its stdin streams have fresh data (needs=("stdin",)): the
+        other streams of the request (the ones matched to the outputs of the processor, or to nothing) do not count.
+        An agent whose proc_defaults_have_priority is True (a person) can run it also when only some of them are fresh,
+        the inputs with a default value taking it.
 
         Returns:
             True if the step ran successfully, False otherwise.

@@ -691,6 +691,53 @@ class Interaction:
             data_tags[stream_user_hash] = [current_tag]
         return data_tags
 
+    def has_fresh_data_for(self, needs: tuple[str, ...] | None, optional_stdin: set[str] | None = None) -> bool:
+        """Tells whether the streams of this interaction that an action needs have fresh data.
+
+        Args:
+            needs: The groups of streams that must have fresh data ("stdin", "stdtar", "stdext"), or None for all the
+                streams of the interaction (the usual rule).
+            optional_stdin: The stdin streams that may go without fresh data (matched to processor inputs that have a
+                default value): when given, at least one needed stream must still be fresh.
+
+        Returns:
+            True if the needed streams have fresh data.
+        """
+        if needs is None:
+            return self.get_new_stream_data_tags(all_fresh_or_fail=True) is not None
+
+        # The needed streams (data samples and default input values are not streams, and never wait)
+        groups = {"stdin": self.stdin_streams, "stdtar": self.stdtar_streams, "stdext": self.stdext_streams}
+        needed = {}
+        for group in needs:
+            for user_hash, stream_obj in groups.get(group, {}).items():
+                if isinstance(stream_obj, Stream):
+                    needed[user_hash] = group
+
+        # An interaction with no needed stream keeps the usual rule (so nothing changes for it)
+        if len(needed) == 0:
+            return self.get_new_stream_data_tags(all_fresh_or_fail=True) is not None
+
+        fresh = self.get_new_stream_data_tags()
+        at_least_one_fresh = False
+        for user_hash, group in needed.items():
+            if user_hash in fresh:
+                at_least_one_fresh = True
+            elif not (group == "stdin" and optional_stdin is not None and user_hash in optional_stdin):
+                return False
+        return at_least_one_fresh
+
+    def has_enough_fresh_data(self) -> bool:
+        """Tells whether this interaction has the fresh data that its action needs to run a step on it (see the
+        @action decorator): every stream of the interaction, unless the action says otherwise.
+
+        Returns:
+            True if it has.
+        """
+        if self.__im is not None:
+            return self.__im.has_enough_fresh_data(self)
+        return self.get_new_stream_data_tags(all_fresh_or_fail=True) is not None
+
     def record_data_tags(self, data_tags: dict[str, list[int]] | None = None, target: str | None = None) -> None:
         """Record that data with the given tag was received for this interaction.
 
@@ -1350,8 +1397,24 @@ class InteractionManager:
             interaction: The interaction to evaluate.
         """
         requester_is_known = interaction.requester in self.agent.all_agents
-        return (not interaction.completed and requester_is_known and
-                (interaction.get_new_stream_data_tags(all_fresh_or_fail=True) is not None))
+        return not interaction.completed and requester_is_known and self.has_enough_fresh_data(interaction)
+
+    def has_enough_fresh_data(self, interaction: Interaction) -> bool:
+        """Tells whether an interaction has the fresh data that its action needs (see the @action decorator): the
+        streams of the groups the action needs, or all of them when it says nothing; when the agent gives priority to
+        the defaults of its processor inputs, the stdin streams matched to an input with a default value may go
+        without, as long as one needed stream is fresh.
+
+        Args:
+            interaction: The interaction.
+
+        Returns:
+            True if it has.
+        """
+        rule = getattr(self.agent, "action_freshness_rule", None)
+        needs, defaults_have_priority = rule(interaction.action_name) if rule is not None else (None, False)
+        optional_stdin = self.__optional_stdin_streams(interaction) if defaults_have_priority else None
+        return interaction.has_fresh_data_for(needs, optional_stdin)
 
     @staticmethod
     def check_consistency_between_action_kwargs_and_interaction_fields(interaction: Interaction) -> bool:
@@ -1862,6 +1925,25 @@ class InteractionManager:
                     user_hash = DataProps.user_hash_from_net_hash(net_hash, name)
                     user_hashes.append(user_hash)
         return user_hashes
+
+    def __optional_stdin_streams(self, interaction: Interaction) -> set[str]:
+        """The stdin streams of an interaction that are matched to processor inputs with a default value.
+
+        The stdin streams of an interaction follow the order of the processor inputs (see match_streams), one per
+        input; when they do not (a different number), none is taken as optional.
+
+        Args:
+            interaction: The interaction.
+
+        Returns:
+            The user hashes of those streams.
+        """
+        optional_inputs = self.agent.proc_optional_inputs or []
+        user_hashes = list(interaction.stdin_streams.keys())
+        if len(user_hashes) != len(optional_inputs):
+            return set()
+        return {user_hash for user_hash, optional in zip(user_hashes, optional_inputs)
+                if optional.get("has_default", False)}
 
 
 class InteractionStatus(Enum):
