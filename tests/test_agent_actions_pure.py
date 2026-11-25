@@ -722,13 +722,17 @@ def test_evaluate_eval_results_keyed_by_buffered_owner():
 
 class _ConnectedPeers:
     """Stand-in for ``node_conn`` for ``connected`` / ``disconnected``: the peers that
-    are connected at the transport level."""
+    are connected at the transport level, and the ones whose first handshake is in flight."""
 
     def __init__(self, *peers):
         self.peers = set(peers)
+        self.pending = set()
 
     def is_connected(self, peer_id):
         return peer_id in self.peers
+
+    def is_peer_session_pending(self, peer_id):
+        return peer_id in self.pending
 
 
 def _following(agent, peer_id, engaged):
@@ -785,6 +789,21 @@ def test_disconnected_follows_the_new_agents_once_there_are_some(agent):
     _run(agent.remove_agent("peer-d"))
     agent.reset_agent_status_attrs()
     assert _run(agent.disconnected()) is False
+
+
+def test_disconnected_is_false_while_getting_in_touch_with_the_peer_is_in_flight(agent):
+    """connect_to only starts getting in touch: the Session dials and shakes hands off-task,
+    so for a moment the peer is neither among the agents nor in a pool. Until that first
+    handshake ends the peer is not disconnected, or a world that checks at every tick drops
+    the peer it is reaching (the guests of the Turing worlds and their hotel manager)."""
+    agent.node_conn = _ConnectedPeers()
+    agent.node_conn.pending.add("peer-m")
+    assert _run(agent.disconnected(agent="peer-m")) is False
+    assert _run(agent.connected("peer-m")) is False
+    assert _run(agent.disconnected(agent="peer-m", handshake_completed=True)) is True
+
+    agent.node_conn.pending.discard("peer-m")        # the handshake failed
+    assert _run(agent.disconnected(agent="peer-m")) is True
 
 
 def test_removal_of_an_agent_not_followed_changes_nothing(agent):

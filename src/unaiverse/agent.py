@@ -858,6 +858,9 @@ class Agent(AgentBasics):
         """Checks if a specific set of agents (by ID or wildcard) are no longer connected to the agent.
         It returns False if any of the specified agents are still connected (async).
 
+        An agent whose first handshake is still in flight is not disconnected (unless only completed handshakes
+        count): connect_to only starts getting in touch, and the peer reaches a pool and the agents later.
+
         Args:
             agent: The ID of the agent or a wildcard to check.
             handshake_completed: If True, only consider agents that have completed the handshake.
@@ -890,7 +893,8 @@ class Agent(AgentBasics):
                     all_disconnected = False
                     break
             else:
-                if agent in self.all_agents or self.node_conn.is_connected(agent):
+                if (agent in self.all_agents or self.node_conn.is_connected(agent)
+                        or self.node_conn.is_peer_session_pending(agent)):
                     all_disconnected = False
                     break
         return all_disconnected
