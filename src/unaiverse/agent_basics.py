@@ -766,6 +766,10 @@ class AgentBasics:
         self.node_conn.reset_rendezvous_tag()
         await self.node_conn.unsubscribe(world_peer_id, channel=f"{world_peer_id}::ps:rv")  # Special rendezvous (ps:rv)
 
+        # Back to the default roles: the role tables and the custom roles were the ones of the world until now
+        self.CUSTOM_ROLES.clear()
+        self.augment_roles()
+
     def load_and_refactor_action_file_and_behav_files(self, force_save: bool = False) -> None:
         """This method is called when building a world object. It loads the behavior files and refactors them.
         It loads the action file agent.py. It checks consistency between the agent action files agent.py and the roles

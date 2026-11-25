@@ -6,6 +6,8 @@ built on the live ones, a second world inherited the roles of the first: a role 
 bits of the first, and the peers of the second world were shown with the role names of the first (the participant
 list of the webapp read them through ``Node.js`` in the browser).
 """
+import asyncio
+
 import pytest
 
 from unaiverse.agent_basics import AgentBasics
@@ -70,3 +72,38 @@ def test_building_the_tables_does_not_touch_the_shared_ones(agent):
 
     assert AgentBasics.ROLE_BITS_TO_STR == before_bits_to_str
     assert AgentBasics.ROLE_STR_TO_BITS == before_str_to_bits
+
+
+class _NodeConnStub:
+    """The two calls of the node connection that leaving a world makes."""
+
+    def reset_rendezvous_tag(self):
+        pass
+
+    async def unsubscribe(self, peer_id, channel=None):
+        pass
+
+
+async def _nothing():
+    pass
+
+
+def test_leaving_a_world_restores_the_default_roles(agent):
+    join(agent, ["host", "player"])
+    agent.CUSTOM_ROLES.extend(["host", "player"])
+
+    # Only the role tables are under test: the rest of the cleanup is stubbed out
+    agent.reset_agent_status_attrs = lambda: None
+    agent._AgentBasics__remove_all_world_private_streams = _nothing
+    agent._AgentBasics__remove_all_world_related_agents = _nothing
+    agent.proc_human_peer_id_to_interaction = {}
+    agent.node_conn = _NodeConnStub()
+    saved_custom_roles = list(AgentBasics.CUSTOM_ROLES)
+    try:
+        asyncio.run(agent.clear_world_related_data("world-peer"))
+
+        assert agent.ROLE_BITS_TO_STR == AgentBasics.BASE_ROLE_BITS_TO_STR
+        assert agent.ROLE_STR_TO_BITS == AgentBasics.BASE_ROLE_STR_TO_BITS
+        assert agent.CUSTOM_ROLES == []
+    finally:
+        AgentBasics.CUSTOM_ROLES[:] = saved_custom_roles
