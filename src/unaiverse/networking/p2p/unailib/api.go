@@ -1271,7 +1271,8 @@ func GetReachability(instanceIndexC C.int) (ret *C.char) {
 // GetWebRTCConnections returns a JSON array of all peers that currently have
 // an active WebRTC DataChannel with this node instance.
 //
-// Each element: {"peer_id": "...", "state": "open"|"other"}
+// Each element: {"peer_id": "...", "state": "open"|"other", "path": "direct"|"turn"|"unknown"},
+// path being what the selected candidate pair runs on (a TURN allocation or not).
 // The caller MUST free the returned string with FreeString.
 //
 //export GetWebRTCConnections
@@ -1285,6 +1286,7 @@ func GetWebRTCConnections(instanceIndexC C.int) (ret *C.char) {
 	type entry struct {
 		PeerID string `json:"peer_id"`
 		State  string `json:"state"`
+		Path   string `json:"path"`
 	}
 
 	ni.webrtcMutex.RLock()
@@ -1294,7 +1296,11 @@ func GetWebRTCConnections(instanceIndexC C.int) (ret *C.char) {
 		if conn.dc != nil && conn.dc.ReadyState() == pwebrtc.DataChannelStateOpen {
 			stateStr = "open"
 		}
-		result = append(result, entry{PeerID: pid.String(), State: stateStr})
+		path := "unknown"
+		if conn.pc != nil {
+			path, _, _ = strings.Cut(webRTCPath(conn.pc), " ")
+		}
+		result = append(result, entry{PeerID: pid.String(), State: stateStr, Path: path})
 	}
 	ni.webrtcMutex.RUnlock()
 
