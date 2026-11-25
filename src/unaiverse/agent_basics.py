@@ -100,6 +100,13 @@ class AgentBasics:
         "world_agent": ROLE_WORLD_AGENT,
     }
 
+    # The two tables above are shared by every agent of the process and augment_roles() rewrites them in place at
+    # every join. The custom roles are always built on these untouched copies of the default roles. Building them
+    # on the live tables kept the roles of the world visited before: a role name found in both worlds kept its old
+    # bits, and the role bits of the new world were then shown with the names of the old one.
+    BASE_ROLE_BITS_TO_STR = dict(ROLE_BITS_TO_STR)
+    BASE_ROLE_STR_TO_BITS = dict(ROLE_STR_TO_BITS)
+
     # Types of badges
     BADGE_TYPES = {'completed', 'attended', 'intermediate', 'pro'}
 
@@ -701,8 +708,8 @@ class AgentBasics:
         """Augment the custom roles (role1, role2, etc.) with the default ones (public, world_master, etc.), generating
         all the mixed roles (world_master~role1, world_master~role2, ...)"""
 
-        role_bits_to_str = {k: v for k, v in AgentBasics.ROLE_BITS_TO_STR.items()}
-        role_str_to_bits = {k: v for k, v in AgentBasics.ROLE_STR_TO_BITS.items()}
+        role_bits_to_str = dict(AgentBasics.BASE_ROLE_BITS_TO_STR)
+        role_str_to_bits = dict(AgentBasics.BASE_ROLE_STR_TO_BITS)
 
         # Both Agent and World: Fusing basic roles and custom roles
         if len(custom_roles) > 0:
@@ -712,7 +719,6 @@ class AgentBasics:
                 role_int = 1 << (i + 2)  # 000000100, then 00001000, etc. (recall that the first two bits are reserved)
                 role_str_to_bits[role_str] = role_int
                 role_bits_to_str[role_int] = role_str
-                AgentBasics.ROLE_STR_TO_BITS[role_str] = role_int
 
         # Both Agent and World: Augmenting roles
         roles_not_to_be_augmented = {AgentBasics.ROLE_PUBLIC,
