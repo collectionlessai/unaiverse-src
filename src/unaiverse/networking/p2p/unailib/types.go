@@ -268,6 +268,12 @@ var (
 	chatWriteBaseTimeout    time.Duration
 	chatWriteMinBytesPerSec int64
 
+	// When positive, the write deadline of a chat frame is a stall deadline instead (see
+	// writeChatFrame): a write fails only when its link took nothing for this long, so a
+	// slow link that keeps draining is waited for, however long the frame takes. The size
+	// rule above failed every chunk of 5 MiB below about 2.8 Mbit/s. Set by ConfigureSendQueues.
+	chatWriteStallTimeout time.Duration
+
 	// The limits of the send queues (see sendqueue.go), set by ConfigureSendQueues: nil
 	// until ConfigureSendQueues was given valid ones; without them a direct message is sent
 	// at once, as before the queues.

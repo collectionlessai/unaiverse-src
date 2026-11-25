@@ -62,6 +62,7 @@ var popBatchMaxBytes = 1536 * 1024 * 1024
 // defaults here): chunkSize 0 means no chunked frames at all.
 var (
 	chunkSize                  int
+	sendChunkSize              int   // The chunks this node writes: at most chunkSize (0: chunkSize)
 	chunkedMaxMessageSize      int64 // 0: no limit
 	reassemblyMaxBytesPerPeer  int64 // 0: chunkedMaxMessageSize
 	reassemblyMaxBytesTotal    int64 // 0: no limit
@@ -198,7 +199,7 @@ func writeChunks(seq uint64, cp *chunkedPayload, write func(frame []byte) error,
 // one frame at a time with write, stopping at the first error, and tells progress (when not
 // nil) the bytes written after each chunk.
 func writeChunkStream(seq uint64, attempt uint8, file bool, channel string, total uint64, src io.Reader, write func(frame []byte) error, progress func(sent, total uint64, attempt uint8)) error {
-	buf := make([]byte, min(uint64(chunkSize-chunkFixedHeader), max(total, 1)))
+	buf := make([]byte, min(uint64(chunkSizeToSend()-chunkFixedHeader), max(total, 1)))
 	var sent uint64
 	for index := uint32(0); ; index++ {
 		n := int(min(uint64(len(buf)), total-sent))
@@ -220,23 +221,50 @@ func writeChunkStream(seq uint64, attempt uint8, file bool, channel string, tota
 	}
 }
 
+// chunkSizeToSend is the size of the chunk frames this node writes: sendChunkSize when set
+// (smaller chunks: a receiver waits reassemblyTimeout for each one, so a slow link must carry
+// a whole chunk in that time), else chunkSize. A receiver takes any chunk up to chunkSize.
+func chunkSizeToSend() int {
+	if sendChunkSize > 0 && sendChunkSize < chunkSize {
+		return sendChunkSize
+	}
+	return chunkSize
+}
+
 // dataChannelPoll is how often a chunk waiting for room on a DataChannel looks again.
 const dataChannelPoll = 2 * time.Millisecond
 
 // writeChunkToDataChannel writes one chunk frame on a DataChannel once what the channel
 // still has to send is at most one chunk: a DataChannel takes all that it is given into
 // memory, so a large message must not be handed to it at once. The wait has the write
-// deadline of the frame, as on a chat stream; a channel that closes ends it.
+// deadline of a chat stream: with a stall deadline (chatWriteStallTimeout) it fails only when
+// the channel sent nothing for that long, else it has the deadline of the size of the frame;
+// a channel that closes ends it.
 func writeChunkToDataChannel(ni *NodeInstance, wconn *WebRTCConn, frame []byte) error {
 	var deadline time.Time
-	if timeout := chatWriteTimeout(len(frame)); timeout > 0 {
+	stall := chatWriteStallTimeout
+	if stall > 0 {
+		deadline = time.Now().Add(stall)
+	} else if timeout := chatWriteTimeout(len(frame)); timeout > 0 {
 		deadline = time.Now().Add(timeout)
 	}
-	for wconn.dc.BufferedAmount() > uint64(chunkSize) {
+	buffered := wconn.dc.BufferedAmount()
+	for wconn.dc.BufferedAmount() > uint64(chunkSizeToSend()) {
 		if wconn.dc.ReadyState() != pwebrtc.DataChannelStateOpen {
 			return fmt.Errorf("the DataChannel closed")
 		}
+
+		// The stall deadline moves on whenever the channel sent something
+		if now := wconn.dc.BufferedAmount(); stall > 0 && now < buffered {
+			deadline = time.Now().Add(stall)
+			buffered = now
+		} else if now > buffered {
+			buffered = now
+		}
 		if !deadline.IsZero() && time.Now().After(deadline) {
+			if stall > 0 {
+				return fmt.Errorf("the DataChannel sent nothing for %v (%d bytes still to send)", stall, wconn.dc.BufferedAmount())
+			}
 			return fmt.Errorf("the DataChannel did not drain in time (%d bytes still to send)", wconn.dc.BufferedAmount())
 		}
 		select {

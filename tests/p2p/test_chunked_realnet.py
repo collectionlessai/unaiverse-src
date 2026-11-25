@@ -144,7 +144,7 @@ def test_a_stream_broken_in_the_middle_of_a_large_message(_libp2p_setup: object,
         # the buffers of the link take the first chunks, and the write of a later one waits until its deadline
         os.kill(receiver.proc.pid, signal.SIGSTOP)
         sender.send_message_to_peer(channel, big)
-        chunk_deadline = Custom.SEND_WRITE_BASE_TIMEOUT + Custom.CHUNK_SIZE / Custom.SEND_WRITE_MIN_BYTES_PER_SEC
+        chunk_deadline = Custom.SEND_WRITE_STALL_TIMEOUT  # A write fails once the link took nothing for this long
         end, failed = time.monotonic() + chunk_deadline + 15.0, False
         while time.monotonic() < end and not failed:
             failed = any(e["type"] == "write_failed" for e in sender.pop_send_events())

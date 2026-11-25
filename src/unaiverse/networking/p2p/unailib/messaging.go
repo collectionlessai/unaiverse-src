@@ -856,6 +856,11 @@ func chatWriteTimeout(frameLen int) time.Duration {
 // must close the stream on an error, since the deadline can fire in the middle of a frame.
 // ni is only for the logs, and may be nil.
 func writeChatFrame(ni *NodeInstance, w io.Writer, frame []byte) error {
+	if chatWriteStallTimeout > 0 {
+		if d, ok := w.(interface{ SetWriteDeadline(time.Time) error }); ok {
+			return writeChatFrameStallBounded(ni, w, d, frame)
+		}
+	}
 	if timeout := chatWriteTimeout(len(frame)); timeout > 0 {
 		if d, ok := w.(interface{ SetWriteDeadline(time.Time) error }); ok {
 			if err := d.SetWriteDeadline(time.Now().Add(timeout)); err != nil {
@@ -874,6 +879,38 @@ func writeChatFrame(ni *NodeInstance, w io.Writer, frame []byte) error {
 	// Write the entire frame to the stream.
 	if _, err := w.Write(frame); err != nil {
 		return fmt.Errorf("failed to write framed message to stream: %w", err)
+	}
+	return nil
+}
+
+// chatWritePieceBytes is how much of a frame writeChatFrameStallBounded writes under one stall
+// deadline: a piece that waits longer than the deadline means that the link took nothing. It
+// drains within the stall deadline (30 s) down to about 9 KB/s, the slowest link a receiver
+// waits for anyway (a chunk of 1 MiB within its reassembly timeout of 120 s).
+const chatWritePieceBytes = 256 * 1024
+
+// writeChatFrameStallBounded writes a frame piece after piece, each under the stall deadline
+// (chatWriteStallTimeout): the write fails when the link took nothing for that long, not when
+// a large frame takes long on a slow link. A deadline that cannot be set is logged and the
+// rest is written with no limit, as in writeChatFrame. The caller must close the stream on an
+// error, since the deadline can fire in the middle of a frame.
+func writeChatFrameStallBounded(ni *NodeInstance, w io.Writer, d interface{ SetWriteDeadline(time.Time) error }, frame []byte) error {
+	defer d.SetWriteDeadline(time.Time{}) // A stream that stays open must not keep the deadline
+	for offset := 0; offset < len(frame); offset += chatWritePieceBytes {
+		if err := d.SetWriteDeadline(time.Now().Add(chatWriteStallTimeout)); err != nil {
+			instanceIndex := -1
+			if ni != nil {
+				instanceIndex = ni.instanceIndex
+			}
+			logger.Warnf("[GO] ⚠️ Instance %d: SetWriteDeadline failed on a chat stream: %v\n", instanceIndex, err)
+			if _, err := w.Write(frame[offset:]); err != nil {
+				return fmt.Errorf("failed to write framed message to stream: %w", err)
+			}
+			return nil
+		}
+		if _, err := w.Write(frame[offset:min(offset+chatWritePieceBytes, len(frame))]); err != nil {
+			return fmt.Errorf("failed to write framed message to stream (nothing taken for %v): %w", chatWriteStallTimeout, err)
+		}
 	}
 	return nil
 }

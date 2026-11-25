@@ -248,8 +248,8 @@ def test_a_receiver_stopped_past_the_write_deadline_is_recovered_in_order(sender
     sender.send_message_to_peer(channel, _msg(0))
     assert receiver.wait_for(1, 10.0)
     sender.pop_send_events()
-    big = 4 << 20  # Deadline: base + 4 MB at the slowest rate allowed
-    deadline = Custom.SEND_WRITE_BASE_TIMEOUT + big / Custom.SEND_WRITE_MIN_BYTES_PER_SEC
+    big = 4 << 20
+    deadline = Custom.SEND_WRITE_STALL_TIMEOUT  # A write fails once the link took nothing for this long
     os.kill(receiver.proc.pid, signal.SIGSTOP)
     for i in range(1, 4):
         sender.send_message_to_peer(channel, _msg(i, big))

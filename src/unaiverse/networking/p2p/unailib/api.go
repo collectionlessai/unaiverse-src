@@ -107,10 +107,12 @@ type sendQueueConfigJSON struct {
 	RetryBackoffMs      []int64 `json:"retry_backoff_ms"`
 	WriteBaseTimeoutMs  int64   `json:"write_base_timeout_ms"`
 	WriteMinBytesPerSec int64   `json:"write_min_bytes_per_sec"`
+	WriteStallTimeoutMs int64   `json:"write_stall_timeout_ms"` // When positive: the write deadline is a stall deadline
 	MaxEvents           int     `json:"max_events"`
 
 	// Chunked frames (chunked.go); chunk_size 0 leaves them off
 	ChunkSize                 int   `json:"chunk_size"`
+	SendChunkSize             int   `json:"send_chunk_size"` // The chunks written, at most chunk_size (0: chunk_size)
 	MaxMessageSize            int64 `json:"max_message_size"`
 	ReassemblyMaxBytesPerPeer int64 `json:"reassembly_max_bytes_per_peer"`
 	ReassemblyMaxBytesTotal   int64 `json:"reassembly_max_bytes_total"`
@@ -131,7 +133,10 @@ type sendQueueConfigJSON struct {
 // Parameters:
 //   - configJSONC (*C.char): {"max_bytes_per_peer", "max_msgs_per_peer", "max_bytes_total",
 //     "low_water" in [0, 1), "max_wait_age_ms", "max_dial_attempts", "retry_backoff_ms" (array,
-//     the last value repeats), "write_base_timeout_ms", "write_min_bytes_per_sec", "max_events"}.
+//     the last value repeats), "write_base_timeout_ms", "write_min_bytes_per_sec",
+//     "write_stall_timeout_ms" (when positive, a write fails only after that long with nothing
+//     drained, instead of the base plus the size at the rate), "max_events", "chunk_size",
+//     "send_chunk_size" (the chunks written, at most chunk_size; 0: chunk_size), ...}.
 //
 // Returns:
 //   - *C.char: `{"state":"Success","message":"..."}` or `{"state":"Error","message":"..."}`
@@ -161,8 +166,8 @@ func ConfigureSendQueues(
 		cfg.RetryBackoff = append(cfg.RetryBackoff, time.Duration(ms)*time.Millisecond)
 	}
 	err := cfg.validate()
-	if err == nil && (in.WriteBaseTimeoutMs <= 0 || in.WriteMinBytesPerSec <= 0) {
-		err = fmt.Errorf("the write deadline needs a positive base and rate, got %d ms and %d B/s", in.WriteBaseTimeoutMs, in.WriteMinBytesPerSec)
+	if err == nil && in.WriteStallTimeoutMs <= 0 && (in.WriteBaseTimeoutMs <= 0 || in.WriteMinBytesPerSec <= 0) {
+		err = fmt.Errorf("the write deadline needs a positive stall timeout, or a positive base and rate, got %d ms, %d ms and %d B/s", in.WriteStallTimeoutMs, in.WriteBaseTimeoutMs, in.WriteMinBytesPerSec)
 	}
 	if err != nil {
 		logger.Errorf("[GO] ❌ Invalid send queue settings, not applied: %v\n", err)
@@ -171,10 +176,15 @@ func ConfigureSendQueues(
 	sendQueueSettings = &cfg
 	chatWriteBaseTimeout = time.Duration(in.WriteBaseTimeoutMs) * time.Millisecond
 	chatWriteMinBytesPerSec = in.WriteMinBytesPerSec
+	chatWriteStallTimeout = time.Duration(max(in.WriteStallTimeoutMs, 0)) * time.Millisecond
 	if in.ChunkSize > 0 && in.ChunkSize < 1024 {
 		in.ChunkSize = 1024 // Below this a chunk is mostly header
 	}
+	if in.SendChunkSize > 0 && in.SendChunkSize < 1024 {
+		in.SendChunkSize = 1024
+	}
 	chunkSize = in.ChunkSize
+	sendChunkSize = in.SendChunkSize
 	chunkedMaxMessageSize = in.MaxMessageSize
 	reassemblyMaxBytesPerPeer = in.ReassemblyMaxBytesPerPeer
 	reassemblyMaxBytesTotal = in.ReassemblyMaxBytesTotal
@@ -189,7 +199,11 @@ func ConfigureSendQueues(
 	if chunkSize > 0 {
 		logger.Infof("[GO] ✅ Chunked frames: %d B per chunk, %d B per message at most (0: no limit), reassembly %d B per peer, %d B in all, timeout %v\n", chunkSize, chunkedMaxMessageSize, reassemblyMaxBytesPerPeer, reassemblyMaxBytesTotal, reassemblyTimeout)
 	}
-	logger.Infof("[GO] ✅ Send queues: %d B and %d messages per peer, %d B in all, low water %.2f, max age %v, %d attempts, backoff %v, write deadline %v + 1 s per %d B\n", cfg.MaxBytesPerPeer, cfg.MaxMsgsPerPeer, cfg.MaxBytesTotal, cfg.LowWater, cfg.MaxWaitAge, cfg.MaxDialAttempts, cfg.RetryBackoff, chatWriteBaseTimeout, chatWriteMinBytesPerSec)
+	writeDeadline := fmt.Sprintf("%v + 1 s per %d B", chatWriteBaseTimeout, chatWriteMinBytesPerSec)
+	if chatWriteStallTimeout > 0 {
+		writeDeadline = fmt.Sprintf("%v with nothing drained", chatWriteStallTimeout)
+	}
+	logger.Infof("[GO] ✅ Send queues: %d B and %d messages per peer, %d B in all, low water %.2f, max age %v, %d attempts, backoff %v, write deadline %s, chunks of %d B sent\n", cfg.MaxBytesPerPeer, cfg.MaxMsgsPerPeer, cfg.MaxBytesTotal, cfg.LowWater, cfg.MaxWaitAge, cfg.MaxDialAttempts, cfg.RetryBackoff, writeDeadline, chunkSizeToSend())
 	return C.CString(jsonSuccessResponse("Send queues configured."))
 }
 

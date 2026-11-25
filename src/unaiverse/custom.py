@@ -45,8 +45,9 @@ class Custom:
     SEND_MAX_WAIT_AGE = 60.  # Seconds the oldest unsent message may wait with no progress, then the queue is dropped
     SEND_MAX_DIAL_ATTEMPTS = 3  # Failed writes in a row (each with a new stream) before the queue is dropped
     SEND_RETRY_BACKOFF = (1., 2., 4.)  # Seconds before the n-th retry (the last one repeats)
-    SEND_WRITE_BASE_TIMEOUT = 10.  # Seconds, the write deadline of a frame is this plus its size at the rate below
-    SEND_WRITE_MIN_BYTES_PER_SEC = 1024 * 1024  # Bytes per second, the slowest link a write is allowed to wait for
+    SEND_WRITE_STALL_TIMEOUT = 30.  # Seconds a write may wait with nothing drained (slow links are waited for)
+    SEND_WRITE_BASE_TIMEOUT = 10.  # Seconds, the write deadline of a frame with an older library: this plus its size...
+    SEND_WRITE_MIN_BYTES_PER_SEC = 1024 * 1024  # ...at this rate (failed every chunk below about 2.8 Mbit/s)
     SEND_MAX_EVENTS = 1024  # Send events kept in Go until Python pops them (the oldest go first)
     SEND_REFUSED_LOG_EVERY = 5.  # Seconds, the refusals of a full queue are logged at most this often per peer
 
@@ -55,7 +56,8 @@ class Custom:
     # =========================================
     # A direct message larger than CHUNK_SIZE goes as chunked frames to a peer that can take them (CAP_CHUNKED_FRAMES);
     # to any other peer (older nodes, browsers) the legacy limit holds, as for pubsub and Session payloads
-    CHUNK_SIZE = 5 * 1024 * 1024  # Bytes of message per chunk frame on the wire
+    CHUNK_SIZE = 5 * 1024 * 1024  # Bytes of message per chunk frame on the wire (the largest one taken)
+    SEND_CHUNK_SIZE = 1024 * 1024  # Bytes per chunk frame written (each must arrive within REASSEMBLY_TIMEOUT)
     MAX_MESSAGE_SIZE = 1024 * 1024 * 1024  # Bytes of one in-memory message, sent or received (0: no limit)
     LEGACY_MAX_MESSAGE_SIZE = 50 * 1024 * 1024  # Bytes of one message as a single frame (peers without chunks)
     REASSEMBLY_MAX_BYTES_PER_PEER = MAX_MESSAGE_SIZE  # Bytes under reassembly from one peer (0: MAX_MESSAGE_SIZE)
