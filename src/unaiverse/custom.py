@@ -66,6 +66,7 @@ class Custom:
     ACCEPT_FILES = True  # File messages (FILE data streamed from disk) are accepted, saved under DOWNLOADS_DIR
     MAX_FILE_SIZE = 0  # Bytes of one file, sent or received (0: no limit)
     DOWNLOADS_DIR = None  # Folder of the received files (None: <app folder>/Downloads, next to the key)
+    MAX_IMAGE_EDGE = 1600  # Longest edge, in pixels, of a picture sent as an image (a larger one is shrunk to it)
 
     # =====================
     # ENVIRONMENT VARIABLES

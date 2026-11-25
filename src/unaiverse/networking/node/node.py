@@ -2256,6 +2256,36 @@ class Node:
                 inputs.append(whatever)
         self.agent.stdin.set(inputs, uuid=uuid, data_tag=tag, force=True)
 
+    @staticmethod
+    def __shrink_image(image: Image.Image, max_edge: int) -> Image.Image:
+        """Shrinks a picture so that its longest edge is at most max_edge pixels, in steps: it is halved while it is
+        still more than twice the target, then resized to the target. A picture already within the limit is returned
+        as it is. A palette picture becomes RGBA and a 1-bit one L, which can be resampled; any other mode is kept.
+
+        Args:
+            image: The picture.
+            max_edge: The longest edge allowed, in pixels.
+
+        Returns:
+            The picture within the limit.
+        """
+        width, height = image.size
+        scale = min(1., max_edge / max(width, height))
+        if scale >= 1.:
+            return image
+        target = (max(1, round(width * scale)), max(1, round(height * scale)))
+        shrunk = image
+
+        # Resampling a palette or a 1-bit picture would pick pixels instead of averaging them
+        if shrunk.mode in ('P', '1'):
+            shrunk = shrunk.convert('RGBA' if shrunk.mode == 'P' else 'L')
+        try:
+            while shrunk.width >= 2 * target[0] and shrunk.height >= 2 * target[1]:
+                shrunk = shrunk.reduce(2)
+        except ValueError:
+            pass  # A mode that reduce() does not take (as I;16): one resize from where it is
+        return shrunk.resize(target, Image.Resampling.LANCZOS)
+
     def __send_file_from_keyboard(self, file_name: str, public: bool, peer_id: str) -> None:
         """The /send command of interactive mode: sends a file from disk. An image goes as image data (in the img
         input), anything else as FILE data (in the file input, path-backed, so it is streamed from disk to a peer that
@@ -2282,6 +2312,7 @@ class Node:
             except (OSError, ValueError) as e:
                 log.user(f"*** {os.path.basename(path)} is not an image I can read ({e}): sent as a file ***")
             if picture is not None:
+                picture = Node.__shrink_image(picture, Custom.MAX_IMAGE_EDGE)
                 self.__keyboard_to_stdin(public, peer_id, img=picture)
                 log.user(f"*** Sending the picture {os.path.basename(path)} ***")
                 return
