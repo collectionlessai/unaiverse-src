@@ -36,6 +36,7 @@ from unaiverse.agent import Agent
 from unaiverse.agent_basics import AgentBasics
 from unaiverse.interaction import Interaction
 from unaiverse.networking.p2p.messages import Msg
+from unaiverse.networking.session import PeerRelation
 from unaiverse.networking.session.sess_msg import WORLD_DISENGAGEMENT
 
 from inproc_harness import (
@@ -389,8 +390,8 @@ def test_members_with_no_address_yet_are_not_asked_to_get_in_touch(roles):
         def get_addrs(self, peer_id):
             return addrs.get(peer_id)
 
-        def is_connected(self, peer_id):
-            return False
+        def relation_of(self, peer_id):
+            return PeerRelation.NONE
 
     a = Agent.__new__(Agent)
     a.node_conn = _Conn()

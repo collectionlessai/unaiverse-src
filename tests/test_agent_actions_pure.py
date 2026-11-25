@@ -48,6 +48,7 @@ import pytest
 
 from unaiverse.agent import Agent
 from unaiverse.agent_basics import AgentBasics
+from unaiverse.networking.session import PeerRelation
 
 pytestmark = pytest.mark.unit
 
@@ -721,18 +722,25 @@ def test_evaluate_eval_results_keyed_by_buffered_owner():
 # disconnected: the agents it followed, once they were removed
 
 class _ConnectedPeers:
-    """Stand-in for ``node_conn`` for ``connected`` / ``disconnected``: the peers that
-    are connected at the transport level, and the ones whose first handshake is in flight."""
+    """Stand-in for ``node_conn`` for ``connected`` / ``disconnected`` and the connect
+    actions: the peers the relation is up with, the ones being reached, and the addresses
+    of the roster. It has no pool to ask: the actions must not read one."""
 
     def __init__(self, *peers):
         self.peers = set(peers)
         self.pending = set()
+        self.addrs = {}
 
-    def is_connected(self, peer_id):
-        return peer_id in self.peers
+    def relation_of(self, peer_id):
+        if peer_id in self.peers:
+            return PeerRelation.UP
+        return PeerRelation.PENDING if peer_id in self.pending else PeerRelation.NONE
 
     def is_peer_session_pending(self, peer_id):
-        return peer_id in self.pending
+        return self.relation_of(peer_id) is PeerRelation.PENDING
+
+    def get_addrs(self, peer_id):
+        return self.addrs.get(peer_id)
 
 
 def _following(agent, peer_id, engaged):
@@ -762,8 +770,8 @@ def test_disconnected_answers_true_once_the_agent_it_followed_was_removed(agent,
 
 
 def test_disconnected_after_the_removal_is_false_while_the_peer_is_still_connected(agent):
-    """Removed from the agents, the peer may still have a transport connection: not
-    disconnected yet, unless only completed handshakes count."""
+    """Removed from the agents, the relation with the peer may still be up: not
+    disconnected yet, unless only what is among the agents counts."""
     _following(agent, "peer-b", engaged=False)
     _run(agent.remove_agent("peer-b"))
     assert _run(agent.disconnected()) is False
@@ -791,19 +799,84 @@ def test_disconnected_follows_the_new_agents_once_there_are_some(agent):
     assert _run(agent.disconnected()) is False
 
 
-def test_disconnected_is_false_while_getting_in_touch_with_the_peer_is_in_flight(agent):
+def test_a_peer_being_reached_is_neither_connected_nor_disconnected(agent):
     """connect_to only starts getting in touch: the Session dials and shakes hands off-task,
-    so for a moment the peer is neither among the agents nor in a pool. Until that first
-    handshake ends the peer is not disconnected, or a world that checks at every tick drops
-    the peer it is reaching (the guests of the Turing worlds and their hotel manager)."""
+    so for a while the peer is not among the agents. Until getting in touch ends the peer
+    is not disconnected, or a world that checks at every tick drops the peer it is reaching
+    (the guests of the Turing worlds and their hotel manager), and it is not connected yet."""
     agent.node_conn = _ConnectedPeers()
     agent.node_conn.pending.add("peer-m")
     assert _run(agent.disconnected(agent="peer-m")) is False
     assert _run(agent.connected("peer-m")) is False
+    assert _run(agent.connected("peer-m", handshake_completed=True)) is False
     assert _run(agent.disconnected(agent="peer-m", handshake_completed=True)) is True
 
-    agent.node_conn.pending.discard("peer-m")        # the handshake failed
+    agent.node_conn.pending.discard("peer-m")        # the attempt failed
     assert _run(agent.disconnected(agent="peer-m")) is True
+    assert _run(agent.connected("peer-m")) is False
+
+
+def test_connected_follows_the_relation_and_the_strict_form_the_agents(agent):
+    """The relation is up before the peer is among the agents (they are updated at the tick
+    boundary) and stays up while a dropped link is recovered: connected, and with
+    handshake_completed only once the peer is among the agents."""
+    agent.node_conn = _ConnectedPeers("peer-m")
+    assert _run(agent.connected("peer-m")) is True
+    assert _run(agent.connected("peer-m", handshake_completed=True)) is False
+    assert _run(agent.disconnected(agent="peer-m")) is False
+
+    agent.all_agents["peer-m"] = object()
+    assert _run(agent.connected("peer-m", handshake_completed=True)) is True
+    assert _run(agent.connected(["peer-m", "peer-x"])) is False     # every agent asked for must be
+
+
+def _asking(agent):
+    """Records what the agent asks the node to get in touch with, and accepts it."""
+    asked = []
+
+    async def _ask(addresses=None, public=True):
+        asked.append(addresses)
+        return addresses[0].rsplit("/p2p/", 1)[-1]
+
+    agent.node_ask_to_get_in_touch_fcn = _ask
+    return asked
+
+
+def test_connect_to_asks_only_when_there_is_no_relation_and_none_being_made(agent):
+    agent.node_conn = _ConnectedPeers("peer-up")
+    agent.node_conn.pending.add("peer-pending")
+    agent.node_conn.addrs = {p: [f"/ip4/1.2.3.4/tcp/1/p2p/{p}"] for p in ("peer-up", "peer-pending", "peer-new")}
+    asked = _asking(agent)
+
+    assert _run(agent.connect_to("peer-up")) is True
+    assert _run(agent.connect_to("peer-pending")) is True
+    assert asked == []
+    assert _run(agent.connect_to("peer-new")) is True
+    assert asked == [["/ip4/1.2.3.4/tcp/1/p2p/peer-new"]]
+    assert _run(agent.connect_to("peer-with-no-address")) is False
+
+
+def test_connect_by_role_counts_a_peer_being_reached_as_asked_and_one_that_is_up_on_request(agent):
+    """A peer being reached is a request to wait for, like a new one, and is not asked
+    again; one whose relation is up counts only with accept_already_connected."""
+    peers = ["peer-up", "peer-pending", "peer-new"]
+    agent.node_conn = _ConnectedPeers("peer-up")
+    agent.node_conn.pending.add("peer-pending")
+    agent.node_conn.find_addrs_by_role = lambda role, return_peer_ids_too=False, discard_yourself=False: (
+        ([], []) if role & Agent.ROLE_WORLD_MASTER == Agent.ROLE_WORLD_MASTER
+        else ([[f"/ip4/1.2.3.4/tcp/1/p2p/{p}"] for p in peers], list(peers)))
+    asked = _asking(agent)
+
+    role = next(iter(Agent.ROLE_STR_TO_BITS))
+    assert _run(agent.connect_by_role(role)) is True
+    assert asked == [["/ip4/1.2.3.4/tcp/1/p2p/peer-new"]]
+    assert agent._found_agents == {"peer-pending", "peer-new"}
+
+    asked.clear()
+    agent.node_conn.pending.add("peer-new")
+    assert _run(agent.connect_by_role(role, accept_already_connected=True)) is True
+    assert asked == []
+    assert agent._found_agents == set(peers)
 
 
 def test_removal_of_an_agent_not_followed_changes_nothing(agent):

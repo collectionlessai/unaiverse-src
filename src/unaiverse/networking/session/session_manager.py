@@ -15,6 +15,7 @@
 import time
 from unaiverse.utils.logger import log
 from typing import Any, Callable, TYPE_CHECKING
+from unaiverse.networking.session.session import PeerRelation
 from unaiverse.networking.session.sess_msg import SessMsg, reason_name
 from unaiverse.networking.session.session import SessionEvent, SessionEventType, DecisionHook
 from unaiverse.networking.session.session import SESSION_HELLO_PROTOCOL, SESSION_CONTROL_PROTOCOL
@@ -1174,13 +1175,33 @@ class SessionManager:
         sess = self._sessions.get(peer_id)
         return sess is not None and sess.state == SessionState.RECONNECTING
 
-    def is_handshake_in_flight(self, peer_id: str) -> bool:
-        """Tells whether this peer has a Session whose FIRST handshake is still in flight.
+    def relation_of(self, peer_id: str) -> PeerRelation:
+        """Tells the relation with this peer on this instance, from the state of its Session.
 
-        It exists but has never reached ESTABLISHED, and is neither a rendezvous-only KNOWN nor RECONNECTING (already
-        established once) nor terminal (FAILED/CLOSED). This is the session-era 'connected but not yet managed' notion
-        the Coordinator aggregates for Agent.agents_are_waiting. The classification lives here, next to SessionState,
-        so the Coordinator stays free of the session enum.
+        PENDING while the first handshake is in flight (dialling included), UP once established and for the whole
+        reconnect grace, NONE otherwise: no Session, a KNOWN one (a peer of the rendezvous not dialled, which the
+        Coordinator turns into PENDING when it holds a dial for it), one that ended or is saying goodbye (CLOSING),
+        and the carrier of a grant waiting to be retired (AWAITING_HANDOFF), which is no relation of its own.
+
+        Args:
+            peer_id: The peer.
+
+        Returns:
+            The relation with the peer.
+        """
+        sess = self._sessions.get(peer_id)
+        if sess is None:
+            return PeerRelation.NONE
+        if sess.state in (SessionState.ESTABLISHED, SessionState.RECONNECTING):
+            return PeerRelation.UP
+        if sess.state in (SessionState.INIT, SessionState.CONNECTING, SessionState.HELLO_SENT,
+                          SessionState.HELLO_ACK_SENT, SessionState.PROFILE_SENT,
+                          SessionState.AWAITING_WORLD_GRANT):
+            return PeerRelation.PENDING
+        return PeerRelation.NONE
+
+    def is_handshake_in_flight(self, peer_id: str) -> bool:
+        """Tells whether this peer has a Session whose FIRST handshake is still in flight (see relation_of).
 
         Args:
             peer_id: The peer.
@@ -1188,12 +1209,7 @@ class SessionManager:
         Returns:
             True while the first handshake of the peer is in flight.
         """
-        sess = self._sessions.get(peer_id)
-        if sess is None:
-            return False
-        return sess.state not in (SessionState.KNOWN, SessionState.ESTABLISHED,
-                                  SessionState.RECONNECTING, SessionState.FAILED,
-                                  SessionState.CLOSED)
+        return self.relation_of(peer_id) is PeerRelation.PENDING
 
     def has_active_sessions(self) -> bool:
         """Tells whether any Session is ESTABLISHED or riding its reconnect grace.

@@ -134,6 +134,13 @@ class SessionState(str, Enum):
     FAILED = "failed"
 
 
+class PeerRelation(str, Enum):
+    """The relation with a peer, as the layers above the Session see it."""
+    NONE = "none"  # No relation and none being made (a peer only known, a relation that ended or is ending)
+    PENDING = "pending"  # Getting in touch: asked or being dialled, not established yet
+    UP = "up"  # Established, a transport blip within its grace included
+
+
 class SessionRole(str, Enum):
     """The direction of a Session: who dialed (fixed for the whole life of the Session)."""
     INITIATOR = "initiator"

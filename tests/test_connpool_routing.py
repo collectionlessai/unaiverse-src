@@ -228,49 +228,32 @@ def test_codec_roundtrips_liveness_control_messages():
         assert isinstance(back.fields["session_id"], bytes)
 
 
-def test_is_peer_session_pending():
-    """NodeConn.is_peer_session_pending is True only for a Session that exists and
-    is neither ESTABLISHED nor terminal. The Coordinator now aggregates the per-state
-    classification from SessionManager.is_handshake_in_flight, so the fake manager exposes
-    that predicate (mirroring the real SessionManager) instead of a bare get_session."""
-    from unaiverse.networking.session import SessionState
-
-    class _FakeSess:
-        def __init__(self, state):
-            self.state = state
+def test_relation_of_a_peer_over_the_two_instances():
+    """NodeConn.relation_of aggregates what its managers say of a peer: up if any of them
+    has the relation up, else pending if any of them is getting in touch, else none.
+    is_peer_session_pending is the pending case alone."""
+    from unaiverse.networking.session import PeerRelation
 
     class _FakeSM:
-        def __init__(self, sessions):
-            self._s = sessions
+        def __init__(self, relations):
+            self._r = relations
 
-        def get_session(self, pid):
-            return self._s.get(pid)
-
-        def is_handshake_in_flight(self, pid):
-            sess = self._s.get(pid)
-            if sess is None:
-                return False
-            return sess.state not in (SessionState.KNOWN, SessionState.ESTABLISHED,
-                                      SessionState.RECONNECTING, SessionState.FAILED,
-                                      SessionState.CLOSED)
+        def relation_of(self, pid):
+            return self._r.get(pid, PeerRelation.NONE)
 
     conn = NodeConn.__new__(NodeConn)  # bypass the heavy P2P-bound __init__
-    conn.set_session_managers(_FakeSM({
-        "pending": _FakeSess(SessionState.HELLO_SENT),
-        "known": _FakeSess(SessionState.KNOWN),
-        "reconnecting": _FakeSess(SessionState.RECONNECTING),
-        "established": _FakeSess(SessionState.ESTABLISHED),
-        "failed": _FakeSess(SessionState.FAILED),
-        "closed": _FakeSess(SessionState.CLOSED),
-    }))
+    conn._held_world_dials = set()
+    conn.set_session_managers(
+        _FakeSM({"pending": PeerRelation.PENDING, "up": PeerRelation.UP, "both": PeerRelation.PENDING}),
+        _FakeSM({"both": PeerRelation.UP, "pending-on-world": PeerRelation.PENDING}))
+    assert conn.relation_of("pending") is PeerRelation.PENDING
+    assert conn.relation_of("pending-on-world") is PeerRelation.PENDING
+    assert conn.relation_of("up") is PeerRelation.UP
+    assert conn.relation_of("both") is PeerRelation.UP
+    assert conn.relation_of("unknown") is PeerRelation.NONE
     assert conn.is_peer_session_pending("pending") is True
-    # KNOWN is a known-but-not-dialed peer: no handshake in flight → not pending.
-    assert conn.is_peer_session_pending("known") is False
-    # RECONNECTING was already established once → not "waiting to be managed".
-    assert conn.is_peer_session_pending("reconnecting") is False
-    assert conn.is_peer_session_pending("established") is False
-    assert conn.is_peer_session_pending("failed") is False
-    assert conn.is_peer_session_pending("closed") is False
+    assert conn.is_peer_session_pending("up") is False
+    assert conn.is_peer_session_pending("both") is False
     assert conn.is_peer_session_pending("unknown") is False
 
 

@@ -12,7 +12,7 @@ import time
 import pytest
 
 from unaiverse.networking.session import (
-    SessionManager, Session, SessionRole, SessionState, SessionEventType, SessMsg,
+    SessionManager, Session, SessionRole, SessionState, SessionEventType, SessMsg, PeerRelation,
     SESSION_HELLO_PROTOCOL, SESSION_PROFILE_PROTOCOL, SESSION_CONTROL_PROTOCOL,
 )
 from unaiverse.networking.session.sess_msg import (
@@ -364,6 +364,39 @@ def _plant(sm, conn, peer_id, local_peer_id, role, state, session_id):
     sess._set_state(state, None)
     sm._set_active(peer_id, sess)
     return sess
+
+
+_RELATION_BY_STATE = {
+    SessionState.KNOWN: PeerRelation.NONE,
+    SessionState.INIT: PeerRelation.PENDING,
+    SessionState.CONNECTING: PeerRelation.PENDING,
+    SessionState.HELLO_SENT: PeerRelation.PENDING,
+    SessionState.HELLO_ACK_SENT: PeerRelation.PENDING,
+    SessionState.PROFILE_SENT: PeerRelation.PENDING,
+    SessionState.AWAITING_WORLD_GRANT: PeerRelation.PENDING,
+    SessionState.AWAITING_HANDOFF: PeerRelation.NONE,
+    SessionState.ESTABLISHED: PeerRelation.UP,
+    SessionState.RECONNECTING: PeerRelation.UP,
+    SessionState.CLOSING: PeerRelation.NONE,
+    SessionState.CLOSED: PeerRelation.NONE,
+    SessionState.FAILED: PeerRelation.NONE,
+}
+
+
+def test_the_relation_is_defined_for_every_state_of_a_session():
+    assert set(_RELATION_BY_STATE) == set(SessionState)
+
+
+@pytest.mark.parametrize("state", list(SessionState))
+def test_relation_of_a_peer_by_the_state_of_its_session(alice_conn, alice_peer_id, bob_peer_id, state):
+    """The relation with a peer is pending while its first handshake is in flight, up once
+    established and for the whole reconnect grace, and none otherwise: a peer only known,
+    a goodbye being said (CLOSING), a relation that ended, the carrier of a grant."""
+    sm = _make_sm(alice_conn, NodeConn.P2P_WORLD, alice_peer_id)
+    assert sm.relation_of(bob_peer_id) is PeerRelation.NONE          # no Session at all
+    _plant(sm, alice_conn, bob_peer_id, alice_peer_id, SessionRole.INITIATOR, state, "s1")
+    assert sm.relation_of(bob_peer_id) is _RELATION_BY_STATE[state]
+    assert sm.is_handshake_in_flight(bob_peer_id) is (_RELATION_BY_STATE[state] is PeerRelation.PENDING)
 
 
 @pytest.mark.parametrize("role", [SessionRole.INITIATOR, SessionRole.RESPONDER])

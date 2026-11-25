@@ -23,7 +23,7 @@ from unaiverse.networking.p2p.messages import Msg
 from unaiverse.networking.p2p.p2p import P2P, P2PError
 from unaiverse.networking.node.tokens import TokenVerifier
 from unaiverse.networking.session.session_manager import SessionManager
-from unaiverse.networking.session.session import SessionState, SessionEventType
+from unaiverse.networking.session.session import SessionState, SessionEventType, PeerRelation
 from unaiverse.networking.session.sess_msg import SessionInbound, WORLD_HANDOFF_COMPLETE, WORLD_DISENGAGEMENT
 
 # sess_msg.py (the session layer's leaf module) is the single source of truth for the
@@ -589,6 +589,9 @@ class NodeConn:
         """
         sm = self._sm_of(peer_id)
         if not settled:
+
+            # Giving a peer up withdraws the dial held for it, which would otherwise go out once the roster lists us
+            self._held_world_dials.discard(peer_id)
             events = await sm.drop(peer_id, reason) if sm is not None else []
         else:
             events = []
@@ -999,23 +1002,38 @@ class NodeConn:
             for pool_name, triple in triples.items():
                 triple[2] = self._p2p_name_to_sm.get(self._pool_name_to_p2p_name[pool_name])
 
+    def relation_of(self, peer_id: str) -> PeerRelation:
+        """Tells the hosted entity its relation with a peer, whatever the instance: UP when a Session with it is
+        established (its reconnect grace included), PENDING while getting in touch with it, NONE otherwise.
+
+        The managers classify the state of their Session (SessionManager.relation_of). The Coordinator adds what only
+        it knows: a dial it holds until the roster of the world lists this node was asked for and has not gone out
+        yet, so that peer is PENDING although its Session is still KNOWN. The pools are not read: they follow the
+        transport, which a relation outlives (the grace) and precedes (a peer in mid-handshake).
+
+        Args:
+            peer_id: The peer.
+
+        Returns:
+            The relation with the peer.
+        """
+        relations = [sm.relation_of(peer_id) for sm in self._session_managers]
+        if PeerRelation.UP in relations:
+            return PeerRelation.UP
+        if PeerRelation.PENDING in relations or peer_id in self._held_world_dials:
+            return PeerRelation.PENDING
+        return PeerRelation.NONE
+
     def is_peer_session_pending(self, peer_id: str) -> bool:
-        """True if `peer_id` has a Session whose *first* handshake is still in
-        flight (it exists but has never reached ESTABLISHED) on any registered
-        instance. This is the session-era replacement for the old "connected but
-        not yet managed" notion behind Agent.agents_are_waiting.
+        """True while getting in touch with `peer_id`: asked or being dialled, not established yet (see relation_of).
 
-        RECONNECTING is deliberately excluded: such a peer was already established
-        (already managed) and is merely re-establishing, so it is not "waiting to
-        be managed". KNOWN is excluded too: it is a peer known from the rendezvous
-        whose initiator has not dialed yet, so no handshake is in flight. Returns
-        False for no Session / KNOWN / ESTABLISHED / RECONNECTING / terminal
-        (FAILED, CLOSED).
+        Args:
+            peer_id: The peer.
 
-        The per-state classification lives in SessionManager.is_handshake_in_flight
-        (next to SessionState); the Coordinator only aggregates across its instances, so
-        connpool no longer imports the session enum."""
-        return any(sm.is_handshake_in_flight(peer_id) for sm in self._session_managers)
+        Returns:
+            True if the relation with the peer is PENDING.
+        """
+        return self.relation_of(peer_id) is PeerRelation.PENDING
 
     def requires_fast_clock(self) -> bool:
         """True if any registered SessionManager has a Session that needs the main loop

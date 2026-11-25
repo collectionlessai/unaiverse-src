@@ -31,6 +31,7 @@ from unaiverse.custom import Custom, GenException
 from unaiverse.streams.dataprops import DataProps
 from unaiverse.modules.utils import ModuleWrapper
 from unaiverse.streams.streams import BufferedStream, Stream
+from unaiverse.networking.session.session import PeerRelation
 from unaiverse.networking.session.sess_msg import WORLD_DISENGAGEMENT, GRACEFUL_SHUTDOWN
 
 
@@ -858,12 +859,13 @@ class Agent(AgentBasics):
         """Checks if a specific set of agents (by ID or wildcard) are no longer connected to the agent.
         It returns False if any of the specified agents are still connected (async).
 
-        An agent whose first handshake is still in flight is not disconnected (unless only completed handshakes
-        count): connect_to only starts getting in touch, and the peer reaches a pool and the agents later.
+        An agent is disconnected when it is not among the agents and there is nothing left to wait for: no relation
+        with it and none being made. So it is not disconnected while getting in touch with it (connect_to only starts
+        that, and the peer reaches the agents later), nor while the link is being recovered after a drop.
 
         Args:
             agent: The ID of the agent or a wildcard to check.
-            handshake_completed: If True, only consider agents that have completed the handshake.
+            handshake_completed: If True, only what is among the agents counts (an agent being reached is disconnected).
 
         Returns:
             True if all involved agents are disconnected, False otherwise.
@@ -893,8 +895,7 @@ class Agent(AgentBasics):
                     all_disconnected = False
                     break
             else:
-                if (agent in self.all_agents or self.node_conn.is_connected(agent)
-                        or self.node_conn.is_peer_session_pending(agent)):
+                if agent in self.all_agents or self.node_conn.relation_of(agent) is not PeerRelation.NONE:
                     all_disconnected = False
                     break
         return all_disconnected
@@ -967,9 +968,12 @@ class Agent(AgentBasics):
     async def connected(self, agent: str | list[str] | None = None, handshake_completed: bool = False) -> bool:
         """Checks if an agent is connected to us or not (async).
 
+        An agent is connected when the relation with it is up, a link being recovered after a drop included. An agent
+        that is still being reached is not connected yet.
+
         Args:
             agent: The agent to check (or None if there are other already set engaged agents).
-            handshake_completed: If True, only consider agents that have completed the handshake.
+            handshake_completed: If True, the agent must also be among the agents (its profile and streams are known).
 
         Returns:
             True if all the requested agents are indeed connected.
@@ -989,7 +993,7 @@ class Agent(AgentBasics):
                 if agent not in self.all_agents:
                     return False
             else:
-                if not self.node_conn.is_connected(agent) and not self.node_conn.is_peer_session_pending(agent):
+                if self.node_conn.relation_of(agent) is not PeerRelation.UP:
                     return False
         return True
 
@@ -1006,17 +1010,14 @@ class Agent(AgentBasics):
 
     @action
     async def agents_are_waiting(self) -> bool:
-        """Checks if there are any agents who have connected but have not yet been fully processed or added to the
-        agent's known lists. This indicates that new agents are waiting to be managed (async).
+        """Checks if the agent is still getting in touch with any of the found agents: asked for or being dialled,
+        not in touch yet. This indicates that there are agents to wait for (async).
 
         Returns:
             True if there are waiting agents, False otherwise.
         """
 
-        # Session-era replacement for the old `_node_agents_waiting` dict: a found
-        # agent is "waiting" while its per-peer Session exists but has not yet
-        # reached ESTABLISHED (handshake in flight). The hosted entity only holds
-        # `conn`, so this state is queried through NodeConn.is_peer_session_pending.
+        # A found agent is "waiting" while getting in touch with it: asked or being dialled, not established yet
         waiting = [a for a in self._found_agents if self.node_conn.is_peer_session_pending(a)]
         log.misc(f"Current set of {len(waiting)} found agents with an in-flight (not yet "
                  f"established) session: {waiting}")
@@ -1203,48 +1204,44 @@ class Agent(AgentBasics):
 
     @action
     async def connect_to(self, peer_id: str) -> bool:
-        """Gets in touch with a peer of the world, unless already connected to it (async).
+        """Gets in touch with a peer of the world, unless already in touch or getting in touch with it (async).
 
         Args:
-            peer_id: The peer to connect to.
+            peer_id: The peer to get in touch with.
 
         Returns:
-            True if already connected or if getting in touch started, False otherwise.
+            True if already in touch, or if getting in touch started (now or before), False otherwise.
         """
-        addresses = self.node_conn.get_addrs(peer_id)
-        if not self.node_conn.is_connected(peer_id):
-
-            # A member with no address yet (a browser before its relay reservations) cannot be dialled, and asking
-            # would log an error at every retry: the roster brings its addresses
-            if not addresses:
-                log.misc(f"Not asking to get in touch with {peer_id}: no address yet")
-                return False
-            log.misc(f"Asking to get in touch with {peer_id}...")
-            peer_id = await self.node_ask_to_get_in_touch_fcn(addresses=addresses, public=False)
-            if peer_id is not None:
-                return True
-            else:
-                return False
-        else:
-            log.misc(f"Not-asking to get in touch with {peer_id}, "
-                     f"since I am already connected to the corresponding peer...")
+        relation = self.node_conn.relation_of(peer_id)
+        if relation is not PeerRelation.NONE:
+            log.misc(f"Not asking to get in touch with {peer_id}: already "
+                     f"{'in touch' if relation is PeerRelation.UP else 'getting in touch'} with it")
             return True
+
+        # A member with no address yet (a browser before its relay reservations) cannot be dialled, and asking
+        # would log an error at every retry: the roster brings its addresses
+        addresses = self.node_conn.get_addrs(peer_id)
+        if not addresses:
+            log.misc(f"Not asking to get in touch with {peer_id}: no address yet")
+            return False
+        log.misc(f"Asking to get in touch with {peer_id}...")
+        return await self.node_ask_to_get_in_touch_fcn(addresses=addresses, public=False) is not None
 
     @action
     async def connect_by_role(self, role: str | list[str], filter_fcn: str | None = None,
                               accept_already_connected: bool = False) -> bool:
-        """Finds and attempts to connect with agents whose profiles match a specific role. It can be optionally
+        """Finds the agents whose profiles match a specific role and gets in touch with them. It can be optionally
         filtered by a custom function. It returns True if at least one valid agent is found (async).
 
         Args:
             role: The role or list of roles to search for.
             filter_fcn: The name of an optional filter function.
-            accept_already_connected: If you want to consider the already connected peers as valid to make this method
+            accept_already_connected: If you want to consider the peers already in touch as valid to make this method
                 return True.
 
         Returns:
-            True if at least one agent is found and a NEW connection request is made (and also if it was already
-                established - if return_true_if_already_connected=True), False otherwise.
+            True if getting in touch with at least one agent started, now or before (and also if one is already in
+                touch, with accept_already_connected=True), False otherwise.
         """
         log.misc(f"Asking to get in touch with all agents whose role is {role}")
 
@@ -1277,29 +1274,30 @@ class Agent(AgentBasics):
             log.misc(f"Found addresses ({len(found_addresses)}) with role: {role}")
             for f_addr, f_peer_id in zip(found_addresses, found_peer_ids):
 
-                # is_connected reads pool residency, which a Session riding its reconnect
-                # grace (up to 45s) still holds: the re-dial is deliberately skipped there,
-                # RESUME on the surviving Session is the preferred recovery. Only the
-                # terminal LOST evicts the pool and re-opens this dial path.
-                if not self.node_conn.is_connected(f_peer_id):
+                # A relation that is up includes a Session riding its reconnect grace: no dial there, RESUME on
+                # the surviving Session is the preferred recovery, and only its end opens this dial path again
+                relation = self.node_conn.relation_of(f_peer_id)
+                if relation is PeerRelation.UP:
+                    log.misc(f"Not asking to get in touch with {f_peer_id}: already in touch with it")
+                    if accept_already_connected:
+                        at_least_one_is_valid = True
+                        self._found_agents.add(f_peer_id)
+                    continue
+                if relation is PeerRelation.NONE:
 
                     # A member with no address yet cannot be dialled: the roster brings its addresses
                     if not f_addr:
                         log.misc(f"Not asking to get in touch with {f_peer_id}: no address yet")
                         continue
                     log.misc(f"Asking to get in touch with {f_peer_id}...")
-                    peer_id = await self.node_ask_to_get_in_touch_fcn(addresses=f_addr, public=False)
-                    if peer_id is not None:
-                        at_least_one_is_valid = True
-                        self._found_agents.add(peer_id)
+                    if await self.node_ask_to_get_in_touch_fcn(addresses=f_addr, public=False) is None:
+                        continue
                 else:
-                    log.misc(f"Not-asking to get in touch with {f_addr}, "
-                             f"since I am already connected to the corresponding peer...")
-                    peer_id = f_peer_id
-                    if accept_already_connected:
-                        at_least_one_is_valid = True
-                        self._found_agents.add(peer_id)
-                log.misc(f"...returned {peer_id}")
+                    log.misc(f"Not asking to get in touch with {f_peer_id}: already getting in touch with it")
+
+                # Getting in touch, asked now or before: a request to wait for, like a new one
+                at_least_one_is_valid = True
+                self._found_agents.add(f_peer_id)
         return at_least_one_is_valid
 
     @action
@@ -1309,7 +1307,8 @@ class Agent(AgentBasics):
 
         Args:
             role: The role or list of roles to search for.
-            handshake_completed: If True, only consider agents that have completed the handshake.
+            handshake_completed: If True, only consider the peers that are among the agents (in touch, with their
+                profile and streams known); otherwise every member of the world with the role.
             engage: If you want to force the found agents to be the ones that you are engaged with.
 
         Returns:

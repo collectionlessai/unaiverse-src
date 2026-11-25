@@ -11,9 +11,10 @@ import asyncio
 
 import pytest
 
+from unaiverse.agent import Agent
 from unaiverse.networking.node.connpool import NodeConn
-from unaiverse.networking.session import SessionState
-from unaiverse.networking.session.sess_msg import ProfileDecisionResult
+from unaiverse.networking.session import SessionState, PeerRelation
+from unaiverse.networking.session.sess_msg import ProfileDecisionResult, GRACEFUL_SHUTDOWN
 
 from node_harness import WireP2P
 
@@ -215,5 +216,83 @@ def test_leaving_the_world_drops_the_wait(mono):
         mono.now += 60.
         await joiner.cycle()
         assert MEMBER not in joiner.dials
+
+    asyncio.run(_scenario())
+
+
+def test_a_held_dial_is_a_relation_being_made(mono):
+    """The dial is held and its Session is still KNOWN, yet the peer was asked for: the
+    relation is pending, as it stays once the dial goes out. A member of the roster nobody
+    asked for is no relation."""
+    async def _scenario():
+        joiner = _Joiner()
+        await joiner.join()
+        await joiner.dial(MEMBER)
+        await joiner.cycle()
+        assert joiner.state_of(MEMBER) == SessionState.KNOWN
+        assert joiner.conn.relation_of(MEMBER) is PeerRelation.PENDING
+        assert joiner.conn.is_peer_session_pending(MEMBER) is True
+        assert joiner.conn.relation_of(OTHER) is PeerRelation.NONE
+
+        joiner.publish(GRANT_TAG + 1, [MEMBER, OTHER, JOINER_WORLD])
+        await joiner.cycle()
+        assert joiner.state_of(MEMBER) == SessionState.CONNECTING
+        assert joiner.conn.relation_of(MEMBER) is PeerRelation.PENDING
+
+    asyncio.run(_scenario())
+
+
+def test_an_agent_that_just_joined_does_not_see_the_member_it_asked_for_as_disconnected(mono):
+    """A role that gets in touch with a member right after the join and checks the link at
+    every tick (the guest of a Turing world with its hotel manager): while the dial is held
+    for the roster the member is neither connected nor disconnected, and asking again
+    changes nothing."""
+    async def _scenario():
+        joiner = _Joiner()
+        await joiner.join()
+        agent = Agent(proc=None)
+        agent.node_conn = joiner.conn
+
+        async def _ask(addresses=None, public=True):
+            await joiner.dial(MEMBER)
+            return MEMBER
+
+        agent.node_ask_to_get_in_touch_fcn = _ask
+        assert await agent.disconnected(agent=MEMBER) is True        # nothing asked yet
+        assert await agent.connect_to(MEMBER) is True
+        for _ in range(3):
+            await joiner.cycle()
+            assert await agent.disconnected(agent=MEMBER) is False
+            assert await agent.connected(MEMBER) is False
+            assert await agent.connect_to(MEMBER) is True
+        assert MEMBER not in joiner.dials
+
+        joiner.publish(GRANT_TAG + 1, [MEMBER, OTHER, JOINER_WORLD])
+        await joiner.cycle()
+        assert joiner.dials.count(MEMBER) == 1
+        assert await agent.disconnected(agent=MEMBER) is False
+
+    asyncio.run(_scenario())
+
+
+def test_giving_a_held_peer_up_withdraws_its_dial(mono):
+    """A peer the hosted entity disconnects from while its dial is held is not dialled when
+    the wait ends. The reckoning of a relation that already ended (a settled drop) is not
+    a withdrawal: it leaves the request in place."""
+    async def _scenario():
+        joiner = _Joiner()
+        await joiner.join()
+        await joiner.dial(MEMBER)
+        await joiner.dial(OTHER)
+        await joiner.conn.drop_peer(OTHER, settled=True)
+        await joiner.conn.drop_peer(MEMBER, GRACEFUL_SHUTDOWN)
+        assert joiner.conn.relation_of(MEMBER) is PeerRelation.NONE
+        assert joiner.conn.relation_of(OTHER) is PeerRelation.PENDING
+
+        joiner.publish(GRANT_TAG + 1, [MEMBER, OTHER, JOINER_WORLD])
+        await joiner.cycle()
+        await joiner.cycle()
+        assert MEMBER not in joiner.dials
+        assert joiner.dials.count(OTHER) == 1
 
     asyncio.run(_scenario())

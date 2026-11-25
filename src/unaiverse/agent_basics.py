@@ -918,11 +918,12 @@ class AgentBasics:
         return self.ROLE_BITS_TO_STR[base_role_int] if base_role_int in self.ROLE_BITS_TO_STR else None
 
     def get_agents_by_role(self, role: str | list[str], handshake_completed: bool = True) -> list[str]:
-        """Finds the connected agents that have the given role(s).
+        """Finds the peers that have the given role(s).
 
         Args:
             role: A role or a list of roles (an augmented role, e.g. "world_master~role1", matches exactly).
-            handshake_completed: Whether to consider only agents whose handshake completed (default: True).
+            handshake_completed: Whether to consider only the peers that are among the agents, in touch and with
+                their profile and streams known, or every member of the world with the role (default: True).
 
         Returns:
             The list of the peer ids found.
