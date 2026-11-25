@@ -989,7 +989,7 @@ class Agent(AgentBasics):
                 if agent not in self.all_agents:
                     return False
             else:
-                if not self.node_conn.is_connected(agent):
+                if not self.node_conn.is_connected(agent) and not self.node_conn.is_peer_session_pending(agent):
                     return False
         return True
 
