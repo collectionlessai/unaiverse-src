@@ -2257,20 +2257,23 @@ class Node:
         self.agent.stdin.set(inputs, uuid=uuid, data_tag=tag, force=True)
 
     @staticmethod
-    def __shrink_image(image: Image.Image, max_edge: int) -> Image.Image:
-        """Shrinks a picture so that its longest edge is at most max_edge pixels, in steps: it is halved while it is
-        still more than twice the target, then resized to the target. A picture already within the limit is returned
-        as it is. A palette picture becomes RGBA and a 1-bit one L, which can be resampled; any other mode is kept.
+    def __shrink_image(image: Image.Image, max_pixels: int) -> Image.Image:
+        """Shrinks a picture so that its area is at most max_pixels pixels, in steps: it is halved while it is still
+        more than twice the target, then resized to the target. The limit is on the area and not on the longest edge,
+        so a panorama and a square photo weigh about the same. A picture already within the limit is returned as it
+        is. A palette picture becomes RGBA and a 1-bit one L, which can be resampled; any other mode is kept.
 
         Args:
             image: The picture.
-            max_edge: The longest edge allowed, in pixels.
+            max_pixels: The largest area allowed, in pixels.
 
         Returns:
             The picture within the limit.
         """
         width, height = image.size
-        scale = min(1., max_edge / max(width, height))
+
+        # Both sides shrink by the same factor, so the area shrinks by its square
+        scale = min(1., (max_pixels / (width * height)) ** 0.5)
         if scale >= 1.:
             return image
         target = (max(1, round(width * scale)), max(1, round(height * scale)))
@@ -2312,7 +2315,7 @@ class Node:
             except (OSError, ValueError) as e:
                 log.user(f"*** {os.path.basename(path)} is not an image I can read ({e}): sent as a file ***")
             if picture is not None:
-                picture = Node.__shrink_image(picture, Custom.MAX_IMAGE_EDGE)
+                picture = Node.__shrink_image(picture, Custom.MAX_IMAGE_PIXELS['sd'])
                 self.__keyboard_to_stdin(public, peer_id, img=picture)
                 log.user(f"*** Sending the picture {os.path.basename(path)} ***")
                 return

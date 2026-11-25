@@ -66,7 +66,11 @@ class Custom:
     ACCEPT_FILES = True  # File messages (FILE data streamed from disk) are accepted, saved under DOWNLOADS_DIR
     MAX_FILE_SIZE = 0  # Bytes of one file, sent or received (0: no limit)
     DOWNLOADS_DIR = None  # Folder of the received files (None: <app folder>/Downloads, next to the key)
-    MAX_IMAGE_EDGE = 1600  # Longest edge, in pixels, of a picture sent as an image (a larger one is shrunk to it)
+
+    # Largest area, in pixels, of a picture sent as an image, for each quality (as Custom.MAX_IMAGE_PIXELS of the
+    # JS SDK): a larger one is shrunk to it, a smaller one keeps its size. SD is about 1155 x 866 for a 4:3 photo,
+    # HD about 2309 x 1732. /send of interactive mode sends in SD
+    MAX_IMAGE_PIXELS = {'sd': 1_000_000, 'hd': 4_000_000}
 
     # =====================
     # ENVIRONMENT VARIABLES
