@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -71,14 +72,33 @@ func InitializeLibrary(
 	// --- Configure Logging FIRST ---
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
 	configStr := C.GoString(logConfigJSONC)
+
+	// UNAIVERSE_GOLOG_CONFIG replaces the levels the caller passed, for debugging a build that cannot be changed (the
+	// desktop app passes {"*":"WARN"}): e.g. {"*":"WARN","unailib":"INFO"}. Where the lines go is go-log's own
+	// GOLOG_OUTPUT and GOLOG_FILE (e.g. GOLOG_OUTPUT=stderr+file GOLOG_FILE=/tmp/go.log)
+	if override := os.Getenv("UNAIVERSE_GOLOG_CONFIG"); override != "" {
+		configStr = override
+	}
 	golog.SetAllLoggers(golog.LevelFatal)
 	if configStr != "" {
 		var logLevels map[string]string
 		if err := json.Unmarshal([]byte(configStr), &logLevels); err != nil {
 			log.Printf("[GO] ⚠️ Invalid log config JSON: %v. Using defaults.\n", err)
 		} else {
-			for logger, levelStr := range logLevels {
-				if err := golog.SetLogLevel(logger, levelStr); err != nil {
+
+			// "*" (every logger) first, then the named loggers: a map has no order, and "*" applied after a named
+			// logger took that logger back to the level of all the others
+			ordered := make([]string, 0, len(logLevels))
+			if _, ok := logLevels["*"]; ok {
+				ordered = append(ordered, "*")
+			}
+			for logger := range logLevels {
+				if logger != "*" {
+					ordered = append(ordered, logger)
+				}
+			}
+			for _, logger := range ordered {
+				if err := golog.SetLogLevel(logger, logLevels[logger]); err != nil {
 					log.Printf("[GO] ⚠️ Failed to set log level for '%s': %v\n", logger, err)
 				}
 			}
