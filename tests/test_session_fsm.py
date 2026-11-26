@@ -723,20 +723,23 @@ def _reconnecting_for(sess, seconds):
 @pytest.mark.parametrize("window", [45.0, 90.0])
 def test_reconnect_window_starts_over_within_twice_the_window(alice_conn, alice_peer_id, bob_peer_id,
                                                               monkeypatch, window):
-    """A transport lost again starts the window over, but the whole time in RECONNECTING
-    never passes twice the window: 180 s with the window of every platform, 90 s with the
-    45 s of a node of 0.2.0. The log says when the ceiling cut the window short."""
+    """A transport that came back and was lost again starts the window over, but the whole
+    time in RECONNECTING never passes twice the window: 180 s with the window of every
+    platform, 90 s with the 45 s of a node of 0.2.0. The log says when the ceiling cut the
+    window short."""
     lines = []
     monkeypatch.setattr(session_mod.log, "session", lambda msg, *a, **k: lines.append(msg))
     monkeypatch.setattr(session_mod, "_TIMEOUT_RECONNECT_S", window)
     sess = _mk(bob_peer_id, SessionRole.INITIATOR, alice_conn, alice_peer_id)
 
     _reconnecting_for(sess, 0.25 * window)
+    sess.on_transport_reconnected()
     assert sess.on_transport_disconnected() is None
     assert sess._timeout_s == window                 # far from the ceiling: a whole window
     assert "which starts over" in lines[-1] and "cut short" not in lines[-1]
 
     _reconnecting_for(sess, 1.75 * window)
+    sess.on_transport_reconnected()
     assert sess.on_transport_disconnected() is None
     restarted = sess._state_entered_at
     assert sess._timeout_s == pytest.approx(0.25 * window, abs=0.5)
@@ -752,6 +755,7 @@ def test_reconnect_window_past_its_ceiling_does_not_start_over(alice_conn, alice
     sess = _mk(bob_peer_id, SessionRole.INITIATOR, alice_conn, alice_peer_id)
     window = session_mod._TIMEOUT_RECONNECT_S
     _reconnecting_for(sess, 2 * window + 5.0)
+    sess.on_transport_reconnected()
     sess.on_transport_disconnected()
     assert sess._timeout_s == 0.0
     ev = sess.check_timeout(sess._state_entered_at + 0.1)
@@ -765,8 +769,57 @@ def test_each_reconnect_has_a_ceiling_of_its_own(alice_conn, alice_peer_id, bob_
     _reconnecting_for(sess, 1.9 * window)
     sess._resume_established()
     _reconnecting_for(sess, 0.0)
+    sess.on_transport_reconnected()
     sess.on_transport_disconnected()
     assert sess._timeout_s == window
+
+
+def _found_by_the_keepalive(sess):
+    """An ESTABLISHED Session whose peer stopped answering: the keep-alive misses its PING
+    once more and takes it to RECONNECTING, while the connection to the peer is still listed."""
+    sess._set_state(SessionState.ESTABLISHED, None)
+    now = time.monotonic()
+    sess._consecutive_ping_failures = session_mod._KEEPALIVE_FAIL_THRESHOLD - 1
+    sess._ping_in_flight, sess._ping_deadline = True, now - 0.1
+    ev = _run(sess.tick_keepalive(now))
+    assert ev is not None and ev.type == SessionEventType.RECONNECTING
+
+
+def test_the_loss_told_again_by_the_pools_does_not_start_the_window_over(alice_conn, alice_peer_id, bob_peer_id,
+                                                                         monkeypatch):
+    """The keep-alive finds a silent peer first; the pools lose it later, when the connection
+    closes on its idle timeout and the grace of the transport has passed (15 s into the window
+    on QUIC). That is the loss that began the window, and the window ends at its length."""
+    lines = []
+    monkeypatch.setattr(session_mod.log, "session", lambda msg, *a, **k: lines.append(msg))
+    sess = _mk(bob_peer_id, SessionRole.INITIATOR, alice_conn, alice_peer_id)
+    _found_by_the_keepalive(sess)
+    window = session_mod._TIMEOUT_RECONNECT_S
+    sess._reconnecting_since -= 15.0
+    sess._state_entered_at -= 15.0
+    entered = sess._state_entered_at
+
+    assert sess.on_transport_disconnected() is None
+    assert sess._state_entered_at == entered and sess._timeout_s == window
+    assert "the window goes on" in lines[-1]
+    assert sess.check_timeout(entered + window - 1.0) is None
+    ev = sess.check_timeout(entered + window + 0.1)
+    assert ev is not None and ev.data["reason"] == "grace_period_expired"
+
+
+def test_each_return_of_the_transport_starts_the_window_over_once(alice_conn, alice_peer_id, bob_peer_id):
+    """A loss after the transport came back starts the window over; a second signal of that
+    loss, with no return in between, does not start it over again."""
+    sess = _mk(bob_peer_id, SessionRole.INITIATOR, alice_conn, alice_peer_id)
+    _reconnecting_for(sess, 20.0)
+    sess.on_transport_reconnected()
+    assert sess.on_transport_disconnected() is None
+    restarted = sess._state_entered_at
+    assert time.monotonic() - restarted < 1.0
+
+    sess._state_entered_at -= 5.0
+    assert sess.on_transport_disconnected() is None
+    assert sess._state_entered_at == restarted - 5.0
 
 
 def test_goaway_inside_the_window_of_a_lost_session_closes(bob_conn, bob_peer_id, alice_peer_id):

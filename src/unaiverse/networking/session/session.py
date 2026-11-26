@@ -360,9 +360,11 @@ class Session:
         # True while RECONNECTING because the peer said it lost the Session (responder only).
         self._peer_lost_session: bool = False
 
-        # When RECONNECTING began and its window, which bound the restarts of that window.
+        # When RECONNECTING began and its window, which bound the restarts of that window, and whether the transport
+        # was seen back since the window began or last started over: only then is a loss a new one.
         self._reconnecting_since: float | None = None
         self._reconnect_window_s: float = _TIMEOUT_RECONNECT_S
+        self._transport_seen_back: bool = False
         self._reconnect_attempts: int = 0
         self._next_redial_at: float = 0.0   # monotonic gate, set/advanced by tick_dial
         self._resume_nonce: bytes = b""
@@ -632,7 +634,10 @@ class Session:
         """Handles a dropped link (transport diff) or a session-level liveness failure.
 
         ESTABLISHED → RECONNECTING, arming the active re-dial + RESUME loop (tick_dial). Already reconnecting: the
-        reconnect window starts over, never past twice its length.
+        reconnect window starts over, never past twice its length, when the transport was seen back since the window
+        began or last started over. Without that it is the loss that began the window, told again: the keep-alive finds
+        a silent peer while its connection is still listed, and the pools lose the peer later, when the connection
+        closes on its own idle timeout and the grace of the transport has passed.
 
         Returns:
             The RECONNECTING event when the Session leaves ESTABLISHED, otherwise None.
@@ -647,6 +652,11 @@ class Session:
         if self.state == SessionState.RECONNECTING and not self._peer_lost_session:
             now = time.monotonic()
             ran = now - self._state_entered_at
+            if not self._transport_seen_back:
+                log.session(f"{self!r} transport lost {ran:.1f}s into the reconnect window, with no return seen since "
+                            f"the loss that began it: the window goes on", sub=self._sub)
+                return None
+            self._transport_seen_back = False
             self._state_entered_at = now
             window = self._reconnect_window_s if self._reconnecting_since is not None else self._timeout_s
             if self._reconnecting_since is not None:
@@ -1837,6 +1847,7 @@ class Session:
         self._set_state(SessionState.RECONNECTING, window_s)
         self._reconnecting_since = self._state_entered_at
         self._reconnect_window_s = window_s
+        self._transport_seen_back = False
         self._lookup_due = False
         self._next_lookup_at = 0.0
         self._peer_lost_session = peer_lost_session
@@ -1860,6 +1871,7 @@ class Session:
         Args:
             why: What showed the transport is back, for the log.
         """
+        self._transport_seen_back = True
         if self._is_probing():
 
             # Due on the next tick_keepalive, not at the next period. One probe in
