@@ -86,8 +86,8 @@ _MAX_HELLO_REPEATS = 2
 
 # How many repeats of its HELLO a responder answers on one Session, each a signature with
 # the host key and a send. An initiator sends one HELLO per dial attempt: _MAX_DIAL_ATTEMPTS
-# here, 6 in the browser (maxDialAttempts of MOBILE_SESSION_TIMEOUTS in the SDK), and the last
-# one again _MAX_HELLO_REPEATS times, so a legitimate one repeats it 7 times at most.
+# here, 6 in the browser (the mobile profile of session_profiles.py), and the last one again
+# _MAX_HELLO_REPEATS times, so a legitimate one repeats it 7 times at most.
 _MAX_REPEATED_HELLOS_ANSWERED = 7
 
 # How often a reconnecting initiator asks the layer above for fresh addresses of its peer.

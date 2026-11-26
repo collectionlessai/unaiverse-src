@@ -1,5 +1,5 @@
 {
-  "about": "Values that unailib (Go) and the browser transport (the SDK) must hold equal: each bounds a step that the other end, or the Session code of the wheel above both, is sized on. A test on each side compares its constants with this table; no code reads it at run time. It travels in the wheels, so that the SDK reads the same bytes.",
+  "about": "Values that unailib (Go) and the browser transport (the SDK) must hold equal: each bounds a step that the other end, or the Session code of the wheel above both, is sized on. A test on each side compares its constants with this table, and no transport takes its values from it; the Session checks its own values against it (session_profiles.py). It travels in the wheels, so that the SDK reads the same bytes.",
   "values": [
     {
       "name": "disconnection_grace",
