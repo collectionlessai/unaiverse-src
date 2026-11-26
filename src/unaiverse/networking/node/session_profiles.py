@@ -56,21 +56,17 @@ _DEFAULT = {name: getattr(module, attr) for name, (module, attr) in _VALUES.item
 _PROFILES: dict[str, dict[str, float]] = {
     "default": {},
 
-    # A browser, also on a phone over a slow or intermittent link (handoffs, tunnels) and in a background tab, which
-    # throttles the loop that drives the timeouts and the keep-alive. Its dial attempts are bounded by the transport
-    # of the browser (5 s each), so its whole budget is far shorter than the backstop of a Python node, and a peer it
-    # lost may be dialled again sooner.
+    # A browser, also on a phone over a slow or intermittent link (handoffs, tunnels) and in a background tab. Its dial
+    # attempts are bounded by the transport of the browser (5 s each), so its whole budget is far shorter than the
+    # backstop of a Python node, and a peer it lost may be dialled again sooner. The keep-alive and the reconnect
+    # window are those of every platform: the two ends of a Session do not tell each other theirs.
     "mobile": {
         "connect_s": 60.0,
         "profile_s": 30.0,  # The profile bytes over a slow link
         "world_s": 45.0,
-        "reconnect_s": 120.0,  # Tunnels, handoffs between networks, a tab in the background
         "closing_s": 15.0,
         "max_dial_attempts": 6,
         "resume_ack_timeout_s": 8.0,
-        "keepalive_period_s": 20.0,  # Battery and data
-        "ping_rtt_timeout_s": 12.0,
-        "keepalive_fail_threshold": 3,
         "quarantine_s": 20.0,
     },
 }

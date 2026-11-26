@@ -4,8 +4,8 @@ Phase 0.1 of the concurrency plan: what a stalled main loop costs a node today.
 The session keep-alive (PING/PONG) is answered only when the peer's main loop pumps its Sessions, and the pump runs
 once per cycle, next to behave(). A node whose behave() blocks (a long action) stops answering, and its peers declare
 the Session lost. These tests drive two SessionManagers over the fake transport with a simulated clock: in the first
-the responder never pumps for two minutes (it is stuck in an action), in the second it pumps every second. They
-characterize the current behavior and are the acceptance reference for the loop split (Phase 2), where the pump
+the responder never pumps for two and a half minutes (it is stuck in an action), in the second it pumps every second.
+They characterize the current behavior and are the acceptance reference for the loop split (Phase 2), where the pump
 keeps running while the HSM is busy.
 """
 import types
@@ -20,7 +20,7 @@ from unaiverse.networking.session import SessionManager, SessionEventType, Sessi
 pytestmark = pytest.mark.e2e
 
 STEP_S = 1.0  # Simulated seconds between two cycles of the initiator
-HORIZON_S = 120.0  # Simulated length of each scenario
+HORIZON_S = 150.0  # Simulated length of each scenario: the detection of a stuck peer and the reconnect window
 
 
 class _FakeClock:
@@ -102,7 +102,7 @@ async def _run(sm_alice: SessionManager, sm_bob: SessionManager, alice_inbox: ob
 
 def test_stuck_peer_is_declared_lost(bidirectional_fakeconns: tuple, alice_peer_id: str, bob_peer_id: str,
                                      monkeypatch: pytest.MonkeyPatch) -> None:
-    """A peer whose loop is stuck for two minutes goes RECONNECTING after ~2 missed PINGs, then LOST."""
+    """A peer whose loop stays stuck goes RECONNECTING after ~2 missed PINGs, then LOST."""
     alice_conn, bob_conn, alice_inbox, bob_inbox = bidirectional_fakeconns
     alice_conn.connect_returns = (bob_peer_id, False)
     clock = _FakeClock()
@@ -135,7 +135,7 @@ def test_stuck_peer_is_declared_lost(bidirectional_fakeconns: tuple, alice_peer_
 
 def test_responsive_peer_stays_established(bidirectional_fakeconns: tuple, alice_peer_id: str, bob_peer_id: str,
                                            monkeypatch: pytest.MonkeyPatch) -> None:
-    """A peer that pumps every second keeps the Session ESTABLISHED for the whole two minutes."""
+    """A peer that pumps every second keeps the Session ESTABLISHED for the whole scenario."""
     alice_conn, bob_conn, alice_inbox, bob_inbox = bidirectional_fakeconns
     alice_conn.connect_returns = (bob_peer_id, False)
     clock = _FakeClock()

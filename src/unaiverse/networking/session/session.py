@@ -49,8 +49,10 @@ _TIMEOUT_PROFILE_S = 15.0  # Stage 2: PROFILE_OFFER → PROFILE_DECISION
 _TIMEOUT_WORLD_S = 30.0  # Stage 3: WORLD_GRANT expiry
 
 # Session-level reconnect ceiling before Session.Lost. Longer than the Go transport grace (DisconnectionGracePeriod)
-# so several backoff'd re-dial + RESUME cycles fit inside the window (see tick_dial).
-_TIMEOUT_RECONNECT_S = 45.0
+# so several backoff'd re-dial + RESUME cycles fit inside the window (see tick_dial). The same on every platform: with
+# a loss found in about 35 s and a way back of a few seconds, it covers an interruption of about 100 s, a freeze of a
+# minute and a half or a change of network. A peer that runs another window ends the Session when the shorter one ends.
+_TIMEOUT_RECONNECT_S = 90.0
 
 # A responder whose peer answered a PING with ok=false: the peer holds no Session for our id.
 # A responder cannot dial, and no RESUME comes from a peer that has just said so, hence
@@ -99,7 +101,8 @@ _ADDRESS_LOOKUP_INTERVAL_S = 15.0
 # Bound to session_id on purpose: /ipfs/ping is a transport probe that go-libp2p
 # answers by dial-on-demand, so it cannot distinguish a restarted peer (no Session)
 # from a live one. A PONG with ok=false (peer holds no matching Session) is treated
-# as a hard liveness failure → reconnect → RESUME → re-handshake.
+# as a hard liveness failure → reconnect → RESUME → re-handshake. The keep-alive is the
+# same on every platform, its period, the wait for the PONG and the misses alike.
 _KEEPALIVE_PERIOD_S = 15.0
 
 # The RTT window must absorb the full polling chain on BOTH sides (our send is a

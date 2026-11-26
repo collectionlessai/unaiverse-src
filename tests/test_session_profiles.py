@@ -15,12 +15,14 @@ from unaiverse.networking.session import session, session_manager
 pytestmark = pytest.mark.unit
 
 # The values the SDK put over the module globals (MOBILE_SESSION_TIMEOUTS in Pyodide/Py-Js/JNodeConn.js at bead6a5),
-# by the names of the profiles (connectS is connect_s, and so on)
+# by the names of the profiles (connectS is connect_s, and so on), but for the keep-alive and the reconnect window
 SDK_MOBILE_VALUES = {
-    "connect_s": 60, "hello_s": 15, "profile_s": 30, "world_s": 45, "reconnect_s": 120, "closing_s": 15,
-    "max_dial_attempts": 6, "retry_base_s": 1, "retry_cap_s": 30, "resume_ack_timeout_s": 8,
-    "keepalive_period_s": 20, "ping_rtt_timeout_s": 12, "keepalive_fail_threshold": 3, "quarantine_s": 20,
+    "connect_s": 60, "hello_s": 15, "profile_s": 30, "world_s": 45, "closing_s": 15,
+    "max_dial_attempts": 6, "retry_base_s": 1, "retry_cap_s": 30, "resume_ack_timeout_s": 8, "quarantine_s": 20,
 }
+
+# Those every platform shares
+SHARED_VALUES = {"reconnect_s": 90, "keepalive_period_s": 15, "ping_rtt_timeout_s": 10, "keepalive_fail_threshold": 2}
 
 
 @pytest.fixture(autouse=True)
@@ -39,6 +41,7 @@ def test_the_default_profile_is_what_a_python_node_runs():
 def test_the_mobile_profile_gives_the_values_the_browser_patched_and_the_default_for_the_rest():
     mobile, default = session_profile("mobile"), session_profile("default")
     assert {name: mobile[name] for name in SDK_MOBILE_VALUES} == SDK_MOBILE_VALUES
+    assert {name: mobile[name] for name in SHARED_VALUES} == {name: default[name] for name in SHARED_VALUES}
     assert {name: value for name, value in mobile.items() if name not in SDK_MOBILE_VALUES} == \
         {name: value for name, value in default.items() if name not in SDK_MOBILE_VALUES}
 
@@ -46,19 +49,25 @@ def test_the_mobile_profile_gives_the_values_the_browser_patched_and_the_default
 def test_applying_a_profile_sets_the_module_globals_and_the_default_takes_them_back():
     applied = apply_session_profile("mobile")
     assert applied == session_values() == session_profile("mobile")
-    assert session._TIMEOUT_RECONNECT_S == 120 and session._KEEPALIVE_FAIL_THRESHOLD == 3
+    assert session._TIMEOUT_PROFILE_S == 30 and session._MAX_DIAL_ATTEMPTS == 6
     assert session_manager._QUARANTINE_S == 20
 
     apply_session_profile("default")
-    assert session._TIMEOUT_RECONNECT_S == session_profile("default")["reconnect_s"]
+    assert session._TIMEOUT_PROFILE_S == session_profile("default")["profile_s"]
     assert session_manager._QUARANTINE_S == session_profile("default")["quarantine_s"]
+
+
+def test_one_keep_alive_and_one_reconnect_window_for_every_platform():
+    """The two ends of a Session do not tell each other their window: one value on every platform."""
+    for name in session_profile_names():
+        assert {key: session_profile(name)[key] for key in SHARED_VALUES} == SHARED_VALUES
 
 
 def test_an_override_by_name_goes_over_the_profile():
     applied = apply_session_profile("mobile", {"connect_s": 75, "closing_s": 12.5})
     assert applied["connect_s"] == session._TIMEOUT_CONNECT_S == 75
     assert session._TIMEOUT_CLOSING_S == 12.5
-    assert session._TIMEOUT_RECONNECT_S == 120
+    assert session._TIMEOUT_PROFILE_S == 30
 
 
 @pytest.mark.parametrize("name, overrides, says", [

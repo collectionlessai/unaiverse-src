@@ -160,8 +160,8 @@ a publicly-reachable host (bare TCP on a VPS with the port forwarded).
 | Scenario | Expected events on the dialer |
 |---|---|
 | Healthy connect | `established` once, then nothing (ping is silent on success) |
-| Kill the listener process | `reconnecting` (transport_disconnected), then `lost` ~10 s later |
-| Link disrupted, peer returns within 10 s | `reconnecting` then `resumed` |
+| Kill the listener process | `reconnecting` (transport_disconnected), then `lost` when the 90 s reconnect window ends |
+| Link disrupted, peer returns within the reconnect window | `reconnecting` then `resumed` |
 | Listener sends GOAWAY (clean shutdown) | `closed` (with reason) |
 | Dial unreachable peer | 4 dial attempts with backoff, then `failed` (`dial_failed`) |
 
@@ -173,9 +173,9 @@ Block the peer's UDP port mid-session (Linux):
 sudo iptables -A INPUT -p udp --sport 30060 -j DROP
 ```
 
-The dialer emits `reconnecting` within ~35 s (two missed 15 s pings + a 5 s ping
-timeout each), then `lost` 10 s later (grace period). Remove the rule and the next
-dial works normally.
+The dialer emits `reconnecting` within ~35 s (two missed PINGs, 15 s apart, each
+waited for 10 s), then `lost` when the 90 s reconnect window ends. Remove the rule
+before that and the Session resumes.
 
 ## Notes
 

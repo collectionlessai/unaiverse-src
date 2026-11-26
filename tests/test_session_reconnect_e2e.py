@@ -159,7 +159,7 @@ def test_redial_failure_backoff_then_grace_expiry_lost_and_quarantine(
 
         # Grace expiry: check_timeout fires LOST before a re-dial can run,
         # the session is evicted and the peer is quarantined.
-        events = await sm_alice.tick(time.monotonic() + 46.0)
+        events = await sm_alice.tick(time.monotonic() + session_mod._TIMEOUT_RECONNECT_S + 1.0)
         assert [e.type for e in events] == [SessionEventType.LOST]
         assert sm_alice.get_session(bob_peer_id) is None
         assert bob_peer_id in sm_alice._quarantine

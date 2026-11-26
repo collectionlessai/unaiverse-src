@@ -22,6 +22,7 @@ from unaiverse.networking.node.connpool import NodeConn
 from unaiverse.networking.node.profile import NodeProfile
 from unaiverse.networking.session import (SessionState, SessionEventType, SessionRole,
                                           VerifiedTokenClaims)
+from unaiverse.networking.session import session as session_mod
 from unaiverse.networking.session.session import SessionEvent
 from unaiverse.networking.session.sess_msg import (CV_HASH_MISMATCH, NOT_AUTHORIZED, GRACEFUL_SHUTDOWN,
                                                    ProfileDecisionResult)
@@ -1067,7 +1068,7 @@ def test_session_lost_while_peer_still_in_pool_purges_and_quarantines():
         await conn._sm_public.on_peer_disconnected(REMOTE_PEER)
         sess = conn._sm_public.get_session(REMOTE_PEER)
         assert sess.state == SessionState.RECONNECTING
-        sess._state_entered_at -= 60.0   # blow past the 45s grace window
+        sess._state_entered_at -= session_mod._TIMEOUT_RECONNECT_S + 15.0   # past the grace window
 
         await node._Node__handle_network_messages()   # tick → LOST → dispatch
         assert conn._sm_public.get_session(REMOTE_PEER) is None

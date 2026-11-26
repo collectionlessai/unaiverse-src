@@ -720,12 +720,12 @@ def _reconnecting_for(sess, seconds):
     sess._state_entered_at -= seconds
 
 
-@pytest.mark.parametrize("window", [45.0, 120.0])
+@pytest.mark.parametrize("window", [45.0, 90.0])
 def test_reconnect_window_starts_over_within_twice_the_window(alice_conn, alice_peer_id, bob_peer_id,
                                                               monkeypatch, window):
     """A transport lost again starts the window over, but the whole time in RECONNECTING
-    never passes twice the window: 90 s with the window of Python, 240 s with the 120 s
-    the browser sets. The log says when the ceiling cut the window short."""
+    never passes twice the window: 180 s with the window of every platform, 90 s with the
+    45 s of a node of 0.2.0. The log says when the ceiling cut the window short."""
     lines = []
     monkeypatch.setattr(session_mod.log, "session", lambda msg, *a, **k: lines.append(msg))
     monkeypatch.setattr(session_mod, "_TIMEOUT_RECONNECT_S", window)
