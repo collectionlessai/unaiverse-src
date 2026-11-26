@@ -1,0 +1,71 @@
+{
+  "about": "Values that unailib (Go) and the browser transport (the SDK) must hold equal: each bounds a step that the other end, or the Session code of the wheel above both, is sized on. A test on each side compares its constants with this table; no code reads it at run time. It travels in the wheels, so that the SDK reads the same bytes.",
+  "values": [
+    {
+      "name": "disconnection_grace",
+      "value": 10000,
+      "unit": "ms",
+      "step": "How long a peer is kept after its last connection closed before the Session is told: a connection that comes back within it is no loss."
+    },
+    {
+      "name": "session_frame_send",
+      "value": 3000,
+      "unit": "ms",
+      "step": "The bound of the send of one Session frame (the dial when there is no connection, the stream, the write), awaited by the Session in its tick."
+    },
+    {
+      "name": "relay_reservation",
+      "value": 10000,
+      "unit": "ms",
+      "step": "The bound of the request of a slot on a relay, awaited by the join of a world and by the renewal of the slot."
+    },
+    {
+      "name": "webrtc_signaling",
+      "value": 60000,
+      "unit": "ms",
+      "step": "The whole budget of the answerer of a WebRTC offer, and of the offerer in the TURN stage."
+    },
+    {
+      "name": "webrtc_direct_stage",
+      "value": 5000,
+      "unit": "ms",
+      "step": "The budget of the direct stage of a WebRTC offer (STUN only): the signalling and the opening of the DataChannel together."
+    },
+    {
+      "name": "webrtc_stage_pause",
+      "value": 750,
+      "unit": "ms",
+      "step": "The pause of the offerer between a direct stage that failed and its TURN offer, for a browser answerer to read the abort and let that exchange go."
+    },
+    {
+      "name": "webrtc_gather_quiet",
+      "value": 500,
+      "unit": "ms",
+      "step": "The silence after a candidate of the kind the stage needs that sends the offer or the answer: the SDP is not trickled."
+    },
+    {
+      "name": "webrtc_direct_gather_max",
+      "value": 3000,
+      "unit": "ms",
+      "step": "The longest wait for candidates in the direct stage, under the stage budget so that the other end gets the SDP within its own."
+    },
+    {
+      "name": "webrtc_turn_gather_max",
+      "value": 8000,
+      "unit": "ms",
+      "step": "The longest wait for candidates in the TURN stage and in an offer with the whole server list."
+    },
+    {
+      "name": "webrtc_freshness",
+      "value": 30000,
+      "unit": "ms",
+      "step": "How recent the last sign of life of a DataChannel must be for it to carry Session frames and to spare a new offer; the sign is the traffic of the other end."
+    },
+    {
+      "name": "webrtc_reassembly",
+      "value": 120000,
+      "unit": "ms",
+      "step": "How long a message chunked over a DataChannel may take at the receiver between its first and its last chunk."
+    }
+  ]
+}

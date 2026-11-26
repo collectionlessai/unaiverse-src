@@ -67,7 +67,7 @@ dev = [
 ]
 
 [tool.setuptools.package-data]
-"unaiverse" = ["utils/public.json"]
+"unaiverse" = ["utils/public.json", "networking/p2p/shared_transport_values.json"]
 
 # The Go sources of the shared library travel in the sdist only: a wheel carries the built library alone
 [tool.setuptools.packages.find]
