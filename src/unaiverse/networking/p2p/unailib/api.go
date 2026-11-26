@@ -28,7 +28,6 @@ import (
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/core/peerstore"
-	rcmgr "github.com/libp2p/go-libp2p/p2p/host/resource-manager"
 	rc "github.com/libp2p/go-libp2p/p2p/protocol/circuitv2/relay"
 	ping "github.com/libp2p/go-libp2p/p2p/protocol/ping"
 	quic "github.com/libp2p/go-libp2p/p2p/transport/quic"
@@ -394,42 +393,7 @@ func CreateNode(
 	}
 
 	// --- Configure Custom Resource Manager ---
-	scalingLimits := rcmgr.DefaultLimits
-	libp2p.SetDefaultServiceLimits(&scalingLimits)
-
-	// These apply per unique Peer ID.
-	scalingLimits.PeerBaseLimit.Conns = 64
-	scalingLimits.PeerBaseLimit.ConnsInbound = 64
-	scalingLimits.PeerBaseLimit.ConnsOutbound = 64
-
-	// Tweak System Limits
-	scalingLimits.SystemBaseLimit.Conns = 256
-	scalingLimits.SystemBaseLimit.ConnsInbound = 128
-	scalingLimits.SystemBaseLimit.ConnsOutbound = 128
-
-	// Compute the concrete limits
-	scaledLimits := scalingLimits.AutoScale()
-
-	// Raise the per-IP limits
-	customIP4Limits := []rcmgr.ConnLimitPerSubnet{
-		{
-			PrefixLength: 32,   // /32 means "one specific IP address"
-			ConnCount:    1024, // Allow 1024 conns from the same IP
-		},
-	}
-	customIP6Limits := []rcmgr.ConnLimitPerSubnet{
-		{
-			PrefixLength: 56,
-			ConnCount:    1024,
-		},
-	}
-
-	// Create the limiter and manager
-	limiter := rcmgr.NewFixedLimiter(scaledLimits)
-	rm, err := rcmgr.NewResourceManager(
-		limiter,
-		rcmgr.WithLimitPerSubnet(customIP4Limits, customIP6Limits),
-	)
+	rm, err := newNodeResourceManager(instanceIndex)
 	if err != nil {
 		return C.CString(jsonErrorResponse(fmt.Sprintf("Instance %d: Failed to create resource manager", instanceIndex), err))
 	}

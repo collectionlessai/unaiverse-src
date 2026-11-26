@@ -38,6 +38,20 @@ const UnaiverseIdentifyAgent = UnaiverseUserAgent + "/go"
 const P2PForgeLoggerName = "p2p-forge/client"
 const DisconnectionGracePeriod = 10 * time.Second
 
+// The connections a node accepts from one address (an IPv4 address, an IPv6 /56): as many
+// at once as MaxConnsPerAddress, and new ones as fast as a bucket of MaxConnsPerAddress
+// tokens refilled at NewConnsPerSecondPerAddress allows. They are sized for a class or a
+// conference behind one NAT, for a private node that everyone reaches through one relay
+// (a relayed connection counts at the address of the relay, and so do the node's own dials
+// through it), and for the wave of redials of the members when a world host comes back,
+// which the default of go-libp2p (a burst of 16, then one new connection every 5 s) let
+// through only slowly. The burst is the number allowed at once because a lower one would
+// only make that number slow to reach.
+const (
+	MaxConnsPerAddress          = 1024
+	NewConnsPerSecondPerAddress = 10
+)
+
 // Session abstraction protocol IDs. Each stage of the Session handshake gets its own
 // libp2p protocol so timeouts / cancellation / version negotiation are independent.
 // One protobuf message per stream (no per-stream channel header), length-prefixed by
