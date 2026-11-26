@@ -1218,6 +1218,11 @@ class Agent(AgentBasics):
                      f"{'in touch' if relation is PeerRelation.UP else 'getting in touch'} with it")
             return True
 
+        # A peer that closed its world Session with us saying it left is not asked for until a newer roster
+        if self.node_conn.is_departed(peer_id):
+            log.misc(f"Not asking to get in touch with {peer_id}: it left us, and no roster since lists it again")
+            return False
+
         # A member with no address yet (a browser before its relay reservations) cannot be dialled, and asking
         # would log an error at every retry: the roster brings its addresses
         addresses = self.node_conn.get_addrs(peer_id)

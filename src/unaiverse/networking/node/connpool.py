@@ -24,7 +24,8 @@ from unaiverse.networking.p2p.p2p import P2P, P2PError
 from unaiverse.networking.node.tokens import TokenVerifier
 from unaiverse.networking.session.session_manager import SessionManager
 from unaiverse.networking.session.session import SessionState, SessionEventType, PeerRelation
-from unaiverse.networking.session.sess_msg import SessionInbound, WORLD_HANDOFF_COMPLETE, WORLD_DISENGAGEMENT
+from unaiverse.networking.session.sess_msg import (SessionInbound, WORLD_HANDOFF_COMPLETE, WORLD_DISENGAGEMENT,
+                                                   reason_name)
 
 # sess_msg.py (the session layer's leaf module) is the single source of truth for the
 # session-protocol value objects. The inbound codec itself (pop + decode) now lives in
@@ -57,6 +58,9 @@ _WORLD_DIAL_MAX_BUDGET_S = 35.0
 # body, or this long after the handoff began.
 _ROSTER_WAIT_S = 5.0
 _ROSTER_WAIT_MAX_S = 30.0
+
+# The end of a world Session whose peer said it left: out of its world, or out of an engagement with us
+_DEPARTED_REASON = f"remote_goaway:{reason_name(WORLD_DISENGAGEMENT)}"
 
 
 class HandoffCorrelation:
@@ -319,6 +323,12 @@ class NodeConn:
         self._roster_wait_tag: int | None = None
         self._roster_wait_until = 0.0
         self._held_world_dials: set[str] = set()
+
+        # Member: the world peers that closed their Session with us saying they left (WORLD_DISENGAGEMENT), with the
+        # tag of the roster held then. Only the host writes the membership, so their entries stay until it publishes
+        # again, and until a newer roster comes nothing of ours asks to get in touch with them.
+        self._is_world_node = is_world_node
+        self._departed: dict[str, int] = {}
 
         # Pre-admissions still waiting for their world-side redemption: peer_id →
         # monotonic deadline. Written by the grant-time pre-admission
@@ -1067,6 +1077,7 @@ class NodeConn:
         events.extend(await self._release_held_world_dials())
 
         self._tell_transports_about_peers(events)
+        self._follow_departed_peers(events)
         return events
 
     async def on_peer_disconnected(self, peer_id: str) -> list:
@@ -1331,9 +1342,10 @@ class NodeConn:
         self._sm_world.world_node_peer_id = world_peer_id
         if world_peer_id is None:
 
-            # Out of the world: no roster to wait for, nothing held
+            # Out of the world: no roster to wait for, nothing held, no peer left out
             self._roster_wait_tag = None
             self._held_world_dials.clear()
+            self._departed.clear()
 
     def get_world_node_peer_id(self) -> str | None:
         """Returns the PRIVATE peer ID of the world node, i.e. the REMOTE world host we joined,
@@ -1670,12 +1682,25 @@ class NodeConn:
             peer_id: The peer ID to query.
 
         Returns:
-            A list of addresses for the peer.
+            A list of addresses for the peer, or None for a peer that left us and that no newer roster lists again.
         """
+        if peer_id in self._departed:
+            return None
         if peer_id in self.peer_id_to_addrs:
             return self.peer_id_to_addrs.get(peer_id)
         else:
             return None
+
+    def is_departed(self, peer_id: str) -> bool:
+        """True for a world peer that closed its Session with us saying it left, while no newer roster lists it.
+
+        Args:
+            peer_id: The peer ID to check.
+
+        Returns:
+            True if the peer is left out of the peers to get in touch with.
+        """
+        return peer_id in self._departed
 
     def in_connection_queues(self, peer_id: str) -> bool:
         """Checks if a peer ID exists in any connection pool.
@@ -1797,6 +1822,12 @@ class NodeConn:
             if tag > self.rendezvous_tag:
                 self.rendezvous_tag = tag
                 rendezvous_peer_infos = rendezvous_state.get('peers', [])
+
+                # A newer roster says who the members are now: a peer that left us and is listed again is back
+                for peer_id in [p for p, mark_tag in self._departed.items() if mark_tag < tag]:
+                    del self._departed[peer_id]
+                    log.misc(f"...{peer_id[-5:]}, which left us, may be asked to get in touch again: a roster "
+                             f"newer than its leave came (tag: {tag})", sub=self._sm_world.log_sub)
 
                 world_agents_peer_infos = []
                 world_masters_peer_infos = []
@@ -2085,6 +2116,28 @@ class NodeConn:
                     dynamic = profile.get("dynamic", {}) if isinstance(profile, dict) else {}
                     sm.set_peer_capabilities(ev.peer_id, int(ev.data.get("peer_capabilities") or 0),
                                              dynamic.get("max_message_size"), dynamic.get("max_file_size"))
+
+    def _follow_departed_peers(self, events: list) -> None:
+        """Leaves out a world peer that closed its Session with us saying it left, and takes it back when a Session
+        with it is established again, whoever started it.
+
+        Not on a world host, which writes the membership and reads no roster that would take the mark away, and never
+        for the host of our world, which ends our world when it leaves us.
+
+        Args:
+            events: The Session events of a pump.
+        """
+        for ev in events:
+            if ev.p2p_name != NodeConn.P2P_WORLD:
+                continue
+            if ev.type == SessionEventType.ESTABLISHED and self._departed.pop(ev.peer_id, None) is not None:
+                log.misc(f"...{ev.peer_id[-5:]}, which left us, is in touch again", sub=self._sm_world.log_sub)
+            elif (ev.type == SessionEventType.CLOSED and ev.data.get("reason") == _DEPARTED_REASON and
+                  not self._is_world_node and ev.peer_id != self.get_world_node_peer_id()):
+                self._departed[ev.peer_id] = self.rendezvous_tag
+                log.misc(f"...{ev.peer_id[-5:]} left us ({reason_name(WORLD_DISENGAGEMENT)}): nothing of ours asks "
+                         f"to get in touch with it until a roster newer than tag {self.rendezvous_tag}",
+                         sub=self._sm_world.log_sub)
 
     def _resolve_tickets(self, ev: dict) -> None:
         """Resolves the tickets of tracked sends that a send event is about: written up to a sequence number, or a

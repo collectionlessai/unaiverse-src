@@ -49,6 +49,7 @@ import pytest
 from unaiverse.agent import Agent
 from unaiverse.agent_basics import AgentBasics
 from unaiverse.networking.session import PeerRelation
+from unaiverse.utils.logger import log
 
 pytestmark = pytest.mark.unit
 
@@ -729,6 +730,7 @@ class _ConnectedPeers:
     def __init__(self, *peers):
         self.peers = set(peers)
         self.pending = set()
+        self.departed = set()
         self.addrs = {}
 
     def relation_of(self, peer_id):
@@ -740,7 +742,10 @@ class _ConnectedPeers:
         return self.relation_of(peer_id) is PeerRelation.PENDING
 
     def get_addrs(self, peer_id):
-        return self.addrs.get(peer_id)
+        return None if peer_id in self.departed else self.addrs.get(peer_id)
+
+    def is_departed(self, peer_id):
+        return peer_id in self.departed
 
 
 def _following(agent, peer_id, engaged):
@@ -854,6 +859,21 @@ def test_connect_to_asks_only_when_there_is_no_relation_and_none_being_made(agen
     assert _run(agent.connect_to("peer-new")) is True
     assert asked == [["/ip4/1.2.3.4/tcp/1/p2p/peer-new"]]
     assert _run(agent.connect_to("peer-with-no-address")) is False
+
+
+def test_connect_to_does_not_ask_for_a_peer_that_left_and_says_why(agent, monkeypatch):
+    """A peer that closed its world Session with us saying it left keeps its entry in the
+    roster until the host publishes again: asking for it would only get us cut."""
+    agent.node_conn = _ConnectedPeers()
+    agent.node_conn.departed.add("peer-gone")
+    agent.node_conn.addrs = {"peer-gone": ["/ip4/1.2.3.4/tcp/1/p2p/peer-gone"]}
+    asked = _asking(agent)
+    lines = []
+    monkeypatch.setattr(log, "misc", lambda msg, *a, **k: lines.append(msg))
+
+    assert _run(agent.connect_to("peer-gone")) is False
+    assert asked == []
+    assert any("Not asking to get in touch with peer-gone: it left us" in line for line in lines)
 
 
 def test_connect_by_role_counts_a_peer_being_reached_as_asked_and_one_that_is_up_on_request(agent):
